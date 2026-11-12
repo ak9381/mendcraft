@@ -511,6 +511,11 @@ export function createPlanRenderer(
   let toolBusy = false;
 
   svg.addEventListener('mousedown', (e) => {
+    // SVG isn't focusable, so a canvas click's default action blurs to <body>
+    // and kills the keyboard shortcuts — suppress it and keep the viewport
+    // container focused instead.
+    e.preventDefault();
+    container.focus({ preventScroll: true });
     if (toolCtl.down({ x: e.clientX, y: e.clientY, source: 'mouse' })) {
       toolBusy = true;
       return;
