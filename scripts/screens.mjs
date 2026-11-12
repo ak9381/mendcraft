@@ -299,6 +299,267 @@ async function main() {
     assert(!(await page.isVisible('#ui-export-panel')), 'Esc closes the export panel');
 
     await ctx.close();
+
+    // ─── Palette walks: on-canvas tools via the SHARED pointer path ──────────
+    // Every placement below drives the exact pointer stream a pinch uses: a real
+    // press on a palette button (data-tool), a drag onto the canvas, release to
+    // drop. page.mouse emits pointer+mouse together, so the palette's pick-and-
+    // place (pointer) and the renderer's tool controller (mouse) both react.
+    const palctx = await browser.newContext({ viewport: { width: 1360, height: 860 } });
+    const pal = await palctx.newPage();
+    // The browser reference panel frames external sites (e.g. MDN) that set
+    // X-Frame-Options: deny — a framing refusal from a third-party site, not an
+    // app fault, so it must not fail the walk.
+    const benign = (t) => /X-Frame-Options|Refused to display|in a frame because/i.test(t);
+    pal.on('console', (m) => m.type() === 'error' && !benign(m.text()) && consoleErrors.push(m.text()));
+    pal.on('pageerror', (e) => !benign(e.message) && consoleErrors.push(`pageerror: ${e.message}`));
+
+    const btnCenter = (pg, tool) =>
+      pg.$eval(`.mc-palette [data-tool="${tool}"]`, (el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
+    async function armTool(pg, tool) {
+      const b = await btnCenter(pg, tool);
+      await pg.mouse.click(b.x, b.y);
+      await pg.waitForTimeout(80);
+    }
+    // Press a palette button, drag off it onto the canvas (>6px arms the ghost),
+    // settle over the drop point so the tool's onHover snaps, then release.
+    async function dragPlace(pg, tool, cx, cy) {
+      const b = await btnCenter(pg, tool);
+      await pg.mouse.move(b.x, b.y);
+      await pg.mouse.down();
+      await pg.mouse.move(b.x + (cx - b.x) * 0.5, b.y + (cy - b.y) * 0.5, { steps: 4 });
+      await pg.mouse.move(cx, cy, { steps: 4 });
+      await pg.mouse.move(cx, cy);
+      await pg.waitForTimeout(70);
+      await pg.mouse.up();
+      await pg.waitForTimeout(140);
+    }
+    // Midpoints (client px) of the longest drawn walls, for hosting openings.
+    const wallTargets = (pg) =>
+      pg.evaluate(() => {
+        const svg = document.querySelector('#viewport svg');
+        const r = svg.getBoundingClientRect();
+        const walls = [...svg.querySelectorAll('line')]
+          .filter((l) => l.getAttribute('stroke') === '#1f2937')
+          .map((l) => {
+            const x1 = +l.getAttribute('x1'), y1 = +l.getAttribute('y1');
+            const x2 = +l.getAttribute('x2'), y2 = +l.getAttribute('y2');
+            return { x1, y1, x2, y2, len: Math.hypot(x2 - x1, y2 - y1) };
+          })
+          .sort((a, b) => b.len - a.len);
+        const at = (w, t) => ({ x: r.left + w.x1 + (w.x2 - w.x1) * t, y: r.top + w.y1 + (w.y2 - w.y1) * t });
+        // A point well inside a room: the first room name label's position.
+        const label = [...svg.querySelectorAll('text')].find((t) => /Bedroom|Living|Kitchen|Room/i.test(t.textContent || ''));
+        const lb = label && label.getBoundingClientRect();
+        return {
+          count: walls.length,
+          door: walls[0] && at(walls[0], 0.35),
+          window: walls[1] && at(walls[1], 0.4),
+          wallA: walls[0] && at(walls[0], 0.12),
+          wallB: walls[0] && at(walls[0], 0.88),
+          room: lb ? { x: lb.left + lb.width / 2, y: lb.top + lb.height / 2 + 40 } : null,
+          center: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+        };
+      });
+
+    // palette-plan-01 — empty canvas with the on-canvas palette docked.
+    await pal.goto(`${BASE}/?sim=1`, { waitUntil: 'networkidle' });
+    await pal.waitForSelector('#viewport svg', { timeout: 5000 });
+    await pal.waitForSelector('.mc-palette', { timeout: 5000 });
+    await pal.waitForTimeout(400);
+    await shot(pal, 'palette-plan-01-empty.png');
+    assert(await pal.isVisible('.mc-palette'), 'plan palette docked on the empty canvas');
+    assert(
+      (await pal.$$('.mc-palette [data-tool="wall"]')).length === 1,
+      'palette exposes the Wall tool button',
+    );
+
+    // palette-plan-02 — a real plan, then a door + window hosted on its walls and
+    // a double bed dropped from the Furniture flyout, all via the palette.
+    await command(pal, 'two bedroom plan');
+    await pal.waitForTimeout(600);
+    let wt = await wallTargets(pal);
+    assert(wt.count >= 4, `plan drew ${wt.count} walls to host openings on`);
+    if (wt.door) await dragPlace(pal, 'door', wt.door.x, wt.door.y);
+    wt = await wallTargets(pal); // geometry/scale may have re-fit after the drop
+    if (wt.window) await dragPlace(pal, 'window', wt.window.x, wt.window.y);
+    // Furniture lives in a flyout: open it, then drag the double bed onto a room.
+    await pal.mouse.click((await btnCenter(pal, 'furniture-group')).x, (await btnCenter(pal, 'furniture-group')).y);
+    await pal.waitForTimeout(150);
+    wt = await wallTargets(pal);
+    const bedPt = wt.room || wt.center;
+    await dragPlace(pal, 'fx:bed-double', bedPt.x, bedPt.y);
+    await pal.waitForTimeout(300);
+    // Drop back to Select so the armed fixture's hover-ghost clears, and park the
+    // cursor off the canvas, for a clean "furnished plan" frame.
+    await armTool(pal, 'select');
+    await pal.mouse.move(wt.center.x, wt.center.y + 160);
+    await pal.waitForTimeout(150);
+    await shot(pal, 'palette-plan-02-drawn.png');
+    const planCounts = await pal.evaluate(() => {
+      const t = (document.getElementById('parts-list')?.textContent || '').toLowerCase();
+      return { door: /door/.test(t), window: /window/.test(t), bed: /bed/.test(t) };
+    });
+    assert(planCounts.door, 'a door was hosted on a wall from the palette');
+    assert(planCounts.window, 'a window was hosted on a wall from the palette');
+    assert(planCounts.bed, 'a bed fixture was dropped from the Furniture flyout');
+
+    // palette-plan-03 — select a wall on the canvas; the properties panel opens.
+    await armTool(pal, 'select');
+    wt = await wallTargets(pal);
+    await pal.mouse.click(wt.door.x, wt.door.y);
+    await pal.waitForTimeout(300);
+    await shot(pal, 'palette-plan-03-properties.png');
+    assert(await pal.isVisible('.mc-props'), 'plan properties panel opens for the selection');
+
+    // palette-plan-04 — extrude the plan to 3D blocks.
+    assert(!(await pal.evaluate(() => document.getElementById('btn-3d')?.hidden)), '3D button available in plan mode');
+    await pal.click('#btn-3d');
+    await pal.waitForTimeout(1200);
+    await shot(pal, 'palette-plan-04-3d.png');
+    assert(
+      (await pal.evaluate(() => document.getElementById('btn-3d')?.getAttribute('aria-pressed'))) === 'true',
+      'plan 3D view toggled on',
+    );
+    await pal.click('#btn-3d');
+    await pal.waitForTimeout(600);
+
+    // palette-plan-05 — measure a wall with the Measure tool (click two ends).
+    await armTool(pal, 'measure');
+    wt = await wallTargets(pal);
+    await pal.mouse.click(wt.wallA.x, wt.wallA.y);
+    await pal.waitForTimeout(120);
+    await pal.mouse.click(wt.wallB.x, wt.wallB.y);
+    await pal.waitForTimeout(150);
+    await pal.keyboard.press('Enter');
+    await pal.waitForTimeout(300);
+    await shot(pal, 'palette-plan-05-measure.png');
+    const measured = await pal.evaluate(
+      () => [...document.querySelectorAll('#viewport svg text')].some((t) => / m$/.test(t.textContent || '')),
+    );
+    assert(measured, 'a measured dimension (… m) is drawn on the canvas');
+
+    // ─── UI-design palette walk ─────────────────────────────────────────────
+    // palette-ui-01 — empty frame with the palette docked.
+    await pal.goto(`${BASE}/?sim=1&mode=ui`, { waitUntil: 'networkidle' });
+    await pal.waitForSelector('#viewport .ui-scroll', { timeout: 5000 });
+    await pal.waitForSelector('.mc-palette', { timeout: 5000 });
+    await pal.waitForTimeout(400);
+    await shot(pal, 'palette-ui-01-empty.png');
+    assert(await pal.isVisible('.ui-empty'), 'ui mode shows the empty-frame hint + palette');
+
+    // palette-ui-02 — build a screen from the palette: add a desktop frame from
+    // the Frame flyout, then stack a navbar, heading, input and button down its
+    // centre line (every drop inside the on-screen frame box so they land).
+    const sc = await pal.$eval('#viewport .ui-scroll', (s) => {
+      const r = s.getBoundingClientRect();
+      return { left: r.left, top: r.top, w: r.width, h: r.height };
+    });
+    await pal.mouse.click((await btnCenter(pal, 'frame-group')).x, (await btnCenter(pal, 'frame-group')).y);
+    await pal.waitForTimeout(150);
+    await armTool(pal, 'frame-desktop');
+    await pal.mouse.click(sc.left + sc.w * 0.5, sc.top + sc.h * 0.5);
+    await pal.waitForTimeout(200);
+    const fr = await pal.$eval('#viewport .ui-frame', (el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, w: r.width, h: r.height };
+    });
+    // A left-of-centre column: the elements stay x-aligned (so the alignment
+    // guide later is a long, clear line) and well clear of the properties panel.
+    const colX = fr.left + fr.w * 0.38;
+    // Click-to-place each element down the centre line (arm the tool, click the
+    // frame) — the same pointer path a pinch-tap drives.
+    for (const [tool, oy] of [['navbar', 70], ['heading', 150], ['input', 230], ['button', 310]]) {
+      await armTool(pal, tool);
+      await pal.mouse.click(colX, fr.top + oy);
+      await pal.waitForTimeout(140);
+    }
+    await pal.waitForTimeout(200);
+    await shot(pal, 'palette-ui-02-built.png');
+    const nodeCount = await pal.evaluate(
+      () => document.querySelectorAll('#viewport .ui-frame [data-id]').length,
+    );
+    assert(nodeCount >= 4, `built ${nodeCount} elements on the frame from the palette`);
+
+    // palette-ui-03 — grab the lowest element and nudge it; because everything was
+    // dropped on the same centre line, a pink alignment guide snaps in mid-drag.
+    await armTool(pal, 'select');
+    const grab = await pal.evaluate(() => {
+      const nodes = [...document.querySelectorAll('#viewport .ui-frame [data-id]')];
+      let best = null;
+      for (const n of nodes) {
+        const r = n.getBoundingClientRect();
+        if (r.width > 8 && r.width < 400 && (!best || r.top > best.top)) {
+          best = { top: r.top, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+      return best && { x: best.x, y: best.y };
+    });
+    assert(!!grab, 'found an element to drag for the alignment-guide shot');
+    await pal.mouse.move(grab.x, grab.y);
+    await pal.mouse.down();
+    await pal.mouse.move(grab.x + 12, grab.y - 70, { steps: 4 }); // nudge off the centre line
+    await pal.mouse.move(grab.x, grab.y - 150, { steps: 6 }); // snap back to it, high in open canvas
+    await pal.waitForTimeout(150);
+    await shot(pal, 'palette-ui-03-guides.png');
+    const guideShown = await pal.evaluate(() =>
+      [...document.querySelectorAll('div')].some((d) => getComputedStyle(d).backgroundColor === 'rgb(236, 72, 153)'),
+    );
+    assert(guideShown, 'a pink alignment guide is visible mid-drag');
+    await pal.mouse.up();
+    await pal.waitForTimeout(150);
+
+    // palette-ui-04 — the selection's properties panel.
+    await shot(pal, 'palette-ui-04-properties.png');
+    assert(await pal.isVisible('.mc-props'), 'ui properties panel shows for the dragged element');
+
+    // palette-ui-05 — the export panel (preview + code).
+    await pal.click('#btn-export');
+    await pal.waitForSelector('#ui-export-panel', { timeout: 5000 });
+    await pal.waitForTimeout(500);
+    await shot(pal, 'palette-ui-05-export.png');
+    assert(await pal.isVisible('#ui-export-panel'), 'ui export panel opens');
+    await pal.keyboard.press('Escape');
+    await pal.waitForTimeout(200);
+
+    // ─── Input extras (gestures / on-screen keyboard / browser reference) ────
+    await pal.goto(`${BASE}/?sim=1`, { waitUntil: 'networkidle' });
+    await pal.waitForSelector('#viewport svg', { timeout: 5000 });
+    await pal.waitForTimeout(300);
+    if (await pal.$('#btn-gestures')) {
+      await pal.click('#btn-gestures');
+      await pal.waitForSelector('.mc-gestures-panel', { timeout: 3000 });
+      await pal.waitForTimeout(300);
+      await shot(pal, 'extras-gestures.png');
+      assert(await pal.isVisible('.mc-gestures-panel'), 'customizable gestures panel opens');
+      await pal.click('#btn-gestures');
+    }
+    if (await pal.$('#btn-keyboard')) {
+      // The keyboard mirrors the focused field; trigger the toggle while the
+      // command input holds focus (a real button click would steal it).
+      await pal.evaluate(() => {
+        document.getElementById('command-input')?.focus();
+        document.getElementById('btn-keyboard')?.click();
+      });
+      await pal.waitForSelector('.mc-keyboard:not([hidden])', { timeout: 3000 });
+      await pal.waitForTimeout(300);
+      await shot(pal, 'extras-keyboard.png');
+      assert(await pal.isVisible('.mc-keyboard'), 'on-screen keyboard shows');
+      await pal.click('#btn-keyboard');
+    }
+    if (await pal.$('#btn-reference')) {
+      await pal.click('#btn-reference');
+      await pal.waitForSelector('.mc-ref-panel', { timeout: 3000 });
+      await pal.waitForTimeout(400);
+      await shot(pal, 'extras-browser.png');
+      assert(await pal.isVisible('.mc-ref-panel'), 'browser reference panel opens');
+      await pal.click('#btn-reference');
+    }
+
+    await palctx.close();
   } finally {
     await browser.close();
   }

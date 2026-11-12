@@ -79,6 +79,7 @@ export function createPalette(
     btn.setAttribute('aria-label', `${item.label}${key}${stubNote}`);
     btn.title = `${item.label}${item.shortcut ? ` — ${item.shortcut.toUpperCase()}` : ''}${stubNote}${item.placeable ? '. Drag onto the canvas to place.' : ''}`;
     btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label}</span>`;
+    btn.dataset.tool = item.toolId;
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       press = { item, x: e.clientX, y: e.clientY };
@@ -94,6 +95,7 @@ export function createPalette(
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'mc-palette-btn mc-palette-group';
+      btn.dataset.tool = item.toolId;
       btn.setAttribute('aria-label', `${item.label} — open components`);
       btn.title = `${item.label} — pick a component`;
       btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label} ▾</span>`;
