@@ -5,8 +5,10 @@ import { buildTemplate, isTemplateName } from './core/templates';
 import { buildScene } from './core/geometry';
 import { meshesToSTL, downloadSTL } from './core/stl';
 import { createViewport, type ViewportHandle } from './ui/viewport';
-import { createHandTracker, type HandEvent, type HandTracker } from './input/hands';
+import type { HandEvent } from './input/hands';
+import { createPresenceTracker, type PresenceTracker } from './input/presence';
 import { createHandOverlay } from './ui/handOverlay';
+import { createFaceOverlay } from './ui/faceOverlay';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { SIM_ACTIVE, DEMO_SCRIPT, mountSimCursor, playDemo } from './sim';
 import {
@@ -35,6 +37,8 @@ app.innerHTML = `
     <span id="ai-status" class="ai-status" aria-live="polite">Checking AI…</span>
     ${SIM_ACTIVE ? '<span class="badge badge-sim">SIM</span>' : ''}
     <button id="btn-camera" type="button" aria-pressed="false">Enable camera</button>
+    <button id="btn-register" type="button" hidden>Register me</button>
+    <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Enable mic</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
@@ -49,6 +53,8 @@ app.innerHTML = `
   </div>
   <div id="layout">
     <div id="viewport" role="application" aria-label="3D build viewport. Click a part to select it.">
+      <div id="resume-hint" class="resume-hint" hidden>Look at the screen to resume</div>
+      <p id="privacy-line" class="privacy-line" hidden>Face and hand data stay on this device. Nothing is uploaded.</p>
       <div id="empty-hint" class="empty-hint">
         <p>${TEMPLATE_HINT}</p>
         <div class="hint-buttons">
@@ -112,6 +118,10 @@ const warningsEl = el<HTMLUListElement>('warnings');
 const failStatesEl = el<HTMLDivElement>('fail-states');
 const srLive = el<HTMLDivElement>('sr-live');
 const btnCamera = el<HTMLButtonElement>('btn-camera');
+const btnRegister = el<HTMLButtonElement>('btn-register');
+const btnReregister = el<HTMLButtonElement>('btn-reregister');
+const resumeHint = el<HTMLDivElement>('resume-hint');
+const privacyLine = el<HTMLParagraphElement>('privacy-line');
 const btnMic = el<HTMLButtonElement>('btn-mic');
 const btnAi = el<HTMLButtonElement>('btn-ai');
 const btnUndo = el<HTMLButtonElement>('btn-undo');
@@ -342,6 +352,7 @@ btnMic.addEventListener('click', () => {
 // ---- hand tracking ----
 
 const handOverlay = createHandOverlay(viewportEl);
+const faceOverlay = createFaceOverlay(viewportEl);
 const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
@@ -349,7 +360,7 @@ viewportEl.appendChild(handCursor);
 
 function placeCursor(x: number, y: number): void {
   // With the real camera on, the full skeleton overlay replaces the dot.
-  if (handTracker) {
+  if (tracker) {
     handCursor.hidden = true;
     return;
   }
@@ -407,31 +418,74 @@ function handleHandEvent(e: HandEvent): void {
   }
 }
 
-let handTracker: HandTracker | null = null;
+let tracker: PresenceTracker | null = null;
+
+function syncOperatorButtons(): void {
+  const on = tracker !== null;
+  const registered = tracker?.isRegistered ?? false;
+  btnRegister.hidden = !on || registered;
+  btnReregister.hidden = !on || !registered;
+  privacyLine.hidden = !on;
+}
 
 btnCamera.addEventListener('click', async () => {
   const turningOn = btnCamera.getAttribute('aria-pressed') !== 'true';
   if (!turningOn) {
-    handTracker?.stop();
-    handTracker = null;
+    tracker?.stop();
+    tracker = null;
     handOverlay.clear();
+    faceOverlay.clear();
+    resumeHint.hidden = true;
     btnCamera.setAttribute('aria-pressed', 'false');
     btnCamera.classList.remove('active');
     handCursor.hidden = true;
+    syncOperatorButtons();
     say('Camera off.');
     return;
   }
   try {
-    handTracker = createHandTracker(handleHandEvent, (hands) => handOverlay.draw(hands));
-    await handTracker.start();
+    tracker = createPresenceTracker(handleHandEvent, (f) => {
+      handOverlay.draw(f.hands);
+      faceOverlay.draw(f.faces, f.rejectedHands);
+    });
+    tracker.onPauseChange((paused) => {
+      resumeHint.hidden = !paused;
+      if (paused) {
+        handCursor.classList.remove('pinching');
+        say('Look at the screen to resume.');
+      } else {
+        say('Resumed.');
+      }
+    });
+    await tracker.start();
     btnCamera.setAttribute('aria-pressed', 'true');
     btnCamera.classList.add('active');
     clearFail('fail-camera');
-    say('Camera on. Pinch to select or drag a part.');
+    syncOperatorButtons();
+    say('Camera on. Pinch to select or drag a part. Press "Register me" to lock onto your face.');
   } catch {
     fail('fail-camera', 'Could not access the camera — pinch gestures are unavailable. Voice and text still work.');
-    handTracker = null;
+    tracker = null;
+    syncOperatorButtons();
   }
+});
+
+btnRegister.addEventListener('click', () => {
+  if (!tracker) return;
+  if (tracker.register()) {
+    syncOperatorButtons();
+    say('Registered. Tracking your hands only.');
+  } else {
+    say('No face detected yet. Face the camera and try again.');
+  }
+});
+
+btnReregister.addEventListener('click', () => {
+  if (!tracker) return;
+  tracker.reregister();
+  resumeHint.hidden = true;
+  syncOperatorButtons();
+  say('Registration reset. Any face can control again.');
 });
 
 // ---- on-device AI ----
