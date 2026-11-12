@@ -66,6 +66,9 @@ export function createPlanRenderer(
   let originX = 0;
   let originY = 0;
   let fitted = false;
+  // Bounds signature captured at the last fit, so a geometry edit that changes
+  // the overall size re-fits automatically (see render()).
+  let fitSig: string | null = null;
 
   const doc = (): PlanDoc => controller.snapshot() as PlanDoc;
   const toScreen = (p: Point) => ({ x: originX + p.x * scale, y: originY - p.y * scale });
@@ -74,7 +77,16 @@ export function createPlanRenderer(
     return { x: (clientX - rect.left - originX) / scale, y: -(clientY - rect.top - originY) / scale };
   }
 
+  /** Signature of the current plan bounds (rounded), for change detection. */
+  function boundsSig(): string {
+    const b = planBounds(doc());
+    if (!b) return 'none';
+    const r = (n: number) => Math.round(n / 10);
+    return `${r(b.min.x)},${r(b.min.y)},${r(b.max.x)},${r(b.max.y)}`;
+  }
+
   function fitView(): void {
+    fitSig = boundsSig();
     const b = planBounds(doc());
     const rect = svg.getBoundingClientRect();
     const W = rect.width || 800;
@@ -85,12 +97,23 @@ export function createPlanRenderer(
       originY = H / 2;
       return;
     }
-    const pad = 1000; // mm margin
-    const w = b.max.x - b.min.x + pad * 2;
-    const h = b.max.y - b.min.y + pad * 2;
+    // Fit the plan PLUS the drawn annotations: the overall outer dimensions sit
+    // OUT (900 mm) beyond the min.x / min.y edges with a label beyond that, so
+    // reserve that band (+label headroom) on those two sides and a little
+    // breathing room on the others — otherwise the bottom "8.00 m" dimension and
+    // its label clip at the viewport edge after zoom-to-fit.
+    const pad = 700; // breathing room (mm)
+    const band = 900; // outer-dimension offset (matches OUT in render())
+    const label = 650; // headroom for the dimension text at fit scale (mm)
+    const minX = b.min.x - band - label;
+    const minY = b.min.y - band - label;
+    const maxX = b.max.x + pad;
+    const maxY = b.max.y + pad;
+    const w = maxX - minX;
+    const h = maxY - minY;
     scale = Math.min(W / w, H / h, 0.3);
-    const cx = (b.min.x + b.max.x) / 2;
-    const cy = (b.min.y + b.max.y) / 2;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
     originX = W / 2 - cx * scale;
     originY = H / 2 + cy * scale;
   }
@@ -177,6 +200,12 @@ export function createPlanRenderer(
     if (!fitted) {
       fitView();
       fitted = true;
+    } else if (!drag && !panning && boundsSig() !== fitSig) {
+      // A discrete edit (voice/text/keyboard) changed the overall size — reframe
+      // so the result stays fully visible (e.g. stretching the shared wall to
+      // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
+      // live gesture is never yanked out from under the user.
+      fitView();
     }
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     const d = doc();

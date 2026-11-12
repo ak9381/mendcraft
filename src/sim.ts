@@ -50,6 +50,9 @@ export function mountSimCursor(container: HTMLElement, onEvent: (e: HandEvent) =
   const cursor = document.createElement('div');
   cursor.className = 'sim-cursor';
   cursor.textContent = 'SIM';
+  // Hidden until the first real pointer input — otherwise it sits parked at the
+  // viewport's top-left corner before the mouse has ever moved.
+  cursor.style.visibility = 'hidden';
   container.appendChild(cursor);
 
   let pinching = false;
@@ -64,6 +67,7 @@ export function mountSimCursor(container: HTMLElement, onEvent: (e: HandEvent) =
 
   function place(x: number, y: number): void {
     const rect = container.getBoundingClientRect();
+    cursor.style.visibility = 'visible'; // reveal on first real pointer input
     cursor.style.left = `${x * rect.width}px`;
     cursor.style.top = `${y * rect.height}px`;
   }
@@ -85,6 +89,7 @@ export function mountSimCursor(container: HTMLElement, onEvent: (e: HandEvent) =
 
   function onDown(e: MouseEvent): void {
     const { x, y } = norm(e);
+    place(x, y); // reveal + position even if no move preceded the press
     pinching = true;
     moved = false;
     lastX = x;

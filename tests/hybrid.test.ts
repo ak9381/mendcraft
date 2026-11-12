@@ -406,6 +406,20 @@ describe('plan generate + edit against real cloud output', () => {
     expect(r.ops && r.ops.length).toBeGreaterThan(0);
   });
 
+  it('generatePlan degrades to a RULES two-bedroom plan when App Check fails (deployed init failure)', async () => {
+    // The deployed path: Firebase/App Check init fails (or the network is
+    // blocked), so there is no cloud model at all. A "two bedroom plan" must
+    // still build — promptly, deterministically, and honestly badged RULES.
+    setModelsForTest({ enabled: true, appCheck: 'failed' });
+    const status = await prepareHybrid();
+    expect(status.appCheck).toBe('failed');
+    const r = await generatePlan('two bedroom plan');
+    expect(r.source).toBe('rules');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+    // The shared wall is still pre-selected, so the demo edit lands offline too.
+    expect(r.ops?.some((o) => o.op === 'select')).toBe(true);
+  });
+
   it('generatePlan falls back to rules when the cloud call hangs (never resolves)', async () => {
     // A cloud "generate" with no timeout would leave the UI spinning forever.
     // The hung call must time out and degrade to the deterministic template.

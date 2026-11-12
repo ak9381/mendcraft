@@ -97,28 +97,51 @@ async function main() {
     );
     assert(rooms >= 4, `two-bedroom plan drew ${rooms} rooms`);
 
-    // 04 — select a wall (click == pinch-equivalent). Pick a long outer wall so
-    // the selection highlight is unmistakable in the shot.
+    // 04 — select the SHARED 3.00 m wall between the two bedrooms (w3). The
+    // generator pre-selects it, so it is already drawn in the selection blue;
+    // click its midpoint on the SVG canvas — the pinch-equivalent pointer path
+    // (a real mousedown→mouseup through the renderer's hit-test), not the side
+    // list — so "make it 4 meters" visibly stretches it.
     const selected = await page.evaluate(() => {
-      const btns = [...document.querySelectorAll('#parts-list li button')];
-      const w = btns.find((b) => /Wall w\d+ · 4\.00 m/.test(b.textContent || '')) ??
-        btns.find((b) => /Wall w\d+/.test(b.textContent || ''));
-      if (!w) return null;
-      w.click();
-      return w.textContent;
+      const svg = document.querySelector('#viewport svg');
+      if (!svg) return null;
+      // The selected wall renders as a thick blue line (#2563eb); dim/door lines
+      // in the same blue are thin (stroke-width < 2), so filter on thickness.
+      const line = [...svg.querySelectorAll('line')].find(
+        (l) => l.getAttribute('stroke') === '#2563eb' && Number(l.getAttribute('stroke-width')) > 2,
+      );
+      if (!line) return null;
+      const x1 = +line.getAttribute('x1'), y1 = +line.getAttribute('y1');
+      const x2 = +line.getAttribute('x2'), y2 = +line.getAttribute('y2');
+      const rect = svg.getBoundingClientRect();
+      const clientX = rect.left + (x1 + x2) / 2;
+      const clientY = rect.top + (y1 + y2) / 2;
+      const opts = { bubbles: true, clientX, clientY };
+      svg.dispatchEvent(new MouseEvent('mousedown', opts));
+      window.dispatchEvent(new MouseEvent('mouseup', opts));
+      return document.querySelector('#parts-list li button.active')?.textContent ?? null;
     });
     await page.waitForTimeout(500);
     await shot(page, '04-wall-selected.png');
-    assert(/selected/i.test(await page.evaluate(
+    const activeLabel = await page.evaluate(
       () => document.querySelector('#parts-list li button.active')?.textContent || '',
-    )), `wall selected (${selected})`);
+    );
+    assert(/Wall w3 · 3\.00 m/.test(activeLabel), `shared 3 m wall w3 selected on canvas ("${activeLabel.trim()}")`);
 
-    // 05 — set that wall to 4 m by voice/text.
+    // 05 — set that shared wall to 4 m by voice/text. It visibly stretches: both
+    // bedrooms grow, the dimension re-reads 4.00 m (no stale 3.00 m), the plan
+    // re-fits taller.
     await command(page, 'make it 4 meters');
     await page.waitForTimeout(500);
     await shot(page, '05-wall-4m.png');
     const verifier = await page.evaluate(() => document.getElementById('verifier-result')?.textContent);
-    assert(/4\.00 m/.test(verifier ?? ''), `wall set to 4 m ("${verifier?.trim()}")`);
+    assert(/w3 set to 4\.00 m/.test(verifier ?? ''), `shared wall set to 4 m ("${verifier?.trim()}")`);
+    // The on-canvas dimension must now read 4.00 m and no stale 3.00 m may remain.
+    const dimTexts = await page.evaluate(
+      () => [...document.querySelectorAll('#viewport svg text')].map((t) => t.textContent || ''),
+    );
+    assert(dimTexts.includes('4.00 m'), 'a 4.00 m dimension is drawn after the stretch');
+    assert(!dimTexts.includes('3.00 m'), 'no stale 3.00 m dimension remains on the shared wall');
 
     // 06 — extrude to 3D.
     assert(!(await page.evaluate(() => document.getElementById('btn-3d')?.hidden)), '3D button available');

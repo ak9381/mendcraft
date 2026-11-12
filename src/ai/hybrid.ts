@@ -110,8 +110,9 @@ export const ON_DEVICE_CREATE_OPTIONS = {
 
 const ON_DEVICE_TIMEOUT_MS = 15000;
 /** Cloud "generate a whole plan/template" budget. A hung cloud call must fall
- *  back to the deterministic template, never leave the UI spinning forever. */
-const CLOUD_GENERATE_TIMEOUT_MS = 12000;
+ *  back to the deterministic template within a few seconds, never leave the UI
+ *  spinning (the deployed path has to degrade to RULES honestly and promptly). */
+const CLOUD_GENERATE_TIMEOUT_MS = 6000;
 
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON Schema
