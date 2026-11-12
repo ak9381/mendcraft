@@ -25,6 +25,7 @@ export const PLAN_DEMO: SimStep[] = [
   { label: 'Make the shared wall 4 meters', utterance: 'make this wall 4 meters' },
   { label: 'Thicken it by 50 mm', utterance: 'thicker by 50' },
   { label: 'Add a door to it', utterance: 'add a door' },
+  { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Export the DXF', action: undefined },
 ];
 
@@ -49,6 +50,7 @@ export const UI_DEMO: SimStep[] = [
   { label: 'Make the button green', utterance: 'make the button green' },
   { label: 'Make it 56 pixels tall', utterance: 'make it 56 pixels tall' },
   { label: 'Bigger heading', utterance: 'bigger heading' },
+  { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Export the HTML', action: undefined },
 ];
 

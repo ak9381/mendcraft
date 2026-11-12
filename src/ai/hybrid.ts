@@ -23,6 +23,7 @@ import {
   ruleConfidence,
   type FusionContext,
 } from './intentFusion';
+import { buildA11yConstraint, coerceA11yExplanations, type A11yExplanation, type A11yIssue } from '../core/a11y';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
@@ -125,6 +126,8 @@ interface Models {
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
+  /** Accessibility explainer (ONLY_IN_CLOUD, a11y-explain schema). */
+  a11yExplain?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
 }
@@ -137,6 +140,7 @@ export interface ModelOverrides {
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
+  a11yExplain?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
@@ -304,6 +308,7 @@ async function ensureModels(): Promise<Models | null> {
       intentCloud: testOverrides.intentCloud ?? null,
       verifyCloud: testOverrides.verifyCloud ?? null,
       fusionCloud: testOverrides.fusionCloud ?? null,
+      a11yExplain: testOverrides.a11yExplain ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
     };
   }
@@ -353,6 +358,7 @@ async function initFirebase(): Promise<Models | null> {
     // truth (the mode's opConstraint) for both the Nano and cloud schemas.
     const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
     const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
+    const a11ySchema = toFirebaseSchema(buildA11yConstraint(modeAi.opConstraint), Schema);
 
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
@@ -419,6 +425,13 @@ async function initFirebase(): Promise<Models | null> {
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
     });
+    const a11yExplain = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: a11ySchema },
+      },
+    });
 
     // Server prompt-template model (@beta on the web SDK). Only used when a
     // template ID is set in Remote Config; otherwise the big jobs use the inline
@@ -431,7 +444,7 @@ async function initFirebase(): Promise<Models | null> {
       promptTemplate = null;
     }
 
-    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, promptTemplate };
+    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, a11yExplain, promptTemplate };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -868,4 +881,56 @@ export async function generateUi(prompt: string): Promise<GenerateUiResult> {
     if (frame) return { frame, note, source: 'rules' };
   }
   return { clarify: 'Try "login screen", "landing hero", "pricing section", or "mobile frame".', source: 'rules' };
+}
+
+/** Cloud explanations (and optional alternative fixes) for a11y issues. */
+export interface ExplainA11yResult {
+  items: A11yExplanation[];
+  source: Source;
+}
+
+const A11Y_EXPLAIN_PROMPT = `You are an accessibility reviewer inside a design tool. The tool's own CODE already measured each issue below against the cited standard — do not re-measure or dispute the numbers. For EACH issue, write a short plain-language "explanation" (max 2 sentences: why it matters for the user, and what the fix does), keeping the cited standard's name. Optionally propose a "fix" as ONE op from the vocabulary below when a single op would resolve the issue. Reply JSON only: {"items":[{"id":"<issue id>","explanation":"...","fix":{...}?}]}.`;
+
+/**
+ * Explain deterministic accessibility issues via Firebase AI Logic
+ * (ONLY_IN_CLOUD, same wrapper discipline as the generate paths: hard timeout,
+ * re-validated output, honest rules fallback). The issues and their fixes are
+ * computed in CODE first — a cloud failure only loses prose, never the check.
+ */
+export async function explainAccessibility(
+  issues: readonly Pick<A11yIssue, 'id' | 'rule' | 'message' | 'citation'>[],
+  summary: string,
+): Promise<ExplainA11yResult> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (models?.a11yExplain && issues.length) {
+    try {
+      const mode = getActiveMode();
+      const prompt = withPreamble(
+        `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
+      );
+      const { response } = await withTimeout(
+        models.a11yExplain.generateContent(prompt),
+        CLOUD_GENERATE_TIMEOUT_MS,
+        'a11y explain',
+      );
+      const items = coerceA11yExplanations(
+        extractJson(response.text()),
+        issues.map((i) => i.id),
+        (raw) => mode.coerce(raw),
+      );
+      if (items.length) {
+        const source = sourceOf(response);
+        recordInference(source, 'a11y-explain', Date.now() - t0);
+        return { items, source };
+      }
+      noteError('a11y explain', new Error('cloud explanations were empty or invalid'));
+    } catch (err) {
+      noteError('a11y explain model', err);
+    }
+  }
+  // Rules floor: the deterministic messages already carry measurement +
+  // citation, so an empty item list simply keeps those.
+  recordInference('rules', 'a11y-explain', Date.now() - t0);
+  return { items: [], source: 'rules' };
 }

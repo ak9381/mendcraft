@@ -43,6 +43,13 @@ import {
   UI_GENERATE_CONSTRAINT,
 } from '../ui/design/ai';
 import { parseUiCommand } from '../ui/design/ruleParser';
+// Accessibility checkers are pure geometry/colour math (no DOM), like the AI
+// modules above, so they import statically too.
+import { checkPlanAccessibility } from '../plan/accessibility';
+import { checkUiAccessibility } from '../ui/design/accessibility';
+import type { A11yIssue } from './a11y';
+import type { PlanDoc } from '../plan/doc';
+import type { UiDoc } from '../ui/design/doc';
 
 /** A quick-start command button, shown on the empty canvas and in onboarding. */
 export interface ModeHint {
@@ -104,6 +111,9 @@ export interface EditorMode {
   coerce(raw: unknown, utterance?: string): object | null;
   /** Does this utterance mean "generate a whole design" (cloud path)? */
   isDesignRequest(utterance: string): boolean;
+  /** Deterministic accessibility checks over the mode's document snapshot
+   *  (see core/a11y.ts). Absent = the mode has no checker (e.g. 'part'). */
+  checkAccessibility?(snapshot: unknown): A11yIssue[];
   /** Mode-specific AI prompts + response schema. */
   ai: ModeAi;
   /** Build the runtime controller (document + engine + export + generate). */
@@ -330,6 +340,7 @@ export const uiMode: EditorMode = {
   parse: parseUiCommand,
   coerce: (raw, utterance) => coerceUi(raw, utterance, parseUiCommand),
   isDesignRequest: isUiDesignRequestMode,
+  checkAccessibility: (snapshot) => checkUiAccessibility(snapshot as UiDoc),
   ai: {
     intentPrompt: UI_INTENT_PROMPT,
     templatePrompt: UI_GENERATE_PROMPT,
@@ -406,6 +417,7 @@ export const planMode: EditorMode = {
   parse: parsePlanCommand,
   coerce: coercePlan,
   isDesignRequest: isPlanDesignRequest,
+  checkAccessibility: (snapshot) => checkPlanAccessibility(snapshot as PlanDoc),
   ai: {
     intentPrompt: PLAN_INTENT_PROMPT,
     templatePrompt: PLAN_GENERATE_PROMPT,

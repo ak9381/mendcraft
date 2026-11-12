@@ -15,6 +15,7 @@ import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo } from './sim';
 import {
   initDeviceModel,
   checkDeviceAvailability,
+  explainAccessibility,
   fuseIntent,
   verifyOp,
   prepareHybrid,
@@ -24,6 +25,8 @@ import {
   type FusionContext,
   type Source,
 } from './ai/hybrid';
+import { isAccessibilityRequest, type A11yIssue } from './core/a11y';
+import { createA11yPanel } from './ui/a11yPanel';
 import {
   REASON_TEXT,
   badgeLabel,
@@ -77,6 +80,7 @@ app.innerHTML = `
     <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
     <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
     <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
+    <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
       <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
@@ -290,6 +294,13 @@ const referencePanel = createReferencePanel();
 viewportEl.appendChild(referencePanel.element);
 const routerPanel = createRouterPanel();
 viewportEl.appendChild(routerPanel.element);
+const a11yPanel = createA11yPanel({
+  onShow: highlightA11yIssue,
+  onApply: applyA11yFix,
+  onApplyAll: applyAllA11yFixes,
+  onRecheck: () => refreshA11yIssues(true),
+});
+viewportEl.appendChild(a11yPanel.element);
 const gesturesPanel = createGesturesPanel({ onChange: (m) => { gestureMap = m; } });
 viewportEl.appendChild(gesturesPanel.element);
 
@@ -320,6 +331,10 @@ btnRouting.addEventListener('click', () => {
   routerPanel.toggle();
   toggleButton(btnRouting, routerPanel.isOpen());
   say(routerPanel.isOpen() ? 'Routing log open.' : 'Routing log closed.');
+});
+el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
+  if (a11yPanel.isOpen()) a11yPanel.toggle();
+  else void runUtterance('check accessibility');
 });
 
 // Discrete gesture actions fire once on the gesture's rising edge. Continuous
@@ -386,7 +401,99 @@ function fusionContext(): FusionContext {
   };
 }
 
+// ---- accessibility checker (deterministic checks + cloud explanations) ----
+
+function currentA11yIssues(): A11yIssue[] {
+  return mode.checkAccessibility ? mode.checkAccessibility(controller.snapshot()) : [];
+}
+
+/** Highlight an issue's targets using the normal selection (works for mouse,
+ *  pinch, and the parts list alike): multi-select where the mode supports it
+ *  (plan select_set), else select the first target. */
+function highlightA11yIssue(issue: A11yIssue): void {
+  if (issue.targetIds.length === 0) return;
+  const multi = controller.applyOp({ op: 'select_set', ids: issue.targetIds });
+  if (!multi.ok) controller.selectId(issue.targetIds[0]);
+  renderAll();
+  say(issue.message);
+}
+
+function applyA11yFix(issue: A11yIssue): void {
+  if (!issue.fix) return;
+  const step = controller.applyOp(issue.fix);
+  if (!step.ok) {
+    say(`Could not apply the fix: ${step.error ?? 'invalid op'}`);
+    return;
+  }
+  say(step.message ?? 'Accessibility fix applied.');
+  refreshA11yIssues();
+}
+
+/** Apply every remaining fix as ONE batch op — a single undoable step. */
+function applyAllA11yFixes(fixable: A11yIssue[]): void {
+  const ops = fixable.map((i) => i.fix).filter((f): f is Record<string, unknown> => !!f);
+  if (ops.length === 0) return;
+  const step = controller.applyOp(ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  if (!step.ok) {
+    say(`Could not apply the fixes: ${step.error ?? 'invalid op'}`);
+    return;
+  }
+  say(`Applied ${ops.length} accessibility ${ops.length === 1 ? 'fix' : 'fixes'}.`);
+  refreshA11yIssues();
+}
+
+/** Re-run the deterministic checks and refresh the panel (after any fix). */
+function refreshA11yIssues(announce = false): void {
+  const issues = currentA11yIssues();
+  a11yPanel.setIssues(issues);
+  renderAll();
+  if (announce) {
+    say(issues.length === 0 ? 'No accessibility issues found.' : `${issues.length} accessibility issues remain.`);
+  }
+}
+
+async function runAccessibilityCheck(): Promise<boolean> {
+  if (!mode.checkAccessibility) {
+    verifierEl.textContent = 'Accessibility checks are not available in this mode.';
+    say('Accessibility checks are not available in this mode.');
+    return false;
+  }
+  const issues = currentA11yIssues();
+  a11yPanel.setIssues(issues, issues.length > 0);
+  a11yPanel.open();
+  opJsonEl.textContent = JSON.stringify(
+    { check: 'accessibility', issues: issues.map((i) => ({ id: i.id, rule: i.rule, severity: i.severity })) },
+    null,
+    2,
+  );
+  if (issues.length === 0) {
+    setBadge('rules');
+    verifierEl.textContent = 'Accessibility check passed — no issues found (measured in code).';
+    say('No accessibility issues found.');
+    return true;
+  }
+  const fails = issues.filter((i) => i.severity === 'fail').length;
+  verifierEl.textContent = `Accessibility: ${issues.length} issue(s), ${fails} hard fail(s) — see the panel.`;
+  say(`Found ${issues.length} accessibility ${issues.length === 1 ? 'issue' : 'issues'}.`);
+  // Highlight everything the checks flagged, then ask the cloud to explain.
+  const allIds = [...new Set(issues.flatMap((i) => i.targetIds))];
+  const sel = controller.applyOp({ op: 'select_set', ids: allIds });
+  if (!sel.ok && allIds[0]) controller.selectId(allIds[0]);
+  renderAll();
+  const res = await explainAccessibility(
+    issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation })),
+    controller.summary(),
+  );
+  setBadge(res.source);
+  a11yPanel.setExplanations(res.items, res.source);
+  return true;
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
+  // Accessibility requests short-circuit BEFORE routing: "make this house
+  // wheelchair friendly" would otherwise hit the plan-generate path on "house".
+  if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
+
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source
   // plus the reason, and every decision lands in the Routing dev panel.
