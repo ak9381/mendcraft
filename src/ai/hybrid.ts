@@ -3,16 +3,14 @@
 // the always-on floor. Every model response is re-validated with validateOp
 // before it can reach the engine.
 
-import { validateOp, type Op } from '../core/ops';
+import { type Op } from '../core/ops';
 import { isTemplateName, type TemplateName } from '../core/templates';
 import { getActiveMode } from '../core/modes';
-import {
-  parseCommand,
-  isTemplateCommand,
-  type Clarify,
-  type RuleParse,
-  type TemplateCommand,
-} from '../core/ruleParser';
+import { parseCommand, isTemplateCommand } from '../core/ruleParser';
+import { coercePlanGenerate } from '../plan/ai';
+import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
+import { buildPlanTemplate } from '../plan/templates';
+import { validatePlanOp, type PlanOp } from '../plan/ops';
 
 export type Source = 'on-device' | 'cloud' | 'rules';
 /**
@@ -30,10 +28,20 @@ export type DeviceModelStatus =
   | 'failed';
 export type AppCheckStatus = 'skipped' | 'ready' | 'failed';
 
+/** The compile result is mode-specific (a validated op, a template, a generate
+ *  directive, or a clarify). The shell only checks for `clarify` and otherwise
+ *  hands it to the active mode's controller, so it is typed loosely here. */
 export interface CompileResult {
-  result: Op | TemplateCommand | Clarify;
+  result: object;
   source: Source;
   ms: number;
+}
+
+/** Plan-mode "generate a whole plan" result (ops already re-validated). */
+export interface GeneratePlanResult {
+  ops?: PlanOp[];
+  clarify?: string;
+  source: Source;
 }
 
 export interface VerifyResult {
@@ -101,18 +109,37 @@ export const ON_DEVICE_CREATE_OPTIONS = {
 const ON_DEVICE_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
-// Structured-output schemas. The on-device Prompt API takes a plain JSON
-// Schema (`responseConstraint`); the cloud path takes the Firebase `Schema`
-// builder (`responseSchema`). The constraints now live on the active
-// EditorMode (core/modes) so this layer stays mode-agnostic; they remain the
-// source of truth and must stay in lockstep with the Schema objects built in
-// initFirebase. Re-exported for back-compat and tests.
+// Structured-output schemas. The on-device Prompt API takes a plain JSON Schema
+// (`responseConstraint`), which the active EditorMode owns (core/modes) so this
+// layer stays mode-agnostic. The cloud path needs Firebase `Schema` objects, so
+// toFirebaseSchema() converts the same plain constraints at runtime — one
+// source of truth per mode, no hand-kept duplicate.
 
-/** On-device constraint for the intent/edit-op model. `depth` is mm or "through". */
-export const OP_RESPONSE_CONSTRAINT = getActiveMode().ai.opConstraint;
-
-/** On-device constraint for the verifier model — not the edit-op schema. */
-export const VERIFY_RESPONSE_CONSTRAINT = getActiveMode().ai.verifyConstraint;
+/** Convert a plain JSON-Schema node into a Firebase AI `Schema`. Supports the
+ *  subset our constraints use: object (all props optional), array, number,
+ *  string, boolean, and anyOf. `S` is the firebase/ai `Schema` builder. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
+  if (Array.isArray(node.anyOf)) {
+    return S.anyOf({ anyOf: (node.anyOf as Record<string, unknown>[]).map((n) => toFirebaseSchema(n, S)) });
+  }
+  switch (node.type) {
+    case 'number': return S.number();
+    case 'string': return S.string();
+    case 'boolean': return S.boolean();
+    case 'array':
+      return S.array({ items: toFirebaseSchema((node.items as Record<string, unknown>) ?? { type: 'string' }, S) });
+    case 'object':
+    default: {
+      const props = (node.properties as Record<string, Record<string, unknown>>) ?? {};
+      const properties: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(props)) properties[k] = toFirebaseSchema(v, S);
+      const keys = Object.keys(properties);
+      // Every property is optional — small models omit most fields per op.
+      return S.object(keys.length ? { properties, optionalProperties: keys } : { properties });
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Config / lazy init.
@@ -276,49 +303,12 @@ async function initFirebase(): Promise<Models | null> {
     const { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, Schema } = await import('firebase/ai');
     const ai = getAI(app, { backend: new GoogleAIBackend() });
 
-    const sizeProps = {
-      w: Schema.number(), d: Schema.number(), h: Schema.number(),
-      diameter: Schema.number(), height: Schema.number(),
-      topDiameter: Schema.number(), tube: Schema.number(),
-    };
-    const vecProps = { x: Schema.number(), y: Schema.number(), z: Schema.number() };
-    const opSchema = Schema.object({
-      properties: {
-        op: Schema.string(),
-        shape: Schema.string(),
-        params: Schema.object({ properties: sizeProps, optionalProperties: Object.keys(sizeProps) }),
-        target: Schema.string(),
-        tool: Schema.string(),
-        targets: Schema.array({ items: Schema.string() }),
-        dx: Schema.number(), dy: Schema.number(), dz: Schema.number(),
-        axis: Schema.string(),
-        deg: Schema.number(),
-        factor: Schema.number(),
-        deltaMm: Schema.object({ properties: vecProps, optionalProperties: ['x', 'y', 'z'] }),
-        diameter: Schema.number(),
-        depth: Schema.anyOf({ anyOf: [Schema.number(), Schema.string()] }),
-        count: Schema.number(),
-        spacing: Schema.number(),
-        radius: Schema.number(),
-        to: Schema.string(),
-        mode: Schema.string(),
-        template: Schema.string(),
-        clarify: Schema.string(),
-      },
-      optionalProperties: [
-        'shape', 'params', 'target', 'tool', 'targets', 'dx', 'dy', 'dz', 'axis',
-        'deg', 'factor', 'deltaMm', 'diameter', 'depth', 'count', 'spacing',
-        'radius', 'to', 'mode', 'template', 'clarify', 'op',
-      ],
-    });
-
-    const verifySchema = Schema.object({
-      properties: {
-        matchesIntent: Schema.boolean(),
-        issue: Schema.string(),
-      },
-      optionalProperties: ['issue'],
-    });
+    // Build all cloud schemas from the ACTIVE mode's plain-JSON constraints, so
+    // the cloud and on-device paths share one source of truth per mode.
+    const modeAi = getActiveMode().ai;
+    const opSchema = toFirebaseSchema(modeAi.opConstraint, Schema);
+    const verifySchema = toFirebaseSchema(modeAi.verifyConstraint, Schema);
+    const templateSchema = toFirebaseSchema(modeAi.generateConstraint, Schema);
 
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
@@ -328,7 +318,7 @@ async function initFirebase(): Promise<Models | null> {
       },
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
-        promptOptions: { responseConstraint: OP_RESPONSE_CONSTRAINT },
+        promptOptions: { responseConstraint: modeAi.opConstraint },
       },
     });
 
@@ -340,26 +330,8 @@ async function initFirebase(): Promise<Models | null> {
       },
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
-        promptOptions: { responseConstraint: VERIFY_RESPONSE_CONSTRAINT },
+        promptOptions: { responseConstraint: modeAi.verifyConstraint },
       },
-    });
-
-    const templateSchema = Schema.object({
-      properties: {
-        template: Schema.string(),
-        params: Schema.object({
-          properties: {
-            cupDiameterMm: Schema.number(), heightMm: Schema.number(), wallMm: Schema.number(),
-            angleDeg: Schema.number(), phoneThicknessMm: Schema.number(), widthMm: Schema.number(),
-            depthMm: Schema.number(), rodDiameterMm: Schema.number(), diameterMm: Schema.number(),
-          },
-          optionalProperties: [
-            'cupDiameterMm', 'heightMm', 'wallMm', 'angleDeg', 'phoneThicknessMm',
-            'widthMm', 'depthMm', 'rodDiameterMm', 'diameterMm',
-          ],
-        }),
-      },
-      optionalProperties: ['params'],
     });
 
     const template = getGenerativeModel(ai, {
@@ -496,19 +468,6 @@ function numericParams(raw: unknown): Record<string, number> {
   return out;
 }
 
-/** Validate untrusted model JSON into a compile result, or null if unusable. */
-function coerceResult(raw: unknown): Op | TemplateCommand | Clarify | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj.clarify === 'string' && obj.clarify.trim()) return { clarify: obj.clarify.trim() };
-  if (obj.template !== undefined) {
-    if (!isTemplateName(obj.template)) return null;
-    return { template: obj.template, params: numericParams(obj.params) };
-  }
-  const v = validateOp(obj);
-  return v.ok ? v.op : null;
-}
-
 type ModelResponse = { text: () => string; inferenceSource?: string };
 
 /**
@@ -545,15 +504,16 @@ export async function compileCommand(
   const models = await ensureModels();
   if (models?.intent) {
     try {
-      const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected part: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
+      const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
       const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
-      const result = response ? coerceResult(extractJson(response.text())) : null;
+      // The active mode coerces untrusted JSON into a validated result (or null).
+      const result = response ? getActiveMode().coerce(extractJson(response.text())) : null;
       if (result) return { result, source: sourceOf(response!), ms: Date.now() - t0 };
     } catch (err) {
       noteError('intent model', err);
     }
   }
-  const result: RuleParse = parseCommand(utterance);
+  const result = getActiveMode().parse(utterance);
   return { result, source: 'rules', ms: Date.now() - t0 };
 }
 
@@ -612,4 +572,37 @@ export async function generateTemplate(prompt: string): Promise<TemplateResult> 
   const ruled = parseCommand(prompt);
   if (isTemplateCommand(ruled)) return { ...ruled, source: 'rules' };
   return { clarify: 'Which design: cup grip, phone stand, hook, or utensil holder?', source: 'rules' };
+}
+
+/**
+ * Plan-mode "generate a whole plan" (ONLY_IN_CLOUD, same hybrid wrapper as the
+ * part template path). The cloud model returns {ops:[...]}; code re-validates
+ * and caps them. Falls back to the deterministic rule parser + a plan template
+ * when the cloud is unavailable, so "two bedroom plan" works with no AI.
+ */
+export async function generatePlan(prompt: string): Promise<GeneratePlanResult> {
+  const models = await ensureModels();
+  if (models?.template) {
+    try {
+      const { response } = await models.template.generateContent(
+        `${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`,
+      );
+      const coerced = coercePlanGenerate(extractJson(response.text()));
+      if (coerced && 'ops' in coerced) return { ops: coerced.ops, source: sourceOf(response) };
+      if (coerced && 'clarify' in coerced) return { clarify: coerced.clarify, source: sourceOf(response) };
+    } catch (err) {
+      noteError('plan generate model', err);
+    }
+  }
+  // Rules fallback: a named template → re-validated ops.
+  const ruled = parsePlanCommand(prompt);
+  if (isPlanGenerate(ruled)) {
+    const ops: PlanOp[] = [];
+    for (const env of buildPlanTemplate(ruled.generate)) {
+      const v = validatePlanOp(env);
+      if (v.ok) ops.push(v.op);
+    }
+    if (ops.length) return { ops, source: 'rules' };
+  }
+  return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
 }

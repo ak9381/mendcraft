@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { buildScene } from '../core/geometry';
 import { BED, type SceneState } from '../core/scene';
+import type { ModeController, ViewportHandle } from '../core/controller';
 
-export interface ViewportHandle {
+interface PartViewport {
   render(state: SceneState): void;
   /** Screen -> part id under the given client (CSS pixel) coordinates. */
   pick(clientX: number, clientY: number): string | null;
@@ -14,7 +15,23 @@ export interface ViewportHandle {
   dispose(): void;
 }
 
-export function createViewport(container: HTMLElement, onSelect: (partId: string | null) => void): ViewportHandle {
+/** Part-mode renderer bound to the generic ModeController contract. The 3D
+ *  viewport keeps its own orbit/click; pinch-drag flows through the controller
+ *  (dragSelectedMm), so this handle needs no world-space drag hooks. */
+export function createPartRenderer(
+  container: HTMLElement,
+  controller: ModeController,
+  onSelect: (id: string | null) => void,
+): ViewportHandle {
+  const vp = createViewport(container, onSelect);
+  return {
+    render: () => vp.render(controller.snapshot() as SceneState),
+    pick: vp.pick,
+    dispose: vp.dispose,
+  };
+}
+
+function createViewport(container: HTMLElement, onSelect: (partId: string | null) => void): PartViewport {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf4f4f5);
 

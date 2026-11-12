@@ -222,6 +222,22 @@ button.primary:hover {
   display: block;
 }
 
+/* Plan mode: the SVG editor fills the viewport (white "paper"); the optional
+   3D extrude overlays it when toggled on. */
+.plan-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  cursor: crosshair;
+}
+.plan-3d {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
 .sim-cursor {
   position: absolute;
   width: 28px;

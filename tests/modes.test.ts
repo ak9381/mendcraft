@@ -5,9 +5,12 @@ import {
   listModes,
   setActiveMode,
   partMode,
+  planMode,
 } from '../src/core/modes';
-import { isClarify, isTemplateCommand } from '../src/core/ruleParser';
+import { isTemplateCommand } from '../src/core/ruleParser';
 import { TEMPLATE_NAMES } from '../src/core/templates';
+
+const isClarify = (r: object): boolean => 'clarify' in r;
 
 describe('mode registry', () => {
   it('hosts the part, plan, and ui modes', () => {
@@ -15,49 +18,60 @@ describe('mode registry', () => {
     expect(ids).toEqual(expect.arrayContaining(['part', 'plan', 'ui']));
   });
 
-  it('defaults to the ready 3D part mode', () => {
-    expect(getActiveMode().id).toBe('part');
+  it('defaults to the ready 2D plan mode (the hero)', () => {
+    expect(getActiveMode().id).toBe('plan');
     expect(getActiveMode().status).toBe('ready');
   });
 
-  it('marks plan and ui as coming-soon and refuses to activate them', () => {
-    expect(getMode('plan')?.status).toBe('coming-soon');
+  it('plan and part are ready; ui is coming-soon and refuses to activate', () => {
+    expect(getMode('plan')?.status).toBe('ready');
+    expect(getMode('part')?.status).toBe('ready');
     expect(getMode('ui')?.status).toBe('coming-soon');
-    expect(setActiveMode('plan')).toBe(false);
     expect(setActiveMode('ui')).toBe(false);
     expect(setActiveMode('nope')).toBe(false);
-    // Still on part after the failed switches.
-    expect(getActiveMode().id).toBe('part');
-    // The ready mode can be (re)activated.
+    // Part stays reachable (mode switch / ?mode=part).
     expect(setActiveMode('part')).toBe(true);
+    expect(getActiveMode().id).toBe('part');
+    // Restore the default.
+    expect(setActiveMode('plan')).toBe(true);
   });
 
-  it('exposes the 3D mode with starter items and quick-start hints', () => {
+  it('exposes the 3D part mode with starter items and quick-start hints', () => {
     const part = getMode('part');
     expect(part).toBe(partMode);
     expect(part?.label).toBe('3D part');
     expect(part?.starterItems).toEqual(TEMPLATE_NAMES);
     expect(part?.hints.length).toBeGreaterThan(0);
-    // The input placeholder + example come from the mode, not hard-coded.
     expect(part?.inputPlaceholder).toMatch(/cup grip/i);
     expect(part?.exampleCommand).toBe('cup grip');
   });
 
-  it("hints drive the UI helpers: every quick-start button parses to a buildable command", () => {
-    // The empty-plate buttons and onboarding "try a command" examples send
-    // hint.command through the mode parser; each must resolve (not clarify).
-    for (const h of partMode.hints) {
-      const parsed = partMode.parse(h.command);
-      expect(isClarify(parsed), `hint "${h.command}" should not clarify`).toBe(false);
-    }
-    // The canonical starter resolves to its template.
-    const cup = partMode.parse('cup grip');
-    expect(isTemplateCommand(cup) && cup.template).toBe('cupGrip');
+  it('exposes the plan mode with a DXF export label and plan hints', () => {
+    expect(getMode('plan')).toBe(planMode);
+    expect(planMode.label).toBe('2D plan');
+    expect(planMode.exportLabel).toMatch(/dxf/i);
+    expect(planMode.exampleCommand).toBe('two bedroom plan');
+    expect(planMode.starterItems.length).toBeGreaterThan(0);
   });
 
-  it('coming-soon modes are inert: parse clarifies and exposes no starter items', () => {
-    const plan = getMode('plan')!;
-    expect(plan.starterItems).toEqual([]);
-    expect(isClarify(plan.parse('anything'))).toBe(true);
+  it("every plan quick-start button parses to something buildable (not a clarify)", () => {
+    for (const h of planMode.hints) {
+      expect(isClarify(planMode.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
+    }
+  });
+
+  it("every part quick-start button parses to a buildable command", () => {
+    for (const h of partMode.hints) {
+      expect(isClarify(partMode.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
+    }
+    const cup = partMode.parse('cup grip');
+    expect(isTemplateCommand(cup as never) && (cup as { template: string }).template).toBe('cupGrip');
+  });
+
+  it('the coming-soon ui mode is inert: parse clarifies and exposes no starter items', () => {
+    const ui = getMode('ui')!;
+    expect(ui.status).toBe('coming-soon');
+    expect(ui.starterItems).toEqual([]);
+    expect(isClarify(ui.parse('anything'))).toBe(true);
   });
 });

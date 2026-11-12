@@ -14,13 +14,36 @@ export interface SimStep {
   delayMs?: number;
 }
 
-export const DEMO_SCRIPT: SimStep[] = [
+/**
+ * Frozen demo for the plan hero: "two-bedroom plan" (rules fallback, no AI) →
+ * the shared wall w3 comes pre-selected + dimensioned → "make it 4 meters" →
+ * the wall and its dimension jump → export DXF. The shared wall id (w3) is
+ * deterministic because applyGenerated resets the id counter (see plan/templates).
+ */
+export const PLAN_DEMO: SimStep[] = [
+  { label: 'Two-bedroom plan', utterance: 'two bedroom plan' },
+  { label: 'Make the shared wall 4 meters', utterance: 'make this wall 4 meters' },
+  { label: 'Thicken it by 50 mm', utterance: 'thicker by 50' },
+  { label: 'Add a door to it', utterance: 'add a door' },
+  { label: 'Export the DXF', action: undefined },
+];
+
+/** Frozen demo for the 3D part mode (reachable via ?mode=part&sim=1). */
+export const PART_DEMO: SimStep[] = [
   { label: 'Build a cup grip', utterance: 'cup grip' },
   { label: 'Select the sleeve', utterance: 'select sleeve' },
   { label: 'Make it narrower (triggers a thin-wall warning)', utterance: 'make it narrower by 7' },
   { label: 'Fix the wall', utterance: 'make it wider by 7' },
   { label: 'Export the STL', action: undefined },
 ];
+
+/** Back-compat alias (defaults to the plan hero demo). */
+export const DEMO_SCRIPT = PLAN_DEMO;
+
+/** The demo script for the active mode id. */
+export function demoFor(modeId: string): SimStep[] {
+  return modeId === 'part' ? PART_DEMO : PLAN_DEMO;
+}
 
 /** Mounts a visible on-screen cursor over `container`; mouse drag emulates a pinch. */
 export function mountSimCursor(container: HTMLElement, onEvent: (e: HandEvent) => void): () => void {

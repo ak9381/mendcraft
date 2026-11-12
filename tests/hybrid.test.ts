@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   compileCommand,
   generateTemplate,
@@ -8,19 +8,25 @@ import {
   checkDeviceAvailability,
   isDesignRequest,
   isEnabled,
-  OP_RESPONSE_CONSTRAINT,
   prepareHybrid,
   setModelsForTest,
-  VERIFY_RESPONSE_CONSTRAINT,
   verifyOp,
   type TextGenModel,
 } from '../src/ai/hybrid';
+import { partMode, setActiveMode } from '../src/core/modes';
 
 const model = (text: string, inferenceSource?: string): TextGenModel => ({
   generateContent: async () => ({ response: { text: () => text, inferenceSource } }),
 });
 
-afterEach(() => setModelsForTest(null));
+// The hybrid wrapper is mode-agnostic (it coerces/parses via the active mode).
+// These tests exercise the 3D-part op vocabulary, so pin the active mode to
+// 'part'; the default is now the 'plan' hero.
+beforeEach(() => setActiveMode('part'));
+afterEach(() => {
+  setModelsForTest(null);
+  setActiveMode('plan');
+});
 
 describe('hybrid compileCommand', () => {
   it('falls back to the rule parser when disabled (no Firebase calls)', async () => {
@@ -168,6 +174,10 @@ describe('hybrid generateTemplate', () => {
 });
 
 describe('verifier and op schemas', () => {
+  // The constraints now live on the active mode; assert the part mode's.
+  const OP_RESPONSE_CONSTRAINT = partMode.ai.opConstraint as { properties: Record<string, never> };
+  const VERIFY_RESPONSE_CONSTRAINT = partMode.ai.verifyConstraint;
+
   it('gives the verifier its own {matchesIntent, issue} schema', () => {
     expect(VERIFY_RESPONSE_CONSTRAINT).toEqual({
       type: 'object',
@@ -180,7 +190,7 @@ describe('verifier and op schemas', () => {
   });
 
   it('mirrors op fields in the on-device constraint and accepts numeric depth', () => {
-    const props = OP_RESPONSE_CONSTRAINT.properties;
+    const props = OP_RESPONSE_CONSTRAINT.properties as Record<string, never>;
     expect(props.depth).toEqual({ anyOf: [{ type: 'number' }, { type: 'string' }] });
     expect(props.params.properties).toMatchObject({ w: { type: 'number' }, diameter: { type: 'number' } });
     expect(props.deltaMm.properties).toEqual({

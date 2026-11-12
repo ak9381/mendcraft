@@ -1,23 +1,17 @@
 import './style.css';
-import { Engine, type SceneState } from './core/scene';
-import { buildTemplate, isTemplateName } from './core/templates';
-import { buildScene } from './core/geometry';
-import { meshesToSTL, downloadSTL } from './core/stl';
-import type { ViewportHandle } from './ui/viewport';
 import { getActiveMode, listModes, setActiveMode } from './core/modes';
+import type { ModeController, ViewportHandle } from './core/controller';
 import type { HandEvent } from './input/hands';
 import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from './input/presence';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
 import { createVoiceController, type VoiceController } from './input/voice';
-import { SIM_ACTIVE, DEMO_SCRIPT, mountSimCursor, playDemo } from './sim';
+import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo } from './sim';
 import {
   initDeviceModel,
   checkDeviceAvailability,
   compileCommand,
   verifyOp,
-  generateTemplate,
-  isDesignRequest,
   prepareHybrid,
   getHybridStatus,
   type DeviceModelStatus,
@@ -25,16 +19,14 @@ import {
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
-const DRAG_MM_RANGE = 300;
 
-const engine = new Engine();
-
-// Restore a previously chosen (ready) mode before reading the active one.
+// Restore a chosen (ready) mode: ?mode= wins, then localStorage, else default.
 try {
-  const storedMode = localStorage.getItem(MODE_KEY);
+  const queryMode = new URLSearchParams(window.location.search).get('mode');
+  const storedMode = queryMode ?? localStorage.getItem(MODE_KEY);
   if (storedMode) setActiveMode(storedMode);
 } catch {
-  // Storage blocked — fall back to the default mode.
+  // Storage blocked — fall back to the default mode ('plan').
 }
 const mode = getActiveMode();
 
@@ -70,7 +62,8 @@ app.innerHTML = `
     <div class="spacer"></div>
     <button id="btn-undo" type="button">Undo</button>
     <button id="btn-redo" type="button">Redo</button>
-    <button id="btn-export" type="button">Export STL</button>
+    <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
+    <button id="btn-export" type="button">${mode.exportLabel}</button>
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
   </header>
   <div id="statusbar" role="group" aria-label="System status">
@@ -84,7 +77,7 @@ app.innerHTML = `
     <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
   </div>
   <div id="layout">
-    <div id="viewport" role="application" aria-label="3D build viewport. Click a part to select it.">
+    <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
       <div id="resume-hint" class="resume-hint" role="status" hidden>Look at the screen to resume</div>
       <p id="privacy-line" class="privacy-line" hidden>Face and hand data stay on this device. Nothing is uploaded.</p>
       <div id="empty-hint" class="empty-hint">
@@ -92,16 +85,16 @@ app.innerHTML = `
         <div class="hint-buttons">${hintButtonsHtml}</div>
       </div>
     </div>
-    <aside id="panel" aria-label="Build details">
+    <aside id="panel" aria-label="Design details">
       <div id="fail-states" role="alert"></div>
       <section>
-        <h2>Parts</h2>
+        <h2>Objects</h2>
         <ul id="parts-list"></ul>
       </section>
       <section>
         <h2>Command</h2>
         <form id="command-box">
-          <input id="command-input" type="text" placeholder="${mode.inputPlaceholder}" aria-label="Type a build command" autocomplete="off" />
+          <input id="command-input" type="text" placeholder="${mode.inputPlaceholder}" aria-label="Type a design command" autocomplete="off" />
           <button id="btn-say" type="submit">Send</button>
         </form>
         <p id="last-command" class="last-command"></p>
@@ -112,7 +105,7 @@ app.innerHTML = `
         <p id="verifier-result" class="verifier-result">No command run yet.</p>
       </section>
       <section>
-        <h2>Printability</h2>
+        <h2>Hints</h2>
         <ul id="warnings"></ul>
       </section>
     </aside>
@@ -149,6 +142,7 @@ const btnMic = el<HTMLButtonElement>('btn-mic');
 const btnAi = el<HTMLButtonElement>('btn-ai');
 const btnUndo = el<HTMLButtonElement>('btn-undo');
 const btnRedo = el<HTMLButtonElement>('btn-redo');
+const btn3d = el<HTMLButtonElement>('btn-3d');
 const btnExport = el<HTMLButtonElement>('btn-export');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
 const progressBar = el<HTMLDivElement>('progress-bar');
@@ -167,7 +161,6 @@ function say(message: string): void {
   }
 }
 
-/** Curated, de-duplicated screen-reader status (no TTS, polite — not spammy). */
 let lastStatusAnnounced = '';
 function announceStatus(message: string): void {
   if (message === lastStatusAnnounced) return;
@@ -202,28 +195,34 @@ function setBadge(source: 'on-device' | 'cloud' | 'rules'): void {
 }
 setBadge('rules');
 
-// ---- rendering ----
+// ---- controller + renderer (mode-provided) ----
+
+const controller: ModeController = await mode.createController();
+const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controller, (id) => {
+  if (!id) return;
+  controller.selectId(id);
+  renderAll();
+});
 
 function renderAll(): void {
-  const state = engine.getState();
-  viewport.render(state);
-  renderParts(state);
+  viewport.render();
+  renderParts();
   renderWarnings();
-  emptyHint.hidden = state.parts.length > 0;
+  emptyHint.hidden = controller.listItems().length > 0;
 }
 
-function renderParts(state: SceneState): void {
+function renderParts(): void {
+  const items = controller.listItems();
   partsList.innerHTML = '';
-  for (const part of state.parts) {
+  for (const item of items) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
     btn.type = 'button';
-    const selected = part.id === state.selectedId;
-    btn.textContent = part.name + (selected ? ' (selected)' : '');
-    btn.setAttribute('aria-pressed', String(selected));
-    if (selected) btn.classList.add('active');
+    btn.textContent = item.label + (item.selected ? ' (selected)' : '');
+    btn.setAttribute('aria-pressed', String(item.selected));
+    if (item.selected) btn.classList.add('active');
     btn.addEventListener('click', () => {
-      engine.apply({ op: 'select', target: part.id });
+      controller.selectId(item.id);
       renderAll();
     });
     li.appendChild(btn);
@@ -232,46 +231,15 @@ function renderParts(state: SceneState): void {
 }
 
 function renderWarnings(): void {
-  const warnings = engine.printability();
   warningsEl.innerHTML = '';
-  for (const w of warnings) {
+  for (const w of controller.warnings()) {
     const li = document.createElement('li');
-    li.textContent = w.message;
+    li.textContent = w;
     warningsEl.appendChild(li);
   }
 }
 
-// ---- viewport + selection ----
-
-const viewport: ViewportHandle = await mode.createRenderer(viewportEl, (partId) => {
-  if (!partId) return;
-  engine.apply({ op: 'select', target: partId });
-  renderAll();
-});
-
 // ---- command pipeline (shared by voice, text, and sim) ----
-
-function applyTemplateResult(result: { template: string; params: Record<string, number> }): boolean {
-  opJsonEl.textContent = JSON.stringify(result, null, 2);
-  if (!isTemplateName(result.template)) {
-    verifierEl.textContent = `Unknown template "${result.template}".`;
-    return false;
-  }
-  // A template starts its design fresh: replace the plate's parts in one
-  // undoable step (undo brings the previous design back).
-  const applied = engine.applyTemplate(buildTemplate(result.template, result.params));
-  if (!applied.ok) {
-    verifierEl.textContent = `Template step failed: ${applied.error}`;
-    say(`Could not finish: ${applied.error}`);
-    renderAll();
-    return false;
-  }
-  verifierEl.textContent = `Applied template "${result.template}".`;
-  say(`Built ${result.template}.`);
-  renderAll();
-  announceWarnings();
-  return true;
-}
 
 async function runUtterance(utterance: string): Promise<void> {
   lastCommandEl.textContent = `"${utterance}"`;
@@ -285,69 +253,71 @@ async function runUtterance(utterance: string): Promise<void> {
 }
 
 async function runUtteranceInner(utterance: string): Promise<boolean> {
-  const before = engine.summary();
-  const state = engine.getState();
-
-  // Longer design requests go to the cloud-only template model, with the
-  // rule parser as fallback inside generateTemplate.
-  if (isDesignRequest(utterance)) {
-    const tmpl = await generateTemplate(utterance);
-    setBadge(tmpl.source);
-    if ('clarify' in tmpl) {
+  // Whole-design requests go to the cloud "generate" path (rules fallback
+  // inside the controller), everything else through the single-op intent path.
+  if (controller.isDesignRequest(utterance)) {
+    const { source, step, clarify } = await controller.generate(utterance);
+    setBadge(source);
+    if (clarify) {
       opJsonEl.textContent = '';
-      verifierEl.textContent = tmpl.clarify;
-      say(tmpl.clarify);
+      verifierEl.textContent = clarify;
+      say(clarify);
       return false;
     }
-    return applyTemplateResult(tmpl);
+    if (!step.ok) {
+      verifierEl.textContent = `Could not build: ${step.error ?? 'unknown error'}`;
+      say('Could not build that.');
+      renderAll();
+      return false;
+    }
+    verifierEl.textContent = step.message ?? 'Done.';
+    say(step.message ?? 'Done.');
+    renderAll();
+    announceWarnings();
+    return true;
   }
 
-  const { result, source } = await compileCommand(utterance, before, state.selectedId);
+  const before = controller.summary();
+  const { result, source } = await compileCommand(utterance, before, controller.selectedId());
   setBadge(source);
 
   if ('clarify' in result) {
     opJsonEl.textContent = '';
-    verifierEl.textContent = result.clarify;
-    say(result.clarify);
+    verifierEl.textContent = (result as { clarify: string }).clarify;
+    say((result as { clarify: string }).clarify);
     return false;
   }
 
-  if ('template' in result) {
-    return applyTemplateResult(result);
-  }
-
-  // Single op: validate (AI output is never trusted), apply, then verify intent.
-  const validated = mode.validateOp(result);
   opJsonEl.textContent = JSON.stringify(result, null, 2);
-  if (!validated.ok) {
-    verifierEl.textContent = `Rejected: ${validated.error}`;
-    say(`I couldn't do that: ${validated.error}`);
+  const step = controller.applyResult(result as Record<string, unknown>);
+  if (!step.ok) {
+    verifierEl.textContent = `Rejected: ${step.error ?? 'invalid'}`;
+    say(`I couldn't do that: ${step.error ?? 'invalid command'}`);
     return false;
   }
-
-  const applied = engine.apply(validated.op);
-  if (!applied.ok) {
-    verifierEl.textContent = `Failed: ${applied.error}`;
-    say(`Couldn't do that: ${applied.error}`);
-    return false;
-  }
-
   renderAll();
-  const after = engine.summary();
-  const verdict = await verifyOp(validated.op, before, after, applied.warnings.map((w) => w.message));
-  if (verdict.matchesIntent) {
-    verifierEl.textContent = `Matches intent (${verdict.source}).`;
+
+  // Single ops get the intent verifier; templates/generate skip it (no `op`).
+  if (step.op) {
+    const after = controller.summary();
+    const verdict = await verifyOp(step.op as never, before, after, step.warnings);
+    if (verdict.matchesIntent) {
+      verifierEl.textContent = `${step.message ?? 'Matches intent'} (${verdict.source}).`;
+    } else {
+      verifierEl.textContent = `Possible mismatch: ${verdict.issue ?? 'unverified'} (${verdict.source}).`;
+      say(verdict.issue ?? 'That may not match what you asked for.');
+    }
   } else {
-    verifierEl.textContent = `Possible mismatch: ${verdict.issue ?? 'unverified'} (${verdict.source}).`;
-    say(verdict.issue ?? 'That may not match what you asked for.');
+    verifierEl.textContent = step.message ?? 'Done.';
   }
   announceWarnings();
+  if (step.message && step.op) say(step.message);
   return true;
 }
 
 function announceWarnings(): void {
-  const warnings = engine.printability();
-  if (warnings.length > 0) say(warnings[0].message);
+  const w = controller.warnings();
+  if (w.length > 0) say(w[0]);
 }
 
 commandForm.addEventListener('submit', (e) => {
@@ -358,25 +328,32 @@ commandForm.addEventListener('submit', (e) => {
   void runUtterance(text);
 });
 
-// ---- undo/redo/export ----
+// ---- undo / redo / export / 3D ----
 
 btnUndo.addEventListener('click', () => {
-  engine.apply({ op: 'undo' });
+  controller.applyOp({ op: 'undo' });
   renderAll();
 });
 btnRedo.addEventListener('click', () => {
-  engine.apply({ op: 'redo' });
+  controller.applyOp({ op: 'redo' });
   renderAll();
 });
 btnExport.addEventListener('click', () => {
-  const meshes = buildScene(engine.getState());
-  if (meshes.length === 0) {
-    say('Nothing to export yet.');
-    return;
-  }
-  downloadSTL(meshesToSTL(meshes), 'mendcraft.stl');
-  say('Exported STL.');
+  controller.export();
+  say(`${mode.exportLabel}.`);
 });
+
+if (viewport.toggle3D) {
+  btn3d.hidden = false;
+  btn3d.addEventListener('click', () => {
+    const on = btn3d.getAttribute('aria-pressed') !== 'true';
+    const now = viewport.toggle3D!(on);
+    btn3d.setAttribute('aria-pressed', String(now));
+    btn3d.classList.toggle('active', now);
+    btn3d.textContent = now ? '2D view' : '3D view';
+    say(now ? '3D view.' : '2D view.');
+  });
+}
 
 // ---- voice ----
 
@@ -406,7 +383,6 @@ handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
 
 function placeCursor(x: number, y: number): void {
-  // With the real camera on, the full skeleton overlay replaces the dot.
   if (tracker) {
     handCursor.hidden = true;
     return;
@@ -427,41 +403,41 @@ function handleHandEvent(e: HandEvent): void {
     case 'tracking':
       placeCursor(e.x, e.y);
       break;
-    case 'pinch-start':
+    case 'pinch-start': {
       placeCursor(e.x, e.y);
       handCursor.classList.add('pinching');
+      const { clientX, clientY } = toClient(e.x, e.y);
+      viewport.beginDrag?.(clientX, clientY);
       break;
+    }
     case 'pinch-tap': {
       placeCursor(e.x, e.y);
       onboarding.notifyPinch();
       const { clientX, clientY } = toClient(e.x, e.y);
-      const partId = viewport.pick(clientX, clientY);
-      if (partId) {
-        engine.apply({ op: 'select', target: partId });
+      const id = viewport.pick(clientX, clientY);
+      if (id) {
+        controller.selectId(id);
         renderAll();
       }
       break;
     }
     case 'pinch-move': {
       placeCursor(e.x, e.y);
-      const state = engine.getState();
-      if (state.selectedId) {
-        const applied = engine.apply({
-          op: 'move',
-          target: 'selected',
-          dx: e.dx * DRAG_MM_RANGE,
-          dy: -e.dy * DRAG_MM_RANGE,
-          dz: 0,
-        });
-        if (applied.ok) renderAll();
+      const { clientX, clientY } = toClient(e.x, e.y);
+      if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
+      if (controller.selectedId()) {
+        const step = controller.dragSelectedMm(e.dx * controller.dragRangeMm, -e.dy * controller.dragRangeMm);
+        if (step?.ok) renderAll();
       }
       break;
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      viewport.endDrag?.();
       break;
     case 'lost':
       handCursor.hidden = true;
+      viewport.endDrag?.();
       break;
   }
 }
@@ -551,7 +527,7 @@ async function enableCamera(): Promise<boolean> {
     clearFail('fail-camera');
     syncOperatorButtons();
     announceStatus('Camera on.');
-    say('Camera on. Pinch to select or drag a part. Press "Register me" to lock onto your face.');
+    say('Camera on. Pinch to select or drag. Press "Register me" to lock onto your face.');
     return true;
   } catch {
     tracker = null;
@@ -615,8 +591,6 @@ btnReregister.addEventListener('click', () => {
 });
 
 // ---- on-device AI ----
-// A Firebase key is not "on-device ready". The user must click to call
-// initializeDeviceModel; we then show downloading, ready, or failed.
 
 const DEVICE_LABELS: Record<DeviceModelStatus, string> = {
   idle: 'Checking on-device AI…',
@@ -693,9 +667,7 @@ for (const btn of emptyHint.querySelectorAll<HTMLButtonElement>('button[data-cmd
   btn.addEventListener('click', () => void runUtterance(btn.dataset.cmd!));
 }
 
-// Mode switch: 'ready' modes reload the shell under the chosen mode; coming-soon
-// buttons are disabled. Only 'part' is ready today, so this mostly surfaces the
-// roadmap, but the switch is wired for when 'plan'/'ui' land.
+// Mode switch: 'ready' modes reload the shell under the chosen mode.
 for (const btn of document.querySelectorAll<HTMLButtonElement>('#mode-switch [data-mode]')) {
   btn.addEventListener('click', () => {
     const id = btn.dataset.mode!;
@@ -706,7 +678,9 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>('#mode-switch [da
       } catch {
         // Storage blocked — the mode just won't persist across reloads.
       }
-      location.reload();
+      const url = new URL(window.location.href);
+      url.searchParams.set('mode', id);
+      window.location.assign(url.toString());
     }
   });
 }
@@ -728,7 +702,7 @@ if (SIM_ACTIVE) {
   btnDemo?.addEventListener('click', () => {
     btnDemo.disabled = true;
     void playDemo(
-      DEMO_SCRIPT,
+      demoFor(mode.id),
       runUtterance,
       (step) => {
         lastCommandEl.textContent = `SIM: ${step.label}`;
@@ -847,7 +821,7 @@ function createOnboarding() {
           body.textContent = 'Camera is on. ✓';
           actions.append(button('Next', next, 'primary'));
         } else {
-          body.textContent = 'Turn on the camera to control parts by pinching. We will ask the browser for permission.';
+          body.textContent = 'Turn on the camera to control objects by pinching. We will ask the browser for permission.';
           const enable = button('Enable camera', async () => {
             enable.disabled = true;
             note.textContent = 'Starting camera…';
@@ -868,10 +842,10 @@ function createOnboarding() {
 
       case 'register':
         if (!cameraOn) {
-          body.textContent = 'Registration locks tracking to your face so other people nearby cannot move your parts. It needs the camera, which is off — you can set it up later from “Register me”.';
+          body.textContent = 'Registration locks tracking to your face so other people nearby cannot move your design. It needs the camera, which is off — you can set it up later from “Register me”.';
           actions.append(button('Skip', next, 'primary'));
         } else {
-          body.textContent = 'Face the camera and press “Register me”. We will lock onto your face so only your hands control the build.';
+          body.textContent = 'Face the camera and press “Register me”. We will lock onto your face so only your hands control the design.';
           const reg = button('Register me', () => {
             if (registerOperator()) {
               next();
@@ -886,17 +860,17 @@ function createOnboarding() {
 
       case 'pinch':
         if (!cameraOn) {
-          body.textContent = 'Pinching uses the camera, which is off. You can select and move parts with voice or the keyboard instead.';
+          body.textContent = 'Pinching uses the camera, which is off. You can select and move objects with voice or the keyboard instead.';
           actions.append(button('Skip', next, 'primary'));
         } else {
-          body.textContent = 'Touch your thumb and index finger together to pinch. Pinch now to select a part — this step advances as soon as a pinch is detected.';
+          body.textContent = 'Touch your thumb and index finger together to pinch. Pinch now to select — this step advances as soon as a pinch is detected.';
           note.textContent = 'Waiting for a pinch…';
           actions.append(button('Skip', next, 'ghost'));
         }
         break;
 
       case 'command': {
-        body.textContent = `Say or type a command to build something. Try “${mode.exampleCommand}”. This step finishes when a command succeeds.`;
+        body.textContent = `Say or type a command. Try “${mode.exampleCommand}”. This step finishes when a command succeeds.`;
         const quick = document.createElement('div');
         quick.className = 'onboard-quick';
         for (const h of mode.hints.slice(0, 3)) {
@@ -940,7 +914,6 @@ function createOnboarding() {
     (card.querySelector('#onboard-title') as HTMLElement | null)?.focus();
   }
 
-  // Focus trap + Escape to close (WCAG 2.1.2 / 2.4.3).
   overlay.addEventListener('keydown', (e) => {
     if (!open) return;
     if (e.key === 'Escape') {
@@ -987,8 +960,6 @@ try {
 } catch {
   onboardedAlready = false;
 }
-// Skip auto-onboarding on the judge path so the demo UI is never obscured;
-// it stays reachable from the Help / tour button.
 if (!onboardedAlready && !SIM_ACTIVE) onboarding.open(0);
 
 if (!navigator.mediaDevices?.getUserMedia) {
