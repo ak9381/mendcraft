@@ -6,6 +6,11 @@ import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from 
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
 import { createVoiceController, type VoiceController } from './input/voice';
+import { createGestureRecognizer } from './input/gestures';
+import type { GestureAction } from './input/gestureMap';
+import { createGesturesPanel } from './ui/gesturesPanel';
+import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
+import { createReferencePanel } from './ui/referencePanel';
 import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo } from './sim';
 import {
   initDeviceModel,
@@ -54,6 +59,9 @@ app.innerHTML = `
     <button id="btn-register" type="button" hidden>Register me</button>
     <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Enable mic</button>
+    <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
+    <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
+    <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
       <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
@@ -251,6 +259,82 @@ function renderWarnings(): void {
   }
 }
 
+// ---- input extras: custom gestures, on-screen keyboard, reference panel ----
+
+const btnGestures = el<HTMLButtonElement>('btn-gestures');
+const btnKeyboard = el<HTMLButtonElement>('btn-keyboard');
+const btnReference = el<HTMLButtonElement>('btn-reference');
+
+// On-screen keyboard lives at the bottom of the page (fixed), so elementFromPoint
+// hit-testing works for the hand pointer; the float panels sit over the canvas.
+const keyboard = createOnScreenKeyboard();
+document.body.appendChild(keyboard.element);
+const referencePanel = createReferencePanel();
+viewportEl.appendChild(referencePanel.element);
+const gesturesPanel = createGesturesPanel({ onChange: (m) => { gestureMap = m; } });
+viewportEl.appendChild(gesturesPanel.element);
+
+let gestureMap = gesturesPanel.getMap();
+const gestureRecognizer = createGestureRecognizer();
+
+function toggleButton(btn: HTMLButtonElement, on: boolean): void {
+  btn.setAttribute('aria-pressed', String(on));
+  btn.classList.toggle('active', on);
+}
+
+btnGestures.addEventListener('click', () => {
+  gesturesPanel.toggle();
+  toggleButton(btnGestures, gesturesPanel.isOpen());
+});
+btnKeyboard.addEventListener('click', () => {
+  if (keyboard.isOpen()) keyboard.close();
+  else keyboard.open();
+  toggleButton(btnKeyboard, keyboard.isOpen());
+  say(keyboard.isOpen() ? 'On-screen keyboard shown.' : 'On-screen keyboard hidden.');
+});
+btnReference.addEventListener('click', () => {
+  referencePanel.toggle();
+  toggleButton(btnReference, referencePanel.isOpen());
+  say(referencePanel.isOpen() ? 'Reference panel open.' : 'Reference panel closed.');
+});
+
+// Discrete gesture actions fire once on the gesture's rising edge. Continuous
+// actions (select/drag/pan/zoom) are already driven by the pinch pointer, so
+// they are intentionally no-ops here. Everything routes through existing
+// handlers (the Undo button, the viewport's key handler), keeping undo/redo
+// intact and camera-or-mouse agnostic.
+const DISCRETE_ACTIONS: Partial<Record<GestureAction, () => void>> = {
+  undo: () => btnUndo.click(),
+  delete: () => viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })),
+  confirm: () => viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+  'open-palette': () => {
+    const btn = viewportEl.querySelector<HTMLButtonElement>('.mc-palette-btn');
+    if (btn) { btn.focus(); say('Palette.'); }
+  },
+};
+
+function runGestureAction(action: GestureAction): void {
+  DISCRETE_ACTIONS[action]?.();
+}
+
+function processGestureFrame(f: PresenceFrame): void {
+  // Operator lock is respected upstream: f.hands already contains only the
+  // locked operator's hands (empty while paused).
+  if (f.paused) {
+    gestureRecognizer.reset();
+    gesturesPanel.feedPreview('none');
+    return;
+  }
+  const res = gestureRecognizer.update({ hands: f.hands.map((h) => h.points), now: performance.now() });
+  gesturesPanel.feedPreview(res.gesture);
+  for (const g of res.fired) runGestureAction(gestureMap[g]);
+  // Two-hand pinch-zoom nudges the viewport zoom when mapped to "zoom".
+  if (res.gesture === 'two-hand-zoom' && gestureMap['two-hand-zoom'] === 'zoom' && Math.abs(res.zoomDelta) > 0.015) {
+    const key = res.zoomDelta > 0 ? '=' : '-';
+    viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  }
+}
+
 // ---- command pipeline (shared by voice, text, and sim) ----
 
 async function runUtterance(utterance: string): Promise<void> {
@@ -445,6 +529,8 @@ function handleHandEvent(e: HandEvent): void {
     case 'tracking': {
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
+      // When the on-screen keyboard is up, an open hand over it dwells on keys.
+      if (keyboard.isOpen() && keyboard.hoverAt(clientX, clientY)) break;
       viewport.hover?.(clientX, clientY); // ghost previews track the open hand
       break;
     }
@@ -459,6 +545,8 @@ function handleHandEvent(e: HandEvent): void {
       placeCursor(e.x, e.y);
       onboarding.notifyPinch();
       const { clientX, clientY } = toClient(e.x, e.y);
+      // A pinch over the on-screen keyboard presses the key under the cursor.
+      if (keyboard.isOpen() && keyboard.pressAt(clientX, clientY)) break;
       if (viewport.tap?.(clientX, clientY)) {
         renderAll(); // a palette/tool consumed the tap
         break;
@@ -529,6 +617,8 @@ function onPresenceFrame(f: PresenceFrame): void {
     ? f.facing ? 'facing screen' : 'looking away'
     : f.facing ? 'facing screen' : 'no face';
   operatorStateEl.textContent = f.registered ? 'locked to you' : 'anyone can drive';
+
+  processGestureFrame(f);
 }
 
 function resetPresenceStatus(): void {
@@ -575,6 +665,8 @@ async function enableCamera(): Promise<boolean> {
     btnCamera.textContent = 'Camera on';
     clearFail('fail-camera');
     syncOperatorButtons();
+    // Hands mode on: focusing a text field now raises the on-screen keyboard.
+    keyboard.setAutoOpen(true);
     announceStatus('Camera on.');
     say('Camera on. Pinch to select or drag. Press "Register me" to lock onto your face.');
     return true;
@@ -602,6 +694,7 @@ function disableCamera(): void {
   btnCamera.textContent = 'Enable camera';
   handCursor.hidden = true;
   syncOperatorButtons();
+  keyboard.setAutoOpen(false);
   resetPresenceStatus();
   say('Camera off.');
 }
