@@ -104,6 +104,22 @@ export function createPlanController(): ModeController {
       return { source: res.source, step: { ok: false, warnings: [] }, clarify: res.clarify };
     },
 
+    applyGenerated(payload): StepResult {
+      const ops = (payload as { ops?: unknown }).ops;
+      if (!Array.isArray(ops)) return { ok: false, error: 'No plan ops to apply.', warnings: [] };
+      // Re-validate every op before it touches the engine — the ops came from a
+      // (possibly stale) queued cloud response, same untrusted-input discipline.
+      const valid: PlanOp[] = [];
+      for (const raw of ops) {
+        const v = validatePlanOp(raw);
+        if (v.ok) valid.push(v.op);
+      }
+      if (!valid.length) return { ok: false, error: 'Queued plan had no valid ops.', warnings: [] };
+      const applied = engine.applyGenerated(valid);
+      if (!applied.ok) return { ok: false, error: applied.error, warnings: [] };
+      return { ok: true, message: 'Plan created.', warnings: applied.warnings };
+    },
+
     dragSelectedMm(dxMm, dyMm): StepResult {
       return controller.applyOp({ op: 'move', target: 'selected', nums: { dx: dxMm, dy: dyMm } });
     },

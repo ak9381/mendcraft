@@ -59,6 +59,11 @@ export interface ModeController {
   isDesignRequest(utterance: string): boolean;
   /** Cloud/rules "generate a whole design" and apply it atomically. */
   generate(utterance: string): Promise<GenerateOutcome>;
+  /** Apply an ALREADY-COMPUTED generate result (plan ops / a ui Frame) as one
+   *  undoable step. Used when a queued offline job runs on reconnect and the
+   *  user accepts the preview. Re-validated like any other engine input. Omitted
+   *  by modes with no "generate whole design" path. */
+  applyGenerated?(payload: unknown): StepResult;
 
   /** Relative drag of the current selection by mm. Null if the mode has no
    *  mm-based drag (then the renderer's own world-space drag is used). */

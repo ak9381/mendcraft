@@ -398,6 +398,65 @@ button.primary:hover {
   font-size: 0.9em;
 }
 
+/* ---- online/offline indicator + offline cloud queue ---- */
+#net-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+}
+#net-state::before {
+  content: '';
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  background: currentColor;
+}
+.net-online { color: #22c55e; }
+.net-offline { color: #f59e0b; }
+
+#queue-section .queue-count {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 0.4em;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.25);
+  font-size: 0.78em;
+  text-align: center;
+}
+.queue-note {
+  color: var(--text-dim);
+  font-size: 0.85em;
+  margin: 0.2em 0 0.5em;
+}
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+}
+.queue-item {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: var(--radius);
+  padding: 0.5em 0.6em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+}
+.queue-item.queue-ready { border-color: rgba(34, 197, 94, 0.5); }
+.queue-item.queue-error { border-color: rgba(239, 68, 68, 0.5); }
+.queue-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6em;
+  align-items: baseline;
+}
+.queue-item-label { font-weight: 600; word-break: break-word; }
+.queue-item-status { color: var(--text-dim); font-size: 0.8em; white-space: nowrap; }
+.queue-item-actions { display: flex; gap: 0.4em; }
+.queue-item-actions button { font-size: 0.85em; padding: 0.25em 0.7em; }
+
 #onboarding {
   position: fixed;
   inset: 0;

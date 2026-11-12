@@ -6,7 +6,7 @@
 import { UiEngine } from './engine';
 import { validateUiOp, type UiOp } from './ops';
 import { buildUiTemplate, isUiTemplateName } from './templates';
-import { activeFrame, locate, nodeLabel, type FramePreset } from './doc';
+import { activeFrame, locate, nodeLabel, type Frame, type FramePreset } from './doc';
 import { toHtml, toSvg } from './export';
 import { generateUi } from '../../ai/hybrid';
 import type { ListItem, ModeController, StepResult } from '../../core/controller';
@@ -91,6 +91,14 @@ export function createUiController(): ModeController {
         return { source: res.source, step: { ok: true, message: res.note ?? 'Screen created.', warnings: applied.warnings } };
       }
       return { source: res.source, step: { ok: false, warnings: [] }, clarify: res.clarify };
+    },
+
+    applyGenerated(payload): StepResult {
+      const frame = (payload as { frame?: Frame }).frame;
+      if (!frame || typeof frame !== 'object') return { ok: false, error: 'No screen to apply.', warnings: [] };
+      const applied = engine.loadFrame(frame);
+      if (!applied.ok) return { ok: false, error: applied.error, warnings: [] };
+      return { ok: true, message: 'Screen created.', warnings: applied.warnings };
     },
 
     dragSelectedMm: () => null,

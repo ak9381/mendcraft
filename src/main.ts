@@ -32,7 +32,7 @@ import {
   type InteractionProfile, type ProfileAdaptation,
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
-import { isAccessibilityRequest, type A11yIssue } from './core/a11y';
+import { isAccessibilityRequest, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
   REASON_TEXT,
@@ -45,6 +45,12 @@ import {
 } from './ai/router';
 import { createRouterPanel } from './ui/routerPanel';
 import { recordInference } from './firebase/telemetry';
+import { generatePlan, generateUi } from './ai/hybrid';
+import { isFirebaseConfigured } from './firebase/app';
+import {
+  createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
+} from './offline/queue';
+import { createNetworkMonitor, routeBigJob } from './offline/network';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
@@ -111,6 +117,7 @@ app.innerHTML = `
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
+    <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
   </div>
   <div id="layout">
     <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
@@ -123,6 +130,11 @@ app.innerHTML = `
     </div>
     <aside id="panel" aria-label="Design details">
       <div id="fail-states" role="alert"></div>
+      <section id="queue-section" aria-label="Offline cloud job queue" hidden>
+        <h2>Cloud queue <span id="queue-count" class="queue-count"></span></h2>
+        <p id="queue-note" class="queue-note"></p>
+        <ul id="queue-list" class="queue-list"></ul>
+      </section>
       <section>
         <h2>Objects</h2>
         <ul id="parts-list"></ul>
@@ -187,6 +199,11 @@ const progressFill = el<HTMLDivElement>('progress-fill');
 const progressLabel = el<HTMLSpanElement>('progress-label');
 const commandForm = el<HTMLFormElement>('command-box');
 const commandInput = el<HTMLInputElement>('command-input');
+const netStateEl = el<HTMLSpanElement>('net-state');
+const queueSection = el<HTMLElement>('queue-section');
+const queueCountEl = el<HTMLSpanElement>('queue-count');
+const queueNoteEl = el<HTMLParagraphElement>('queue-note');
+const queueListEl = el<HTMLUListElement>('queue-list');
 
 // The interaction profile currently in force (hand-adaptive input). Declared
 // here so say() can honour its voiceVerbosity; retuned by applyActiveProfile().
@@ -566,6 +583,14 @@ async function runAccessibilityCheck(): Promise<boolean> {
   const sel = controller.applyOp({ op: 'select_set', ids: allIds });
   if (!sel.ok && allIds[0]) controller.selectId(allIds[0]);
   renderAll();
+  // Offline: the deterministic checks + fixes already ran above; queue only the
+  // cloud PROSE (explanations) for reconnect, as a previewable fix.
+  if (routeBigJob(netEnv()) === 'enqueue') {
+    await enqueueA11yJob(issues, controller.summary());
+    verifierEl.textContent += ' Cloud explanations queued for when you reconnect.';
+    say('Offline — queued cloud accessibility explanations for when you reconnect.');
+    return true;
+  }
   const res = await explainAccessibility(
     issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation })),
     controller.summary(),
@@ -574,6 +599,242 @@ async function runAccessibilityCheck(): Promise<boolean> {
   a11yPanel.setExplanations(res.items, res.source);
   return true;
 }
+
+// ---- offline-first cloud job queue --------------------------------------
+// Big cloud jobs (whole-plan + screen generation, the a11y audit's cloud
+// explanations) are the only things that NEED the network. Offline, we persist
+// them to IndexedDB and keep working locally; on reconnect the queue drains to
+// the cloud automatically and each result becomes a previewable fix (Apply /
+// Reject). Single-op edits never queue — they stay on-device (Nano / rules).
+
+const cloudConfigured = isFirebaseConfigured();
+const jobQueue = createJobQueue(createIndexedDbStore());
+const net = createNetworkMonitor({ navigator, target: window });
+let draining = false;
+
+/** Cloud results awaiting the user's accept/reject. Kept in memory only (large,
+ *  and re-fetchable on the next reconnect), keyed by job id. */
+type StagedResult =
+  | { kind: 'plan'; payload: { ops: unknown[] }; source: Source }
+  | { kind: 'ui'; payload: { frame: unknown }; source: Source }
+  | { kind: 'a11y'; items: A11yExplanation[]; source: Source };
+const staged = new Map<string, StagedResult>();
+/** Job ids with an accept/reject in flight — guards against a double-click
+ *  re-entering acceptJob before the async remove settles (double-apply). */
+const settling = new Set<string>();
+
+const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', ui: 'Screen', a11y: 'A11y audit' };
+
+/** Only plan/ui modes queue generation jobs; part stays fully synchronous. */
+function bigJobKind(): JobKind | null {
+  return mode.id === 'plan' || mode.id === 'ui' ? (mode.id as JobKind) : null;
+}
+
+function netEnv() {
+  return { online: net.online(), cloudConfigured };
+}
+
+function renderNetState(): void {
+  const online = net.online();
+  const n = jobQueue.count();
+  netStateEl.classList.toggle('net-online', online);
+  netStateEl.classList.toggle('net-offline', !online);
+  netStateEl.textContent = online
+    ? n ? `Online · ${n} in queue` : 'Online'
+    : n ? `Offline · ${n} queued` : 'Offline';
+  netStateEl.title = online
+    ? 'Connected. Queued cloud jobs run automatically.'
+    : 'Offline. Edits keep working on-device; big cloud jobs are queued until you reconnect.';
+}
+
+function renderQueue(jobs: QueuedJob[] = jobQueue.jobs()): void {
+  queueSection.hidden = jobs.length === 0;
+  queueCountEl.textContent = jobs.length ? String(jobs.length) : '';
+  queueNoteEl.textContent = jobs.length
+    ? net.online()
+      ? 'Back online — running queued jobs on the cloud…'
+      : 'Queued — these run automatically when you reconnect.'
+    : '';
+  queueListEl.replaceChildren(...jobs.map(renderJobRow));
+  renderNetState();
+}
+
+function renderJobRow(job: QueuedJob): HTMLLIElement {
+  const li = document.createElement('li');
+  li.className = `queue-item queue-${job.status}`;
+  const head = document.createElement('div');
+  head.className = 'queue-item-head';
+  const title = document.createElement('span');
+  title.className = 'queue-item-label';
+  title.textContent = `${KIND_LABEL[job.kind]}: ${job.label}`;
+  const status = document.createElement('span');
+  status.className = 'queue-item-status';
+  status.textContent =
+    job.status === 'ready' ? 'ready to apply'
+    : job.status === 'running' ? 'running…'
+    : job.status === 'error' ? `failed${job.error ? ` — ${job.error}` : ''}`
+    : 'queued';
+  head.append(title, status);
+
+  const actions = document.createElement('div');
+  actions.className = 'queue-item-actions';
+  const result = staged.get(job.id);
+  if (job.status === 'ready' && result) {
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Apply';
+    if (result.kind !== 'a11y' && job.mode !== mode.id) {
+      apply.disabled = true;
+      apply.title = `Switch to ${job.mode} mode to apply.`;
+    }
+    apply.addEventListener('click', () => void acceptJob(job.id));
+    actions.append(apply);
+  }
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'ghost';
+  dismiss.textContent = job.status === 'ready' ? 'Reject' : 'Remove';
+  dismiss.addEventListener('click', () => void dismissJob(job.id));
+  actions.append(dismiss);
+
+  li.append(head, actions);
+  return li;
+}
+
+async function acceptJob(id: string): Promise<void> {
+  if (settling.has(id)) return; // a prior click is still applying/removing
+  const result = staged.get(id);
+  const job = jobQueue.jobs().find((j) => j.id === id);
+  if (!result || !job) return;
+  settling.add(id);
+  try {
+  if (result.kind === 'a11y') {
+    // The deterministic issues are re-measured for the CURRENT scene; the cloud
+    // only supplied the prose, keyed by issue id.
+    a11yPanel.setIssues(currentA11yIssues());
+    a11yPanel.setExplanations(result.items, result.source);
+    a11yPanel.open();
+    setBadge(result.source);
+    say('Accessibility explanations applied.');
+  } else {
+    if (job.mode !== mode.id) { say(`Switch to ${job.mode} mode to apply this.`); return; }
+    const step = controller.applyGenerated?.(result.payload)
+      ?? { ok: false, error: 'This mode cannot apply generated designs.', warnings: [] };
+    if (!step.ok) {
+      verifierEl.textContent = `Could not apply queued job: ${step.error ?? 'invalid'}`;
+      say(`Could not apply: ${step.error ?? 'invalid'}`);
+      return;
+    }
+    setBadge(result.source);
+    verifierEl.textContent = `${step.message ?? 'Applied.'} (queued · ${result.source}).`;
+    say(step.message ?? 'Applied queued design.');
+    renderAll();
+    viewport.fit?.();
+  }
+  staged.delete(id);
+  await jobQueue.remove(id);
+  } finally {
+    settling.delete(id);
+  }
+}
+
+async function dismissJob(id: string): Promise<void> {
+  if (settling.has(id)) return;
+  settling.add(id);
+  try {
+    staged.delete(id);
+    await jobQueue.remove(id);
+    say('Removed from the queue.');
+  } finally {
+    settling.delete(id);
+  }
+}
+
+async function enqueueBigJob(utterance: string): Promise<void> {
+  const kind = bigJobKind();
+  if (!kind) return;
+  await jobQueue.enqueue({ kind, mode: mode.id, label: utterance, payload: { prompt: utterance } });
+}
+
+async function enqueueA11yJob(issues: A11yIssue[], summary: string): Promise<void> {
+  await jobQueue.enqueue({
+    kind: 'a11y',
+    mode: mode.id,
+    label: `${issues.length} issue${issues.length === 1 ? '' : 's'}`,
+    payload: {
+      issues: issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation })),
+      summary,
+    },
+  });
+}
+
+/** Run one queued job on the cloud and stage its result (or mark it failed). */
+async function runJobOnCloud(job: QueuedJob): Promise<void> {
+  if (job.kind === 'a11y') {
+    const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '');
+    staged.set(job.id, { kind: 'a11y', items: res.items, source: res.source });
+    await jobQueue.setStatus(job.id, 'ready');
+    return;
+  }
+  const prompt = job.payload.prompt ?? '';
+  if (job.kind === 'plan') {
+    const res = await generatePlan(prompt);
+    if (res.ops?.length) {
+      staged.set(job.id, { kind: 'plan', payload: { ops: res.ops }, source: res.source });
+      await jobQueue.setStatus(job.id, 'ready');
+    } else {
+      await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no plan');
+    }
+  } else {
+    const res = await generateUi(prompt);
+    if (res.frame) {
+      staged.set(job.id, { kind: 'ui', payload: { frame: res.frame }, source: res.source });
+      await jobQueue.setStatus(job.id, 'ready');
+    } else {
+      await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no screen');
+    }
+  }
+}
+
+/** Drain the queue once: run each still-pending job on the cloud, in FIFO order.
+ *  Errored jobs are left for the next reconnect rather than retried in a loop. */
+async function drainQueue(): Promise<void> {
+  if (draining || !net.online()) return;
+  draining = true;
+  try {
+    const pending = jobQueue.jobs().filter((j) => j.status === 'queued' || j.status === 'error');
+    for (const job of pending) {
+      if (!net.online()) break; // went offline mid-drain — stop, resume on reconnect
+      await jobQueue.setStatus(job.id, 'running');
+      try {
+        await runJobOnCloud(job);
+      } catch (err) {
+        await jobQueue.setStatus(job.id, 'error', err instanceof Error ? err.message : 'cloud error');
+      }
+    }
+  } finally {
+    draining = false;
+    renderQueue();
+  }
+}
+
+jobQueue.subscribe((jobs) => renderQueue(jobs));
+net.subscribe((online) => {
+  renderNetState();
+  renderQueue();
+  if (online) {
+    const n = jobQueue.count();
+    if (n) say(`Back online — running ${n} queued cloud job${n === 1 ? '' : 's'}.`);
+    void drainQueue();
+  } else {
+    say('Offline — edits keep working on-device; big cloud jobs will be queued.');
+  }
+});
+void jobQueue.init().then(() => {
+  renderQueue();
+  if (net.online()) void drainQueue(); // finish anything left queued from a prior session
+});
+renderNetState();
 
 async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Accessibility requests short-circuit BEFORE routing: "make this house
@@ -591,6 +852,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Whole-design requests go to the cloud "generate" path (rules fallback
   // inside the controller), everything else through the single-op fusion path.
   if (isBig) {
+    // Offline + a queueable mode → persist a cloud job for reconnect, then still
+    // apply the on-device/rules result now so the edit keeps working.
+    const route = bigJobKind() ? routeBigJob(netEnv()) : 'run-now';
+    if (route === 'enqueue') await enqueueBigJob(utterance);
     const { source, step, clarify } = await controller.generate(utterance);
     const reason = finalReason(decision, source, false);
     setBadge(source, reason);
@@ -609,8 +874,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       renderAll();
       return false;
     }
-    verifierEl.textContent = `${step.message ?? 'Done.'} (${source}).`;
-    say(step.message ?? 'Done.');
+    const queuedNote = route === 'enqueue' ? ' Queued a cloud version for when you reconnect.' : '';
+    verifierEl.textContent = `${step.message ?? 'Done.'} (${source}).${queuedNote}`;
+    say(`${step.message ?? 'Done.'}${queuedNote}`);
     renderAll();
     viewport.fit?.(); // re-fit whenever a whole plan is (re)generated
     announceWarnings();
