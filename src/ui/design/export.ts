@@ -11,6 +11,7 @@ import {
   type StackNode,
   type UiNode,
 } from './doc';
+import { isLightColor } from './colors';
 
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
@@ -42,6 +43,10 @@ function styleFor(node: UiNode, parentDir: StackNode['direction']): string {
       if (node.padding) parts.push(`padding:${node.padding}px`);
       parts.push(`align-items:${alignToFlex(node.align)}`, `justify-content:${justifyToFlex(node.justify)}`);
       if (node.fill) parts.push(`background:${node.fill}`);
+      // A pale card on a white page needs a hairline + soft shadow to read.
+      if (isLightColor(node.fill)) {
+        parts.push('border:1px solid rgba(15,23,42,0.08)', 'box-shadow:0 1px 2px rgba(15,23,42,0.06), 0 6px 16px rgba(15,23,42,0.06)');
+      }
       if (node.radius) parts.push(`border-radius:${node.radius}px`);
       if (node.width !== undefined) parts.push(`width:${node.width}px`, 'max-width:100%');
       if (node.children.some((c) => c.abs)) parts.push('position:relative');
@@ -181,7 +186,7 @@ function svgForNode(node: UiNode, box: { x: number; y: number; w: number; h: num
       return `  <circle cx="${box.x + box.w / 2}" cy="${box.y + box.h / 2}" r="${box.w / 2}" fill="${node.fill}" />`;
     case 'stack':
       return node.fill
-        ? `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${node.radius ?? 0}" fill="${node.fill}" />`
+        ? `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${node.radius ?? 0}" fill="${node.fill}"${isLightColor(node.fill) ? ' stroke="#e2e8f0"' : ''} />`
         : '';
   }
 }

@@ -357,11 +357,12 @@ btnExport.addEventListener('click', async () => {
   // UI mode opens an accessible export panel (preview + code + download/copy)
   // instead of silently downloading files; other modes export directly.
   if (mode.id === 'ui') {
-    const { uiHtmlOf, uiSvgOf } = await import('./ui/design/controller');
+    const { uiHtmlOf, uiSvgOf, uiFrameSizeOf } = await import('./ui/design/controller');
     const html = uiHtmlOf(controller);
     if (!html) { say('Nothing to export yet — create a screen first.'); return; }
+    const size = uiFrameSizeOf(controller);
     const { openExportPanel } = await import('./ui/design/exportPanel');
-    openExportPanel({ html, svg: uiSvgOf(controller), onStatus: (m) => say(m) });
+    openExportPanel({ html, svg: uiSvgOf(controller), frameW: size?.w, frameH: size?.h, onStatus: (m) => say(m) });
     return;
   }
   controller.export();

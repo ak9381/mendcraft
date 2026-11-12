@@ -24,6 +24,23 @@ export function toColor(v: unknown): string | undefined {
   return NAMED_COLORS[base];
 }
 
+/** True for pale fills (e.g. white/near-white cards) that need a border + shadow
+ *  to read against a white page. Non-hex / unknown values are treated as dark. */
+export function isLightColor(v: string | undefined): boolean {
+  if (!v) return false;
+  const hex = toColor(v);
+  if (!hex || !hex.startsWith('#')) return false;
+  const h = hex.slice(1);
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  if (full.length !== 6) return false;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  // Perceived luminance (0..255); pale cards sit high on this scale.
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  return lum > 218;
+}
+
 /** First named/hex colour mentioned in a token list (for the rule parser). */
 export function findColor(tokens: string[]): string | undefined {
   for (let i = 0; i < tokens.length; i++) {

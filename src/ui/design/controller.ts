@@ -127,3 +127,9 @@ export function uiSvgOf(controller: ModeController): string | null {
   const frame = activeFrame(controller.snapshot() as import('./doc').UiDoc);
   return frame ? toSvg(frame) : null;
 }
+
+/** The active frame's pixel size (lets the export panel scale the preview to fit). */
+export function uiFrameSizeOf(controller: ModeController): { w: number; h: number } | null {
+  const frame = activeFrame(controller.snapshot() as import('./doc').UiDoc);
+  return frame ? { w: frame.w, h: frame.h } : null;
+}

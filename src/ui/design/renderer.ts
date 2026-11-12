@@ -17,6 +17,7 @@ import {
   type UiNode,
 } from './doc';
 import { alignSnap, insertionIndex, snapTargets, stackAt, wrapDirection, type Guide, type Segment } from './editing';
+import { isLightColor } from './colors';
 import { createUiTools, uiPaletteItems, type UiToolCtx } from './tools';
 import { createUiPropsPanel } from './propsPanel';
 
@@ -224,6 +225,11 @@ export function createUiRenderer(
       case 'stack': {
         e = document.createElement('div');
         if (node.fill) e.style.background = node.fill;
+        // A pale card on a white page needs a hairline + soft shadow to read.
+        if (isLightColor(node.fill)) {
+          e.style.border = '1px solid rgba(15,23,42,0.08)';
+          e.style.boxShadow = '0 1px 2px rgba(15,23,42,0.06), 0 6px 16px rgba(15,23,42,0.06)';
+        }
         if (node.radius) e.style.borderRadius = `${node.radius}px`;
         break;
       }
