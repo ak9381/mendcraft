@@ -64,6 +64,7 @@ app.innerHTML = `
     <button id="btn-redo" type="button">Redo</button>
     <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
     <button id="btn-export" type="button">${mode.exportLabel}</button>
+    ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
   </header>
   <div id="statusbar" role="group" aria-label="System status">
@@ -353,6 +354,22 @@ btnExport.addEventListener('click', () => {
   controller.export();
   say(`${mode.exportLabel}.`);
 });
+
+// UI mode only: copy the active frame's single-file HTML to the clipboard.
+const btnCopyHtml = document.getElementById('btn-copy-html') as HTMLButtonElement | null;
+if (btnCopyHtml) {
+  btnCopyHtml.addEventListener('click', async () => {
+    const { uiHtmlOf } = await import('./ui/design/controller');
+    const html = uiHtmlOf(controller);
+    if (!html) { say('Nothing to copy yet — create a screen first.'); return; }
+    try {
+      await navigator.clipboard.writeText(html);
+      say('HTML copied to clipboard.');
+    } catch {
+      say('Could not access the clipboard.');
+    }
+  });
+}
 
 if (viewport.toggle3D) {
   btn3d.hidden = false;

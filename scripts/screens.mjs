@@ -187,6 +187,70 @@ async function main() {
     );
     assert(partItems.some((t) => /grip|sleeve/i.test(t || '')), `part mode built the cup grip (${partItems.join(', ')})`);
 
+    // ─── UI-design mode walk (?mode=ui) ──────────────────────────────────────
+    // ui-01 — empty frame.
+    await page.goto(`${BASE}/?sim=1&mode=ui`, { waitUntil: 'networkidle' });
+    await page.waitForSelector('#viewport .ui-scroll', { timeout: 5000 });
+    await page.waitForTimeout(400);
+    await shot(page, 'ui-01-empty-frame.png');
+    assert(await page.isVisible('#viewport .ui-empty'), 'ui mode shows an empty-frame hint');
+
+    // ui-02 — generate a login screen (rules fallback, honest badge).
+    await command(page, 'login screen');
+    await page.waitForTimeout(500);
+    const uiBadge = await badge(page);
+    console.log(`ui path: ${uiBadge} (sim/rules, no cloud)`);
+    await shot(page, 'ui-02-login.png');
+    const hasButton = await page.evaluate(
+      () => !!document.querySelector('#viewport .ui-frame [data-id^="btn-"]'),
+    );
+    assert(hasButton, 'login screen rendered a sign-in button');
+
+    // ui-03 — select the sign-in button via the renderer's pointer path.
+    await command(page, 'select the button');
+    await page.waitForTimeout(400);
+    await shot(page, 'ui-03-selected.png');
+    const selectedBtn = await page.evaluate(
+      () => (document.querySelector('#parts-list li button.active')?.textContent || '').trim(),
+    );
+    assert(/Button/i.test(selectedBtn), `the button is selected ("${selectedBtn}")`);
+
+    // ui-04 — voice edit: recolour then resize the selected button.
+    await command(page, 'make the button blue');
+    await page.waitForTimeout(300);
+    await command(page, 'make it 48 pixels tall');
+    await page.waitForTimeout(400);
+    await shot(page, 'ui-04-voice-edit.png');
+
+    // ui-05 — a mobile screen.
+    await command(page, 'mobile login screen');
+    await page.waitForTimeout(500);
+    await shot(page, 'ui-05-mobile.png');
+    const mobileW = await page.evaluate(
+      () => document.querySelector('#viewport .ui-frame')?.getBoundingClientRect().width || 0,
+    );
+    assert(mobileW > 0, 'mobile frame rendered');
+
+    // ui-06 — export clean HTML (+ SVG). Capture the HTML bytes.
+    const uiDownloads = [];
+    page.on('download', (d) => uiDownloads.push(d));
+    await page.click('#btn-export');
+    await page.waitForTimeout(1000);
+    await shot(page, 'ui-06-export.png');
+    const htmlDownload = uiDownloads.find((d) => d.suggestedFilename().endsWith('.html'));
+    assert(!!htmlDownload, 'HTML download fired');
+    if (htmlDownload) {
+      const path = resolve(OUT, 'ui-06-export.html');
+      const stream = await htmlDownload.createReadStream();
+      const chunks = [];
+      for await (const c of stream) chunks.push(c);
+      const htmlOut = Buffer.concat(chunks).toString('utf8');
+      await writeFile(path, htmlOut);
+      assert(htmlOut.includes('<!DOCTYPE html>'), 'exported HTML is a full document');
+      assert(/<button/.test(htmlOut), 'exported HTML has a <button>');
+      console.log(`  wrote ${path} (${htmlOut.length} bytes)`);
+    }
+
     await ctx.close();
   } finally {
     await browser.close();

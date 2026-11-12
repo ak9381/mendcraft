@@ -37,12 +37,27 @@ export const PART_DEMO: SimStep[] = [
   { label: 'Export the STL', action: undefined },
 ];
 
+/**
+ * Frozen demo for the UI-design mode (reachable via ?mode=ui&sim=1): a login
+ * screen (rules fallback, no AI) → recolour then resize the sign-in button →
+ * export the HTML. All deterministic, no network.
+ */
+export const UI_DEMO: SimStep[] = [
+  { label: 'Login screen', utterance: 'login screen' },
+  { label: 'Select the button', utterance: 'select the button' },
+  { label: 'Make the button blue', utterance: 'make the button blue' },
+  { label: 'Make it 48 pixels tall', utterance: 'make it 48 pixels tall' },
+  { label: 'Export the HTML', action: undefined },
+];
+
 /** Back-compat alias (defaults to the plan hero demo). */
 export const DEMO_SCRIPT = PLAN_DEMO;
 
 /** The demo script for the active mode id. */
 export function demoFor(modeId: string): SimStep[] {
-  return modeId === 'part' ? PART_DEMO : PLAN_DEMO;
+  if (modeId === 'part') return PART_DEMO;
+  if (modeId === 'ui') return UI_DEMO;
+  return PLAN_DEMO;
 }
 
 /** Mounts a visible on-screen cursor over `container`; mouse drag emulates a pinch. */
