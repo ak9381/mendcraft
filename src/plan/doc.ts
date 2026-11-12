@@ -30,7 +30,7 @@ export interface Wall {
   thickness: number;
 }
 
-export type OpeningKind = 'door' | 'window';
+export type OpeningKind = 'door' | 'window' | 'opening';
 /** Which side a door leaf swings towards (purely a drawing hint). */
 export type Swing = 'left' | 'right';
 

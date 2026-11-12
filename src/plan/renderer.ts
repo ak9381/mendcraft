@@ -5,6 +5,19 @@
 // 3D as a *view* (not a second editor). Implements the generic ViewportHandle.
 
 import type { ModeController, ViewportHandle } from '../core/controller';
+import { createToolController, type OverlayDraw, type ToolContext } from '../core/tools';
+import { createFullscreenControl, createPalette, createTrash } from '../core/palette';
+import {
+  copySelected,
+  createPlanTools,
+  deleteSelected,
+  duplicateSelected,
+  flipSelected,
+  nudgeSelected,
+  paletteItems,
+  pasteClipboard,
+} from './tools';
+import { createPropsPanel } from './propsPanel';
 import {
   pointAlong,
   roomCentroid,
@@ -19,7 +32,7 @@ import {
   type Point,
   type Wall,
 } from './doc';
-import { GRID_MM, snapPoint } from './snap';
+import { GRID_MM } from './snap';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const WALL_HEIGHT_MM = 2500;
@@ -158,41 +171,112 @@ export function createPlanRenderer(
     return pts;
   }
 
-  // ---- drag ----
-  let drag: { wallId: string; grabWorld: Point; grabMid: Point } | null = null;
+  // ---- shared tool framework (palette, trash, fullscreen, props) ----
+  // All mutations route through ctx.apply → controller.applyOp (validated,
+  // undoable). Mouse events and pinch-derived ViewportHandle calls converge on
+  // the same ToolController, so every tool works hands-free.
+  let overlayDraw: ((ov: OverlayDraw) => void) | null = null;
 
-  function beginDrag(clientX: number, clientY: number): boolean {
-    const sel = controller.selectedId();
-    if (!sel) return false;
-    const w = doc().walls.find((x) => x.id === sel);
-    if (!w) return false;
-    drag = { wallId: w.id, grabWorld: toWorld(clientX, clientY), grabMid: wallMidpoint(w) };
-    return true;
-  }
+  const status = document.createElement('div');
+  status.className = 'mc-status';
+  status.setAttribute('role', 'status');
+  container.appendChild(status);
 
-  function doDrag(clientX: number, clientY: number): boolean {
-    if (!drag) return false;
-    const now = toWorld(clientX, clientY);
-    const target = {
-      x: drag.grabMid.x + (now.x - drag.grabWorld.x),
-      y: drag.grabMid.y + (now.y - drag.grabWorld.y),
-    };
-    const others = doc().walls.filter((w) => w.id !== drag!.wallId);
-    const snapped = snapPoint(target, others, GRID_MM, GRID_MM).point;
-    const cur = doc().walls.find((w) => w.id === drag!.wallId);
-    if (!cur) return false;
-    const mid = wallMidpoint(cur);
-    const dx = snapped.x - mid.x;
-    const dy = snapped.y - mid.y;
-    if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) {
-      controller.applyOp({ op: 'move', target: drag.wallId, nums: { dx, dy } });
+  const trash = createTrash(container);
+
+  const ctx: ToolContext = {
+    apply(op) {
+      const r = controller.applyOp(op);
+      if (r.ok) {
+        onSelect(controller.selectedId());
+        render();
+      } else if (r.error) {
+        status.textContent = r.error;
+      }
+      return r;
+    },
+    toWorld: (x, y) => toWorld(x, y),
+    toScreen(p) {
+      const rect = svg.getBoundingClientRect();
+      const s = toScreen(p);
+      return { x: s.x + rect.left, y: s.y + rect.top };
+    },
+    scale: () => scale,
+    pick,
+    select(id) {
+      if (id) {
+        controller.selectId(id);
+        onSelect(id);
+      }
+    },
+    selectedId: () => controller.selectedId(),
+    snapshot: () => doc(),
+    render: () => render(),
+    setOverlay(draw) {
+      overlayDraw = draw;
       render();
-    }
-    return true;
-  }
+    },
+    setStatus(text) {
+      status.textContent = text;
+    },
+    overTrash: (x, y) => trash.isOver(x, y),
+    setTrashHover: (on) => trash.setHover(on),
+  };
 
-  function endDrag(): void {
-    drag = null;
+  const tools = createPlanTools(ctx);
+  const toolCtl = createToolController(tools, {
+    defaultId: 'select',
+    onToolChange(id) {
+      palette.setActive(id);
+      status.textContent = tools.find((t) => t.id === id)?.hint ?? '';
+    },
+  });
+  const palette = createPalette(container, paletteItems(tools), {
+    onArm: (id) => toolCtl.activate(id),
+    onPlaceStart: (id, x, y) => toolCtl.beginPlace(id, { x, y, source: 'mouse' }),
+  });
+  const fsCtl = createFullscreenControl(container, container, (hint) => {
+    status.textContent = hint;
+  });
+  const propsPanel = createPropsPanel(container, {
+    apply: (op) => ctx.apply(op),
+    snapshot: () => doc(),
+    selectedId: () => controller.selectedId(),
+  });
+  palette.setActive('select');
+  status.textContent = tools[0].hint ?? '';
+
+  /** Overlay helpers for the active tool (client px → svg-local px). */
+  function makeOverlay(g: SVGGElement): OverlayDraw {
+    const rect = svg.getBoundingClientRect();
+    const lx = (v: number) => v - rect.left;
+    const ly = (v: number) => v - rect.top;
+    return {
+      line(a, b, color = '#2563eb', width = 2, dash) {
+        const ln = el('line', { x1: lx(a.x), y1: ly(a.y), x2: lx(b.x), y2: ly(b.y), stroke: color, 'stroke-width': width, 'stroke-linecap': 'round' });
+        if (dash) ln.setAttribute('stroke-dasharray', dash);
+        g.appendChild(ln);
+      },
+      dot(p, color = '#2563eb', r = 4) {
+        g.appendChild(el('circle', { cx: lx(p.x), cy: ly(p.y), r, fill: color, stroke: '#ffffff', 'stroke-width': 1.5 }));
+      },
+      label(p, text, color = '#1f2937') {
+        const t = textNode(lx(p.x), ly(p.y), text, 12, color, 'middle');
+        t.setAttribute('paint-order', 'stroke');
+        t.setAttribute('stroke', '#ffffff');
+        t.setAttribute('stroke-width', '3');
+        g.appendChild(t);
+      },
+      rect(a, b, stroke = '#2563eb', fill = 'none') {
+        g.appendChild(el('rect', {
+          x: Math.min(lx(a.x), lx(b.x)),
+          y: Math.min(ly(a.y), ly(b.y)),
+          width: Math.abs(a.x - b.x),
+          height: Math.abs(a.y - b.y),
+          stroke, fill, 'stroke-width': 1.5, 'stroke-dasharray': '6 4',
+        }));
+      },
+    };
   }
 
   // ---- rendering ----
@@ -200,7 +284,7 @@ export function createPlanRenderer(
     if (!fitted) {
       fitView();
       fitted = true;
-    } else if (!drag && !panning && boundsSig() !== fitSig) {
+    } else if (!toolBusy && !panning && boundsSig() !== fitSig) {
       // A discrete edit (voice/text/keyboard) changed the overall size — reframe
       // so the result stays fully visible (e.g. stretching the shared wall to
       // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
@@ -276,8 +360,30 @@ export function createPlanRenderer(
           d: `M ${sOpen.x} ${sOpen.y} A ${r} ${r} 0 0 1 ${far.x} ${far.y}`,
           fill: 'none', stroke: '#93c5fd', 'stroke-width': 1,
         }));
-      } else {
+      } else if (o.kind === 'window') {
         svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#0ea5e9', 'stroke-width': 2 }));
+      } else {
+        // Plain opening: thin jamb ticks at either end of the gap.
+        svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
+      }
+      if (o.id === d.selectedId) {
+        svg.appendChild(el('line', {
+          x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y,
+          stroke: '#2563eb', 'stroke-width': Math.max(4, wall.thickness * scale + 4),
+          'stroke-opacity': 0.25, 'stroke-linecap': 'round',
+        }));
+      }
+    }
+
+    // Endpoint handles on the selected wall (drag with the Select tool).
+    const selWall = d.walls.find((w) => w.id === d.selectedId);
+    if (selWall) {
+      for (const endPt of [selWall.a, selWall.b]) {
+        const s = toScreen(endPt);
+        svg.appendChild(el('rect', {
+          x: s.x - 5, y: s.y - 5, width: 10, height: 10,
+          fill: '#ffffff', stroke: '#2563eb', 'stroke-width': 2,
+        }));
       }
     }
 
@@ -352,6 +458,14 @@ export function createPlanRenderer(
       }
     }
 
+    // Active-tool transient overlay (ghost previews, live readouts) on top.
+    if (overlayDraw) {
+      const g = el('g', { class: 'mc-overlay' });
+      svg.appendChild(g);
+      overlayDraw(makeOverlay(g));
+    }
+    propsPanel?.update();
+
     if (view3d) view3d.update();
   }
 
@@ -393,32 +507,37 @@ export function createPlanRenderer(
 
   // ---- native mouse / wheel / keyboard ----
   let panning: { x: number; y: number } | null = null;
+  // A tool gesture (drag/draw) is in flight — suppress auto re-fit meanwhile.
+  let toolBusy = false;
 
   svg.addEventListener('mousedown', (e) => {
-    const id = pick(e.clientX, e.clientY);
-    if (id) {
-      onSelect(id);
-      controller.selectId(id);
-      render();
-      beginDrag(e.clientX, e.clientY);
-    } else {
-      panning = { x: e.clientX, y: e.clientY };
+    if (toolCtl.down({ x: e.clientX, y: e.clientY, source: 'mouse' })) {
+      toolBusy = true;
+      return;
     }
+    panning = { x: e.clientX, y: e.clientY };
+  });
+  svg.addEventListener('dblclick', () => {
+    toolCtl.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
   });
   window.addEventListener('mousemove', onMouseMove);
   function onMouseMove(e: MouseEvent): void {
-    if (drag) { doDrag(e.clientX, e.clientY); return; }
     if (panning) {
       originX += e.clientX - panning.x;
       originY += e.clientY - panning.y;
       panning = { x: e.clientX, y: e.clientY };
       render();
+      return;
     }
+    const p = { x: e.clientX, y: e.clientY, source: 'mouse' as const };
+    if (e.buttons === 0 && !toolCtl.placing()) toolCtl.hover(p);
+    else toolCtl.move(p);
   }
   window.addEventListener('mouseup', onMouseUp);
-  function onMouseUp(): void {
-    endDrag();
+  function onMouseUp(e: MouseEvent): void {
+    if (!panning) toolCtl.up({ x: e.clientX, y: e.clientY, source: 'mouse' });
     panning = null;
+    toolBusy = false;
   }
 
   svg.addEventListener('wheel', (e) => {
@@ -433,6 +552,50 @@ export function createPlanRenderer(
   }, { passive: false });
 
   function onKey(e: KeyboardEvent): void {
+    const target = e.target as HTMLElement | null;
+    if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+    // Global editing chords (work in any tool).
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const k = e.key.toLowerCase();
+      const did = k === 'd' ? duplicateSelected(ctx) : k === 'c' ? copySelected(ctx) : k === 'v' ? pasteClipboard(ctx) : false;
+      if (did) {
+        e.preventDefault();
+        return;
+      }
+    }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && deleteSelected(ctx)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key.toLowerCase() === 'x' && flipSelected(ctx)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key.toLowerCase() === 'f' && !e.shiftKey) {
+        void fsCtl.toggle();
+        e.preventDefault();
+        return;
+      }
+    }
+    // Tool shortcuts (V/W/R/D/N/O/T/M, Shift+M) + active-tool keys (Enter, Esc).
+    if (toolCtl.handleKey(e)) {
+      e.preventDefault();
+      render();
+      return;
+    }
+    // Arrows nudge the selection by one grid cell; with nothing selected they pan.
+    if (controller.selectedId() && e.key.startsWith('Arrow')) {
+      const g = GRID_MM;
+      const d: Record<string, [number, number]> = {
+        ArrowLeft: [-g, 0], ArrowRight: [g, 0], ArrowUp: [0, g], ArrowDown: [0, -g],
+      };
+      const n = d[e.key];
+      if (n && nudgeSelected(ctx, n[0], n[1])) {
+        e.preventDefault();
+        return;
+      }
+    }
     const step = 40;
     if (e.key === 'ArrowLeft') originX += step;
     else if (e.key === 'ArrowRight') originX -= step;
@@ -474,13 +637,54 @@ export function createPlanRenderer(
 
   render();
 
+  // Pinch events arrive via these ViewportHandle hooks (main.ts converts hand
+  // coords to client px) and feed the SAME ToolController as the mouse.
+  let pinchActive = false;
+  let lastPinch = { x: 0, y: 0 };
+
   return {
     render,
     fit,
     pick,
-    beginDrag,
-    drag: doDrag,
-    endDrag,
+    beginDrag(clientX, clientY) {
+      lastPinch = { x: clientX, y: clientY };
+      const item = palette.itemAt(clientX, clientY);
+      if (item) {
+        toolCtl.beginPlace(item.toolId, { x: clientX, y: clientY, source: 'pinch' });
+        pinchActive = true;
+        return true;
+      }
+      pinchActive = toolCtl.down({ x: clientX, y: clientY, source: 'pinch' });
+      toolBusy = pinchActive;
+      return pinchActive;
+    },
+    drag(clientX, clientY) {
+      lastPinch = { x: clientX, y: clientY };
+      if (toolCtl.placing() || pinchActive) {
+        toolCtl.move({ x: clientX, y: clientY, source: 'pinch' });
+        return true;
+      }
+      return false;
+    },
+    endDrag() {
+      if (toolCtl.placing() || pinchActive) toolCtl.up({ x: lastPinch.x, y: lastPinch.y, source: 'pinch' });
+      pinchActive = false;
+      toolBusy = false;
+    },
+    tap(clientX, clientY) {
+      const item = palette.itemAt(clientX, clientY);
+      if (item) {
+        toolCtl.activate(item.toolId);
+        return true;
+      }
+      const p = { x: clientX, y: clientY, source: 'pinch' as const };
+      const handled = toolCtl.down(p);
+      toolCtl.up(p);
+      return handled;
+    },
+    hover(clientX, clientY) {
+      toolCtl.hover({ x: clientX, y: clientY, source: 'pinch' });
+    },
     toggle3D,
     dispose() {
       window.removeEventListener('mousemove', onMouseMove);
@@ -488,6 +692,11 @@ export function createPlanRenderer(
       container.removeEventListener('keydown', onKey);
       resize.disconnect();
       view3d?.dispose();
+      palette.dispose();
+      trash.dispose();
+      fsCtl.dispose();
+      propsPanel.dispose();
+      status.remove();
       svg.remove();
     },
   };

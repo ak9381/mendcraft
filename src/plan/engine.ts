@@ -251,7 +251,8 @@ export class PlanEngine {
         return { ...state, walls: [...state.walls, wall], selectedId: id };
       }
       case 'add_door':
-      case 'add_window': {
+      case 'add_window':
+      case 'add_opening': {
         const wallId = this.resolveId(state, op.target, 'wall');
         if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
@@ -266,7 +267,7 @@ export class PlanEngine {
         const opening: Opening =
           op.op === 'add_door'
             ? { id, kind: 'door', wallId, offset, width, swing: op.swing }
-            : { id, kind: 'window', wallId, offset, width };
+            : { id, kind: op.op === 'add_window' ? 'window' : 'opening', wallId, offset, width };
         return { ...state, openings: [...state.openings, opening], selectedId: id };
       }
       case 'add_dim': {
@@ -365,6 +366,56 @@ export class PlanEngine {
         if (!id) return `no object for target "${op.target}"`;
         return { ...state, selectedId: id };
       }
+      case 'set_swing': {
+        const id = this.resolveId(state, op.target);
+        const door = id ? state.openings.find((o) => o.id === id && o.kind === 'door') : undefined;
+        if (!door) return `no door for target "${op.target}"`;
+        const swing = op.swing ?? (door.swing === 'right' ? 'left' : 'right');
+        return {
+          ...state,
+          openings: state.openings.map((o) => (o.id === door.id ? { ...o, swing } : o)),
+          selectedId: door.id,
+        };
+      }
+      case 'move_opening': {
+        const id = this.resolveId(state, op.target);
+        const opening = id ? state.openings.find((o) => o.id === id) : undefined;
+        if (!opening) return `no opening for target "${op.target}"`;
+        const wall = state.walls.find((w) => w.id === opening.wallId);
+        if (!wall) return `opening ${opening.id} has no host wall`;
+        const offset = Math.max(0, Math.min(op.offset, wallLength(wall) - opening.width));
+        return {
+          ...state,
+          openings: state.openings.map((o) => (o.id === opening.id ? { ...o, offset } : o)),
+          selectedId: opening.id,
+        };
+      }
+      case 'set_width': {
+        const id = this.resolveId(state, op.target);
+        const opening = id ? state.openings.find((o) => o.id === id) : undefined;
+        if (!opening) return `no opening for target "${op.target}"`;
+        const wall = state.walls.find((w) => w.id === opening.wallId);
+        if (!wall) return `opening ${opening.id} has no host wall`;
+        const len = wallLength(wall);
+        const width = Math.min(op.width, len);
+        const offset = Math.max(0, Math.min(opening.offset, len - width));
+        return {
+          ...state,
+          openings: state.openings.map((o) => (o.id === opening.id ? { ...o, width, offset } : o)),
+          selectedId: opening.id,
+        };
+      }
+      case 'move_end': {
+        const wallId = this.resolveId(state, op.target, 'wall');
+        if (!wallId) return this.noWall(state, op.target);
+        const wall = state.walls.find((w) => w.id === wallId)!;
+        const p = { x: op.x, y: op.y };
+        const newA = op.end === 'a' ? p : wall.a;
+        const newB = op.end === 'b' ? p : wall.b;
+        if (Math.hypot(newB.x - newA.x, newB.y - newA.y) < PLAN_LIMITS.wallLen.min)
+          return 'wall would be too short';
+        return { ...this.moveEndpoints(state, wallId, newA, newB), selectedId: wallId };
+      }
       case 'undo':
       case 'redo':
         return 'handled by apply()';
@@ -409,7 +460,7 @@ export class PlanEngine {
     for (const o of this.state.openings) {
       items.push({
         id: o.id,
-        label: `${o.kind === 'door' ? 'Door' : 'Window'} on ${o.wallId} · ${mmToMetresLabel(o.width)}`,
+        label: `${o.kind === 'door' ? 'Door' : o.kind === 'window' ? 'Window' : 'Opening'} on ${o.wallId} · ${mmToMetresLabel(o.width)}`,
         selected: this.state.selectedId === o.id,
       });
     }

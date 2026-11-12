@@ -88,6 +88,11 @@ export interface ViewportHandle {
   /** Continue a world-space drag (with snap); true if handled. */
   drag?(clientX: number, clientY: number): boolean;
   endDrag?(): void;
+  /** A pinch-tap (click equivalent) routed to the mode's tool framework;
+   *  true when a tool consumed it (then the shell skips its pick+select). */
+  tap?(clientX: number, clientY: number): boolean;
+  /** Pointer travelling with no pinch held — tools draw ghost previews. */
+  hover?(clientX: number, clientY: number): void;
   /** Toggle a secondary view (plan: extrude walls to 3D). */
   toggle3D?(on: boolean): boolean;
   dispose(): void;

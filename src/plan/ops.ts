@@ -16,6 +16,7 @@ export type PlanOpName =
   | 'add_wall'
   | 'add_door'
   | 'add_window'
+  | 'add_opening'
   | 'add_dim'
   | 'set_length'
   | 'move'
@@ -24,12 +25,17 @@ export type PlanOpName =
   | 'rename'
   | 'delete'
   | 'select'
+  | 'set_swing'
+  | 'move_opening'
+  | 'set_width'
+  | 'move_end'
   | 'undo'
   | 'redo';
 
 export const PLAN_OP_NAMES: readonly PlanOpName[] = [
-  'add_room', 'add_wall', 'add_door', 'add_window', 'add_dim', 'set_length',
-  'move', 'offset', 'set_thickness', 'rename', 'delete', 'select', 'undo', 'redo',
+  'add_room', 'add_wall', 'add_door', 'add_window', 'add_opening', 'add_dim', 'set_length',
+  'move', 'offset', 'set_thickness', 'rename', 'delete', 'select',
+  'set_swing', 'move_opening', 'set_width', 'move_end', 'undo', 'redo',
 ] as const;
 
 export interface AddRoomOp {
@@ -58,6 +64,40 @@ export interface AddWindowOp {
   target: string;
   offset?: number;
   width: number;
+}
+/** A plain wall cut (no leaf/arc, no glazing) — e.g. an open passage. */
+export interface AddOpeningOp {
+  op: 'add_opening';
+  target: string;
+  offset?: number;
+  width: number;
+}
+/** Flip (no swing given) or set a door's swing side. */
+export interface SetSwingOp {
+  op: 'set_swing';
+  target: string;
+  swing?: Swing;
+}
+/** Slide a hosted opening along its wall to a new near-edge offset (clamped). */
+export interface MoveOpeningOp {
+  op: 'move_opening';
+  target: string;
+  offset: number;
+}
+/** Resize a hosted opening's width (clamped inside its wall). */
+export interface SetWidthOp {
+  op: 'set_width';
+  target: string;
+  width: number;
+}
+/** Move one endpoint of a wall (dragging its handle); coincident endpoints of
+ *  connected walls follow, as with `move`. */
+export interface MoveEndOp {
+  op: 'move_end';
+  target: string;
+  end: 'a' | 'b';
+  x: number;
+  y: number;
 }
 export interface AddDimOp {
   op: 'add_dim';
@@ -111,7 +151,12 @@ export type PlanOp =
   | AddWallOp
   | AddDoorOp
   | AddWindowOp
+  | AddOpeningOp
   | AddDimOp
+  | SetSwingOp
+  | MoveOpeningOp
+  | SetWidthOp
+  | MoveEndOp
   | SetLengthOp
   | MoveWallOp
   | OffsetWallOp
@@ -218,10 +263,11 @@ export function validatePlanOp(raw: unknown): PlanValidation {
       return { ok: true, op: { op: 'add_wall', a: { x: ax, y: ay }, b: { x: bx, y: by }, thickness } };
     }
     case 'add_door':
-    case 'add_window': {
+    case 'add_window':
+    case 'add_opening': {
       const t = target();
       if (!t) return fail(`${name} needs a target wall`);
-      const def = name === 'add_door' ? DEFAULTS.doorWidth : DEFAULTS.windowWidth;
+      const def = name === 'add_window' ? DEFAULTS.windowWidth : DEFAULTS.doorWidth;
       const width = mm('width', PLAN_LIMITS.openingWidth.min, PLAN_LIMITS.openingWidth.max) ?? def;
       const offset = mm('offset', PLAN_LIMITS.coord.min, PLAN_LIMITS.coord.max);
       if (name === 'add_door') {
@@ -230,9 +276,45 @@ export function validatePlanOp(raw: unknown): PlanValidation {
         if (offset !== undefined) op.offset = offset;
         return { ok: true, op };
       }
-      const op: AddWindowOp = { op: 'add_window', target: t, width };
+      const op: AddWindowOp | AddOpeningOp = {
+        op: name === 'add_window' ? 'add_window' : 'add_opening',
+        target: t,
+        width,
+      };
       if (offset !== undefined) op.offset = offset;
       return { ok: true, op };
+    }
+    case 'set_swing': {
+      const t = target();
+      if (!t) return fail('set_swing needs a target door');
+      const op: SetSwingOp = { op: 'set_swing', target: t };
+      if (raw.swing === 'left' || raw.swing === 'right') op.swing = raw.swing;
+      return { ok: true, op };
+    }
+    case 'move_opening': {
+      const t = target();
+      if (!t) return fail('move_opening needs a target opening');
+      const offset = mm('offset', 0, PLAN_LIMITS.coord.max);
+      if (offset === undefined) return fail('move_opening needs a numeric offset');
+      return { ok: true, op: { op: 'move_opening', target: t, offset } };
+    }
+    case 'set_width': {
+      const t = target();
+      if (!t) return fail('set_width needs a target opening');
+      const width = mm('width', PLAN_LIMITS.openingWidth.min, PLAN_LIMITS.openingWidth.max);
+      if (width === undefined) return fail('set_width needs a numeric width');
+      return { ok: true, op: { op: 'set_width', target: t, width } };
+    }
+    case 'move_end': {
+      const t = target();
+      if (!t) return fail('move_end needs a target wall');
+      const end = raw.end === 'a' || raw.end === 'b' ? raw.end : undefined;
+      if (!end) return fail("move_end needs end 'a' or 'b'");
+      const { coord } = PLAN_LIMITS;
+      const x = mm('x', coord.min, coord.max);
+      const y = mm('y', coord.min, coord.max);
+      if (x === undefined || y === undefined) return fail('move_end needs numeric x, y');
+      return { ok: true, op: { op: 'move_end', target: t, end, x, y } };
     }
     case 'add_dim': {
       const t = target();

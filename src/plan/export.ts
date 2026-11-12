@@ -84,6 +84,8 @@ function drawOpening(dxf: DxfBuilder, o: Opening, wall: Wall): void {
     dxf.line('OPENINGS', { x: start.x + n.x * t, y: start.y + n.y * t }, { x: end.x + n.x * t, y: end.y + n.y * t });
     return;
   }
+  if (o.kind !== 'door') return; // plain opening: just the threshold line
+
   // Door: a swing arc of radius = width, hinged at the near (or far) edge.
   const d = wallDir(wall);
   const baseDeg = Math.atan2(d.y, d.x) * DEG;

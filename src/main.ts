@@ -441,9 +441,12 @@ function toClient(x: number, y: number): { clientX: number; clientY: number } {
 
 function handleHandEvent(e: HandEvent): void {
   switch (e.type) {
-    case 'tracking':
+    case 'tracking': {
       placeCursor(e.x, e.y);
+      const { clientX, clientY } = toClient(e.x, e.y);
+      viewport.hover?.(clientX, clientY); // ghost previews track the open hand
       break;
+    }
     case 'pinch-start': {
       placeCursor(e.x, e.y);
       handCursor.classList.add('pinching');
@@ -455,6 +458,10 @@ function handleHandEvent(e: HandEvent): void {
       placeCursor(e.x, e.y);
       onboarding.notifyPinch();
       const { clientX, clientY } = toClient(e.x, e.y);
+      if (viewport.tap?.(clientX, clientY)) {
+        renderAll(); // a palette/tool consumed the tap
+        break;
+      }
       const id = viewport.pick(clientX, clientY);
       if (id) {
         controller.selectId(id);
