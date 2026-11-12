@@ -9,6 +9,8 @@ export interface ToolPointer {
   x: number;
   y: number;
   source: 'mouse' | 'pinch';
+  /** Shift held during the press (multi-select toggle). Pinch never sets it. */
+  shift?: boolean;
 }
 
 /** Transient feedback layer the active tool draws into (screen px). The host

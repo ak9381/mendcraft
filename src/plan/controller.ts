@@ -41,6 +41,13 @@ function opMessage(op: PlanOp, id: string | undefined, engine: PlanEngine): stri
     case 'rename': return 'Renamed.';
     case 'delete': return 'Deleted.';
     case 'select': return `${who} selected.`;
+    case 'select_set': return op.ids.length ? `${op.ids.length} selected.` : 'Selection cleared.';
+    case 'batch': return `${op.ops.length} edits applied (one step).`;
+    case 'move_many': return `${op.ids.length} item${op.ids.length > 1 ? 's' : ''} moved.`;
+    case 'rotate': return 'Rotated.';
+    case 'add_fixture': return 'Fixture added.';
+    case 'set_sill': return 'Sill height set.';
+    case 'set_height': return 'Height set.';
     default: return 'Done.';
   }
 }

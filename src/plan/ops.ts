@@ -29,13 +29,22 @@ export type PlanOpName =
   | 'move_opening'
   | 'set_width'
   | 'move_end'
+  | 'add_fixture'
+  | 'move_many'
+  | 'rotate'
+  | 'set_sill'
+  | 'set_height'
+  | 'select_set'
+  | 'batch'
   | 'undo'
   | 'redo';
 
 export const PLAN_OP_NAMES: readonly PlanOpName[] = [
   'add_room', 'add_wall', 'add_door', 'add_window', 'add_opening', 'add_dim', 'set_length',
   'move', 'offset', 'set_thickness', 'rename', 'delete', 'select',
-  'set_swing', 'move_opening', 'set_width', 'move_end', 'undo', 'redo',
+  'set_swing', 'move_opening', 'set_width', 'move_end',
+  'add_fixture', 'move_many', 'rotate', 'set_sill', 'set_height', 'select_set', 'batch',
+  'undo', 'redo',
 ] as const;
 
 export interface AddRoomOp {
@@ -99,9 +108,59 @@ export interface MoveEndOp {
   x: number;
   y: number;
 }
+/** Dimension a wall (target) OR two free points (ax/ay/bx/by, from Measure). */
 export interface AddDimOp {
   op: 'add_dim';
+  target?: string;
+  a?: Point;
+  b?: Point;
+}
+/** Place a furniture/fixture item: rotated rect centred on (x, y). */
+export interface AddFixtureOp {
+  op: 'add_fixture';
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  rotation: number;
+}
+/** Rigidly translate a SET of walls/fixtures by (dx, dy) in one step. Unlike a
+ *  batch of `move` ops, shared endpoints move exactly once (no cascade). */
+export interface MoveManyOp {
+  op: 'move_many';
+  ids: string[];
+  dx: number;
+  dy: number;
+}
+/** Rotate a fixture by `angle` degrees CCW; on a door, flips its swing. */
+export interface RotateOp {
+  op: 'rotate';
   target: string;
+  angle: number;
+}
+/** Window sill height above the floor (mm). */
+export interface SetSillOp {
+  op: 'set_sill';
+  target: string;
+  sill: number;
+}
+/** Vertical height (mm): wall height, or a door/window opening height. */
+export interface SetHeightOp {
+  op: 'set_height';
+  target: string;
+  height: number;
+}
+/** Replace the multi-selection (empty clears). Last id becomes the primary. */
+export interface SelectSetOp {
+  op: 'select_set';
+  ids: string[];
+}
+/** Apply several ops as ONE undoable step (multi-select delete/move/paste).
+ *  Sub-ops that fail (e.g. a cascade already deleted the target) are skipped. */
+export interface BatchOp {
+  op: 'batch';
+  ops: PlanOp[];
 }
 export interface SetLengthOp {
   op: 'set_length';
@@ -157,6 +216,13 @@ export type PlanOp =
   | MoveOpeningOp
   | SetWidthOp
   | MoveEndOp
+  | AddFixtureOp
+  | MoveManyOp
+  | RotateOp
+  | SetSillOp
+  | SetHeightOp
+  | SelectSetOp
+  | BatchOp
   | SetLengthOp
   | MoveWallOp
   | OffsetWallOp
@@ -176,6 +242,9 @@ export const PLAN_LIMITS = {
   openingWidth: { min: 300, max: 20_000 },
   move: { min: -100_000, max: 100_000 },
   offset: { min: -50_000, max: 50_000 },
+  fixtureSize: { min: 100, max: 10_000 },
+  sill: { min: 0, max: 3_000 },
+  height: { min: 100, max: 6_000 },
 } as const;
 
 export const DEFAULTS = {
@@ -183,6 +252,10 @@ export const DEFAULTS = {
   doorWidth: 900,
   windowWidth: 1200,
   doorSwing: 'left' as Swing,
+  wallHeight: 2500,
+  doorHeight: 2100,
+  windowSill: 900,
+  windowHeight: 1200,
 } as const;
 
 export type PlanValidation = { ok: true; op: PlanOp } | { ok: false; error: string };
@@ -318,8 +391,72 @@ export function validatePlanOp(raw: unknown): PlanValidation {
     }
     case 'add_dim': {
       const t = target();
-      if (!t) return fail('add_dim needs a target wall');
-      return { ok: true, op: { op: 'add_dim', target: t } };
+      if (t) return { ok: true, op: { op: 'add_dim', target: t } };
+      // Free aligned dimension between two points (from the Measure tool).
+      const { coord } = PLAN_LIMITS;
+      const ax = mm('ax', coord.min, coord.max);
+      const ay = mm('ay', coord.min, coord.max);
+      const bx = mm('bx', coord.min, coord.max);
+      const by = mm('by', coord.min, coord.max);
+      if (ax === undefined || ay === undefined || bx === undefined || by === undefined)
+        return fail('add_dim needs a target wall or ax, ay, bx, by');
+      return { ok: true, op: { op: 'add_dim', a: { x: ax, y: ay }, b: { x: bx, y: by } } };
+    }
+    case 'add_fixture': {
+      const { coord, fixtureSize } = PLAN_LIMITS;
+      const x = mm('x', coord.min, coord.max);
+      const y = mm('y', coord.min, coord.max);
+      const w = mm('w', fixtureSize.min, fixtureSize.max);
+      const dd = mm('d', fixtureSize.min, fixtureSize.max);
+      if (x === undefined || y === undefined || w === undefined || dd === undefined)
+        return fail('add_fixture needs numeric x, y, w, d');
+      // Rotation is degrees — never unit-converted.
+      const rotation = toNum(rawNum(raw, 'rotation')) ?? 0;
+      return { ok: true, op: { op: 'add_fixture', kind: str(raw.kind) ?? 'fixture', x, y, w, d: dd, rotation } };
+    }
+    case 'move_many': {
+      const ids = Array.isArray(raw.ids) ? raw.ids.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : [];
+      if (ids.length === 0) return fail('move_many needs a non-empty ids array');
+      const dx = mm('dx', PLAN_LIMITS.move.min, PLAN_LIMITS.move.max) ?? 0;
+      const dy = mm('dy', PLAN_LIMITS.move.min, PLAN_LIMITS.move.max) ?? 0;
+      return { ok: true, op: { op: 'move_many', ids, dx, dy } };
+    }
+    case 'rotate': {
+      const t = target();
+      if (!t) return fail('rotate needs a target');
+      const angle = toNum(rawNum(raw, 'angle')) ?? 90; // degrees, no unit conversion
+      return { ok: true, op: { op: 'rotate', target: t, angle } };
+    }
+    case 'set_sill': {
+      const t = target();
+      if (!t) return fail('set_sill needs a target window');
+      const sill = mm('sill', PLAN_LIMITS.sill.min, PLAN_LIMITS.sill.max);
+      if (sill === undefined) return fail('set_sill needs a numeric sill height');
+      return { ok: true, op: { op: 'set_sill', target: t, sill } };
+    }
+    case 'set_height': {
+      const t = target();
+      if (!t) return fail('set_height needs a target');
+      const height = mm('height', PLAN_LIMITS.height.min, PLAN_LIMITS.height.max);
+      if (height === undefined) return fail('set_height needs a numeric height');
+      return { ok: true, op: { op: 'set_height', target: t, height } };
+    }
+    case 'select_set': {
+      const ids = Array.isArray(raw.ids) ? raw.ids.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : undefined;
+      if (!ids) return fail('select_set needs an ids array');
+      return { ok: true, op: { op: 'select_set', ids } };
+    }
+    case 'batch': {
+      if (!Array.isArray(raw.ops) || raw.ops.length === 0) return fail('batch needs a non-empty ops array');
+      const ops: PlanOp[] = [];
+      for (const sub of raw.ops) {
+        if (isObj(sub) && (sub.op === 'batch' || sub.op === 'undo' || sub.op === 'redo'))
+          return fail(`batch cannot contain "${String(sub.op)}"`);
+        const v = validatePlanOp(sub);
+        if (!v.ok) return fail(`batch: ${v.error}`);
+        ops.push(v.op);
+      }
+      return { ok: true, op: { op: 'batch', ops } };
     }
     case 'set_length': {
       const t = target();

@@ -28,6 +28,8 @@ export interface Wall {
   b: Point;
   /** Wall thickness in mm (drawn as a band straddling the centreline). */
   thickness: number;
+  /** Wall height in mm for the 3D view (defaults to 2500). */
+  height?: number;
 }
 
 export type OpeningKind = 'door' | 'window' | 'opening';
@@ -44,6 +46,22 @@ export interface Opening {
   width: number;
   /** Doors only; ignored for windows. */
   swing?: Swing;
+  /** Windows: sill height above floor in mm (defaults to 900). */
+  sill?: number;
+  /** Vertical extent in mm: door leaf height / window glazing height. */
+  height?: number;
+}
+
+/** A free-standing furniture/fixture item (sofa, WC, basin, …): a rotated
+ *  rectangle centred on (x, y), `w` × `d` mm, `rotation` degrees CCW. */
+export interface Fixture {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  d: number;
+  rotation: number;
 }
 
 /** A named room: an ordered loop of wall ids. Area is derived from geometry. */
@@ -53,10 +71,23 @@ export interface Room {
   wallIds: string[];
 }
 
-/** A linear dimension pinned to a wall; its measured value is always recomputed. */
+/** A linear dimension: pinned to a wall (value always re-derived from the wall)
+ *  OR a free aligned dimension between two fixed points (from Measure). */
 export interface Dimension {
   id: string;
-  wallId: string;
+  wallId?: string;
+  a?: Point;
+  b?: Point;
+}
+
+/** Measured value of a dimension (wall length or point distance), in mm. */
+export function dimLength(dim: Dimension, doc: PlanDoc): number | null {
+  if (dim.wallId) {
+    const w = doc.walls.find((x) => x.id === dim.wallId);
+    return w ? wallLength(w) : null;
+  }
+  if (dim.a && dim.b) return Math.hypot(dim.b.x - dim.a.x, dim.b.y - dim.a.y);
+  return null;
 }
 
 export interface PlanDoc {
@@ -64,12 +95,15 @@ export interface PlanDoc {
   openings: Opening[];
   rooms: Room[];
   dims: Dimension[];
-  /** Currently selected object id (wall/opening/room/dim), or null. */
+  fixtures: Fixture[];
+  /** Primary selection (last picked), or null. */
   selectedId: string | null;
+  /** Full multi-selection; selectedId is always a member (or both empty). */
+  selectedIds: string[];
 }
 
 export function emptyPlan(): PlanDoc {
-  return { walls: [], openings: [], rooms: [], dims: [], selectedId: null };
+  return { walls: [], openings: [], rooms: [], dims: [], fixtures: [], selectedId: null, selectedIds: [] };
 }
 
 // ─── Geometry helpers (all pure) ──────────────────────────────────────────
@@ -202,11 +236,11 @@ export function mm2ToM2Label(mm2: number): string {
   return `${(mm2 / 1_000_000).toFixed(2)} m²`;
 }
 
-/** Find any plan object (wall/opening/room/dim) by id. */
+/** Find any plan object (wall/opening/room/dim/fixture) by id. */
 export function findObject(
   doc: PlanDoc,
   id: string,
-): { kind: 'wall' | 'opening' | 'room' | 'dim'; obj: Wall | Opening | Room | Dimension } | null {
+): { kind: 'wall' | 'opening' | 'room' | 'dim' | 'fixture'; obj: Wall | Opening | Room | Dimension | Fixture } | null {
   const w = doc.walls.find((o) => o.id === id);
   if (w) return { kind: 'wall', obj: w };
   const o = doc.openings.find((x) => x.id === id);
@@ -215,5 +249,7 @@ export function findObject(
   if (r) return { kind: 'room', obj: r };
   const d = doc.dims.find((x) => x.id === id);
   if (d) return { kind: 'dim', obj: d };
+  const f = doc.fixtures.find((x) => x.id === id);
+  if (f) return { kind: 'fixture', obj: f };
   return null;
 }

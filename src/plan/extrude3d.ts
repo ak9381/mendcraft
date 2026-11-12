@@ -4,33 +4,10 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { wallDir, wallLength, wallMidpoint, type PlanDoc, type Wall } from './doc';
-
-const SILL = 900;
-const HEAD = 2100;
-
-interface Segment { s: number; e: number; z0: number; z1: number; }
-
-/** Solid wall segments along its length, cut by doors/windows. */
-function wallSegments(wall: Wall, doc: PlanDoc, height: number): Segment[] {
-  const L = wallLength(wall);
-  const openings = doc.openings
-    .filter((o) => o.wallId === wall.id)
-    .map((o) => ({ ...o, s: Math.max(0, o.offset), e: Math.min(L, o.offset + o.width) }))
-    .sort((a, b) => a.s - b.s);
-  const segs: Segment[] = [];
-  let cursor = 0;
-  for (const o of openings) {
-    if (o.s > cursor) segs.push({ s: cursor, e: o.s, z0: 0, z1: height });
-    if (o.kind === 'window') {
-      segs.push({ s: o.s, e: o.e, z0: 0, z1: SILL });
-      segs.push({ s: o.s, e: o.e, z0: HEAD, z1: height });
-    } // door: full-height gap
-    cursor = Math.max(cursor, o.e);
-  }
-  if (cursor < L) segs.push({ s: cursor, e: L, z0: 0, z1: height });
-  return segs;
-}
+import { wallDir, wallLength, wallMidpoint, type PlanDoc } from './doc';
+// Segment math lives in editing.ts (pure, unit-tested): per-wall height and
+// per-opening sill/height are honoured there.
+import { wallSegments } from './editing';
 
 export function createExtrudeView(
   container: HTMLElement,

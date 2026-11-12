@@ -367,5 +367,5 @@ describe('labels', () => {
 });
 
 it('a fresh plan is empty', () => {
-  expect(emptyPlan()).toEqual({ walls: [], openings: [], rooms: [], dims: [], selectedId: null });
+  expect(emptyPlan()).toEqual({ walls: [], openings: [], rooms: [], dims: [], fixtures: [], selectedId: null, selectedIds: [] });
 });

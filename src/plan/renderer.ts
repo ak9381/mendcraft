@@ -16,14 +16,15 @@ import {
   nudgeSelected,
   paletteItems,
   pasteClipboard,
+  rotateSelected,
 } from './tools';
 import { createPropsPanel } from './propsPanel';
+import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp } from './editing';
 import {
   pointAlong,
   roomCentroid,
   roomArea,
   wallLength,
-  wallMidpoint,
   wallNormal,
   planBounds,
   mmToMetresLabel,
@@ -142,6 +143,9 @@ export function createPlanRenderer(
       if (dist <= slack && (!best || dist < best.dist)) best = { id: w.id, dist };
     }
     if (best) return best.id;
+    for (const f of d.fixtures) {
+      if (pointInPolygon(p, fixturePolygon(f))) return f.id;
+    }
     for (const room of d.rooms) {
       const poly = room.wallIds
         .map((id) => d.walls.find((x) => x.id === id))
@@ -279,6 +283,43 @@ export function createPlanRenderer(
     };
   }
 
+  // ---- inline numeric editor for temporary dimensions ----
+  let dimEditor: HTMLInputElement | null = null;
+  function openInlineEditor(clientX: number, clientY: number, initialMm: number, commit: (v: number) => void): void {
+    dimEditor?.remove();
+    const rect = container.getBoundingClientRect();
+    const inp = document.createElement('input');
+    dimEditor = inp;
+    inp.type = 'number';
+    inp.className = 'mc-dim-edit';
+    inp.value = String(Math.round(initialMm));
+    inp.title = 'mm — Enter applies, Esc cancels';
+    inp.style.cssText =
+      `position:absolute;left:${clientX - rect.left - 44}px;top:${clientY - rect.top - 14}px;` +
+      'width:88px;z-index:40;font-size:12px;padding:2px 4px;border:1px solid #2563eb;border-radius:4px;';
+    let done = false;
+    const close = () => {
+      if (done) return;
+      done = true;
+      inp.remove();
+      if (dimEditor === inp) dimEditor = null;
+      container.focus({ preventScroll: true });
+    };
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        const v = Number(inp.value);
+        close();
+        if (Number.isFinite(v)) commit(v);
+      } else if (e.key === 'Escape') close();
+    });
+    inp.addEventListener('blur', close);
+    inp.addEventListener('mousedown', (e) => e.stopPropagation());
+    container.appendChild(inp);
+    inp.focus();
+    inp.select();
+  }
+
   // ---- rendering ----
   function render(): void {
     if (!fitted) {
@@ -318,13 +359,16 @@ export function createPlanRenderer(
       }
     }
 
+    const isSel = (id: string): boolean =>
+      d.selectedIds?.length ? d.selectedIds.includes(id) : id === d.selectedId;
+
     // Walls (no per-wall length labels — they clutter the drawing and sit on
     // door arcs; dimensions are shown separately for the selection + explicit
     // dims + overall outer size below).
     for (const w of d.walls) {
       const a = toScreen(w.a);
       const b = toScreen(w.b);
-      const selected = w.id === d.selectedId;
+      const selected = isSel(w.id);
       svg.appendChild(el('line', {
         x1: a.x, y1: a.y, x2: b.x, y2: b.y,
         stroke: selected ? '#2563eb' : '#1f2937',
@@ -366,7 +410,7 @@ export function createPlanRenderer(
         // Plain opening: thin jamb ticks at either end of the gap.
         svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
       }
-      if (o.id === d.selectedId) {
+      if (isSel(o.id)) {
         svg.appendChild(el('line', {
           x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y,
           stroke: '#2563eb', 'stroke-width': Math.max(4, wall.thickness * scale + 4),
@@ -375,8 +419,28 @@ export function createPlanRenderer(
       }
     }
 
+    // Fixtures (furniture/sanitary items): rotated rect + kind label; the
+    // single selected fixture gets a rotate handle (drag snaps to 15°).
+    for (const f of d.fixtures) {
+      const pts = fixturePolygon(f).map((p) => toScreen(p));
+      const selected = isSel(f.id);
+      svg.appendChild(el('polygon', {
+        points: pts.map((p) => `${p.x},${p.y}`).join(' '),
+        fill: selected ? 'rgba(37,99,235,0.12)' : 'rgba(180,83,9,0.08)',
+        stroke: selected ? '#2563eb' : '#b45309',
+        'stroke-width': selected ? 2 : 1.2,
+      }));
+      const c = toScreen({ x: f.x, y: f.y });
+      svg.appendChild(textNode(c.x, c.y + 4, f.kind, 11, selected ? '#1d4ed8' : '#92400e', 'middle'));
+      if (selected && d.selectedIds.length === 1) {
+        const h = toScreen(fixtureHandlePoint(f, 30 / scale));
+        svg.appendChild(el('line', { x1: c.x, y1: c.y, x2: h.x, y2: h.y, stroke: '#2563eb', 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+        svg.appendChild(el('circle', { cx: h.x, cy: h.y, r: 6, fill: '#ffffff', stroke: '#2563eb', 'stroke-width': 2 }));
+      }
+    }
+
     // Endpoint handles on the selected wall (drag with the Select tool).
-    const selWall = d.walls.find((w) => w.id === d.selectedId);
+    const selWall = d.selectedIds.length <= 1 ? d.walls.find((w) => w.id === d.selectedId) : undefined;
     if (selWall) {
       for (const endPt of [selWall.a, selWall.b]) {
         const s = toScreen(endPt);
@@ -396,37 +460,77 @@ export function createPlanRenderer(
       ? { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 }
       : { x: 0, y: 0 };
 
-    /** Dimension a wall, offset to the outward side (away from the plan centre). */
-    function drawWallDim(wall: Wall, color: string, labelColor: string): void {
-      let n = wallNormal(wall);
-      const mid = wallMidpoint(wall);
-      // Flip the normal so the dimension sits on the OUTSIDE of the plan.
+    /** Aligned dimension between two world points, offset to the side of the
+     *  segment facing away from the plan centre. `onEdit` makes the label a
+     *  click target that opens the inline value editor (temporary dims). */
+    function drawSegDim(
+      pa: Point,
+      pb: Point,
+      gap: number,
+      valueMm: number,
+      color: string,
+      labelColor: string,
+      onEdit?: (clientX: number, clientY: number) => void,
+    ): void {
+      const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+      if (len < 1) return;
+      const dir = { x: (pb.x - pa.x) / len, y: (pb.y - pa.y) / len };
+      let n = { x: -dir.y, y: dir.x };
+      const mid = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
       if ((mid.x - centre.x) * n.x + (mid.y - centre.y) * n.y < 0) n = { x: -n.x, y: -n.y };
-      const gap = wall.thickness / 2 + 350;
-      const a = { x: wall.a.x + n.x * gap, y: wall.a.y + n.y * gap };
-      const b = { x: wall.b.x + n.x * gap, y: wall.b.y + n.y * gap };
+      const a = { x: pa.x + n.x * gap, y: pa.y + n.y * gap };
+      const b = { x: pb.x + n.x * gap, y: pb.y + n.y * gap };
       const sa = toScreen(a);
       const sb = toScreen(b);
-      const wa = toScreen(wall.a);
-      const wb = toScreen(wall.b);
+      const wa = toScreen(pa);
+      const wb = toScreen(pb);
       svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: color, 'stroke-width': 1 }));
       svg.appendChild(el('line', { x1: wa.x, y1: wa.y, x2: sa.x, y2: sa.y, stroke: color, 'stroke-width': 0.75 }));
       svg.appendChild(el('line', { x1: wb.x, y1: wb.y, x2: sb.x, y2: sb.y, stroke: color, 'stroke-width': 0.75 }));
       const m = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
-      // Nudge the label a little further out along the normal.
       const ns = { x: n.x * scale, y: -n.y * scale };
-      svg.appendChild(textNode(m.x + ns.x * 10, m.y - ns.y * 10 - 2, mmToMetresLabel(wallLength(wall)), 12, labelColor, 'middle'));
+      const label = textNode(m.x + ns.x * 10, m.y - ns.y * 10 - 2, mmToMetresLabel(valueMm), 12, labelColor, 'middle');
+      if (onEdit) {
+        label.setAttribute('text-decoration', 'underline');
+        label.setAttribute('pointer-events', 'all');
+        label.style.cursor = 'pointer';
+        label.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onEdit(e.clientX, e.clientY);
+        });
+      }
+      svg.appendChild(label);
     }
 
-    const dimmed = new Set(d.dims.map((dm) => dm.wallId));
+    const drawWallDim = (wall: Wall, color: string, labelColor: string, onEdit?: (x: number, y: number) => void): void =>
+      drawSegDim(wall.a, wall.b, wall.thickness / 2 + 350, wallLength(wall), color, labelColor, onEdit);
+
+    const dimmed = new Set(d.dims.map((dm) => dm.wallId).filter(Boolean));
     for (const dim of d.dims) {
       const wall = d.walls.find((x) => x.id === dim.wallId);
       if (wall) drawWallDim(wall, '#16a34a', '#15803d');
+      else if (dim.a && dim.b)
+        drawSegDim(dim.a, dim.b, 250, Math.hypot(dim.b.x - dim.a.x, dim.b.y - dim.a.y), '#16a34a', '#15803d');
     }
-    // Selected wall: dimension it too (unless it already has an explicit dim).
-    if (d.selectedId && !dimmed.has(d.selectedId)) {
-      const sel = d.walls.find((x) => x.id === d.selectedId);
-      if (sel) drawWallDim(sel, '#2563eb', '#2563eb');
+
+    // Revit-style temporary dimensions for the (single) selection: a wall shows
+    // its editable length; a door/window shows editable distances from both
+    // wall ends. Clicking the underlined value opens an inline editor.
+    if (d.selectedId && d.selectedIds.length <= 1) {
+      for (const td of tempDims(d, d.selectedId)) {
+        if (td.kind === 'wall-length' && dimmed.has(td.targetId)) continue;
+        const host = td.kind === 'wall-length'
+          ? d.walls.find((w) => w.id === td.targetId)
+          : d.walls.find((w) => w.id === d.openings.find((o) => o.id === td.targetId)?.wallId);
+        const gap = (host ? host.thickness / 2 : 50) + (td.kind === 'wall-length' ? 350 : 650);
+        drawSegDim(td.a, td.b, gap, td.value, '#2563eb', '#1d4ed8', (cx, cy) => {
+          openInlineEditor(cx, cy, td.value, (v) => {
+            const env = tempDimEditOp(doc(), { kind: td.kind, targetId: td.targetId }, v);
+            if (env) ctx.apply(env);
+          });
+        });
+      }
     }
 
     // Overall outer dimensions (bounding box width + height), drawn outside.
@@ -516,7 +620,7 @@ export function createPlanRenderer(
     // container focused instead.
     e.preventDefault();
     container.focus({ preventScroll: true });
-    if (toolCtl.down({ x: e.clientX, y: e.clientY, source: 'mouse' })) {
+    if (toolCtl.down({ x: e.clientX, y: e.clientY, source: 'mouse', shift: e.shiftKey })) {
       toolBusy = true;
       return;
     }
@@ -562,7 +666,7 @@ export function createPlanRenderer(
     // Global editing chords (work in any tool).
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       const k = e.key.toLowerCase();
-      const did = k === 'd' ? duplicateSelected(ctx) : k === 'c' ? copySelected(ctx) : k === 'v' ? pasteClipboard(ctx) : false;
+      const did = k === 'd' ? duplicateSelected(ctx) : k === 'c' ? copySelected(ctx) : k === 'v' ? pasteClipboard(ctx) : k === 'r' ? rotateSelected(ctx) : false;
       if (did) {
         e.preventDefault();
         return;
@@ -701,6 +805,7 @@ export function createPlanRenderer(
       trash.dispose();
       fsCtl.dispose();
       propsPanel.dispose();
+      dimEditor?.remove();
       status.remove();
       svg.remove();
     },

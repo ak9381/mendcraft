@@ -8,15 +8,17 @@
 
 import type { Tool, ToolContext, ToolPointer } from '../core/tools';
 import type { PaletteItemSpec } from '../core/palette';
-import { GRID_MM, snapToGrid, snapToObjects } from './snap';
+import { GRID_MM, measureSnap, snapToGrid, snapToObjects, snapValueToGrid, type MeasureSnapKind } from './snap';
 import { chainClick, emptyChain, normRect, ortho45, type WallChainState } from './drawTools';
 import { clampOpeningOffset, nearestWall, projectToWall } from './hosting';
+import { fixtureHandlePoint, handleAngle, rectHits, snapAngle, toggleSelection } from './editing';
 import {
   mmToMetresLabel,
   pointAlong,
   roomPolygon,
   wallLength,
   wallMidpoint,
+  type Fixture,
   type Opening,
   type PlanDoc,
   type Point,
@@ -30,23 +32,35 @@ const docOf = (ctx: ToolContext): PlanDoc => ctx.snapshot() as PlanDoc;
 /** Object-snap radius in mm that tracks the zoom (≥ one grid cell, ~14 px). */
 const snapRadius = (ctx: ToolContext): number => Math.max(GRID_MM, 14 / ctx.scale());
 
-/** Endpoint/midpoint snap first, grid snap otherwise. */
-function snapWorld(ctx: ToolContext, world: Point): Point {
-  const hit = snapToObjects(world, docOf(ctx).walls, snapRadius(ctx));
-  return hit ? hit.point : snapToGrid(world);
-}
-
 // ─── Selection helpers (also used by the renderer's global keys) ────────────
 
 type Clip =
   | { type: 'wall'; a: Point; b: Point; thickness: number }
   | { type: 'opening'; kind: Opening['kind']; wallId: string; offset: number; width: number; swing?: 'left' | 'right' }
   | { type: 'room'; x: number; y: number; w: number; h: number }
-  | null;
+  | { type: 'fixture'; kind: string; x: number; y: number; w: number; d: number; rotation: number };
 
-let clipboard: Clip = null;
+let clipboard: Clip[] = [];
 
-function selectedObject(ctx: ToolContext): { kind: 'wall' | 'opening' | 'room'; obj: Wall | Opening | Room } | null {
+/** Current multi-selection (falls back to the single selectedId). */
+export function selectionIds(ctx: ToolContext): string[] {
+  const d = docOf(ctx);
+  if (d.selectedIds?.length) return d.selectedIds;
+  return d.selectedId ? [d.selectedId] : [];
+}
+
+function setSelection(ctx: ToolContext, ids: string[]): void {
+  ctx.apply({ op: 'select_set', ids });
+}
+
+/** Apply a list of op envelopes as ONE undoable step (single op stays plain). */
+function applyAsOne(ctx: ToolContext, envs: Array<Record<string, unknown>>): boolean {
+  if (envs.length === 0) return false;
+  if (envs.length === 1) return ctx.apply(envs[0]).ok;
+  return ctx.apply({ op: 'batch', ops: envs }).ok;
+}
+
+function selectedObject(ctx: ToolContext): { kind: 'wall' | 'opening' | 'room' | 'fixture'; obj: Wall | Opening | Room | Fixture } | null {
   const d = docOf(ctx);
   const id = ctx.selectedId();
   if (!id) return null;
@@ -56,13 +70,15 @@ function selectedObject(ctx: ToolContext): { kind: 'wall' | 'opening' | 'room'; 
   if (o) return { kind: 'opening', obj: o };
   const r = d.rooms.find((x) => x.id === id);
   if (r) return { kind: 'room', obj: r };
+  const f = d.fixtures.find((x) => x.id === id);
+  if (f) return { kind: 'fixture', obj: f };
   return null;
 }
 
+/** Delete the whole selection as one undoable step. */
 export function deleteSelected(ctx: ToolContext): boolean {
-  const id = ctx.selectedId();
-  if (!id) return false;
-  return ctx.apply({ op: 'delete', target: id }).ok;
+  const ids = selectionIds(ctx);
+  return applyAsOne(ctx, ids.map((id) => ({ op: 'delete', target: id })));
 }
 
 /** X: flip the selected door's swing. */
@@ -72,70 +88,89 @@ export function flipSelected(ctx: ToolContext): boolean {
   return ctx.apply({ op: 'set_swing', target: sel.obj.id }).ok;
 }
 
-function clipFrom(ctx: ToolContext): Clip {
-  const sel = selectedObject(ctx);
-  if (!sel) return null;
-  if (sel.kind === 'wall') {
-    const w = sel.obj as Wall;
-    return { type: 'wall', a: { ...w.a }, b: { ...w.b }, thickness: w.thickness };
+/** Ctrl+R: rotate selected fixtures 90° CCW; a selected door flips its swing. */
+export function rotateSelected(ctx: ToolContext): boolean {
+  const d = docOf(ctx);
+  const envs: Array<Record<string, unknown>> = [];
+  for (const id of selectionIds(ctx)) {
+    if (d.fixtures.some((f) => f.id === id)) envs.push({ op: 'rotate', target: id, angle: 90 });
+    else if (d.openings.some((o) => o.id === id && o.kind === 'door')) envs.push({ op: 'rotate', target: id });
   }
-  if (sel.kind === 'opening') {
-    const o = sel.obj as Opening;
-    return { type: 'opening', kind: o.kind, wallId: o.wallId, offset: o.offset, width: o.width, swing: o.swing };
-  }
-  const room = sel.obj as Room;
-  const poly = roomPolygon(room, docOf(ctx));
-  if (!poly) return null;
-  const xs = poly.map((p) => p.x);
-  const ys = poly.map((p) => p.y);
-  const x = Math.min(...xs);
-  const y = Math.min(...ys);
-  return { type: 'room', x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  return applyAsOne(ctx, envs);
 }
 
-function applyClip(ctx: ToolContext, clip: Clip, shift: number): boolean {
-  if (!clip) return false;
+function clipOne(d: PlanDoc, id: string): Clip | null {
+  const w = d.walls.find((x) => x.id === id);
+  if (w) return { type: 'wall', a: { ...w.a }, b: { ...w.b }, thickness: w.thickness };
+  const o = d.openings.find((x) => x.id === id);
+  if (o) return { type: 'opening', kind: o.kind, wallId: o.wallId, offset: o.offset, width: o.width, swing: o.swing };
+  const f = d.fixtures.find((x) => x.id === id);
+  if (f) return { type: 'fixture', kind: f.kind, x: f.x, y: f.y, w: f.w, d: f.d, rotation: f.rotation };
+  const room = d.rooms.find((x) => x.id === id);
+  if (room) {
+    const poly = roomPolygon(room, d);
+    if (!poly) return null;
+    const xs = poly.map((p) => p.x);
+    const ys = poly.map((p) => p.y);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { type: 'room', x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  }
+  return null;
+}
+
+function clipsFrom(ctx: ToolContext): Clip[] {
+  const d = docOf(ctx);
+  return selectionIds(ctx).map((id) => clipOne(d, id)).filter((c): c is Clip => !!c);
+}
+
+function clipEnvelope(clip: Clip, shift: number): Record<string, unknown> {
   if (clip.type === 'wall')
-    return ctx.apply({
+    return {
       op: 'add_wall',
       x1: clip.a.x + shift, y1: clip.a.y - shift,
       x2: clip.b.x + shift, y2: clip.b.y - shift,
       thickness: clip.thickness,
-    }).ok;
+    };
   if (clip.type === 'opening') {
     const op = clip.kind === 'door' ? 'add_door' : clip.kind === 'window' ? 'add_window' : 'add_opening';
-    return ctx.apply({
+    return {
       op, target: clip.wallId, offset: clip.offset + clip.width + 100, width: clip.width,
       ...(clip.kind === 'door' ? { swing: clip.swing ?? 'left' } : {}),
-    }).ok;
+    };
   }
-  return ctx.apply({ op: 'add_room', x: clip.x + shift, y: clip.y - shift, w: clip.w, h: clip.h }).ok;
+  if (clip.type === 'fixture')
+    return { op: 'add_fixture', kind: clip.kind, x: clip.x + shift, y: clip.y - shift, w: clip.w, d: clip.d, rotation: clip.rotation };
+  return { op: 'add_room', x: clip.x + shift, y: clip.y - shift, w: clip.w, h: clip.h };
 }
 
-/** Ctrl+D: duplicate the selection with a small offset. */
+/** Ctrl+D: duplicate the whole selection (one undoable step). */
 export function duplicateSelected(ctx: ToolContext): boolean {
-  return applyClip(ctx, clipFrom(ctx), 300);
+  return applyAsOne(ctx, clipsFrom(ctx).map((c) => clipEnvelope(c, 300)));
 }
 
-/** Ctrl+C / Ctrl+V. */
+/** Ctrl+C / Ctrl+V — the clipboard holds the whole selection. */
 export function copySelected(ctx: ToolContext): boolean {
-  const c = clipFrom(ctx);
-  if (!c) return false;
-  clipboard = c;
+  const clips = clipsFrom(ctx);
+  if (clips.length === 0) return false;
+  clipboard = clips;
   return true;
 }
 export function pasteClipboard(ctx: ToolContext): boolean {
-  return applyClip(ctx, clipboard, 500);
+  return applyAsOne(ctx, clipboard.map((c) => clipEnvelope(c, 500)));
 }
 
-/** Arrow keys: nudge a wall by (dx, dy) mm, or slide an opening along its wall. */
+/** Arrow keys: nudge the selection by (dx, dy) mm as one step; a lone opening
+ *  slides along its wall instead. */
 export function nudgeSelected(ctx: ToolContext, dx: number, dy: number): boolean {
-  const sel = selectedObject(ctx);
-  if (!sel) return false;
-  if (sel.kind === 'wall')
-    return ctx.apply({ op: 'move', target: sel.obj.id, dx, dy }).ok;
-  if (sel.kind === 'opening') {
-    const o = sel.obj as Opening;
+  const d = docOf(ctx);
+  const ids = selectionIds(ctx);
+  if (ids.length === 0) return false;
+  const movable = ids.filter((id) => d.walls.some((w) => w.id === id) || d.fixtures.some((f) => f.id === id));
+  if (movable.length > 0)
+    return ctx.apply({ op: 'move_many', ids: movable, dx, dy }).ok;
+  const o = d.openings.find((x) => x.id === ids[0]);
+  if (o) {
     const delta = dx !== 0 ? dx : dy;
     return ctx.apply({ op: 'move_opening', target: o.id, offset: o.offset + delta }).ok;
   }
@@ -148,12 +183,17 @@ function createSelectTool(ctx: ToolContext): Tool {
   type Drag =
     | { kind: 'wall'; id: string; grabWorld: Point; grabMid: Point }
     | { kind: 'opening'; id: string }
+    | { kind: 'fixture'; id: string; grabWorld: Point; grabPos: Point }
     | { kind: 'end'; wallId: string; end: 'a' | 'b' }
+    | { kind: 'multi'; ids: string[]; grabWorld: Point; applied: Point }
+    | { kind: 'rotate'; id: string }
+    | { kind: 'marquee'; startWorld: Point; additive: boolean }
     | null;
   let drag: Drag = null;
   let overTrash = false;
 
   function endpointAt(p: ToolPointer): { wallId: string; end: 'a' | 'b' } | null {
+    if (selectionIds(ctx).length !== 1) return null;
     const wall = docOf(ctx).walls.find((w) => w.id === ctx.selectedId());
     if (!wall) return null;
     for (const end of ['a', 'b'] as const) {
@@ -163,34 +203,100 @@ function createSelectTool(ctx: ToolContext): Tool {
     return null;
   }
 
+  /** Rotate handle of the single selected fixture, hit within 12 px. */
+  function rotateHandleAt(p: ToolPointer): string | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const f = docOf(ctx).fixtures.find((x) => x.id === ctx.selectedId());
+    if (!f) return null;
+    const s = ctx.toScreen(fixtureHandlePoint(f, 30 / ctx.scale()));
+    return Math.hypot(s.x - p.x, s.y - p.y) <= 12 ? f.id : null;
+  }
+
+  function marqueeOverlay(start: Point, cur: Point): void {
+    ctx.setOverlay((ov) => {
+      ov.rect(ctx.toScreen(start), ctx.toScreen(cur), '#2563eb', 'rgba(37,99,235,0.06)');
+      const r = normRect(start, cur);
+      ov.label(ctx.toScreen({ x: r.x + r.w / 2, y: r.y + r.h }), `${mmToMetresLabel(r.w)} × ${mmToMetresLabel(r.h)}`, '#2563eb');
+    });
+  }
+
   return {
     id: 'select',
     label: 'Select',
     icon: '⬚',
     shortcut: 'v',
-    hint: 'Click/pinch to select; drag to move; drag endpoint handles to stretch; drop on the bin to delete.',
+    hint: 'Click to select (Shift toggles, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
     onDown(p) {
       const handle = endpointAt(p);
       if (handle) {
         drag = { kind: 'end', ...handle };
         return true;
       }
+      const rotId = rotateHandleAt(p);
+      if (rotId) {
+        drag = { kind: 'rotate', id: rotId };
+        return true;
+      }
+      const world = ctx.toWorld(p.x, p.y);
       const id = ctx.pick(p.x, p.y);
-      if (!id) return false; // let the host pan
-      ctx.select(id);
+      if (!id) {
+        drag = { kind: 'marquee', startWorld: world, additive: !!p.shift };
+        return true;
+      }
+      const sel = selectionIds(ctx);
+      if (p.shift) {
+        setSelection(ctx, toggleSelection(sel, id));
+        return true;
+      }
+      const keepGroup = sel.includes(id) && sel.length > 1;
+      if (!keepGroup) setSelection(ctx, [id]);
       const d = docOf(ctx);
-      const wall = d.walls.find((w) => w.id === id);
-      if (wall) drag = { kind: 'wall', id, grabWorld: ctx.toWorld(p.x, p.y), grabMid: wallMidpoint(wall) };
-      else if (d.openings.some((o) => o.id === id)) drag = { kind: 'opening', id };
+      if (keepGroup) {
+        const ids = sel.filter((x) => d.walls.some((w) => w.id === x) || d.fixtures.some((f) => f.id === x));
+        drag = { kind: 'multi', ids, grabWorld: world, applied: { x: 0, y: 0 } };
+      } else {
+        const wall = d.walls.find((w) => w.id === id);
+        const fixture = d.fixtures.find((f) => f.id === id);
+        if (wall) drag = { kind: 'wall', id, grabWorld: world, grabMid: wallMidpoint(wall) };
+        else if (fixture) drag = { kind: 'fixture', id, grabWorld: world, grabPos: { x: fixture.x, y: fixture.y } };
+        else if (d.openings.some((o) => o.id === id)) drag = { kind: 'opening', id };
+      }
       ctx.render();
       return true;
     },
     onMove(p) {
       if (!drag) return;
-      overTrash = ctx.overTrash(p.x, p.y);
-      ctx.setTrashHover(overTrash);
       const world = ctx.toWorld(p.x, p.y);
       const d = docOf(ctx);
+      if (drag.kind === 'marquee') {
+        marqueeOverlay(drag.startWorld, world);
+        return;
+      }
+      if (drag.kind === 'rotate') {
+        const f = d.fixtures.find((x) => x.id === (drag as { id: string }).id);
+        if (!f) return;
+        const desired = snapAngle(handleAngle({ x: f.x, y: f.y }, world), 15);
+        let delta = desired - f.rotation;
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        if (Math.abs(delta) >= 1) ctx.apply({ op: 'rotate', target: f.id, angle: delta });
+        ctx.setStatus(`Rotation ${Math.round(desired)}° (snaps to 15°)`);
+        return;
+      }
+      overTrash = ctx.overTrash(p.x, p.y);
+      ctx.setTrashHover(overTrash);
+      if (drag.kind === 'multi') {
+        const desired = {
+          x: snapValueToGrid(world.x - drag.grabWorld.x),
+          y: snapValueToGrid(world.y - drag.grabWorld.y),
+        };
+        const dx = desired.x - drag.applied.x;
+        const dy = desired.y - drag.applied.y;
+        if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) {
+          if (ctx.apply({ op: 'move_many', ids: drag.ids, dx, dy }).ok) drag.applied = desired;
+        }
+        return;
+      }
       if (drag.kind === 'end') {
         const wall = d.walls.find((w) => w.id === (drag as { wallId: string }).wallId);
         if (!wall) return;
@@ -214,6 +320,18 @@ function createSelectTool(ctx: ToolContext): Tool {
         if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) ctx.apply({ op: 'move', target: cur.id, dx, dy });
         return;
       }
+      if (drag.kind === 'fixture') {
+        const f = d.fixtures.find((x) => x.id === (drag as { id: string }).id);
+        if (!f) return;
+        const target = snapToGrid({
+          x: drag.grabPos.x + (world.x - drag.grabWorld.x),
+          y: drag.grabPos.y + (world.y - drag.grabWorld.y),
+        });
+        const dx = target.x - f.x;
+        const dy = target.y - f.y;
+        if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) ctx.apply({ op: 'move', target: f.id, dx, dy });
+        return;
+      }
       const o = d.openings.find((x) => x.id === (drag as { id: string }).id);
       const wall = o && d.walls.find((w) => w.id === o.wallId);
       if (!o || !wall) return;
@@ -221,10 +339,16 @@ function createSelectTool(ctx: ToolContext): Tool {
       const offset = clampOpeningOffset(proj.t, o.width, wallLength(wall));
       if (Math.abs(offset - o.offset) >= 1) ctx.apply({ op: 'move_opening', target: o.id, offset });
     },
-    onUp() {
-      if (drag && drag.kind !== 'end' && overTrash) {
-        const id = drag.kind === 'wall' || drag.kind === 'opening' ? drag.id : null;
-        if (id) ctx.apply({ op: 'delete', target: id });
+    onUp(p) {
+      if (drag?.kind === 'marquee') {
+        const world = p ? ctx.toWorld(p.x, p.y) : drag.startWorld;
+        const r = normRect(drag.startWorld, world);
+        const hits = rectHits(docOf(ctx), r);
+        const ids = drag.additive ? [...new Set([...selectionIds(ctx), ...hits])] : hits;
+        ctx.setOverlay(null);
+        setSelection(ctx, ids);
+      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && overTrash) {
+        deleteSelected(ctx);
       }
       drag = null;
       overTrash = false;
@@ -232,6 +356,7 @@ function createSelectTool(ctx: ToolContext): Tool {
     },
     onCancel() {
       drag = null;
+      ctx.setOverlay(null);
       ctx.setTrashHover(false);
     },
   };
@@ -440,9 +565,14 @@ function createDimTool(ctx: ToolContext): Tool {
 
 function createMeasureTool(ctx: ToolContext): Tool {
   let pts: Point[] = [];
-  let hover: Point | null = null;
+  let hover: { point: Point; kind: MeasureSnapKind } | null = null;
 
-  const snap = (world: Point): Point => snapWorld(ctx, world);
+  const snap = (world: Point): { point: Point; kind: MeasureSnapKind } =>
+    measureSnap(world, docOf(ctx).walls, snapRadius(ctx));
+
+  const SNAP_COLORS: Record<MeasureSnapKind, string> = {
+    endpoint: '#16a34a', midpoint: '#0ea5e9', face: '#f59e0b', grid: '#86efac',
+  };
 
   function updateOverlay(): void {
     if (pts.length === 0 && !hover) {
@@ -463,15 +593,23 @@ function createMeasureTool(ctx: ToolContext): Tool {
         }
       }
       const last = pts[pts.length - 1];
-      if (last && hover) {
-        const a = ctx.toScreen(last);
-        const b = ctx.toScreen(hover);
-        const len = Math.hypot(hover.x - last.x, hover.y - last.y);
-        const ang = Math.round((Math.atan2(hover.y - last.y, hover.x - last.x) * 180) / Math.PI);
-        ov.line(a, b, '#16a34a', 2, '6 4');
-        ov.label({ x: b.x + 12, y: b.y - 10 }, `${mmToMetresLabel(len)} · ${ang}°${total > 0 ? ` · Σ ${mmToMetresLabel(total + len)}` : ''}`, '#15803d');
-      } else if (hover) {
-        ov.dot(ctx.toScreen(hover), '#86efac');
+      if (hover) {
+        // Visible snap marker: colour by what it snapped to; non-grid snaps get
+        // a ring + name so wall-face snaps are unmistakable.
+        const hs = ctx.toScreen(hover.point);
+        ov.dot(hs, SNAP_COLORS[hover.kind], hover.kind === 'grid' ? 3 : 5);
+        if (hover.kind !== 'grid') ov.label({ x: hs.x + 12, y: hs.y + 12 }, hover.kind, SNAP_COLORS[hover.kind]);
+        if (last) {
+          const a = ctx.toScreen(last);
+          const len = Math.hypot(hover.point.x - last.x, hover.point.y - last.y);
+          const ang = Math.round((Math.atan2(hover.point.y - last.y, hover.point.x - last.x) * 180) / Math.PI);
+          ov.line(a, hs, '#16a34a', 2, '6 4');
+          ov.label({ x: hs.x + 12, y: hs.y - 10 }, `${mmToMetresLabel(len)} · ${ang}°${total > 0 ? ` · Σ ${mmToMetresLabel(total + len)}` : ''}`, '#15803d');
+        }
+      }
+      if (pts.length >= 2) {
+        const end = ctx.toScreen(pts[pts.length - 1]);
+        ov.label({ x: end.x, y: end.y + 20 }, '⏎ Make dimension', '#2563eb');
       }
     });
   }
@@ -482,14 +620,25 @@ function createMeasureTool(ctx: ToolContext): Tool {
     ctx.setOverlay(null);
   }
 
+  /** Enter: turn the measured chain into permanent aligned dimensions. */
+  function makeDimension(): void {
+    const envs: Array<Record<string, unknown>> = [];
+    for (let i = 1; i < pts.length; i++) {
+      envs.push({ op: 'add_dim', ax: pts[i - 1].x, ay: pts[i - 1].y, bx: pts[i].x, by: pts[i].y });
+    }
+    if (applyAsOne(ctx, envs)) ctx.setStatus(`${envs.length} permanent dimension${envs.length > 1 ? 's' : ''} added.`);
+    clear();
+  }
+
   return {
     id: 'measure',
     label: 'Measure',
     icon: '⟼',
     shortcut: 'shift+m',
-    hint: 'Click points to measure (chains; snaps to endpoints/midpoints/grid; shows length + angle). Esc clears. Use Dimension (M) for a permanent dim.',
+    hint: 'Click points to measure (snaps to endpoints, midpoints and BOTH wall faces, with a marker). Enter turns the chain into a permanent dimension; Esc clears.',
     onDown(p) {
-      pts = [...pts, snap(ctx.toWorld(p.x, p.y))];
+      const s = snap(ctx.toWorld(p.x, p.y));
+      pts = [...pts, s.point];
       updateOverlay();
       return true;
     },
@@ -502,7 +651,8 @@ function createMeasureTool(ctx: ToolContext): Tool {
     },
     onKey(e) {
       if (e.key === 'Enter') {
-        clear();
+        if (pts.length >= 2) makeDimension();
+        else clear();
         return true;
       }
       return false;

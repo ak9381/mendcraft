@@ -8,6 +8,7 @@
 // or wall-trimming logic — a known, documented limit (see README/summary).
 
 import {
+  dimLength,
   emptyPlan,
   findObject,
   mm2ToM2Label,
@@ -18,12 +19,14 @@ import {
   wallLength,
   wallNormal,
   type Dimension,
+  type Fixture,
   type Opening,
   type PlanDoc,
   type Point,
   type Room,
   type Wall,
 } from './doc';
+import { normalizeAngle } from './editing';
 import { nearestOrthoDir } from './snap';
 import type { PlanOp } from './ops';
 import { DEFAULTS, PLAN_LIMITS } from './ops';
@@ -44,6 +47,31 @@ export interface PlanListItem {
 
 const same = (p: Point, q: Point) => Math.hypot(p.x - q.x, p.y - q.y) <= COINCIDENT_MM;
 const r1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Re-establish the selection invariant after any reduce: selectedIds only holds
+ * live ids; selectedId is a member (single-target ops set selectedId — if it is
+ * already in the set the multi-selection survives, otherwise it becomes the
+ * sole selection).
+ */
+function allIds(doc: PlanDoc): Set<string> {
+  const live = new Set<string>();
+  for (const w of doc.walls) live.add(w.id);
+  for (const o of doc.openings) live.add(o.id);
+  for (const r of doc.rooms) live.add(r.id);
+  for (const d of doc.dims) live.add(d.id);
+  for (const f of doc.fixtures) live.add(f.id);
+  return live;
+}
+
+function normalizeSelection(doc: PlanDoc): PlanDoc {
+  const live = allIds(doc);
+  let ids = (doc.selectedIds ?? []).filter((id) => live.has(id));
+  let primary = doc.selectedId && live.has(doc.selectedId) ? doc.selectedId : null;
+  if (primary && !ids.includes(primary)) ids = [primary];
+  if (!primary) primary = ids[ids.length - 1] ?? null;
+  return { ...doc, selectedId: primary, selectedIds: ids };
+}
 
 /** A wall is axis-aligned when its centreline is purely horizontal or vertical. */
 function isAxisAligned(w: Wall): boolean {
@@ -113,7 +141,7 @@ export class PlanEngine {
     if (typeof result === 'string') return { ok: false, error: result, warnings: [] };
     this.undoStack.push(this.state);
     this.redoStack = [];
-    this.state = result;
+    this.state = normalizeSelection(result);
     this.bump(op);
     return { ok: true, warnings: this.warnings() };
   }
@@ -134,7 +162,7 @@ export class PlanEngine {
     }
     this.undoStack.push(this.state);
     this.redoStack = [];
-    this.state = working;
+    this.state = normalizeSelection(working);
     this.revision += 1;
     for (const op of ops) this.opLog.push({ rev: this.revision, op });
     return { ok: true, warnings: this.warnings() };
@@ -271,8 +299,13 @@ export class PlanEngine {
         return { ...state, openings: [...state.openings, opening], selectedId: id };
       }
       case 'add_dim': {
-        const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return this.noWall(state, op.target);
+        if (!op.target && op.a && op.b) {
+          // Free aligned dimension between two measured points.
+          const dim: Dimension = { id: this.nextId('m'), a: { ...op.a }, b: { ...op.b } };
+          return { ...state, dims: [...state.dims, dim], selectedId: dim.id };
+        }
+        const wallId = this.resolveId(state, op.target ?? 'selected', 'wall');
+        if (!wallId) return this.noWall(state, op.target ?? 'selected');
         if (state.dims.some((d) => d.wallId === wallId))
           return { ...state, selectedId: wallId }; // already dimensioned — no-op change
         const dim: Dimension = { id: this.nextId('m'), wallId };
@@ -292,6 +325,16 @@ export class PlanEngine {
         return this.moveEndpoints(state, wallId, wall.a, newB);
       }
       case 'move': {
+        // Fixtures translate freely; walls drag their coincident neighbours.
+        const anyId = this.resolveId(state, op.target);
+        const fixture = anyId ? state.fixtures.find((f) => f.id === anyId) : undefined;
+        if (fixture)
+          return {
+            ...state,
+            fixtures: state.fixtures.map((f) =>
+              f.id === fixture.id ? { ...f, x: f.x + op.dx, y: f.y + op.dy } : f),
+            selectedId: fixture.id,
+          };
         const wallId = this.resolveId(state, op.target, 'wall');
         if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
@@ -338,6 +381,7 @@ export class PlanEngine {
         if (found.kind === 'wall') {
           const walls = state.walls.filter((w) => w.id !== id);
           return {
+            ...state,
             walls,
             openings: state.openings.filter((o) => o.wallId !== id),
             dims: state.dims.filter((d) => d.wallId !== id),
@@ -350,21 +394,124 @@ export class PlanEngine {
           const wallIds = new Set(room.wallIds);
           const walls = state.walls.filter((w) => !wallIds.has(w.id));
           return {
+            ...state,
             walls,
             openings: state.openings.filter((o) => !wallIds.has(o.wallId)),
-            dims: state.dims.filter((d) => !wallIds.has(d.wallId)),
+            dims: state.dims.filter((d) => !d.wallId || !wallIds.has(d.wallId)),
             rooms: state.rooms.filter((rm) => rm.id !== id),
             selectedId: null,
           };
         }
         if (found.kind === 'opening')
           return { ...state, openings: state.openings.filter((o) => o.id !== id), selectedId: null };
+        if (found.kind === 'fixture')
+          return { ...state, fixtures: state.fixtures.filter((f) => f.id !== id), selectedId: null };
         return { ...state, dims: state.dims.filter((d) => d.id !== id), selectedId: null };
       }
       case 'select': {
         const id = this.resolveId(state, op.target);
         if (!id) return `no object for target "${op.target}"`;
-        return { ...state, selectedId: id };
+        return { ...state, selectedId: id, selectedIds: [id] };
+      }
+      case 'select_set': {
+        const ids = op.ids.filter((id) => findObject(state, id));
+        return { ...state, selectedIds: ids, selectedId: ids[ids.length - 1] ?? null };
+      }
+      case 'batch': {
+        // One undoable step. Sub-ops that fail are skipped (e.g. deleting a
+        // wall already cascaded away an opening also in the batch).
+        let working = state;
+        let applied = 0;
+        for (const sub of op.ops) {
+          const r = this.reduce(working, sub);
+          if (typeof r === 'string') continue;
+          working = r;
+          applied += 1;
+        }
+        if (applied === 0) return 'batch: none of the ops could be applied';
+        // A batch that CREATED objects (duplicate/paste) selects all of them —
+        // each add sub-op only sets selectedId, so the last one would win and
+        // normalizeSelection would collapse the group to that single id.
+        const before = allIds(state);
+        const created = [...allIds(working)].filter((id) => !before.has(id));
+        if (created.length > 0)
+          working = { ...working, selectedIds: created, selectedId: created[created.length - 1] };
+        return working;
+      }
+      case 'add_fixture': {
+        const id = this.nextId('f');
+        const fixture: Fixture = {
+          id, kind: op.kind, x: op.x, y: op.y, w: op.w, d: op.d,
+          rotation: normalizeAngle(op.rotation),
+        };
+        return { ...state, fixtures: [...state.fixtures, fixture], selectedId: id, selectedIds: [id] };
+      }
+      case 'move_many': {
+        const idSet = new Set(op.ids);
+        // Old endpoints of the selected walls: coincident endpoints of
+        // UNSELECTED neighbours drag along (once — no cascade).
+        const oldPts: Point[] = state.walls.filter((w) => idSet.has(w.id)).flatMap((w) => [w.a, w.b]);
+        const touches = (p: Point) => oldPts.some((q) => same(p, q));
+        const shift = (p: Point): Point => ({ x: p.x + op.dx, y: p.y + op.dy });
+        const walls = state.walls.map((w) => {
+          if (idSet.has(w.id)) return { ...w, a: shift(w.a), b: shift(w.b) };
+          const na = touches(w.a) ? shift(w.a) : w.a;
+          const nb = touches(w.b) ? shift(w.b) : w.b;
+          return na === w.a && nb === w.b ? w : { ...w, a: na, b: nb };
+        });
+        const fixtures = state.fixtures.map((f) =>
+          idSet.has(f.id) ? { ...f, x: f.x + op.dx, y: f.y + op.dy } : f);
+        return { ...state, walls, fixtures };
+      }
+      case 'rotate': {
+        const id = this.resolveId(state, op.target);
+        if (!id) return `no object for target "${op.target}"`;
+        const fixture = state.fixtures.find((f) => f.id === id);
+        if (fixture) {
+          return {
+            ...state,
+            fixtures: state.fixtures.map((f) =>
+              f.id === id ? { ...f, rotation: normalizeAngle(f.rotation + op.angle) } : f),
+            selectedId: id,
+          };
+        }
+        const door = state.openings.find((o) => o.id === id && o.kind === 'door');
+        if (door) {
+          const swing = door.swing === 'right' ? 'left' : 'right';
+          return {
+            ...state,
+            openings: state.openings.map((o) => (o.id === id ? { ...o, swing } : o)),
+            selectedId: id,
+          };
+        }
+        return `rotate applies to fixtures and doors (target "${op.target}")`;
+      }
+      case 'set_sill': {
+        const id = this.resolveId(state, op.target);
+        const win = id ? state.openings.find((o) => o.id === id && o.kind === 'window') : undefined;
+        if (!win) return `no window for target "${op.target}"`;
+        return {
+          ...state,
+          openings: state.openings.map((o) => (o.id === win.id ? { ...o, sill: op.sill } : o)),
+          selectedId: win.id,
+        };
+      }
+      case 'set_height': {
+        const id = this.resolveId(state, op.target);
+        if (!id) return `no object for target "${op.target}"`;
+        if (state.walls.some((w) => w.id === id))
+          return {
+            ...state,
+            walls: state.walls.map((w) => (w.id === id ? { ...w, height: op.height } : w)),
+            selectedId: id,
+          };
+        if (state.openings.some((o) => o.id === id))
+          return {
+            ...state,
+            openings: state.openings.map((o) => (o.id === id ? { ...o, height: op.height } : o)),
+            selectedId: id,
+          };
+        return `set_height applies to walls and openings (target "${op.target}")`;
       }
       case 'set_swing': {
         const id = this.resolveId(state, op.target);
@@ -464,11 +611,18 @@ export class PlanEngine {
         selected: this.state.selectedId === o.id,
       });
     }
+    for (const f of this.state.fixtures) {
+      items.push({
+        id: f.id,
+        label: `${f.kind} · ${r1(f.w)}×${r1(f.d)} mm · ${r1(f.rotation)}°`,
+        selected: this.state.selectedId === f.id,
+      });
+    }
     for (const d of this.state.dims) {
-      const w = this.state.walls.find((x) => x.id === d.wallId);
+      const len = dimLength(d, this.state);
       items.push({
         id: d.id,
-        label: `Dimension ${w ? mmToMetresLabel(wallLength(w)) : '—'}`,
+        label: `Dimension ${len !== null ? mmToMetresLabel(len) : '—'}`,
         selected: this.state.selectedId === d.id,
       });
     }

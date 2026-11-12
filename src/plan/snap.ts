@@ -4,7 +4,8 @@
 // renderer (pinch/mouse drag) and the engine.
 
 import type { Point, Wall } from './doc';
-import { wallMidpoint } from './doc';
+import { wallMidpoint, wallNormal } from './doc';
+import { projectToWall } from './hosting';
 
 /** Default grid spacing in mm (100 mm = 10 cm). */
 export const GRID_MM = 100;
@@ -58,6 +59,47 @@ export function snapPoint(
   const obj = snapToObjects(p, walls, objectRadius, excludeWallId);
   if (obj) return { point: obj.point, snapped: obj.kind };
   return { point: snapToGrid(p, grid), snapped: 'grid' };
+}
+
+/**
+ * Snap to the nearest wall FACE (either side of the band, thickness/2 off the
+ * centreline), within `radius` mm. Measuring wants real surfaces, not the
+ * centreline, so BOTH faces are candidates; the nearest one wins.
+ */
+export function snapToWallFaces(
+  p: Point,
+  walls: Wall[],
+  radius: number,
+): { point: Point; kind: 'face'; wallId: string } | null {
+  let best: { point: Point; wallId: string; d: number } | null = null;
+  for (const w of walls) {
+    const proj = projectToWall(p, w);
+    const n = wallNormal(w);
+    for (const side of [1, -1]) {
+      const q = {
+        x: proj.point.x + n.x * (w.thickness / 2) * side,
+        y: proj.point.y + n.y * (w.thickness / 2) * side,
+      };
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (d <= radius && (!best || d < best.d)) best = { point: q, wallId: w.id, d };
+    }
+  }
+  return best ? { point: best.point, kind: 'face', wallId: best.wallId } : null;
+}
+
+export type MeasureSnapKind = 'endpoint' | 'midpoint' | 'face' | 'grid';
+
+/** Measure-tool snap: endpoints/midpoints beat faces beat the grid. */
+export function measureSnap(
+  p: Point,
+  walls: Wall[],
+  radius: number,
+): { point: Point; kind: MeasureSnapKind } {
+  const obj = snapToObjects(p, walls, radius);
+  if (obj) return { point: obj.point, kind: obj.kind };
+  const face = snapToWallFaces(p, walls, radius);
+  if (face) return { point: face.point, kind: 'face' };
+  return { point: snapToGrid(p), kind: 'grid' };
 }
 
 /**
