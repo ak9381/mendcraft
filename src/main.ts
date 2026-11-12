@@ -6,9 +6,21 @@ import { buildScene } from './core/geometry';
 import { meshesToSTL, downloadSTL } from './core/stl';
 import { createViewport, type ViewportHandle } from './ui/viewport';
 import { createHandTracker, type HandEvent, type HandTracker } from './input/hands';
+import { createHandOverlay } from './ui/handOverlay';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { SIM_ACTIVE, DEMO_SCRIPT, mountSimCursor, playDemo } from './sim';
-import { initDeviceModel, compileCommand, verifyOp, generateTemplate, isDesignRequest, prepareHybrid } from './ai/hybrid';
+import {
+  initDeviceModel,
+  checkDeviceAvailability,
+  compileCommand,
+  verifyOp,
+  generateTemplate,
+  isDesignRequest,
+  prepareHybrid,
+  getHybridStatus,
+  type DeviceModelStatus,
+} from './ai/hybrid';
+import { TEMPLATE_HINT } from './core/ruleParser';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const DRAG_MM_RANGE = 300;
@@ -19,11 +31,12 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="topbar">
     <span class="brand">Mendcraft</span>
-    <span id="source-badge" class="badge badge-rules">RULES</span>
+    <span id="source-badge" class="badge badge-rules" title="Who answered the last command">RULES</span>
+    <span id="ai-status" class="ai-status" aria-live="polite">Checking AI…</span>
     ${SIM_ACTIVE ? '<span class="badge badge-sim">SIM</span>' : ''}
     <button id="btn-camera" type="button" aria-pressed="false">Enable camera</button>
     <button id="btn-mic" type="button" aria-pressed="false">Enable mic</button>
-    <button id="btn-ai" type="button">Enable on-device AI</button>
+    <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
       <div id="progress-bar"><div id="progress-fill"></div></div>
       <span id="progress-label">0%</span>
@@ -35,7 +48,17 @@ app.innerHTML = `
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
   </div>
   <div id="layout">
-    <div id="viewport" role="application" aria-label="3D build viewport. Click a part to select it."></div>
+    <div id="viewport" role="application" aria-label="3D build viewport. Click a part to select it.">
+      <div id="empty-hint" class="empty-hint">
+        <p>${TEMPLATE_HINT}</p>
+        <div class="hint-buttons">
+          <button type="button" data-cmd="cup grip">Cup grip</button>
+          <button type="button" data-cmd="phone stand">Phone stand</button>
+          <button type="button" data-cmd="hook">Hook</button>
+          <button type="button" data-cmd="utensil holder">Utensil holder</button>
+        </div>
+      </div>
+    </div>
     <div id="panel">
       <div id="fail-states"></div>
       <section>
@@ -45,7 +68,7 @@ app.innerHTML = `
       <section>
         <h2>Command</h2>
         <form id="command-box">
-          <input id="command-input" type="text" placeholder="Try: add a box" aria-label="Type a build command" />
+          <input id="command-input" type="text" placeholder="Try: cup grip" aria-label="Type a build command" />
           <button id="btn-say" type="submit">Send</button>
         </form>
         <p id="last-command" style="font-size:0.85em;color:var(--text-dim);margin:0.5em 0 0.25em;"></p>
@@ -78,6 +101,8 @@ app.innerHTML = `
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const viewportEl = el<HTMLDivElement>('viewport');
+const emptyHint = el<HTMLDivElement>('empty-hint');
+const aiStatusEl = el<HTMLSpanElement>('ai-status');
 const sourceBadge = el<HTMLSpanElement>('source-badge');
 const partsList = el<HTMLUListElement>('parts-list');
 const opJsonEl = el<HTMLPreElement>('op-json');
@@ -132,6 +157,7 @@ function renderAll(): void {
   viewport.render(state);
   renderParts(state);
   renderWarnings();
+  emptyHint.hidden = state.parts.length > 0;
 }
 
 function renderParts(state: SceneState): void {
@@ -177,14 +203,14 @@ function applyTemplateResult(result: { template: string; params: Record<string, 
     verifierEl.textContent = `Unknown template "${result.template}".`;
     return;
   }
-  for (const op of buildTemplate(result.template, result.params)) {
-    const applied = engine.apply(op);
-    if (!applied.ok) {
-      verifierEl.textContent = `Template step failed: ${applied.error}`;
-      say(`Could not finish: ${applied.error}`);
-      renderAll();
-      return;
-    }
+  // A template starts its design fresh: replace the plate's parts in one
+  // undoable step (undo brings the previous design back).
+  const applied = engine.applyTemplate(buildTemplate(result.template, result.params));
+  if (!applied.ok) {
+    verifierEl.textContent = `Template step failed: ${applied.error}`;
+    say(`Could not finish: ${applied.error}`);
+    renderAll();
+    return;
   }
   verifierEl.textContent = `Applied template "${result.template}".`;
   say(`Built ${result.template}.`);
@@ -194,6 +220,14 @@ function applyTemplateResult(result: { template: string; params: Record<string, 
 
 async function runUtterance(utterance: string): Promise<void> {
   lastCommandEl.textContent = `"${utterance}"`;
+  try {
+    await runUtteranceInner(utterance);
+  } finally {
+    renderAiStatus();
+  }
+}
+
+async function runUtteranceInner(utterance: string): Promise<void> {
   const before = engine.summary();
   const state = engine.getState();
 
@@ -307,12 +341,18 @@ btnMic.addEventListener('click', () => {
 
 // ---- hand tracking ----
 
+const handOverlay = createHandOverlay(viewportEl);
 const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
 
 function placeCursor(x: number, y: number): void {
+  // With the real camera on, the full skeleton overlay replaces the dot.
+  if (handTracker) {
+    handCursor.hidden = true;
+    return;
+  }
   const rect = viewportEl.getBoundingClientRect();
   handCursor.hidden = false;
   handCursor.style.left = `${x * rect.width}px`;
@@ -374,6 +414,7 @@ btnCamera.addEventListener('click', async () => {
   if (!turningOn) {
     handTracker?.stop();
     handTracker = null;
+    handOverlay.clear();
     btnCamera.setAttribute('aria-pressed', 'false');
     btnCamera.classList.remove('active');
     handCursor.hidden = true;
@@ -381,7 +422,7 @@ btnCamera.addEventListener('click', async () => {
     return;
   }
   try {
-    handTracker = createHandTracker(handleHandEvent);
+    handTracker = createHandTracker(handleHandEvent, (hands) => handOverlay.draw(hands));
     await handTracker.start();
     btnCamera.setAttribute('aria-pressed', 'true');
     btnCamera.classList.add('active');
@@ -397,35 +438,80 @@ btnCamera.addEventListener('click', async () => {
 // A Firebase key is not "on-device ready". The user must click to call
 // initializeDeviceModel; we then show downloading, ready, or failed.
 
+const DEVICE_LABELS: Record<DeviceModelStatus, string> = {
+  idle: 'Checking on-device AI…',
+  unsupported: 'On-device AI: not in this browser',
+  unavailable: 'On-device AI: unavailable here',
+  downloadable: 'Download on-device AI',
+  downloading: 'Resume on-device AI download',
+  ready: 'On-device AI ready',
+  failed: 'Retry on-device AI',
+};
+
+function renderDeviceButton(status: DeviceModelStatus): void {
+  btnAi.textContent = DEVICE_LABELS[status];
+  btnAi.disabled = status === 'idle' || status === 'unsupported' || status === 'unavailable' || status === 'ready';
+  btnAi.dataset.status = status;
+  if (status === 'unsupported' || status === 'unavailable') {
+    btnAi.title = 'Chrome reports Gemini Nano cannot run on this device. Commands use the cloud model instead.';
+  } else {
+    btnAi.title = '';
+  }
+}
+
+function renderAiStatus(): void {
+  const st = getHybridStatus();
+  const cloud = st.appCheck === 'ready' ? 'Cloud AI on' : st.appCheck === 'failed' ? 'Cloud AI off' : 'Rules only';
+  const dev: Record<DeviceModelStatus, string> = {
+    idle: 'on-device: checking', unsupported: 'on-device: not supported',
+    unavailable: 'on-device: unavailable', downloadable: 'on-device: not downloaded',
+    downloading: 'on-device: downloading', ready: 'on-device: ready', failed: 'on-device: failed',
+  };
+  aiStatusEl.textContent = `${cloud} · ${dev[st.deviceModel]}`;
+  aiStatusEl.title = st.lastError ?? '';
+}
+
 btnAi.addEventListener('click', async () => {
   btnAi.disabled = true;
   btnAi.textContent = 'Downloading on-device AI…';
   progressWrap.hidden = false;
   progressFill.style.width = '0%';
-  progressLabel.textContent = '0%';
+  progressLabel.textContent = 'starting…';
   clearFail('fail-ai');
+  let sawProgress = false;
   const ok = await initDeviceModel((p) => {
+    sawProgress = true;
     const pct = Math.round(p * 100);
     progressFill.style.width = `${pct}%`;
     progressLabel.textContent = `${pct}%`;
   });
   progressWrap.hidden = true;
+  const status = getHybridStatus();
+  renderDeviceButton(status.deviceModel);
+  renderAiStatus();
   if (ok) {
-    btnAi.textContent = 'On-device AI ready';
-    say('On-device AI is ready.');
+    say(sawProgress ? 'On-device AI downloaded and ready.' : 'On-device AI is ready.');
   } else {
-    btnAi.disabled = false;
-    btnAi.textContent = 'Enable on-device AI';
-    fail('fail-ai', 'On-device AI failed to start — falling back to cloud or rules.');
-    say('On-device AI failed to start.');
+    const why =
+      status.deviceModel === 'unavailable' || status.deviceModel === 'unsupported'
+        ? 'Chrome says on-device AI is not available on this device. Using the cloud model instead.'
+        : `On-device AI did not start${status.lastError ? ` (${status.lastError})` : ''}. Using the cloud model instead.`;
+    fail('fail-ai', why);
+    say('On-device AI is not available. Using the cloud.');
   }
 });
 
-void prepareHybrid().then((status) => {
+for (const btn of emptyHint.querySelectorAll<HTMLButtonElement>('button[data-cmd]')) {
+  btn.addEventListener('click', () => void runUtterance(btn.dataset.cmd!));
+}
+
+void prepareHybrid().then(async (status) => {
   if (status.appCheck === 'failed' || status.message) {
-    fail('fail-appcheck', status.message ?? 'App Check is required. Using rules only.');
+    fail('fail-appcheck', `${status.message ?? 'App Check is required. Using rules only.'}${status.lastError ? ` (${status.lastError})` : ''}`);
     setBadge('rules');
   }
+  renderDeviceButton(await checkDeviceAvailability());
+  renderAiStatus();
 });
 
 // ---- sim mode ----

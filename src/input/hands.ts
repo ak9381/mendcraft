@@ -7,24 +7,9 @@ const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wa
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-const THUMB_TIP = 4;
-const INDEX_TIP = 8;
-const WRIST = 0;
-const MIDDLE_MCP = 9;
+import { createHandsProcessor, type HandEvent, type HandFrame } from './handLogic';
 
-// Pinch ratio (tip distance / hand-size reference) hysteresis: engage below
-// PINCH_ON, release above PINCH_OFF. User-calibratable via setPinchThreshold.
-const DEFAULT_PINCH_ON = 0.35;
-const DEFAULT_PINCH_OFF = 0.48;
-const TAP_MOVE_LIMIT = 0.03; // normalised screen units; beyond this a pinch is a drag, not a tap
-
-export type HandEvent =
-  | { type: 'pinch-tap'; x: number; y: number }
-  | { type: 'pinch-start'; x: number; y: number }
-  | { type: 'pinch-move'; x: number; y: number; dx: number; dy: number }
-  | { type: 'pinch-end' }
-  | { type: 'lost' }
-  | { type: 'tracking'; x: number; y: number };
+export type { HandEvent, HandFrame } from './handLogic';
 
 export interface HandTracker {
   start(): Promise<void>;
@@ -33,7 +18,10 @@ export interface HandTracker {
   readonly videoEl: HTMLVideoElement;
 }
 
-export function createHandTracker(onEvent: (e: HandEvent) => void): HandTracker {
+export function createHandTracker(
+  onEvent: (e: HandEvent) => void,
+  onFrame?: (hands: HandFrame[]) => void,
+): HandTracker {
   const video = document.createElement('video');
   video.playsInline = true;
   video.muted = true;
@@ -44,66 +32,19 @@ export function createHandTracker(onEvent: (e: HandEvent) => void): HandTracker 
   let stream: MediaStream | null = null;
   let rafId = 0;
   let running = false;
-  let pinching = false;
-  let tapCandidate = true;
-  let lastX = 0;
-  let lastY = 0;
-  let pinchOn = DEFAULT_PINCH_ON;
-  let pinchOff = DEFAULT_PINCH_OFF;
+  const processor = createHandsProcessor(onEvent);
 
   function setPinchThreshold(on: number, off: number): void {
-    pinchOn = on;
-    pinchOff = off;
-  }
-
-  function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
-    return Math.hypot(a.x - b.x, a.y - b.y);
+    processor.setPinchThreshold(on, off);
   }
 
   function handleResult(result: HandLandmarkerResult): void {
-    const hand = result.landmarks[0];
-    if (!hand) {
-      if (pinching) {
-        pinching = false;
-        onEvent({ type: 'pinch-end' });
-      }
-      onEvent({ type: 'lost' });
-      return;
-    }
-
-    const handSize = dist(hand[WRIST], hand[MIDDLE_MCP]) || 1;
-    const ratio = dist(hand[THUMB_TIP], hand[INDEX_TIP]) / handSize;
-    // Mirror x so the cursor matches what the user sees in a front-facing camera.
-    const x = 1 - hand[INDEX_TIP].x;
-    const y = hand[INDEX_TIP].y;
-
-    if (!pinching && ratio < pinchOn) {
-      pinching = true;
-      tapCandidate = true;
-      lastX = x;
-      lastY = y;
-      onEvent({ type: 'pinch-start', x, y });
-      return;
-    }
-
-    if (pinching && ratio > pinchOff) {
-      pinching = false;
-      if (tapCandidate) onEvent({ type: 'pinch-tap', x, y });
-      onEvent({ type: 'pinch-end' });
-      return;
-    }
-
-    if (pinching) {
-      const dx = x - lastX;
-      const dy = y - lastY;
-      if (Math.hypot(dx, dy) > TAP_MOVE_LIMIT) tapCandidate = false;
-      lastX = x;
-      lastY = y;
-      onEvent({ type: 'pinch-move', x, y, dx, dy });
-      return;
-    }
-
-    onEvent({ type: 'tracking', x, y });
+    const hands = result.landmarks.map((landmarks, i) => ({
+      landmarks,
+      label: result.handedness?.[i]?.[0]?.categoryName,
+    }));
+    const frames = processor.process(hands);
+    onFrame?.(frames);
   }
 
   function loop(): void {
@@ -121,7 +62,7 @@ export function createHandTracker(onEvent: (e: HandEvent) => void): HandTracker 
     landmarker = await HandLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
       runningMode: 'VIDEO',
-      numHands: 1,
+      numHands: 2,
     });
 
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
@@ -140,6 +81,7 @@ export function createHandTracker(onEvent: (e: HandEvent) => void): HandTracker 
     video.srcObject = null;
     landmarker?.close();
     landmarker = null;
+    onFrame?.([]);
   }
 
   return { start, stop, setPinchThreshold, videoEl: video };

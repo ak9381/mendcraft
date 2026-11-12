@@ -5,6 +5,7 @@ import {
   getDeviceModelStatus,
   getHybridStatus,
   initDeviceModel,
+  checkDeviceAvailability,
   isDesignRequest,
   isEnabled,
   OP_RESPONSE_CONSTRAINT,
@@ -204,10 +205,17 @@ describe('device model init state', () => {
     expect(getHybridStatus().deviceModel).toBe('idle');
   });
 
-  it('reports ready only after initializeDeviceModel succeeds', async () => {
+  /** Fake Chrome LanguageModel whose availability() walks a script. */
+  const lm = (...seq: string[]) => {
+    let i = 0;
+    return { availability: async () => seq[Math.min(i++, seq.length - 1)] };
+  };
+
+  it('reports ready only after the download finishes and Chrome says available', async () => {
     const progress: number[] = [];
     setModelsForTest({
       enabled: true,
+      languageModel: lm('downloadable', 'available'),
       intent: {
         generateContent: async () => ({ response: { text: () => '{}' } }),
         initializeDeviceModel: async (onProgress) => {
@@ -222,9 +230,49 @@ describe('device model init state', () => {
     expect(progress).toEqual([0.5, 1]);
   });
 
+  it('does NOT report ready when the SDK resolves but Chrome says unavailable', async () => {
+    setModelsForTest({
+      enabled: true,
+      languageModel: lm('downloadable', 'unavailable'),
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async () => undefined,
+      },
+    });
+    expect(await initDeviceModel()).toBe(false);
+    expect(getDeviceModelStatus()).toBe('unavailable');
+  });
+
+  it('reports unsupported without the Prompt API and never calls the SDK', async () => {
+    let called = false;
+    setModelsForTest({
+      enabled: true,
+      languageModel: null,
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async () => { called = true; },
+      },
+    });
+    expect(await initDeviceModel()).toBe(false);
+    expect(getDeviceModelStatus()).toBe('unsupported');
+    expect(called).toBe(false);
+  });
+
+  it('maps availability() honestly on page load', async () => {
+    setModelsForTest({ enabled: true, languageModel: lm('downloadable') });
+    expect(await checkDeviceAvailability()).toBe('downloadable');
+    setModelsForTest({ enabled: true, languageModel: lm('downloading') });
+    expect(await checkDeviceAvailability()).toBe('downloading');
+    setModelsForTest({ enabled: true, languageModel: lm('available') });
+    expect(await checkDeviceAvailability()).toBe('ready');
+    setModelsForTest({ enabled: true, languageModel: lm('unavailable') });
+    expect(await checkDeviceAvailability()).toBe('unavailable');
+  });
+
   it('reports failed when initializeDeviceModel is missing', async () => {
     setModelsForTest({
       enabled: true,
+      languageModel: lm('downloadable'),
       intent: model('{"op":"undo"}'),
     });
     const ok = await initDeviceModel();
@@ -235,6 +283,7 @@ describe('device model init state', () => {
   it('reports failed when initializeDeviceModel throws', async () => {
     setModelsForTest({
       enabled: true,
+      languageModel: lm('downloadable'),
       intent: {
         generateContent: async () => ({ response: { text: () => '{}' } }),
         initializeDeviceModel: async () => {
@@ -245,12 +294,14 @@ describe('device model init state', () => {
     const ok = await initDeviceModel();
     expect(ok).toBe(false);
     expect(getDeviceModelStatus()).toBe('failed');
+    expect(getHybridStatus().lastError).toContain('unavailable');
   });
 
   it('sets downloading while the device model is warming', async () => {
     let statusDuring: string | undefined;
     setModelsForTest({
       enabled: true,
+      languageModel: lm('downloadable', 'available'),
       intent: {
         generateContent: async () => ({ response: { text: () => '{}' } }),
         initializeDeviceModel: async () => {
@@ -261,6 +312,28 @@ describe('device model init state', () => {
     await initDeviceModel();
     expect(statusDuring).toBe('downloading');
     expect(getDeviceModelStatus()).toBe('ready');
+  });
+});
+
+describe('cloud retry when the on-device call throws', () => {
+  it('retries on the cloud-only model and labels it cloud', async () => {
+    setModelsForTest({
+      enabled: true,
+      intent: { generateContent: async () => { throw new Error('nano blew up'); } },
+      intentCloud: model('{"template":"cupGrip","params":{}}', 'in_cloud'),
+    });
+    const r = await compileCommand('cup grip', '{}', null);
+    expect(r.source).toBe('cloud');
+    expect(r.result).toEqual({ template: 'cupGrip', params: {} });
+    expect(getHybridStatus().lastError).toContain('nano blew up');
+  });
+
+  it('falls to rules (still loading the template) when both fail', async () => {
+    const boom: TextGenModel = { generateContent: async () => { throw new Error('down'); } };
+    setModelsForTest({ enabled: true, intent: boom, intentCloud: boom });
+    const r = await compileCommand('cup grip', '{}', null);
+    expect(r.source).toBe('rules');
+    expect(r.result).toEqual({ template: 'cupGrip', params: {} });
   });
 });
 

@@ -252,6 +252,28 @@ export class Engine {
     this.opLog.push({ rev: this.revision, op });
   }
 
+  /**
+   * Load a template as a single undoable step, starting from a fresh plate.
+   * Template ops refer to parts by name ('grip sleeve', ...), so applying them
+   * onto an existing design would collide with same-named parts; starting fresh
+   * avoids that. Applied atomically: if any op fails, the scene is untouched
+   * (no half-built parts), and a single undo restores the previous design.
+   */
+  applyTemplate(ops: Op[]): ApplyResult {
+    let working: SceneState = emptyScene();
+    for (const op of ops) {
+      const result = this.reduce(working, op);
+      if (typeof result === 'string') return { ok: false, error: result, warnings: [] };
+      working = result;
+    }
+    this.undoStack.push(this.state);
+    this.redoStack = [];
+    this.state = working;
+    this.revision += 1;
+    for (const op of ops) this.opLog.push({ rev: this.revision, op });
+    return { ok: true, warnings: this.printability() };
+  }
+
   /** Pure reducer: new state, or an error string (state untouched). */
   private reduce(state: SceneState, op: Op): SceneState | string {
     const replace = (part: Part): SceneState => ({

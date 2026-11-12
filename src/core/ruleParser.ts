@@ -67,6 +67,7 @@ export function normalize(utterance: string): string[] {
   const raw = utterance
     .toLowerCase()
     .replace(/[^a-z0-9.\- ]+/g, ' ')
+    .replace(/([a-z])-([a-z])/g, '$1 $2')
     .split(/\s+/)
     .map((t) => t.replace(/^\.+|\.+$/g, ''))
     .filter((t) => t.length > 0)
@@ -160,11 +161,60 @@ const RESIZE_WORDS: Record<string, { axis: Axis; sign: 1 | -1 }> = {
 };
 
 const TEMPLATE_PATTERNS: Array<{ re: RegExp; template: TemplateName; numParam: string }> = [
-  { re: /cup ?grip|grip .*cup|cup .*grip|cup ?holder|mug ?grip/, template: 'cupGrip', numParam: 'cupDiameterMm' },
-  { re: /phone ?(stand|holder|dock)|stand .*phone/, template: 'phoneStand', numParam: 'angleDeg' },
-  { re: /utensil|pen ?holder|pencil ?holder|spoon ?holder/, template: 'utensilHolder', numParam: 'diameterMm' },
-  { re: /\bhook\b/, template: 'hook', numParam: 'rodDiameterMm' },
+  { re: /cup ?grips?|grip .*(cup|mug)|(cup|mug) .*grip|(cup|mug) ?holder|mug ?grip|\b(cop|cub|cap|cups) grips?\b/, template: 'cupGrip', numParam: 'cupDiameterMm' },
+  { re: /phone ?(stand|holder|dock|rest)s?|stand .*phone|holds? .*phone|prop .*phone/, template: 'phoneStand', numParam: 'angleDeg' },
+  { re: /utensils?|cutlery|pen ?holder|pencil ?holder|spoon ?holder|fork ?holder|brush ?holder/, template: 'utensilHolder', numParam: 'diameterMm' },
+  { re: /\bhooks?\b|\bhanger\b/, template: 'hook', numParam: 'rodDiameterMm' },
 ];
+
+/** Spoken/typed template names, matched fuzzily (typos, ASR slips). */
+const TEMPLATE_NAMES: Array<{ name: string; template: TemplateName; numParam: string }> = [
+  { name: 'cup grip', template: 'cupGrip', numParam: 'cupDiameterMm' },
+  { name: 'cupgrip', template: 'cupGrip', numParam: 'cupDiameterMm' },
+  { name: 'phone stand', template: 'phoneStand', numParam: 'angleDeg' },
+  { name: 'phonestand', template: 'phoneStand', numParam: 'angleDeg' },
+  { name: 'utensil holder', template: 'utensilHolder', numParam: 'diameterMm' },
+];
+
+/** Verbs that, followed only by a bare noun, mean "load that template". */
+const BUILD_VERBS = new Set(['make', 'build', 'create', 'design', 'print', 'start', 'load', 'new', 'want', 'need']);
+const BARE_TEMPLATE_NOUNS: Record<string, { template: TemplateName; numParam: string }> = {
+  cup: { template: 'cupGrip', numParam: 'cupDiameterMm' },
+  mug: { template: 'cupGrip', numParam: 'cupDiameterMm' },
+  grip: { template: 'cupGrip', numParam: 'cupDiameterMm' },
+  phone: { template: 'phoneStand', numParam: 'angleDeg' },
+  stand: { template: 'phoneStand', numParam: 'angleDeg' },
+};
+
+function editDistance(a: string, b: string): number {
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length][b.length];
+}
+
+/** Template from a name, a near-miss of a name, or "make a cup". */
+export function matchTemplate(tokens: string[]): { template: TemplateName; numParam: string } | null {
+  const s = tokens.join(' ');
+  for (const p of TEMPLATE_PATTERNS) if (p.re.test(s)) return p;
+  const words = tokens.filter((t) => !/^-?\d/.test(t));
+  for (const { name, template, numParam } of TEMPLATE_NAMES) {
+    const n = name.split(' ').length;
+    for (let i = 0; i + n <= words.length; i++) {
+      const window = words.slice(i, i + n).join(' ');
+      if (editDistance(window, name) <= (name.length >= 10 ? 2 : 1)) return { template, numParam };
+    }
+  }
+  const content = words.filter((t) => !FILLERS.has(t) && t !== 'for' && t !== 'my' && t !== 'to');
+  if (content.length === 1 && BARE_TEMPLATE_NOUNS[content[0]]) return BARE_TEMPLATE_NOUNS[content[0]];
+  if (content.length === 2 && BUILD_VERBS.has(content[0]) && BARE_TEMPLATE_NOUNS[content[1]])
+    return BARE_TEMPLATE_NOUNS[content[1]];
+  return null;
+}
+
+export const TEMPLATE_HINT = 'Start with a design: say "cup grip", "phone stand", "hook", or "utensil holder".';
 
 // ---------------------------------------------------------------------------
 
@@ -213,13 +263,13 @@ export function parseCommand(utterance: string): RuleParse {
     return finalize({ op: 'delete', target: name || 'selected' });
   }
 
-  // Templates ("cup grip", "phone stand", "hook", "utensil holder").
-  for (const { re, template, numParam } of TEMPLATE_PATTERNS) {
-    if (re.test(s)) {
-      const params: Record<string, number> = {};
-      if (nums.length > 0) params[numParam] = nums[0];
-      return { template, params };
-    }
+  // Templates ("cup grip", "phone stand", "hook", "utensil holder"),
+  // including near-misses like "cop grip" or "make a cup".
+  const tmpl = matchTemplate(tokens);
+  if (tmpl) {
+    const params: Record<string, number> = {};
+    if (nums.length > 0) params[tmpl.numParam] = nums[0];
+    return { template: tmpl.template, params };
   }
 
   // Booleans.
@@ -344,6 +394,6 @@ export function parseCommand(utterance: string): RuleParse {
   }
 
   return clarify(
-    'I did not catch that. Try "add a box", "move left 10", "hole 6 through", or "make it taller by 5".',
+    'I did not catch that. Try "cup grip", "phone stand", "hook", "utensil holder", "add a box", or "move left 10".',
   );
 }

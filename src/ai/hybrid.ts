@@ -14,7 +14,19 @@ import {
 } from '../core/ruleParser';
 
 export type Source = 'on-device' | 'cloud' | 'rules';
-export type DeviceModelStatus = 'idle' | 'downloading' | 'ready' | 'failed';
+/**
+ * On-device model state, mirroring Chrome's LanguageModel.availability():
+ * unsupported = no Prompt API in this browser; unavailable = API present but
+ * this device/flags can't run Nano; downloadable = click to download.
+ */
+export type DeviceModelStatus =
+  | 'idle'
+  | 'unsupported'
+  | 'unavailable'
+  | 'downloadable'
+  | 'downloading'
+  | 'ready'
+  | 'failed';
 export type AppCheckStatus = 'skipped' | 'ready' | 'failed';
 
 export interface CompileResult {
@@ -37,6 +49,13 @@ export interface HybridStatus {
   appCheck: AppCheckStatus;
   deviceModel: DeviceModelStatus;
   message: string | null;
+  /** Last AI error (cloud or on-device), for the UI and console. */
+  lastError: string | null;
+}
+
+/** Minimal surface of Chrome's global LanguageModel (Prompt API). */
+export interface LanguageModelProvider {
+  availability(options?: unknown): Promise<string>;
 }
 
 /** Minimal surface of a GenerativeModel that this module needs (mockable). */
@@ -51,15 +70,34 @@ interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
   verify: TextGenModel | null;
+  /** Cloud-only twins used if the on-device call itself throws. */
+  intentCloud?: TextGenModel | null;
+  verifyCloud?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
   intent?: TextGenModel | null;
   template?: TextGenModel | null;
   verify?: TextGenModel | null;
+  intentCloud?: TextGenModel | null;
+  verifyCloud?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
+  /** Fake Chrome LanguageModel; null = browser without the Prompt API. */
+  languageModel?: LanguageModelProvider | null;
 }
+
+/**
+ * Text-only, English on-device session. Passed to the SDK and to our own
+ * availability() checks so both ask Chrome the same question. (The SDK's
+ * default also expects image input, which needs the multimodal flag.)
+ */
+export const ON_DEVICE_CREATE_OPTIONS = {
+  expectedInputs: [{ type: 'text' as const, languages: ['en'] }],
+  expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
+};
+
+const ON_DEVICE_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON
@@ -134,11 +172,29 @@ let initPromise: Promise<Models | null> | null = null;
 let deviceModelStatus: DeviceModelStatus = 'idle';
 let appCheckState: AppCheckStatus = 'skipped';
 let statusMessage: string | null = null;
+let lastError: string | null = null;
 
 function resetStatus(): void {
   deviceModelStatus = 'idle';
   appCheckState = 'skipped';
   statusMessage = null;
+  lastError = null;
+}
+
+function noteError(where: string, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  lastError = `${where}: ${msg}`;
+  console.warn(`[mendcraft] ${lastError}`, err);
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
 }
 
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
@@ -160,7 +216,7 @@ export function getDeviceModelStatus(): DeviceModelStatus {
 }
 
 export function getHybridStatus(): HybridStatus {
-  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage };
+  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError };
 }
 
 export async function prepareHybrid(): Promise<HybridStatus> {
@@ -198,6 +254,8 @@ async function ensureModels(): Promise<Models | null> {
       intent: testOverrides.intent ?? null,
       template: testOverrides.template ?? null,
       verify: testOverrides.verify ?? null,
+      intentCloud: testOverrides.intentCloud ?? null,
+      verifyCloud: testOverrides.verifyCloud ?? null,
     };
   }
   if (!isEnabled()) {
@@ -244,7 +302,8 @@ async function initFirebase(): Promise<Models | null> {
         isTokenAutoRefreshEnabled: true,
       });
       appCheckState = 'ready';
-    } catch {
+    } catch (err) {
+      noteError('App Check init', err);
       appCheckState = 'failed';
       statusMessage = APP_CHECK_FAIL_MSG;
       cached = null;
@@ -304,7 +363,10 @@ async function initFirebase(): Promise<Models | null> {
         model: 'gemini-3.5-flash-lite',
         generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
       },
-      onDeviceParams: { promptOptions: { responseConstraint: OP_RESPONSE_CONSTRAINT } },
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: OP_RESPONSE_CONSTRAINT },
+      },
     });
 
     const verify = getGenerativeModel(ai, {
@@ -313,7 +375,10 @@ async function initFirebase(): Promise<Models | null> {
         model: 'gemini-3.5-flash-lite',
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
-      onDeviceParams: { promptOptions: { responseConstraint: VERIFY_RESPONSE_CONSTRAINT } },
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: VERIFY_RESPONSE_CONSTRAINT },
+      },
     });
 
     const templateSchema = Schema.object({
@@ -342,9 +407,25 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
-    cached = { intent, template, verify };
+    const intentCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: 'gemini-3.5-flash-lite',
+        generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
+      },
+    });
+    const verifyCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: 'gemini-3.5-flash-lite',
+        generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
+      },
+    });
+
+    cached = { intent, template, verify, intentCloud, verifyCloud };
     return cached;
-  } catch {
+  } catch (err) {
+    noteError('Firebase AI init', err);
     if (appCheckState !== 'failed') {
       statusMessage = 'Firebase AI could not start. Using rules only.';
     }
@@ -353,23 +434,65 @@ async function initFirebase(): Promise<Models | null> {
   }
 }
 
+function languageModelProvider(): LanguageModelProvider | null {
+  if (testOverrides && 'languageModel' in testOverrides) return testOverrides.languageModel ?? null;
+  const lm = (globalThis as Record<string, unknown>).LanguageModel as LanguageModelProvider | undefined;
+  return lm && typeof lm.availability === 'function' ? lm : null;
+}
+
+function mapAvailability(a: string): DeviceModelStatus {
+  switch (a) {
+    case 'available': return 'ready';
+    case 'downloadable': return 'downloadable';
+    case 'downloading': return 'downloading';
+    default: return 'unavailable';
+  }
+}
+
+/**
+ * Ask Chrome (without downloading anything) whether Nano can run here.
+ * Safe to call on page load; updates and returns the device status.
+ */
+export async function checkDeviceAvailability(): Promise<DeviceModelStatus> {
+  const lm = languageModelProvider();
+  if (!lm) {
+    deviceModelStatus = 'unsupported';
+    return deviceModelStatus;
+  }
+  try {
+    deviceModelStatus = mapAvailability(await lm.availability(ON_DEVICE_CREATE_OPTIONS));
+  } catch (err) {
+    noteError('LanguageModel.availability', err);
+    deviceModelStatus = 'unavailable';
+  }
+  return deviceModelStatus;
+}
+
 /**
  * Download/warm the on-device model. Must be called from a user gesture
- * (Chrome Prompt API requirement). Returns true only if the device model is
- * ready — a configured Firebase key is not enough.
+ * (Chrome Prompt API requirement). Returns true only if Chrome reports the
+ * model "available" afterwards; the SDK's initializeDeviceModel silently
+ * returns in PREFER_ON_DEVICE mode when Nano is unavailable, so its success
+ * alone is not proof.
  */
 export async function initDeviceModel(onProgress?: (p: number) => void): Promise<boolean> {
-  deviceModelStatus = 'downloading';
+  const before = await checkDeviceAvailability();
+  if (before === 'unsupported' || before === 'unavailable') return false;
   const models = await ensureModels();
   if (!models?.intent?.initializeDeviceModel) {
     deviceModelStatus = 'failed';
+    if (!lastError) lastError = 'Firebase AI is not configured, so on-device AI cannot start.';
     return false;
   }
+  deviceModelStatus = before === 'ready' ? 'ready' : 'downloading';
   try {
     await models.intent.initializeDeviceModel(onProgress);
-    deviceModelStatus = 'ready';
-    return true;
-  } catch {
+    const after = await checkDeviceAvailability();
+    if (after === 'ready') return true;
+    deviceModelStatus = after === 'unavailable' || after === 'unsupported' ? after : 'failed';
+    return false;
+  } catch (err) {
+    noteError('initializeDeviceModel', err);
     deviceModelStatus = 'failed';
     return false;
   }
@@ -445,6 +568,30 @@ function coerceResult(raw: unknown): Op | TemplateCommand | Clarify | null {
   return v.ok ? v.op : null;
 }
 
+type ModelResponse = { text: () => string; inferenceSource?: string };
+
+/**
+ * Hybrid call. In PREFER_ON_DEVICE the SDK does not fall back to the cloud if
+ * the on-device prompt itself throws (or hangs), so retry once on the
+ * cloud-only twin before giving up to the rule parser.
+ */
+async function callWithCloudRetry(
+  hybrid: TextGenModel,
+  cloud: TextGenModel | null,
+  prompt: string,
+  label: string,
+): Promise<ModelResponse | null> {
+  try {
+    const { response } = await withTimeout(hybrid.generateContent(prompt), ON_DEVICE_TIMEOUT_MS, label);
+    return response;
+  } catch (err) {
+    noteError(`${label} (hybrid)`, err);
+    if (!cloud) throw err;
+    const { response } = await cloud.generateContent(prompt);
+    return { text: () => response.text(), inferenceSource: 'in_cloud' };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API.
 
@@ -458,11 +605,11 @@ export async function compileCommand(
   if (models?.intent) {
     try {
       const prompt = `${INTENT_PROMPT}\nScene: ${sceneSummary}\nSelected part: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
-      const { response } = await models.intent.generateContent(prompt);
-      const result = coerceResult(extractJson(response.text()));
-      if (result) return { result, source: sourceOf(response), ms: Date.now() - t0 };
-    } catch {
-      // fall through to rules
+      const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
+      const result = response ? coerceResult(extractJson(response.text())) : null;
+      if (result) return { result, source: sourceOf(response!), ms: Date.now() - t0 };
+    } catch (err) {
+      noteError('intent model', err);
     }
   }
   const result: RuleParse = parseCommand(utterance);
@@ -483,7 +630,8 @@ Op: ${JSON.stringify(op)}
 Scene before: ${beforeSummary}
 Scene after: ${afterSummary}
 Printability warnings: ${JSON.stringify(warnings)}`;
-      const { response } = await models.verify.generateContent(prompt);
+      const response = await callWithCloudRetry(models.verify, models.verifyCloud ?? null, prompt, 'verify');
+      if (!response) throw new Error('verifier returned nothing');
       const parsed = extractJson(response.text());
       if (typeof parsed === 'object' && parsed !== null) {
         const o = parsed as Record<string, unknown>;
@@ -495,8 +643,8 @@ Printability warnings: ${JSON.stringify(warnings)}`;
           };
         }
       }
-    } catch {
-      // fall through to deterministic check
+    } catch (err) {
+      noteError('verify model', err);
     }
   }
   return { matchesIntent: warnings.length === 0, issue: warnings[0] ?? null, source: 'rules' };
@@ -516,8 +664,8 @@ export async function generateTemplate(prompt: string): Promise<TemplateResult> 
           return { template: o.template, params: numericParams(o.params), source: sourceOf(response) };
         }
       }
-    } catch {
-      // fall through to rules
+    } catch (err) {
+      noteError('template model', err);
     }
   }
   const ruled = parseCommand(prompt);

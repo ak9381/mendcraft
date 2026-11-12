@@ -121,3 +121,39 @@ describe('ruleParser', () => {
     expect(r).toMatchObject({ op: 'fillet', radius: 30 });
   });
 });
+
+describe('template commands', () => {
+  const cases: Array<[string, string]> = [
+    ['cup grip', 'cupGrip'], ['Cup grip.', 'cupGrip'], ['cup-grip', 'cupGrip'], ['cupgrip', 'cupGrip'],
+    ['make a cup grip', 'cupGrip'], ['build me a cup grip', 'cupGrip'], ['cop grip', 'cupGrip'],
+    ['cup grap', 'cupGrip'], ['cup grips', 'cupGrip'], ['make a cup', 'cupGrip'], ['mug holder', 'cupGrip'],
+    ['phone stand', 'phoneStand'], ['design a stand for my phone', 'phoneStand'], ['phone stnd', 'phoneStand'],
+    ['something to hold my phone', 'phoneStand'], ['make a phone', 'phoneStand'],
+    ['hook', 'hook'], ['make a hook', 'hook'], ['hooks', 'hook'],
+    ['utensil holder', 'utensilHolder'], ['utensils', 'utensilHolder'], ['utensel holder', 'utensilHolder'],
+    ['spoon holder', 'utensilHolder'],
+  ];
+  for (const [input, template] of cases) {
+    it(`"${input}" loads ${template}`, () => {
+      const r = parseCommand(input);
+      expect('template' in r && r.template).toBe(template);
+    });
+  }
+
+  it('keeps a size number on the template', () => {
+    expect(parseCommand('cup grip 80')).toEqual({ template: 'cupGrip', params: { cupDiameterMm: 80 } });
+  });
+
+  it('does not hijack ordinary edit commands', () => {
+    expect(parseCommand('add a box')).toMatchObject({ op: 'add', shape: 'box' });
+    expect(parseCommand('move left 10')).toMatchObject({ op: 'move' });
+    expect(parseCommand('rotate 45')).toMatchObject({ op: 'rotate' });
+    expect(parseCommand('make it taller by 5')).toMatchObject({ op: 'scale' });
+  });
+
+  it('lists the templates when it cannot parse', () => {
+    const r = parseCommand('banana');
+    expect('clarify' in r && r.clarify).toContain('cup grip');
+  });
+});
+
