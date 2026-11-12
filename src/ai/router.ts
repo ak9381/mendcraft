@@ -120,7 +120,7 @@ export function finalReason(planned: RouteDecision, actual: Source, escalated: b
   return planned.path === 'cloud' ? planned.reason : 'no-device';
 }
 
-const SOURCE_TEXT: Record<Source, string> = {
+export const SOURCE_TEXT: Record<Source, string> = {
   'on-device': 'On-device',
   cloud: 'Cloud',
   rules: 'Rules',

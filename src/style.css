@@ -815,6 +815,40 @@ button.primary:hover {
 }
 .privacy-line[hidden] { display: none; }
 
+/* Language picker in the topbar. */
+.lang-pick { display: inline-flex; align-items: center; }
+.lang-pick select {
+  background: var(--panel, #161a22);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 0.35em 0.5em;
+  font-size: 0.9em;
+}
+
+/* Live caption bar: her words beside the English translation. */
+.caption-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 2.4em;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 90%;
+  display: flex;
+  gap: 0.6em;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 0.5em 0.9em;
+  border-radius: 10px;
+  background: rgba(20, 22, 28, 0.86);
+  pointer-events: none;
+}
+.caption-bar[hidden] { display: none; }
+.caption-heard { font-size: 1.1em; font-weight: 600; }
+.caption-translation { font-size: 0.95em; color: var(--text-dim, #9aa4b2); }
+.caption-translation[hidden] { display: none; }
+
 /* ─── Shared on-canvas tool framework (palette, trash, fullscreen, props) ─── */
 .mc-palette {
   position: absolute;

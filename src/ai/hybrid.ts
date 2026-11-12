@@ -517,6 +517,29 @@ export async function checkDeviceAvailability(): Promise<DeviceModelStatus> {
 }
 
 /**
+ * Ask Chrome whether Nano can run a given language on-device (no download),
+ * by querying availability() with that language as expected input/output. The
+ * router uses this to try Nano first for a supported language and fall back to
+ * the cloud translate path otherwise. 'en' is always on-device-capable when the
+ * base model is ready, so it short-circuits without a query.
+ */
+export async function checkLanguageAvailability(langCode: string): Promise<boolean> {
+  if (langCode === 'en') return deviceModelStatus === 'ready';
+  const lm = languageModelProvider();
+  if (!lm) return false;
+  try {
+    const a = await lm.availability({
+      expectedInputs: [{ type: 'text', languages: [langCode] }],
+      expectedOutputs: [{ type: 'text', languages: ['en'] }],
+    });
+    return a === 'available';
+  } catch (err) {
+    noteError('LanguageModel.availability (lang)', err);
+    return false;
+  }
+}
+
+/**
  * Download/warm the on-device model. Must be called from a user gesture
  * (Chrome Prompt API requirement). Returns true only if Chrome reports the
  * model "available" afterwards; the SDK's initializeDeviceModel silently
@@ -695,6 +718,8 @@ export interface FusionOutcome {
   confidence: number;
   source: Source;
   ms: number;
+  /** English translation of a non-English transcript (fusion with a language). */
+  translation?: string;
 }
 
 /**
@@ -713,7 +738,7 @@ export interface FusionOutcome {
 export async function fuseIntent(
   utterance: string,
   ctx: FusionContext,
-  opts?: { forceCloud?: boolean },
+  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string } },
 ): Promise<FusionOutcome> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -721,7 +746,7 @@ export async function fuseIntent(
   const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
   if (models && primary) {
     try {
-      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx);
+      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang);
       const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
       const response = await callWithCloudRetry(primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse');
       const parsed = response

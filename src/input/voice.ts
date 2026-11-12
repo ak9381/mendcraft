@@ -27,6 +27,8 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
 
 export interface VoiceController {
   readonly supported: boolean;
+  /** Set the recognition language (BCP-47, e.g. 'en-US', 'kn-IN'). */
+  setLang(lang: string): void;
   /** Always-on continuous listening toggle. */
   setAlwaysOn(on: boolean): void;
   /** Push-to-talk: start listening until the matching stop call. */
@@ -86,6 +88,14 @@ export function createVoiceController(onCommand: (utterance: string) => void): V
     }
   }
 
+  function setLang(lang: string): void {
+    if (!recognition || !lang || recognition.lang === lang) return;
+    recognition.lang = lang;
+    // A running recognizer keeps its old language until restarted; bounce it so
+    // the new language takes effect immediately (onend auto-restarts if wanted).
+    if (wantListening) recognition.stop();
+  }
+
   function setAlwaysOn(on: boolean): void {
     alwaysOn = on;
     updateListening();
@@ -113,5 +123,5 @@ export function createVoiceController(onCommand: (utterance: string) => void): V
     recognition?.stop();
   }
 
-  return { supported, setAlwaysOn, pushToTalkStart, pushToTalkStop, submitText, stop };
+  return { supported, setLang, setAlwaysOn, pushToTalkStart, pushToTalkStop, submitText, stop };
 }

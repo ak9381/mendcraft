@@ -36,7 +36,6 @@ import { isAccessibilityRequest, type A11yExplanation, type A11yIssue } from './
 import { createA11yPanel } from './ui/a11yPanel';
 import {
   REASON_TEXT,
-  badgeLabel,
   finalReason,
   pickEscalated,
   planRoute,
@@ -44,6 +43,12 @@ import {
   type RouteReason,
 } from './ai/router';
 import { createRouterPanel } from './ui/routerPanel';
+import {
+  LANGUAGES, DEFAULT_LANGUAGE, resolveLanguage, isEnglish, shouldTranslate,
+  translateInCloud, languageBadgeLabel, buildCaption, localize, pickVoice,
+  type Language,
+} from './ai/language';
+import { checkLanguageAvailability } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
@@ -56,6 +61,20 @@ import { createNetworkMonitor, routeBigJob } from './offline/network';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
+const LANG_KEY = 'mendcraft.lang';
+
+// The spoken/written language (Akash's mom speaks Kannada). Restored from a
+// prior session; drives speech recognition lang, routing (translate in the
+// cloud when non-English), the badge, captions, and confirmations.
+let currentLanguage: Language = DEFAULT_LANGUAGE;
+try {
+  currentLanguage = resolveLanguage(localStorage.getItem(LANG_KEY));
+} catch {
+  // Storage blocked — default to English.
+}
+// Does Nano report it can run the current language on-device? Refreshed on
+// startup and on every language change; false means the cloud does the translate.
+let deviceLangReady = false;
 
 // Restore a chosen (ready) mode: ?mode= wins, then localStorage, else default.
 try {
@@ -85,6 +104,12 @@ app.innerHTML = `
   <header id="topbar">
     <span class="brand">Mendcraft</span>
     <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
+    <label id="lang-pick" class="lang-pick" title="Spoken and written language">
+      <span class="sr-only">Language</span>
+      <select id="lang-select" aria-label="Language">${LANGUAGES
+        .map((l) => `<option value="${l.code}"${l.code === currentLanguage.code ? ' selected' : ''}>${l.label}</option>`)
+        .join('')}</select>
+    </label>
     <button id="btn-help" type="button" class="ghost" aria-label="Help and guided tour">Help / tour</button>
     ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
     <button id="btn-camera" type="button" aria-pressed="false">Enable camera</button>
@@ -126,6 +151,10 @@ app.innerHTML = `
     <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
       <div id="resume-hint" class="resume-hint" role="status" hidden>Look at the screen to resume</div>
       <p id="privacy-line" class="privacy-line" hidden>Face and hand data stay on this device. Nothing is uploaded.</p>
+      <div id="caption-bar" class="caption-bar" role="status" aria-live="polite" hidden>
+        <span id="caption-heard" class="caption-heard"></span>
+        <span id="caption-translation" class="caption-translation" hidden></span>
+      </div>
       <div id="empty-hint" class="empty-hint">
         <p>${mode.hint}</p>
         <div class="hint-buttons">${hintButtonsHtml}</div>
@@ -203,6 +232,10 @@ const progressLabel = el<HTMLSpanElement>('progress-label');
 const commandForm = el<HTMLFormElement>('command-box');
 const commandInput = el<HTMLInputElement>('command-input');
 const netStateEl = el<HTMLSpanElement>('net-state');
+const langSelect = el<HTMLSelectElement>('lang-select');
+const captionBar = el<HTMLDivElement>('caption-bar');
+const captionHeard = el<HTMLSpanElement>('caption-heard');
+const captionTranslation = el<HTMLSpanElement>('caption-translation');
 const queueSection = el<HTMLElement>('queue-section');
 const queueCountEl = el<HTMLSpanElement>('queue-count');
 const queueNoteEl = el<HTMLParagraphElement>('queue-note');
@@ -219,8 +252,15 @@ function say(message: string): void {
   // users); 'standard'/'coached' speak normally.
   if (activeProfile.voiceVerbosity === 'terse') return;
   if ('speechSynthesis' in window) {
+    // Speak in the chosen language. If no matching voice exists for a non-English
+    // language, stay text-only (the screen-reader line above already updated)
+    // rather than mispronouncing it with an English voice.
+    const voice = pickVoice(window.speechSynthesis.getVoices(), currentLanguage);
+    if (!voice && !isEnglish(currentLanguage)) return;
     const utter = new SpeechSynthesisUtterance(message);
     utter.rate = 1.1;
+    utter.lang = currentLanguage.speechLang;
+    if (voice) utter.voice = voice as SpeechSynthesisVoice;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utter);
   }
@@ -251,15 +291,61 @@ const SOURCE_TOOLTIP: Record<'on-device' | 'cloud' | 'rules', string> = {
   rules: 'Answered by the built-in deterministic parser — fully offline, no AI.',
 };
 
-function setBadge(source: Source, reason?: RouteReason): void {
+function setBadge(source: Source, reason?: RouteReason, translated = false): void {
   sourceBadge.className = `badge badge-${source}`;
-  const label = reason ? badgeLabel(source, reason) : source.toUpperCase().replace('-', ' ');
+  const label = reason
+    ? languageBadgeLabel(source, reason, currentLanguage, translated)
+    : source.toUpperCase().replace('-', ' ');
   sourceBadge.textContent = label;
   const why = reason ? ` Route: ${REASON_TEXT[reason]}.` : '';
   sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
   sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
 }
 setBadge('rules');
+
+// ---- live caption bar (her words + the English translation) ----------------
+
+/** Show what was heard; the translation line fills in once fusion returns. */
+function showCaptionHeard(heard: string): void {
+  const text = heard.trim();
+  if (!text) return;
+  captionHeard.textContent = text;
+  captionHeard.lang = currentLanguage.speechLang;
+  captionTranslation.hidden = true;
+  captionTranslation.textContent = '';
+  captionBar.hidden = false;
+}
+
+/** Pair the heard text with its English translation (no-op when there is none). */
+function showCaptionTranslation(heard: string, translation?: string): void {
+  const cap = buildCaption(heard, translation, currentLanguage);
+  if (!cap.translation) return;
+  captionTranslation.textContent = `→ ${cap.translation}`;
+  captionTranslation.lang = 'en';
+  captionTranslation.hidden = false;
+}
+
+// ---- language picker -------------------------------------------------------
+
+/** Re-ask Nano whether it can run the current language on-device. Reset to
+ *  false synchronously first so a command spoken before the probe resolves never
+ *  routes on the PREVIOUS language's cached answer (safe default: cloud). */
+function refreshDeviceLangReady(): void {
+  const lang = currentLanguage;
+  deviceLangReady = false;
+  void checkLanguageAvailability(lang.code).then((ready) => {
+    if (currentLanguage === lang) deviceLangReady = ready;
+  });
+}
+
+function applyLanguage(lang: Language, announce: boolean): void {
+  currentLanguage = lang;
+  try { localStorage.setItem(LANG_KEY, lang.code); } catch { /* storage blocked */ }
+  voice.setLang(lang.speechLang);
+  refreshDeviceLangReady();
+  captionBar.hidden = true; // stale translation from the old language
+  if (announce) say(localize('languageSet', lang));
+}
 
 // ---- controller + renderer (mode-provided) ----
 
@@ -887,10 +973,15 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
   if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
 
+  // Show her words immediately; the English translation fills in once the cloud
+  // (or on-device) fusion call returns it.
+  showCaptionHeard(utterance);
+
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source
   // plus the reason, and every decision lands in the Routing dev panel.
   const t0 = performance.now();
+  const translated = shouldTranslate(currentLanguage); // non-English → translate path
   const env = routerEnv();
   const isBig = controller.isDesignRequest(utterance);
   const decision = planRoute(utterance, (u) => mode.parse(u), isBig, env);
@@ -904,6 +995,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     if (route === 'enqueue') await enqueueBigJob(utterance);
     const { source, step, clarify } = await controller.generate(utterance);
     const reason = finalReason(decision, source, false);
+    // NOT translated: the whole-design generate path has no translate guide and
+    // returns no translation, so the badge must stay generic ("Cloud · big job")
+    // and never claim "· Kannada" for a call that didn't translate.
     setBadge(source, reason);
     routerPanel.add({ utterance, planned: decision.path, source, reason, escalated: false, ms: performance.now() - t0 });
     recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(utterance), performance.now() - t0);
@@ -917,7 +1011,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     }
     if (!step.ok) {
       verifierEl.textContent = `Could not build: ${step.error ?? 'unknown error'}`;
-      say('Could not build that.');
+      say(localize('couldNotBuild', currentLanguage));
       renderAll();
       return false;
     }
@@ -935,6 +1029,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   let source: Source;
   let confidence: number | undefined;
   let escalated = false;
+  let translation: string | undefined;
   if (decision.ruleResult) {
     // Exact-rule short circuit: no model call at all — a private local event.
     result = decision.ruleResult;
@@ -943,7 +1038,11 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     recordLedger('rules', 'command', REASON_TEXT.exact, '');
   } else {
     const ctx = fusionContext();
-    let outcome = await fuseIntent(utterance, ctx);
+    // Non-English (or a language Nano can't run) goes to the cloud, which
+    // TRANSLATES and emits the same typed op in one Firebase AI Logic call.
+    const toCloud = translateInCloud(currentLanguage, { ...env, deviceLangReady });
+    const langOpt = translated ? currentLanguage : undefined;
+    let outcome = await fuseIntent(utterance, ctx, { forceCloud: toCloud, lang: langOpt });
     // Primary inference: a cloud answer stores its payload; on-device/rules are
     // private. The reason follows the planned route (on-device → private).
     recordLedger(
@@ -955,16 +1054,19 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
       // retry physically contacts the cloud, so its send is recorded even if the
       // on-device answer is ultimately kept.
-      const retry = await fuseIntent(utterance, ctx, { forceCloud: true });
+      const retry = await fuseIntent(utterance, ctx, { forceCloud: true, lang: langOpt });
       recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], commandPayload(utterance, ctx), retry.ms);
       ({ outcome, escalated } = pickEscalated(outcome, retry));
     }
     result = outcome.result;
     source = outcome.source;
     confidence = outcome.confidence;
+    translation = outcome.translation;
   }
+  // Pair her words with the English translation the model returned.
+  showCaptionTranslation(utterance, translation);
   const reason = finalReason(decision, source, escalated);
-  setBadge(source, reason);
+  setBadge(source, reason, translated);
   routerPanel.add({ utterance, planned: decision.path, source, reason, confidence, escalated, ms: performance.now() - t0 });
 
   if ('clarify' in result) {
@@ -1071,7 +1173,7 @@ if (viewport.toggle3D) {
     btn3d.setAttribute('aria-pressed', String(now));
     btn3d.classList.toggle('active', now);
     btn3d.textContent = now ? '2D view' : '3D view';
-    say(now ? '3D view.' : '2D view.');
+    say(now ? localize('view3d', currentLanguage) : localize('view2d', currentLanguage));
   });
 }
 
@@ -1084,13 +1186,23 @@ if (!voice.supported) {
   fail('fail-mic', 'Voice recognition is not supported in this browser — use the text command box instead.');
 }
 
+// ---- language picker wiring (after `voice`, which applyLanguage drives) ----
+
+langSelect.value = currentLanguage.code;
+langSelect.addEventListener('change', () => {
+  applyLanguage(resolveLanguage(langSelect.value), true);
+});
+// Apply the restored language once at startup: set recognition lang + probe Nano.
+voice.setLang(currentLanguage.speechLang);
+refreshDeviceLangReady();
+
 btnMic.addEventListener('click', () => {
   const nowOn = btnMic.getAttribute('aria-pressed') !== 'true';
   btnMic.setAttribute('aria-pressed', String(nowOn));
   btnMic.classList.toggle('active', nowOn);
   btnMic.textContent = nowOn ? 'Mic on' : 'Enable mic';
   voice.setAlwaysOn(nowOn);
-  say(nowOn ? 'Listening.' : 'Mic off.');
+  say(nowOn ? localize('listening', currentLanguage) : localize('micOff', currentLanguage));
 });
 
 // ---- hand tracking ----

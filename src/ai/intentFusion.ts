@@ -46,6 +46,8 @@ export interface FusionParse {
   result: object;
   /** 0..1 — the model's own certainty (rules path: 1 for ops, 0 for clarify). */
   confidence: number;
+  /** English translation of a non-English transcript, when one was requested. */
+  translation?: string;
 }
 
 /** Context payload caps — the whole prompt must fit Nano's small window. */
@@ -114,19 +116,42 @@ export const FUSION_GUIDE = `The transcript is messy speech: ignore fillers ("uh
 - "a bit" / "slightly" => a small sensible amount in the given unit.
 Only use ids that appear in Context — never invent ids. Also output "confidence": a number 0..1 for how sure you are this op matches the intent (vague or ambiguous => low). If you cannot resolve the intent at all, reply {"clarify":"<short question>","confidence":0}.`;
 
-/** Full fusion prompt: the active mode's intent prompt (op vocabulary) + the
- *  deixis guide + the pointer context + the cleaned transcript. */
-export function buildFusionPrompt(intentPrompt: string, utterance: string, ctx: FusionContext): string {
-  // JSON.stringify escapes quotes in the transcript so speech can never close
-  // the Transcript field early and masquerade as extra instructions.
-  return `${intentPrompt}\n${FUSION_GUIDE}\nContext: ${serializeFusionContext(ctx)}\nTranscript: ${JSON.stringify(normalizeTranscript(utterance))}`;
+/** A spoken language the transcript may be in (ai/language.Language subset). */
+export interface PromptLanguage {
+  code: string;
+  englishName: string;
 }
 
-/** The mode's op responseConstraint + a "confidence" number. Non-mutating —
- *  the plain intent model keeps using the original constraint untouched. */
+/** Translation addendum appended when the transcript is in a non-English
+ *  language: translate first, then map to an op — all in this one call. */
+export function fusionTranslateGuide(lang: PromptLanguage): string {
+  return `The transcript is spoken ${lang.englishName}. FIRST translate it to English, THEN map that English to one op using the vocabulary above. Put the plain-English translation in a "translation" field. Resolve deixis against Context exactly as described. Do NOT answer in ${lang.englishName}; the op fields and translation are English.`;
+}
+
+/** Full fusion prompt: the active mode's intent prompt (op vocabulary) + the
+ *  deixis guide + an optional translation guide + the pointer context + the
+ *  cleaned transcript. */
+export function buildFusionPrompt(
+  intentPrompt: string,
+  utterance: string,
+  ctx: FusionContext,
+  lang?: PromptLanguage,
+): string {
+  // JSON.stringify escapes quotes in the transcript so speech can never close
+  // the Transcript field early and masquerade as extra instructions.
+  const translate = lang && lang.code !== 'en' ? `\n${fusionTranslateGuide(lang)}` : '';
+  return `${intentPrompt}\n${FUSION_GUIDE}${translate}\nContext: ${serializeFusionContext(ctx)}\nTranscript: ${JSON.stringify(normalizeTranscript(utterance))}`;
+}
+
+/** The mode's op responseConstraint + a "confidence" number and an optional
+ *  "translation" string. Non-mutating — the plain intent model keeps using the
+ *  original constraint untouched. */
 export function buildFusionConstraint(opConstraint: Record<string, unknown>): Record<string, unknown> {
   const props = (opConstraint.properties as Record<string, unknown> | undefined) ?? {};
-  return { ...opConstraint, properties: { ...props, confidence: { type: 'number' } } };
+  return {
+    ...opConstraint,
+    properties: { ...props, confidence: { type: 'number' }, translation: { type: 'string' } },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,13 +183,17 @@ function coerceConfidence(v: unknown, fallback: number): number {
  */
 export function parseFusionResult(raw: unknown, coerce: CoerceFn, utterance: string): FusionParse | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  const { confidence, ...rest } = raw as Record<string, unknown>;
+  // Split off the fusion-only fields (confidence, translation) before coercion
+  // so the mode validates ONLY its own op vocabulary.
+  const { confidence, translation, ...rest } = raw as Record<string, unknown>;
   const result = coerce(rest, utterance);
   if (!result) return null;
-  return {
+  const parsed: FusionParse = {
     result,
     confidence: coerceConfidence(confidence, isClarify(result) ? 0 : DEFAULT_OP_CONFIDENCE),
   };
+  if (typeof translation === 'string' && translation.trim()) parsed.translation = translation.trim();
+  return parsed;
 }
 
 /**
