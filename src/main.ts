@@ -17,15 +17,22 @@ import {
   checkDeviceAvailability,
   explainAccessibility,
   fuseIntent,
+  resolveDeixis,
   verifyOp,
   prepareHybrid,
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
   type DeviceModelStatus,
+  type DeixisImage,
   type FusionContext,
   type Source,
 } from './ai/hybrid';
+import {
+  buildCropRect, deixisToOp, isDeicticAdjust, matchCandidateByLabel,
+  type DeixisCandidate,
+} from './ai/deixis';
+import { captureCropFromVideo } from './input/frameCapture';
 import { createHandMetricsSampler, type HandMetrics } from './input/handMetrics';
 import {
   PROFILES, resolveActiveProfile, summarizeAdaptation,
@@ -40,6 +47,7 @@ import {
   pickEscalated,
   planRoute,
   shouldEscalate,
+  type RouteDecision,
   type RouteReason,
 } from './ai/router';
 import { createRouterPanel } from './ui/routerPanel';
@@ -592,6 +600,93 @@ async function runUtterance(utterance: string): Promise<void> {
   if (ok) onboarding.notifyCommand();
 }
 
+// ---- point and say "this" (deixis via camera crop + pointer) ----
+
+/** Last known pointer: viewport client px (mouse or pinch alike), plus the
+ *  pinch position in CAMERA-frame coordinates (un-mirrored) when a hand drove
+ *  it — that is where the camera crop is taken. Mouse pointers have no camera
+ *  mapping, so they send no image at all. */
+let lastPointer: {
+  clientX: number;
+  clientY: number;
+  cameraNorm: { x: number; y: number } | null;
+} | null = null;
+
+/**
+ * POINT AND SAY: resolve "make this brighter" from ONE tight JPEG crop of the
+ * camera around the pinch position (hand pointer only; never a face/hand
+ * identity crop, never stored) plus the element under the pointer, via
+ * hybrid.resolveDeixis (PREFER_ON_DEVICE, image input, Firebase AI Logic only).
+ * Returns null to fall through to the ordinary fusion path — pointing can
+ * never make a command worse.
+ */
+async function runPointAndSay(utterance: string, t0: number, decision: RouteDecision): Promise<boolean | null> {
+  if (!lastPointer || !controller.deixisInfo) return null;
+  const pointedId = viewport.pick(lastPointer.clientX, lastPointer.clientY);
+  const kindOf = (id: string): string => controller.deixisInfo?.(id)?.kind ?? id.replace(/[-_]?\d+$/, '');
+  const items = controller.listItems();
+  // Pointed element first — the prompt tells the model "pointed" = the first.
+  const candidates: DeixisCandidate[] = [
+    ...(pointedId ? [{ id: pointedId, kind: kindOf(pointedId), label: items.find((i) => i.id === pointedId)?.label.trim() }] : []),
+    ...items.filter((i) => i.id !== pointedId).map((i) => ({ id: i.id, kind: kindOf(i.id), label: i.label.trim() })),
+  ];
+  let image: DeixisImage | null = null;
+  let pointerPx: { x: number; y: number } | null = null;
+  let imageNote = 'no image';
+  const video = tracker?.videoEl ?? null;
+  if (video && lastPointer.cameraNorm) {
+    const crop = buildCropRect(video.videoWidth, video.videoHeight, lastPointer.cameraNorm);
+    const cap = captureCropFromVideo(video, crop);
+    if (cap) {
+      image = { mimeType: cap.mimeType, dataBase64: cap.dataBase64 };
+      pointerPx = crop.pointer;
+      imageNote = `one ${cap.w}x${cap.h}px JPEG crop around the pointer`;
+    }
+  }
+  const outcome = await resolveDeixis(utterance, image, {
+    pointer: pointerPx, candidates, space: mode.id as 'plan' | 'ui',
+  });
+  if (!outcome) return null;
+  const res = outcome.resolution;
+  // Honest ledger entry for the call that DID run: the crop + command left the
+  // device only if the cloud answered; on-device stays a private event.
+  recordLedger(
+    outcome.source, 'point+say', REASON_TEXT.pointed,
+    `${commandPayload(utterance)}\nimage: ${imageNote}\npointer: ${pointedId ? `on ${pointedId}` : 'not on a canvas element'}`,
+    outcome.ms,
+  );
+  const finish = (ok: boolean, msg: string): boolean => {
+    setBadge(outcome.source, 'pointed');
+    routerPanel.add({
+      utterance, planned: decision.path, source: outcome.source, reason: 'pointed',
+      confidence: res.confidence, escalated: false, ms: performance.now() - t0,
+    });
+    verifierEl.textContent = msg;
+    say(msg);
+    return ok;
+  };
+  const targetId = res.target === 'pointed' ? pointedId
+    : res.target === 'none' ? matchCandidateByLabel(res.object, candidates)
+      : res.target;
+  if (!targetId) {
+    // The camera saw a nameable real object with no canvas twin → say so;
+    // otherwise let the ordinary fusion path have its normal go.
+    if (!res.object) return null;
+    opJsonEl.textContent = JSON.stringify({ pointAndSay: res }, null, 2);
+    return finish(false, `I can see the ${res.object}, but nothing matching it on the canvas.`);
+  }
+  const info = controller.deixisInfo(targetId);
+  const op = info ? deixisToOp(res, info) : null;
+  if (!op) return finish(false, `I can't change the ${res.property} of a ${info?.kind ?? 'part'} here.`);
+  controller.selectId(targetId);
+  const step = controller.applyOp(op);
+  opJsonEl.textContent = JSON.stringify(op, null, 2);
+  if (!step.ok) return finish(false, `I couldn't do that: ${step.error ?? 'invalid command'}`);
+  renderAll();
+  announceWarnings();
+  return finish(true, step.message ?? 'Done.');
+}
+
 /** Pointer/selection context handed to intent fusion (mode-agnostic: cursor and
  *  nearby elements stay empty until modes expose them — see ai/router.ts). */
 function fusionContext(): FusionContext {
@@ -1037,6 +1132,14 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     recordInference('rules', 'route-exact', performance.now() - t0);
     recordLedger('rules', 'command', REASON_TEXT.exact, '');
   } else {
+    // POINT AND SAY: an English deictic adjustment ("make this brighter") with
+    // a live pointer tries the camera-crop resolver first; a null result falls
+    // through to the ordinary fusion path below.
+    if ((mode.id === 'plan' || mode.id === 'ui') && isEnglish(currentLanguage)
+      && isDeicticAdjust(utterance) && lastPointer) {
+      const handled = await runPointAndSay(utterance, t0, decision);
+      if (handled !== null) return handled;
+    }
     const ctx = fusionContext();
     // Non-English (or a language Nano can't run) goes to the cloud, which
     // TRANSLATES and emits the same typed op in one Firebase AI Logic call.
@@ -1243,12 +1346,21 @@ function smoothAim(x: number, y: number): { x: number; y: number } {
   return { x: smX, y: smY };
 }
 
+// Mouse/touch pointers feed point-and-say too (same pointer layer as pinch);
+// a mouse has no camera mapping, so those commands send no image at all.
+viewportEl.addEventListener('pointermove', (e: PointerEvent) => {
+  lastPointer = { clientX: e.clientX, clientY: e.clientY, cameraNorm: null };
+}, { passive: true });
+
 function handleHandEvent(e: HandEvent): void {
   switch (e.type) {
     case 'tracking': {
       const s = smoothAim(e.x, e.y);
       placeCursor(s.x, s.y);
       const { clientX, clientY } = toClient(s.x, s.y);
+      // Hand coords are mirrored to screen space (x = 1 - camera x); store the
+      // camera-frame position so point-and-say can crop the frame there.
+      lastPointer = { clientX, clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(clientX, clientY)) break;
       viewport.hover?.(clientX, clientY); // ghost previews track the open hand
@@ -1266,6 +1378,7 @@ function handleHandEvent(e: HandEvent): void {
       placeCursor(e.x, e.y);
       onboarding.notifyPinch();
       const { clientX, clientY } = toClient(e.x, e.y);
+      lastPointer = { clientX, clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       // A pinch over the on-screen keyboard presses the key under the cursor.
       if (keyboard.isOpen() && keyboard.pressAt(clientX, clientY)) break;
       if (viewport.tap?.(clientX, clientY)) {

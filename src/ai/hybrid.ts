@@ -23,6 +23,13 @@ import {
   ruleConfidence,
   type FusionContext,
 } from './intentFusion';
+import {
+  DEIXIS_CONSTRAINT,
+  buildDeixisPrompt,
+  parseDeixisResult,
+  type DeixisCandidate,
+  type DeixisResolution,
+} from './deixis';
 import { buildA11yConstraint, coerceA11yExplanations, type A11yExplanation, type A11yIssue } from '../core/a11y';
 import {
   PROFILE_CONSTRAINT, buildAdaptPrompt, coerceProfileAdaptation, type ProfileAdaptation,
@@ -120,12 +127,27 @@ export interface TemplateGenModel {
   }): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
 }
 
+/** One inline image part of a multimodal request (JPEG/PNG, base64). */
+export interface ImagePart {
+  inlineData: { mimeType: string; data: string };
+}
+
+/** Minimal surface of a GenerativeModel taking text + image parts (mockable). */
+export interface MultimodalGenModel {
+  generateContent(
+    request: Array<string | ImagePart>,
+  ): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
+}
+
 interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
   verify: TextGenModel | null;
   /** Deictic intent-fusion model: op schema + confidence (PREFER_ON_DEVICE). */
   fusion?: TextGenModel | null;
+  /** Point-and-say resolver: camera crop + pointer (PREFER_ON_DEVICE, image input). */
+  deixis?: MultimodalGenModel | null;
+  deixisCloud?: MultimodalGenModel | null;
   /** Cloud-only twins used if the on-device call itself throws. */
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
@@ -143,6 +165,8 @@ export interface ModelOverrides {
   template?: TextGenModel | null;
   verify?: TextGenModel | null;
   fusion?: TextGenModel | null;
+  deixis?: MultimodalGenModel | null;
+  deixisCloud?: MultimodalGenModel | null;
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
@@ -164,6 +188,13 @@ export interface ModelOverrides {
  */
 export const ON_DEVICE_CREATE_OPTIONS = {
   expectedInputs: [{ type: 'text' as const, languages: ['en'] }],
+  expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
+};
+
+/** Point-and-say session: text + ONE still image in, text out. Only the deixis
+ *  model asks Chrome for multimodal Nano (needs the multimodal flag). */
+export const DEIXIS_CREATE_OPTIONS = {
+  expectedInputs: [{ type: 'text' as const, languages: ['en'] }, { type: 'image' as const }],
   expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
 };
 
@@ -315,6 +346,8 @@ async function ensureModels(): Promise<Models | null> {
       template: testOverrides.template ?? null,
       verify: testOverrides.verify ?? null,
       fusion: testOverrides.fusion ?? null,
+      deixis: testOverrides.deixis ?? null,
+      deixisCloud: testOverrides.deixisCloud ?? null,
       intentCloud: testOverrides.intentCloud ?? null,
       verifyCloud: testOverrides.verifyCloud ?? null,
       fusionCloud: testOverrides.fusionCloud ?? null,
@@ -415,6 +448,28 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // Point-and-say: the one multimodal model — a still crop + pointer resolve
+    // "this". Image payloads ride the same Firebase AI Logic call, nothing else.
+    const deixisSchema = toFirebaseSchema(DEIXIS_CONSTRAINT, Schema);
+    const deixis = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: deixisSchema },
+      },
+      onDeviceParams: {
+        createOptions: DEIXIS_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: DEIXIS_CONSTRAINT },
+      },
+    }) as unknown as MultimodalGenModel;
+    const deixisCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: deixisSchema },
+      },
+    }) as unknown as MultimodalGenModel;
+
     const intentCloud = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
@@ -470,7 +525,7 @@ async function initFirebase(): Promise<Models | null> {
       promptTemplate = null;
     }
 
-    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate };
+    cached = { intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -767,6 +822,75 @@ export async function fuseIntent(
   const result = mode.parse(normalizeTranscript(utterance));
   recordInference('rules', 'fuse', Date.now() - t0);
   return { result, confidence: ruleConfidence(result), source: 'rules', ms: Date.now() - t0 };
+}
+
+/** The still frame sent with a point-and-say command (one tight JPEG crop). */
+export interface DeixisImage {
+  mimeType: 'image/jpeg' | 'image/png';
+  dataBase64: string;
+}
+
+export interface DeixisOutcome {
+  resolution: DeixisResolution;
+  source: Source;
+  ms: number;
+}
+
+/**
+ * POINT AND SAY "THIS" (PREFER_ON_DEVICE, image input): resolve what the user
+ * is pointing at — on the canvas (candidate list) or a real object in the
+ * camera view (one tight crop around the pointer) — plus which property to
+ * change. Prompt/crop building and response validation live in deixis.ts
+ * (pure). Returns null when no model is available or nothing valid came back;
+ * the caller then falls through to the ordinary fusion path, so point-and-say
+ * never breaks a command that would have worked without it. The frame crop is
+ * sent ONLY here, only through Firebase AI Logic, never stored.
+ */
+export async function resolveDeixis(
+  utterance: string,
+  image: DeixisImage | null,
+  opts: {
+    pointer: { x: number; y: number } | null;
+    candidates: readonly DeixisCandidate[];
+    space: 'plan' | 'ui';
+  },
+): Promise<DeixisOutcome | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.deixis) return null;
+  const prompt = buildDeixisPrompt(utterance, {
+    hasImage: image !== null,
+    pointer: opts.pointer,
+    candidates: opts.candidates,
+    space: opts.space,
+  });
+  const parts: Array<string | ImagePart> = image
+    ? [prompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
+    : [prompt];
+  let response: ModelResponse | null = null;
+  try {
+    ({ response } = await withTimeout(models.deixis.generateContent(parts), ON_DEVICE_TIMEOUT_MS, 'deixis'));
+  } catch (err) {
+    noteError('deixis (hybrid)', err);
+    if (!models.deixisCloud) return null;
+    try {
+      const r = await models.deixisCloud.generateContent(parts);
+      response = { text: () => r.response.text(), inferenceSource: 'in_cloud' };
+    } catch (err2) {
+      noteError('deixis (cloud)', err2);
+      return null;
+    }
+  }
+  const resolution = response
+    ? parseDeixisResult(extractJson(response.text()), opts.candidates.map((c) => c.id))
+    : null;
+  if (!resolution) {
+    if (response) noteError('deixis parse', new Error(`model answer not accepted: ${response.text().slice(0, 200)}`));
+    return null;
+  }
+  const source = sourceOf(response!);
+  recordInference(source, 'deixis', Date.now() - t0);
+  return { resolution, source, ms: Date.now() - t0 };
 }
 
 export async function verifyOp(

@@ -9,6 +9,7 @@ import { buildUiTemplate, isUiTemplateName } from './templates';
 import { activeFrame, locate, nodeLabel, type Frame, type FramePreset } from './doc';
 import { toHtml, toSvg } from './export';
 import { generateUi } from '../../ai/hybrid';
+import type { DeixisTargetInfo } from '../../ai/deixis';
 import type { ListItem, ModeController, StepResult } from '../../core/controller';
 
 function download(filename: string, text: string, mime: string): void {
@@ -49,6 +50,25 @@ export function createUiController(): ModeController {
     selectedId: () => engine.getState().selectedId,
     warnings: () => engine.warnings(),
     snapshot: () => engine.getState(),
+    // Point-and-say: the pointed node's current paint/size so deixisToOp can
+    // build "brighter"/"bigger" from real values (engine re-validates the op).
+    deixisInfo(id): DeixisTargetInfo | null {
+      const loc = locate(engine.getState(), id);
+      if (!loc) return null;
+      const n = loc.node;
+      const info: DeixisTargetInfo = { id, space: 'ui', kind: n.type };
+      switch (n.type) {
+        case 'text': info.fill = n.color; info.fontSize = n.size; break;
+        case 'button': info.fill = n.fill; info.h = n.height; break;
+        case 'rect': info.fill = n.fill; info.w = n.w; info.h = n.h; break;
+        case 'image': info.w = n.w; info.h = n.h; break;
+        case 'icon': info.fill = n.fill; break;
+        case 'stack': info.fill = n.fill; break;
+        case 'divider': info.fill = n.color; break;
+        case 'input': info.h = n.height; break;
+      }
+      return info;
+    },
     listItems: (): ListItem[] =>
       engine.listItems().map((i) => ({ id: i.id, label: `${'· '.repeat(i.depth)}${i.label}`, selected: i.selected })),
 

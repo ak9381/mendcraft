@@ -23,7 +23,8 @@ export type RouteReason =
   | 'low-confidence' // cloud: the on-device answer was unsure, re-asked the cloud
   | 'no-device'      // cloud: no usable on-device model here
   | 'offline'        // rules: no AI available at all (Firebase missing / blocked)
-  | 'fallback';      // rules: an AI path failed, the deterministic floor answered
+  | 'fallback'       // rules: an AI path failed, the deterministic floor answered
+  | 'pointed';       // deixis: resolved from a camera crop + pointer (point and say)
 
 /** What the router knows about the world when it decides. */
 export interface RouterEnv {
@@ -134,6 +135,7 @@ export const REASON_TEXT: Record<RouteReason, string> = {
   'no-device': 'no on-device AI',
   offline: 'offline',
   fallback: 'fallback',
+  pointed: 'point + say',
 };
 
 /** Badge text: "Cloud · big job", "On-device · private", "Rules · exact command". */

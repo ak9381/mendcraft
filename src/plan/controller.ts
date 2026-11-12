@@ -8,6 +8,7 @@ import { buildPlanTemplate, isPlanTemplateName } from './templates';
 import { toDxf, toJson } from './export';
 import { mmToMetresLabel, wallLength } from './doc';
 import { generatePlan } from '../ai/hybrid';
+import type { DeixisTargetInfo } from '../ai/deixis';
 import type { ListItem, ModeController, StepResult } from '../core/controller';
 
 function download(filename: string, text: string, mime: string): void {
@@ -62,6 +63,20 @@ export function createPlanController(): ModeController {
   const controller: ModeController = {
     dragRangeMm: 6000,
     summary: () => engine.summary(),
+    // Point-and-say: the sizeable property of the pointed element (geometry only
+    // — a plan has no brightness/colour, deixisToOp says so honestly).
+    deixisInfo(id): DeixisTargetInfo | null {
+      const doc = engine.getState();
+      const wall = doc.walls.find((w) => w.id === id);
+      if (wall) return { id, space: 'plan', kind: 'wall', lengthMm: wallLength(wall) };
+      const opening = doc.openings.find((o) => o.id === id);
+      if (opening) return { id, space: 'plan', kind: opening.kind, widthMm: opening.width };
+      const fixture = doc.fixtures.find((f) => f.id === id);
+      if (fixture) return { id, space: 'plan', kind: fixture.kind };
+      const text = doc.texts.find((t) => t.id === id);
+      if (text) return { id, space: 'plan', kind: 'text' };
+      return null;
+    },
     selectedId: () => engine.getState().selectedId,
     warnings: () => engine.warnings(),
     snapshot: () => engine.getState(),

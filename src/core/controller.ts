@@ -12,6 +12,7 @@
 // exporter behind export(). No shell change — just one more registerMode(...).
 
 import type { Source } from '../ai/hybrid';
+import type { DeixisTargetInfo } from '../ai/deixis';
 
 /** One row in the accessible "Parts/Objects" panel (keyboard-selectable). */
 export interface ListItem {
@@ -70,6 +71,10 @@ export interface ModeController {
   dragSelectedMm(dxMm: number, dyMm: number): StepResult | null;
   /** mm per normalized screen unit for the pinch-drag fallback above. */
   readonly dragRangeMm: number;
+
+  /** Current properties of one element for the point-and-say op builder
+   *  (ai/deixis.deixisToOp). Omitted by modes without deictic adjustments. */
+  deixisInfo?(id: string): DeixisTargetInfo | null;
 
   /** Download the current document (STL for part; DXF + JSON for plan). */
   export(): void;
