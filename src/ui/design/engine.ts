@@ -10,7 +10,9 @@ import {
   locate,
   nodeLabel,
   type ButtonNode,
+  type DividerNode,
   type Frame,
+  type IconNode,
   type ImageNode,
   type InputNode,
   type RectNode,
@@ -18,7 +20,6 @@ import {
   type TextNode,
   type UiDoc,
   type UiNode,
-  type UiNodeType,
 } from './doc';
 import { UI_DEFAULTS, type UiOp } from './ops';
 
@@ -116,6 +117,9 @@ export class UiEngine {
     }
     if (/\b(text|body|paragraph|label)\b/.test(r)) return match((n) => n.type === 'text');
     if (/\b(image|img|picture|photo)\b/.test(r)) return match((n) => n.type === 'image');
+    if (/\b(divider|rule|separator|hr)\b/.test(r)) return match((n) => n.type === 'divider');
+    if (/\b(icon|circle|avatar)\b/.test(r)) return match((n) => n.type === 'icon');
+    if (/\b(nav|navbar|header bar)\b/.test(r)) return match((n) => n.type === 'stack' && n.id.startsWith('navbar'));
     if (/\b(rect|box|card|shape)\b/.test(r)) return match((n) => n.type === 'rect' || n.type === 'stack');
     return undefined;
   }
@@ -191,6 +195,7 @@ export class UiEngine {
         }
         parentId ??= frame.root.id;
         const node = this.makeNode(state, op);
+        if (op.x !== undefined && op.y !== undefined) node.abs = { x: op.x, y: op.y };
         const next = mapFrames(state, frame.id, (f) => ({
           ...f,
           root: insertInto(f.root, parentId!, node, op.index),
@@ -215,6 +220,17 @@ export class UiEngine {
             return { ...n, ...(op.w !== undefined ? { w: op.w } : {}), ...(op.h !== undefined ? { h: op.h } : {}) };
           }
           if ((n.type === 'button' || n.type === 'input') && op.h !== undefined) return { ...n, height: op.h };
+          if (n.type === 'icon' && (op.w ?? op.h) !== undefined) return { ...n, size: (op.w ?? op.h)! };
+          if (n.type === 'stack') {
+            return {
+              ...n,
+              sizing: {
+                ...n.sizing,
+                ...(op.w !== undefined ? { wMode: 'fixed' as const, w: op.w } : {}),
+                ...(op.h !== undefined ? { hMode: 'fixed' as const, h: op.h } : {}),
+              },
+            };
+          }
           return n;
         });
       }
@@ -222,9 +238,10 @@ export class UiEngine {
         const id = this.resolveId(state, op.target);
         if (!id) return this.noNode(op.target);
         return this.edit(state, id, (n) => {
-          if (n.type === 'button' || n.type === 'rect') return { ...n, fill: op.fill };
+          if (n.type === 'button' || n.type === 'rect' || n.type === 'icon') return { ...n, fill: op.fill };
           if (n.type === 'stack') return { ...n, fill: op.fill };
           if (n.type === 'text') return { ...n, color: op.fill };
+          if (n.type === 'divider') return { ...n, color: op.fill };
           return n;
         });
       }
@@ -262,6 +279,89 @@ export class UiEngine {
             ...(op.justify !== undefined ? { justify: op.justify } : {}),
           };
         });
+      }
+      case 'set_pos': {
+        const id = this.resolveId(state, op.target);
+        if (!id) return this.noNode(op.target);
+        return this.edit(state, id, (n) => {
+          if (op.flow) {
+            const { abs: _drop, ...rest } = n;
+            return rest as UiNode;
+          }
+          return { ...n, abs: { x: op.x ?? n.abs?.x ?? 0, y: op.y ?? n.abs?.y ?? 0 } };
+        });
+      }
+      case 'set_sizing': {
+        const id = this.resolveId(state, op.target);
+        if (!id) return this.noNode(op.target);
+        return this.edit(state, id, (n) => ({
+          ...n,
+          sizing: {
+            ...n.sizing,
+            ...(op.wMode !== undefined ? { wMode: op.wMode } : {}),
+            ...(op.w !== undefined ? { w: op.w } : {}),
+            ...(op.hMode !== undefined ? { hMode: op.hMode } : {}),
+            ...(op.h !== undefined ? { h: op.h } : {}),
+          },
+        }));
+      }
+      case 'wrap': {
+        const ids = op.targets
+          .map((t) => this.resolveId(state, t))
+          .filter((v): v is string => !!v);
+        if (!ids.length) return this.noNode(op.targets[0] ?? 'selected');
+        const first = locate(state, ids[0]);
+        if (!first || !first.parent) return 'that node cannot be wrapped';
+        const parent = first.parent;
+        // Only siblings of the first target wrap together; keep document order.
+        const picked = parent.children.filter((c) => ids.includes(c.id));
+        if (!picked.length) return 'that node cannot be wrapped';
+        const at = parent.children.findIndex((c) => c.id === picked[0].id);
+        const wrapper: StackNode = {
+          id: this.mintId(state, op.direction === 'row' ? 'row' : 'group'),
+          type: 'stack', direction: op.direction ?? 'column',
+          gap: UI_DEFAULTS.gap, padding: 0, align: 'stretch', justify: 'start',
+          // Wrapping keeps free-placed nodes where they were: the wrapper takes
+          // the first node's abs slot and the children return to flow.
+          ...(picked[0].abs ? { abs: picked[0].abs } : {}),
+          children: picked.map((c) => {
+            const { abs: _drop, ...rest } = c;
+            return rest as UiNode;
+          }),
+        };
+        const next = mapFrames(state, first.frame.id, (f) => ({
+          ...f,
+          root: mapNode(f.root, parent.id, (p) => {
+            if (p.type !== 'stack') return p;
+            const children = p.children.filter((c) => !ids.includes(c.id));
+            children.splice(Math.min(at, children.length), 0, wrapper);
+            return { ...p, children };
+          }),
+        }));
+        return { ...next, selectedId: wrapper.id };
+      }
+      case 'duplicate': {
+        const id = this.resolveId(state, op.target);
+        if (!id) return this.noNode(op.target);
+        const loc = locate(state, id);
+        if (!loc || !loc.parent) return 'that node cannot be duplicated';
+        const clone = this.cloneWithIds(state, loc.node);
+        if (clone.abs) clone.abs = { x: clone.abs.x + 12, y: clone.abs.y + 12 };
+        const at = loc.parent.children.findIndex((c) => c.id === id) + 1;
+        const next = mapFrames(state, loc.frame.id, (f) => ({
+          ...f,
+          root: insertInto(f.root, loc.parent!.id, clone, at),
+        }));
+        return { ...next, selectedId: clone.id };
+      }
+      case 'batch': {
+        let cur: UiDoc = state;
+        for (const sub of op.ops) {
+          const r = this.reduce(cur, sub);
+          if (typeof r === 'string') return `batch failed: ${r}`;
+          cur = r;
+        }
+        return cur;
       }
       case 'move': {
         const id = this.resolveId(state, op.target);
@@ -321,9 +421,27 @@ export class UiEngine {
     return { ...next, selectedId: id };
   }
 
+  /** Deep-copy a node, re-minting every id so the clone is independent. */
+  private cloneWithIds(state: UiDoc, node: UiNode): UiNode {
+    const used = allIds(state);
+    const mint = (base: string): string => {
+      const slug = slugify(base) || 'node';
+      let cand = slug;
+      for (let i = 2; used.has(cand); i++) cand = `${slug}-${i}`;
+      used.add(cand);
+      return cand;
+    };
+    const walk = (n: UiNode): UiNode => {
+      const id = mint(n.id.replace(/-\d+$/, ''));
+      if (n.type === 'stack') return { ...n, id, children: n.children.map(walk) };
+      return { ...n, id };
+    };
+    return walk(node);
+  }
+
   /** Build a fresh node with sane defaults + a readable, unique id. */
   private makeNode(state: UiDoc, op: Extract<UiOp, { op: 'add_node' }>): UiNode {
-    const type = op.nodeType as UiNodeType;
+    const type = op.nodeType;
     switch (type) {
       case 'text': {
         const role = op.role ?? 'body';
@@ -366,6 +484,56 @@ export class UiEngine {
         const node: RectNode = {
           id: this.mintId(state, 'rect'), type: 'rect',
           fill: op.fill ?? UI_DEFAULTS.rectFill, w: UI_DEFAULTS.rectW, h: UI_DEFAULTS.rectH, radius: 8,
+        };
+        return node;
+      }
+      case 'divider': {
+        const node: DividerNode = {
+          id: this.mintId(state, 'divider'), type: 'divider', color: '#e2e8f0', thickness: 1,
+        };
+        return node;
+      }
+      case 'icon': {
+        const node: IconNode = {
+          id: this.mintId(state, 'icon'), type: 'icon', fill: op.fill ?? '#2563eb', size: 40,
+        };
+        return node;
+      }
+      case 'card': {
+        // A white rounded card with a starter title + body (a stack preset).
+        const id = this.mintId(state, 'card');
+        const node: StackNode = {
+          id, type: 'stack', direction: 'column', gap: 10, padding: 20,
+          align: 'start', justify: 'start', fill: op.fill ?? '#ffffff', radius: 12,
+          sizing: { wMode: 'fixed', w: 280 },
+          children: [
+            { id: `${id}-title`, type: 'text', role: 'heading', text: op.text ?? 'Card title', size: 18, weight: 600, color: UI_DEFAULTS.textColor },
+            { id: `${id}-body`, type: 'text', role: 'body', text: 'Supporting copy goes here.', size: 14, weight: 400, color: '#64748b' },
+          ],
+        };
+        return node;
+      }
+      case 'navbar': {
+        // Row stack: logo, link row, CTA — justify between, full width.
+        const id = this.mintId(state, 'navbar');
+        const node: StackNode = {
+          id, type: 'stack', direction: 'row', gap: 24, padding: 16,
+          align: 'center', justify: 'between', fill: op.fill ?? '#ffffff',
+          children: [
+            { id: `${id}-logo`, type: 'text', role: 'heading', text: op.text ?? 'Logo', size: 18, weight: 700, color: UI_DEFAULTS.textColor },
+            {
+              id: `${id}-links`, type: 'stack', direction: 'row', gap: 20, padding: 0,
+              align: 'center', justify: 'start',
+              children: ['Home', 'Features', 'Pricing'].map((t, i) => ({
+                id: `${id}-link-${i + 1}`, type: 'text' as const, role: 'body' as const,
+                text: t, size: 14, weight: 500 as const, color: '#475569',
+              })),
+            },
+            {
+              id: `${id}-cta`, type: 'button', label: 'Sign up', fill: UI_DEFAULTS.buttonFill,
+              textColor: UI_DEFAULTS.buttonText, radius: UI_DEFAULTS.buttonRadius, height: 36,
+            },
+          ],
         };
         return node;
       }

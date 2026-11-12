@@ -125,6 +125,14 @@ export function parseUiCommand(utterance: string): UiParse {
     return { op: 'delete', target: t };
   }
 
+  // "wrap in a row" / "wrap it in a column" / "group them" → wrap op (Shift+A).
+  if (has('wrap') || (has('group') && !has('background'))) {
+    return { op: 'wrap', target: 'selected', direction: has('row') ? 'row' : has('column') || has('col') ? 'column' : undefined };
+  }
+  if (has('duplicate') || s.includes('copy it') || s.includes('copy that')) {
+    return { op: 'duplicate', target: 'selected' };
+  }
+
   // Move up / down (reorder within the stack). Guard the bare "up/down"
   // shorthand so it never swallows "add a button called Sign up".
   const addContext = has('add') || has('insert') || has('called') || has('named') || tokens[0] === 'new';
@@ -146,7 +154,11 @@ export function parseUiCommand(utterance: string): UiParse {
     if (has('heading') || has('title') || has('header')) return { op: 'add_node', nodeType: 'text', role: 'heading', text: label ?? 'Heading' };
     if (has('text') || has('paragraph') || has('body') || has('label')) return { op: 'add_node', nodeType: 'text', role: 'body', text: label ?? 'Text' };
     if (has('image') || has('picture') || has('photo')) return { op: 'add_node', nodeType: 'image' };
-    if (has('card') || has('stack') || has('row') || has('column') || has('section')) {
+    if (has('navbar') || has('nav') || s.includes('navigation bar')) return { op: 'add_node', nodeType: 'navbar' };
+    if (has('divider') || has('separator') || has('rule')) return { op: 'add_node', nodeType: 'divider' };
+    if (has('icon') || has('circle') || has('avatar')) return { op: 'add_node', nodeType: 'icon' };
+    if (has('card')) return { op: 'add_node', nodeType: 'card' };
+    if (has('stack') || has('row') || has('column') || has('section')) {
       return { op: 'add_node', nodeType: 'stack', direction: has('row') ? 'row' : 'column' };
     }
     return clarify('Add what — a heading, text, input, button, image, or card?');

@@ -8,7 +8,7 @@
 // over a document + typed ops + validate + engine + renderer + exporter + AI
 // schema + rule parser, so a 'ui' mode is just another such document.
 
-export type FramePreset = 'desktop' | 'mobile';
+export type FramePreset = 'desktop' | 'tablet' | 'mobile';
 export type StackDir = 'row' | 'column';
 export type Align = 'start' | 'center' | 'end' | 'stretch';
 export type Justify = 'start' | 'center' | 'end' | 'between';
@@ -18,10 +18,27 @@ export type FontWeight = 400 | 500 | 600 | 700;
 
 export const FRAME_PRESETS: Record<FramePreset, { w: number; h: number; label: string }> = {
   desktop: { w: 1440, h: 900, label: 'Desktop' },
+  tablet: { w: 834, h: 1194, label: 'Tablet' },
   mobile: { w: 390, h: 844, label: 'Mobile' },
 };
 
-export interface StackNode {
+export type SizeMode = 'fixed' | 'fill' | 'hug';
+export interface Sizing {
+  wMode?: SizeMode;
+  w?: number;
+  hMode?: SizeMode;
+  h?: number;
+}
+
+/** Shared optional fields: free (absolute) placement + Figma-style sizing.
+ *  A node with `abs` set is out of flow, positioned relative to its parent
+ *  stack's box; everything else lays out in the stack flow as before. */
+export interface NodeExtras {
+  abs?: { x: number; y: number };
+  sizing?: Sizing;
+}
+
+export interface StackNode extends NodeExtras {
   id: string;
   type: 'stack';
   direction: StackDir;
@@ -37,7 +54,7 @@ export interface StackNode {
   children: UiNode[];
 }
 
-export interface TextNode {
+export interface TextNode extends NodeExtras {
   id: string;
   type: 'text';
   role: TextRole;
@@ -47,7 +64,7 @@ export interface TextNode {
   color: string;
 }
 
-export interface ButtonNode {
+export interface ButtonNode extends NodeExtras {
   id: string;
   type: 'button';
   label: string;
@@ -57,7 +74,7 @@ export interface ButtonNode {
   height: number;
 }
 
-export interface InputNode {
+export interface InputNode extends NodeExtras {
   id: string;
   type: 'input';
   label: string;
@@ -66,7 +83,7 @@ export interface InputNode {
   height: number;
 }
 
-export interface ImageNode {
+export interface ImageNode extends NodeExtras {
   id: string;
   type: 'image';
   w: number;
@@ -74,7 +91,7 @@ export interface ImageNode {
   radius: number;
 }
 
-export interface RectNode {
+export interface RectNode extends NodeExtras {
   id: string;
   type: 'rect';
   fill: string;
@@ -83,7 +100,23 @@ export interface RectNode {
   radius: number;
 }
 
-export type UiNode = StackNode | TextNode | ButtonNode | InputNode | ImageNode | RectNode;
+/** Horizontal rule (exports as <hr>). */
+export interface DividerNode extends NodeExtras {
+  id: string;
+  type: 'divider';
+  color: string;
+  thickness: number;
+}
+
+/** Circle icon placeholder (avatar / glyph slot). */
+export interface IconNode extends NodeExtras {
+  id: string;
+  type: 'icon';
+  fill: string;
+  size: number;
+}
+
+export type UiNode = StackNode | TextNode | ButtonNode | InputNode | ImageNode | RectNode | DividerNode | IconNode;
 export type UiNodeType = UiNode['type'];
 
 export interface Frame {
@@ -177,6 +210,8 @@ export function nodeLabel(node: UiNode | Frame): string {
     case 'input': return `Input · ${node.inputType} · "${trunc(node.label || node.placeholder)}"`;
     case 'image': return `Image · ${node.w}×${node.h}`;
     case 'rect': return `Rect · ${node.w}×${node.h}`;
+    case 'divider': return 'Divider';
+    case 'icon': return `Icon · ${node.size}`;
   }
 }
 
@@ -198,28 +233,45 @@ export interface Box {
 
 /** Rough intrinsic size of a node (content box) before stretching. */
 export function intrinsicSize(node: UiNode): { w: number; h: number } {
-  switch (node.type) {
-    case 'text': {
-      const charW = node.size * 0.56;
-      return { w: Math.max(40, Math.round(node.text.length * charW)), h: Math.round(node.size * 1.4) };
+  const base = ((): { w: number; h: number } => {
+    switch (node.type) {
+      case 'text': {
+        const charW = node.size * 0.56;
+        return { w: Math.max(40, Math.round(node.text.length * charW)), h: Math.round(node.size * 1.4) };
+      }
+      case 'button':
+        return { w: Math.max(96, node.label.length * 10 + 48), h: node.height };
+      case 'input':
+        return { w: 280, h: node.height + (node.label ? 22 : 0) };
+      case 'image':
+        return { w: node.w, h: node.h };
+      case 'rect':
+        return { w: node.w, h: node.h };
+      case 'divider':
+        return { w: 160, h: Math.max(1, node.thickness) };
+      case 'icon':
+        return { w: node.size, h: node.size };
+      case 'stack': {
+        const s = stackIntrinsic(node);
+        return node.width !== undefined ? { w: node.width, h: s.h } : s;
+      }
     }
-    case 'button':
-      return { w: Math.max(96, node.label.length * 10 + 48), h: node.height };
-    case 'input':
-      return { w: 280, h: node.height + (node.label ? 22 : 0) };
-    case 'image':
-      return { w: node.w, h: node.h };
-    case 'rect':
-      return { w: node.w, h: node.h };
-    case 'stack': {
-      const s = stackIntrinsic(node);
-      return node.width !== undefined ? { w: node.width, h: s.h } : s;
-    }
-  }
+  })();
+  // Fixed sizing overrides the intrinsic measure (fill is resolved in layout).
+  const sz = node.sizing;
+  return {
+    w: sz?.wMode === 'fixed' && sz.w !== undefined ? sz.w : base.w,
+    h: sz?.hMode === 'fixed' && sz.h !== undefined ? sz.h : base.h,
+  };
+}
+
+/** Children that participate in the stack flow (abs nodes are out of flow). */
+export function flowChildren(s: StackNode): UiNode[] {
+  return s.children.filter((c) => !c.abs);
 }
 
 function stackIntrinsic(s: StackNode): { w: number; h: number } {
-  const kids = s.children.map(intrinsicSize);
+  const kids = flowChildren(s).map(intrinsicSize);
   const mainIsW = s.direction === 'row';
   let main = 0;
   let cross = 0;
@@ -247,16 +299,36 @@ function layoutStack(stack: StackNode, box: Box, out: Map<string, Box>): void {
   const pad = stack.padding;
   const inner: Box = { x: box.x + pad, y: box.y + pad, w: Math.max(0, box.w - pad * 2), h: Math.max(0, box.h - pad * 2) };
   const mainIsW = stack.direction === 'row';
-  const n = stack.children.length;
+
+  // Absolute children: parent-box-relative, out of flow.
+  for (const child of stack.children) {
+    if (!child.abs) continue;
+    const sz = intrinsicSize(child);
+    const childBox: Box = { x: box.x + child.abs.x, y: box.y + child.abs.y, w: sz.w, h: sz.h };
+    out.set(child.id, childBox);
+    if (child.type === 'stack') layoutStack(child, childBox, out);
+  }
+
+  const flow = flowChildren(stack);
+  const n = flow.length;
   if (n === 0) return;
 
-  const sizes = stack.children.map(intrinsicSize);
-  const mainSize = (i: number) => (mainIsW ? sizes[i].w : sizes[i].h);
+  const sizes = flow.map(intrinsicSize);
   const innerMain = mainIsW ? inner.w : inner.h;
   const innerCross = mainIsW ? inner.h : inner.w;
+  const mainMode = (c: UiNode) => (mainIsW ? c.sizing?.wMode : c.sizing?.hMode);
+  const crossMode = (c: UiNode) => (mainIsW ? c.sizing?.hMode : c.sizing?.wMode);
 
   let totalMain = 0;
-  for (let i = 0; i < n; i++) totalMain += mainSize(i);
+  for (let i = 0; i < n; i++) totalMain += mainIsW ? sizes[i].w : sizes[i].h;
+
+  // 'fill' on the main axis: share the leftover space equally.
+  const fillIdx = flow.map((c, i) => (mainMode(c) === 'fill' ? i : -1)).filter((i) => i >= 0);
+  const leftover = Math.max(0, innerMain - totalMain - stack.gap * (n - 1));
+  const fillExtra = fillIdx.length ? leftover / fillIdx.length : 0;
+  const mainSize = (i: number) =>
+    (mainIsW ? sizes[i].w : sizes[i].h) + (fillIdx.includes(i) ? fillExtra : 0);
+  totalMain += fillExtra * fillIdx.length;
   const free = innerMain - totalMain;
 
   let gap = stack.gap;
@@ -271,13 +343,14 @@ function layoutStack(stack: StackNode, box: Box, out: Map<string, Box>): void {
 
   let cursor = (mainIsW ? inner.x : inner.y) + Math.max(0, start);
   for (let i = 0; i < n; i++) {
-    const child = stack.children[i];
+    const child = flow[i];
     const cm = mainSize(i);
     const intrinsicCross = mainIsW ? sizes[i].h : sizes[i].w;
     // A stack with an explicit width keeps it (a centred card) even inside a
     // stretch parent; everything else stretches to fill the cross axis.
-    const fixedCross = !mainIsW && child.type === 'stack' && child.width !== undefined;
-    const stretch = stack.align === 'stretch' && child.type !== 'image' && !fixedCross;
+    const fixedCross = (!mainIsW && child.type === 'stack' && child.width !== undefined) || crossMode(child) === 'fixed' || crossMode(child) === 'hug';
+    const stretch = crossMode(child) === 'fill' ||
+      (stack.align === 'stretch' && child.type !== 'image' && child.type !== 'icon' && !fixedCross);
     const cc = stretch ? innerCross : Math.min(intrinsicCross, innerCross);
     let crossPos = mainIsW ? inner.y : inner.x;
     if (!stretch) {

@@ -6,7 +6,7 @@
 //
 // Envelope: { op, target?, parent?, nodeType?, nums{...}, text?, ... }
 
-import type { Align, FontWeight, FramePreset, InputType, Justify, StackDir, TextRole, UiNodeType } from './doc';
+import type { Align, FontWeight, FramePreset, InputType, Justify, SizeMode, StackDir, TextRole, UiNodeType } from './doc';
 import { toColor } from './colors';
 
 export type UiOpName =
@@ -17,21 +17,33 @@ export type UiOpName =
   | 'set_fill'
   | 'set_style'
   | 'set_layout'
+  | 'set_pos'
+  | 'set_sizing'
+  | 'wrap'
+  | 'duplicate'
   | 'move'
   | 'delete'
-  | 'select';
+  | 'select'
+  | 'batch';
 
 export const UI_OP_NAMES: readonly UiOpName[] = [
   'add_frame', 'add_node', 'set_text', 'set_size', 'set_fill', 'set_style',
-  'set_layout', 'move', 'delete', 'select',
+  'set_layout', 'set_pos', 'set_sizing', 'wrap', 'duplicate', 'move', 'delete',
+  'select', 'batch',
 ] as const;
+
+/** Composite palette drops that expand to preset stacks in the engine. */
+export type AddableType = UiNodeType | 'card' | 'navbar';
 
 export interface AddFrameOp { op: 'add_frame'; preset: FramePreset }
 export interface AddNodeOp {
   op: 'add_node';
-  nodeType: Exclude<UiNodeType, never>;
+  nodeType: AddableType;
   parent?: string;
   index?: number;
+  /** Absolute (free) placement inside the parent, frame-local px. */
+  x?: number;
+  y?: number;
   text?: string;
   role?: TextRole;
   label?: string;
@@ -59,14 +71,30 @@ export interface SetLayoutOp {
   align?: Align;
   justify?: Justify;
 }
+/** Move an absolute node (or make a node absolute) at frame-local px. */
+export interface SetPosOp { op: 'set_pos'; target: string; x?: number; y?: number; flow?: boolean }
+export interface SetSizingOp {
+  op: 'set_sizing';
+  target: string;
+  wMode?: SizeMode;
+  w?: number;
+  hMode?: SizeMode;
+  h?: number;
+}
+/** Wrap one or more siblings into a new row/column stack (Shift+A). */
+export interface WrapOp { op: 'wrap'; targets: string[]; direction?: StackDir }
+export interface DuplicateOp { op: 'duplicate'; target: string }
 /** Reorder within the parent stack (delta up/down) or move into another stack. */
 export interface MoveOp { op: 'move'; target: string; parent?: string; index?: number; delta?: number }
 export interface DeleteOp { op: 'delete'; target: string }
 export interface SelectOp { op: 'select'; target: string }
+/** Apply several ops atomically — one undo step; any failure rolls back all. */
+export interface BatchOp { op: 'batch'; ops: UiOp[] }
 
 export type UiOp =
   | AddFrameOp | AddNodeOp | SetTextOp | SetSizeOp | SetFillOp
-  | SetStyleOp | SetLayoutOp | MoveOp | DeleteOp | SelectOp;
+  | SetStyleOp | SetLayoutOp | SetPosOp | SetSizingOp | WrapOp | DuplicateOp
+  | MoveOp | DeleteOp | SelectOp | BatchOp;
 
 export const UI_LIMITS = {
   size: { min: 4, max: 4000 },
@@ -117,10 +145,11 @@ function toNum(v: unknown): number | undefined {
   return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
 }
 
-const NODE_TYPES: readonly UiNodeType[] = ['stack', 'text', 'button', 'input', 'image', 'rect'];
+const NODE_TYPES: readonly AddableType[] = ['stack', 'text', 'button', 'input', 'image', 'rect', 'divider', 'icon', 'card', 'navbar'];
 const ALIGNS: readonly Align[] = ['start', 'center', 'end', 'stretch'];
 const JUSTIFIES: readonly Justify[] = ['start', 'center', 'end', 'between'];
 const INPUT_TYPES: readonly InputType[] = ['text', 'email', 'password'];
+const SIZE_MODES: readonly SizeMode[] = ['fixed', 'fill', 'hug'];
 
 function weightOf(v: unknown): FontWeight | undefined {
   const n = toNum(v);
@@ -152,17 +181,21 @@ export function validateUiOp(raw: unknown): UiValidation {
   switch (name as UiOpName) {
     case 'add_frame': {
       const p = str(raw.preset)?.toLowerCase();
-      const preset: FramePreset = p === 'mobile' || p === 'phone' ? 'mobile' : 'desktop';
+      const preset: FramePreset =
+        p === 'mobile' || p === 'phone' ? 'mobile' : p === 'tablet' || p === 'ipad' ? 'tablet' : 'desktop';
       return { ok: true, op: { op: 'add_frame', preset } };
     }
     case 'add_node': {
-      const t = str(raw.nodeType)?.toLowerCase() as UiNodeType | undefined;
+      const t = str(raw.nodeType)?.toLowerCase() as AddableType | undefined;
       if (!t || !NODE_TYPES.includes(t)) return fail('add_node needs a valid nodeType');
       const op: AddNodeOp = { op: 'add_node', nodeType: t };
       const parent = str(raw.parent);
       if (parent) op.parent = parent;
       const idx = num('index', 0, 999);
       if (idx !== undefined) op.index = Math.round(idx);
+      const x = num('x', 0, UI_LIMITS.size.max);
+      const y = num('y', 0, UI_LIMITS.size.max);
+      if (x !== undefined && y !== undefined) { op.x = Math.round(x); op.y = Math.round(y); }
       const text = str(raw.text);
       if (text) op.text = text;
       const role = str(raw.role)?.toLowerCase();
@@ -236,6 +269,61 @@ export function validateUiOp(raw: unknown): UiValidation {
         op.align === undefined && op.justify === undefined)
         return fail('set_layout needs a property to change');
       return { ok: true, op };
+    }
+    case 'set_pos': {
+      const t = target();
+      if (!t) return fail('set_pos needs a target');
+      const op: SetPosOp = { op: 'set_pos', target: t };
+      const x = num('x', -UI_LIMITS.size.max, UI_LIMITS.size.max);
+      const y = num('y', -UI_LIMITS.size.max, UI_LIMITS.size.max);
+      if (x !== undefined) op.x = Math.round(x);
+      if (y !== undefined) op.y = Math.round(y);
+      if (raw.flow === true) op.flow = true;
+      if (op.x === undefined && op.y === undefined && !op.flow) return fail('set_pos needs x, y, or flow');
+      return { ok: true, op };
+    }
+    case 'set_sizing': {
+      const t = target();
+      if (!t) return fail('set_sizing needs a target');
+      const op: SetSizingOp = { op: 'set_sizing', target: t };
+      const wMode = str(raw.wMode)?.toLowerCase() as SizeMode | undefined;
+      if (wMode && SIZE_MODES.includes(wMode)) op.wMode = wMode;
+      const hMode = str(raw.hMode)?.toLowerCase() as SizeMode | undefined;
+      if (hMode && SIZE_MODES.includes(hMode)) op.hMode = hMode;
+      const w = num('w', UI_LIMITS.size.min, UI_LIMITS.size.max);
+      if (w !== undefined) op.w = Math.round(w);
+      const h = num('h', UI_LIMITS.size.min, UI_LIMITS.size.max);
+      if (h !== undefined) op.h = Math.round(h);
+      if (op.wMode === undefined && op.hMode === undefined && op.w === undefined && op.h === undefined)
+        return fail('set_sizing needs a mode or a value');
+      return { ok: true, op };
+    }
+    case 'wrap': {
+      const list = Array.isArray(raw.targets) ? raw.targets.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : [];
+      const single = target();
+      const targets = list.length ? list : single ? [single] : [];
+      if (!targets.length) return fail('wrap needs at least one target');
+      const op: WrapOp = { op: 'wrap', targets };
+      const dir = str(raw.direction)?.toLowerCase();
+      if (dir === 'row' || dir === 'column') op.direction = dir;
+      return { ok: true, op };
+    }
+    case 'duplicate': {
+      const t = target();
+      if (!t) return fail('duplicate needs a target');
+      return { ok: true, op: { op: 'duplicate', target: t } };
+    }
+    case 'batch': {
+      if (!Array.isArray(raw.ops) || raw.ops.length === 0) return fail('batch needs ops');
+      if (raw.ops.length > 100) return fail('batch too large');
+      const ops: UiOp[] = [];
+      for (const sub of raw.ops) {
+        const v = validateUiOp(sub);
+        if (!v.ok) return fail(`batch: ${v.error}`);
+        if (v.op.op === 'batch') return fail('batch cannot nest');
+        ops.push(v.op);
+      }
+      return { ok: true, op: { op: 'batch', ops } };
     }
     case 'move': {
       const t = target();

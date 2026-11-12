@@ -5,6 +5,8 @@
 // ViewportHandle so the mode-agnostic shell drives it unchanged.
 
 import type { ModeController, ViewportHandle } from '../../core/controller';
+import { createToolController } from '../../core/tools';
+import { createFullscreenControl, createPalette, createTrash } from '../../core/palette';
 import {
   activeFrame,
   layoutFrame,
@@ -14,6 +16,9 @@ import {
   type UiDoc,
   type UiNode,
 } from './doc';
+import { alignSnap, insertionIndex, snapTargets, stackAt, wrapDirection, type Guide, type Segment } from './editing';
+import { createUiTools, uiPaletteItems, type UiToolCtx } from './tools';
+import { createUiPropsPanel } from './propsPanel';
 
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
@@ -47,9 +52,81 @@ export function createUiRenderer(
 
   let scale = 1;
   let boxes = new Map<string, Box>();
+  /** Secondary (Shift-click) selection on top of the engine's selectedId. */
+  const multi = new Set<string>();
+  let propsPanelRef: { update(): void } | null = null;
 
   const doc = (): UiDoc => controller.snapshot() as UiDoc;
   const frame = (): Frame | undefined => activeFrame(doc());
+
+  /** Everything currently selected (engine primary + shift extras). */
+  function selection(): string[] {
+    const sel = controller.selectedId();
+    const ids = new Set(multi);
+    if (sel) ids.add(sel);
+    return [...ids];
+  }
+
+  // Transient overlay (frame-local px, scales with the wrapper): placement
+  // ghost, stack insertion indicator, pink alignment guides.
+  const overlay = document.createElement('div');
+  Object.assign(overlay.style, {
+    position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '6',
+  } as CSSStyleDeclaration);
+  wrap.appendChild(overlay);
+  const ghostEl = document.createElement('div');
+  Object.assign(ghostEl.style, {
+    position: 'absolute', border: '1.5px dashed #2563eb', background: 'rgba(37,99,235,.08)',
+    borderRadius: '6px', display: 'none', color: '#2563eb', fontSize: '12px',
+    fontFamily: FONT_STACK, padding: '2px 6px', boxSizing: 'border-box',
+  } as CSSStyleDeclaration);
+  overlay.appendChild(ghostEl);
+  const insertEl = document.createElement('div');
+  Object.assign(insertEl.style, {
+    position: 'absolute', background: '#2563eb', borderRadius: '2px', display: 'none',
+  } as CSSStyleDeclaration);
+  overlay.appendChild(insertEl);
+  let guideEls: HTMLElement[] = [];
+
+  function setGhost(b: Box | null, label?: string): void {
+    if (!b) {
+      ghostEl.style.display = 'none';
+      return;
+    }
+    Object.assign(ghostEl.style, {
+      display: 'block', left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px`,
+    } as CSSStyleDeclaration);
+    ghostEl.textContent = label ?? '';
+  }
+  function setInsertLine(seg: Segment | null): void {
+    if (!seg) {
+      insertEl.style.display = 'none';
+      return;
+    }
+    const vertical = seg.x1 === seg.x2;
+    Object.assign(insertEl.style, {
+      display: 'block',
+      left: `${vertical ? seg.x1 - 1.5 : seg.x1}px`,
+      top: `${vertical ? seg.y1 : seg.y1 - 1.5}px`,
+      width: `${vertical ? 3 : seg.x2 - seg.x1}px`,
+      height: `${vertical ? seg.y2 - seg.y1 : 3}px`,
+    } as CSSStyleDeclaration);
+  }
+  function setGuides(guides: Guide[]): void {
+    for (const g of guideEls) g.remove();
+    guideEls = guides.map((g) => {
+      const el = document.createElement('div');
+      Object.assign(el.style, {
+        position: 'absolute', background: '#ec4899',
+        left: `${g.axis === 'v' ? g.pos - 0.5 : g.from}px`,
+        top: `${g.axis === 'v' ? g.from : g.pos - 0.5}px`,
+        width: `${g.axis === 'v' ? 1 : g.to - g.from}px`,
+        height: `${g.axis === 'v' ? g.to - g.from : 1}px`,
+      } as CSSStyleDeclaration);
+      overlay.appendChild(el);
+      return el;
+    });
+  }
 
   function fitScale(f: Frame): void {
     const rect = scroll.getBoundingClientRect();
@@ -133,6 +210,17 @@ export function createUiRenderer(
         e.style.borderRadius = `${node.radius}px`;
         break;
       }
+      case 'divider': {
+        e = document.createElement('div');
+        e.style.background = node.color;
+        break;
+      }
+      case 'icon': {
+        e = document.createElement('div');
+        e.style.background = node.fill;
+        e.style.borderRadius = '50%';
+        break;
+      }
       case 'stack': {
         e = document.createElement('div');
         if (node.fill) e.style.background = node.fill;
@@ -189,15 +277,19 @@ export function createUiRenderer(
     frameEl.style.background = f.background;
     frameEl.style.boxShadow = '0 1px 3px rgba(15,23,42,.15), 0 8px 24px rgba(15,23,42,.08)';
     const sel = doc().selectedId;
+    for (const id of [...multi]) if (!boxes.has(id)) multi.delete(id);
+    const selected = new Set(multi);
+    if (sel) selected.add(sel);
 
     // Draw in depth order (parents first) so children paint on top.
     const draw = (node: UiNode) => {
       const box = boxes.get(node.id);
       if (!box) return;
-      frameEl.appendChild(styleNode(node, box, node.id === sel));
+      frameEl.appendChild(styleNode(node, box, selected.has(node.id)));
       if (node.type === 'stack') for (const c of node.children) draw(c);
     };
     for (const c of f.root.children) draw(c);
+    propsPanelRef?.update();
 
     // A corner resize handle — only on nodes set_size can actually resize
     // (image/rect/button/input); drawing it on text/stacks would be a no-op.
@@ -248,35 +340,177 @@ export function createUiRenderer(
     return hits[0].id;
   }
 
-  // ---- drag to reorder within the parent stack ----
-  let drag: { id: string; startY: number; startX: number; moved: boolean } | null = null;
+  // ---- shared tool framework: status, trash, palette, tools, props ----
+  const status = document.createElement('div');
+  status.className = 'mc-status';
+  status.setAttribute('role', 'status');
+  container.appendChild(status);
+  const trash = createTrash(container);
+
+  const toolCtx: UiToolCtx = {
+    apply(op) {
+      const r = controller.applyOp(op);
+      if (r.ok) {
+        onSelect(controller.selectedId());
+        render();
+      } else if (r.error) {
+        status.textContent = r.error;
+      }
+      return r;
+    },
+    frame,
+    boxes: () => boxes,
+    toFrame,
+    setGhost,
+    setInsertLine,
+    setStatus: (t) => {
+      status.textContent = t;
+    },
+    render: () => render(),
+    activateSelect: () => toolCtl.activate('select'),
+  };
+  const tools = createUiTools(toolCtx);
+  const toolCtl = createToolController(tools, {
+    defaultId: 'select',
+    onToolChange(id) {
+      palette.setActive(id);
+      status.textContent = tools.find((t) => t.id === id)?.hint ?? '';
+    },
+  });
+  const palette = createPalette(container, uiPaletteItems(tools), {
+    onArm: (id) => toolCtl.activate(id),
+    onPlaceStart: (id, x, y) => toolCtl.beginPlace(id, { x, y, source: 'mouse' }),
+  });
+  const fsCtl = createFullscreenControl(container, container, (hint) => {
+    status.textContent = hint;
+  });
+  const propsPanel = createUiPropsPanel(container, {
+    apply: (op) => toolCtx.apply(op),
+    snapshot: doc,
+    selectedId: () => controller.selectedId(),
+  });
+  propsPanelRef = propsPanel;
+  palette.setActive('select');
+  status.textContent = tools[0].hint ?? '';
+
+  // ---- drag to move: flow children reorder with the insertion indicator,
+  // absolute children move freely with smart alignment guides ----
+  let drag: {
+    id: string;
+    startX: number;
+    startY: number;
+    box: Box;
+    parentId: string;
+    parentOrigin: { x: number; y: number };
+    curIdx: number;
+    mode: 'abs' | 'flow';
+    el: HTMLElement | null;
+    moved: boolean;
+    pendingFlow?: { parent: string; index: number };
+    pendingAbs?: { x: number; y: number };
+  } | null = null;
+  let lastPt = { x: 0, y: 0 };
 
   function beginDrag(clientX: number, clientY: number): boolean {
     const sel = controller.selectedId();
     if (!sel) return false;
-    drag = { id: sel, startX: clientX, startY: clientY, moved: false };
+    const loc = locate(doc(), sel);
+    const box = boxes.get(sel);
+    if (!loc || !loc.parent || !box) return false;
+    const parentOrigin = boxes.get(loc.parent.id) ?? { x: 0, y: 0 };
+    drag = {
+      id: sel, startX: clientX, startY: clientY, box,
+      parentId: loc.parent.id,
+      parentOrigin: { x: parentOrigin.x, y: parentOrigin.y },
+      curIdx: loc.parent.children.findIndex((c) => c.id === sel),
+      mode: loc.node.abs ? 'abs' : 'flow',
+      el: frameEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(sel)}"]`),
+      moved: false,
+    };
     return true;
   }
+
   function doDrag(clientX: number, clientY: number): boolean {
     if (!drag) return false;
     const f = frame();
     if (!f) return false;
-    const loc = locate(doc(), drag.id);
-    if (!loc || !loc.parent) return false;
-    const horizontal = loc.parent.direction === 'row';
-    const delta = horizontal ? (clientX - drag.startX) : (clientY - drag.startY);
-    const threshold = 40 * scale;
-    if (Math.abs(delta) >= threshold) {
-      const dir = Math.sign(delta);
-      controller.applyOp({ op: 'move', target: drag.id, nums: { delta: dir } });
-      drag.startX = clientX;
-      drag.startY = clientY;
-      drag.moved = true;
-      render();
+    lastPt = { x: clientX, y: clientY };
+    const dx = (clientX - drag.startX) / scale;
+    const dy = (clientY - drag.startY) / scale;
+    if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+    trash.setHover(trash.isOver(clientX, clientY));
+    if (!drag.moved) return true;
+
+    if (drag.mode === 'abs') {
+      const moving: Box = { x: drag.box.x + dx, y: drag.box.y + dy, w: drag.box.w, h: drag.box.h };
+      const snap = alignSnap(moving, snapTargets(f, boxes, drag.id));
+      setGuides(snap.guides);
+      drag.pendingAbs = {
+        x: Math.round(snap.x - drag.parentOrigin.x),
+        y: Math.round(snap.y - drag.parentOrigin.y),
+      };
+      if (drag.el) {
+        drag.el.style.left = `${snap.x}px`;
+        drag.el.style.top = `${snap.y}px`;
+      }
+    } else {
+      const fp = toFrame(clientX, clientY);
+      const stack = stackAt(f, boxes, fp, drag.id);
+      if (stack) {
+        const ins = insertionIndex(stack, boxes, fp, drag.id);
+        // The engine splices after detaching the dragged node, so same-parent
+        // moves past the original slot shift down by one.
+        const index = stack.id === drag.parentId && drag.curIdx < ins.index ? ins.index - 1 : ins.index;
+        drag.pendingFlow = { parent: stack.id, index };
+        setInsertLine(ins.line);
+      } else {
+        drag.pendingFlow = undefined;
+        setInsertLine(null);
+      }
+      if (drag.el) {
+        drag.el.style.transform = `translate(${dx}px, ${dy}px)`;
+        drag.el.style.opacity = '0.6';
+        drag.el.style.zIndex = '7';
+      }
     }
     return true;
   }
-  function endDrag(): void { drag = null; }
+
+  function endDragAt(clientX: number, clientY: number): void {
+    const d = drag;
+    drag = null;
+    setGuides([]);
+    setInsertLine(null);
+    trash.setHover(false);
+    if (!d) return;
+    if (d.el) {
+      d.el.style.transform = '';
+      d.el.style.opacity = '';
+      d.el.style.zIndex = '';
+    }
+    if (!d.moved) {
+      render();
+      return;
+    }
+    if (trash.isOver(clientX, clientY)) {
+      toolCtx.apply({ op: 'delete', target: d.id });
+      multi.clear();
+      return;
+    }
+    if (d.mode === 'abs' && d.pendingAbs) {
+      toolCtx.apply({ op: 'set_pos', target: d.id, nums: d.pendingAbs });
+      return;
+    }
+    if (d.mode === 'flow' && d.pendingFlow &&
+      !(d.pendingFlow.parent === d.parentId && d.pendingFlow.index === d.curIdx)) {
+      toolCtx.apply({ op: 'move', target: d.id, parent: d.pendingFlow.parent, nums: { index: d.pendingFlow.index } });
+      return;
+    }
+    render();
+  }
+  function endDrag(): void {
+    endDragAt(lastPt.x, lastPt.y);
+  }
 
   // ---- drag the corner handle to resize the selection (one set_size on release) ----
   let rz: { id: string; startX: number; startY: number; w: number; h: number; el: HTMLElement | null } | null = null;
@@ -319,22 +553,51 @@ export function createUiRenderer(
       e.preventDefault();
       return;
     }
+    // An armed placement tool consumes the press (click-to-place).
+    if (toolCtl.activeId() !== 'select' || toolCtl.placing()) {
+      if (toolCtl.down({ x: e.clientX, y: e.clientY, source: 'mouse', shift: e.shiftKey })) {
+        container.focus();
+        e.preventDefault();
+        return;
+      }
+    }
     const id = pick(e.clientX, e.clientY);
-    onSelect(id);
-    if (id) controller.selectId(id);
+    if (e.shiftKey && id) {
+      // Shift-click: toggle in the multi-selection.
+      const prev = controller.selectedId();
+      if (multi.has(id)) {
+        multi.delete(id);
+      } else {
+        if (prev && prev !== id) multi.add(prev);
+        controller.selectId(id);
+        onSelect(id);
+      }
+    } else {
+      multi.clear();
+      onSelect(id);
+      if (id) controller.selectId(id);
+    }
     render();
     container.focus();
-    if (id) beginDrag(e.clientX, e.clientY);
+    if (id && !e.shiftKey) beginDrag(e.clientX, e.clientY);
+  });
+  scroll.addEventListener('mousemove', (e) => {
+    // Ghost previews while a placement tool is armed (no button held).
+    if (!drag && !rz && (toolCtl.placing() || toolCtl.activeId() !== 'select')) {
+      toolCtl.hover({ x: e.clientX, y: e.clientY, source: 'mouse' });
+    }
   });
   window.addEventListener('mousemove', onMove);
   function onMove(e: MouseEvent): void {
     if (rz) doResize(e.clientX, e.clientY);
     else if (drag) doDrag(e.clientX, e.clientY);
+    else if (toolCtl.placing()) toolCtl.move({ x: e.clientX, y: e.clientY, source: 'mouse' });
   }
   window.addEventListener('mouseup', onUp);
   function onUp(e: MouseEvent): void {
     if (rz) endResize(e.clientX, e.clientY);
-    else endDrag();
+    else if (drag) endDragAt(e.clientX, e.clientY);
+    else if (toolCtl.placing()) toolCtl.up({ x: e.clientX, y: e.clientY, source: 'mouse' });
   }
 
   function siblings(id: string): { ids: string[]; idx: number } | null {
@@ -344,18 +607,94 @@ export function createUiRenderer(
     return { ids, idx: ids.indexOf(id) };
   }
 
+  let clipboard: string[] = [];
+
+  function selectOnly(id: string | null): void {
+    multi.clear();
+    if (id) controller.selectId(id);
+    onSelect(id);
+    render();
+  }
+
   function onKey(e: KeyboardEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
     const sel = controller.selectedId();
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === 'z' || e.key === 'Z')) {
-      controller.applyOp({ op: e.shiftKey ? 'redo' : 'undo' }); render(); e.preventDefault(); return;
+      controller.applyOp({ op: e.shiftKey ? 'redo' : 'undo' }); multi.clear(); render(); e.preventDefault(); return;
     }
     if (mod && (e.key === 'y' || e.key === 'Y')) {
-      controller.applyOp({ op: 'redo' }); render(); e.preventDefault(); return;
+      controller.applyOp({ op: 'redo' }); multi.clear(); render(); e.preventDefault(); return;
     }
+    if (mod && (e.key === 'd' || e.key === 'D')) {
+      const ids = selection();
+      if (ids.length === 1) toolCtx.apply({ op: 'duplicate', target: ids[0] });
+      else if (ids.length > 1) toolCtx.apply({ op: 'batch', ops: ids.map((id) => ({ op: 'duplicate', target: id })) });
+      multi.clear();
+      e.preventDefault(); return;
+    }
+    if (mod && (e.key === 'c' || e.key === 'C')) {
+      clipboard = selection();
+      if (clipboard.length) status.textContent = `Copied ${clipboard.length} element${clipboard.length > 1 ? 's' : ''}.`;
+      e.preventDefault(); return;
+    }
+    if (mod && (e.key === 'v' || e.key === 'V')) {
+      const live = clipboard.filter((id) => boxes.has(id));
+      if (live.length === 1) toolCtx.apply({ op: 'duplicate', target: live[0] });
+      else if (live.length > 1) toolCtx.apply({ op: 'batch', ops: live.map((id) => ({ op: 'duplicate', target: id })) });
+      multi.clear();
+      e.preventDefault(); return;
+    }
+    // Shift+A: wrap the selection into a row/column stack (Figma-like).
+    if (!mod && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+      const ids = selection();
+      if (ids.length) {
+        const bs = ids.map((id) => boxes.get(id)).filter((b): b is Box => !!b);
+        toolCtx.apply({ op: 'wrap', targets: ids, direction: wrapDirection(bs) });
+        multi.clear();
+      }
+      e.preventDefault(); return;
+    }
+    // Esc: cancel an armed tool, else climb to the parent (Figma-style).
+    if (e.key === 'Escape') {
+      if (toolCtl.activeId() !== 'select' || toolCtl.placing()) {
+        toolCtl.handleKey(e);
+        toolCtl.activate('select');
+      } else if (sel) {
+        const loc = locate(doc(), sel);
+        selectOnly(loc?.parent?.id ?? null);
+      }
+      e.preventDefault(); return;
+    }
+    // Enter: descend into the first child of a stack.
+    if (e.key === 'Enter' && sel) {
+      const node = locate(doc(), sel)?.node;
+      if (node?.type === 'stack' && node.children[0]) selectOnly(node.children[0].id);
+      e.preventDefault(); return;
+    }
+    // Tool shortcuts (V/A/R/T/H/B/I/G/C/N/O/L).
+    if (toolCtl.handleKey(e)) { e.preventDefault(); return; }
     if (!sel) return;
     if (e.key === 'Delete' || e.key === 'Backspace') {
-      controller.applyOp({ op: 'delete', target: sel }); onSelect(controller.selectedId()); render(); e.preventDefault(); return;
+      const ids = selection();
+      if (ids.length === 1) toolCtx.apply({ op: 'delete', target: ids[0] });
+      else toolCtx.apply({ op: 'batch', ops: ids.map((id) => ({ op: 'delete', target: id })) });
+      multi.clear();
+      onSelect(controller.selectedId()); render(); e.preventDefault(); return;
+    }
+    // Arrow nudge for free-placed nodes (Shift = 10px); flow nodes navigate /
+    // Shift-reorder as before.
+    const node = locate(doc(), sel)?.node;
+    if (node?.abs) {
+      const step = e.shiftKey ? 10 : 1;
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+      if (dx || dy) {
+        toolCtx.apply({ op: 'set_pos', target: sel, nums: { x: node.abs.x + dx, y: node.abs.y + dy } });
+        e.preventDefault();
+      }
+      return;
     }
     const sib = siblings(sel);
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
@@ -382,11 +721,36 @@ export function createUiRenderer(
     beginDrag,
     drag: doDrag,
     endDrag,
+    tap(clientX, clientY) {
+      // Pinch-taps: palette buttons first, then an armed placement tool.
+      const item = palette.itemAt(clientX, clientY);
+      if (item) {
+        toolCtl.activate(item.toolId);
+        return true;
+      }
+      if (toolCtl.activeId() !== 'select' || toolCtl.placing()) {
+        const p = { x: clientX, y: clientY, source: 'pinch' as const };
+        if (toolCtl.placing()) toolCtl.up(p);
+        else toolCtl.down(p);
+        return true;
+      }
+      return false;
+    },
+    hover(clientX, clientY) {
+      if (toolCtl.placing() || toolCtl.activeId() !== 'select') {
+        toolCtl.hover({ x: clientX, y: clientY, source: 'pinch' });
+      }
+    },
     dispose() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       container.removeEventListener('keydown', onKey);
       resize.disconnect();
+      palette.dispose();
+      trash.dispose();
+      fsCtl.dispose();
+      propsPanel.dispose();
+      status.remove();
       scroll.remove();
       container.classList.remove('ui-stage');
     },

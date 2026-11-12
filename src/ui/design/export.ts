@@ -32,8 +32,9 @@ function justifyToFlex(j: StackNode['justify']): string {
   return j === 'start' ? 'flex-start' : j === 'end' ? 'flex-end' : j === 'center' ? 'center' : 'space-between';
 }
 
-/** Inline style for one node (kept per-node so the export is a single file). */
-function styleFor(node: UiNode): string {
+/** Inline style for one node (kept per-node so the export is a single file).
+ *  `parentDir` maps fill-sizing onto the right flex property. */
+function styleFor(node: UiNode, parentDir: StackNode['direction']): string {
   const parts: string[] = [];
   switch (node.type) {
     case 'stack': {
@@ -43,6 +44,7 @@ function styleFor(node: UiNode): string {
       if (node.fill) parts.push(`background:${node.fill}`);
       if (node.radius) parts.push(`border-radius:${node.radius}px`);
       if (node.width !== undefined) parts.push(`width:${node.width}px`, 'max-width:100%');
+      if (node.children.some((c) => c.abs)) parts.push('position:relative');
       break;
     }
     case 'text':
@@ -70,12 +72,30 @@ function styleFor(node: UiNode): string {
     case 'rect':
       parts.push(`width:${node.w}px`, `height:${node.h}px`, `background:${node.fill}`, `border-radius:${node.radius}px`);
       break;
+    case 'divider':
+      parts.push('border:0', 'width:100%', 'margin:0', `height:${Math.max(1, node.thickness)}px`, `background:${node.color}`);
+      break;
+    case 'icon':
+      parts.push(`width:${node.size}px`, `height:${node.size}px`, 'border-radius:50%', `background:${node.fill}`, 'flex:none');
+      break;
   }
+  // Figma-style sizing: fixed → explicit px; fill → grow on the parent's main
+  // axis / stretch on the cross; hug is the flex default.
+  const sz = node.sizing;
+  if (sz) {
+    const horizontal = parentDir === 'row';
+    if (sz.wMode === 'fixed' && sz.w !== undefined) parts.push(`width:${sz.w}px`);
+    if (sz.hMode === 'fixed' && sz.h !== undefined) parts.push(`height:${sz.h}px`);
+    if (sz.wMode === 'fill') parts.push(horizontal ? 'flex:1 1 0' : 'align-self:stretch');
+    if (sz.hMode === 'fill') parts.push(horizontal ? 'align-self:stretch' : 'flex:1 1 0');
+  }
+  // Free-placed nodes export as position:absolute inside the relative parent.
+  if (node.abs) parts.push('position:absolute', `left:${node.abs.x}px`, `top:${node.abs.y}px`);
   return parts.join(';');
 }
 
-function renderNode(node: UiNode, depth: number): string {
-  const style = styleFor(node);
+function renderNode(node: UiNode, depth: number, parentDir: StackNode['direction'] = 'column'): string {
+  const style = styleFor(node, parentDir);
   const s = (extra = '') => ` style="${style}"${extra}`;
   switch (node.type) {
     case 'text': {
@@ -96,8 +116,12 @@ function renderNode(node: UiNode, depth: number): string {
       return `${pad(depth)}<img alt="Image placeholder"${s()} src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" />`;
     case 'rect':
       return `${pad(depth)}<div${s()}></div>`;
+    case 'divider':
+      return `${pad(depth)}<hr${s()} />`;
+    case 'icon':
+      return `${pad(depth)}<div role="img" aria-label="Icon"${s()}></div>`;
     case 'stack': {
-      const kids = node.children.map((c) => renderNode(c, depth + 1)).join('\n');
+      const kids = node.children.map((c) => renderNode(c, depth + 1, node.direction)).join('\n');
       return `${pad(depth)}<div${s()}>\n${kids}\n${pad(depth)}</div>`;
     }
   }
@@ -151,6 +175,10 @@ function svgForNode(node: UiNode, box: { x: number; y: number; w: number; h: num
       return `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${node.radius}" fill="#e2e8f0" />`;
     case 'rect':
       return `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${node.radius}" fill="${node.fill}" />`;
+    case 'divider':
+      return `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${Math.max(1, node.thickness)}" fill="${node.color}" />`;
+    case 'icon':
+      return `  <circle cx="${box.x + box.w / 2}" cy="${box.y + box.h / 2}" r="${box.w / 2}" fill="${node.fill}" />`;
     case 'stack':
       return node.fill
         ? `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="${node.radius ?? 0}" fill="${node.fill}" />`
