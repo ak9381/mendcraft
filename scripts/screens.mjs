@@ -205,22 +205,51 @@ async function main() {
       () => !!document.querySelector('#viewport .ui-frame [data-id^="btn-"]'),
     );
     assert(hasButton, 'login screen rendered a sign-in button');
+    // B — the desktop login is a centred card (~400px), not a full-1440 form.
+    const loginWidths = await page.evaluate(() => {
+      const frame = document.querySelector('#viewport .ui-frame');
+      const btn = document.querySelector('#viewport .ui-frame [data-id^="btn-"]');
+      if (!frame || !btn) return null;
+      return { fw: frame.getBoundingClientRect().width, bw: btn.getBoundingClientRect().width };
+    });
+    assert(
+      loginWidths && loginWidths.bw / loginWidths.fw < 0.45,
+      `desktop login is a centred card, not full-width (button ${loginWidths ? Math.round((loginWidths.bw / loginWidths.fw) * 100) : '?'}% of frame)`,
+    );
 
-    // ui-03 — select the sign-in button via the renderer's pointer path.
-    await command(page, 'select the button');
+    // ui-03 — select the sign-in button by CLICKING it on the canvas (the
+    // renderer's real pointer path = the pinch equivalent), not the side list.
+    const clickedBtn = await page.evaluate(() => {
+      const btn = document.querySelector('#viewport .ui-frame [data-id^="btn-"]');
+      if (!btn) return null;
+      const r = btn.getBoundingClientRect();
+      const opts = { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+      btn.dispatchEvent(new MouseEvent('mousedown', opts));
+      window.dispatchEvent(new MouseEvent('mouseup', opts));
+      return true;
+    });
+    assert(!!clickedBtn, 'sign-in button present to click on the canvas');
     await page.waitForTimeout(400);
     await shot(page, 'ui-03-selected.png');
     const selectedBtn = await page.evaluate(
       () => (document.querySelector('#parts-list li button.active')?.textContent || '').trim(),
     );
-    assert(/Button/i.test(selectedBtn), `the button is selected ("${selectedBtn}")`);
+    assert(/Button/i.test(selectedBtn), `the button is selected via canvas click ("${selectedBtn}")`);
 
-    // ui-04 — voice edit: recolour then resize the selected button.
-    await command(page, 'make the button blue');
-    await page.waitForTimeout(300);
-    await command(page, 'make it 48 pixels tall');
+    // ui-04 — voice edits that are VISIBLE: recolour the button green, make it
+    // taller, and enlarge the heading.
+    await command(page, 'make the button green');
+    await page.waitForTimeout(250);
+    await command(page, 'make it 56 pixels tall');
+    await page.waitForTimeout(250);
+    await command(page, 'bigger heading');
     await page.waitForTimeout(400);
     await shot(page, 'ui-04-voice-edit.png');
+    const btnGreen = await page.evaluate(() => {
+      const btn = document.querySelector('#viewport .ui-frame [data-id^="btn-"]');
+      return btn ? getComputedStyle(btn).backgroundColor : '';
+    });
+    assert(/22,\s*163,\s*74/.test(btnGreen), `the button turned green ("${btnGreen}")`);
 
     // ui-05 — a mobile screen.
     await command(page, 'mobile login screen');
@@ -230,15 +259,30 @@ async function main() {
       () => document.querySelector('#viewport .ui-frame')?.getBoundingClientRect().width || 0,
     );
     assert(mobileW > 0, 'mobile frame rendered');
+    // D — the op/JSON panel reflects the latest command, not a stale set_size.
+    const opJson = await page.evaluate(() => document.getElementById('op-json')?.textContent || '');
+    assert(
+      /generate/.test(opJson) && !/set_size/.test(opJson),
+      `op panel shows the latest command ("${opJson.replace(/\s+/g, ' ').trim().slice(0, 50)}")`,
+    );
 
-    // ui-06 — export clean HTML (+ SVG). Capture the HTML bytes.
+    // ui-06 — open the export panel (preview + code + actions), screenshot it,
+    // then download the HTML from the panel and prove Esc closes it.
     const uiDownloads = [];
     page.on('download', (d) => uiDownloads.push(d));
     await page.click('#btn-export');
-    await page.waitForTimeout(1000);
+    await page.waitForSelector('#ui-export-panel .export-iframe', { timeout: 5000 });
+    await page.waitForTimeout(600);
     await shot(page, 'ui-06-export.png');
+    assert(await page.isVisible('#ui-export-panel [role=dialog]'), 'export panel opens as a dialog');
+    const panelHasCode = await page.evaluate(
+      () => /<!DOCTYPE html>/.test(document.querySelector('.export-code')?.textContent || ''),
+    );
+    assert(panelHasCode, 'export panel shows the exported HTML source');
+    await page.click('.export-actions button'); // Download HTML
+    await page.waitForTimeout(600);
     const htmlDownload = uiDownloads.find((d) => d.suggestedFilename().endsWith('.html'));
-    assert(!!htmlDownload, 'HTML download fired');
+    assert(!!htmlDownload, 'HTML download fired from the panel');
     if (htmlDownload) {
       const path = resolve(OUT, 'ui-06-export.html');
       const stream = await htmlDownload.createReadStream();
@@ -250,6 +294,9 @@ async function main() {
       assert(/<button/.test(htmlOut), 'exported HTML has a <button>');
       console.log(`  wrote ${path} (${htmlOut.length} bytes)`);
     }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    assert(!(await page.isVisible('#ui-export-panel')), 'Esc closes the export panel');
 
     await ctx.close();
   } finally {

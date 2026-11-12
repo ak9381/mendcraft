@@ -39,14 +39,16 @@ export const PART_DEMO: SimStep[] = [
 
 /**
  * Frozen demo for the UI-design mode (reachable via ?mode=ui&sim=1): a login
- * screen (rules fallback, no AI) → recolour then resize the sign-in button →
- * export the HTML. All deterministic, no network.
+ * screen (rules fallback, no AI) → select the sign-in button → recolour it green,
+ * make it taller, enlarge the heading (all visible edits) → export the HTML.
+ * All deterministic, no network.
  */
 export const UI_DEMO: SimStep[] = [
   { label: 'Login screen', utterance: 'login screen' },
   { label: 'Select the button', utterance: 'select the button' },
-  { label: 'Make the button blue', utterance: 'make the button blue' },
-  { label: 'Make it 48 pixels tall', utterance: 'make it 48 pixels tall' },
+  { label: 'Make the button green', utterance: 'make the button green' },
+  { label: 'Make it 56 pixels tall', utterance: 'make it 56 pixels tall' },
+  { label: 'Bigger heading', utterance: 'bigger heading' },
   { label: 'Export the HTML', action: undefined },
 ];
 

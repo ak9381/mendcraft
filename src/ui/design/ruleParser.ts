@@ -106,8 +106,8 @@ export function parseUiCommand(utterance: string): UiParse {
   if (/\blog ?in\b/.test(s) || /\bsign ?in\b/.test(s) || (has('login')) ) {
     return { generate: 'login', preset: mobile ? 'mobile' : 'desktop' };
   }
-  if (has('landing') || has('hero')) return { generate: 'landing' };
-  if (has('pricing')) return { generate: 'pricing' };
+  if (has('landing') || has('hero')) return { generate: 'landing', preset: mobile ? 'mobile' : 'desktop' };
+  if (has('pricing')) return { generate: 'pricing', preset: mobile ? 'mobile' : 'desktop' };
 
   // New frame.
   if (has('frame') || (has('screen') && (has('new') || has('add') || mobile || /\bdesktop\b/.test(s)))) {

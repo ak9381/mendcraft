@@ -198,6 +198,7 @@ setBadge('rules');
 
 // ---- controller + renderer (mode-provided) ----
 
+if (mode.id === 'ui') viewportEl.classList.add('ui-mode');
 const controller: ModeController = await mode.createController();
 const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controller, (id) => {
   if (!id) return;
@@ -269,6 +270,8 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   if (controller.isDesignRequest(utterance)) {
     const { source, step, clarify } = await controller.generate(utterance);
     setBadge(source);
+    // Keep the op/JSON panel fresh — reflect this command, not the previous op.
+    opJsonEl.textContent = JSON.stringify({ generate: utterance, source }, null, 2);
     if (clarify) {
       opJsonEl.textContent = '';
       verifierEl.textContent = clarify;
@@ -350,7 +353,17 @@ btnRedo.addEventListener('click', () => {
   controller.applyOp({ op: 'redo' });
   renderAll();
 });
-btnExport.addEventListener('click', () => {
+btnExport.addEventListener('click', async () => {
+  // UI mode opens an accessible export panel (preview + code + download/copy)
+  // instead of silently downloading files; other modes export directly.
+  if (mode.id === 'ui') {
+    const { uiHtmlOf, uiSvgOf } = await import('./ui/design/controller');
+    const html = uiHtmlOf(controller);
+    if (!html) { say('Nothing to export yet — create a screen first.'); return; }
+    const { openExportPanel } = await import('./ui/design/exportPanel');
+    openExportPanel({ html, svg: uiSvgOf(controller), onStatus: (m) => say(m) });
+    return;
+  }
   controller.export();
   say(`${mode.exportLabel}.`);
 });

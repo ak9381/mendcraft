@@ -121,3 +121,9 @@ export function uiHtmlOf(controller: ModeController): string | null {
   const frame = activeFrame(controller.snapshot() as import('./doc').UiDoc);
   return frame ? toHtml(frame) : null;
 }
+
+/** The active frame's flat SVG (for the export panel's Download SVG button). */
+export function uiSvgOf(controller: ModeController): string | null {
+  const frame = activeFrame(controller.snapshot() as import('./doc').UiDoc);
+  return frame ? toSvg(frame) : null;
+}

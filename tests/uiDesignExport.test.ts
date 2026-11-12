@@ -34,8 +34,9 @@ describe('HTML export', () => {
 
   it('escapes user text', () => {
     const frame = buildUiTemplate('login')!;
-    // Inject a hostile heading and ensure it is escaped in the output.
-    frame.root.children[0] = { ...(frame.root.children[0] as never), text: '<script>x</script>' } as never;
+    // Inject a hostile heading (nested in the login card) and ensure it is escaped.
+    const card = frame.root.children[0];
+    if (card.type === 'stack') card.children[0] = { ...(card.children[0] as never), text: '<script>x</script>' } as never;
     const out = toHtml(frame);
     expect(out).not.toContain('<script>x</script>');
     expect(out).toContain('&lt;script&gt;');
@@ -44,6 +45,12 @@ describe('HTML export', () => {
   it('renders a landing hero with an image placeholder (alt text)', () => {
     const out = toHtml(buildUiTemplate('landing')!);
     expect(out).toContain('<img alt="Image placeholder"');
+  });
+
+  it('the login card exports a fixed max-width so the preview matches the export', () => {
+    const out = toHtml(buildUiTemplate('login')!);
+    expect(out).toContain('width:400px');
+    expect(out).toContain('max-width:100%');
   });
 });
 

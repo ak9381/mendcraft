@@ -42,6 +42,7 @@ function styleFor(node: UiNode): string {
       parts.push(`align-items:${alignToFlex(node.align)}`, `justify-content:${justifyToFlex(node.justify)}`);
       if (node.fill) parts.push(`background:${node.fill}`);
       if (node.radius) parts.push(`border-radius:${node.radius}px`);
+      if (node.width !== undefined) parts.push(`width:${node.width}px`, 'max-width:100%');
       break;
     }
     case 'text':

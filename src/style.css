@@ -574,6 +574,99 @@ button.primary:hover {
 }
 .hint-buttons button { font-size: 1em; padding: 0.6em 0.9em; }
 
+/* UI mode draws a real empty artboard in the canvas, so the quick-start card
+   drops to the bottom instead of covering the artboard's placeholder text. */
+#viewport.ui-mode .empty-hint {
+  top: auto;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: rgba(20, 22, 28, 0.92);
+}
+
+/* ---- UI-mode export panel (preview + code + actions) ---- */
+.export-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vmin;
+  background: rgba(8, 10, 14, 0.62);
+}
+.export-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 94vw);
+  height: min(760px, 92vh);
+  background: #0f1116;
+  color: #e5e7eb;
+  border: 1px solid #262a33;
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75em 1em;
+  border-bottom: 1px solid #262a33;
+}
+.export-head h2 { margin: 0; font-size: 1.1em; }
+.export-close {
+  font-size: 1em;
+  line-height: 1;
+  padding: 0.35em 0.6em;
+}
+.export-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  background: #262a33;
+}
+.export-preview,
+.export-codewrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #0f1116;
+}
+.export-sublabel {
+  padding: 0.5em 0.9em;
+  font-size: 0.78em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+.export-iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+.export-code {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 0 0.9em 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #cbd5e1;
+  white-space: pre;
+}
+.export-actions {
+  display: flex;
+  gap: 0.6em;
+  padding: 0.8em 1em;
+  border-top: 1px solid #262a33;
+}
+.export-actions button { padding: 0.55em 0.9em; }
+.export-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .hand-overlay {
   position: absolute;
   inset: 0;

@@ -152,21 +152,34 @@ export function createUiRenderer(
     const f = frame();
     frameEl.replaceChildren();
     if (!f) {
-      frameEl.style.width = '0';
-      frameEl.style.height = '0';
+      // A real, empty Desktop 1440×900 artboard (scaled to fit) with a label
+      // above it — so entering UI mode shows an actual frame, not a placeholder.
+      const EW = 1440;
+      const EH = 900;
+      fitScale({ w: EW, h: EH } as Frame);
+      frameEl.style.width = `${EW}px`;
+      frameEl.style.height = `${EH}px`;
+      frameEl.style.background = '#fff';
+      frameEl.style.border = '';
+      frameEl.style.boxShadow = '0 1px 3px rgba(15,23,42,.15), 0 8px 24px rgba(15,23,42,.08)';
+
+      const label = document.createElement('div');
+      label.textContent = 'Desktop 1440×900';
+      Object.assign(label.style, {
+        position: 'absolute', left: '0', top: '-26px', fontSize: '13px',
+        fontWeight: '600', color: '#64748b', fontFamily: FONT_STACK, whiteSpace: 'nowrap',
+      } as CSSStyleDeclaration);
+      frameEl.appendChild(label);
+
       const empty = document.createElement('div');
       empty.className = 'ui-empty';
-      empty.textContent = 'No frame yet — pick a quick-start below, or say "login screen".';
+      empty.textContent = 'Empty frame — say "login screen" or pick a quick-start.';
       Object.assign(empty.style, {
         position: 'absolute', inset: '0', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', color: '#64748b', fontFamily: FONT_STACK, padding: '24px', textAlign: 'center',
+        justifyContent: 'center', color: '#94a3b8', fontFamily: FONT_STACK, fontSize: '22px',
+        padding: '24px', textAlign: 'center',
       } as CSSStyleDeclaration);
-      frameEl.style.width = '420px';
-      frameEl.style.height = '300px';
-      frameEl.style.background = '#fff';
-      frameEl.style.border = '1px dashed #cbd5e1';
       frameEl.appendChild(empty);
-      fitScale({ w: 420, h: 300 } as Frame);
       return;
     }
     fitScale(f);
@@ -186,17 +199,22 @@ export function createUiRenderer(
     };
     for (const c of f.root.children) draw(c);
 
-    // A corner resize handle on the current selection (if it's a frame node).
+    // A corner resize handle — only on nodes set_size can actually resize
+    // (image/rect/button/input); drawing it on text/stacks would be a no-op.
     if (sel) {
       const box = boxes.get(sel);
-      if (box) {
+      const node = box ? locate(doc(), sel)?.node : undefined;
+      const resizable = !!node && (node.type === 'image' || node.type === 'rect' || node.type === 'button' || node.type === 'input');
+      if (box && resizable) {
         const h = document.createElement('div');
         Object.assign(h.style, {
-          position: 'absolute', left: `${box.x + box.w - 6}px`, top: `${box.y + box.h - 6}px`,
-          width: '12px', height: '12px', background: '#2563eb', borderRadius: '3px',
+          position: 'absolute', left: `${box.x + box.w - 8}px`, top: `${box.y + box.h - 8}px`,
+          width: '16px', height: '16px', background: '#2563eb', borderRadius: '3px',
           border: '2px solid #fff', cursor: 'nwse-resize', zIndex: '5',
         } as CSSStyleDeclaration);
         h.dataset.handle = sel;
+        h.setAttribute('role', 'slider');
+        h.setAttribute('aria-label', 'Resize selection (drag)');
         frameEl.appendChild(h);
       }
     }
@@ -260,8 +278,47 @@ export function createUiRenderer(
   }
   function endDrag(): void { drag = null; }
 
+  // ---- drag the corner handle to resize the selection (one set_size on release) ----
+  let rz: { id: string; startX: number; startY: number; w: number; h: number; el: HTMLElement | null } | null = null;
+
+  function beginResize(clientX: number, clientY: number, id: string): boolean {
+    const box = boxes.get(id);
+    if (!box) return false;
+    const el = frameEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    rz = { id, startX: clientX, startY: clientY, w: box.w, h: box.h, el };
+    return true;
+  }
+  function liveResize(clientX: number, clientY: number): { w: number; h: number } | null {
+    if (!rz) return null;
+    const w = Math.max(16, rz.w + (clientX - rz.startX) / scale);
+    const h = Math.max(16, rz.h + (clientY - rz.startY) / scale);
+    return { w, h };
+  }
+  function doResize(clientX: number, clientY: number): void {
+    const now = liveResize(clientX, clientY);
+    if (!now || !rz?.el) return;
+    rz.el.style.width = `${now.w}px`;
+    rz.el.style.height = `${now.h}px`;
+  }
+  function endResize(clientX: number, clientY: number): void {
+    const now = liveResize(clientX, clientY);
+    const target = rz?.id;
+    rz = null;
+    if (!now || !target) { render(); return; }
+    const snap = (n: number) => Math.max(4, Math.round(n / 4) * 4); // snapped to 4px
+    controller.applyOp({ op: 'set_size', target, nums: { w: snap(now.w), h: snap(now.h) } });
+    render();
+  }
+
   // ---- native pointer + keyboard ----
   scroll.addEventListener('mousedown', (e) => {
+    const handleId = (e.target as HTMLElement)?.dataset?.handle;
+    if (handleId) { // grabbed the resize handle, not a node
+      beginResize(e.clientX, e.clientY, handleId);
+      container.focus();
+      e.preventDefault();
+      return;
+    }
     const id = pick(e.clientX, e.clientY);
     onSelect(id);
     if (id) controller.selectId(id);
@@ -270,9 +327,15 @@ export function createUiRenderer(
     if (id) beginDrag(e.clientX, e.clientY);
   });
   window.addEventListener('mousemove', onMove);
-  function onMove(e: MouseEvent): void { if (drag) doDrag(e.clientX, e.clientY); }
+  function onMove(e: MouseEvent): void {
+    if (rz) doResize(e.clientX, e.clientY);
+    else if (drag) doDrag(e.clientX, e.clientY);
+  }
   window.addEventListener('mouseup', onUp);
-  function onUp(): void { endDrag(); }
+  function onUp(e: MouseEvent): void {
+    if (rz) endResize(e.clientX, e.clientY);
+    else endDrag();
+  }
 
   function siblings(id: string): { ids: string[]; idx: number } | null {
     const loc = locate(doc(), id);

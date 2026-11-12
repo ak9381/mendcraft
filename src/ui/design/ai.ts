@@ -237,6 +237,7 @@ function buildNode(raw: unknown, used: Set<string>, budget: { n: number }): UiNo
         justify: (raw.justify === 'center' || raw.justify === 'end' || raw.justify === 'between' || raw.justify === 'start') ? raw.justify : 'start',
         children: kids,
         ...(toColor(raw.fill) ? { fill: toColor(raw.fill), radius: num('radius') ?? 12 } : {}),
+        ...(num('width') !== undefined ? { width: num('width') } : {}),
       };
       return node;
     }

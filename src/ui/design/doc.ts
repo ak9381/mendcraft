@@ -32,6 +32,8 @@ export interface StackNode {
   /** Optional card background + corner radius (used by pricing cards / sections). */
   fill?: string;
   radius?: number;
+  /** Optional fixed width (px) — a centred card/column, e.g. a ~400px login. */
+  width?: number;
   children: UiNode[];
 }
 
@@ -209,8 +211,10 @@ export function intrinsicSize(node: UiNode): { w: number; h: number } {
       return { w: node.w, h: node.h };
     case 'rect':
       return { w: node.w, h: node.h };
-    case 'stack':
-      return stackIntrinsic(node);
+    case 'stack': {
+      const s = stackIntrinsic(node);
+      return node.width !== undefined ? { w: node.width, h: s.h } : s;
+    }
   }
 }
 
@@ -270,7 +274,10 @@ function layoutStack(stack: StackNode, box: Box, out: Map<string, Box>): void {
     const child = stack.children[i];
     const cm = mainSize(i);
     const intrinsicCross = mainIsW ? sizes[i].h : sizes[i].w;
-    const stretch = stack.align === 'stretch' && child.type !== 'image';
+    // A stack with an explicit width keeps it (a centred card) even inside a
+    // stretch parent; everything else stretches to fill the cross axis.
+    const fixedCross = !mainIsW && child.type === 'stack' && child.width !== undefined;
+    const stretch = stack.align === 'stretch' && child.type !== 'image' && !fixedCross;
     const cc = stretch ? innerCross : Math.min(intrinsicCross, innerCross);
     let crossPos = mainIsW ? inner.y : inner.x;
     if (!stretch) {

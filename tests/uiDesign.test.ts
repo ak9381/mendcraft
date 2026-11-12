@@ -112,8 +112,8 @@ describe('ui engine — build + edit', () => {
     expect(root.padding).toBe(40);
     expect(root.align).toBe('center');
     run(e, { op: 'set_style', target: 'heading', nums: { size: 40 } });
-    const h = activeFrame(e.getState())!.root.children.find((c) => c.type === 'text' && c.role === 'heading');
-    expect(h && h.type === 'text' && h.size).toBe(40);
+    const h = locate(e.getState(), e.resolveRef('heading')!)!.node;
+    expect(h.type === 'text' && h.size).toBe(40);
   });
 
   it('move reorders within the parent stack; delete removes a node', () => {
@@ -163,13 +163,28 @@ describe('ui layout (pure)', () => {
     e.loadFrame(buildUiTemplate('login', 'mobile')!);
     const frame = activeFrame(e.getState())!;
     const boxes = layoutFrame(frame);
-    const btn = frame.root.children.find((c) => c.type === 'button')!;
-    const box = boxes.get(btn.id)!;
-    // align=stretch → full content width (frame 390 minus 2*padding 32 = 326).
-    expect(box.w).toBe(390 - 32 * 2);
+    // The login content sits in a centred card; on a mobile frame the 400px card
+    // clamps to the frame's inner width (390 − 2*32 = 326) and align=stretch fills it.
+    const card = frame.root.children[0];
+    expect(card.type).toBe('stack');
+    const kids = card.type === 'stack' ? card.children : [];
+    const btn = kids.find((c) => c.type === 'button')!;
+    expect(boxes.get(btn.id)!.w).toBe(390 - 32 * 2);
     // children stack top-to-bottom: each y is greater than the previous.
-    const ys = frame.root.children.map((c) => boxes.get(c.id)!.y);
+    const ys = kids.map((c) => boxes.get(c.id)!.y);
     for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
+  });
+
+  it('a desktop login is a centred ~400px card, not a full-width form', () => {
+    const frame = buildUiTemplate('login', 'desktop')!;
+    const boxes = layoutFrame(frame);
+    const card = frame.root.children[0];
+    expect(card.type === 'stack' && card.width).toBe(400);
+    const box = boxes.get(card.id)!;
+    expect(box.w).toBe(400); // fixed card width, not the 1440 frame
+    // centred horizontally within the frame.
+    expect(box.x).toBeGreaterThan(300);
+    expect(Math.round(box.x + box.w / 2)).toBe(720);
   });
 
   it('a pricing row lays three cards side by side', () => {
@@ -299,7 +314,20 @@ describe('ui templates', () => {
     }
     const login = buildUiTemplate('login', 'mobile')!;
     expect(login.preset).toBe('mobile');
-    expect(login.root.children.some((c) => c.type === 'input' && c.inputType === 'password')).toBe(true);
-    expect(login.root.children.some((c) => c.type === 'button')).toBe(true);
+    const card = login.root.children[0];
+    const kids = card.type === 'stack' ? card.children : [];
+    expect(kids.some((c) => c.type === 'input' && c.inputType === 'password')).toBe(true);
+    expect(kids.some((c) => c.type === 'button')).toBe(true);
+  });
+
+  it('landing + pricing scale to a mobile frame without overflow', () => {
+    const landing = buildUiTemplate('landing', 'mobile')!;
+    expect(landing.preset).toBe('mobile');
+    const img = landing.root.children.find((c) => c.type === 'image')!;
+    expect(img.type === 'image' && img.w).toBeLessThanOrEqual(390);
+    const pricing = buildUiTemplate('pricing', 'mobile')!;
+    const cardRow = pricing.root.children.find((c) => c.type === 'stack')!;
+    // on mobile the three cards stack in a column.
+    expect(cardRow.type === 'stack' && cardRow.direction).toBe('column');
   });
 });
