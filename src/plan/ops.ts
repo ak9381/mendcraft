@@ -36,6 +36,10 @@ export type PlanOpName =
   | 'set_height'
   | 'select_set'
   | 'batch'
+  | 'add_text'
+  | 'set_text'
+  | 'set_font'
+  | 'set_size'
   | 'undo'
   | 'redo';
 
@@ -44,6 +48,7 @@ export const PLAN_OP_NAMES: readonly PlanOpName[] = [
   'move', 'offset', 'set_thickness', 'rename', 'delete', 'select',
   'set_swing', 'move_opening', 'set_width', 'move_end',
   'add_fixture', 'move_many', 'rotate', 'set_sill', 'set_height', 'select_set', 'batch',
+  'add_text', 'set_text', 'set_font', 'set_size',
   'undo', 'redo',
 ] as const;
 
@@ -151,6 +156,33 @@ export interface SetHeightOp {
   target: string;
   height: number;
 }
+/** Place a text annotation at (x, y) with an optional font height (mm). */
+export interface AddTextOp {
+  op: 'add_text';
+  x: number;
+  y: number;
+  text: string;
+  size?: number;
+}
+/** Edit a text label's content. */
+export interface SetTextOp {
+  op: 'set_text';
+  target: string;
+  text: string;
+}
+/** Set a text label's font height (mm). */
+export interface SetFontOp {
+  op: 'set_font';
+  target: string;
+  size: number;
+}
+/** Resize a fixture/component: new width and/or depth in mm. */
+export interface SetSizeOp {
+  op: 'set_size';
+  target: string;
+  w?: number;
+  d?: number;
+}
 /** Replace the multi-selection (empty clears). Last id becomes the primary. */
 export interface SelectSetOp {
   op: 'select_set';
@@ -221,6 +253,10 @@ export type PlanOp =
   | RotateOp
   | SetSillOp
   | SetHeightOp
+  | AddTextOp
+  | SetTextOp
+  | SetFontOp
+  | SetSizeOp
   | SelectSetOp
   | BatchOp
   | SetLengthOp
@@ -245,6 +281,7 @@ export const PLAN_LIMITS = {
   fixtureSize: { min: 100, max: 10_000 },
   sill: { min: 0, max: 3_000 },
   height: { min: 100, max: 6_000 },
+  fontSize: { min: 50, max: 3_000 },
 } as const;
 
 export const DEFAULTS = {
@@ -256,6 +293,7 @@ export const DEFAULTS = {
   doorHeight: 2100,
   windowSill: 900,
   windowHeight: 1200,
+  fontSize: 300,
 } as const;
 
 export type PlanValidation = { ok: true; op: PlanOp } | { ok: false; error: string };
@@ -440,6 +478,42 @@ export function validatePlanOp(raw: unknown): PlanValidation {
       const height = mm('height', PLAN_LIMITS.height.min, PLAN_LIMITS.height.max);
       if (height === undefined) return fail('set_height needs a numeric height');
       return { ok: true, op: { op: 'set_height', target: t, height } };
+    }
+    case 'add_text': {
+      const { coord, fontSize } = PLAN_LIMITS;
+      const x = mm('x', coord.min, coord.max);
+      const y = mm('y', coord.min, coord.max);
+      const text = str(raw.text);
+      if (x === undefined || y === undefined) return fail('add_text needs numeric x, y');
+      if (!text) return fail('add_text needs a text string');
+      const size = mm('size', fontSize.min, fontSize.max) ?? DEFAULTS.fontSize;
+      return { ok: true, op: { op: 'add_text', x, y, text, size } };
+    }
+    case 'set_text': {
+      const t = target();
+      const text = str(raw.text);
+      if (!t) return fail('set_text needs a target');
+      if (text === undefined) return fail('set_text needs a text string');
+      return { ok: true, op: { op: 'set_text', target: t, text } };
+    }
+    case 'set_font': {
+      const t = target();
+      if (!t) return fail('set_font needs a target');
+      const size = mm('size', PLAN_LIMITS.fontSize.min, PLAN_LIMITS.fontSize.max);
+      if (size === undefined) return fail('set_font needs a numeric size');
+      return { ok: true, op: { op: 'set_font', target: t, size } };
+    }
+    case 'set_size': {
+      const t = target();
+      if (!t) return fail('set_size needs a target');
+      const { fixtureSize } = PLAN_LIMITS;
+      const w = mm('w', fixtureSize.min, fixtureSize.max);
+      const dd = mm('d', fixtureSize.min, fixtureSize.max);
+      if (w === undefined && dd === undefined) return fail('set_size needs a numeric w or d');
+      const op: SetSizeOp = { op: 'set_size', target: t };
+      if (w !== undefined) op.w = w;
+      if (dd !== undefined) op.d = dd;
+      return { ok: true, op };
     }
     case 'select_set': {
       const ids = Array.isArray(raw.ids) ? raw.ids.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : undefined;

@@ -11,7 +11,8 @@ import type { PaletteItemSpec } from '../core/palette';
 import { GRID_MM, measureSnap, snapToGrid, snapToObjects, snapValueToGrid, type MeasureSnapKind } from './snap';
 import { chainClick, emptyChain, normRect, ortho45, type WallChainState } from './drawTools';
 import { clampOpeningOffset, nearestWall, projectToWall } from './hosting';
-import { fixtureHandlePoint, handleAngle, rectHits, snapAngle, toggleSelection } from './editing';
+import { fixtureHandlePoint, fixturePolygon, handleAngle, rectHits, snapAngle, toggleSelection } from './editing';
+import { fixtureSpec, snapFixtureToWall, type FixtureSpec } from './fixtures';
 import {
   mmToMetresLabel,
   pointAlong,
@@ -166,7 +167,8 @@ export function nudgeSelected(ctx: ToolContext, dx: number, dy: number): boolean
   const d = docOf(ctx);
   const ids = selectionIds(ctx);
   if (ids.length === 0) return false;
-  const movable = ids.filter((id) => d.walls.some((w) => w.id === id) || d.fixtures.some((f) => f.id === id));
+  const movable = ids.filter((id) =>
+    d.walls.some((w) => w.id === id) || d.fixtures.some((f) => f.id === id) || d.texts.some((t) => t.id === id));
   if (movable.length > 0)
     return ctx.apply({ op: 'move_many', ids: movable, dx, dy }).ok;
   const o = d.openings.find((x) => x.id === ids[0]);
@@ -663,24 +665,164 @@ function createMeasureTool(ctx: ToolContext): Tool {
 }
 
 function createTextTool(ctx: ToolContext): Tool {
+  function place(p: ToolPointer): void {
+    const world = snapToGrid(ctx.toWorld(p.x, p.y));
+    ctx.editText?.(p.x, p.y, '', (text) => {
+      if (text.trim()) ctx.apply({ op: 'add_text', nums: { x: world.x, y: world.y }, text: text.trim() });
+    });
+  }
   return {
     id: 'text',
     label: 'Text',
     icon: 'T',
     shortcut: 't',
-    stub: true,
-    hint: 'Text labels are a placeholder — coming in the next update.',
-    onActivate() {
-      ctx.setStatus('Text tool is a placeholder — coming in the next update.');
-    },
-    onDown() {
-      ctx.setStatus('Text tool is a placeholder — coming in the next update.');
+    placeable: true,
+    hint: 'Click to place a text label, then type. Double-click a label to edit it; set the font size in the properties panel.',
+    onDown(p) {
+      place(p);
       return true;
+    },
+    onPlace: place,
+  };
+}
+
+/** Tool id for placing a component of a given kind. */
+export const fixtureToolId = (kind: string): string => `fx:${kind}`;
+
+/** The component kind a fixture tool id refers to (null for non-fixture tools). */
+export function fixtureKindOf(toolId: string): string | null {
+  return toolId.startsWith('fx:') ? toolId.slice(3) : null;
+}
+
+/** Generic click/drag-to-place tool for a catalogue component (columns,
+ *  furniture, sanitary). Shows a ghost footprint; wall-hugging items back
+ *  against a nearby wall, everything else grid-snaps. */
+function createFixtureTool(ctx: ToolContext, spec: FixtureSpec): Tool {
+  /** Resolve the placement (centre + rotation) under the cursor. */
+  function resolve(p: ToolPointer): { x: number; y: number; w: number; d: number; rotation: number } {
+    const world = ctx.toWorld(p.x, p.y);
+    const base = { x: world.x, y: world.y, w: spec.w, d: spec.d };
+    if (spec.snapsToWall) {
+      const snapped = snapFixtureToWall(base, docOf(ctx).walls, Math.max(1500, 60 / ctx.scale()));
+      if (snapped) return { ...base, ...snapped };
+    }
+    const g = snapToGrid(world);
+    return { ...base, x: g.x, y: g.y, rotation: 0 };
+  }
+
+  function ghost(p: ToolPointer): void {
+    const f = resolve(p);
+    ctx.setOverlay((ov) => {
+      const pts = fixturePolygon({ id: '', kind: spec.kind, ...f }).map((q) => ctx.toScreen(q));
+      for (let i = 0; i < pts.length; i++) ov.line(pts[i], pts[(i + 1) % pts.length], '#b45309', 1.5);
+      ov.label(ctx.toScreen({ x: f.x, y: f.y }), spec.label, '#92400e');
+    });
+  }
+
+  function place(p: ToolPointer): void {
+    if (ctx.overTrash(p.x, p.y)) {
+      ctx.setOverlay(null);
+      return;
+    }
+    const f = resolve(p);
+    ctx.apply({ op: 'add_fixture', kind: spec.kind, nums: { x: f.x, y: f.y, w: f.w, d: f.d, rotation: f.rotation } });
+    ctx.setStatus(`${spec.label} placed — Ctrl+R rotates, drag to move.`);
+  }
+
+  return {
+    id: fixtureToolId(spec.kind),
+    label: spec.label,
+    icon: spec.icon,
+    shortcut: '',
+    placeable: true,
+    hint: `Hover to preview, click (or drag from the palette) to place a ${spec.label.toLowerCase()}.${spec.snapsToWall ? ' Backs against a nearby wall.' : ''}`,
+    onHover: ghost,
+    onMove: ghost,
+    onDown(p) {
+      place(p);
+      return true;
+    },
+    onPlace: place,
+    onCancel: () => ctx.setOverlay(null),
+    onDeactivate: () => ctx.setOverlay(null),
+  };
+}
+
+/** Stairs: drag a straight run to set its length + direction (click places a
+ *  default run). Stored as a `stairs` fixture (w = run length, d = width). */
+function createStairsTool(ctx: ToolContext): Tool {
+  const spec = fixtureSpec('stairs');
+  let start: Point | null = null;
+
+  function commit(run: { a: Point; b: Point }): void {
+    const len = Math.hypot(run.b.x - run.a.x, run.b.y - run.a.y);
+    if (len < 500) {
+      ctx.setStatus('Run too short — drag further to set the stair length.');
+      return;
+    }
+    const angle = (Math.atan2(run.b.y - run.a.y, run.b.x - run.a.x) * 180) / Math.PI;
+    const centre = { x: (run.a.x + run.b.x) / 2, y: (run.a.y + run.b.y) / 2 };
+    ctx.apply({ op: 'add_fixture', kind: 'stairs', nums: { x: centre.x, y: centre.y, w: len, d: spec.d, rotation: angle } });
+    ctx.setStatus(`Stairs ${mmToMetresLabel(len)} placed.`);
+  }
+
+  function overlay(a: Point, b: Point): void {
+    ctx.setOverlay((ov) => {
+      const sa = ctx.toScreen(a);
+      const sb = ctx.toScreen(b);
+      ov.line(sa, sb, '#64748b', 2);
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      ov.label({ x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 - 10 }, `Stairs ${mmToMetresLabel(len)}`, '#475569');
+    });
+  }
+
+  return {
+    id: 'stairs',
+    label: 'Stairs',
+    icon: spec.icon,
+    shortcut: 's',
+    placeable: true,
+    hint: 'Drag a straight run to set the stair length and direction (step lines + arrow). Click once to drop a default run.',
+    onDown(p) {
+      start = snapToGrid(ctx.toWorld(p.x, p.y));
+      return true;
+    },
+    onMove(p) {
+      if (!start) return;
+      overlay(start, snapToGrid(ortho45(start, ctx.toWorld(p.x, p.y))));
+    },
+    onUp(p) {
+      if (!start) return;
+      const end = snapToGrid(ortho45(start, ctx.toWorld(p.x, p.y)));
+      ctx.setOverlay(null);
+      if (Math.hypot(end.x - start.x, end.y - start.y) < 500) {
+        // A plain click: drop a default-length run pointing east.
+        commit({ a: start, b: { x: start.x + spec.w, y: start.y } });
+      } else {
+        commit({ a: start, b: end });
+      }
+      start = null;
+    },
+    onPlace(p) {
+      const g = snapToGrid(ctx.toWorld(p.x, p.y));
+      commit({ a: { x: g.x - spec.w / 2, y: g.y }, b: { x: g.x + spec.w / 2, y: g.y } });
+      ctx.setOverlay(null);
+    },
+    onCancel() {
+      start = null;
+      ctx.setOverlay(null);
     },
   };
 }
 
+/** Component kinds shown in the compact "Furniture" palette flyout. */
+export const FURNITURE_FLYOUT: string[] = [
+  'column-round', 'bed-single', 'bed-double', 'sofa', 'dining-table', 'chair',
+  'desk', 'kitchen-counter', 'wardrobe', 'toilet', 'sink', 'bathtub', 'shower',
+];
+
 export function createPlanTools(ctx: ToolContext): Tool[] {
+  const fixtureTools = ['column-square', ...FURNITURE_FLYOUT].map((k) => createFixtureTool(ctx, fixtureSpec(k)));
   return [
     createSelectTool(ctx),
     createWallTool(ctx),
@@ -690,17 +832,28 @@ export function createPlanTools(ctx: ToolContext): Tool[] {
     createHostedTool(ctx, 'opening'),
     createDimTool(ctx),
     createMeasureTool(ctx),
+    createStairsTool(ctx),
     createTextTool(ctx),
+    ...fixtureTools,
   ];
 }
 
+const toSpec = (t: Tool): PaletteItemSpec => ({
+  toolId: t.id, label: t.label, icon: t.icon, shortcut: t.shortcut, placeable: t.placeable, stub: t.stub,
+});
+
+/** Palette layout: the main dock, with every furniture/sanitary component tucked
+ *  into one compact "Furniture" flyout so the dock stays short. */
 export function paletteItems(tools: Tool[]): PaletteItemSpec[] {
-  return tools.map((t) => ({
-    toolId: t.id,
-    label: t.label,
-    icon: t.icon,
-    shortcut: t.shortcut,
-    placeable: t.placeable,
-    stub: t.stub,
-  }));
+  const byId = (id: string) => tools.find((t) => t.id === id);
+  const flyoutIds = new Set(FURNITURE_FLYOUT.map(fixtureToolId));
+  const dock: PaletteItemSpec[] = [];
+  for (const t of tools) {
+    if (flyoutIds.has(t.id)) continue;
+    // Give the square-column tool the plain "Column" label on the dock.
+    dock.push(t.id === fixtureToolId('column-square') ? { ...toSpec(t), label: 'Column' } : toSpec(t));
+  }
+  const group = FURNITURE_FLYOUT.map((k) => byId(fixtureToolId(k))).filter((t): t is Tool => !!t).map(toSpec);
+  dock.push({ toolId: 'furniture-group', label: 'Furniture', icon: '🛋', shortcut: '', group });
+  return dock;
 }

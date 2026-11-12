@@ -45,9 +45,13 @@ function opMessage(op: PlanOp, id: string | undefined, engine: PlanEngine): stri
     case 'batch': return `${op.ops.length} edits applied (one step).`;
     case 'move_many': return `${op.ids.length} item${op.ids.length > 1 ? 's' : ''} moved.`;
     case 'rotate': return 'Rotated.';
-    case 'add_fixture': return 'Fixture added.';
+    case 'add_fixture': return `${op.kind.replace(/-/g, ' ')} added.`;
     case 'set_sill': return 'Sill height set.';
     case 'set_height': return 'Height set.';
+    case 'set_size': return 'Resized.';
+    case 'add_text': return 'Label added.';
+    case 'set_text': return 'Label updated.';
+    case 'set_font': return 'Font size set.';
     default: return 'Done.';
   }
 }

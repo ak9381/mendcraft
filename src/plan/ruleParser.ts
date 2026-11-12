@@ -13,7 +13,28 @@
 //   "dimension this wall" / "undo"
 
 import type { Clarify } from '../core/ruleParser';
+import type { Point } from './doc';
+import { fixtureSpec } from './fixtures';
 import type { PlanTemplateName } from './templates';
+
+// The renderer updates this as the pointer moves so "add a bed HERE" places the
+// component under the cursor. Null until the pointer has moved over the canvas.
+let planCursor: Point | null = null;
+export function setPlanCursor(p: Point | null): void {
+  planCursor = p;
+}
+
+/** Spoken component words → catalogue kind (see plan/fixtures.ts). */
+const FIXTURE_WORDS: Record<string, string> = {
+  bed: 'bed-double', sofa: 'sofa', couch: 'sofa', settee: 'sofa',
+  table: 'dining-table', chair: 'chair', stool: 'chair', desk: 'desk',
+  counter: 'kitchen-counter', worktop: 'kitchen-counter',
+  wardrobe: 'wardrobe', closet: 'wardrobe', cupboard: 'wardrobe',
+  toilet: 'toilet', wc: 'toilet', loo: 'toilet', sink: 'sink', basin: 'sink',
+  bathtub: 'bathtub', bath: 'bathtub', tub: 'bathtub', shower: 'shower',
+  column: 'column-square', pillar: 'column-square', post: 'column-square',
+  stairs: 'stairs', staircase: 'stairs', stair: 'stairs', steps: 'stairs',
+};
 
 export interface PlanGenerate {
   generate: PlanTemplateName;
@@ -42,7 +63,7 @@ const WORD_FIXES: Record<string, string> = {
   centimetre: 'cm', centimetres: 'cm', centimeter: 'cm', centimeters: 'cm',
   millimetre: 'mm', millimetres: 'mm', millimeter: 'mm', millimeters: 'mm',
   bedrooms: 'bedroom', rooms: 'room', doors: 'door', windows: 'window',
-  walls: 'wall', thick: 'thickness', wide: 'thickness',
+  walls: 'wall', thick: 'thickness',
 };
 
 const isNum = (t: string | undefined): boolean => t !== undefined && /^-?\d+(\.\d+)?$/.test(t);
@@ -123,6 +144,44 @@ export function parsePlanCommand(utterance: string): PlanParse {
   if (['delete', 'remove', 'erase'].includes(tokens[0])) {
     const target = tokens.slice(1).filter((t) => t !== 'the').join(' ') || 'selected';
     return { op: 'delete', target };
+  }
+
+  // Rotate the selection: "rotate it", "turn it 45", "rotate".
+  if (has('rotate') || has('turn')) {
+    const angle = nums.length ? nums[0] : 90;
+    return { op: 'rotate', target: 'selected', nums: { angle } };
+  }
+
+  // Resize a component: "make it 2 metres wide" / "half a metre deep".
+  // "...wall ... wide" stays a wall-thickness edit (back-compat with "200 wide").
+  if (has('wide') || has('deep')) {
+    if (nums.length === 0) return clarify('How wide, in metres?');
+    if (has('wall') || has('thickness'))
+      return { op: 'set_thickness', target: 'selected', nums: { thickness: nums[0] }, unit: unitOf(tokens, 'mm') };
+    const field = has('deep') ? 'd' : 'w';
+    return { op: 'set_size', target: 'selected', nums: { [field]: nums[0] }, unit: unitOf(tokens, 'm') };
+  }
+
+  // Place a component at the cursor: "add a bed here", "put a sofa", "stairs".
+  const fixtureTok = tokens.find((t) => FIXTURE_WORDS[t] !== undefined);
+  if (fixtureTok) {
+    let kind = FIXTURE_WORDS[fixtureTok];
+    if (kind === 'bed-double' && has('single')) kind = 'bed-single';
+    if (kind === 'column-square' && has('round')) kind = 'column-round';
+    const spec = fixtureSpec(kind);
+    const at = planCursor ?? { x: 0, y: 0 };
+    return { op: 'add_fixture', kind, nums: { x: at.x, y: at.y, w: spec.w, d: spec.d } };
+  }
+
+  // Text annotation: "add a label Kitchen", "text Living room".
+  if (tokens[0] === 'label' || tokens[0] === 'text' || has('label')) {
+    const content = tokens
+      .filter((t) => !['add', 'a', 'an', 'the', 'label', 'text', 'here', 'say', 'put', 'new'].includes(t))
+      .join(' ')
+      .trim();
+    if (!content) return clarify('What should the label say?');
+    const at = planCursor ?? { x: 0, y: 0 };
+    return { op: 'add_text', nums: { x: at.x, y: at.y }, text: content };
   }
 
   // Add a room: "room 4 by 3", "add a bedroom 4 by 3 meters". Bare numbers in a

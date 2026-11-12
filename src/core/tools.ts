@@ -43,6 +43,9 @@ export interface ToolContext {
   /** Trash-zone hit test + hover highlight (drag-to-delete). */
   overTrash(clientX: number, clientY: number): boolean;
   setTrashHover(on: boolean): void;
+  /** Open an inline text editor at client px (plan Text tool / label edit).
+   *  Optional: modes without text annotations simply omit it. */
+  editText?(clientX: number, clientY: number, initial: string, commit: (text: string) => void): void;
 }
 
 export interface Tool {

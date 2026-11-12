@@ -11,6 +11,9 @@ export interface PaletteItemSpec {
   shortcut: string;
   placeable?: boolean;
   stub?: boolean;
+  /** When present, this button is a flyout: clicking it opens a compact panel
+   *  of these sub-items (each armable / draggable like a normal item). */
+  group?: PaletteItemSpec[];
 }
 
 export interface PaletteHandle {
@@ -37,36 +40,79 @@ export function createPalette(
   root.setAttribute('aria-label', 'Drawing tools');
   const buttons = new Map<string, HTMLButtonElement>();
 
+  // Flat registry of every armable item (dock + open flyout) for pinch hit-tests.
+  const flat: Array<{ item: PaletteItemSpec; btn: HTMLButtonElement; visible: () => boolean }> = [];
+  const flyouts: HTMLElement[] = [];
+
   let press: { item: PaletteItemSpec; x: number; y: number } | null = null;
+  function closeFlyouts(): void {
+    for (const f of flyouts) f.hidden = true;
+  }
   function onWinMove(e: PointerEvent): void {
     if (!press) return;
     if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
       const item = press.item;
       press = null;
-      if (item.placeable) cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
+      if (item.placeable) {
+        closeFlyouts();
+        cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
+      }
     }
   }
   function onWinUp(): void {
-    if (press) cb.onArm(press.item.toolId);
+    if (press) {
+      cb.onArm(press.item.toolId);
+      closeFlyouts();
+    }
     press = null;
   }
   window.addEventListener('pointermove', onWinMove);
   window.addEventListener('pointerup', onWinUp);
 
-  for (const item of items) {
+  /** Build one armable button (press→arm, press+drag→place) into `parent`. */
+  function makeButton(item: PaletteItemSpec, parent: HTMLElement, visible: () => boolean): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mc-palette-btn' + (item.stub ? ' stub' : '');
     const stubNote = item.stub ? ' — coming in the next update' : '';
-    btn.setAttribute('aria-label', `${item.label} (${item.shortcut.toUpperCase()})${stubNote}`);
-    btn.title = `${item.label} — ${item.shortcut.toUpperCase()}${stubNote}${item.placeable ? '. Drag onto the canvas to place.' : ''}`;
+    const key = item.shortcut ? ` (${item.shortcut.toUpperCase()})` : '';
+    btn.setAttribute('aria-label', `${item.label}${key}${stubNote}`);
+    btn.title = `${item.label}${item.shortcut ? ` — ${item.shortcut.toUpperCase()}` : ''}${stubNote}${item.placeable ? '. Drag onto the canvas to place.' : ''}`;
     btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label}</span>`;
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       press = { item, x: e.clientX, y: e.clientY };
     });
     buttons.set(item.toolId, btn);
-    root.appendChild(btn);
+    flat.push({ item, btn, visible });
+    parent.appendChild(btn);
+    return btn;
+  }
+
+  for (const item of items) {
+    if (item.group) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mc-palette-btn mc-palette-group';
+      btn.setAttribute('aria-label', `${item.label} — open components`);
+      btn.title = `${item.label} — pick a component`;
+      btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label} ▾</span>`;
+      const flyout = document.createElement('div');
+      flyout.className = 'mc-flyout';
+      flyout.hidden = true;
+      for (const sub of item.group) makeButton(sub, flyout, () => !flyout.hidden);
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const willOpen = flyout.hidden;
+        closeFlyouts();
+        flyout.hidden = !willOpen;
+      });
+      flyouts.push(flyout);
+      root.appendChild(btn);
+      root.appendChild(flyout);
+    } else {
+      makeButton(item, root, () => true);
+    }
   }
   host.appendChild(root);
 
@@ -75,8 +121,9 @@ export function createPalette(
       for (const [id, btn] of buttons) btn.classList.toggle('active', id === toolId);
     },
     itemAt(x, y) {
-      for (const item of items) {
-        const r = buttons.get(item.toolId)!.getBoundingClientRect();
+      for (const { item, btn, visible } of flat) {
+        if (!visible()) continue;
+        const r = btn.getBoundingClientRect();
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return item;
       }
       return null;

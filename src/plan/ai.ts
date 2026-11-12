@@ -29,15 +29,18 @@ export const PLAN_OP_CONSTRAINT: Record<string, unknown> = {
     nums: {
       type: 'object',
       properties: {
-        x: NUM, y: NUM, w: NUM, h: NUM,
+        x: NUM, y: NUM, w: NUM, h: NUM, d: NUM,
         x1: NUM, y1: NUM, x2: NUM, y2: NUM,
         dx: NUM, dy: NUM, length: NUM, offset: NUM,
         width: NUM, thickness: NUM, delta: NUM, dist: NUM,
+        rotation: NUM, angle: NUM, size: NUM,
       },
     },
     unit: { type: 'string' },
     name: { type: 'string' },
     swing: { type: 'string' },
+    kind: { type: 'string' },
+    text: { type: 'string' },
     clarify: { type: 'string' },
   },
 };
@@ -107,6 +110,10 @@ Ops (exact shapes):
 {"op":"offset","target","nums":{"dist"},"unit"}        (perpendicular to the wall)
 {"op":"set_thickness","target","nums":{"thickness"} or {"delta"},"unit"}
 {"op":"rename","target","name"} {"op":"delete","target"} {"op":"select","target"}
+{"op":"add_fixture","kind","nums":{"x","y","w","d","rotation"?}}  (kind: bed-single|bed-double|sofa|dining-table|chair|desk|kitchen-counter|wardrobe|toilet|sink|bathtub|shower|stairs|column-square|column-round)
+{"op":"rotate","target","nums":{"angle"}}  (degrees; 90 if unsaid)
+{"op":"set_size","target","nums":{"w"?,"d"?},"unit"}  (resize a component)
+{"op":"add_text","nums":{"x","y"},"text"} {"op":"set_text","target","text"}
 {"op":"undo"} {"op":"redo"}
 ALWAYS include every number the command states inside "nums" — never drop it.
 Examples:

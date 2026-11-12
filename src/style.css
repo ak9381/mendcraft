@@ -754,6 +754,25 @@ button.primary:hover {
 .mc-palette-btn.stub { opacity: 0.55; }
 .mc-palette-btn .mc-ico { font-size: 17px; line-height: 1; }
 .mc-palette-btn .mc-lbl { font-size: 10px; }
+.mc-palette-group.active,
+.mc-palette-group:hover { background: #f1f5f9; }
+/* "Furniture" flyout: a compact grid that pops out to the right of the dock so
+   the dock itself stays short. `hidden` removes it from flow when closed. */
+.mc-flyout {
+  position: absolute;
+  left: calc(100% + 8px);
+  display: grid;
+  grid-template-columns: repeat(2, 56px);
+  gap: 4px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+  z-index: 31;
+}
+.mc-flyout[hidden] { display: none; }
+.mc-text-edit { font: inherit; }
 .mc-trash {
   position: absolute;
   right: 14px;

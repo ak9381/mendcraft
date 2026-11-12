@@ -41,6 +41,7 @@ export function rectHits(doc: PlanDoc, r: Rect): string[] {
     if (wall && inRect(pointAlong(wall, o.offset + o.width / 2), r)) ids.push(o.id);
   }
   for (const f of doc.fixtures) if (inRect({ x: f.x, y: f.y }, r)) ids.push(f.id);
+  for (const t of doc.texts) if (inRect({ x: t.x, y: t.y }, r)) ids.push(t.id);
   return ids;
 }
 

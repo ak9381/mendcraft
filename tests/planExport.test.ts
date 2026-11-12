@@ -35,11 +35,11 @@ describe('DXF export', () => {
   });
 
   it('emits wall LINEs, an opening ARC, a dimension TEXT and a room LABEL', () => {
-    expect(dxf).toContain('\nLINE\n8\nWALLS\n');
-    expect(dxf).toContain('\nARC\n8\nOPENINGS\n'); // door swing
-    expect(dxf).toContain('\nLINE\n8\nOPENINGS\n'); // window
-    expect(dxf).toContain('\nTEXT\n8\nDIMS\n'); // dimension label
-    expect(dxf).toContain('\nTEXT\n8\nLABELS\n'); // room name/area
+    expect(dxf).toContain('\nLINE\n8\nA-WALL\n');
+    expect(dxf).toContain('\nARC\n8\nA-DOOR\n'); // door swing
+    expect(dxf).toContain('\nLINE\n8\nA-GLAZ\n'); // window
+    expect(dxf).toContain('\nTEXT\n8\nA-ANNO-DIMS\n'); // dimension label
+    expect(dxf).toContain('\nTEXT\n8\nA-AREA\n'); // room name/area
   });
 
   it('dimension text reads in metres', () => {

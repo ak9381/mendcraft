@@ -64,6 +64,17 @@ export interface Fixture {
   rotation: number;
 }
 
+/** A free-standing text annotation placed on the plan (mm position, mm font
+ *  height). Edited inline or via the properties panel. */
+export interface TextLabel {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  /** Font height in mm (world units), default 300. */
+  size: number;
+}
+
 /** A named room: an ordered loop of wall ids. Area is derived from geometry. */
 export interface Room {
   id: string;
@@ -96,6 +107,7 @@ export interface PlanDoc {
   rooms: Room[];
   dims: Dimension[];
   fixtures: Fixture[];
+  texts: TextLabel[];
   /** Primary selection (last picked), or null. */
   selectedId: string | null;
   /** Full multi-selection; selectedId is always a member (or both empty). */
@@ -103,7 +115,7 @@ export interface PlanDoc {
 }
 
 export function emptyPlan(): PlanDoc {
-  return { walls: [], openings: [], rooms: [], dims: [], fixtures: [], selectedId: null, selectedIds: [] };
+  return { walls: [], openings: [], rooms: [], dims: [], fixtures: [], texts: [], selectedId: null, selectedIds: [] };
 }
 
 // ─── Geometry helpers (all pure) ──────────────────────────────────────────
@@ -240,7 +252,7 @@ export function mm2ToM2Label(mm2: number): string {
 export function findObject(
   doc: PlanDoc,
   id: string,
-): { kind: 'wall' | 'opening' | 'room' | 'dim' | 'fixture'; obj: Wall | Opening | Room | Dimension | Fixture } | null {
+): { kind: 'wall' | 'opening' | 'room' | 'dim' | 'fixture' | 'text'; obj: Wall | Opening | Room | Dimension | Fixture | TextLabel } | null {
   const w = doc.walls.find((o) => o.id === id);
   if (w) return { kind: 'wall', obj: w };
   const o = doc.openings.find((x) => x.id === id);
@@ -251,5 +263,7 @@ export function findObject(
   if (d) return { kind: 'dim', obj: d };
   const f = doc.fixtures.find((x) => x.id === id);
   if (f) return { kind: 'fixture', obj: f };
+  const t = doc.texts.find((x) => x.id === id);
+  if (t) return { kind: 'text', obj: t };
   return null;
 }

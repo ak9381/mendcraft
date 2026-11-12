@@ -61,6 +61,7 @@ function allIds(doc: PlanDoc): Set<string> {
   for (const r of doc.rooms) live.add(r.id);
   for (const d of doc.dims) live.add(d.id);
   for (const f of doc.fixtures) live.add(f.id);
+  for (const t of doc.texts) live.add(t.id);
   return live;
 }
 
@@ -335,6 +336,14 @@ export class PlanEngine {
               f.id === fixture.id ? { ...f, x: f.x + op.dx, y: f.y + op.dy } : f),
             selectedId: fixture.id,
           };
+        const text = anyId ? state.texts.find((t) => t.id === anyId) : undefined;
+        if (text)
+          return {
+            ...state,
+            texts: state.texts.map((t) =>
+              t.id === text.id ? { ...t, x: t.x + op.dx, y: t.y + op.dy } : t),
+            selectedId: text.id,
+          };
         const wallId = this.resolveId(state, op.target, 'wall');
         if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
@@ -406,6 +415,8 @@ export class PlanEngine {
           return { ...state, openings: state.openings.filter((o) => o.id !== id), selectedId: null };
         if (found.kind === 'fixture')
           return { ...state, fixtures: state.fixtures.filter((f) => f.id !== id), selectedId: null };
+        if (found.kind === 'text')
+          return { ...state, texts: state.texts.filter((t) => t.id !== id), selectedId: null };
         return { ...state, dims: state.dims.filter((d) => d.id !== id), selectedId: null };
       }
       case 'select': {
@@ -461,7 +472,9 @@ export class PlanEngine {
         });
         const fixtures = state.fixtures.map((f) =>
           idSet.has(f.id) ? { ...f, x: f.x + op.dx, y: f.y + op.dy } : f);
-        return { ...state, walls, fixtures };
+        const texts = state.texts.map((t) =>
+          idSet.has(t.id) ? { ...t, x: t.x + op.dx, y: t.y + op.dy } : t);
+        return { ...state, walls, fixtures, texts };
       }
       case 'rotate': {
         const id = this.resolveId(state, op.target);
@@ -512,6 +525,40 @@ export class PlanEngine {
             selectedId: id,
           };
         return `set_height applies to walls and openings (target "${op.target}")`;
+      }
+      case 'add_text': {
+        const id = this.nextId('t');
+        const text = { id, x: op.x, y: op.y, text: op.text, size: op.size ?? DEFAULTS.fontSize };
+        return { ...state, texts: [...state.texts, text], selectedId: id, selectedIds: [id] };
+      }
+      case 'set_text': {
+        const id = this.resolveId(state, op.target);
+        if (!id || !state.texts.some((t) => t.id === id)) return `no text for target "${op.target}"`;
+        return {
+          ...state,
+          texts: state.texts.map((t) => (t.id === id ? { ...t, text: op.text } : t)),
+          selectedId: id,
+        };
+      }
+      case 'set_font': {
+        const id = this.resolveId(state, op.target);
+        if (!id || !state.texts.some((t) => t.id === id)) return `no text for target "${op.target}"`;
+        return {
+          ...state,
+          texts: state.texts.map((t) => (t.id === id ? { ...t, size: op.size } : t)),
+          selectedId: id,
+        };
+      }
+      case 'set_size': {
+        const id = this.resolveId(state, op.target);
+        const fixture = id ? state.fixtures.find((f) => f.id === id) : undefined;
+        if (!fixture) return `no fixture for target "${op.target}"`;
+        return {
+          ...state,
+          fixtures: state.fixtures.map((f) =>
+            f.id === fixture.id ? { ...f, w: op.w ?? f.w, d: op.d ?? f.d } : f),
+          selectedId: fixture.id,
+        };
       }
       case 'set_swing': {
         const id = this.resolveId(state, op.target);
@@ -616,6 +663,13 @@ export class PlanEngine {
         id: f.id,
         label: `${f.kind} · ${r1(f.w)}×${r1(f.d)} mm · ${r1(f.rotation)}°`,
         selected: this.state.selectedId === f.id,
+      });
+    }
+    for (const t of this.state.texts) {
+      items.push({
+        id: t.id,
+        label: `Text "${t.text}"`,
+        selected: this.state.selectedId === t.id,
       });
     }
     for (const d of this.state.dims) {

@@ -20,6 +20,8 @@ import {
 } from './tools';
 import { createPropsPanel } from './propsPanel';
 import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp } from './editing';
+import { fixtureSpec, fixtureSymbol, fixtureLocalToWorld } from './fixtures';
+import { setPlanCursor } from './ruleParser';
 import {
   pointAlong,
   roomCentroid,
@@ -145,6 +147,10 @@ export function createPlanRenderer(
     if (best) return best.id;
     for (const f of d.fixtures) {
       if (pointInPolygon(p, fixturePolygon(f))) return f.id;
+    }
+    for (const t of d.texts) {
+      const halfW = Math.max(t.text.length * t.size * 0.32, t.size);
+      if (Math.abs(p.x - t.x) <= halfW && Math.abs(p.y - t.y) <= t.size * 0.8) return t.id;
     }
     for (const room of d.rooms) {
       const poly = room.wallIds
@@ -320,6 +326,44 @@ export function createPlanRenderer(
     inp.select();
   }
 
+  // ---- inline TEXT editor (Text tool place + double-click edit) ----
+  let textEditor: HTMLInputElement | null = null;
+  function openTextEditor(clientX: number, clientY: number, initial: string, commit: (text: string) => void): void {
+    textEditor?.remove();
+    const rect = container.getBoundingClientRect();
+    const inp = document.createElement('input');
+    textEditor = inp;
+    inp.type = 'text';
+    inp.className = 'mc-text-edit';
+    inp.value = initial;
+    inp.placeholder = 'Label…';
+    inp.title = 'Enter applies, Esc cancels';
+    inp.style.cssText =
+      `position:absolute;left:${clientX - rect.left - 60}px;top:${clientY - rect.top - 12}px;` +
+      'width:140px;z-index:40;font-size:13px;padding:2px 4px;border:1px solid #2563eb;border-radius:4px;';
+    let done = false;
+    const close = (apply: boolean) => {
+      if (done) return;
+      done = true;
+      const v = inp.value;
+      inp.remove();
+      if (textEditor === inp) textEditor = null;
+      container.focus({ preventScroll: true });
+      if (apply) commit(v);
+    };
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') close(true);
+      else if (e.key === 'Escape') close(false);
+    });
+    inp.addEventListener('blur', () => close(true));
+    inp.addEventListener('mousedown', (e) => e.stopPropagation());
+    container.appendChild(inp);
+    inp.focus();
+    inp.select();
+  }
+  ctx.editText = openTextEditor;
+
   // ---- rendering ----
   function render(): void {
     if (!fitted) {
@@ -419,23 +463,63 @@ export function createPlanRenderer(
       }
     }
 
-    // Fixtures (furniture/sanitary items): rotated rect + kind label; the
-    // single selected fixture gets a rotate handle (drag snaps to 15°).
+    // Components (stairs, columns, furniture, sanitary): footprint + the proper
+    // 2D architectural symbol from the catalogue; the single selected one gets a
+    // rotate handle (drag snaps to 15°).
     for (const f of d.fixtures) {
-      const pts = fixturePolygon(f).map((p) => toScreen(p));
+      const spec = fixtureSpec(f.kind);
       const selected = isSel(f.id);
-      svg.appendChild(el('polygon', {
-        points: pts.map((p) => `${p.x},${p.y}`).join(' '),
-        fill: selected ? 'rgba(37,99,235,0.12)' : 'rgba(180,83,9,0.08)',
-        stroke: selected ? '#2563eb' : '#b45309',
-        'stroke-width': selected ? 2 : 1.2,
-      }));
+      const stroke = selected ? '#2563eb' : '#b45309';
+      const fill = selected ? 'rgba(37,99,235,0.12)' : 'rgba(180,83,9,0.07)';
+      if (spec.outline === 'round') {
+        const c0 = toScreen({ x: f.x, y: f.y });
+        svg.appendChild(el('circle', { cx: c0.x, cy: c0.y, r: (Math.min(f.w, f.d) / 2) * scale, fill, stroke, 'stroke-width': selected ? 2 : 1.2 }));
+      } else {
+        const pts = fixturePolygon(f).map((p) => toScreen(p));
+        svg.appendChild(el('polygon', {
+          points: pts.map((p) => `${p.x},${p.y}`).join(' '), fill, stroke, 'stroke-width': selected ? 2 : 1.2,
+        }));
+      }
+      // Interior symbol detail (mm → world → screen).
+      const sym = selected ? '#1d4ed8' : '#b45309';
+      for (const prim of fixtureSymbol(f)) {
+        if (prim.t === 'line') {
+          const a = toScreen(fixtureLocalToWorld(f, prim.a));
+          const b = toScreen(fixtureLocalToWorld(f, prim.b));
+          svg.appendChild(el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: sym, 'stroke-width': 1 }));
+        } else if (prim.t === 'circle') {
+          const cc = toScreen(fixtureLocalToWorld(f, prim.c));
+          svg.appendChild(el('circle', { cx: cc.x, cy: cc.y, r: prim.r * scale, fill: 'none', stroke: sym, 'stroke-width': 1 }));
+        } else {
+          const wp = prim.pts.map((p) => toScreen(fixtureLocalToWorld(f, p)));
+          const n = prim.close === false ? wp.length - 1 : wp.length;
+          for (let i = 0; i < n; i++) {
+            const a = wp[i];
+            const b = wp[(i + 1) % wp.length];
+            svg.appendChild(el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: sym, 'stroke-width': 1 }));
+          }
+        }
+      }
       const c = toScreen({ x: f.x, y: f.y });
-      svg.appendChild(textNode(c.x, c.y + 4, f.kind, 11, selected ? '#1d4ed8' : '#92400e', 'middle'));
       if (selected && d.selectedIds.length === 1) {
         const h = toScreen(fixtureHandlePoint(f, 30 / scale));
         svg.appendChild(el('line', { x1: c.x, y1: c.y, x2: h.x, y2: h.y, stroke: '#2563eb', 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
         svg.appendChild(el('circle', { cx: h.x, cy: h.y, r: 6, fill: '#ffffff', stroke: '#2563eb', 'stroke-width': 2 }));
+      }
+    }
+
+    // Text annotations.
+    for (const t of d.texts) {
+      const c = toScreen({ x: t.x, y: t.y });
+      const selected = isSel(t.id);
+      const node = textNode(c.x, c.y, t.text, Math.max(9, t.size * scale), selected ? '#1d4ed8' : '#334155', 'middle');
+      node.setAttribute('data-text-id', t.id);
+      node.style.cursor = 'text';
+      svg.appendChild(node);
+      if (selected) {
+        node.setAttribute('paint-order', 'stroke');
+        node.setAttribute('stroke', 'rgba(37,99,235,0.18)');
+        node.setAttribute('stroke-width', '4');
       }
     }
 
@@ -626,11 +710,22 @@ export function createPlanRenderer(
     }
     panning = { x: e.clientX, y: e.clientY };
   });
-  svg.addEventListener('dblclick', () => {
+  svg.addEventListener('dblclick', (e) => {
+    // Double-click a text label to edit it inline.
+    const id = pick(e.clientX, e.clientY);
+    const t = id ? doc().texts.find((x) => x.id === id) : undefined;
+    if (t) {
+      controller.selectId(t.id);
+      openTextEditor(e.clientX, e.clientY, t.text, (text) => {
+        ctx.apply(text.trim() ? { op: 'set_text', target: t.id, text: text.trim() } : { op: 'delete', target: t.id });
+      });
+      return;
+    }
     toolCtl.handleKey(new KeyboardEvent('keydown', { key: 'Enter' }));
   });
   window.addEventListener('mousemove', onMouseMove);
   function onMouseMove(e: MouseEvent): void {
+    setPlanCursor(toWorld(e.clientX, e.clientY));
     if (panning) {
       originX += e.clientX - panning.x;
       originY += e.clientY - panning.y;
@@ -792,6 +887,7 @@ export function createPlanRenderer(
       return handled;
     },
     hover(clientX, clientY) {
+      setPlanCursor(toWorld(clientX, clientY));
       toolCtl.hover({ x: clientX, y: clientY, source: 'pinch' });
     },
     toggle3D,

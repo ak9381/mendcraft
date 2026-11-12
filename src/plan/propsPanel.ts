@@ -101,6 +101,7 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
     const opening = d.openings.find((o) => o.id === id);
     const room = d.rooms.find((r) => r.id === id);
     const fixture = d.fixtures.find((f) => f.id === id);
+    const text = d.texts.find((t) => t.id === id);
 
     if (wall) {
       title.textContent = `Wall ${wall.id}`;
@@ -127,9 +128,21 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
         root.appendChild(row('Sill (mm)', numInput(o.sill ?? DEFAULTS.windowSill, 50, (v) => io.apply({ op: 'set_sill', target: o.id, sill: v }))));
     } else if (fixture) {
       title.textContent = `${fixture.kind} ${fixture.id}`;
-      root.appendChild(row('Size', `${Math.round(fixture.w)} × ${Math.round(fixture.d)} mm`));
+      root.appendChild(row('Kind', fixture.kind));
+      root.appendChild(row('Width (mm)', numInput(fixture.w, 50, (v) => io.apply({ op: 'set_size', target: fixture.id, w: v }))));
+      root.appendChild(row('Depth (mm)', numInput(fixture.d, 50, (v) => io.apply({ op: 'set_size', target: fixture.id, d: v }))));
       root.appendChild(row('Rotation (°)', numInput(fixture.rotation, 15, (v) =>
         io.apply({ op: 'rotate', target: fixture.id, angle: v - fixture.rotation }))));
+    } else if (text) {
+      title.textContent = `Text ${text.id}`;
+      const ti = document.createElement('input');
+      ti.type = 'text';
+      ti.value = text.text;
+      ti.addEventListener('change', () => {
+        if (ti.value.trim()) io.apply({ op: 'set_text', target: text.id, text: ti.value.trim() });
+      });
+      root.appendChild(row('Text', ti));
+      root.appendChild(row('Font size (mm)', numInput(text.size, 50, (v) => io.apply({ op: 'set_font', target: text.id, size: v }))));
     } else if (room) {
       title.textContent = room.name;
       const name = document.createElement('input');
