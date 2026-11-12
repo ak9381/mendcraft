@@ -5,6 +5,7 @@
 
 import { validateOp, type Op } from '../core/ops';
 import { isTemplateName, type TemplateName } from '../core/templates';
+import { getActiveMode } from '../core/modes';
 import {
   parseCommand,
   isTemplateCommand,
@@ -102,54 +103,16 @@ const ON_DEVICE_TIMEOUT_MS = 15000;
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON
 // Schema (`responseConstraint`); the cloud path takes the Firebase `Schema`
-// builder (`responseSchema`). These constraints are the source of truth and
-// must stay in lockstep with the Schema objects built in initFirebase.
-
-const SIZE_PROPS = {
-  w: { type: 'number' }, d: { type: 'number' }, h: { type: 'number' },
-  diameter: { type: 'number' }, height: { type: 'number' },
-  topDiameter: { type: 'number' }, tube: { type: 'number' },
-} as const;
-
-const VEC_PROPS = {
-  x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
-} as const;
+// builder (`responseSchema`). The constraints now live on the active
+// EditorMode (core/modes) so this layer stays mode-agnostic; they remain the
+// source of truth and must stay in lockstep with the Schema objects built in
+// initFirebase. Re-exported for back-compat and tests.
 
 /** On-device constraint for the intent/edit-op model. `depth` is mm or "through". */
-export const OP_RESPONSE_CONSTRAINT = {
-  type: 'object',
-  properties: {
-    op: { type: 'string' },
-    shape: { type: 'string' },
-    params: { type: 'object', properties: SIZE_PROPS },
-    target: { type: 'string' },
-    tool: { type: 'string' },
-    targets: { type: 'array', items: { type: 'string' } },
-    dx: { type: 'number' }, dy: { type: 'number' }, dz: { type: 'number' },
-    axis: { type: 'string' },
-    deg: { type: 'number' },
-    factor: { type: 'number' },
-    deltaMm: { type: 'object', properties: VEC_PROPS },
-    diameter: { type: 'number' },
-    depth: { anyOf: [{ type: 'number' }, { type: 'string' }] },
-    count: { type: 'number' },
-    spacing: { type: 'number' },
-    radius: { type: 'number' },
-    to: { type: 'string' },
-    mode: { type: 'string' },
-    template: { type: 'string' },
-    clarify: { type: 'string' },
-  },
-} as const;
+export const OP_RESPONSE_CONSTRAINT = getActiveMode().ai.opConstraint;
 
 /** On-device constraint for the verifier model — not the edit-op schema. */
-export const VERIFY_RESPONSE_CONSTRAINT = {
-  type: 'object',
-  properties: {
-    matchesIntent: { type: 'boolean' },
-    issue: { type: 'string' },
-  },
-} as const;
+export const VERIFY_RESPONSE_CONSTRAINT = getActiveMode().ai.verifyConstraint;
 
 // ---------------------------------------------------------------------------
 // Config / lazy init.
@@ -499,31 +462,9 @@ export async function initDeviceModel(onProgress?: (p: number) => void): Promise
 }
 
 // ---------------------------------------------------------------------------
-// Prompts. The intent prompt doubles as the Nano system prompt, so it is kept
-// compact (well under ~1.5k tokens): the op enum with one-line param shapes.
-
-const INTENT_PROMPT = `You convert one short spoken command for a 3D print builder into ONE JSON object. Units are mm. Use target "selected" unless the user names a part. Axes: x=left/right, y=front/back, z=up. Reply with JSON only, no prose.
-Ops (exact shapes):
-{"op":"add","shape":"box|cylinder|sphere|cone|torus","params":{box:{w,d,h} cylinder:{diameter,height} sphere:{diameter} cone:{diameter,height,topDiameter?} torus:{diameter,tube}}}
-{"op":"move","target","dx","dy","dz"}
-{"op":"rotate","target","axis":"x|y|z","deg"}
-{"op":"scale","target","factor"} or {"op":"scale","target","deltaMm":{x?,y?,z?}} (taller by 5 => deltaMm z 5)
-{"op":"hole","target","diameter","depth":number or "through","axis":"x|y|z"}
-{"op":"subtract","target","tool"} {"op":"union","targets":[ids]}
-{"op":"align","target","to":"floor","mode":"center"}
-{"op":"mirror","target","axis"} {"op":"array","target","count","spacing","axis"}
-{"op":"fillet","target","radius"} {"op":"delete","target"} {"op":"select","target"}
-{"op":"undo"} {"op":"redo"}
-Named designs: {"template":"cupGrip|phoneStand|hook|utensilHolder","params":{}}
-If the command is unclear or unsafe, reply {"clarify":"<short question>"}.`;
-
-const TEMPLATE_PROMPT = `You design a 3D-printable helper object. Reply with ONE JSON object only: {"template":"cupGrip|phoneStand|hook|utensilHolder","params":{...}}.
-Pick the closest template to the request and set only numeric params you are confident about:
-cupGrip: cupDiameterMm, heightMm, wallMm. phoneStand: angleDeg, phoneThicknessMm, widthMm.
-hook: depthMm, rodDiameterMm. utensilHolder: diameterMm, heightMm, wallMm. All mm, angles in degrees.`;
-
-const VERIFY_PROMPT = `You check whether an edit to a 3D scene did what the op intended. Reply JSON only: {"matchesIntent":true|false,"issue":null or "<short issue>"}.`;
-
+// Prompts come from the active EditorMode (core/modes). The intent prompt
+// doubles as the Nano system prompt, so modes keep it compact.
+//
 // ---------------------------------------------------------------------------
 // Response handling.
 
@@ -604,7 +545,7 @@ export async function compileCommand(
   const models = await ensureModels();
   if (models?.intent) {
     try {
-      const prompt = `${INTENT_PROMPT}\nScene: ${sceneSummary}\nSelected part: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
+      const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected part: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
       const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
       const result = response ? coerceResult(extractJson(response.text())) : null;
       if (result) return { result, source: sourceOf(response!), ms: Date.now() - t0 };
@@ -625,7 +566,7 @@ export async function verifyOp(
   const models = await ensureModels();
   if (models?.verify) {
     try {
-      const prompt = `${VERIFY_PROMPT}
+      const prompt = `${getActiveMode().ai.verifyPrompt}
 Op: ${JSON.stringify(op)}
 Scene before: ${beforeSummary}
 Scene after: ${afterSummary}
@@ -655,7 +596,7 @@ export async function generateTemplate(prompt: string): Promise<TemplateResult> 
   if (models?.template) {
     try {
       const { response } = await models.template.generateContent(
-        `${TEMPLATE_PROMPT}\nRequest: "${prompt}"`,
+        `${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`,
       );
       const parsed = extractJson(response.text());
       if (typeof parsed === 'object' && parsed !== null) {
