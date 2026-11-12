@@ -15,12 +15,21 @@ import { coerceUiGenerate } from '../ui/design/ai';
 import { parseUiCommand, isUiGenerate } from '../ui/design/ruleParser';
 import { buildUiTemplate } from '../ui/design/templates';
 import type { Frame, FramePreset } from '../ui/design/doc';
+import {
+  buildFusionConstraint,
+  buildFusionPrompt,
+  normalizeTranscript,
+  parseFusionResult,
+  ruleConfidence,
+  type FusionContext,
+} from './intentFusion';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
+export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
 export type Source = 'on-device' | 'cloud' | 'rules';
 /**
  * On-device model state, mirroring Chrome's LanguageModel.availability():
@@ -110,9 +119,12 @@ interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
   verify: TextGenModel | null;
+  /** Deictic intent-fusion model: op schema + confidence (PREFER_ON_DEVICE). */
+  fusion?: TextGenModel | null;
   /** Cloud-only twins used if the on-device call itself throws. */
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
+  fusionCloud?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
 }
@@ -121,8 +133,10 @@ export interface ModelOverrides {
   intent?: TextGenModel | null;
   template?: TextGenModel | null;
   verify?: TextGenModel | null;
+  fusion?: TextGenModel | null;
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
+  fusionCloud?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
@@ -275,8 +289,10 @@ async function ensureModels(): Promise<Models | null> {
       intent: testOverrides.intent ?? null,
       template: testOverrides.template ?? null,
       verify: testOverrides.verify ?? null,
+      fusion: testOverrides.fusion ?? null,
       intentCloud: testOverrides.intentCloud ?? null,
       verifyCloud: testOverrides.verifyCloud ?? null,
+      fusionCloud: testOverrides.fusionCloud ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
     };
   }
@@ -322,6 +338,10 @@ async function initFirebase(): Promise<Models | null> {
     const opSchema = toFirebaseSchema(modeAi.opConstraint, Schema);
     const verifySchema = toFirebaseSchema(modeAi.verifyConstraint, Schema);
     const templateSchema = toFirebaseSchema(modeAi.generateConstraint, Schema);
+    // Intent fusion: the same op vocabulary + a confidence field, one source of
+    // truth (the mode's opConstraint) for both the Nano and cloud schemas.
+    const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
+    const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
 
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
@@ -355,11 +375,30 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    const fusion = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
+      },
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: fusionConstraint },
+      },
+    });
+
     const intentCloud = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
         model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
+      },
+    });
+    const fusionCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
       },
     });
     const verifyCloud = getGenerativeModel(ai, {
@@ -381,7 +420,7 @@ async function initFirebase(): Promise<Models | null> {
       promptTemplate = null;
     }
 
-    cached = { intent, template, verify, intentCloud, verifyCloud, promptTemplate };
+    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, promptTemplate };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -597,6 +636,53 @@ export async function compileCommand(
   const result = getActiveMode().parse(utterance);
   recordInference('rules', 'compile', Date.now() - t0);
   return { result, source: 'rules', ms: Date.now() - t0 };
+}
+
+/** A fused deictic command: a mode-validated result + the model's confidence. */
+export interface FusionOutcome {
+  result: object;
+  /** 0..1. Rules path: 1 for a concrete op, 0 for a clarify. */
+  confidence: number;
+  source: Source;
+  ms: number;
+}
+
+/**
+ * ON-DEVICE INTENT FUSION (PREFER_ON_DEVICE): resolve a messy voice transcript
+ * plus pointer/hand context ("put a door here", "make that one wider") into one
+ * typed, re-validated op with a confidence score. Prompt building and result
+ * parsing live in intentFusion.ts (pure, unit-tested without a network).
+ *
+ * NOTE for the upcoming command router: call intentFusion.exactRuleParse()
+ * FIRST — an exact rule-parsed command short-circuits fusion entirely. This
+ * function only rule-parses as a last-resort floor when no model is available.
+ */
+export async function fuseIntent(utterance: string, ctx: FusionContext): Promise<FusionOutcome> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const mode = getActiveMode();
+  if (models?.fusion) {
+    try {
+      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx);
+      const response = await callWithCloudRetry(models.fusion, models.fusionCloud ?? null, prompt, 'fuse');
+      const parsed = response
+        ? parseFusionResult(extractJson(response.text()), mode.coerce.bind(mode), utterance)
+        : null;
+      if (parsed) {
+        const source = sourceOf(response!);
+        recordInference(source, 'fuse', Date.now() - t0);
+        return { ...parsed, source, ms: Date.now() - t0 };
+      }
+      if (response) noteError('fuse coerce', new Error(`model op not accepted: ${response.text().slice(0, 200)}`));
+    } catch (err) {
+      noteError('fusion model', err);
+    }
+  }
+  // Deterministic floor: rule-parse the cleaned transcript (fillers/stutters
+  // stripped), so "uh move move it left 10" still works with no model at all.
+  const result = mode.parse(normalizeTranscript(utterance));
+  recordInference('rules', 'fuse', Date.now() - t0);
+  return { result, confidence: ruleConfidence(result), source: 'rules', ms: Date.now() - t0 };
 }
 
 export async function verifyOp(
