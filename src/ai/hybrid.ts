@@ -15,7 +15,12 @@ import { coerceUiGenerate } from '../ui/design/ai';
 import { parseUiCommand, isUiGenerate } from '../ui/design/ruleParser';
 import { buildUiTemplate } from '../ui/design/templates';
 import type { Frame, FramePreset } from '../ui/design/doc';
+import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
+import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
+import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
+import { initTelemetry, recordInference } from '../firebase/telemetry';
 
+export type { AppCheckStatus } from '../firebase/appCheck';
 export type Source = 'on-device' | 'cloud' | 'rules';
 /**
  * On-device model state, mirroring Chrome's LanguageModel.availability():
@@ -30,7 +35,6 @@ export type DeviceModelStatus =
   | 'downloading'
   | 'ready'
   | 'failed';
-export type AppCheckStatus = 'skipped' | 'ready' | 'failed';
 
 /** The compile result is mode-specific (a validated op, a template, a generate
  *  directive, or a clarify). The shell only checks for `clarify` and otherwise
@@ -89,6 +93,19 @@ export interface TextGenModel {
   initializeDeviceModel?(onProgress?: (p: number) => void): Promise<void>;
 }
 
+/**
+ * Server prompt-template model (firebase/ai getTemplateGenerativeModel). Used
+ * for the big cloud jobs when a template ID is configured in Remote Config; the
+ * template and its output schema live on the Firebase server, so the request is
+ * just an ID plus variables. Still re-validated like any other model output.
+ */
+export interface TemplateGenModel {
+  generateContent(request: {
+    templateId: string;
+    templateVariables: Record<string, unknown>;
+  }): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
+}
+
 interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
@@ -96,6 +113,8 @@ interface Models {
   /** Cloud-only twins used if the on-device call itself throws. */
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
+  /** Server prompt-template model for the big cloud jobs (may be null). */
+  promptTemplate?: TemplateGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -104,6 +123,7 @@ export interface ModelOverrides {
   verify?: TextGenModel | null;
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
+  promptTemplate?: TemplateGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Fake Chrome LanguageModel; null = browser without the Prompt API. */
@@ -164,19 +184,9 @@ function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
 }
 
 // ---------------------------------------------------------------------------
-// Config / lazy init.
-
-interface Env {
-  [key: string]: string | boolean | undefined;
-}
-
-function env(): Env {
-  return ((import.meta as unknown as { env?: Env }).env ?? {}) as Env;
-}
-
-const PLACEHOLDER_RE = /your|placeholder|changeme|replace|xxx|<|^\s*$/i;
-
-const APP_CHECK_FAIL_MSG = 'App Check is required and failed to start. Using rules only.';
+// Config / lazy init. Firebase init (app, App Check, Remote Config, telemetry)
+// lives in src/firebase/*; this module only orchestrates it and owns the test
+// seam, status, and routing.
 
 let testOverrides: ModelOverrides | null = null;
 let cached: Models | null = null;
@@ -219,8 +229,7 @@ export function setModelsForTest(overrides: ModelOverrides | null): void {
 
 export function isEnabled(): boolean {
   if (testOverrides?.enabled !== undefined) return testOverrides.enabled;
-  const key = env().VITE_FIREBASE_API_KEY;
-  return typeof key === 'string' && !PLACEHOLDER_RE.test(key);
+  return isFirebaseConfigured();
 }
 
 export function getDeviceModelStatus(): DeviceModelStatus {
@@ -268,6 +277,7 @@ async function ensureModels(): Promise<Models | null> {
       verify: testOverrides.verify ?? null,
       intentCloud: testOverrides.intentCloud ?? null,
       verifyCloud: testOverrides.verifyCloud ?? null,
+      promptTemplate: testOverrides.promptTemplate ?? null,
     };
   }
   if (!isEnabled()) {
@@ -281,48 +291,29 @@ async function ensureModels(): Promise<Models | null> {
 
 async function initFirebase(): Promise<Models | null> {
   try {
-    const e = env();
-    const { initializeApp, getApps } = await import('firebase/app');
-    const app =
-      getApps()[0] ??
-      initializeApp({
-        apiKey: String(e.VITE_FIREBASE_API_KEY),
-        authDomain: e.VITE_FIREBASE_AUTH_DOMAIN as string | undefined,
-        projectId: e.VITE_FIREBASE_PROJECT_ID as string | undefined,
-        appId: e.VITE_FIREBASE_APP_ID as string | undefined,
-        messagingSenderId: e.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined,
-        storageBucket: e.VITE_FIREBASE_STORAGE_BUCKET as string | undefined,
-      });
+    const app = await getFirebaseApp();
 
     // App Check is required for Firebase AI Logic. A missing key or a failed
     // init is not swallowable: fall back to rules and tell the UI.
-    const siteKey = e.VITE_RECAPTCHA_SITE_KEY;
-    if (typeof siteKey !== 'string' || !siteKey || PLACEHOLDER_RE.test(siteKey)) {
-      appCheckState = 'failed';
-      statusMessage = 'App Check is required but no reCAPTCHA site key is configured. Using rules only.';
-      cached = null;
-      return null;
-    }
-    try {
-      if (e.DEV === true || e.DEV === 'true' || e.VITE_APPCHECK_DEBUG === 'true') {
-        const g = globalThis as Record<string, unknown>;
-        ((g.self as Record<string, unknown> | undefined) ?? g).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-      }
-      const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
-      initializeAppCheck(app, {
-        provider: new ReCaptchaEnterpriseProvider(siteKey),
-        isTokenAutoRefreshEnabled: true,
-      });
-      appCheckState = 'ready';
-    } catch (err) {
-      noteError('App Check init', err);
-      appCheckState = 'failed';
-      statusMessage = APP_CHECK_FAIL_MSG;
+    const ac = await initAppCheck(app);
+    appCheckState = ac.status;
+    if (ac.status === 'failed') {
+      if (ac.error) noteError('App Check init', ac.error);
+      statusMessage = ac.message;
       cached = null;
       return null;
     }
 
-    const { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, Schema } = await import('firebase/ai');
+    // Remote Config: fetch the cloud model name + prompt text BEFORE building the
+    // models, so the fetched model name is actually applied (not fetched-and-
+    // ignored). The realtime listener keeps the preamble + template IDs — which
+    // are read per request — current without a redeploy.
+    await initRemoteConfig(app);
+    await initTelemetry(app);
+    const cloudModel = remoteSettings().cloudModel;
+
+    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema } =
+      await import('firebase/ai');
     const ai = getAI(app, { backend: new GoogleAIBackend() });
 
     // Build all cloud schemas from the ACTIVE mode's plain-JSON constraints, so
@@ -335,7 +326,7 @@ async function initFirebase(): Promise<Models | null> {
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
       inCloudParams: {
-        model: 'gemini-3.5-flash-lite',
+        model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
       },
       onDeviceParams: {
@@ -347,7 +338,7 @@ async function initFirebase(): Promise<Models | null> {
     const verify = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
       inCloudParams: {
-        model: 'gemini-3.5-flash-lite',
+        model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
       onDeviceParams: {
@@ -359,7 +350,7 @@ async function initFirebase(): Promise<Models | null> {
     const template = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
-        model: 'gemini-3.5-flash-lite',
+        model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: templateSchema },
       },
     });
@@ -367,19 +358,30 @@ async function initFirebase(): Promise<Models | null> {
     const intentCloud = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
-        model: 'gemini-3.5-flash-lite',
+        model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
       },
     });
     const verifyCloud = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
-        model: 'gemini-3.5-flash-lite',
+        model: cloudModel,
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
     });
 
-    cached = { intent, template, verify, intentCloud, verifyCloud };
+    // Server prompt-template model (@beta on the web SDK). Only used when a
+    // template ID is set in Remote Config; otherwise the big jobs use the inline
+    // prompt above. Guarded so an SDK without it never breaks init.
+    let promptTemplate: TemplateGenModel | null = null;
+    try {
+      promptTemplate = getTemplateGenerativeModel(ai) as unknown as TemplateGenModel;
+    } catch (err) {
+      noteError('prompt template model', err);
+      promptTemplate = null;
+    }
+
+    cached = { intent, template, verify, intentCloud, verifyCloud, promptTemplate };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -514,6 +516,56 @@ async function callWithCloudRetry(
   }
 }
 
+/** Prepend the Remote Config prompt preamble (if any) to a big-job prompt. */
+function withPreamble(prompt: string): string {
+  const pre = remoteSettings().promptPreamble.trim();
+  return pre ? `${pre}\n${prompt}` : prompt;
+}
+
+/**
+ * Run a big cloud job (plan / screen / part generation). If a server prompt-
+ * template ID is configured in Remote Config for this job, call the template
+ * model first — the prompt and output schema live on the Firebase server, so the
+ * request is just the ID plus the user's text. On any failure, fall back to the
+ * inline-prompt cloud model. Either way the caller re-validates the returned text
+ * before it can touch the design.
+ */
+async function runBigCloudJob(
+  models: Models,
+  jobPrompt: string,
+  request: string,
+  templateId: string,
+  label: string,
+): Promise<ModelResponse | null> {
+  // One shared budget across both legs: a template timeout must not add a second
+  // full timeout on top, or a big job could spin ~2× before degrading to rules.
+  const deadline = Date.now() + CLOUD_GENERATE_TIMEOUT_MS;
+  const remaining = () => Math.max(0, deadline - Date.now());
+  if (templateId && models.promptTemplate) {
+    try {
+      const { response } = await withTimeout(
+        models.promptTemplate.generateContent({
+          templateId,
+          templateVariables: { request, preamble: remoteSettings().promptPreamble },
+        }),
+        remaining(),
+        `${label} template`,
+      );
+      return { text: () => response.text(), inferenceSource: response.inferenceSource ?? 'in_cloud' };
+    } catch (err) {
+      noteError(`${label} server template`, err);
+      // Server template missing/unprovisioned — fall through to the inline model.
+    }
+  }
+  if (!models.template) return null;
+  const { response } = await withTimeout(
+    models.template.generateContent(jobPrompt),
+    remaining(),
+    label,
+  );
+  return response;
+}
+
 // ---------------------------------------------------------------------------
 // Public API.
 
@@ -530,7 +582,11 @@ export async function compileCommand(
       const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
       // The active mode coerces untrusted JSON into a validated result (or null).
       const result = response ? getActiveMode().coerce(extractJson(response.text()), utterance) : null;
-      if (result) return { result, source: sourceOf(response!), ms: Date.now() - t0 };
+      if (result) {
+        const source = sourceOf(response!);
+        recordInference(source, 'compile', Date.now() - t0);
+        return { result, source, ms: Date.now() - t0 };
+      }
       // Model answered but nothing valid came out — record the raw text so an
       // unexpected RULES-badge fallback is explainable (not a silent drop).
       if (response) noteError('intent coerce', new Error(`model op not accepted: ${response.text().slice(0, 200)}`));
@@ -539,6 +595,7 @@ export async function compileCommand(
     }
   }
   const result = getActiveMode().parse(utterance);
+  recordInference('rules', 'compile', Date.now() - t0);
   return { result, source: 'rules', ms: Date.now() - t0 };
 }
 
@@ -562,10 +619,12 @@ Printability warnings: ${JSON.stringify(warnings)}`;
       if (typeof parsed === 'object' && parsed !== null) {
         const o = parsed as Record<string, unknown>;
         if (typeof o.matchesIntent === 'boolean') {
+          const source = sourceOf(response);
+          recordInference(source, 'verify');
           return {
             matchesIntent: o.matchesIntent,
             issue: typeof o.issue === 'string' && o.issue ? o.issue : null,
-            source: sourceOf(response),
+            source,
           };
         }
       }
@@ -573,6 +632,7 @@ Printability warnings: ${JSON.stringify(warnings)}`;
       noteError('verify model', err);
     }
   }
+  recordInference('rules', 'verify');
   return { matchesIntent: warnings.length === 0, issue: warnings[0] ?? null, source: 'rules' };
 }
 
@@ -580,22 +640,24 @@ export async function generateTemplate(prompt: string): Promise<TemplateResult> 
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const { response } = await withTimeout(
-        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
-        CLOUD_GENERATE_TIMEOUT_MS,
-        'template',
+      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
+      const response = await runBigCloudJob(
+        models, jobPrompt, prompt, remoteSettings().templateIds.part, 'template',
       );
-      const parsed = extractJson(response.text());
+      const parsed = response ? extractJson(response.text()) : null;
       if (typeof parsed === 'object' && parsed !== null) {
         const o = parsed as Record<string, unknown>;
         if (isTemplateName(o.template)) {
-          return { template: o.template, params: numericParams(o.params), source: sourceOf(response) };
+          const source = sourceOf(response!);
+          recordInference(source, 'generate-template');
+          return { template: o.template, params: numericParams(o.params), source };
         }
       }
     } catch (err) {
       noteError('template model', err);
     }
   }
+  recordInference('rules', 'generate-template');
   const ruled = parseCommand(prompt);
   if (isTemplateCommand(ruled)) return { ...ruled, source: 'rules' };
   return { clarify: 'Which design: cup grip, phone stand, hook, or utensil holder?', source: 'rules' };
@@ -611,20 +673,28 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const { response } = await withTimeout(
-        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
-        CLOUD_GENERATE_TIMEOUT_MS,
-        'plan generate',
+      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
+      const response = await runBigCloudJob(
+        models, jobPrompt, prompt, remoteSettings().templateIds.plan, 'plan generate',
       );
-      const coerced = coercePlanGenerate(extractJson(response.text()));
-      if (coerced && 'ops' in coerced && coerced.ops.length) return { ops: coerced.ops, source: sourceOf(response) };
-      if (coerced && 'clarify' in coerced) return { clarify: coerced.clarify, source: sourceOf(response) };
+      const coerced = response ? coercePlanGenerate(extractJson(response.text())) : null;
+      if (coerced && 'ops' in coerced && coerced.ops.length) {
+        const source = sourceOf(response!);
+        recordInference(source, 'generate-plan');
+        return { ops: coerced.ops, source };
+      }
+      if (coerced && 'clarify' in coerced) {
+        const source = sourceOf(response!);
+        recordInference(source, 'generate-plan');
+        return { clarify: coerced.clarify, source };
+      }
       // 200 but no usable plan — fall through to the deterministic template.
       noteError('plan generate', new Error('cloud plan was empty or invalid; using a template'));
     } catch (err) {
       noteError('plan generate model', err);
     }
   }
+  recordInference('rules', 'generate-plan');
   // Rules fallback: a named template → re-validated ops. An unrecognised design
   // request still gets an honest two-bedroom plan rather than a dead-end clarify.
   const ruled = parsePlanCommand(prompt);
@@ -656,19 +726,27 @@ export async function generateUi(prompt: string): Promise<GenerateUiResult> {
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const { response } = await withTimeout(
-        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
-        CLOUD_GENERATE_TIMEOUT_MS,
-        'ui generate',
+      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
+      const response = await runBigCloudJob(
+        models, jobPrompt, prompt, remoteSettings().templateIds.screen, 'ui generate',
       );
-      const coerced = coerceUiGenerate(extractJson(response.text()));
-      if (coerced && 'frame' in coerced) return { frame: coerced.frame, source: sourceOf(response) };
-      if (coerced && 'clarify' in coerced) return { clarify: coerced.clarify, source: sourceOf(response) };
+      const coerced = response ? coerceUiGenerate(extractJson(response.text())) : null;
+      if (coerced && 'frame' in coerced) {
+        const source = sourceOf(response!);
+        recordInference(source, 'generate-ui');
+        return { frame: coerced.frame, source };
+      }
+      if (coerced && 'clarify' in coerced) {
+        const source = sourceOf(response!);
+        recordInference(source, 'generate-ui');
+        return { clarify: coerced.clarify, source };
+      }
       noteError('ui generate', new Error('cloud screen was empty or invalid; using a template'));
     } catch (err) {
       noteError('ui generate model', err);
     }
   }
+  recordInference('rules', 'generate-ui');
   // Rules fallback: a named template → an expanded, validated Frame.
   const ruled = parseUiCommand(prompt);
   const mobile = /\b(mobile|phone)\b/.test(prompt.toLowerCase());

@@ -15,6 +15,7 @@ import {
   type TextGenModel,
 } from '../src/ai/hybrid';
 import { partMode, setActiveMode } from '../src/core/modes';
+import { resetRemoteConfig, setRemoteConfigForTest } from '../src/firebase/remoteConfig';
 
 const model = (text: string, inferenceSource?: string): TextGenModel => ({
   generateContent: async () => ({ response: { text: () => text, inferenceSource } }),
@@ -452,6 +453,71 @@ describe('plan generate + edit against real cloud output', () => {
     const r = await compileCommand('move it 500 left', '{}', 'w3');
     expect(r.source).toBe('rules');
     expect(r.result).toMatchObject({ op: 'move', nums: { dx: -500 } });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Server prompt templates (Firebase AI Logic) are used for the big cloud jobs
+// only when a template ID is configured in Remote Config; otherwise the inline
+// prompt model is used. The returned text is re-validated either way.
+
+describe('server prompt templates (Remote Config driven)', () => {
+  beforeEach(() => setActiveMode('plan'));
+  afterEach(() => resetRemoteConfig());
+
+  const PLAN_DOC =
+    '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
+
+  it('calls the server prompt-template model when a template ID is set', async () => {
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate', screen: '', part: '' } });
+    const calls: { templateId: string; templateVariables: Record<string, unknown> }[] = [];
+    setModelsForTest({
+      enabled: true,
+      // The inline model would throw if (wrongly) used instead of the template.
+      template: { generateContent: async () => { throw new Error('inline must not run'); } },
+      promptTemplate: {
+        generateContent: async (req) => {
+          calls.push(req);
+          return { response: { text: () => PLAN_DOC, inferenceSource: 'in_cloud' } };
+        },
+      },
+    });
+    const r = await generatePlan('two bedroom plan');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].templateId).toBe('plan_generate');
+    expect(calls[0].templateVariables).toMatchObject({ request: 'two bedroom plan' });
+    expect(r.source).toBe('cloud');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the inline cloud model when the server template fails', async () => {
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate', screen: '', part: '' } });
+    setModelsForTest({
+      enabled: true,
+      template: model(PLAN_DOC, 'in_cloud'),
+      promptTemplate: { generateContent: async () => { throw new Error('no such template'); } },
+    });
+    const r = await generatePlan('two bedroom plan');
+    expect(r.source).toBe('cloud');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+  });
+
+  it('ignores the template model and uses the inline prompt when no template ID is set', async () => {
+    let templateCalled = false;
+    setModelsForTest({
+      enabled: true,
+      template: model(PLAN_DOC, 'in_cloud'),
+      promptTemplate: {
+        generateContent: async () => {
+          templateCalled = true;
+          return { response: { text: () => PLAN_DOC } };
+        },
+      },
+    });
+    const r = await generatePlan('two bedroom plan');
+    expect(templateCalled).toBe(false);
+    expect(r.source).toBe('cloud');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
   });
 });
 
