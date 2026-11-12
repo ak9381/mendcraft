@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   compileCommand,
   generatePlan,
@@ -404,6 +404,25 @@ describe('plan generate + edit against real cloud output', () => {
     const r = await generatePlan('two bedroom plan');
     expect(r.source).toBe('rules');
     expect(r.ops && r.ops.length).toBeGreaterThan(0);
+  });
+
+  it('generatePlan falls back to rules when the cloud call hangs (never resolves)', async () => {
+    // A cloud "generate" with no timeout would leave the UI spinning forever.
+    // The hung call must time out and degrade to the deterministic template.
+    vi.useFakeTimers();
+    try {
+      setModelsForTest({
+        enabled: true,
+        template: { generateContent: () => new Promise(() => {}) }, // never settles
+      });
+      const promise = generatePlan('two bedroom plan');
+      await vi.advanceTimersByTimeAsync(13000); // past CLOUD_GENERATE_TIMEOUT_MS
+      const r = await promise;
+      expect(r.source).toBe('rules');
+      expect(r.ops && r.ops.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('compileCommand repairs an under-filled set_length and keeps the cloud badge', async () => {

@@ -109,6 +109,9 @@ export const ON_DEVICE_CREATE_OPTIONS = {
 };
 
 const ON_DEVICE_TIMEOUT_MS = 15000;
+/** Cloud "generate a whole plan/template" budget. A hung cloud call must fall
+ *  back to the deterministic template, never leave the UI spinning forever. */
+const CLOUD_GENERATE_TIMEOUT_MS = 12000;
 
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON Schema
@@ -564,8 +567,10 @@ export async function generateTemplate(prompt: string): Promise<TemplateResult> 
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const { response } = await models.template.generateContent(
-        `${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`,
+      const { response } = await withTimeout(
+        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
+        CLOUD_GENERATE_TIMEOUT_MS,
+        'template',
       );
       const parsed = extractJson(response.text());
       if (typeof parsed === 'object' && parsed !== null) {
@@ -593,8 +598,10 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const { response } = await models.template.generateContent(
-        `${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`,
+      const { response } = await withTimeout(
+        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
+        CLOUD_GENERATE_TIMEOUT_MS,
+        'plan generate',
       );
       const coerced = coercePlanGenerate(extractJson(response.text()));
       if (coerced && 'ops' in coerced && coerced.ops.length) return { ops: coerced.ops, source: sourceOf(response) };
