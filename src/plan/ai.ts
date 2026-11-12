@@ -116,9 +116,9 @@ Examples:
 "thicker by 50" -> {"op":"set_thickness","target":"selected","nums":{"delta":50},"unit":"mm"}
 If unclear, reply {"clarify":"<short question>"}.`;
 
-export const PLAN_GENERATE_PROMPT = `You design a whole 2D floor plan as ONE JSON DOCUMENT (NOT ops). Reply JSON only, no prose:
-{"unit":"mm","rooms":[{"name":"Bedroom 1","x":0,"y":0,"w":4000,"h":3000},{"name":"Bedroom 2","x":4000,"y":0,"w":4000,"h":3000}],"doors":[{"room":"Bedroom 1","side":"s","offset":1000,"width":900}],"windows":[{"room":"Bedroom 2","side":"n","width":1200}]}
-Rules: "rooms" is REQUIRED and must be non-empty — every plan has at least one room. Each room is an axis-aligned rectangle; (x,y) is its bottom-left corner; w,h are width/height. Place rooms on a grid so neighbours share an EXACT edge (e.g. one room x=0 w=4000 and its neighbour x=4000). "side" is n|s|e|w (north/south/east/west) of that room's wall. Default "unit" is "mm" (a 4 m room is 4000). At most ${MAX_GENERATE_ROOMS} rooms. CODE builds every wall, reuses shared walls, assigns all ids, dimensions and selects a wall — you ONLY place rooms, doors and windows. Never emit ops or ids. A "two-bedroom plan" is two side-by-side bedrooms. If the request is unclear, reply {"clarify":"<short question>"}.`;
+export const PLAN_GENERATE_PROMPT = `You design a whole, believable 2D home floor plan as ONE JSON DOCUMENT (NOT ops). Reply JSON only, no prose:
+{"unit":"mm","rooms":[{"name":"Bedroom 1","x":0,"y":3000,"w":4000,"h":3000},{"name":"Bedroom 2","x":4000,"y":3000,"w":4000,"h":3000},{"name":"Living room","x":0,"y":0,"w":4000,"h":3000},{"name":"Kitchen","x":4000,"y":0,"w":2000,"h":3000},{"name":"Bathroom","x":6000,"y":0,"w":2000,"h":3000}],"doors":[{"room":"Living room","side":"s","width":900},{"room":"Bedroom 1","side":"s","width":800},{"room":"Bedroom 2","side":"s","width":800}],"windows":[{"room":"Bedroom 1","side":"n","width":1200},{"room":"Kitchen","side":"s","width":1000}]}
+Rules: "rooms" is REQUIRED and non-empty. Each room is an axis-aligned rectangle; (x,y) is its bottom-left corner; w,h are width/height. TILE the rooms to fill one overall rectangle with NO OVERLAPS and NO GAPS — neighbours must share an EXACT edge (one room x=0 w=4000, its neighbour x=4000). Default "unit" is "mm" (a 4 m room is 4000). At most ${MAX_GENERATE_ROOMS} rooms. A realistic flat has 2 bedrooms + a living room + a kitchen + a bathroom. Give it ONE entrance door (on an OUTER wall of the living room) and a door into each room; put windows only on OUTER walls (facing outside). "side" is n|s|e|w of that room's wall. CODE builds every wall, reuses shared walls, assigns all ids, dimensions and selects the wall shared by the two bedrooms — you ONLY place rooms, doors and windows. Never emit ops or ids, and never overlap two rooms. If the request is unclear, reply {"clarify":"<short question>"}.`;
 
 export const PLAN_VERIFY_PROMPT = `You check whether a floor-plan edit did what the op intended. Reply JSON only: {"matchesIntent":true|false,"issue":null or "<short issue>"}.`;
 
@@ -206,13 +206,21 @@ function findDocRoom(doc: PlanDoc, ref: string): Room | undefined {
   return doc.rooms.length === 1 ? doc.rooms[0] : undefined;
 }
 
-/** A wall worth pre-selecting: a shared interior wall if any, else the longest
- *  wall of the first room, else the first wall. */
+/** A wall worth pre-selecting, in priority order: the wall shared by two
+ *  BEDROOMS (the demo's "make this wall 4 meters" target), else any shared
+ *  interior wall, else the longest wall of the first room, else the first wall. */
 function pickSelectableWall(doc: PlanDoc): string | undefined {
   if (!doc.walls.length) return undefined;
-  const count = new Map<string, number>();
-  for (const r of doc.rooms) for (const id of r.wallIds) count.set(id, (count.get(id) ?? 0) + 1);
-  const shared = [...count.entries()].find(([, n]) => n >= 2);
+  const rooms = new Map<string, string[]>(); // wallId -> room names sharing it
+  for (const r of doc.rooms) for (const id of r.wallIds) {
+    (rooms.get(id) ?? rooms.set(id, []).get(id)!).push(r.name.toLowerCase());
+  }
+  const isBedroom = (n: string) => n.includes('bedroom') || n.includes('bed room');
+  const bedroomShared = [...rooms.entries()].find(
+    ([, names]) => names.filter(isBedroom).length >= 2,
+  );
+  if (bedroomShared) return bedroomShared[0];
+  const shared = [...rooms.entries()].find(([, names]) => names.length >= 2);
   if (shared) return shared[0];
   const first = doc.rooms[0];
   if (first) {
@@ -245,17 +253,39 @@ function collectOpenings(raw: unknown, kind: 'add_door' | 'add_window'): Opening
   return out;
 }
 
-/** Expand a whole-plan document into validated, deterministic ops (or []). */
+interface Rect { x: number; y: number; w: number; h: number }
+
+/** True when two rectangles share positive (interior) area. Edge-to-edge
+ *  touching (shared wall) is NOT an overlap. Small epsilon tolerates rounding. */
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  const EPS = 1;
+  return (
+    a.x + a.w - EPS > b.x && b.x + b.w - EPS > a.x &&
+    a.y + a.h - EPS > b.y && b.y + b.h - EPS > a.y
+  );
+}
+
+/** Expand a whole-plan document into validated, deterministic ops (or []).
+ *  Rooms that overlap an already-accepted room are DROPPED (an untrusted cloud
+ *  doc must never produce rooms stacked on top of each other). */
 export function expandPlanDocument(raw: Record<string, unknown>): PlanOp[] {
   const unit = typeof raw.unit === 'string' ? raw.unit : 'mm';
   const roomsRaw = Array.isArray(raw.rooms) ? raw.rooms.slice(0, MAX_GENERATE_ROOMS) : [];
   const roomOps: PlanOp[] = [];
+  const accepted: Rect[] = [];
   for (const r of roomsRaw) {
     if (!isObj(r)) continue;
     const env: Record<string, unknown> = { op: 'add_room', nums: { x: r.x, y: r.y, w: r.w, h: r.h }, unit };
     if (typeof r.name === 'string' && r.name.trim()) env.name = r.name.trim();
     const v = validatePlanOp(env);
-    if (v.ok) roomOps.push(v.op);
+    if (!v.ok || v.op.op !== 'add_room') continue;
+    const rect: Rect = { x: v.op.x, y: v.op.y, w: v.op.w, h: v.op.h };
+    if (accepted.some((a) => rectsOverlap(a, rect))) {
+      console.warn('[mendcraft] dropped an overlapping room from the generated plan', rect);
+      continue;
+    }
+    accepted.push(rect);
+    roomOps.push(v.op);
   }
   if (!roomOps.length) return [];
 

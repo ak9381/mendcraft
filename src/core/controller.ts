@@ -78,6 +78,9 @@ export interface ModeController {
 export interface ViewportHandle {
   /** Redraw from the controller's current snapshot. */
   render(): void;
+  /** Zoom-to-fit the current content into the viewport (after generate / load /
+   *  window resize). Optional — modes without a fittable 2D view omit it. */
+  fit?(): void;
   /** Screen → object id under the given client (CSS px) coordinates. */
   pick(clientX: number, clientY: number): string | null;
   /** Begin a world-space drag of the current selection; true if it grabbed. */

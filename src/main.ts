@@ -204,11 +204,21 @@ const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controlle
   renderAll();
 });
 
+let hadContent = false;
 function renderAll(): void {
   viewport.render();
   renderParts();
   renderWarnings();
-  emptyHint.hidden = controller.listItems().length > 0;
+  const count = controller.listItems().length;
+  emptyHint.hidden = count > 0;
+  // Zoom-to-fit the first time content appears (e.g. "room 4 by 3" on a blank
+  // canvas) so the drawing is centred in the viewport, not under the panel.
+  if (!hadContent && count > 0) {
+    hadContent = true;
+    viewport.fit?.();
+  } else if (count === 0) {
+    hadContent = false;
+  }
 }
 
 function renderParts(): void {
@@ -270,9 +280,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       renderAll();
       return false;
     }
-    verifierEl.textContent = step.message ?? 'Done.';
+    verifierEl.textContent = `${step.message ?? 'Done.'} (${source}).`;
     say(step.message ?? 'Done.');
     renderAll();
+    viewport.fit?.(); // re-fit whenever a whole plan is (re)generated
     announceWarnings();
     return true;
   }
@@ -594,10 +605,10 @@ btnReregister.addEventListener('click', () => {
 
 const DEVICE_LABELS: Record<DeviceModelStatus, string> = {
   idle: 'Checking on-device AI…',
-  unsupported: 'On-device AI: not in this browser',
-  unavailable: 'On-device AI: unavailable here',
+  unsupported: 'On-device AI: unsupported',
+  unavailable: 'On-device AI: unavailable',
   downloadable: 'Download on-device AI',
-  downloading: 'Resume on-device AI download',
+  downloading: 'Resume AI download',
   ready: 'On-device AI ready',
   failed: 'Retry on-device AI',
 };

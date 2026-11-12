@@ -178,7 +178,7 @@ describe('plan engine — parametric edits', () => {
 });
 
 describe('plan templates + generate', () => {
-  it('two-bedroom template builds two rooms sharing wall w3, dimensioned + selected', () => {
+  it('two-bedroom template builds a believable flat sharing wall w3, dimensioned + selected', () => {
     const e = new PlanEngine();
     const ops = buildPlanTemplate('twoBedroom').map((o) => {
       const v = validatePlanOp(o);
@@ -188,10 +188,45 @@ describe('plan templates + generate', () => {
     const res = e.applyGenerated(ops);
     expect(res.ok).toBe(true);
     const doc = e.getState();
-    expect(doc.rooms).toHaveLength(2);
-    expect(doc.dims).toHaveLength(1);
+    // A real flat: 2 bedrooms + living + kitchen + bathroom, tiled with no gaps.
+    expect(doc.rooms).toHaveLength(5);
+    expect(doc.rooms.map((r) => r.name)).toEqual([
+      'Bedroom 1', 'Bedroom 2', 'Living room', 'Kitchen', 'Bathroom',
+    ]);
+    // The wall shared by the two bedrooms is w3 — dimensioned + pre-selected.
     expect(doc.dims[0].wallId).toBe('w3');
     expect(doc.selectedId).toBe('w3');
+    expect(doc.rooms[0].wallIds.filter((id) => doc.rooms[1].wallIds.includes(id))).toEqual(['w3']);
+    // An entrance door + per-room doors + windows on outer walls were placed.
+    expect(doc.openings.filter((o) => o.kind === 'door').length).toBeGreaterThanOrEqual(3);
+    expect(doc.openings.some((o) => o.kind === 'window')).toBe(true);
+    // No two rooms overlap (every room keeps its own floor area).
+    const areas = doc.rooms.map((r) => roomArea(r, doc));
+    expect(areas.every((a) => a > 0)).toBe(true);
+  });
+
+  it('two-bedroom → set shared wall w3 to 4000 STRETCHES: bedrooms 4×4, no slanted walls', () => {
+    const e = new PlanEngine();
+    const ops = buildPlanTemplate('twoBedroom').map((o) => (validatePlanOp(o) as { ok: true; op: never }).op);
+    e.applyGenerated(ops);
+    const beforeAxis = e.getState().walls.every(
+      (w) => Math.abs(w.a.x - w.b.x) < 1 || Math.abs(w.a.y - w.b.y) < 1,
+    );
+    expect(beforeAxis).toBe(true);
+    run(e, { op: 'set_length', target: 'w3', nums: { length: 4 }, unit: 'm' });
+    const doc = e.getState();
+    // Every wall is still axis-aligned — no gable/slant, so no 4.12 m walls.
+    for (const w of doc.walls) {
+      expect(Math.abs(w.a.x - w.b.x) < 1 || Math.abs(w.a.y - w.b.y) < 1).toBe(true);
+      const len = wallLength(w);
+      expect(Math.abs(len - 4123) > 10).toBe(true); // not the old hypot(4000,1000) gable wall
+    }
+    // Both bedrooms are now 4 m × 4 m (shared wall stretched from 3 m to 4 m).
+    const bed1 = doc.rooms.find((r) => r.name === 'Bedroom 1')!;
+    const bed2 = doc.rooms.find((r) => r.name === 'Bedroom 2')!;
+    expect(roomArea(bed1, doc)).toBeCloseTo(16_000_000);
+    expect(roomArea(bed2, doc)).toBeCloseTo(16_000_000);
+    expect(wallLength(doc.walls.find((w) => w.id === 'w3')!)).toBeCloseTo(4000);
   });
 
   it('applyGenerated is one undoable step', () => {

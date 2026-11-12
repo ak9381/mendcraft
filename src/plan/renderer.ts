@@ -205,7 +205,9 @@ export function createPlanRenderer(
       }
     }
 
-    // Walls.
+    // Walls (no per-wall length labels — they clutter the drawing and sit on
+    // door arcs; dimensions are shown separately for the selection + explicit
+    // dims + overall outer size below).
     for (const w of d.walls) {
       const a = toScreen(w.a);
       const b = toScreen(w.b);
@@ -216,9 +218,6 @@ export function createPlanRenderer(
         'stroke-width': Math.max(2, w.thickness * scale),
         'stroke-linecap': 'round',
       }));
-      // Live length label at the midpoint.
-      const mid = toScreen(wallMidpoint(w));
-      svg.appendChild(textNode(mid.x, mid.y - Math.max(6, w.thickness * scale * 0.5 + 4), mmToMetresLabel(wallLength(w)), 11, selected ? '#2563eb' : '#94a3b8', 'middle'));
     }
 
     // Openings.
@@ -253,11 +252,21 @@ export function createPlanRenderer(
       }
     }
 
-    // Dimensions (explicit) — offset line + witnesses + label in metres.
-    for (const dim of d.dims) {
-      const wall = d.walls.find((x) => x.id === dim.wallId);
-      if (!wall) continue;
-      const n = wallNormal(wall);
+    // Dimensions. We deliberately do NOT label every wall: only the explicit
+    // dims (d.dims), the current selection, and the overall outer size. Each dim
+    // offsets OUTSIDE the wall (away from the plan centre) with witness lines, so
+    // the label never sits on the wall or a door arc.
+    const bounds = planBounds(d);
+    const centre = bounds
+      ? { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 }
+      : { x: 0, y: 0 };
+
+    /** Dimension a wall, offset to the outward side (away from the plan centre). */
+    function drawWallDim(wall: Wall, color: string, labelColor: string): void {
+      let n = wallNormal(wall);
+      const mid = wallMidpoint(wall);
+      // Flip the normal so the dimension sits on the OUTSIDE of the plan.
+      if ((mid.x - centre.x) * n.x + (mid.y - centre.y) * n.y < 0) n = { x: -n.x, y: -n.y };
       const gap = wall.thickness / 2 + 350;
       const a = { x: wall.a.x + n.x * gap, y: wall.a.y + n.y * gap };
       const b = { x: wall.b.x + n.x * gap, y: wall.b.y + n.y * gap };
@@ -265,14 +274,65 @@ export function createPlanRenderer(
       const sb = toScreen(b);
       const wa = toScreen(wall.a);
       const wb = toScreen(wall.b);
-      svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#16a34a', 'stroke-width': 1 }));
-      svg.appendChild(el('line', { x1: wa.x, y1: wa.y, x2: sa.x, y2: sa.y, stroke: '#16a34a', 'stroke-width': 0.75 }));
-      svg.appendChild(el('line', { x1: wb.x, y1: wb.y, x2: sb.x, y2: sb.y, stroke: '#16a34a', 'stroke-width': 0.75 }));
-      const mid = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
-      svg.appendChild(textNode(mid.x, mid.y - 4, mmToMetresLabel(wallLength(wall)), 12, '#15803d', 'middle'));
+      svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: color, 'stroke-width': 1 }));
+      svg.appendChild(el('line', { x1: wa.x, y1: wa.y, x2: sa.x, y2: sa.y, stroke: color, 'stroke-width': 0.75 }));
+      svg.appendChild(el('line', { x1: wb.x, y1: wb.y, x2: sb.x, y2: sb.y, stroke: color, 'stroke-width': 0.75 }));
+      const m = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
+      // Nudge the label a little further out along the normal.
+      const ns = { x: n.x * scale, y: -n.y * scale };
+      svg.appendChild(textNode(m.x + ns.x * 10, m.y - ns.y * 10 - 2, mmToMetresLabel(wallLength(wall)), 12, labelColor, 'middle'));
+    }
+
+    const dimmed = new Set(d.dims.map((dm) => dm.wallId));
+    for (const dim of d.dims) {
+      const wall = d.walls.find((x) => x.id === dim.wallId);
+      if (wall) drawWallDim(wall, '#16a34a', '#15803d');
+    }
+    // Selected wall: dimension it too (unless it already has an explicit dim).
+    if (d.selectedId && !dimmed.has(d.selectedId)) {
+      const sel = d.walls.find((x) => x.id === d.selectedId);
+      if (sel) drawWallDim(sel, '#2563eb', '#2563eb');
+    }
+
+    // Overall outer dimensions (bounding box width + height), drawn outside.
+    if (bounds) {
+      const OUT = 900; // mm beyond the plan
+      const { min, max } = bounds;
+      const widthMm = max.x - min.x;
+      const heightMm = max.y - min.y;
+      if (widthMm > 1) {
+        const y = min.y - OUT;
+        const sa = toScreen({ x: min.x, y });
+        const sb = toScreen({ x: max.x, y });
+        svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#94a3b8', 'stroke-width': 1 }));
+        svg.appendChild(el('line', { x1: toScreen({ x: min.x, y: min.y }).x, y1: toScreen({ x: min.x, y: min.y }).y, x2: sa.x, y2: sa.y, stroke: '#cbd5e1', 'stroke-width': 0.75 }));
+        svg.appendChild(el('line', { x1: toScreen({ x: max.x, y: min.y }).x, y1: toScreen({ x: max.x, y: min.y }).y, x2: sb.x, y2: sb.y, stroke: '#cbd5e1', 'stroke-width': 0.75 }));
+        svg.appendChild(textNode((sa.x + sb.x) / 2, sa.y + 16, mmToMetresLabel(widthMm), 12, '#64748b', 'middle'));
+      }
+      if (heightMm > 1) {
+        const x = min.x - OUT;
+        const sa = toScreen({ x, y: min.y });
+        const sb = toScreen({ x, y: max.y });
+        svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#94a3b8', 'stroke-width': 1 }));
+        svg.appendChild(el('line', { x1: toScreen({ x: min.x, y: min.y }).x, y1: toScreen({ x: min.x, y: min.y }).y, x2: sa.x, y2: sa.y, stroke: '#cbd5e1', 'stroke-width': 0.75 }));
+        svg.appendChild(el('line', { x1: toScreen({ x: min.x, y: max.y }).x, y1: toScreen({ x: min.x, y: max.y }).y, x2: sb.x, y2: sb.y, stroke: '#cbd5e1', 'stroke-width': 0.75 }));
+        const m = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
+        const t = textNode(m.x - 8, m.y, mmToMetresLabel(heightMm), 12, '#64748b', 'middle');
+        t.setAttribute('transform', `rotate(-90 ${m.x - 8} ${m.y})`);
+        svg.appendChild(t);
+      }
     }
 
     if (view3d) view3d.update();
+  }
+
+  /** Zoom-to-fit the current plan into the viewport, then redraw. Called after
+   *  generate / template load and on window resize so the drawing stays centred
+   *  in the (panel-free) viewport rather than running under the side panel. */
+  function fit(): void {
+    fitView();
+    fitted = true;
+    render();
   }
 
   function drawGrid(W: number, H: number): void {
@@ -357,7 +417,9 @@ export function createPlanRenderer(
   }
   container.addEventListener('keydown', onKey);
 
-  const resize = new ResizeObserver(() => render());
+  // Re-fit on container/window resize so the plan never ends up partly under the
+  // panel; while the 3D view is active the SVG is hidden, so just redraw.
+  const resize = new ResizeObserver(() => (view3d ? render() : fit()));
   resize.observe(container);
 
   // ---- optional 3D extrude view ----
@@ -385,6 +447,7 @@ export function createPlanRenderer(
 
   return {
     render,
+    fit,
     pick,
     beginDrag,
     drag: doDrag,

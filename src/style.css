@@ -103,11 +103,19 @@ button.primary:hover {
 #topbar {
   display: flex;
   align-items: center;
-  gap: 0.75em;
+  gap: 0.4em 0.5em;
   padding: 0.6em 1em;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+}
+
+/* Topbar buttons are secondary controls — keep them compact so the row fits on
+   a laptop (≥1440) without wrapping to a second line. */
+#topbar > button,
+#topbar .mode-btn {
+  padding: 0.5em 0.7em;
+  min-width: 0;
 }
 
 #topbar .brand {
@@ -189,6 +197,12 @@ button.primary:hover {
   gap: 0.5em;
   font-size: 0.85em;
   color: var(--text-dim);
+}
+
+/* An id selector beats the UA [hidden] rule, so re-assert it: the download bar
+   must stay hidden until a download is actually in progress. */
+#progress-wrap[hidden] {
+  display: none;
 }
 
 #progress-bar {
@@ -314,11 +328,17 @@ button.primary:hover {
 
 #command-box input {
   flex: 1;
+  min-width: 0; /* allow the input to shrink so the Send button never clips */
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.6em;
   min-height: 44px;
+}
+
+#command-box button {
+  flex: 0 0 auto; /* keep "Send" fully visible */
+  padding-inline: 0.9em;
 }
 
 #op-json {
@@ -363,7 +383,7 @@ button.primary:hover {
 }
 
 #warnings:empty::after {
-  content: 'No printability warnings.';
+  content: 'No issues flagged.';
   color: var(--text-dim);
   font-size: 0.9em;
 }

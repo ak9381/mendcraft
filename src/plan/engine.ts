@@ -45,6 +45,11 @@ export interface PlanListItem {
 const same = (p: Point, q: Point) => Math.hypot(p.x - q.x, p.y - q.y) <= COINCIDENT_MM;
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
+/** A wall is axis-aligned when its centreline is purely horizontal or vertical. */
+function isAxisAligned(w: Wall): boolean {
+  return Math.abs(w.b.x - w.a.x) <= COINCIDENT_MM || Math.abs(w.b.y - w.a.y) <= COINCIDENT_MM;
+}
+
 export class PlanEngine {
   private state: PlanDoc = emptyPlan();
   private undoStack: PlanDoc[] = [];
@@ -55,6 +60,12 @@ export class PlanEngine {
 
   getState(): PlanDoc {
     return this.state;
+  }
+
+  /** Resolve a target ref ('selected' / an id / a room name) against the current
+   *  state to a concrete object id, for honest post-edit confirmation messages. */
+  resolveRef(ref: string): string | undefined {
+    return this.resolveId(this.state, ref);
   }
 
   private nextId(prefix: string): string {
@@ -132,6 +143,32 @@ export class PlanEngine {
   private bump(op: PlanOp): void {
     this.revision += 1;
     this.opLog.push({ rev: this.revision, op });
+  }
+
+  /**
+   * STRETCH an axis-aligned wall: keep its start `a`, move its end to `newB`
+   * along the wall's own axis, and translate EVERY plan vertex on the far side
+   * of the old end (its projection on the wall axis >= the old end's, within
+   * tolerance) by the same delta. Connected perpendicular walls lengthen and
+   * stay orthogonal; parallel walls don't skew; rooms resize; openings keep
+   * their offsets (measured from the fixed `a`); dims re-derive.
+   */
+  private stretchFromEnd(doc: PlanDoc, wallId: string, newB: Point): PlanDoc {
+    const wall = doc.walls.find((w) => w.id === wallId)!;
+    const a = wall.a;
+    const oldB = wall.b;
+    const dir = wallDir(wall); // unit along a -> b (axis)
+    const delta = { x: newB.x - oldB.x, y: newB.y - oldB.y };
+    // Projection of a point onto the wall axis, measured from `a`.
+    const proj = (p: Point) => (p.x - a.x) * dir.x + (p.y - a.y) * dir.y;
+    const threshold = proj(oldB) - COINCIDENT_MM; // old end's axis coordinate
+    const shift = (p: Point): Point => (proj(p) >= threshold ? { x: p.x + delta.x, y: p.y + delta.y } : p);
+    const walls = doc.walls.map((w) => {
+      const na = shift(w.a);
+      const nb = shift(w.b);
+      return na === w.a && nb === w.b ? w : { ...w, a: na, b: nb };
+    });
+    return { ...doc, walls };
   }
 
   /** Move a target wall's endpoints and drag any coincident endpoints with them. */
@@ -247,6 +284,10 @@ export class PlanEngine {
         // Keep the start point `a`; snap the direction to the nearest axis (ortho).
         const dir = nearestOrthoDir(wallDir(wall));
         const newB: Point = { x: wall.a.x + dir.x * op.length, y: wall.a.y + dir.y * op.length };
+        // Axis-aligned walls STRETCH the plan (far-side vertices translate, so
+        // connected walls stay orthogonal and rooms resize). Slanted walls keep
+        // the simpler coincident-endpoint drag.
+        if (isAxisAligned(wall)) return this.stretchFromEnd(state, wallId, newB);
         return this.moveEndpoints(state, wallId, wall.a, newB);
       }
       case 'move': {

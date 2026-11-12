@@ -21,7 +21,7 @@ describe('plan controller — frozen demo path', () => {
     // The shared wall is pre-selected + dimensioned (see plan/templates).
     expect(c.selectedId()).toBe('w3');
     const doc0 = c.snapshot() as PlanDoc;
-    expect(doc0.rooms).toHaveLength(2);
+    expect(doc0.rooms).toHaveLength(5); // believable flat: 2 beds + living + kitchen + bath
     expect(doc0.dims).toHaveLength(1);
     expect(wallLength(doc0.walls.find((w) => w.id === 'w3')!)).toBeCloseTo(3000);
 

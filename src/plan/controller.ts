@@ -6,7 +6,7 @@ import { PlanEngine } from './engine';
 import { validatePlanOp, type PlanOp } from './ops';
 import { buildPlanTemplate, isPlanTemplateName } from './templates';
 import { toDxf, toJson } from './export';
-import { mmToMetresLabel } from './doc';
+import { mmToMetresLabel, wallLength } from './doc';
 import { generatePlan } from '../ai/hybrid';
 import type { ListItem, ModeController, StepResult } from '../core/controller';
 
@@ -20,21 +20,27 @@ function download(filename: string, text: string, mime: string): void {
   URL.revokeObjectURL(url);
 }
 
-/** A short spoken confirmation for a just-applied op. */
-function opMessage(op: PlanOp): string {
+/** A short confirmation for a just-applied op, naming the affected wall and its
+ *  actual resulting value so the verifier always reflects the LAST command
+ *  (e.g. "Wall w3 set to 4.00 m"). `id` is the resolved target; `engine` is read
+ *  AFTER the op so lengths reflect the real geometry (stretch can snap them). */
+function opMessage(op: PlanOp, id: string | undefined, engine: PlanEngine): string {
+  const wall = id ? engine.getState().walls.find((w) => w.id === id) : undefined;
+  const len = wall ? mmToMetresLabel(wallLength(wall)) : undefined;
+  const who = id ? `Wall ${id}` : 'Wall';
   switch (op.op) {
     case 'add_room': return 'Room added.';
     case 'add_wall': return 'Wall added.';
-    case 'add_door': return 'Door added.';
-    case 'add_window': return 'Window added.';
-    case 'add_dim': return 'Dimension added.';
-    case 'set_length': return `Wall is now ${mmToMetresLabel(op.length)}.`;
-    case 'move': return 'Wall moved.';
-    case 'offset': return 'Wall offset.';
-    case 'set_thickness': return 'Thickness changed.';
+    case 'add_door': return `Door added${id ? ` on ${id}` : ''}.`;
+    case 'add_window': return `Window added${id ? ` on ${id}` : ''}.`;
+    case 'add_dim': return `Dimension added${id ? ` on ${id}` : ''}.`;
+    case 'set_length': return `${who} set to ${len ?? mmToMetresLabel(op.length)}`;
+    case 'move': return len ? `${who} moved (now ${len})` : `${who} moved.`;
+    case 'offset': return len ? `${who} offset (now ${len})` : `${who} offset.`;
+    case 'set_thickness': return wall ? `${who} thickness ${Math.round(wall.thickness)} mm` : 'Thickness changed.';
     case 'rename': return 'Renamed.';
     case 'delete': return 'Deleted.';
-    case 'select': return 'Selected.';
+    case 'select': return `${who} selected.`;
     default: return 'Done.';
   }
 }
@@ -60,9 +66,13 @@ export function createPlanController(): ModeController {
     applyOp(raw): StepResult {
       const v = validatePlanOp(raw);
       if (!v.ok) return { ok: false, error: v.error, warnings: [] };
+      // Resolve the target BEFORE applying ('selected' refers to the pre-edit
+      // selection) so the confirmation can name the concrete wall it changed.
+      const ref = 'target' in v.op && typeof v.op.target === 'string' ? v.op.target : undefined;
+      const id = ref ? engine.resolveRef(ref) : undefined;
       const applied = engine.apply(v.op);
       if (!applied.ok) return { ok: false, error: applied.error, warnings: [] };
-      return { ok: true, message: opMessage(v.op), warnings: applied.warnings, op: v.op };
+      return { ok: true, message: opMessage(v.op, id, engine), warnings: applied.warnings, op: v.op };
     },
 
     selectId: (id) => engine.apply({ op: 'select', target: id }).ok,

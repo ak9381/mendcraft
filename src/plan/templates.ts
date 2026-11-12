@@ -1,13 +1,17 @@
 // Deterministic PLAN templates: each returns a list of plan op envelopes that
 // PlanEngine.applyGenerated() builds from a blank document in one undoable step.
 // These back both the rules fallback ("two bedroom plan" with no AI) and the
-// cloud generate path (the model returns {ops:[...]}, code re-validates them).
+// cloud generate path (the model returns a document, code expands + re-validates).
 //
 // Note on ids: applyGenerated resets the id counter, so wall ids are
 // deterministic. add_room reuses a coincident wall, so two rooms placed side by
-// side SHARE one wall. In `twoBedroom` the shared wall is `w3`; the template
-// dimensions and selects it so the frozen demo ("make it 4 meters") lands on a
-// single, already-selected wall without any pointing.
+// side SHARE one wall. `twoBedroom` is a believable flat (2 bedrooms + living +
+// kitchen + bathroom) tiled with no overlaps/gaps; because the two bedrooms are
+// placed FIRST and side by side, the wall they share is `w3`, which the
+// expansion dimensions and pre-selects so the demo ("make it 4 meters") lands
+// on a single, already-selected wall without any pointing.
+
+import { expandPlanDocument } from './ai';
 
 export type PlanTemplateName = 'twoBedroom' | 'oneRoom' | 'studio';
 
@@ -17,14 +21,43 @@ export function isPlanTemplateName(v: unknown): v is PlanTemplateName {
   return typeof v === 'string' && (PLAN_TEMPLATE_NAMES as readonly string[]).includes(v);
 }
 
-/** Two 4 m × 3 m bedrooms sharing a central wall (`w3`), dimensioned + selected. */
+/**
+ * A believable two-bedroom flat (8 m × 6 m): two 4 m × 3 m bedrooms across the
+ * top sharing wall `w3`, and a living room + kitchen + bathroom tiled across the
+ * bottom. Perfectly tiled (no overlaps/gaps), with an entrance door on the
+ * living-room's outer wall, a door into every room, and windows on outer walls.
+ * Built as a DOCUMENT and expanded through the same path as the cloud generator,
+ * so code assigns all ids, reuses shared walls, and dimensions + selects `w3`.
+ */
 function twoBedroom(): Record<string, unknown>[] {
-  return [
-    { op: 'add_room', nums: { x: 0, y: 0, w: 4, h: 3 }, unit: 'm', name: 'Bedroom 1' },
-    { op: 'add_room', nums: { x: 4, y: 0, w: 4, h: 3 }, unit: 'm', name: 'Bedroom 2' },
-    { op: 'add_dim', target: 'w3' },
-    { op: 'select', target: 'w3' },
-  ];
+  const doc = {
+    unit: 'mm',
+    // Bedrooms FIRST (left then right) so their shared wall is `w3`.
+    rooms: [
+      { name: 'Bedroom 1', x: 0, y: 3000, w: 4000, h: 3000 },
+      { name: 'Bedroom 2', x: 4000, y: 3000, w: 4000, h: 3000 },
+      { name: 'Living room', x: 0, y: 0, w: 4000, h: 3000 },
+      { name: 'Kitchen', x: 4000, y: 0, w: 2000, h: 3000 },
+      { name: 'Bathroom', x: 6000, y: 0, w: 2000, h: 3000 },
+    ],
+    doors: [
+      { room: 'Living room', side: 's', width: 900 }, // entrance (outer wall)
+      { room: 'Bedroom 1', side: 's', width: 800 },
+      { room: 'Bedroom 2', side: 's', width: 800 },
+      { room: 'Kitchen', side: 'w', width: 800 },
+      { room: 'Bathroom', side: 'w', width: 700 },
+    ],
+    windows: [
+      { room: 'Bedroom 1', side: 'n', width: 1200 },
+      { room: 'Bedroom 2', side: 'n', width: 1200 },
+      { room: 'Living room', side: 'w', width: 1000 },
+      { room: 'Kitchen', side: 's', width: 1000 },
+      { room: 'Bathroom', side: 'e', width: 600 },
+    ],
+  };
+  // expandPlanDocument returns fully-validated PlanOps; they are valid op
+  // envelopes, so the caller can re-validate them harmlessly.
+  return expandPlanDocument(doc) as unknown as Record<string, unknown>[];
 }
 
 /** A single 4 m × 3 m room, dimensioned on its left wall and selected. */
