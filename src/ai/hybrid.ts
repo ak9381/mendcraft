@@ -14,6 +14,8 @@ import {
 } from '../core/ruleParser';
 
 export type Source = 'on-device' | 'cloud' | 'rules';
+export type DeviceModelStatus = 'idle' | 'downloading' | 'ready' | 'failed';
+export type AppCheckStatus = 'skipped' | 'ready' | 'failed';
 
 export interface CompileResult {
   result: Op | TemplateCommand | Clarify;
@@ -31,6 +33,12 @@ export type TemplateResult =
   | { template: TemplateName; params: Record<string, number>; source: Source }
   | { clarify: string; source: Source };
 
+export interface HybridStatus {
+  appCheck: AppCheckStatus;
+  deviceModel: DeviceModelStatus;
+  message: string | null;
+}
+
 /** Minimal surface of a GenerativeModel that this module needs (mockable). */
 export interface TextGenModel {
   generateContent(
@@ -42,7 +50,68 @@ export interface TextGenModel {
 interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
+  verify: TextGenModel | null;
 }
+
+export interface ModelOverrides {
+  intent?: TextGenModel | null;
+  template?: TextGenModel | null;
+  verify?: TextGenModel | null;
+  enabled?: boolean;
+  appCheck?: AppCheckStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Structured-output schemas. The on-device Prompt API takes a plain JSON
+// Schema (`responseConstraint`); the cloud path takes the Firebase `Schema`
+// builder (`responseSchema`). These constraints are the source of truth and
+// must stay in lockstep with the Schema objects built in initFirebase.
+
+const SIZE_PROPS = {
+  w: { type: 'number' }, d: { type: 'number' }, h: { type: 'number' },
+  diameter: { type: 'number' }, height: { type: 'number' },
+  topDiameter: { type: 'number' }, tube: { type: 'number' },
+} as const;
+
+const VEC_PROPS = {
+  x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
+} as const;
+
+/** On-device constraint for the intent/edit-op model. `depth` is mm or "through". */
+export const OP_RESPONSE_CONSTRAINT = {
+  type: 'object',
+  properties: {
+    op: { type: 'string' },
+    shape: { type: 'string' },
+    params: { type: 'object', properties: SIZE_PROPS },
+    target: { type: 'string' },
+    tool: { type: 'string' },
+    targets: { type: 'array', items: { type: 'string' } },
+    dx: { type: 'number' }, dy: { type: 'number' }, dz: { type: 'number' },
+    axis: { type: 'string' },
+    deg: { type: 'number' },
+    factor: { type: 'number' },
+    deltaMm: { type: 'object', properties: VEC_PROPS },
+    diameter: { type: 'number' },
+    depth: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+    count: { type: 'number' },
+    spacing: { type: 'number' },
+    radius: { type: 'number' },
+    to: { type: 'string' },
+    mode: { type: 'string' },
+    template: { type: 'string' },
+    clarify: { type: 'string' },
+  },
+} as const;
+
+/** On-device constraint for the verifier model — not the edit-op schema. */
+export const VERIFY_RESPONSE_CONSTRAINT = {
+  type: 'object',
+  properties: {
+    matchesIntent: { type: 'boolean' },
+    issue: { type: 'string' },
+  },
+} as const;
 
 // ---------------------------------------------------------------------------
 // Config / lazy init.
@@ -57,17 +126,27 @@ function env(): Env {
 
 const PLACEHOLDER_RE = /your|placeholder|changeme|replace|xxx|<|^\s*$/i;
 
-let testOverrides: { intent?: TextGenModel | null; template?: TextGenModel | null; enabled?: boolean } | null = null;
+const APP_CHECK_FAIL_MSG = 'App Check is required and failed to start. Using rules only.';
+
+let testOverrides: ModelOverrides | null = null;
 let cached: Models | null = null;
 let initPromise: Promise<Models | null> | null = null;
+let deviceModelStatus: DeviceModelStatus = 'idle';
+let appCheckState: AppCheckStatus = 'skipped';
+let statusMessage: string | null = null;
+
+function resetStatus(): void {
+  deviceModelStatus = 'idle';
+  appCheckState = 'skipped';
+  statusMessage = null;
+}
 
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
-export function setModelsForTest(
-  overrides: { intent?: TextGenModel | null; template?: TextGenModel | null; enabled?: boolean } | null,
-): void {
+export function setModelsForTest(overrides: ModelOverrides | null): void {
   testOverrides = overrides;
   cached = null;
   initPromise = null;
+  resetStatus();
 }
 
 export function isEnabled(): boolean {
@@ -76,12 +155,55 @@ export function isEnabled(): boolean {
   return typeof key === 'string' && !PLACEHOLDER_RE.test(key);
 }
 
+export function getDeviceModelStatus(): DeviceModelStatus {
+  return deviceModelStatus;
+}
+
+export function getHybridStatus(): HybridStatus {
+  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage };
+}
+
+export async function prepareHybrid(): Promise<HybridStatus> {
+  await ensureModels();
+  return getHybridStatus();
+}
+
+/**
+ * Longer free-form design requests belong on the cloud-only template model
+ * (e.g. "design a stand for my phone"), not the short-command intent path.
+ */
+export function isDesignRequest(utterance: string): boolean {
+  const t = utterance.trim().toLowerCase();
+  if (!t) return false;
+  if (/\bdesign\b/.test(t)) return true;
+  if (/\b(i need|i want|something to|something for)\b/.test(t)) return true;
+  if (/\bfor my\b/.test(t)) return true;
+  if (/\b(create|build me|make me)\b/.test(t) && t.split(/\s+/).length >= 5) return true;
+  return false;
+}
+
 async function ensureModels(): Promise<Models | null> {
   if (testOverrides) {
-    if (testOverrides.enabled === false) return null;
-    return { intent: testOverrides.intent ?? null, template: testOverrides.template ?? null };
+    if (testOverrides.enabled === false) {
+      appCheckState = testOverrides.appCheck ?? 'skipped';
+      return null;
+    }
+    if (testOverrides.appCheck === 'failed') {
+      appCheckState = 'failed';
+      statusMessage = APP_CHECK_FAIL_MSG;
+      return null;
+    }
+    appCheckState = testOverrides.appCheck ?? 'ready';
+    return {
+      intent: testOverrides.intent ?? null,
+      template: testOverrides.template ?? null,
+      verify: testOverrides.verify ?? null,
+    };
   }
-  if (!isEnabled()) return null;
+  if (!isEnabled()) {
+    appCheckState = 'skipped';
+    return null;
+  }
   if (cached) return cached;
   initPromise ??= initFirebase();
   return initPromise;
@@ -102,21 +224,31 @@ async function initFirebase(): Promise<Models | null> {
         storageBucket: e.VITE_FIREBASE_STORAGE_BUCKET as string | undefined,
       });
 
+    // App Check is required for Firebase AI Logic. A missing key or a failed
+    // init is not swallowable: fall back to rules and tell the UI.
     const siteKey = e.VITE_RECAPTCHA_SITE_KEY;
-    if (typeof siteKey === 'string' && siteKey && !PLACEHOLDER_RE.test(siteKey)) {
-      try {
-        if (e.DEV === true || e.DEV === 'true' || e.VITE_APPCHECK_DEBUG === 'true') {
-          const g = globalThis as Record<string, unknown>;
-          ((g.self as Record<string, unknown> | undefined) ?? g).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-        }
-        const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
-        initializeAppCheck(app, {
-          provider: new ReCaptchaEnterpriseProvider(siteKey),
-          isTokenAutoRefreshEnabled: true,
-        });
-      } catch {
-        // App Check is hardening, not a hard dependency; continue without it.
+    if (typeof siteKey !== 'string' || !siteKey || PLACEHOLDER_RE.test(siteKey)) {
+      appCheckState = 'failed';
+      statusMessage = 'App Check is required but no reCAPTCHA site key is configured. Using rules only.';
+      cached = null;
+      return null;
+    }
+    try {
+      if (e.DEV === true || e.DEV === 'true' || e.VITE_APPCHECK_DEBUG === 'true') {
+        const g = globalThis as Record<string, unknown>;
+        ((g.self as Record<string, unknown> | undefined) ?? g).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
       }
+      const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
+      initializeAppCheck(app, {
+        provider: new ReCaptchaEnterpriseProvider(siteKey),
+        isTokenAutoRefreshEnabled: true,
+      });
+      appCheckState = 'ready';
+    } catch {
+      appCheckState = 'failed';
+      statusMessage = APP_CHECK_FAIL_MSG;
+      cached = null;
+      return null;
     }
 
     const { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, Schema } = await import('firebase/ai');
@@ -142,7 +274,7 @@ async function initFirebase(): Promise<Models | null> {
         factor: Schema.number(),
         deltaMm: Schema.object({ properties: vecProps, optionalProperties: ['x', 'y', 'z'] }),
         diameter: Schema.number(),
-        depth: Schema.string(),
+        depth: Schema.anyOf({ anyOf: [Schema.number(), Schema.string()] }),
         count: Schema.number(),
         spacing: Schema.number(),
         radius: Schema.number(),
@@ -158,21 +290,13 @@ async function initFirebase(): Promise<Models | null> {
       ],
     });
 
-    // Plain-JSON mirror of opSchema for the on-device Prompt API constraint.
-    const responseConstraint = {
-      type: 'object',
+    const verifySchema = Schema.object({
       properties: {
-        op: { type: 'string' }, shape: { type: 'string' }, params: { type: 'object' },
-        target: { type: 'string' }, tool: { type: 'string' },
-        targets: { type: 'array', items: { type: 'string' } },
-        dx: { type: 'number' }, dy: { type: 'number' }, dz: { type: 'number' },
-        axis: { type: 'string' }, deg: { type: 'number' }, factor: { type: 'number' },
-        deltaMm: { type: 'object' }, diameter: { type: 'number' },
-        depth: { type: 'string' }, count: { type: 'number' }, spacing: { type: 'number' },
-        radius: { type: 'number' }, to: { type: 'string' }, mode: { type: 'string' },
-        template: { type: 'string' }, clarify: { type: 'string' },
+        matchesIntent: Schema.boolean(),
+        issue: Schema.string(),
       },
-    };
+      optionalProperties: ['issue'],
+    });
 
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
@@ -180,7 +304,16 @@ async function initFirebase(): Promise<Models | null> {
         model: 'gemini-3.5-flash-lite',
         generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
       },
-      onDeviceParams: { promptOptions: { responseConstraint } },
+      onDeviceParams: { promptOptions: { responseConstraint: OP_RESPONSE_CONSTRAINT } },
+    });
+
+    const verify = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: {
+        model: 'gemini-3.5-flash-lite',
+        generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
+      },
+      onDeviceParams: { promptOptions: { responseConstraint: VERIFY_RESPONSE_CONSTRAINT } },
     });
 
     const templateSchema = Schema.object({
@@ -209,24 +342,35 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
-    cached = { intent, template };
+    cached = { intent, template, verify };
     return cached;
   } catch {
+    if (appCheckState !== 'failed') {
+      statusMessage = 'Firebase AI could not start. Using rules only.';
+    }
+    cached = null;
     return null;
   }
 }
 
 /**
  * Download/warm the on-device model. Must be called from a user gesture
- * (Chrome Prompt API requirement). Returns true if the device model is ready.
+ * (Chrome Prompt API requirement). Returns true only if the device model is
+ * ready — a configured Firebase key is not enough.
  */
 export async function initDeviceModel(onProgress?: (p: number) => void): Promise<boolean> {
+  deviceModelStatus = 'downloading';
   const models = await ensureModels();
-  if (!models?.intent?.initializeDeviceModel) return false;
+  if (!models?.intent?.initializeDeviceModel) {
+    deviceModelStatus = 'failed';
+    return false;
+  }
   try {
     await models.intent.initializeDeviceModel(onProgress);
+    deviceModelStatus = 'ready';
     return true;
   } catch {
+    deviceModelStatus = 'failed';
     return false;
   }
 }
@@ -254,6 +398,8 @@ const TEMPLATE_PROMPT = `You design a 3D-printable helper object. Reply with ONE
 Pick the closest template to the request and set only numeric params you are confident about:
 cupGrip: cupDiameterMm, heightMm, wallMm. phoneStand: angleDeg, phoneThicknessMm, widthMm.
 hook: depthMm, rodDiameterMm. utensilHolder: diameterMm, heightMm, wallMm. All mm, angles in degrees.`;
+
+const VERIFY_PROMPT = `You check whether an edit to a 3D scene did what the op intended. Reply JSON only: {"matchesIntent":true|false,"issue":null or "<short issue>"}.`;
 
 // ---------------------------------------------------------------------------
 // Response handling.
@@ -330,14 +476,14 @@ export async function verifyOp(
   warnings: string[],
 ): Promise<VerifyResult> {
   const models = await ensureModels();
-  if (models?.intent) {
+  if (models?.verify) {
     try {
-      const prompt = `You check whether an edit to a 3D scene did what the op intended. Reply JSON only: {"matchesIntent":true|false,"issue":null or "<short issue>"}.
+      const prompt = `${VERIFY_PROMPT}
 Op: ${JSON.stringify(op)}
 Scene before: ${beforeSummary}
 Scene after: ${afterSummary}
 Printability warnings: ${JSON.stringify(warnings)}`;
-      const { response } = await models.intent.generateContent(prompt);
+      const { response } = await models.verify.generateContent(prompt);
       const parsed = extractJson(response.text());
       if (typeof parsed === 'object' && parsed !== null) {
         const o = parsed as Record<string, unknown>;

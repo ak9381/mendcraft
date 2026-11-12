@@ -2,8 +2,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   compileCommand,
   generateTemplate,
+  getDeviceModelStatus,
+  getHybridStatus,
+  initDeviceModel,
+  isDesignRequest,
   isEnabled,
+  OP_RESPONSE_CONSTRAINT,
+  prepareHybrid,
   setModelsForTest,
+  VERIFY_RESPONSE_CONSTRAINT,
   verifyOp,
   type TextGenModel,
 } from '../src/ai/hybrid';
@@ -105,17 +112,26 @@ describe('hybrid verifyOp', () => {
     });
   });
 
-  it('uses the model verdict when available', async () => {
+  it('uses the verifier model verdict when available', async () => {
     setModelsForTest({
       enabled: true,
-      intent: model('{"matchesIntent":false,"issue":"moved the wrong way"}', 'on_device'),
+      verify: model('{"matchesIntent":false,"issue":"moved the wrong way"}', 'on_device'),
     });
     const r = await verifyOp(op, '{}', '{}', []);
     expect(r).toEqual({ matchesIntent: false, issue: 'moved the wrong way', source: 'on-device' });
   });
 
+  it('does not reuse the intent (edit-op) model for verification', async () => {
+    setModelsForTest({
+      enabled: true,
+      intent: model('{"matchesIntent":false,"issue":"should be ignored"}', 'on_device'),
+    });
+    const r = await verifyOp(op, '{}', '{}', []);
+    expect(r).toEqual({ matchesIntent: true, issue: null, source: 'rules' });
+  });
+
   it('falls back deterministically on malformed verdicts', async () => {
-    setModelsForTest({ enabled: true, intent: model('{"matchesIntent":"maybe"}') });
+    setModelsForTest({ enabled: true, verify: model('{"matchesIntent":"maybe"}') });
     const r = await verifyOp(op, '{}', '{}', []);
     expect(r).toEqual({ matchesIntent: true, issue: null, source: 'rules' });
   });
@@ -147,5 +163,145 @@ describe('hybrid generateTemplate', () => {
     const unknown = await generateTemplate('a spaceship');
     expect(unknown.source).toBe('rules');
     expect('clarify' in unknown).toBe(true);
+  });
+});
+
+describe('verifier and op schemas', () => {
+  it('gives the verifier its own {matchesIntent, issue} schema', () => {
+    expect(VERIFY_RESPONSE_CONSTRAINT).toEqual({
+      type: 'object',
+      properties: {
+        matchesIntent: { type: 'boolean' },
+        issue: { type: 'string' },
+      },
+    });
+    expect(VERIFY_RESPONSE_CONSTRAINT).not.toHaveProperty('properties.op');
+  });
+
+  it('mirrors op fields in the on-device constraint and accepts numeric depth', () => {
+    const props = OP_RESPONSE_CONSTRAINT.properties;
+    expect(props.depth).toEqual({ anyOf: [{ type: 'number' }, { type: 'string' }] });
+    expect(props.params.properties).toMatchObject({ w: { type: 'number' }, diameter: { type: 'number' } });
+    expect(props.deltaMm.properties).toEqual({
+      x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
+    });
+    expect(props.op).toEqual({ type: 'string' });
+    expect(props.dx).toEqual({ type: 'number' });
+  });
+});
+
+describe('device model init state', () => {
+  it('does not treat a configured/enabled key as on-device ready', async () => {
+    setModelsForTest({
+      enabled: true,
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async () => undefined,
+      },
+    });
+    expect(isEnabled()).toBe(true);
+    expect(getDeviceModelStatus()).toBe('idle');
+    expect(getHybridStatus().deviceModel).toBe('idle');
+  });
+
+  it('reports ready only after initializeDeviceModel succeeds', async () => {
+    const progress: number[] = [];
+    setModelsForTest({
+      enabled: true,
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async (onProgress) => {
+          onProgress?.(0.5);
+          onProgress?.(1);
+        },
+      },
+    });
+    const ok = await initDeviceModel((p) => progress.push(p));
+    expect(ok).toBe(true);
+    expect(getDeviceModelStatus()).toBe('ready');
+    expect(progress).toEqual([0.5, 1]);
+  });
+
+  it('reports failed when initializeDeviceModel is missing', async () => {
+    setModelsForTest({
+      enabled: true,
+      intent: model('{"op":"undo"}'),
+    });
+    const ok = await initDeviceModel();
+    expect(ok).toBe(false);
+    expect(getDeviceModelStatus()).toBe('failed');
+  });
+
+  it('reports failed when initializeDeviceModel throws', async () => {
+    setModelsForTest({
+      enabled: true,
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async () => {
+          throw new Error('unavailable');
+        },
+      },
+    });
+    const ok = await initDeviceModel();
+    expect(ok).toBe(false);
+    expect(getDeviceModelStatus()).toBe('failed');
+  });
+
+  it('sets downloading while the device model is warming', async () => {
+    let statusDuring: string | undefined;
+    setModelsForTest({
+      enabled: true,
+      intent: {
+        generateContent: async () => ({ response: { text: () => '{}' } }),
+        initializeDeviceModel: async () => {
+          statusDuring = getDeviceModelStatus();
+        },
+      },
+    });
+    await initDeviceModel();
+    expect(statusDuring).toBe('downloading');
+    expect(getDeviceModelStatus()).toBe('ready');
+  });
+});
+
+describe('App Check required', () => {
+  it('falls back to rules and surfaces a failed status when App Check fails', async () => {
+    setModelsForTest({
+      enabled: true,
+      appCheck: 'failed',
+      intent: model('{"op":"move","target":"selected","dx":99,"dy":0,"dz":0}', 'in_cloud'),
+      verify: model('{"matchesIntent":false,"issue":"should not run"}'),
+      template: model('{"template":"hook","params":{}}'),
+    });
+    const status = await prepareHybrid();
+    expect(status.appCheck).toBe('failed');
+    expect(status.message).toMatch(/App Check/i);
+
+    const compiled = await compileCommand('move left 10', '{}', null);
+    expect(compiled.source).toBe('rules');
+    expect(compiled.result).toEqual({ op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 });
+
+    const verdict = await verifyOp(
+      { op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 },
+      '{}',
+      '{}',
+      [],
+    );
+    expect(verdict.source).toBe('rules');
+  });
+});
+
+describe('isDesignRequest', () => {
+  it('routes longer design phrasing to the template model', () => {
+    expect(isDesignRequest('design a stand for my phone')).toBe(true);
+    expect(isDesignRequest('something to hang my bag on')).toBe(true);
+    expect(isDesignRequest('I need a grip for my cup')).toBe(true);
+  });
+
+  it('leaves short edit commands on the intent / rules path', () => {
+    expect(isDesignRequest('add a box')).toBe(false);
+    expect(isDesignRequest('move left 10')).toBe(false);
+    expect(isDesignRequest('make it taller by 5')).toBe(false);
+    expect(isDesignRequest('cup grip')).toBe(false);
   });
 });

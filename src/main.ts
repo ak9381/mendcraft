@@ -8,7 +8,7 @@ import { createViewport, type ViewportHandle } from './ui/viewport';
 import { createHandTracker, type HandEvent, type HandTracker } from './input/hands';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { SIM_ACTIVE, DEMO_SCRIPT, mountSimCursor, playDemo } from './sim';
-import { isEnabled as onDeviceEnabled, initDeviceModel, compileCommand, verifyOp } from './ai/hybrid';
+import { initDeviceModel, compileCommand, verifyOp, generateTemplate, isDesignRequest, prepareHybrid } from './ai/hybrid';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const DRAG_MM_RANGE = 300;
@@ -171,10 +171,46 @@ const viewport: ViewportHandle = createViewport(viewportEl, (partId) => {
 
 // ---- command pipeline (shared by voice, text, and sim) ----
 
+function applyTemplateResult(result: { template: string; params: Record<string, number> }): void {
+  opJsonEl.textContent = JSON.stringify(result, null, 2);
+  if (!isTemplateName(result.template)) {
+    verifierEl.textContent = `Unknown template "${result.template}".`;
+    return;
+  }
+  for (const op of buildTemplate(result.template, result.params)) {
+    const applied = engine.apply(op);
+    if (!applied.ok) {
+      verifierEl.textContent = `Template step failed: ${applied.error}`;
+      say(`Could not finish: ${applied.error}`);
+      renderAll();
+      return;
+    }
+  }
+  verifierEl.textContent = `Applied template "${result.template}".`;
+  say(`Built ${result.template}.`);
+  renderAll();
+  announceWarnings();
+}
+
 async function runUtterance(utterance: string): Promise<void> {
   lastCommandEl.textContent = `"${utterance}"`;
   const before = engine.summary();
   const state = engine.getState();
+
+  // Longer design requests go to the cloud-only template model, with the
+  // rule parser as fallback inside generateTemplate.
+  if (isDesignRequest(utterance)) {
+    const tmpl = await generateTemplate(utterance);
+    setBadge(tmpl.source);
+    if ('clarify' in tmpl) {
+      opJsonEl.textContent = '';
+      verifierEl.textContent = tmpl.clarify;
+      say(tmpl.clarify);
+      return;
+    }
+    applyTemplateResult(tmpl);
+    return;
+  }
 
   const { result, source } = await compileCommand(utterance, before, state.selectedId);
   setBadge(source);
@@ -187,24 +223,7 @@ async function runUtterance(utterance: string): Promise<void> {
   }
 
   if ('template' in result) {
-    opJsonEl.textContent = JSON.stringify(result, null, 2);
-    if (!isTemplateName(result.template)) {
-      verifierEl.textContent = `Unknown template "${result.template}".`;
-      return;
-    }
-    for (const op of buildTemplate(result.template, result.params)) {
-      const applied = engine.apply(op);
-      if (!applied.ok) {
-        verifierEl.textContent = `Template step failed: ${applied.error}`;
-        say(`Could not finish: ${applied.error}`);
-        renderAll();
-        return;
-      }
-    }
-    verifierEl.textContent = `Applied template "${result.template}".`;
-    say(`Built ${result.template}.`);
-    renderAll();
-    announceWarnings();
+    applyTemplateResult(result);
     return;
   }
 
@@ -375,29 +394,37 @@ btnCamera.addEventListener('click', async () => {
 });
 
 // ---- on-device AI ----
-
-if (onDeviceEnabled()) {
-  btnAi.disabled = true;
-  btnAi.textContent = 'On-device AI ready';
-}
+// A Firebase key is not "on-device ready". The user must click to call
+// initializeDeviceModel; we then show downloading, ready, or failed.
 
 btnAi.addEventListener('click', async () => {
   btnAi.disabled = true;
+  btnAi.textContent = 'Downloading on-device AI…';
   progressWrap.hidden = false;
-  try {
-    await initDeviceModel((p) => {
-      const pct = Math.round(p * 100);
-      progressFill.style.width = `${pct}%`;
-      progressLabel.textContent = `${pct}%`;
-    });
+  progressFill.style.width = '0%';
+  progressLabel.textContent = '0%';
+  clearFail('fail-ai');
+  const ok = await initDeviceModel((p) => {
+    const pct = Math.round(p * 100);
+    progressFill.style.width = `${pct}%`;
+    progressLabel.textContent = `${pct}%`;
+  });
+  progressWrap.hidden = true;
+  if (ok) {
     btnAi.textContent = 'On-device AI ready';
     say('On-device AI is ready.');
-  } catch {
+  } else {
     btnAi.disabled = false;
     btnAi.textContent = 'Enable on-device AI';
-    fail('fail-ai', 'On-device AI is unavailable on this device — falling back to cloud or rules.');
-  } finally {
-    progressWrap.hidden = true;
+    fail('fail-ai', 'On-device AI failed to start — falling back to cloud or rules.');
+    say('On-device AI failed to start.');
+  }
+});
+
+void prepareHybrid().then((status) => {
+  if (status.appCheck === 'failed' || status.message) {
+    fail('fail-appcheck', status.message ?? 'App Check is required. Using rules only.');
+    setBadge('rules');
   }
 });
 
