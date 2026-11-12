@@ -260,6 +260,17 @@ export async function prepareHybrid(): Promise<HybridStatus> {
 }
 
 /**
+ * What the pure router (ai/router.ts) needs to know about the world. Call after
+ * prepareHybrid() so App Check / device status are real, not 'idle'/'skipped'.
+ */
+export function routerEnv(): { deviceReady: boolean; cloudReady: boolean } {
+  return {
+    deviceReady: deviceModelStatus === 'ready',
+    cloudReady: isEnabled() && appCheckState !== 'failed',
+  };
+}
+
+/**
  * Longer free-form design requests belong on the cloud-only template model
  * (e.g. "design a stand for my phone"), not the short-command intent path.
  */
@@ -653,18 +664,27 @@ export interface FusionOutcome {
  * typed, re-validated op with a confidence score. Prompt building and result
  * parsing live in intentFusion.ts (pure, unit-tested without a network).
  *
- * NOTE for the upcoming command router: call intentFusion.exactRuleParse()
- * FIRST — an exact rule-parsed command short-circuits fusion entirely. This
- * function only rule-parses as a last-resort floor when no model is available.
+ * The command router (ai/router.ts) calls intentFusion.exactRuleParse() FIRST —
+ * an exact rule-parsed command short-circuits fusion entirely. This function
+ * only rule-parses as a last-resort floor when no model is available.
+ *
+ * `forceCloud` is the router's low-confidence escalation: re-ask the ONLY_IN_CLOUD
+ * fusion twin instead of Nano (falls to the rules floor if no cloud model).
  */
-export async function fuseIntent(utterance: string, ctx: FusionContext): Promise<FusionOutcome> {
+export async function fuseIntent(
+  utterance: string,
+  ctx: FusionContext,
+  opts?: { forceCloud?: boolean },
+): Promise<FusionOutcome> {
   const t0 = Date.now();
   const models = await ensureModels();
   const mode = getActiveMode();
-  if (models?.fusion) {
+  const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
+  if (models && primary) {
     try {
       const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx);
-      const response = await callWithCloudRetry(models.fusion, models.fusionCloud ?? null, prompt, 'fuse');
+      const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
+      const response = await callWithCloudRetry(primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse');
       const parsed = response
         ? parseFusionResult(extractJson(response.text()), mode.coerce.bind(mode), utterance)
         : null;

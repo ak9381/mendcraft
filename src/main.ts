@@ -15,12 +15,26 @@ import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo } from './sim';
 import {
   initDeviceModel,
   checkDeviceAvailability,
-  compileCommand,
+  fuseIntent,
   verifyOp,
   prepareHybrid,
   getHybridStatus,
+  routerEnv,
   type DeviceModelStatus,
+  type FusionContext,
+  type Source,
 } from './ai/hybrid';
+import {
+  REASON_TEXT,
+  badgeLabel,
+  finalReason,
+  pickEscalated,
+  planRoute,
+  shouldEscalate,
+  type RouteReason,
+} from './ai/router';
+import { createRouterPanel } from './ui/routerPanel';
+import { recordInference } from './firebase/telemetry';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
@@ -62,6 +76,7 @@ app.innerHTML = `
     <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
     <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
     <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
+    <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
       <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
@@ -195,12 +210,13 @@ const SOURCE_TOOLTIP: Record<'on-device' | 'cloud' | 'rules', string> = {
   rules: 'Answered by the built-in deterministic parser — fully offline, no AI.',
 };
 
-function setBadge(source: 'on-device' | 'cloud' | 'rules'): void {
+function setBadge(source: Source, reason?: RouteReason): void {
   sourceBadge.className = `badge badge-${source}`;
-  const label = source.toUpperCase().replace('-', ' ');
+  const label = reason ? badgeLabel(source, reason) : source.toUpperCase().replace('-', ' ');
   sourceBadge.textContent = label;
-  sourceBadge.title = SOURCE_TOOLTIP[source];
-  sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}`);
+  const why = reason ? ` Route: ${REASON_TEXT[reason]}.` : '';
+  sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
+  sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
 }
 setBadge('rules');
 
@@ -264,6 +280,7 @@ function renderWarnings(): void {
 const btnGestures = el<HTMLButtonElement>('btn-gestures');
 const btnKeyboard = el<HTMLButtonElement>('btn-keyboard');
 const btnReference = el<HTMLButtonElement>('btn-reference');
+const btnRouting = el<HTMLButtonElement>('btn-routing');
 
 // On-screen keyboard lives at the bottom of the page (fixed), so elementFromPoint
 // hit-testing works for the hand pointer; the float panels sit over the canvas.
@@ -271,6 +288,8 @@ const keyboard = createOnScreenKeyboard();
 document.body.appendChild(keyboard.element);
 const referencePanel = createReferencePanel();
 viewportEl.appendChild(referencePanel.element);
+const routerPanel = createRouterPanel();
+viewportEl.appendChild(routerPanel.element);
 const gesturesPanel = createGesturesPanel({ onChange: (m) => { gestureMap = m; } });
 viewportEl.appendChild(gesturesPanel.element);
 
@@ -296,6 +315,11 @@ btnReference.addEventListener('click', () => {
   referencePanel.toggle();
   toggleButton(btnReference, referencePanel.isOpen());
   say(referencePanel.isOpen() ? 'Reference panel open.' : 'Reference panel closed.');
+});
+btnRouting.addEventListener('click', () => {
+  routerPanel.toggle();
+  toggleButton(btnRouting, routerPanel.isOpen());
+  say(routerPanel.isOpen() ? 'Routing log open.' : 'Routing log closed.');
 });
 
 // Discrete gesture actions fire once on the gesture's rising edge. Continuous
@@ -348,12 +372,36 @@ async function runUtterance(utterance: string): Promise<void> {
   if (ok) onboarding.notifyCommand();
 }
 
+/** Pointer/selection context handed to intent fusion (mode-agnostic: cursor and
+ *  nearby elements stay empty until modes expose them — see ai/router.ts). */
+function fusionContext(): FusionContext {
+  const sel = controller.selectedId();
+  return {
+    space: mode.id as FusionContext['space'],
+    unit: mode.id === 'ui' ? 'px' : 'mm',
+    cursor: null,
+    hoverId: null,
+    selectedIds: sel ? [sel] : [],
+    nearby: [],
+  };
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
+  // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
+  // cloud escalation. The decision is pure; the badge shows the ACTUAL source
+  // plus the reason, and every decision lands in the Routing dev panel.
+  const t0 = performance.now();
+  const env = routerEnv();
+  const isBig = controller.isDesignRequest(utterance);
+  const decision = planRoute(utterance, (u) => mode.parse(u), isBig, env);
+
   // Whole-design requests go to the cloud "generate" path (rules fallback
-  // inside the controller), everything else through the single-op intent path.
-  if (controller.isDesignRequest(utterance)) {
+  // inside the controller), everything else through the single-op fusion path.
+  if (isBig) {
     const { source, step, clarify } = await controller.generate(utterance);
-    setBadge(source);
+    const reason = finalReason(decision, source, false);
+    setBadge(source, reason);
+    routerPanel.add({ utterance, planned: decision.path, source, reason, escalated: false, ms: performance.now() - t0 });
     // Keep the op/JSON panel fresh — reflect this command, not the previous op.
     opJsonEl.textContent = JSON.stringify({ generate: utterance, source }, null, 2);
     if (clarify) {
@@ -377,8 +425,29 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   }
 
   const before = controller.summary();
-  const { result, source } = await compileCommand(utterance, before, controller.selectedId());
-  setBadge(source);
+  let result: object;
+  let source: Source;
+  let confidence: number | undefined;
+  let escalated = false;
+  if (decision.ruleResult) {
+    // Exact-rule short circuit: no model call at all.
+    result = decision.ruleResult;
+    source = 'rules';
+    recordInference('rules', 'route-exact', performance.now() - t0);
+  } else {
+    let outcome = await fuseIntent(utterance, fusionContext());
+    if (shouldEscalate(outcome.source, outcome.confidence, env)) {
+      // Unsure on-device answer: re-ask the cloud twin, keep the better one.
+      const retry = await fuseIntent(utterance, fusionContext(), { forceCloud: true });
+      ({ outcome, escalated } = pickEscalated(outcome, retry));
+    }
+    result = outcome.result;
+    source = outcome.source;
+    confidence = outcome.confidence;
+  }
+  const reason = finalReason(decision, source, escalated);
+  setBadge(source, reason);
+  routerPanel.add({ utterance, planned: decision.path, source, reason, confidence, escalated, ms: performance.now() - t0 });
 
   if ('clarify' in result) {
     opJsonEl.textContent = '';
@@ -830,7 +899,7 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>('#mode-switch [da
 void prepareHybrid().then(async (status) => {
   if (status.appCheck === 'failed' || status.message) {
     fail('fail-appcheck', `${status.message ?? 'App Check is required. Using rules only.'}${status.lastError ? ` (${status.lastError})` : ''}`);
-    setBadge('rules');
+    setBadge('rules', 'offline');
   }
   renderDeviceButton(await checkDeviceAvailability());
   renderAiStatus();
