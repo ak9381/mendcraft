@@ -44,6 +44,8 @@ import {
   type RouteReason,
 } from './ai/router';
 import { createRouterPanel } from './ui/routerPanel';
+import { createLedger, type LedgerSource } from './core/ledger';
+import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
 import { generatePlan, generateUi } from './ai/hybrid';
 import { isFirebaseConfigured } from './firebase/app';
@@ -94,6 +96,7 @@ app.innerHTML = `
     <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
     <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
     <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
+    <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
     <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
@@ -319,6 +322,7 @@ const btnGestures = el<HTMLButtonElement>('btn-gestures');
 const btnKeyboard = el<HTMLButtonElement>('btn-keyboard');
 const btnReference = el<HTMLButtonElement>('btn-reference');
 const btnRouting = el<HTMLButtonElement>('btn-routing');
+const btnLedger = el<HTMLButtonElement>('btn-ledger');
 
 // On-screen keyboard lives at the bottom of the page (fixed), so elementFromPoint
 // hit-testing works for the hand pointer; the float panels sit over the canvas.
@@ -328,6 +332,10 @@ const referencePanel = createReferencePanel();
 viewportEl.appendChild(referencePanel.element);
 const routerPanel = createRouterPanel();
 viewportEl.appendChild(routerPanel.element);
+// "What left this device" ledger: pure accounting (core/ledger) + a pinned panel.
+const ledger = createLedger();
+const ledgerPanel = createLedgerPanel(ledger);
+viewportEl.appendChild(ledgerPanel.element);
 const a11yPanel = createA11yPanel({
   onShow: highlightA11yIssue,
   onApply: applyA11yFix,
@@ -434,6 +442,14 @@ btnRouting.addEventListener('click', () => {
   routerPanel.toggle();
   toggleButton(btnRouting, routerPanel.isOpen());
   say(routerPanel.isOpen() ? 'Routing log open.' : 'Routing log closed.');
+});
+btnLedger.addEventListener('click', () => {
+  ledgerPanel.toggle();
+  toggleButton(btnLedger, ledgerPanel.isOpen());
+  const c = ledger.counts();
+  say(ledgerPanel.isOpen()
+    ? `What left this device: ${c.cloud} cloud call${c.cloud === 1 ? '' : 's'}, ${c.private} private on-device event${c.private === 1 ? '' : 's'}.`
+    : 'Ledger closed.');
 });
 el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
   if (a11yPanel.isOpen()) a11yPanel.toggle();
@@ -591,11 +607,15 @@ async function runAccessibilityCheck(): Promise<boolean> {
     say('Offline — queued cloud accessibility explanations for when you reconnect.');
     return true;
   }
-  const res = await explainAccessibility(
-    issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation })),
-    controller.summary(),
-  );
+  const summary = controller.summary();
+  const sent = issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
+  const res = await explainAccessibility(sent, summary);
   setBadge(res.source);
+  recordLedger(
+    res.source, 'a11y-explain',
+    res.source === 'cloud' ? 'explain issues' : REASON_TEXT.private,
+    `issues: ${JSON.stringify(sent)}\ndesign: ${summary}`,
+  );
   a11yPanel.setExplanations(res.items, res.source);
   return true;
 }
@@ -772,6 +792,9 @@ async function enqueueA11yJob(issues: A11yIssue[], summary: string): Promise<voi
 async function runJobOnCloud(job: QueuedJob): Promise<void> {
   if (job.kind === 'a11y') {
     const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '');
+    recordLedger(res.source, 'a11y-explain (queued)',
+      res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private,
+      `issues: ${JSON.stringify(job.payload.issues ?? [])}\ndesign: ${job.payload.summary ?? ''}`);
     staged.set(job.id, { kind: 'a11y', items: res.items, source: res.source });
     await jobQueue.setStatus(job.id, 'ready');
     return;
@@ -779,6 +802,8 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
   const prompt = job.payload.prompt ?? '';
   if (job.kind === 'plan') {
     const res = await generatePlan(prompt);
+    recordLedger(res.source, 'generate (queued)',
+      res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private, commandPayload(prompt));
     if (res.ops?.length) {
       staged.set(job.id, { kind: 'plan', payload: { ops: res.ops }, source: res.source });
       await jobQueue.setStatus(job.id, 'ready');
@@ -787,6 +812,8 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
     }
   } else {
     const res = await generateUi(prompt);
+    recordLedger(res.source, 'generate (queued)',
+      res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private, commandPayload(prompt));
     if (res.frame) {
       staged.set(job.id, { kind: 'ui', payload: { frame: res.frame }, source: res.source });
       await jobQueue.setStatus(job.id, 'ready');
@@ -836,6 +863,25 @@ void jobQueue.init().then(() => {
 });
 renderNetState();
 
+// ---- "what left this device" ledger recording ----------------------------
+// Mirrors the badge's honesty contract: each AI event is recorded with the SAME
+// source the badge shows. A `cloud` event stores the abstract design payload that
+// was actually sent (design ops + command text only — the camera, face, hand and
+// voice never reach this layer); `on-device`/`rules` events are counted as
+// private, with nothing stored because nothing left the machine.
+
+/** The abstract design payload sent for a command: the command text plus the
+ *  compact scene context the model needs — never any device-only signal. */
+function commandPayload(utterance: string, ctx?: FusionContext): string {
+  const base = `command: ${JSON.stringify(utterance)}`;
+  if (!ctx) return base;
+  return `${base}\ncontext: ${JSON.stringify({ space: ctx.space, unit: ctx.unit, selected: ctx.selectedIds })}`;
+}
+
+function recordLedger(source: Source, job: string, reason: string, sent: string, ms?: number): void {
+  ledger.record({ source: source as LedgerSource, job, reason, sent, ms });
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Accessibility requests short-circuit BEFORE routing: "make this house
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
@@ -860,6 +906,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     const reason = finalReason(decision, source, false);
     setBadge(source, reason);
     routerPanel.add({ utterance, planned: decision.path, source, reason, escalated: false, ms: performance.now() - t0 });
+    recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(utterance), performance.now() - t0);
     // Keep the op/JSON panel fresh — reflect this command, not the previous op.
     opJsonEl.textContent = JSON.stringify({ generate: utterance, source }, null, 2);
     if (clarify) {
@@ -889,15 +936,27 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   let confidence: number | undefined;
   let escalated = false;
   if (decision.ruleResult) {
-    // Exact-rule short circuit: no model call at all.
+    // Exact-rule short circuit: no model call at all — a private local event.
     result = decision.ruleResult;
     source = 'rules';
     recordInference('rules', 'route-exact', performance.now() - t0);
+    recordLedger('rules', 'command', REASON_TEXT.exact, '');
   } else {
-    let outcome = await fuseIntent(utterance, fusionContext());
+    const ctx = fusionContext();
+    let outcome = await fuseIntent(utterance, ctx);
+    // Primary inference: a cloud answer stores its payload; on-device/rules are
+    // private. The reason follows the planned route (on-device → private).
+    recordLedger(
+      outcome.source, 'intent',
+      outcome.source === 'cloud' ? REASON_TEXT[decision.reason] : REASON_TEXT.private,
+      commandPayload(utterance, ctx), outcome.ms,
+    );
     if (shouldEscalate(outcome.source, outcome.confidence, env)) {
-      // Unsure on-device answer: re-ask the cloud twin, keep the better one.
-      const retry = await fuseIntent(utterance, fusionContext(), { forceCloud: true });
+      // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
+      // retry physically contacts the cloud, so its send is recorded even if the
+      // on-device answer is ultimately kept.
+      const retry = await fuseIntent(utterance, ctx, { forceCloud: true });
+      recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], commandPayload(utterance, ctx), retry.ms);
       ({ outcome, escalated } = pickEscalated(outcome, retry));
     }
     result = outcome.result;
@@ -928,6 +987,13 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   if (step.op) {
     const after = controller.summary();
     const verdict = await verifyOp(step.op as never, before, after, step.warnings);
+    // The verifier also leaves the device when it resolves in the cloud: it sends
+    // the op plus before/after scene summaries (abstract geometry, no raw input).
+    recordLedger(
+      verdict.source, 'verify',
+      verdict.source === 'cloud' ? 'verify op' : REASON_TEXT.private,
+      `op: ${JSON.stringify(step.op)}\nbefore: ${before}\nafter: ${after}\nwarnings: ${JSON.stringify(step.warnings)}`,
+    );
     if (verdict.matchesIntent) {
       verifierEl.textContent = `${step.message ?? 'Matches intent'} (${verdict.source}).`;
     } else {
@@ -1400,6 +1466,12 @@ if (SIM_ACTIVE) {
       runUtterance,
       (step) => {
         lastCommandEl.textContent = `SIM: ${step.label}`;
+        if (step.revealLedger) {
+          ledgerPanel.open();
+          toggleButton(btnLedger, true);
+          const c = ledger.counts();
+          say(`What left this device: ${c.cloud} cloud call${c.cloud === 1 ? '' : 's'} (${c.bytesSent} bytes), ${c.private} private on-device events.`);
+        }
       },
       () => btnExport.click(),
     ).finally(() => {

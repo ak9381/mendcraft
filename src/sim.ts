@@ -12,6 +12,10 @@ export interface SimStep {
   utterance?: string;
   action?: () => void | Promise<void>;
   delayMs?: number;
+  /** Final beat: open the "what left this device" ledger so the judge can see
+   *  the cloud calls (abstract ops + text) against the private on-device count.
+   *  The shell handles the reveal in onStep; playDemo just skips the export. */
+  revealLedger?: boolean;
 }
 
 /**
@@ -27,6 +31,7 @@ export const PLAN_DEMO: SimStep[] = [
   { label: 'Add a door to it', utterance: 'add a door' },
   { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Export the DXF', action: undefined },
+  { label: 'See what left this device', revealLedger: true },
 ];
 
 /** Frozen demo for the 3D part mode (reachable via ?mode=part&sim=1). */
@@ -36,6 +41,7 @@ export const PART_DEMO: SimStep[] = [
   { label: 'Make it narrower (triggers a thin-wall warning)', utterance: 'make it narrower by 7' },
   { label: 'Fix the wall', utterance: 'make it wider by 7' },
   { label: 'Export the STL', action: undefined },
+  { label: 'See what left this device', revealLedger: true },
 ];
 
 /**
@@ -52,6 +58,7 @@ export const UI_DEMO: SimStep[] = [
   { label: 'Bigger heading', utterance: 'bigger heading' },
   { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Export the HTML', action: undefined },
+  { label: 'See what left this device', revealLedger: true },
 ];
 
 /** Back-compat alias (defaults to the plan hero demo). */
@@ -149,6 +156,7 @@ export async function playDemo(
     onStep(step, i);
     if (step.utterance) await runUtterance(step.utterance);
     else if (step.action) await step.action();
+    else if (step.revealLedger) { /* onStep opens the ledger; no export here */ }
     else onExport();
     await new Promise((resolve) => setTimeout(resolve, step.delayMs ?? 1400));
   }
