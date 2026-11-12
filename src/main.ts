@@ -21,10 +21,17 @@ import {
   prepareHybrid,
   getHybridStatus,
   routerEnv,
+  adaptHandProfile,
   type DeviceModelStatus,
   type FusionContext,
   type Source,
 } from './ai/hybrid';
+import { createHandMetricsSampler, type HandMetrics } from './input/handMetrics';
+import {
+  PROFILES, resolveActiveProfile, summarizeAdaptation,
+  type InteractionProfile, type ProfileAdaptation,
+} from './input/handProfile';
+import { createHandProfilePanel } from './ui/handProfilePanel';
 import { isAccessibilityRequest, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
@@ -77,6 +84,7 @@ app.innerHTML = `
     <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Enable mic</button>
     <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
+    <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
     <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
     <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
     <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
@@ -140,6 +148,7 @@ app.innerHTML = `
   </div>
   <div id="sr-live" class="sr-only" aria-live="polite"></div>
   <div id="status-live" class="sr-only" aria-live="polite"></div>
+  <div id="mc-toast" class="mc-toast" role="status" aria-live="polite" hidden></div>
   <div id="onboarding" hidden></div>
 `;
 
@@ -179,8 +188,16 @@ const progressLabel = el<HTMLSpanElement>('progress-label');
 const commandForm = el<HTMLFormElement>('command-box');
 const commandInput = el<HTMLInputElement>('command-input');
 
+// The interaction profile currently in force (hand-adaptive input). Declared
+// here so say() can honour its voiceVerbosity; retuned by applyActiveProfile().
+let activeProfile: InteractionProfile = PROFILES.standard;
+
 function say(message: string): void {
-  srLive.textContent = message;
+  srLive.textContent = message; // screen-reader text always updates
+  // The active hand profile's voiceVerbosity tunes spoken output: 'terse' keeps
+  // the screen-reader text but skips text-to-speech (less chatter for confident
+  // users); 'standard'/'coached' speak normally.
+  if (activeProfile.voiceVerbosity === 'terse') return;
   if ('speechSynthesis' in window) {
     const utter = new SpeechSynthesisUtterance(message);
     utter.rate = 1.1;
@@ -307,6 +324,70 @@ viewportEl.appendChild(gesturesPanel.element);
 let gestureMap = gesturesPanel.getMap();
 const gestureRecognizer = createGestureRecognizer();
 
+// ---- hand-adaptive input (all on-device) ----
+// Numbers computed from the operator's hand landmarks (never video) drive an
+// on-device Nano pick of the interaction profile. The profile retunes the shared
+// pointer layer, so it helps the pinch pointer AND is harmless to the mouse path.
+const btnHands = el<HTMLButtonElement>('btn-hands');
+const toastEl = el<HTMLDivElement>('mc-toast');
+const metricsSampler = createHandMetricsSampler();
+let adapting = false;
+let adaptedOnce = false;
+let toastTimer = 0;
+
+const handsPanel = createHandProfilePanel({
+  onOverride: () => applyActiveProfile(lastAdaptation),
+  onReadapt: () => { adaptedOnce = false; void runAdaptation(true); },
+});
+viewportEl.appendChild(handsPanel.element);
+let lastAdaptation: ProfileAdaptation = { profile: PROFILES.standard, reason: '', source: 'rules' };
+
+function showToast(message: string): void {
+  toastEl.textContent = message;
+  toastEl.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => { toastEl.hidden = true; }, 6000);
+}
+
+/**
+ * Apply a resolved adaptation (Nano/rules pick, or a manual override) to the
+ * shared pointer layer. Applied today: pinch thresholds (setPinchThreshold),
+ * target/cursor size (--mc-target-scale), pointer smoothing (smoothAim, read
+ * from activeProfile), and voice verbosity (say()). snapRadiusScale / clickMode
+ * / dwellMs are carried on the profile as the chosen configuration for the
+ * snap + dwell subsystems to read, but are not yet wired into the drag path —
+ * summarizeAdaptation deliberately does not claim them.
+ */
+function applyActiveProfile(adaptation: ProfileAdaptation): void {
+  const resolved = resolveActiveProfile(adaptation, handsPanel.getOverride());
+  activeProfile = resolved.profile;
+  tracker?.setPinchThreshold(activeProfile.pinchOn, activeProfile.pinchOff);
+  document.documentElement.style.setProperty('--mc-target-scale', String(activeProfile.targetScale));
+  handsPanel.setAdaptation(resolved);
+}
+
+/** Run the on-device adaptation once enough pinches are sampled. */
+async function runAdaptation(force = false): Promise<void> {
+  if (adapting) return;
+  if (!force && (adaptedOnce || !metricsSampler.ready())) return;
+  adapting = true;
+  try {
+    const metrics: HandMetrics = metricsSampler.snapshot();
+    handsPanel.setMetrics(metrics);
+    const result = await adaptHandProfile(metrics);
+    lastAdaptation = result;
+    adaptedOnce = true;
+    applyActiveProfile(result);
+    // Only toast when the choice is actually in force (not overridden away).
+    if (handsPanel.getOverride() === 'auto') {
+      showToast(summarizeAdaptation(result.profile));
+      say(summarizeAdaptation(result.profile));
+    }
+  } finally {
+    adapting = false;
+  }
+}
+
 function toggleButton(btn: HTMLButtonElement, on: boolean): void {
   btn.setAttribute('aria-pressed', String(on));
   btn.classList.toggle('active', on);
@@ -315,6 +396,11 @@ function toggleButton(btn: HTMLButtonElement, on: boolean): void {
 btnGestures.addEventListener('click', () => {
   gesturesPanel.toggle();
   toggleButton(btnGestures, gesturesPanel.isOpen());
+});
+btnHands.addEventListener('click', () => {
+  handsPanel.setMetrics(metricsSampler.snapshot());
+  handsPanel.toggle();
+  toggleButton(btnHands, handsPanel.isOpen());
 });
 btnKeyboard.addEventListener('click', () => {
   if (keyboard.isOpen()) keyboard.close();
@@ -700,17 +786,32 @@ function toClient(x: number, y: number): { clientX: number; clientY: number } {
   return { clientX: rect.left + x * rect.width, clientY: rect.top + y * rect.height };
 }
 
+// Pointer smoothing for the AIMING phase only: the active profile's `smoothing`
+// EMA steadies a shaky hover/cursor, while commit actions (tap, drag) stay on raw
+// coordinates for accuracy. Reset whenever the pinch state changes.
+let smX: number | null = null;
+let smY: number | null = null;
+function smoothAim(x: number, y: number): { x: number; y: number } {
+  const keep = activeProfile.smoothing;
+  if (keep <= 0 || smX === null || smY === null) { smX = x; smY = y; return { x, y }; }
+  smX += (x - smX) * (1 - keep);
+  smY += (y - smY) * (1 - keep);
+  return { x: smX, y: smY };
+}
+
 function handleHandEvent(e: HandEvent): void {
   switch (e.type) {
     case 'tracking': {
-      placeCursor(e.x, e.y);
-      const { clientX, clientY } = toClient(e.x, e.y);
+      const s = smoothAim(e.x, e.y);
+      placeCursor(s.x, s.y);
+      const { clientX, clientY } = toClient(s.x, s.y);
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(clientX, clientY)) break;
       viewport.hover?.(clientX, clientY); // ghost previews track the open hand
       break;
     }
     case 'pinch-start': {
+      smX = null; smY = null; // commit on raw coordinates
       placeCursor(e.x, e.y);
       handCursor.classList.add('pinching');
       const { clientX, clientY } = toClient(e.x, e.y);
@@ -749,6 +850,7 @@ function handleHandEvent(e: HandEvent): void {
       viewport.endDrag?.();
       break;
     case 'lost':
+      smX = null; smY = null;
       handCursor.hidden = true;
       viewport.endDrag?.();
       break;
@@ -793,6 +895,14 @@ function onPresenceFrame(f: PresenceFrame): void {
     ? f.facing ? 'facing screen' : 'looking away'
     : f.facing ? 'facing screen' : 'no face';
   operatorStateEl.textContent = f.registered ? 'locked to you' : 'anyone can drive';
+
+  // Hand-adaptive input: sample the operator's primary hand (landmarks only,
+  // never video) and, once enough pinches are seen, let on-device Nano pick the
+  // interaction profile. Skipped while paused (no operator hand to measure).
+  if (!f.paused && f.hands.length > 0) {
+    metricsSampler.push({ t: performance.now(), points: f.hands[0].points });
+    if (metricsSampler.ready() && !adaptedOnce) void runAdaptation();
+  }
 
   processGestureFrame(f);
 }

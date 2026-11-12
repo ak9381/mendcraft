@@ -24,6 +24,10 @@ import {
   type FusionContext,
 } from './intentFusion';
 import { buildA11yConstraint, coerceA11yExplanations, type A11yExplanation, type A11yIssue } from '../core/a11y';
+import {
+  PROFILE_CONSTRAINT, buildAdaptPrompt, coerceProfileAdaptation, type ProfileAdaptation,
+} from '../input/handProfile';
+import type { HandMetrics } from '../input/handMetrics';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
@@ -128,6 +132,8 @@ interface Models {
   fusionCloud?: TextGenModel | null;
   /** Accessibility explainer (ONLY_IN_CLOUD, a11y-explain schema). */
   a11yExplain?: TextGenModel | null;
+  /** On-device hand-profile picker (PREFER_ON_DEVICE, numbers-only; never cloud). */
+  handAdapt?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
 }
@@ -141,9 +147,12 @@ export interface ModelOverrides {
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
   a11yExplain?: TextGenModel | null;
+  handAdapt?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
+  /** Force the reported on-device model status (test seam for adaptHandProfile). */
+  deviceModel?: DeviceModelStatus;
   /** Fake Chrome LanguageModel; null = browser without the Prompt API. */
   languageModel?: LanguageModelProvider | null;
 }
@@ -300,6 +309,7 @@ async function ensureModels(): Promise<Models | null> {
       return null;
     }
     appCheckState = testOverrides.appCheck ?? 'ready';
+    if (testOverrides.deviceModel) deviceModelStatus = testOverrides.deviceModel;
     return {
       intent: testOverrides.intent ?? null,
       template: testOverrides.template ?? null,
@@ -309,6 +319,7 @@ async function ensureModels(): Promise<Models | null> {
       verifyCloud: testOverrides.verifyCloud ?? null,
       fusionCloud: testOverrides.fusionCloud ?? null,
       a11yExplain: testOverrides.a11yExplain ?? null,
+      handAdapt: testOverrides.handAdapt ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
     };
   }
@@ -433,6 +444,21 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // Hand-adaptive input: ONLY_ON_DEVICE, with NO inCloudParams at all. The raw
+    // hand numbers must never leave the device, and ONLY_ON_DEVICE gives the SDK
+    // no cloud transport to fall back to (it errors instead of going to cloud if
+    // Nano is not ready) — so the metrics prompt is physically unable to be
+    // uploaded. This is stronger than PREFER_ON_DEVICE, which can silently fall
+    // back to the cloud. adaptHandProfile() still gates on Nano being ready so
+    // the ONLY_ON_DEVICE "not ready" error never fires in normal use.
+    const handAdapt = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: PROFILE_CONSTRAINT },
+      },
+    });
+
     // Server prompt-template model (@beta on the web SDK). Only used when a
     // template ID is set in Remote Config; otherwise the big jobs use the inline
     // prompt above. Guarded so an SDK without it never breaks init.
@@ -444,7 +470,7 @@ async function initFirebase(): Promise<Models | null> {
       promptTemplate = null;
     }
 
-    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, a11yExplain, promptTemplate };
+    cached = { intent, template, verify, fusion, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -933,4 +959,51 @@ export async function explainAccessibility(
   // citation, so an empty item list simply keeps those.
   recordInference('rules', 'a11y-explain', Date.now() - t0);
   return { items: [], source: 'rules' };
+}
+
+export interface AdaptHandResult extends ProfileAdaptation {
+  ms: number;
+}
+
+/**
+ * HAND-ADAPTIVE INPUT (on-device only). Feed the numbers computed from hand
+ * landmarks (input/handMetrics — effort, tremor, pinch time, fatigue) to Nano
+ * via the Prompt API's responseConstraint and get back one interaction profile.
+ *
+ * Privacy is the hard constraint: the raw numbers must never leave the device.
+ * So this path, unlike every other hybrid call, uses an ONLY_ON_DEVICE model
+ * with NO cloud transport (no inCloudParams, no cloud twin, no cloud retry), and
+ * runs it only when Nano is actually ready here; the on-device source is then
+ * re-checked belt-and-suspenders and anything else is discarded. When Nano is
+ * unavailable the
+ * deterministic rules pick (handProfile.fallbackProfile) stands in — the numbers
+ * still never go anywhere. Telemetry records only the source + latency, never
+ * the metrics themselves.
+ */
+export async function adaptHandProfile(metrics: HandMetrics): Promise<AdaptHandResult> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (models?.handAdapt && deviceModelStatus === 'ready') {
+    try {
+      const prompt = buildAdaptPrompt(metrics);
+      const { response } = await withTimeout(
+        models.handAdapt.generateContent(prompt),
+        ON_DEVICE_TIMEOUT_MS,
+        'hand-adapt',
+      );
+      // Belt-and-suspenders: if this somehow resolved in the cloud, drop it so
+      // the raw hand numbers are never acted on off-device.
+      if (sourceOf(response) === 'on-device') {
+        const parsed = coerceProfileAdaptation(extractJson(response.text()), metrics);
+        recordInference('on-device', 'hand-adapt', Date.now() - t0);
+        return { ...parsed, ms: Date.now() - t0 };
+      }
+      noteError('hand adapt', new Error('on-device model unavailable; keeping numbers on device'));
+    } catch (err) {
+      noteError('hand adapt model', err);
+    }
+  }
+  const rules = coerceProfileAdaptation(null, metrics);
+  recordInference('rules', 'hand-adapt', Date.now() - t0);
+  return { ...rules, ms: Date.now() - t0 };
 }

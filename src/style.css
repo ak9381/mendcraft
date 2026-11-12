@@ -274,15 +274,17 @@ button.primary:hover {
 }
 
 .hand-cursor {
+  /* Size tracks the active interaction profile's target scale (hand-adaptive
+     input), set on :root; falls back to 1 before any profile is applied. */
   position: absolute;
-  width: 22px;
-  height: 22px;
-  margin: -11px 0 0 -11px;
+  width: calc(22px * var(--mc-target-scale, 1));
+  height: calc(22px * var(--mc-target-scale, 1));
+  margin: calc(-11px * var(--mc-target-scale, 1)) 0 0 calc(-11px * var(--mc-target-scale, 1));
   border: 3px solid var(--accent);
   border-radius: 50%;
   pointer-events: none;
   z-index: 5;
-  transition: background 0.1s;
+  transition: background 0.1s, width 0.15s, height 0.15s;
 }
 
 .hand-cursor.pinching {
@@ -1086,6 +1088,7 @@ button.primary:hover {
 /* ─── Input extras: gestures panel, on-screen keyboard, reference panel ─────── */
 /* Shared floating-card look for the two canvas panels. */
 .mc-gestures-panel,
+.mc-hands-panel,
 .mc-ref-panel {
   position: absolute;
   z-index: 40;
@@ -1096,8 +1099,67 @@ button.primary:hover {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 .mc-gestures-panel[hidden],
+.mc-hands-panel[hidden],
 .mc-ref-panel[hidden],
 .mc-keyboard[hidden] { display: none; }
+
+/* Hand-adaptive settings panel (reuses the shared .mc-panel-* bits). */
+.mc-hands-panel {
+  top: 72px;
+  right: 16px;
+  width: 340px;
+  max-width: calc(100% - 32px);
+  padding: 0 0 12px;
+}
+.mc-hands-current { margin: 10px 12px; font-size: 14px; }
+.mc-hands-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+}
+.mc-hands-row label { font-size: 14px; color: var(--text-dim); }
+.mc-hands-row select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.mc-hands-metrics {
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  font-size: 13px;
+}
+.mc-hands-metrics dt { color: var(--text-dim); }
+.mc-hands-metrics dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.mc-hands-hint { margin: 0; grid-column: 1 / -1; color: var(--text-dim); }
+
+/* Adaptation toast (bottom-centre, auto-dismiss). */
+.mc-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(90vw, 460px);
+  padding: 10px 16px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+}
+.mc-toast[hidden] { display: none; }
 
 /* Gestures settings panel. */
 .mc-gestures-panel {
