@@ -82,6 +82,17 @@ interface Candidate {
   matrix: number[] | null;
 }
 
+/** Create a MediaPipe task on the GPU delegate, falling back to CPU if the GPU
+ *  delegate cannot be initialised (headless / software WebGL / no GPU). */
+async function createWithFallback<T>(make: (delegate: 'GPU' | 'CPU') => Promise<T>): Promise<T> {
+  try {
+    return await make('GPU');
+  } catch (err) {
+    console.warn('[mendcraft] MediaPipe GPU delegate unavailable — falling back to CPU.', err);
+    return await make('CPU');
+  }
+}
+
 function mirrorBox(b: FaceBox): FaceBox {
   const x = 1 - (b.x + b.w);
   return { x, y: b.y, w: b.w, h: b.h, cx: 1 - b.cx, cy: b.cy };
@@ -246,17 +257,25 @@ export function createPresenceTracker(
 
   async function start(): Promise<void> {
     const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-    handLm = await HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate: 'GPU' },
-      runningMode: 'VIDEO',
-      numHands: 4,
-    });
-    faceLm = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: 'GPU' },
-      runningMode: 'VIDEO',
-      numFaces: 4,
-      outputFacialTransformationMatrixes: true,
-    });
+    // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
+    // locked-down GPUs, software renderers) cannot create it, so fall back to the
+    // CPU delegate automatically rather than failing the whole camera. Tracking is
+    // slower on CPU but still works — far better than no hands/face at all.
+    handLm = await createWithFallback((delegate) =>
+      HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+        runningMode: 'VIDEO',
+        numHands: 4,
+      }),
+    );
+    faceLm = await createWithFallback((delegate) =>
+      FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+        runningMode: 'VIDEO',
+        numFaces: 4,
+        outputFacialTransformationMatrixes: true,
+      }),
+    );
 
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
     video.srcObject = stream;
