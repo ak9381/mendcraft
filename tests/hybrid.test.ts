@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   compileCommand,
+  generatePlan,
   generateTemplate,
   getDeviceModelStatus,
   getHybridStatus,
@@ -371,6 +372,53 @@ describe('App Check required', () => {
       [],
     );
     expect(verdict.source).toBe('rules');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Plan-mode regressions, driven by the ACTUAL raw text the live cloud returned.
+// Two production bugs: generate must expand a DOCUMENT (not emit ops that name
+// unknown ids), and an under-filled edit op must be repaired from the utterance.
+
+describe('plan generate + edit against real cloud output', () => {
+  beforeEach(() => setActiveMode('plan'));
+  // afterEach already resets models + restores the 'plan' default.
+
+  const CLOUD_PLAN_DOC =
+    '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
+  const CLOUD_PLAN_NO_ROOMS =
+    '{"unit":"mm","windows":[{"room":"Bedroom 1","side":"n","width":1200}]}';
+  const CLOUD_SET_LENGTH_NO_NUM = '{"op":"set_length","target":"selected","unit":"m"}';
+
+  it('generatePlan expands a cloud DOCUMENT and labels the source cloud', async () => {
+    setModelsForTest({ enabled: true, template: model(CLOUD_PLAN_DOC, 'in_cloud') });
+    const r = await generatePlan('two bedroom plan');
+    expect(r.source).toBe('cloud');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+    // The expansion pre-selects the shared wall so the next edit lands.
+    expect(r.ops?.some((o) => o.op === 'select')).toBe(true);
+  });
+
+  it('generatePlan falls back to a two-bedroom template when the cloud doc has no rooms', async () => {
+    setModelsForTest({ enabled: true, template: model(CLOUD_PLAN_NO_ROOMS, 'in_cloud') });
+    const r = await generatePlan('two bedroom plan');
+    expect(r.source).toBe('rules');
+    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+  });
+
+  it('compileCommand repairs an under-filled set_length and keeps the cloud badge', async () => {
+    setModelsForTest({ enabled: true, intent: model(CLOUD_SET_LENGTH_NO_NUM, 'in_cloud') });
+    const r = await compileCommand('make this wall 4 meters', '{}', 'w3');
+    expect(r.source).toBe('cloud');
+    expect(r.result).toEqual({ op: 'set_length', target: 'selected', length: 4000 });
+  });
+
+  it('compileCommand does not repair into a different op (falls back to rules)', async () => {
+    setModelsForTest({ enabled: true, intent: model(CLOUD_SET_LENGTH_NO_NUM, 'in_cloud') });
+    // Rules read this as a move, not set_length → no repair → rules path.
+    const r = await compileCommand('move it 500 left', '{}', 'w3');
+    expect(r.source).toBe('rules');
+    expect(r.result).toMatchObject({ op: 'move', nums: { dx: -500 } });
   });
 });
 

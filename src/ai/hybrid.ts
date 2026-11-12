@@ -9,7 +9,7 @@ import { getActiveMode } from '../core/modes';
 import { parseCommand, isTemplateCommand } from '../core/ruleParser';
 import { coercePlanGenerate } from '../plan/ai';
 import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
-import { buildPlanTemplate } from '../plan/templates';
+import { buildPlanTemplate, type PlanTemplateName } from '../plan/templates';
 import { validatePlanOp, type PlanOp } from '../plan/ops';
 
 export type Source = 'on-device' | 'cloud' | 'rules';
@@ -41,6 +41,8 @@ export interface CompileResult {
 export interface GeneratePlanResult {
   ops?: PlanOp[];
   clarify?: string;
+  /** Honest note shown instead of "Plan created." (e.g. a template fallback). */
+  note?: string;
   source: Source;
 }
 
@@ -135,8 +137,12 @@ function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
       const properties: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(props)) properties[k] = toFirebaseSchema(v, S);
       const keys = Object.keys(properties);
-      // Every property is optional — small models omit most fields per op.
-      return S.object(keys.length ? { properties, optionalProperties: keys } : { properties });
+      // Properties are optional by default (small models omit most fields per op),
+      // but a node may name a `required` subset — these the model MUST return
+      // (e.g. a generated plan's `rooms`), so the field can't be silently dropped.
+      const required = Array.isArray(node.required) ? (node.required as string[]) : [];
+      const optionalProperties = keys.filter((k) => !required.includes(k));
+      return S.object(keys.length ? { properties, optionalProperties } : { properties });
     }
   }
 }
@@ -507,8 +513,11 @@ export async function compileCommand(
       const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
       const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
       // The active mode coerces untrusted JSON into a validated result (or null).
-      const result = response ? getActiveMode().coerce(extractJson(response.text())) : null;
+      const result = response ? getActiveMode().coerce(extractJson(response.text()), utterance) : null;
       if (result) return { result, source: sourceOf(response!), ms: Date.now() - t0 };
+      // Model answered but nothing valid came out — record the raw text so an
+      // unexpected RULES-badge fallback is explainable (not a silent drop).
+      if (response) noteError('intent coerce', new Error(`model op not accepted: ${response.text().slice(0, 200)}`));
     } catch (err) {
       noteError('intent model', err);
     }
@@ -588,21 +597,30 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
         `${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`,
       );
       const coerced = coercePlanGenerate(extractJson(response.text()));
-      if (coerced && 'ops' in coerced) return { ops: coerced.ops, source: sourceOf(response) };
+      if (coerced && 'ops' in coerced && coerced.ops.length) return { ops: coerced.ops, source: sourceOf(response) };
       if (coerced && 'clarify' in coerced) return { clarify: coerced.clarify, source: sourceOf(response) };
+      // 200 but no usable plan — fall through to the deterministic template.
+      noteError('plan generate', new Error('cloud plan was empty or invalid; using a template'));
     } catch (err) {
       noteError('plan generate model', err);
     }
   }
-  // Rules fallback: a named template → re-validated ops.
+  // Rules fallback: a named template → re-validated ops. An unrecognised design
+  // request still gets an honest two-bedroom plan rather than a dead-end clarify.
   const ruled = parsePlanCommand(prompt);
-  if (isPlanGenerate(ruled)) {
+  let template: PlanTemplateName | null = isPlanGenerate(ruled) ? ruled.generate : null;
+  let note: string | undefined;
+  if (!template && getActiveMode().isDesignRequest(prompt)) {
+    template = 'twoBedroom';
+    note = 'Cloud plan was unavailable — built a two-bedroom template instead.';
+  }
+  if (template) {
     const ops: PlanOp[] = [];
-    for (const env of buildPlanTemplate(ruled.generate)) {
+    for (const env of buildPlanTemplate(template)) {
       const v = validatePlanOp(env);
       if (v.ok) ops.push(v.op);
     }
-    if (ops.length) return { ops, source: 'rules' };
+    if (ops.length) return { ops, note, source: 'rules' };
   }
   return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
 }

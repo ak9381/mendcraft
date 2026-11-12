@@ -27,7 +27,7 @@ import {
   isPlanClarify,
 } from '../src/plan/ruleParser';
 import { buildPlanTemplate } from '../src/plan/templates';
-import { coercePlan, coercePlanGenerate } from '../src/plan/ai';
+import { coercePlan, coercePlanGenerate, expandPlanDocument } from '../src/plan/ai';
 
 // Apply a loose envelope through the real validator, like the controller does.
 function run(engine: PlanEngine, env: Record<string, unknown>) {
@@ -241,10 +241,86 @@ describe('plan AI coercion', () => {
     expect(coercePlan({ clarify: 'Which wall?' })).toEqual({ clarify: 'Which wall?' });
   });
 
-  it('coercePlanGenerate keeps only valid ops and caps the list', () => {
+  it('coercePlanGenerate keeps only valid ops and caps the list (legacy ops shape)', () => {
     const r = coercePlanGenerate({ ops: [{ op: 'add_room', nums: { x: 0, y: 0, w: 4, h: 3 }, unit: 'm' }, { op: 'nope' }] });
     expect(r && 'ops' in r && r.ops).toHaveLength(1);
     expect(coercePlanGenerate({ ops: [] })).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Regression fixtures: the ACTUAL raw text the real cloud (gemini-3.5-flash-
+// lite) returned during a live smoke test of plan mode. These two shapes were
+// the two production bugs; keep them pinned so neither regresses.
+
+/** Bug 1 (fixed): whole-plan generate now returns a DOCUMENT, not raw ops. */
+const CLOUD_PLAN_DOC =
+  '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
+/** Bug 1 (the failure): the model once returned ONLY windows, no rooms. */
+const CLOUD_PLAN_NO_ROOMS =
+  '{"unit":"mm","windows":[{"room":"Bedroom 1","side":"n","width":1200},{"room":"Bedroom 2","side":"n","width":1200}]}';
+/** Bug 2: the intent model named a valid op but DROPPED the length number. */
+const CLOUD_SET_LENGTH_NO_NUM = '{"op":"set_length","target":"selected","unit":"m"}';
+
+describe('plan generate — whole-plan DOCUMENT expansion (Bug 1)', () => {
+  it('expands the real cloud document into a buildable plan with a pre-selected shared wall', () => {
+    const r = coercePlanGenerate(JSON.parse(CLOUD_PLAN_DOC));
+    if (!r || !('ops' in r)) throw new Error('expected ops');
+    const engine = new PlanEngine();
+    const applied = engine.applyGenerated(r.ops);
+    expect(applied.ok).toBe(true);
+    const doc = engine.getState();
+    // Two rooms sharing one interior wall, which is dimensioned + pre-selected
+    // so the next "make this wall 4 meters" lands without pointing.
+    expect(doc.rooms).toHaveLength(2);
+    expect(doc.walls).toHaveLength(7);
+    expect(doc.selectedId).toBe('w3');
+    expect(doc.dims.map((d) => d.wallId)).toContain('w3');
+    const shared = doc.rooms[0].wallIds.filter((id) => doc.rooms[1].wallIds.includes(id));
+    expect(shared).toEqual(['w3']);
+  });
+
+  it('resolves doors/windows by room + side to concrete wall ids (never a room id)', () => {
+    const ops = expandPlanDocument({
+      unit: 'mm',
+      rooms: [{ name: 'Studio', x: 0, y: 0, w: 6000, h: 4000 }],
+      doors: [{ room: 'Studio', side: 's', width: 900 }],
+      windows: [{ room: 'Studio', side: 'n', width: 1200 }],
+    });
+    const engine = new PlanEngine();
+    expect(engine.applyGenerated(ops).ok).toBe(true);
+    const doc = engine.getState();
+    expect(doc.openings).toHaveLength(2);
+    // Every opening targets a real wall, and south ≠ north wall.
+    for (const o of doc.openings) expect(doc.walls.some((w) => w.id === o.wallId)).toBe(true);
+    const door = doc.openings.find((o) => o.kind === 'door')!;
+    const win = doc.openings.find((o) => o.kind === 'window')!;
+    expect(door.wallId).not.toBe(win.wallId);
+  });
+
+  it('rejects a document with no rooms (→ caller falls back to a template)', () => {
+    expect(coercePlanGenerate(JSON.parse(CLOUD_PLAN_NO_ROOMS))).toBeNull();
+    expect(expandPlanDocument({ unit: 'mm', doors: [{ room: 'x', side: 'n' }] })).toEqual([]);
+  });
+});
+
+describe('plan intent — under-filled op repair (Bug 2)', () => {
+  it('repairs a model op that dropped its number using the same utterance', () => {
+    const raw = JSON.parse(CLOUD_SET_LENGTH_NO_NUM);
+    // Without the utterance there is no number to supply → rejected.
+    expect(coercePlan(raw)).toBeNull();
+    // With the utterance, the dropped length is filled from the rule parse.
+    expect(coercePlan(raw, 'make this wall 4 meters')).toEqual({
+      op: 'set_length',
+      target: 'selected',
+      length: 4000,
+    });
+  });
+
+  it('never invents a different op: repair only when the rule parser agrees', () => {
+    const raw = JSON.parse(CLOUD_SET_LENGTH_NO_NUM);
+    // Utterance the rules read as a MOVE, not a set_length → no repair.
+    expect(coercePlan(raw, 'move it 500 left')).toBeNull();
   });
 });
 

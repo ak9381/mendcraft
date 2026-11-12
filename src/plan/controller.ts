@@ -78,7 +78,7 @@ export function createPlanController(): ModeController {
       if (res.ops) {
         const applied = engine.applyGenerated(res.ops);
         if (!applied.ok) return { source: res.source, step: { ok: false, error: applied.error, warnings: [] } };
-        return { source: res.source, step: { ok: true, message: 'Plan created.', warnings: applied.warnings } };
+        return { source: res.source, step: { ok: true, message: res.note ?? 'Plan created.', warnings: applied.warnings } };
       }
       return { source: res.source, step: { ok: false, warnings: [] }, clarify: res.clarify };
     },

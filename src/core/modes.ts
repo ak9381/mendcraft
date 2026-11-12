@@ -88,8 +88,10 @@ export interface EditorMode {
    *  {clarify}, or (plan) a {generate} directive. */
   parse(utterance: string): object;
   /** Coerce untrusted AI JSON into a validated result (op/template/clarify) or
-   *  null to reject (→ rule parser). AI output is never trusted. */
-  coerce(raw: unknown): object | null;
+   *  null to reject (→ rule parser). AI output is never trusted. The optional
+   *  `utterance` lets a mode repair an op the model skeletoned but under-filled
+   *  (e.g. named a valid op yet dropped a number) from the same command. */
+  coerce(raw: unknown, utterance?: string): object | null;
   /** Does this utterance mean "generate a whole design" (cloud path)? */
   isDesignRequest(utterance: string): boolean;
   /** Mode-specific AI prompts + response schema. */

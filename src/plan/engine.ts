@@ -152,6 +152,17 @@ export class PlanEngine {
     return { ...doc, walls };
   }
 
+  /** A friendly "couldn't find the wall" message. For the common "selected"
+   *  case (nothing picked), it tells the user to pick one and lists wall ids. */
+  private noWall(state: PlanDoc, target: string): string {
+    if (target === 'selected') {
+      const ids = state.walls.map((w) => w.id);
+      if (!ids.length) return 'No wall is selected yet, and the plan has no walls.';
+      return `No wall is selected. Pinch or click a wall first (e.g. ${ids.slice(0, 3).join(', ')}).`;
+    }
+    return `no wall for target "${target}"`;
+  }
+
   /** Pure reducer: new document, or an error string (state untouched). */
   private reduce(state: PlanDoc, op: PlanOp): PlanDoc | string {
     switch (op.op) {
@@ -205,7 +216,7 @@ export class PlanEngine {
       case 'add_door':
       case 'add_window': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
         const len = wallLength(wall);
         if (len < PLAN_LIMITS.openingWidth.min)
@@ -223,7 +234,7 @@ export class PlanEngine {
       }
       case 'add_dim': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         if (state.dims.some((d) => d.wallId === wallId))
           return { ...state, selectedId: wallId }; // already dimensioned — no-op change
         const dim: Dimension = { id: this.nextId('m'), wallId };
@@ -231,7 +242,7 @@ export class PlanEngine {
       }
       case 'set_length': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
         // Keep the start point `a`; snap the direction to the nearest axis (ortho).
         const dir = nearestOrthoDir(wallDir(wall));
@@ -240,7 +251,7 @@ export class PlanEngine {
       }
       case 'move': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
         const newA = { x: wall.a.x + op.dx, y: wall.a.y + op.dy };
         const newB = { x: wall.b.x + op.dx, y: wall.b.y + op.dy };
@@ -248,7 +259,7 @@ export class PlanEngine {
       }
       case 'offset': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
         const n = wallNormal(wall);
         const newA = { x: wall.a.x + n.x * op.dist, y: wall.a.y + n.y * op.dist };
@@ -257,7 +268,7 @@ export class PlanEngine {
       }
       case 'set_thickness': {
         const wallId = this.resolveId(state, op.target, 'wall');
-        if (!wallId) return `no wall for target "${op.target}"`;
+        if (!wallId) return this.noWall(state, op.target);
         const wall = state.walls.find((w) => w.id === wallId)!;
         const raw = op.thickness ?? wall.thickness + (op.delta ?? 0);
         const thickness = Math.min(PLAN_LIMITS.thickness.max, Math.max(PLAN_LIMITS.thickness.min, raw));
