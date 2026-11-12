@@ -33,6 +33,16 @@ import {
   PLAN_GENERATE_CONSTRAINT,
 } from '../plan/ai';
 import { parsePlanCommand } from '../plan/ruleParser';
+import {
+  coerceUi,
+  UI_INTENT_PROMPT,
+  UI_GENERATE_PROMPT,
+  UI_VERIFY_PROMPT,
+  UI_OP_CONSTRAINT,
+  UI_VERIFY_CONSTRAINT,
+  UI_GENERATE_CONSTRAINT,
+} from '../ui/design/ai';
+import { parseUiCommand } from '../ui/design/ruleParser';
 
 /** A quick-start command button, shown on the empty canvas and in onboarding. */
 export interface ModeHint {
@@ -284,51 +294,59 @@ function isPlanDesignRequest(utterance: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Coming-soon stub (UI design). Registered so the shell surfaces the roadmap;
-// it cannot be activated, so its controller/renderer are inert.
+// UI-design mode ('ui'). Its AI, parser, controller, and renderer live under
+// src/ui/design (mirroring plan/). Registered below as a ready mode.
 
-function comingSoonMode(id: string, label: string, description: string, roadmapHint: string): EditorMode {
-  const noop = `The ${label} mode is coming soon.`;
-  return {
-    id,
-    label,
-    status: 'coming-soon',
-    description,
-    hint: roadmapHint,
-    hints: [],
-    inputPlaceholder: `${label} — coming soon`,
-    exampleCommand: '',
-    help: `${description} ${noop}`,
-    exportLabel: 'Export',
-    starterItems: [],
-    parse: () => ({ clarify: noop }),
-    coerce: () => null,
-    isDesignRequest: () => false,
-    ai: {
-      intentPrompt: noop,
-      templatePrompt: noop,
-      verifyPrompt: noop,
-      opConstraint: { type: 'object', properties: {} },
-      verifyConstraint: { type: 'object', properties: {} },
-      generateConstraint: { type: 'object', properties: {} },
-    },
-    async createController() {
-      throw new Error(`${label} mode is not ready.`);
-    },
-    async createRenderer(container) {
-      container.innerHTML = `<div class="mode-placeholder">${label}: coming soon.</div>`;
-      return { render() {}, pick: () => null, dispose() {} };
-    },
-  };
+/** "login screen", "landing hero", "pricing section", "design a dashboard" → cloud. */
+function isUiDesignRequestMode(utterance: string): boolean {
+  const t = utterance.trim().toLowerCase();
+  if (!t) return false;
+  if (/\b(login|sign in|signin|signup|sign up|landing|hero|pricing|screen|page|dashboard|form|checkout|profile|settings|onboarding)\b/.test(t)) return true;
+  return /\bdesign\b/.test(t) && /\b(screen|page|ui|app|site|layout)\b/.test(t);
 }
 
-/** UI-design mode (frames, stacks, text, buttons, HTML/CSS export) — later. */
-export const uiMode = comingSoonMode(
-  'ui',
-  'UI design',
-  'Hands-free UI and screen layout design with HTML/CSS export.',
-  'UI design mode is coming later.',
-);
+/** UI-design mode (frames, stacks, text, buttons, HTML/CSS export). Its AI,
+ *  parser, controller, and renderer live under src/ui/design. */
+export const uiMode: EditorMode = {
+  id: 'ui',
+  label: 'UI design',
+  status: 'ready',
+  description: 'Design web screens — frames, text, buttons, inputs — and export clean HTML/CSS.',
+  hint: 'Start with a screen: say "login screen", "landing hero", or "pricing section".',
+  hints: [
+    { label: 'Login screen', command: 'login screen' },
+    { label: 'Landing hero', command: 'landing hero' },
+    { label: 'Pricing section', command: 'pricing section' },
+    { label: 'Mobile frame', command: 'mobile frame' },
+  ],
+  inputPlaceholder: 'Try: login screen',
+  exampleCommand: 'login screen',
+  help:
+    'Say or type a screen like "login screen", or an edit like "add a button called Sign up", ' +
+    '"make the button blue", "make it 48 pixels tall", "bigger heading", "center it", or "add 16 ' +
+    'pixels of padding". Click/pinch a node to select, drag to reorder, and "export html".',
+  exportLabel: 'Export HTML',
+  starterItems: ['login screen', 'landing hero', 'pricing section', 'mobile frame'],
+  parse: parseUiCommand,
+  coerce: (raw, utterance) => coerceUi(raw, utterance, parseUiCommand),
+  isDesignRequest: isUiDesignRequestMode,
+  ai: {
+    intentPrompt: UI_INTENT_PROMPT,
+    templatePrompt: UI_GENERATE_PROMPT,
+    verifyPrompt: UI_VERIFY_PROMPT,
+    opConstraint: UI_OP_CONSTRAINT,
+    verifyConstraint: UI_VERIFY_CONSTRAINT,
+    generateConstraint: UI_GENERATE_CONSTRAINT,
+  },
+  async createController() {
+    const { createUiController } = await import('../ui/design/controller');
+    return createUiController();
+  },
+  async createRenderer(container, controller, onSelect) {
+    const { createUiRenderer } = await import('../ui/design/renderer');
+    return createUiRenderer(container, controller, onSelect);
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Registry. 'plan' is the default hero; 'part' stays fully available

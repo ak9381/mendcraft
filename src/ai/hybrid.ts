@@ -11,6 +11,10 @@ import { coercePlanGenerate } from '../plan/ai';
 import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
 import { buildPlanTemplate, type PlanTemplateName } from '../plan/templates';
 import { validatePlanOp, type PlanOp } from '../plan/ops';
+import { coerceUiGenerate } from '../ui/design/ai';
+import { parseUiCommand, isUiGenerate } from '../ui/design/ruleParser';
+import { buildUiTemplate } from '../ui/design/templates';
+import type { Frame, FramePreset } from '../ui/design/doc';
 
 export type Source = 'on-device' | 'cloud' | 'rules';
 /**
@@ -42,6 +46,14 @@ export interface GeneratePlanResult {
   ops?: PlanOp[];
   clarify?: string;
   /** Honest note shown instead of "Plan created." (e.g. a template fallback). */
+  note?: string;
+  source: Source;
+}
+
+/** UI-mode "generate a whole screen" result (a validated Frame or a clarify). */
+export interface GenerateUiResult {
+  frame?: Frame;
+  clarify?: string;
   note?: string;
   source: Source;
 }
@@ -631,4 +643,45 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
     if (ops.length) return { ops, note, source: 'rules' };
   }
   return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
+}
+
+/**
+ * UI-mode "generate a whole screen" (same hybrid wrapper as the plan generate
+ * path). The cloud model returns a compact DOCUMENT; code expands + re-validates
+ * it into a Frame. Falls back to the deterministic rule parser + a UI template
+ * (login / landing / pricing) when the cloud is unavailable, so "login screen"
+ * works with no AI.
+ */
+export async function generateUi(prompt: string): Promise<GenerateUiResult> {
+  const models = await ensureModels();
+  if (models?.template) {
+    try {
+      const { response } = await withTimeout(
+        models.template.generateContent(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`),
+        CLOUD_GENERATE_TIMEOUT_MS,
+        'ui generate',
+      );
+      const coerced = coerceUiGenerate(extractJson(response.text()));
+      if (coerced && 'frame' in coerced) return { frame: coerced.frame, source: sourceOf(response) };
+      if (coerced && 'clarify' in coerced) return { clarify: coerced.clarify, source: sourceOf(response) };
+      noteError('ui generate', new Error('cloud screen was empty or invalid; using a template'));
+    } catch (err) {
+      noteError('ui generate model', err);
+    }
+  }
+  // Rules fallback: a named template → an expanded, validated Frame.
+  const ruled = parseUiCommand(prompt);
+  const mobile = /\b(mobile|phone)\b/.test(prompt.toLowerCase());
+  const preset: FramePreset = mobile ? 'mobile' : 'desktop';
+  let template = isUiGenerate(ruled) ? ruled.generate : null;
+  let note: string | undefined;
+  if (!template && getActiveMode().isDesignRequest(prompt)) {
+    template = 'login';
+    note = 'Cloud design was unavailable — built a login template instead.';
+  }
+  if (template) {
+    const frame = buildUiTemplate(template, isUiGenerate(ruled) ? ruled.preset ?? preset : preset);
+    if (frame) return { frame, note, source: 'rules' };
+  }
+  return { clarify: 'Try "login screen", "landing hero", "pricing section", or "mobile frame".', source: 'rules' };
 }

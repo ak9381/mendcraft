@@ -74,7 +74,7 @@ function extractLabel(utterance: string): string | undefined {
 }
 
 /** Which named node a command targets ("the button", "email field"), or 'selected'. */
-function targetOf(tokens: string[], s: string): string {
+function targetOf(_tokens: string[], s: string): string {
   if (/\bemail\b/.test(s)) return 'email field';
   if (/\bpassword\b/.test(s)) return 'password field';
   if (/\b(heading|title|header)\b/.test(s)) return 'heading';
@@ -125,15 +125,19 @@ export function parseUiCommand(utterance: string): UiParse {
     return { op: 'delete', target: t };
   }
 
-  // Move up / down (reorder within the stack).
-  if (has('move') || has('nudge') || ((has('up') || has('down')) && !has('scroll'))) {
+  // Move up / down (reorder within the stack). Guard the bare "up/down"
+  // shorthand so it never swallows "add a button called Sign up".
+  const addContext = has('add') || has('insert') || has('called') || has('named') || tokens[0] === 'new';
+  if (has('move') || has('nudge') || (!addContext && (has('up') || has('down')) && !has('scroll'))) {
     if (has('up')) return { op: 'move', target: 'selected', nums: { delta: -1 } };
     if (has('down')) return { op: 'move', target: 'selected', nums: { delta: 1 } };
     return clarify('Move it up or down?');
   }
 
-  // Add a node.
-  if (has('add') || has('insert') || (['new'].includes(tokens[0]))) {
+  // Add a node. "add 16 pixels of padding" / "add a 24 gap" are layout edits,
+  // not new nodes — let them fall through to the padding/gap branches below.
+  const layoutContext = has('padding') || has('pad') || has('gap') || has('spacing');
+  if (!layoutContext && (has('add') || has('insert') || (['new'].includes(tokens[0])))) {
     const label = extractLabel(utterance);
     if (has('password')) return { op: 'add_node', nodeType: 'input', inputType: 'password', label: label ?? 'Password' };
     if (has('email')) return { op: 'add_node', nodeType: 'input', inputType: 'email', label: label ?? 'Email' };

@@ -23,11 +23,12 @@ describe('mode registry', () => {
     expect(getActiveMode().status).toBe('ready');
   });
 
-  it('plan and part are ready; ui is coming-soon and refuses to activate', () => {
+  it('plan, part, and ui are ready; an unknown id refuses to activate', () => {
     expect(getMode('plan')?.status).toBe('ready');
     expect(getMode('part')?.status).toBe('ready');
-    expect(getMode('ui')?.status).toBe('coming-soon');
-    expect(setActiveMode('ui')).toBe(false);
+    expect(getMode('ui')?.status).toBe('ready');
+    expect(setActiveMode('ui')).toBe(true);
+    expect(getActiveMode().id).toBe('ui');
     expect(setActiveMode('nope')).toBe(false);
     // Part stays reachable (mode switch / ?mode=part).
     expect(setActiveMode('part')).toBe(true);
@@ -68,10 +69,18 @@ describe('mode registry', () => {
     expect(isTemplateCommand(cup as never) && (cup as { template: string }).template).toBe('cupGrip');
   });
 
-  it('the coming-soon ui mode is inert: parse clarifies and exposes no starter items', () => {
+  it('the ui mode is ready with an HTML export label and screen hints', () => {
     const ui = getMode('ui')!;
-    expect(ui.status).toBe('coming-soon');
-    expect(ui.starterItems).toEqual([]);
-    expect(isClarify(ui.parse('anything'))).toBe(true);
+    expect(ui.status).toBe('ready');
+    expect(ui.label).toBe('UI design');
+    expect(ui.exportLabel).toMatch(/html/i);
+    expect(ui.exampleCommand).toBe('login screen');
+    expect(ui.starterItems.length).toBeGreaterThan(0);
+  });
+
+  it('every ui quick-start button parses to something buildable (not a clarify)', () => {
+    for (const h of getMode('ui')!.hints) {
+      expect(isClarify(getMode('ui')!.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
+    }
   });
 });

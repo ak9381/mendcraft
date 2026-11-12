@@ -11,7 +11,6 @@ import {
   nodeLabel,
   type ButtonNode,
   type Frame,
-  type FramePreset,
   type ImageNode,
   type InputNode,
   type RectNode,
