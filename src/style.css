@@ -1558,3 +1558,81 @@ button.primary:hover {
   from { background-size: 100% 0%; }
   to { background-size: 100% 200%; }
 }
+
+/* ---- relay pairing: laptop "Pair phone" panel ---- */
+.mc-pair-panel {
+  position: absolute;
+  z-index: 40;
+  top: 72px;
+  right: 16px;
+  width: 300px;
+  max-width: calc(100% - 32px);
+  max-height: 80%;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.mc-pair-panel[hidden] { display: none; }
+.mc-pair-head { display: flex; align-items: center; justify-content: space-between; }
+.mc-pair-title { font-weight: 600; }
+.mc-pair-x { background: none; border: none; color: var(--text); cursor: pointer; font-size: 14px; }
+.mc-pair-status { margin: 0; font-size: 13px; }
+.mc-pair-qr { align-self: center; background: #fff; border-radius: 6px; padding: 6px; }
+.mc-pair-code-row { margin: 0; font-size: 12px; opacity: 0.9; }
+.mc-pair-code { font-size: 18px; letter-spacing: 2px; display: block; margin-top: 2px; }
+.mc-pair-cam { margin: 0; }
+.mc-pair-frame { width: 100%; border-radius: 6px; border: 1px solid var(--border); }
+.mc-pair-cam figcaption { font-size: 11px; opacity: 0.8; margin-top: 4px; }
+.mc-pair-note { margin: 0; font-size: 11px; opacity: 0.8; }
+
+/* ---- relay pairing: phone /remote page ---- */
+.remote-page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text, #eee);
+}
+.remote-head { display: flex; align-items: baseline; gap: 10px; }
+.remote-sub { opacity: 0.7; }
+.remote-status { margin: 0; font-size: 15px; }
+.remote-join { display: flex; flex-direction: column; gap: 8px; }
+.remote-join input, .remote-cmd input {
+  font-size: 18px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #444);
+  background: var(--panel, #1c1c22);
+  color: inherit;
+}
+.remote-controls { display: flex; flex-direction: column; gap: 14px; }
+.remote-controls button:disabled { opacity: 0.4; }
+.remote-pad { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.remote-pad-row { display: flex; gap: 56px; }
+.remote-key {
+  width: 64px;
+  height: 64px;
+  font-size: 22px;
+  border-radius: 12px;
+}
+.remote-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.remote-big {
+  flex: 1;
+  min-height: 52px;
+  font-size: 16px;
+  border-radius: 10px;
+}
+.remote-cmd { display: flex; gap: 8px; }
+.remote-cmd input { flex: 1; }
+.remote-camera { display: flex; flex-direction: column; gap: 8px; }
+.remote-preview { width: 100%; border-radius: 10px; }
+.remote-privacy, .remote-note { font-size: 12px; opacity: 0.8; margin: 0; }

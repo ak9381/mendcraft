@@ -1,0 +1,40 @@
+rules_version = '2';
+
+// Relay pairing rooms — capability-URL model, no auth:
+//  - A room id is a 24-char high-entropy token (120 bits); knowing the id IS
+//    the capability, so direct access on a known path is allowed but
+//    collection listing is not (ids can't be enumerated).
+//  - The only doc ever written at rooms/{id} is the short-code alias
+//    {room: token} the host creates while waiting (and clears on pair), so
+//    writes at that level are constrained to exactly that shape. The 8-char
+//    code is 40-bit entropy — brute-forceable in principle, but only during
+//    the short waiting window before the host clears it.
+//  - rooms/{id}/messages is an APPEND-ONLY channel (no update/delete): the
+//    pairing handshake, remote commands, and low-rate phone-camera stills
+//    destined ONLY for the paired laptop. Nothing here reaches Firebase AI.
+// TODO(post-hackathon): add a Firestore TTL policy on rooms + messages so
+// abandoned rooms and alias docs expire on their own.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /rooms/{roomId} {
+      allow get: if true;
+      allow list: if false;
+      // Alias docs only; nothing else is ever stored on the room doc itself.
+      allow create, update: if request.resource.data.keys().hasOnly(['room'])
+        && request.resource.data.room is string
+        && request.resource.data.room.size() == 24;
+      allow delete: if resource.data.keys().hasOnly(['room']);
+
+      match /messages/{messageId} {
+        // list is required for onSnapshot over the subcollection, but the path
+        // already requires the unguessable roomId, so it leaks nothing.
+        allow get, list, create: if true;
+        allow update, delete: if false; // append-only channel
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

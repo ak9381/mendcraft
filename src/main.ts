@@ -70,6 +70,13 @@ import {
   createPhrasebook, createIndexedDbPhrasebookStore,
   parseTeachCommand, parseCorrectionCommand,
 } from './ai/phrasebook';
+import { createPairPanel } from './ui/pairPanel';
+import { createFakeTransport, type RelayTransport } from './relay/transport';
+import { probeFirestore } from './relay/firestoreTransport';
+import {
+  createGuestSession, createHostSession, type GuestSession, type HostSession,
+} from './relay/session';
+import { buildJoinUrl, pairStateLabel, type RelayCommand } from './relay/protocol';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
@@ -134,6 +141,7 @@ app.innerHTML = `
     <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
     <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
     <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
+    <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
     <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
@@ -553,6 +561,108 @@ btnLedger.addEventListener('click', () => {
 el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
   if (a11yPanel.isOpen()) a11yPanel.toggle();
   else void runUtterance('check accessibility');
+});
+
+// ---- phone relay pairing (QR → /remote page → room over an injected transport)
+
+const btnPair = el<HTMLButtonElement>('btn-pair');
+const pairPanel = createPairPanel({
+  onOpen: () => void ensurePairing(),
+  onDisconnect: () => {
+    void hostSession?.close();
+  },
+});
+viewportEl.appendChild(pairPanel.element);
+
+let hostSession: HostSession | null = null;
+let relayTransport: RelayTransport | null = null;
+let pairingInit: Promise<void> | null = null;
+
+/** Incoming phone commands ride the exact paths mouse/pinch already use:
+ *  the Undo/Redo/Mic buttons, the shared runUtterance pipeline, and the
+ *  viewport's arrow-key pan — so undo history and the op log stay intact. */
+function handleRemoteCommand(cmd: RelayCommand): void {
+  switch (cmd.kind) {
+    case 'undo':
+      btnUndo.click();
+      break;
+    case 'redo':
+      btnRedo.click();
+      break;
+    case 'mic':
+      btnMic.click();
+      break;
+    case 'command':
+      if (cmd.text) void runUtterance(cmd.text);
+      break;
+    case 'nudge': {
+      const key =
+        cmd.dx === -1 ? 'ArrowLeft' : cmd.dx === 1 ? 'ArrowRight' : cmd.dy === -1 ? 'ArrowUp' : 'ArrowDown';
+      viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      break;
+    }
+  }
+}
+
+function ensurePairing(): Promise<void> {
+  if (!pairingInit) pairingInit = initPairing();
+  return pairingInit;
+}
+
+async function initPairing(): Promise<void> {
+  pairPanel.setStatus('Starting a room…');
+  // SIM and unconfigured builds use the in-page fake transport; otherwise probe
+  // Firestore and fall back gracefully (it is not enabled on the project yet).
+  if (SIM_ACTIVE || !isFirebaseConfigured()) {
+    relayTransport = createFakeTransport();
+    pairPanel.setTransportNote(SIM_ACTIVE
+      ? 'SIM: in-page demo transport — no network used.'
+      : 'Firebase is not configured — in-page demo transport only.');
+  } else {
+    const probe = await probeFirestore();
+    if (probe.ok) {
+      relayTransport = probe.transport;
+      pairPanel.setTransportNote('Transport: Firestore room (commands + low-rate camera stills).');
+    } else {
+      relayTransport = createFakeTransport();
+      pairPanel.setTransportNote(`Waiting for Firestore: ${probe.reason} A real phone cannot join yet; the demo transport is active.`);
+    }
+  }
+  hostSession = await createHostSession(relayTransport);
+  pairPanel.setRoom(buildJoinUrl(window.location.origin, hostSession.token), hostSession.code);
+  let frames = 0;
+  hostSession.onState((s) => {
+    pairPanel.setStatus(pairStateLabel(s, 'host'));
+    pairPanel.setPaired(s === 'paired');
+    if (s === 'paired') {
+      say('Phone remote connected.');
+      // Honest ledger: pairing over Firestore is a cloud call — but only the
+      // room token + handshake. Camera stills are REDACTED by design: they go
+      // laptop-ward only and are never logged, stored, or sent to any model.
+      if (relayTransport?.kind === 'firestore') {
+        recordLedger('cloud', 'phone pairing', 'phone remote paired over the room doc',
+          'room token + pairing handshake — no design data, no media, never to AI');
+      }
+    } else if (s === 'gone') {
+      say('Phone left the room.');
+    } else if (s === 'idle') {
+      // Session closed — the next panel open mints a fresh room + QR.
+      hostSession = null;
+      pairingInit = null;
+      frames = 0;
+    }
+  });
+  hostSession.onCommand(handleRemoteCommand);
+  hostSession.onFrame((f) => {
+    frames += 1;
+    pairPanel.setFrame(f.mimeType, f.dataBase64);
+    pairPanel.setStatus(`Phone remote connected — camera live (${frames} stills received).`);
+  });
+}
+
+btnPair.addEventListener('click', () => {
+  pairPanel.toggle();
+  toggleButton(btnPair, pairPanel.isOpen());
 });
 
 // Discrete gesture actions fire once on the gesture's rising edge. Continuous
@@ -1812,8 +1922,31 @@ async function runSimFeature(step: SimStep): Promise<void> {
       else say('No automatic accessibility fixes to accept.');
       break;
     }
+    // Relay beats: a simulated phone joins the real host session over the
+    // in-page fake transport and drives the editor through the same envelope
+    // validation + command path a real phone would.
+    case 'relay-pair': {
+      pairPanel.open();
+      toggleButton(btnPair, true);
+      await ensurePairing();
+      if (relayTransport && hostSession) {
+        simPhone = await createGuestSession(relayTransport, hostSession.token);
+      }
+      break;
+    }
+    case 'relay-undo':
+      await simPhone?.sendCommand({ kind: 'undo' });
+      break;
+    case 'relay-cmd':
+      await simPhone?.sendCommand({ kind: 'command', text: 'make this wall 3 meters' });
+      break;
+    case 'relay-gone':
+      await simPhone?.close();
+      simPhone = null;
+      break;
   }
 }
+let simPhone: GuestSession | null = null;
 
 if (SIM_ACTIVE) {
   mountSimCursor(viewportEl, handleHandEvent);

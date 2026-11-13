@@ -10,7 +10,11 @@ export const SIM_ACTIVE = new URLSearchParams(window.location.search).get('sim')
 /** A declarative "feature beat" the shell performs (via playDemo's onFeature):
  *  on-device hand-adapt pick, offline/online toggle, or accepting an a11y fix.
  *  Keeps the demo script data-only; main.ts owns each implementation. */
-export type SimFeature = 'adapt' | 'offline' | 'online' | 'accept-a11y';
+export type SimFeature =
+  | 'adapt' | 'offline' | 'online' | 'accept-a11y'
+  // Relay pairing beats: a simulated phone joins over the in-page fake
+  // transport (no Firestore), drives the editor, then leaves.
+  | 'relay-pair' | 'relay-undo' | 'relay-cmd' | 'relay-gone';
 
 export interface SimStep {
   label: string;
@@ -49,6 +53,10 @@ export const PLAN_DEMO: SimStep[] = [
   { label: 'Back to English', lang: 'en' },
   { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Accept the accessibility fix', feature: 'accept-a11y' },
+  { label: 'Pair a phone (QR + short code)', feature: 'relay-pair', delayMs: 1900 },
+  { label: 'Phone remote: undo', feature: 'relay-undo', delayMs: 1700 },
+  { label: 'Phone remote: type a command', feature: 'relay-cmd', delayMs: 1900 },
+  { label: 'Phone leaves the room', feature: 'relay-gone' },
   { label: 'Export the DXF', action: undefined },
   { label: 'See what left this device', revealLedger: true },
 ];
