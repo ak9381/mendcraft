@@ -8,6 +8,7 @@ import {
   cryptoRandom,
   generateRoomToken,
   shortCodeOf,
+  type MusicStatus,
   type PairState,
   type RandomBytes,
   type RelayCommand,
@@ -34,6 +35,8 @@ export interface HostSession extends SessionBase {
   readonly code: string;
   onCommand(cb: (cmd: RelayCommand) => void): void;
   onFrame(cb: (frame: RelayFrame) => void): void;
+  /** The phone's latest music-player state (for the /control dashboard). */
+  onMusic(cb: (music: MusicStatus) => void): void;
   /** Publish the latest privacy-safe state to the room for any /control iPad. */
   publishState(snapshot: ControlSnapshot): Promise<void>;
 }
@@ -48,6 +51,7 @@ export interface GuestSession extends SessionBase {
   readonly roomId: string;
   sendCommand(cmd: RelayCommand): Promise<void>;
   sendFrame(frame: RelayFrame): Promise<void>;
+  sendMusic(music: MusicStatus): Promise<void>;
 }
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
@@ -103,6 +107,7 @@ export async function createHostSession(
   const core = makeCore('host', transport, token);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
+  let musicCb: ((music: MusicStatus) => void) | null = null;
   // The most recent snapshot, re-sent whenever a /control iPad announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -135,6 +140,8 @@ export async function createHostSession(
       if (core.state === 'paired') commandCb?.(msg.cmd);
     } else if (msg.type === 'frame') {
       if (core.state === 'paired') frameCb?.({ mimeType: msg.mimeType, dataBase64: msg.dataBase64 });
+    } else if (msg.type === 'music') {
+      if (core.state === 'paired') musicCb?.(msg.music);
     }
   });
   await transport.setAlias(code, token);
@@ -149,6 +156,9 @@ export async function createHostSession(
     },
     onFrame: (cb) => {
       frameCb = cb;
+    },
+    onMusic: (cb) => {
+      musicCb = cb;
     },
     publishState,
     close: async () => {
@@ -180,6 +190,8 @@ export async function createGuestSession(
       transport.publish(roomId, {
         v: 1, from: 'phone', type: 'frame', mimeType: frame.mimeType, dataBase64: frame.dataBase64,
       }),
+    sendMusic: (music) =>
+      transport.publish(roomId, { v: 1, from: 'phone', type: 'music', music }),
     close: () => core.close(),
   };
 }

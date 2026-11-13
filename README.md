@@ -41,6 +41,39 @@ npm test        # vitest: op validator, engine, undo/redo, printability, rule pa
 npm run build   # type-check + production build
 ```
 
+## WiZ lamp + music remote
+The phone `/remote` page and the iPad `/control` room can drive a WiZ smart lamp
+and an in-app music player; a discreet lamp control also lives in the laptop
+editor (the **Lamp** toolbar button).
+
+### WiZ lamp (needs the local bridge)
+Browsers can't send UDP, so a tiny Node bridge does the datagrams to the bulb
+(JSON-RPC on UDP `38899`) and exposes a localhost HTTP API:
+```bash
+npm run wiz-bridge                              # binds 127.0.0.1:38888 (this laptop)
+npm run wiz-bridge -- --host 0.0.0.0            # let a phone on the same Wi-Fi reach it
+npm run wiz-bridge -- --bulb 192.168.1.50       # pin a known bulb IP
+```
+- **Localhost by default.** `--host 0.0.0.0` is for same-Wi-Fi phones only — **never**
+  expose the bridge to the public internet. No cloud, no WiZ account, no API keys.
+- In the UI: **Discover** finds bulbs, then **On/Off**, brightness, warm/neutral/cool,
+  and a couple of colours. If the bridge is down the UI says *"bridge offline — run
+  `npm run wiz-bridge` on the laptop"* and never claims the lamp is connected.
+- From a phone, point it at the laptop's bridge with `?bridge=http://<laptop-ip>:38888`
+  on the `/remote` URL (persisted in `localStorage`). Default is `http://127.0.0.1:38888`.
+- The pure command builder + response parser is `src/devices/wiz.ts` (unit-tested,
+  no real UDP); the browser talks only to the bridge via `src/devices/wizClient.ts`.
+
+### Music
+An in-app `HTMLAudioElement` player on `/remote`: play/pause, next/prev, volume,
+a small built-in public-domain playlist (streamed — needs internet) and an **Add
+local tracks** picker that plays files from the phone fully offline. The player
+state (title/playing/volume — never audio) is relayed to the `/control` room.
+**Apple Music** is an honest stub: without a MusicKit *developer token* it shows
+*"Apple Music needs a MusicKit developer token (not configured)"* and our own
+player keeps working — no paid SDK, no faked connection. Pure reducer in
+`src/music/player.ts`.
+
 ## Judge path: `/?sim=1`
 Open `http://localhost:5173/?sim=1`. It needs no camera or mic. A scripted demo (cup grip → select the sleeve → too-thin wall warning → fix → export) runs through the same command pipeline. A mouse-driven virtual hand cursor emulates the pinch. Sim outputs are labelled `SIM`.
 

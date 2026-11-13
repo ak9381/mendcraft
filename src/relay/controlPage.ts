@@ -86,9 +86,9 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
 
         <section class="card card-appliances" aria-label="Lamp and music">
           <h2>Room</h2>
-          <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span></p>
-          <p class="c-appliance">Music: <span id="c-music" class="c-tag">unknown</span></p>
-          <p class="card-note">Read-only — no device control wired yet.</p>
+          <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span> <span id="c-lamp-detail" class="c-appliance-detail"></span></p>
+          <p class="c-appliance">Music: <span id="c-music" class="c-tag">unknown</span> <span id="c-music-detail" class="c-appliance-detail"></span></p>
+          <p class="card-note">Read-only mirror. Control the lamp from the editor or /remote; music plays on /remote.</p>
         </section>
 
         <section class="card card-caption" aria-label="Live captions">
@@ -188,9 +188,11 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       queueEl.appendChild(li);
     });
 
-    // Appliances.
+    // Appliances (lamp from the editor/remote bridge, music from the phone).
     setAppliance($<HTMLSpanElement>('c-lamp'), snap.appliances.lamp);
     setAppliance($<HTMLSpanElement>('c-music'), snap.appliances.music);
+    $<HTMLSpanElement>('c-lamp-detail').textContent = snap.appliances.lampDetail ?? '';
+    $<HTMLSpanElement>('c-music-detail').textContent = snap.appliances.musicTitle ?? '';
 
     // Caption.
     const heardEl = $<HTMLParagraphElement>('c-caption-heard');

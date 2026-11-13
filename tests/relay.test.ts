@@ -14,6 +14,7 @@ import {
   shortCodeOf,
   validateCommand,
   validateMessage,
+  validateMusic,
   type PairState,
   type RandomBytes,
   type RelayMessage,
@@ -109,6 +110,18 @@ describe('relay message envelope', () => {
     expect(validateCommand({ kind: 'command', text: '' })).toBeNull();
     expect(validateCommand({ kind: 'command', text: 'x'.repeat(501) })).toBeNull();
     expect(validateCommand({ kind: 'mic' })).toEqual({ kind: 'mic' });
+  });
+
+  it('validates + clamps music status, and only the phone may send it', () => {
+    expect(validateMusic({ title: 'Song', playing: true, volume: 0.4 })).toEqual({ title: 'Song', playing: true, volume: 0.4 });
+    expect(validateMusic({ title: 'Song', playing: true, volume: 9 })).toEqual({ title: 'Song', playing: true, volume: 1 });
+    expect(validateMusic({ title: 'Song', playing: 'yes', volume: 1 })).toBeNull();
+    expect(validateMusic({ title: 123, playing: true, volume: 1 })).toBeNull();
+    expect(validateMessage({ v: 1, from: 'phone', type: 'music', music: { title: 'S', playing: false, volume: 0.2 } }))
+      .toMatchObject({ type: 'music', music: { title: 'S', playing: false } });
+    // A host must not publish music (only the phone drives playback).
+    expect(validateMessage({ v: 1, from: 'host', type: 'music', music: { title: 'S', playing: false, volume: 0.2 } }))
+      .toBeNull();
   });
 });
 
@@ -208,6 +221,18 @@ describe('host + guest sessions over the fake transport', () => {
 
     await host.close();
     expect(host.state()).toBe('idle');
+  });
+
+  it('relays phone music state to the host while paired', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const music: unknown[] = [];
+    host.onMusic((m) => music.push(m));
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    await guest.sendMusic({ title: 'Clair de Lune', playing: true, volume: 0.5 });
+    await flush();
+    expect(music).toEqual([{ title: 'Clair de Lune', playing: true, volume: 0.5 }]);
   });
 
   it('ignores commands and frames while not paired', async () => {

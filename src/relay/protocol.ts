@@ -114,6 +114,15 @@ export interface RelayCommand {
   dy?: number;
 }
 
+/** The phone's in-app music player state, relayed to the host so it can appear
+ *  on the /control dashboard. Carries only title/playing/volume — no audio. */
+export interface MusicStatus {
+  title: string;
+  playing: boolean;
+  /** 0..1 */
+  volume: number;
+}
+
 export type RelayMessage =
   | { v: 1; from: RelayRole; type: 'hello' }
   | { v: 1; from: RelayRole; type: 'bye' }
@@ -121,6 +130,9 @@ export type RelayMessage =
   /** A low-rate JPEG still from the phone camera — goes ONLY to the paired
    *  laptop via the room, never to Firebase AI, and is never ledgered. */
   | { v: 1; from: RelayRole; type: 'frame'; mimeType: string; dataBase64: string }
+  /** The phone's music-player state (title/playing/volume) — relayed to the host
+   *  so the /control dashboard can show it. No audio ever leaves the phone. */
+  | { v: 1; from: 'phone'; type: 'music'; music: MusicStatus }
   /** The laptop's privacy-safe state for the iPad /control dashboard. Only a
    *  host sends it; the snapshot carries NO camera/landmark/audio (see
    *  controlSnapshot.ts). Validated loosely here and re-coerced on receipt. */
@@ -144,6 +156,16 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (typeof c.dx === 'number') out.dx = c.dx;
   if (typeof c.dy === 'number') out.dy = c.dy;
   return out;
+}
+
+/** Validate a music-status payload from the wire; null when malformed. */
+export function validateMusic(raw: unknown): MusicStatus | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if (typeof m.title !== 'string' || m.title.length > 200) return null;
+  if (typeof m.playing !== 'boolean') return null;
+  if (typeof m.volume !== 'number' || !Number.isFinite(m.volume)) return null;
+  return { title: m.title, playing: m.playing, volume: Math.min(1, Math.max(0, m.volume)) };
 }
 
 /** Validate a whole message from the wire; null when malformed. */
@@ -174,6 +196,12 @@ export function validateMessage(raw: unknown): RelayMessage | null {
       if (typeof m.mimeType !== 'string' || !m.mimeType.startsWith('image/')) return null;
       if (typeof m.dataBase64 !== 'string' || !m.dataBase64) return null;
       return { v: 1, from, type: 'frame', mimeType: m.mimeType, dataBase64: m.dataBase64 };
+    case 'music': {
+      // Only the phone drives music; the host relays it onto the dashboard.
+      if (from !== 'phone') return null;
+      const music = validateMusic(m.music);
+      return music ? { v: 1, from: 'phone', type: 'music', music } : null;
+    }
     default:
       return null;
   }

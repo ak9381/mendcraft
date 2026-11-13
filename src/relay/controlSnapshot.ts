@@ -46,8 +46,18 @@ function clampCall(c: CloudCall): CloudCall {
 }
 
 export type DeviceId = 'laptop' | 'phone' | 'other';
-/** Lamp/music are read-only placeholders — never a fake "connected" claim. */
+/** Lamp on/off/unknown — never a fake "connected" claim (unknown = no bridge). */
 export type ApplianceState = 'on' | 'off' | 'unknown';
+
+/** Appliance states published to the dashboard. `lamp`/`music` are the honest
+ *  on/off/unknown; the optional *Detail/Title strings add a short human label
+ *  ("On · 80% · 2700K", the now-playing track) when the laptop knows it. */
+export interface ApplianceSnapshot {
+  lamp: ApplianceState;
+  music: ApplianceState;
+  lampDetail?: string;
+  musicTitle?: string;
+}
 
 /** One line in the live AI request feed. */
 export interface AiFeedEntry {
@@ -105,7 +115,7 @@ export interface ControlSnapshot {
   ai: AiFeedEntry[];
   ledger: { calls: CloudCall[]; counts: LedgerCounts };
   queue: QueueEntry[];
-  appliances: { lamp: ApplianceState; music: ApplianceState };
+  appliances: ApplianceSnapshot;
   caption: CaptionLine | null;
   scene: SceneSnapshot | null;
   omitted: SnapshotOmissions;
@@ -134,7 +144,7 @@ export interface ControlSnapshotInput {
   ai?: AiFeedInput[];
   ledger?: { calls: CloudCall[]; counts: LedgerCounts } | null;
   queue?: QueuedJob[];
-  appliances?: { lamp?: ApplianceState; music?: ApplianceState };
+  appliances?: { lamp?: ApplianceState; music?: ApplianceState; lampDetail?: string; musicTitle?: string };
   caption?: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null;
   scene?: SceneInput | null;
 }
@@ -226,10 +236,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ai: ai.kept,
     ledger: { calls: calls.kept, counts },
     queue: queue.kept,
-    appliances: {
-      lamp: input.appliances?.lamp ?? 'unknown',
-      music: input.appliances?.music ?? 'unknown',
-    },
+    appliances: buildAppliances(input.appliances),
     caption,
     scene,
     omitted: {
@@ -239,6 +246,23 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
       primitives: primitivesDropped,
     },
   };
+}
+
+/** Build the appliance block, adding the optional detail labels only when the
+ *  laptop actually provided them (so the plain `{lamp,music}` shape is kept when
+ *  there's nothing extra to say — and never a fabricated label). */
+function buildAppliances(
+  a: ControlSnapshotInput['appliances'],
+): ApplianceSnapshot {
+  const out: ApplianceSnapshot = {
+    lamp: a?.lamp ?? 'unknown',
+    music: a?.music ?? 'unknown',
+  };
+  const lampDetail = a?.lampDetail ? safeText(a.lampDetail, LABEL_MAX) : '';
+  const musicTitle = a?.musicTitle ? safeText(a.musicTitle, LABEL_MAX) : '';
+  if (lampDetail) out.lampDetail = lampDetail;
+  if (musicTitle) out.musicTitle = musicTitle;
+  return out;
 }
 
 function clampPrimitive(p: ScenePrimitive): ScenePrimitive {
@@ -362,6 +386,8 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     appliances: {
       lamp: oneOf<ApplianceState>(ap.lamp, APPLIANCES, 'unknown'),
       music: oneOf<ApplianceState>(ap.music, APPLIANCES, 'unknown'),
+      lampDetail: str(ap.lampDetail) || undefined,
+      musicTitle: str(ap.musicTitle) || undefined,
     },
     caption,
     scene,
@@ -420,22 +446,27 @@ export function controlDemoSnapshots(): ControlSnapshot[] {
 
   const base: ControlSnapshotInput = {
     activeDevice: 'laptop',
-    appliances: { lamp: 'unknown', music: 'unknown' },
   };
 
+  // Lamp + music toggle across the loop so the Play demo shows them changing
+  // with no real bulb or audio: off → lamp on → lamp+music on → music only.
   return [
     buildControlSnapshot({ ...base, rev: 1, ai: ai.slice(0, 1),
+      appliances: { lamp: 'off', music: 'off' },
       scene: { mode: 'plan', summary: '4 walls, 2 rooms', rev: 4, primitives: walls.slice(0, 4) } }),
     buildControlSnapshot({ ...base, rev: 2, ai: ai.slice(0, 2),
       ledger: { calls: [], counts: counts(0) },
+      appliances: { lamp: 'on', music: 'off', lampDetail: 'On · 80% · 2700K' },
       scene: { mode: 'plan', summary: '5 walls, 2 rooms', rev: 6, primitives: walls } }),
     buildControlSnapshot({ ...base, rev: 3, ai,
       ledger: { calls: [cloudCall], counts: counts(1) },
+      appliances: { lamp: 'on', music: 'on', lampDetail: 'On · 80% · 2700K', musicTitle: 'Clair de Lune — Debussy' },
       queue: [{ id: 'job-1', kind: 'plan', mode: 'plan', label: 'studio apartment',
         payload: { prompt: 'studio apartment' }, createdAt: 0, seq: 1, status: 'queued' }],
       scene: { mode: 'plan', summary: '5 walls, 2 rooms', rev: 6, primitives: walls } }),
     buildControlSnapshot({ ...base, rev: 4, activeDevice: 'phone', ai,
       ledger: { calls: [cloudCall], counts: counts(1) },
+      appliances: { lamp: 'off', music: 'on', musicTitle: 'Clair de Lune — Debussy' },
       queue: [{ id: 'job-1', kind: 'plan', mode: 'plan', label: 'studio apartment',
         payload: { prompt: 'studio apartment' }, createdAt: 0, seq: 1, status: 'running' }],
       caption: { heard: 'ಈ ಗೋಡೆಯನ್ನು ದಪ್ಪ ಮಾಡು', translation: 'make this wall thick',

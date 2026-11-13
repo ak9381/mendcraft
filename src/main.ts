@@ -71,6 +71,9 @@ import {
   parseTeachCommand, parseCorrectionCommand,
 } from './ai/phrasebook';
 import { createPairPanel } from './ui/pairPanel';
+import { createLampPanel } from './ui/lampPanel';
+import { lampStateLabel, type LampState } from './devices/wiz';
+import type { MusicStatus } from './relay/protocol';
 import { createFakeTransport, type RelayTransport } from './relay/transport';
 import { probeFirestore } from './relay/firestoreTransport';
 import {
@@ -78,7 +81,7 @@ import {
 } from './relay/session';
 import { buildJoinUrl, pairStateLabel, type RelayCommand } from './relay/protocol';
 import {
-  buildControlSnapshot, type AiFeedInput, type DeviceId, type ScenePrimitive,
+  buildControlSnapshot, type AiFeedInput, type ApplianceState, type DeviceId, type ScenePrimitive,
 } from './relay/controlSnapshot';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
@@ -145,6 +148,7 @@ app.innerHTML = `
     <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
     <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
     <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
+    <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
     <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
@@ -585,6 +589,14 @@ const pairPanel = createPairPanel({
 });
 viewportEl.appendChild(pairPanel.element);
 
+const btnLamp = el<HTMLButtonElement>('btn-lamp');
+const lampPanel = createLampPanel({ onState: (state, online) => setControlLamp(state, online) });
+viewportEl.appendChild(lampPanel.element);
+btnLamp.addEventListener('click', () => {
+  lampPanel.toggle();
+  toggleButton(btnLamp, lampPanel.isOpen());
+});
+
 let hostSession: HostSession | null = null;
 let relayTransport: RelayTransport | null = null;
 let pairingInit: Promise<void> | null = null;
@@ -674,6 +686,9 @@ async function initPairing(): Promise<void> {
     pairPanel.setFrame(f.mimeType, f.dataBase64);
     pairPanel.setStatus(`Phone remote connected — camera live (${frames} stills received).`);
   });
+  // The phone's music player relays its state (title/playing/volume, no audio);
+  // mirror it onto the /control dashboard.
+  hostSession.onMusic((music) => setControlMusic(music));
 }
 
 btnPair.addEventListener('click', () => {
@@ -961,6 +976,13 @@ const controlFeed: AiFeedInput[] = [];
 let controlDevice: DeviceId = 'laptop';
 let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
 let controlRev = 0;
+// Appliance state mirrored to the /control dashboard. Lamp comes from the editor
+// lamp panel (laptop ↔ bridge); music arrives from the phone over the relay.
+// 'unknown' until we actually know — never a fabricated "connected".
+let controlLamp: ApplianceState = 'unknown';
+let controlLampDetail: string | undefined;
+let controlMusic: ApplianceState = 'unknown';
+let controlMusicTitle: string | undefined;
 
 /** Compact 2D primitives for the dashboard's wireframe preview. Plan walls are
  *  line segments; other modes fall back to summary-only (empty primitives). */
@@ -985,6 +1007,7 @@ function publishControlSnapshot(): void {
     ai: controlFeed,
     ledger: { calls: ledger.calls(), counts: ledger.counts() },
     queue: jobQueue.jobs(),
+    appliances: { lamp: controlLamp, music: controlMusic, lampDetail: controlLampDetail, musicTitle: controlMusicTitle },
     caption: controlCaption,
     scene: {
       mode: mode.id,
@@ -1004,6 +1027,20 @@ function noteControlAi(ai: AiFeedInput): void {
 function setControlDevice(device: DeviceId): void {
   if (controlDevice === device) return;
   controlDevice = device;
+  publishControlSnapshot();
+}
+
+/** Lamp panel → snapshot. Offline bridge = 'unknown' (no fake connectivity). */
+function setControlLamp(state: LampState | null, online: boolean): void {
+  controlLamp = !online || !state ? 'unknown' : state.on ? 'on' : 'off';
+  controlLampDetail = online && state ? lampStateLabel(state) : undefined;
+  publishControlSnapshot();
+}
+
+/** Phone music status (over the relay) → snapshot. */
+function setControlMusic(music: MusicStatus): void {
+  controlMusic = music.playing ? 'on' : 'off';
+  controlMusicTitle = music.title || undefined;
   publishControlSnapshot();
 }
 ledger.subscribe(() => publishControlSnapshot());

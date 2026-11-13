@@ -70,6 +70,18 @@ describe('buildControlSnapshot — privacy', () => {
     expect(buildControlSnapshot({}).appliances).toEqual({ lamp: 'unknown', music: 'unknown' });
     expect(buildControlSnapshot({ appliances: { lamp: 'off' } }).appliances).toEqual({ lamp: 'off', music: 'unknown' });
   });
+
+  it('carries lamp/music detail labels only when provided (and clamps them)', () => {
+    const snap = buildControlSnapshot({
+      appliances: { lamp: 'on', music: 'on', lampDetail: 'On · 80% · 2700K', musicTitle: 'Clair de Lune' },
+    });
+    expect(snap.appliances).toEqual({
+      lamp: 'on', music: 'on', lampDetail: 'On · 80% · 2700K', musicTitle: 'Clair de Lune',
+    });
+    // Empty detail strings are omitted, keeping the plain {lamp,music} shape.
+    expect(buildControlSnapshot({ appliances: { lamp: 'on', music: 'off', lampDetail: '' } }).appliances)
+      .toEqual({ lamp: 'on', music: 'off' });
+  });
 });
 
 describe('buildControlSnapshot — caps and omissions', () => {

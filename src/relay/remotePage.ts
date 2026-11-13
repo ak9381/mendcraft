@@ -15,6 +15,11 @@ import {
 import { createFakeTransport, type RelayTransport } from './transport';
 import { probeFirestore } from './firestoreTransport';
 import { createGuestSession, resolveRoomId, type GuestSession } from './session';
+import { createWizClient, resolveBridgeUrl } from '../devices/wizClient';
+import { createLampControl } from '../devices/lampControl';
+import { createMusicController } from '../music/musicController';
+import { currentTrack, playerStatusLabel, DEFAULT_TRACKS, type Track } from '../music/player';
+import { appleMusicStatus } from '../music/appleMusic';
 
 const FRAME_INTERVAL_MS = 900; // ~1 fps keeps room-doc traffic tiny
 const FRAME_WIDTH = 320;
@@ -61,6 +66,31 @@ export async function mountRemotePage(root: HTMLElement): Promise<void> {
           <p class="remote-privacy">Camera stays on this phone except low-rate stills sent only to your paired laptop. Never to AI models.</p>
         </div>
       </div>
+
+      <section class="remote-devices" aria-label="Room devices">
+        <div id="remote-lamp" class="remote-lamp-mount"></div>
+
+        <div class="remote-music">
+          <div class="lamp-head"><span class="lamp-title">Music</span>
+            <span id="remote-music-apple" class="badge badge-rules">Apple Music?</span></div>
+          <p id="remote-now" class="remote-now" role="status" aria-live="polite">No track</p>
+          <div class="remote-music-controls" role="group" aria-label="Playback">
+            <button id="remote-prev" type="button" aria-label="Previous track">⏮</button>
+            <button id="remote-playpause" type="button" aria-label="Play or pause">▶</button>
+            <button id="remote-next" type="button" aria-label="Next track">⏭</button>
+          </div>
+          <label class="remote-vol-label">Volume
+            <input id="remote-vol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
+          </label>
+          <label class="remote-track-label">Track
+            <select id="remote-tracks" aria-label="Choose a track"></select>
+          </label>
+          <label class="remote-addtracks">Add local tracks
+            <input id="remote-files" type="file" accept="audio/*" multiple aria-label="Add audio files from this device" />
+          </label>
+          <p id="remote-music-note" class="remote-privacy"></p>
+        </div>
+      </section>
       <p id="remote-note" class="remote-note"></p>
     </div>
   `;
@@ -97,7 +127,11 @@ export async function mountRemotePage(root: HTMLElement): Promise<void> {
       (b as HTMLButtonElement).disabled = !paired;
     }
     if (!paired && shareStream) stopSharing();
+    // Push current music state so a freshly paired laptop's /control populates.
+    if (paired) publishMusic?.();
   }
+  // Set once the music controller exists (below); lets setState relay on pairing.
+  let publishMusic: (() => void) | null = null;
 
   function send(cmd: RelayCommand): void {
     void session?.sendCommand(cmd).catch(() => {
@@ -175,8 +209,87 @@ export async function mountRemotePage(root: HTMLElement): Promise<void> {
     if (shareStream) stopSharing();
     else void startSharing();
   });
+
+  // ---- WiZ lamp: talks to the local bridge, independent of laptop pairing ----
+  const lampMount = root.querySelector<HTMLDivElement>('#remote-lamp')!;
+  const wizClient = createWizClient(resolveBridgeUrl());
+  const lamp = createLampControl(wizClient, { compact: true });
+  lampMount.appendChild(lamp.element);
+  void lamp.refresh();
+
+  // ---- Music: our own HTMLAudioElement player; state relayed to /control -----
+  const audio = new Audio();
+  audio.preload = 'none';
+  const music = createMusicController(audio, DEFAULT_TRACKS);
+  const nowEl = root.querySelector<HTMLParagraphElement>('#remote-now')!;
+  const playBtn = root.querySelector<HTMLButtonElement>('#remote-playpause')!;
+  const volEl = root.querySelector<HTMLInputElement>('#remote-vol')!;
+  const trackSel = root.querySelector<HTMLSelectElement>('#remote-tracks')!;
+  const filesInput = root.querySelector<HTMLInputElement>('#remote-files')!;
+  const appleBadge = root.querySelector<HTMLSpanElement>('#remote-music-apple')!;
+  const musicNote = root.querySelector<HTMLParagraphElement>('#remote-music-note')!;
+
+  // Apple Music is an honest stub: without a MusicKit developer token we say so
+  // and keep our own player. (See src/music/appleMusic.ts.)
+  const apple = appleMusicStatus();
+  appleBadge.textContent = apple.kind === 'ready' ? 'Apple Music ready' : 'Apple Music off';
+  musicNote.textContent =
+    apple.kind === 'ready' ? '' : 'message' in apple ? apple.message : '';
+
+  function fillTracks(tracks: Track[], index: number): void {
+    trackSel.innerHTML = '';
+    tracks.forEach((t, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = t.local ? `${t.title} (on this phone)` : t.title;
+      if (i === index) opt.selected = true;
+      trackSel.appendChild(opt);
+    });
+  }
+
+  // Relay the player state to the paired laptop (title/playing/volume; no audio).
+  function relayMusic(): void {
+    if (!session || session.state() !== 'paired') return;
+    const s = music.state();
+    void session.sendMusic({ title: currentTrack(s)?.title ?? '', playing: s.playing, volume: s.volume })
+      .catch(() => undefined);
+  }
+  publishMusic = relayMusic;
+
+  music.onChange((s) => {
+    nowEl.textContent = playerStatusLabel(s);
+    playBtn.textContent = s.playing ? '❚❚' : '▶';
+    playBtn.setAttribute('aria-label', s.playing ? 'Pause' : 'Play');
+    if (Number(volEl.value) !== s.volume) volEl.value = String(s.volume);
+    fillTracks(s.tracks, s.index);
+    relayMusic();
+  });
+
+  playBtn.addEventListener('click', () => music.dispatch({ type: 'toggle' }));
+  root.querySelector('#remote-prev')!.addEventListener('click', () => music.dispatch({ type: 'prev' }));
+  root.querySelector('#remote-next')!.addEventListener('click', () => music.dispatch({ type: 'next' }));
+  volEl.addEventListener('input', () => music.dispatch({ type: 'setVolume', volume: Number(volEl.value) }));
+  trackSel.addEventListener('change', () => music.dispatch({ type: 'select', index: Number(trackSel.value) }));
+  const localUrls: string[] = [];
+  filesInput.addEventListener('change', () => {
+    const picked: Track[] = Array.from(filesInput.files ?? []).map((f, i) => {
+      const src = URL.createObjectURL(f);
+      localUrls.push(src);
+      return {
+        id: `local-${f.name}-${i}`,
+        title: f.name.replace(/\.[^.]+$/, ''),
+        artist: 'On this phone',
+        src,
+        local: true,
+      };
+    });
+    if (picked.length) music.dispatch({ type: 'addTracks', tracks: picked });
+  });
+
   window.addEventListener('pagehide', () => {
     stopSharing();
+    music.destroy();
+    for (const url of localUrls) URL.revokeObjectURL(url);
     void session?.close();
   });
 
