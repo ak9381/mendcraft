@@ -14,6 +14,7 @@ import {
   type RelayMessage,
   type RelayRole,
 } from './protocol';
+import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
 import type { RelayTransport } from './transport';
 
 export interface RelayFrame {
@@ -33,6 +34,14 @@ export interface HostSession extends SessionBase {
   readonly code: string;
   onCommand(cb: (cmd: RelayCommand) => void): void;
   onFrame(cb: (frame: RelayFrame) => void): void;
+  /** Publish the latest privacy-safe state to the room for any /control iPad. */
+  publishState(snapshot: ControlSnapshot): Promise<void>;
+}
+
+/** Read-only iPad dashboard view of a host's room. */
+export interface ControlSession extends SessionBase {
+  readonly roomId: string;
+  onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
 }
 
 export interface GuestSession extends SessionBase {
@@ -94,8 +103,23 @@ export async function createHostSession(
   const core = makeCore('host', transport, token);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
+  // The most recent snapshot, re-sent whenever a /control iPad announces itself,
+  // so a dashboard that joins late sees current state without waiting for the
+  // next change. Pairing state is unaffected by control presence.
+  let lastSnapshot: ControlSnapshot | null = null;
+
+  function publishState(snapshot: ControlSnapshot): Promise<void> {
+    lastSnapshot = snapshot;
+    return transport.publish(token, { v: 1, from: 'host', type: 'state', snapshot });
+  }
 
   core.listen((msg) => {
+    if (msg.from === 'control') {
+      // A read-only dashboard, not a remote: never changes pairing. Replay the
+      // latest state so it populates immediately.
+      if (msg.type === 'hello' && lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      return;
+    }
     if (msg.type === 'hello') {
       const wasPaired = core.state === 'paired';
       core.setState(advancePair(core.state, 'peer-hello'));
@@ -126,6 +150,7 @@ export async function createHostSession(
     onFrame: (cb) => {
       frameCb = cb;
     },
+    publishState,
     close: async () => {
       await transport.clearAlias(code).catch(() => undefined);
       await core.close();
@@ -155,6 +180,46 @@ export async function createGuestSession(
       transport.publish(roomId, {
         v: 1, from: 'phone', type: 'frame', mimeType: frame.mimeType, dataBase64: frame.dataBase64,
       }),
+    close: () => core.close(),
+  };
+}
+
+/** iPad dashboard side: subscribe to a host room and receive state snapshots.
+ *  It announces presence (so the host replays its latest state) but never sends
+ *  a command or a frame, and never flips the host's phone-pairing state. */
+export async function createControlSession(
+  transport: RelayTransport,
+  roomId: string,
+): Promise<ControlSession> {
+  const core = makeCore('control', transport, roomId);
+  let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
+  // Buffer the newest snapshot so a callback registered after the host's replay
+  // (the hello → republish round-trip can land before onSnapshot is wired) still
+  // sees current state immediately — the same contract onState has.
+  let lastSnapshot: ControlSnapshot | null = null;
+
+  core.listen((msg) => {
+    if (msg.type === 'state') {
+      const snap = coerceSnapshot(msg.snapshot);
+      if (!snap) return;
+      // First snapshot flips 'waiting' → 'paired' (the laptop is live).
+      core.setState(advancePair(core.state, 'peer-hello'));
+      lastSnapshot = snap;
+      snapshotCb?.(snap);
+    } else if (msg.type === 'bye' && msg.from === 'host') {
+      core.setState(advancePair(core.state, 'peer-bye'));
+    }
+  });
+  await transport.publish(roomId, { v: 1, from: 'control', type: 'hello' });
+
+  return {
+    roomId,
+    state: () => core.state,
+    onState: (cb) => core.onState(cb),
+    onSnapshot: (cb) => {
+      snapshotCb = cb;
+      if (lastSnapshot) cb(lastSnapshot);
+    },
     close: () => core.close(),
   };
 }

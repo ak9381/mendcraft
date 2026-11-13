@@ -1636,3 +1636,129 @@ button.primary:hover {
 .remote-camera { display: flex; flex-direction: column; gap: 8px; }
 .remote-preview { width: 100%; border-radius: 10px; }
 .remote-privacy, .remote-note { font-size: 12px; opacity: 0.8; margin: 0; }
+
+/* ===== iPad /control dashboard ===========================================
+   A read-mostly control room. Large text + touch targets, card grid that
+   reflows to one column on a portrait iPad. No editor shell styling here. */
+.control-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px clamp(12px, 3vw, 28px) 48px;
+  color: var(--text);
+}
+.control-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.control-head .brand { font-size: 1.5rem; font-weight: 700; }
+.control-sub { color: var(--text-dim); font-size: 1.1rem; }
+.control-bytes { margin-left: auto; color: var(--text-dim); font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.control-banner { color: var(--warn); font-size: 1.05rem; margin: 12px 0 0; min-height: 1.2em; }
+.control-join {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 12px 0 0;
+}
+.control-join label { width: 100%; color: var(--text-dim); }
+.control-join input {
+  flex: 1 1 280px;
+  min-height: 52px;
+  font-size: 1.1rem;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+.control-join button {
+  min-height: 52px;
+  min-width: 96px;
+  font-size: 1.1rem;
+  padding: 0 22px;
+  background: var(--accent);
+  color: #06101f;
+  border: none;
+  border-radius: var(--radius);
+  font-weight: 700;
+}
+
+.control-grid {
+  margin-top: 18px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.control-grid .card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  min-height: 120px;
+}
+.control-grid .card h2 { margin: 0 0 12px; font-size: 1.15rem; }
+.card-note { color: var(--text-dim); font-size: 0.9rem; margin: 8px 0 0; }
+.card-empty { color: var(--text-dim); font-style: italic; }
+.card-ai, .card-ledger { grid-column: span 2; }
+.card-scene { grid-row: span 2; }
+.c-device { font-size: 1.8rem; font-weight: 700; margin: 0; }
+
+.c-feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.c-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+}
+.c-row.src-cloud { border-left: 3px solid var(--accent); flex-direction: column; align-items: stretch; }
+.c-row.src-on-device { border-left: 3px solid var(--accent-2); }
+.c-row-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.c-row-ms { color: var(--text-dim); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.c-row-head { display: flex; gap: 10px; align-items: baseline; width: 100%; }
+.c-job { font-weight: 700; }
+.c-reason { color: var(--text-dim); flex: 1; }
+.c-sent { font-family: ui-monospace, monospace; font-size: 0.9rem; color: var(--text-dim); overflow-wrap: anywhere; }
+.c-redactions { color: var(--warn); font-size: 0.85rem; }
+.c-counts { color: var(--text-dim); font-size: 0.95rem; margin: 0 0 10px; }
+.c-ord { color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 1.4em; text-align: right; }
+.c-kind { font-weight: 600; }
+
+.c-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(166, 169, 177, 0.18);
+  color: var(--text-dim);
+}
+.tag-queued { background: rgba(166, 169, 177, 0.2); }
+.tag-running { background: rgba(79, 156, 255, 0.2); color: #7ab8ff; }
+.tag-ready { background: rgba(46, 204, 113, 0.2); color: #4ade80; }
+.tag-error { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.tag-appliance-on { background: rgba(46, 204, 113, 0.2); color: #4ade80; }
+.tag-appliance-off { background: rgba(166, 169, 177, 0.18); }
+.c-appliance { font-size: 1.1rem; margin: 6px 0; }
+
+.c-caption-heard { font-size: 1.4rem; margin: 0; }
+.c-caption-tr { color: var(--text-dim); font-size: 1.05rem; margin: 6px 0 0; }
+
+.c-scene { background: var(--panel-2); border-radius: 8px; min-height: 180px; display: flex; align-items: center; justify-content: center; }
+.c-wire { width: 100%; height: auto; }
+.c-wire line { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
+.c-wire rect { fill: rgba(79, 156, 255, 0.12); stroke: var(--accent); stroke-width: 2; }
+
+@media (max-width: 760px) {
+  .card-ai, .card-ledger { grid-column: span 1; }
+  .card-scene { grid-row: auto; }
+}

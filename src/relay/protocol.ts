@@ -5,6 +5,8 @@
 // build/parse, the message envelope, and the pairing state machine.
 
 /** Crockford base32: no I/L/O/U, so codes survive being read aloud or typed. */
+import type { ControlSnapshot } from './controlSnapshot';
+
 export const TOKEN_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** 24 chars × 5 bits = 120 bits of entropy — the room id is the capability. */
 export const TOKEN_LENGTH = 24;
@@ -88,9 +90,18 @@ export function isRemoteRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'remote';
 }
 
+/** Does this location want the iPad /control dashboard instead of the editor? */
+export function isControlRoute(pathname: string, search: string): boolean {
+  if (/^\/control\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'control';
+}
+
 // ---- message envelope -------------------------------------------------------
 
-export type RelayRole = 'host' | 'phone';
+// 'control' is the read-only iPad dashboard: it subscribes to a host's room and
+// receives privacy-safe state snapshots. It never drives the editor, so it only
+// ever sends presence (hello/bye) — never a command or a frame.
+export type RelayRole = 'host' | 'phone' | 'control';
 
 export type RelayCommandKind = 'undo' | 'redo' | 'command' | 'nudge' | 'mic';
 
@@ -109,7 +120,11 @@ export type RelayMessage =
   | { v: 1; from: RelayRole; type: 'cmd'; cmd: RelayCommand }
   /** A low-rate JPEG still from the phone camera — goes ONLY to the paired
    *  laptop via the room, never to Firebase AI, and is never ledgered. */
-  | { v: 1; from: RelayRole; type: 'frame'; mimeType: string; dataBase64: string };
+  | { v: 1; from: RelayRole; type: 'frame'; mimeType: string; dataBase64: string }
+  /** The laptop's privacy-safe state for the iPad /control dashboard. Only a
+   *  host sends it; the snapshot carries NO camera/landmark/audio (see
+   *  controlSnapshot.ts). Validated loosely here and re-coerced on receipt. */
+  | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot };
 
 const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic'];
 
@@ -136,13 +151,21 @@ export function validateMessage(raw: unknown): RelayMessage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const m = raw as Record<string, unknown>;
   if (m.v !== 1) return null;
-  if (m.from !== 'host' && m.from !== 'phone') return null;
+  if (m.from !== 'host' && m.from !== 'phone' && m.from !== 'control') return null;
   const from = m.from as RelayRole;
   switch (m.type) {
     case 'hello':
       return { v: 1, from, type: 'hello' };
     case 'bye':
       return { v: 1, from, type: 'bye' };
+    case 'state':
+      // Only a host publishes state; the payload is validated loosely here
+      // (object with the snapshot version) and defensively re-coerced by the
+      // dashboard via coerceSnapshot before anything is rendered.
+      if (from !== 'host') return null;
+      if (typeof m.snapshot !== 'object' || m.snapshot === null) return null;
+      if ((m.snapshot as { v?: unknown }).v !== 1) return null;
+      return { v: 1, from: 'host', type: 'state', snapshot: m.snapshot as ControlSnapshot };
     case 'cmd': {
       const cmd = validateCommand(m.cmd);
       return cmd ? { v: 1, from, type: 'cmd', cmd } : null;

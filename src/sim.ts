@@ -4,6 +4,10 @@
 // voice/text use. All sim output is labelled SIM in the UI.
 
 import type { HandEvent } from './input/hands';
+// The /control dashboard's fake-adapter driver lives with the pure snapshot
+// module (no DOM/window) so tests can import it without a browser; re-exported
+// here so the Play-demo surface stays in src/sim.ts.
+export { playControlDemo } from './relay/controlSnapshot';
 
 export const SIM_ACTIVE = new URLSearchParams(window.location.search).get('sim') === '1';
 

@@ -77,6 +77,9 @@ import {
   createGuestSession, createHostSession, type GuestSession, type HostSession,
 } from './relay/session';
 import { buildJoinUrl, pairStateLabel, type RelayCommand } from './relay/protocol';
+import {
+  buildControlSnapshot, type AiFeedInput, type DeviceId, type ScenePrimitive,
+} from './relay/controlSnapshot';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
@@ -334,6 +337,10 @@ function showCaptionHeard(heard: string): void {
   captionTranslation.hidden = true;
   captionTranslation.textContent = '';
   captionBar.hidden = false;
+  controlCaption = {
+    heard: text, translation: null,
+    langCode: currentLanguage.code, langLabel: currentLanguage.englishName,
+  };
 }
 
 /** Pair the heard text with its English translation (no-op when there is none). */
@@ -343,6 +350,10 @@ function showCaptionTranslation(heard: string, translation?: string): void {
   captionTranslation.textContent = `→ ${cap.translation}`;
   captionTranslation.lang = 'en';
   captionTranslation.hidden = false;
+  controlCaption = {
+    heard: cap.heard, translation: cap.translation,
+    langCode: currentLanguage.code, langLabel: currentLanguage.englishName,
+  };
 }
 
 // ---- language picker -------------------------------------------------------
@@ -582,6 +593,8 @@ let pairingInit: Promise<void> | null = null;
  *  the Undo/Redo/Mic buttons, the shared runUtterance pipeline, and the
  *  viewport's arrow-key pan — so undo history and the op log stay intact. */
 function handleRemoteCommand(cmd: RelayCommand): void {
+  // The operator is driving from the phone now — reflect that on the dashboard.
+  setControlDevice('phone');
   switch (cmd.kind) {
     case 'undo':
       btnUndo.click();
@@ -636,6 +649,8 @@ async function initPairing(): Promise<void> {
     pairPanel.setPaired(s === 'paired');
     if (s === 'paired') {
       say('Phone remote connected.');
+      // Push current state so a /control iPad in the room populates immediately.
+      publishControlSnapshot();
       // Honest ledger: pairing over Firestore is a cloud call — but only the
       // room token + handshake. Camera stills are REDACTED by design: they go
       // laptop-ward only and are never logged, stored, or sent to any model.
@@ -645,6 +660,7 @@ async function initPairing(): Promise<void> {
       }
     } else if (s === 'gone') {
       say('Phone left the room.');
+      setControlDevice('laptop');
     } else if (s === 'idle') {
       // Session closed — the next panel open mints a fresh room + QR.
       hostSession = null;
@@ -934,6 +950,65 @@ async function runAccessibilityCheck(): Promise<boolean> {
 // rules result on reconnect — the real queue mechanism, labelled SIM throughout.
 const cloudConfigured = isFirebaseConfigured() || SIM_ACTIVE;
 const jobQueue = createJobQueue(createIndexedDbStore());
+
+// ---- iPad /control dashboard publisher ----------------------------------
+// When a room is live (hostSession), the laptop publishes a small, privacy-safe
+// snapshot (relay/controlSnapshot) the /control page renders. It carries source
+// + reason for every AI event, cloud utterances only (private text stays here),
+// the ledger, the queue, captions and a compact scene — never camera, landmarks
+// or audio. Built fresh on every change; a no-op until a phone/iPad pairs.
+const controlFeed: AiFeedInput[] = [];
+let controlDevice: DeviceId = 'laptop';
+let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
+let controlRev = 0;
+
+/** Compact 2D primitives for the dashboard's wireframe preview. Plan walls are
+ *  line segments; other modes fall back to summary-only (empty primitives). */
+function controlScenePrimitives(): ScenePrimitive[] {
+  try {
+    const snap = controller.snapshot() as { walls?: { a: { x: number; y: number }; b: { x: number; y: number } }[] };
+    if (Array.isArray(snap.walls)) {
+      return snap.walls.map((w) => ({ t: 'seg', x1: w.a.x, y1: w.a.y, x2: w.b.x, y2: w.b.y }));
+    }
+  } catch {
+    // Snapshot shape varies by mode; a preview is best-effort, never load-bearing.
+  }
+  return [];
+}
+
+function publishControlSnapshot(): void {
+  if (!hostSession) return;
+  controlRev += 1;
+  const snap = buildControlSnapshot({
+    rev: controlRev,
+    activeDevice: controlDevice,
+    ai: controlFeed,
+    ledger: { calls: ledger.calls(), counts: ledger.counts() },
+    queue: jobQueue.jobs(),
+    caption: controlCaption,
+    scene: {
+      mode: mode.id,
+      summary: controller.summary().slice(0, 240),
+      rev: controlRev,
+      primitives: controlScenePrimitives(),
+    },
+  });
+  void hostSession.publishState(snap).catch(() => undefined);
+}
+
+function noteControlAi(ai: AiFeedInput): void {
+  controlFeed.push(ai);
+  if (controlFeed.length > 24) controlFeed.shift();
+  publishControlSnapshot();
+}
+function setControlDevice(device: DeviceId): void {
+  if (controlDevice === device) return;
+  controlDevice = device;
+  publishControlSnapshot();
+}
+ledger.subscribe(() => publishControlSnapshot());
+jobQueue.subscribe(() => publishControlSnapshot());
+
 // PERSONAL PHRASEBOOK (ai/phrasebook): the user's own phrasings + corrections,
 // kept on-device in IndexedDB and fed to Nano as few-shot examples. Private —
 // it only ever rides a cloud call on a sanctioned escalation (see fuseIntent).
@@ -1380,6 +1455,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   const reason = finalReason(decision, source, escalated);
   setBadge(source, reason, translated);
   routerPanel.add({ utterance, planned: decision.path, source, reason, confidence, escalated, ms: performance.now() - t0 });
+  // Mirror the routed event to the /control dashboard feed. Only a cloud event
+  // carries its utterance (it already left the device); private events are
+  // source+reason only — the raw command text stays on the laptop.
+  noteControlAi({ source, reason, utterance, ms: performance.now() - t0 });
 
   if ('clarify' in result) {
     opJsonEl.textContent = '';

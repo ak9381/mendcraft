@@ -3,11 +3,14 @@
 //   /remote (or ?view=remote)  → the phone remote + camera page
 //   everything else            → the existing editor (src/main.ts, unchanged)
 
-import { isRemoteRoute } from './relay/protocol';
+import { isControlRoute, isRemoteRoute } from './relay/protocol';
 
 if (isRemoteRoute(window.location.pathname, window.location.search)) {
   const { mountRemotePage } = await import('./relay/remotePage');
   await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!);
+} else if (isControlRoute(window.location.pathname, window.location.search)) {
+  const { mountControlPage } = await import('./relay/controlPage');
+  await mountControlPage(document.querySelector<HTMLDivElement>('#app')!);
 } else {
   await import('./main');
 }
