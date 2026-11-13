@@ -5,7 +5,14 @@
 
 import { isControlRoute, isRemoteRoute } from './relay/protocol';
 
-if (isRemoteRoute(window.location.pathname, window.location.search)) {
+// Inside the thin Android shell (Capacitor) the bundle is served from
+// https://localhost/ with no path — the native app IS the remote, so route
+// there directly instead of the editor.
+const isNativeShell = Boolean(
+  (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.(),
+);
+
+if (isNativeShell || isRemoteRoute(window.location.pathname, window.location.search)) {
   const { mountRemotePage } = await import('./relay/remotePage');
   await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!);
 } else if (isControlRoute(window.location.pathname, window.location.search)) {

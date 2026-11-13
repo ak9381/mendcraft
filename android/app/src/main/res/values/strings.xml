@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mendcraft Relay</string>
+    <string name="title_activity_main">Mendcraft Relay</string>
+    <string name="package_name">app.mendcraft.relay</string>
+    <string name="custom_url_scheme">app.mendcraft.relay</string>
+    <string name="assist_service_label">Mendcraft Assist (Instagram, Pinterest, WhatsApp)</string>
+    <string name="assist_service_description">Hands-free helper limited to Instagram, Pinterest and WhatsApp. Performs scroll gestures and types a reply draft you already approved. It never sends anything by itself: sending always needs your explicit pinch or a tap on the big Send button after the draft is visible. It does not read passwords, notifications or other apps.</string>
+</resources>

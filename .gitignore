@@ -39,3 +39,12 @@ serviceAccount*.json
 GoogleService-Info.plist
 google-services.json
 .firebase/
+
+# Android (project sources in android/ are committed; builds/secrets are not —
+# android/.gitignore also covers .gradle/, build/, local.properties)
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+*.keystore
+*.jks

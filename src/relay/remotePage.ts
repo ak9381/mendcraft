@@ -20,6 +20,7 @@ import { createLampControl } from '../devices/lampControl';
 import { createMusicController } from '../music/musicController';
 import { currentTrack, playerStatusLabel, DEFAULT_TRACKS, type Track } from '../music/player';
 import { appleMusicStatus } from '../music/appleMusic';
+import { getAssistBridge } from '../assist/bridge';
 
 const FRAME_INTERVAL_MS = 900; // ~1 fps keeps room-doc traffic tiny
 const FRAME_WIDTH = 320;
@@ -89,6 +90,31 @@ export async function mountRemotePage(root: HTMLElement): Promise<void> {
             <input id="remote-files" type="file" accept="audio/*" multiple aria-label="Add audio files from this device" />
           </label>
           <p id="remote-music-note" class="remote-privacy"></p>
+        </div>
+      </section>
+
+      <section id="remote-assist" class="remote-devices" aria-label="Phone assist" hidden>
+        <div class="remote-music">
+          <div class="lamp-head"><span class="lamp-title">Phone assist</span>
+            <span id="assist-state" class="badge badge-rules">checking…</span></div>
+          <p class="remote-privacy">Works only in Instagram, Pinterest and WhatsApp.
+            WhatsApp replies are drafts — sending always needs the big ✓ Send button
+            shown over WhatsApp. Never automatic.</p>
+          <button id="assist-settings" type="button" class="remote-big" hidden>Enable in Android Settings</button>
+          <div id="assist-controls" hidden>
+            <div class="remote-music-controls" role="group" aria-label="Feed scrolling">
+              <button id="assist-up" type="button" aria-label="Scroll up">▲</button>
+              <button id="assist-down" type="button" aria-label="Scroll down">▼</button>
+              <button id="assist-auto" type="button" aria-pressed="false">Auto-scroll: off</button>
+            </div>
+            <form id="assist-draft-form" class="remote-cmd">
+              <input id="assist-draft" type="text" placeholder="Draft a WhatsApp reply…"
+                aria-label="WhatsApp reply draft" autocomplete="off" />
+              <button type="submit">Draft</button>
+            </form>
+            <button id="assist-cancel" type="button" class="remote-big">Cancel draft</button>
+            <p id="assist-note" class="remote-privacy"></p>
+          </div>
         </div>
       </section>
       <p id="remote-note" class="remote-note"></p>
@@ -292,6 +318,69 @@ export async function mountRemotePage(root: HTMLElement): Promise<void> {
     for (const url of localUrls) URL.revokeObjectURL(url);
     void session?.close();
   });
+
+  // Phone assist (Android shell only): scroll Instagram/Pinterest and stage
+  // WhatsApp reply drafts via the AccessibilityService. The web page never
+  // shows this — getAssistBridge() is null outside the native app. Note there
+  // is deliberately no Send control here: the single send click happens in the
+  // native overlay drawn over WhatsApp, after the draft is visible.
+  const assist = getAssistBridge();
+  if (assist) {
+    const assistSection = root.querySelector<HTMLElement>('#remote-assist')!;
+    const assistState = root.querySelector<HTMLSpanElement>('#assist-state')!;
+    const assistSettings = root.querySelector<HTMLButtonElement>('#assist-settings')!;
+    const assistControls = root.querySelector<HTMLDivElement>('#assist-controls')!;
+    const assistAuto = root.querySelector<HTMLButtonElement>('#assist-auto')!;
+    const assistNote = root.querySelector<HTMLParagraphElement>('#assist-note')!;
+    const draftForm = root.querySelector<HTMLFormElement>('#assist-draft-form')!;
+    const draftInput = root.querySelector<HTMLInputElement>('#assist-draft')!;
+    assistSection.hidden = false;
+    let autoOn = false;
+
+    function showAuto(on: boolean): void {
+      autoOn = on;
+      assistAuto.textContent = `Auto-scroll: ${on ? 'on (slow)' : 'off'}`;
+      assistAuto.setAttribute('aria-pressed', String(on));
+    }
+
+    async function refreshAssist(): Promise<void> {
+      const { enabled } = await assist!.isServiceEnabled().catch(() => ({ enabled: false }));
+      assistState.textContent = enabled ? 'service on' : 'service off';
+      assistState.className = `badge ${enabled ? 'badge-device' : 'badge-rules'}`;
+      assistSettings.hidden = enabled;
+      assistControls.hidden = !enabled;
+      // The native overlay has its own pause/stop buttons — resync our toggle
+      // with the overlay's actual state instead of trusting a local flag.
+      const { running } = await assist!.getAutoScrollState().catch(() => ({ running: false }));
+      showAuto(running);
+    }
+    void refreshAssist();
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) void refreshAssist();
+    });
+
+    assistSettings.addEventListener('click', () => void assist!.openAccessibilitySettings());
+    root.querySelector('#assist-up')!.addEventListener('click', () => void assist!.scroll({ direction: 'up' }));
+    root.querySelector('#assist-down')!.addEventListener('click', () => void assist!.scroll({ direction: 'down' }));
+    assistAuto.addEventListener('click', () => {
+      showAuto(!autoOn);
+      void assist!.setAutoScroll({ enabled: autoOn });
+    });
+    draftForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = draftInput.value.trim();
+      if (!text) return;
+      void assist!.stageDraft({ text }).then(({ staged }) => {
+        assistNote.textContent = staged
+          ? 'Draft staged. Open the WhatsApp chat — the text appears in the compose box, then confirm with the big ✓ Send overlay button (or ✕ Cancel).'
+          : 'Could not stage the draft.';
+      });
+    });
+    root.querySelector('#assist-cancel')!.addEventListener('click', () => {
+      void assist!.cancelDraft();
+      assistNote.textContent = 'Draft cancelled.';
+    });
+  }
 
   // Join path 1: the QR URL carries ?room=TOKEN. Path 2: type the short code.
   const fromUrl = parseJoinInput(window.location.href);

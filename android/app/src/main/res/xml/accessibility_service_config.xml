@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OS-level scope of the assist service. packageNames is the hard allowlist:
+     Android will not deliver events from any other app, so the service cannot
+     see or touch anything outside Instagram, Pinterest and WhatsApp(+Business).
+     No flagRequestFilterKeyEvents, no canRequestTouchExploration — this is a
+     gesture/draft helper, not an input method or screen reader. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/assist_service_description"
+    android:packageNames="com.instagram.android,com.pinterest,com.whatsapp,com.whatsapp.w4b"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100" />

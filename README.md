@@ -74,6 +74,42 @@ state (title/playing/volume — never audio) is relayed to the `/control` room.
 player keeps working — no paid SDK, no faked connection. Pure reducer in
 `src/music/player.ts`.
 
+## Android app (thin Relay shell + phone assist)
+A Capacitor wrapper around the same web bundle — inside the app, `src/boot.ts`
+detects the native shell and boots straight into the `/remote` page (remote +
+camera). Project lives in `android/` (`appId app.mendcraft.relay`); config in
+`capacitor.config.ts`.
+
+```bash
+npm run build && npx cap sync android       # copy web assets into the shell
+cd android && ./gradlew assembleDebug       # needs JDK 21 + Android SDK (free)
+adb install app/build/outputs/apk/debug/app-debug.apk
+```
+Or open `android/` in Android Studio and press Run. No keystores,
+`google-services.json` or other secrets are committed.
+
+### Phone assist (AccessibilityService, opt-in)
+After installing, enable **Mendcraft Assist** in *Android Settings →
+Accessibility* (the in-app panel has an "Enable in Android Settings" shortcut).
+It is **allowlisted to Instagram, Pinterest and WhatsApp (+ Business) only** —
+the OS-level `packageNames` filter in
+`android/app/src/main/res/xml/accessibility_service_config.xml` means it never
+even receives events from other apps. It reads no passwords, notifications or
+message content.
+
+- **Scrolling** (Instagram/Pinterest): big ▲/▼ overlay buttons perform swipe
+  gestures; an optional slow auto-scroll is **off by default**, clamped to a
+  slow cadence, and pausable instantly.
+- **WhatsApp replies never auto-send.** The app only *types a draft* (text you
+  already confirmed in Mendcraft) into the compose field. Sending requires an
+  explicit pinch or a tap on the big **✓ Send** overlay button *after the draft
+  is visible* — one single click on WhatsApp's own send button. There is no
+  timer path, no "send when compose fills", and **✕ Cancel** is always next to
+  it. This is enforced by the unit-tested state machine in
+  `src/assist/policy.ts` (mirrored by `assist/AssistPolicy.java`):
+  `idle → staged → placed → confirm → sent`, where `confirm` is the only edge
+  that sends.
+
 ## Judge path: `/?sim=1`
 Open `http://localhost:5173/?sim=1`. It needs no camera or mic. A scripted demo (cup grip → select the sleeve → too-thin wall warning → fix → export) runs through the same command pipeline. A mouse-driven virtual hand cursor emulates the pinch. Sim outputs are labelled `SIM`.
 
