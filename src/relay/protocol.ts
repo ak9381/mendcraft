@@ -90,6 +90,16 @@ export function isRemoteRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'remote';
 }
 
+/**
+ * Does this location want the phone-focused /phone page? It is the same remote
+ * page in a "lamp & music" variant — the install target for the iPhone PWA
+ * (manifest start_url). Matches `/phone` or `?view=phone`.
+ */
+export function isPhoneRoute(pathname: string, search: string): boolean {
+  if (/^\/phone\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'phone';
+}
+
 /** Does this location want the iPad /control dashboard instead of the editor? */
 export function isControlRoute(pathname: string, search: string): boolean {
   if (/^\/control\/?$/.test(pathname)) return true;

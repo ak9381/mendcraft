@@ -1,0 +1,17 @@
+{
+  "name": "Mendcraft",
+  "short_name": "Mendcraft",
+  "description": "Hands-free lamp & music remote for a paired Mendcraft laptop.",
+  "start_url": "/phone",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#13131a",
+  "theme_color": "#13131a",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

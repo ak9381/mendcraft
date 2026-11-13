@@ -26,13 +26,25 @@ const FRAME_INTERVAL_MS = 900; // ~1 fps keeps room-doc traffic tiny
 const FRAME_WIDTH = 320;
 const FRAME_QUALITY = 0.5;
 
-export async function mountRemotePage(root: HTMLElement): Promise<void> {
-  document.title = 'Mendcraft remote';
+export interface RemotePageOptions {
+  /**
+   * 'remote' (default) is the full phone remote + camera page. 'phone' is the
+   * compact iPhone-PWA variant focused on the lamp + music: it hides the camera
+   * share, the nudge pad and the typed-command form via a CSS class, leaving big
+   * play/pause, volume and lamp controls. Pairing (code/QR) still works so music
+   * state is relayed to /control.
+   */
+  variant?: 'remote' | 'phone';
+}
+
+export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions = {}): Promise<void> {
+  const isPhone = opts.variant === 'phone';
+  document.title = isPhone ? 'Mendcraft — lamp & music' : 'Mendcraft remote';
   root.innerHTML = `
-    <div class="remote-page">
+    <div class="remote-page${isPhone ? ' remote-phone' : ''}">
       <header class="remote-head">
         <span class="brand">Mendcraft</span>
-        <span class="remote-sub">phone remote</span>
+        <span class="remote-sub">${isPhone ? 'lamp &amp; music' : 'phone remote'}</span>
         <span id="remote-transport" class="badge badge-rules">…</span>
       </header>
       <p id="remote-status" class="remote-status" role="status" aria-live="polite">Connecting…</p>

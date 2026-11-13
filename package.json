@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "wiz-bridge": "node scripts/wiz-bridge.mjs",
+    "gen-icons": "node scripts/gen-icons.mjs",
     "test": "vitest run"
   },
   "devDependencies": {
@@ -21,6 +22,7 @@
   "dependencies": {
     "@capacitor/android": "^8.6.2",
     "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
     "@mediapipe/tasks-vision": "^1.2.3",
     "firebase": "^13.3.0",
     "qrcode": "^1.5.4",

@@ -48,3 +48,16 @@ android/app/build/
 android/capacitor-cordova-android-plugins/build/
 *.keystore
 *.jks
+
+# iOS (Capacitor) — ios/README.md is committed; the generated Xcode project and
+# all build output are not. `npx cap add ios` regenerates ios/App on a Mac.
+ios/App/App/public/
+ios/App/Pods/
+ios/App/build/
+ios/App/output/
+ios/App/DerivedData/
+ios/App/*.xcworkspace/xcuserdata/
+ios/App/*.xcodeproj/xcuserdata/
+ios/capacitor-cordova-ios-plugins/
+*.ipa
+*.dSYM.zip

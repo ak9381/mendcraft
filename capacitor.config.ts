@@ -12,6 +12,15 @@ const config: CapacitorConfig = {
     // https://localhost scheme is a secure context so this works offline.
     allowMixedContent: false,
   },
+  ios: {
+    // The iOS shell is the lamp & music remote only (no Instagram/WhatsApp
+    // assist — that is Android-only). Run `npx cap add ios` on a Mac to
+    // generate the Xcode project in ios/; see ios/README.md. The webview boots
+    // the same dist/ bundle at path '/', so boot.ts's isNativeShell branch
+    // mounts the full remote; set the webview URL to '/phone' (or add an iOS
+    // branch in boot.ts) to get the compact lamp & music variant on device.
+    contentInset: 'always',
+  },
 };
 
 export default config;

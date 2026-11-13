@@ -1596,12 +1596,25 @@ button.primary:hover {
 .remote-page {
   max-width: 480px;
   margin: 0 auto;
-  padding: 16px;
+  /* iPhone-safe: respect the notch / home-indicator insets when installed as a
+     standalone PWA (index.html sets viewport-fit=cover). env() falls back to 0
+     on browsers without safe-area support, so desktop is unaffected. */
+  padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 14px;
   color: var(--text, #eee);
 }
+
+/* ---- /phone variant: compact lamp & music remote for the iPhone PWA ----
+   Hide the design/camera controls and enlarge playback + lamp targets. The
+   lamp and music live in .remote-devices and work without pairing. */
+.remote-phone .remote-controls { display: none; }
+.remote-phone .remote-devices { gap: 22px; }
+.remote-phone .remote-music-controls button { min-height: 64px; font-size: 26px; }
+.remote-phone .remote-big { min-height: 60px; font-size: 18px; }
+.remote-phone .remote-vol-label input[type="range"] { height: 34px; }
 .remote-head { display: flex; align-items: baseline; gap: 10px; }
 .remote-sub { opacity: 0.7; }
 .remote-status { margin: 0; font-size: 15px; }
@@ -1643,7 +1656,9 @@ button.primary:hover {
 .control-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 16px clamp(12px, 3vw, 28px) 48px;
+  /* iPhone/iPad-safe insets (viewport-fit=cover); env() → 0 where unsupported. */
+  padding: calc(16px + env(safe-area-inset-top)) calc(clamp(12px, 3vw, 28px) + env(safe-area-inset-right))
+    calc(48px + env(safe-area-inset-bottom)) calc(clamp(12px, 3vw, 28px) + env(safe-area-inset-left));
   color: var(--text);
 }
 .control-head {
