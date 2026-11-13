@@ -8,11 +8,13 @@ import { isControlRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
 // Inside the thin Android shell (Capacitor) the bundle is served from
 // https://localhost/ with no path — the native app IS the remote, so route
 // there directly instead of the editor.
-const isNativeShell = Boolean(
-  (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.(),
-);
+type CapGlobal = { isNativePlatform?: () => boolean; getPlatform?: () => string };
+const cap = (window as unknown as { Capacitor?: CapGlobal }).Capacitor;
+const isNativeShell = Boolean(cap?.isNativePlatform?.());
+// The iOS shell is the iPhone lamp & music remote (compact /phone variant).
+const isIosShell = isNativeShell && cap?.getPlatform?.() === 'ios';
 
-if (isPhoneRoute(window.location.pathname, window.location.search)) {
+if (isIosShell || isPhoneRoute(window.location.pathname, window.location.search)) {
   // /phone is the iPhone PWA install target: the remote page in its compact
   // "lamp & music" variant (large play/pause, volume, lamp on/off/dim).
   const { mountRemotePage } = await import('./relay/remotePage');
