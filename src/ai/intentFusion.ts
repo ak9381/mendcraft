@@ -129,18 +129,23 @@ export function fusionTranslateGuide(lang: PromptLanguage): string {
 }
 
 /** Full fusion prompt: the active mode's intent prompt (op vocabulary) + the
- *  deixis guide + an optional translation guide + the pointer context + the
- *  cleaned transcript. */
+ *  deixis guide + an optional translation guide + an optional personal-phrasebook
+ *  few-shot block + the pointer context + the cleaned transcript. `fewShot` is the
+ *  user's private learned mappings (ai/phrasebook); the CALLER decides whether it
+ *  may be attached to a given model call (on-device always; cloud only on an
+ *  escalation), so this function just slots it in when given. */
 export function buildFusionPrompt(
   intentPrompt: string,
   utterance: string,
   ctx: FusionContext,
   lang?: PromptLanguage,
+  fewShot?: string,
 ): string {
   // JSON.stringify escapes quotes in the transcript so speech can never close
   // the Transcript field early and masquerade as extra instructions.
   const translate = lang && lang.code !== 'en' ? `\n${fusionTranslateGuide(lang)}` : '';
-  return `${intentPrompt}\n${FUSION_GUIDE}${translate}\nContext: ${serializeFusionContext(ctx)}\nTranscript: ${JSON.stringify(normalizeTranscript(utterance))}`;
+  const examples = fewShot && fewShot.trim() ? `\n${fewShot.trim()}` : '';
+  return `${intentPrompt}\n${FUSION_GUIDE}${translate}${examples}\nContext: ${serializeFusionContext(ctx)}\nTranscript: ${JSON.stringify(normalizeTranscript(utterance))}`;
 }
 
 /** The mode's op responseConstraint + a "confidence" number and an optional

@@ -793,7 +793,16 @@ export interface FusionOutcome {
 export async function fuseIntent(
   utterance: string,
   ctx: FusionContext,
-  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string } },
+  opts?: {
+    forceCloud?: boolean;
+    lang?: { code: string; englishName: string };
+    /** Personal-phrasebook few-shot block (ai/phrasebook.buildFewShotPrefix).
+     *  Private speech — attached to the on-device model always, but to the cloud
+     *  ONLY when `examplesCloudOk` says this is the sanctioned escalation. */
+    fewShot?: string;
+    /** The router already escalated THIS command, so the few-shot may go cloud. */
+    examplesCloudOk?: boolean;
+  },
 ): Promise<FusionOutcome> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -801,8 +810,15 @@ export async function fuseIntent(
   const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
   if (models && primary) {
     try {
-      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang);
-      const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
+      // Privacy gate: the phrasebook may ride a cloud call only on the sanctioned
+      // escalation; otherwise it is on-device only.
+      const fewShot = opts?.fewShot && (!opts.forceCloud || opts.examplesCloudOk) ? opts.fewShot : undefined;
+      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang, fewShot);
+      // An on-device call carrying the private phrasebook must NOT silently fall
+      // back to the cloud twin (that would leak it without an escalation); it
+      // drops to the rules floor instead. Only an explicit forceCloud escalation
+      // sends examples to the cloud.
+      const retry = opts?.forceCloud || fewShot ? null : models.fusionCloud ?? null;
       const response = await callWithCloudRetry(primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse');
       const parsed = response
         ? parseFusionResult(extractJson(response.text()), mode.coerce.bind(mode), utterance)

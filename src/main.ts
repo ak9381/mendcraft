@@ -66,6 +66,10 @@ import {
   createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
 } from './offline/queue';
 import { createNetworkMonitor, routeBigJob } from './offline/network';
+import {
+  createPhrasebook, createIndexedDbPhrasebookStore,
+  parseTeachCommand, parseCorrectionCommand,
+} from './ai/phrasebook';
 
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
@@ -815,6 +819,13 @@ async function runAccessibilityCheck(): Promise<boolean> {
 
 const cloudConfigured = isFirebaseConfigured();
 const jobQueue = createJobQueue(createIndexedDbStore());
+// PERSONAL PHRASEBOOK (ai/phrasebook): the user's own phrasings + corrections,
+// kept on-device in IndexedDB and fed to Nano as few-shot examples. Private —
+// it only ever rides a cloud call on a sanctioned escalation (see fuseIntent).
+const phrasebook = createPhrasebook(createIndexedDbPhrasebookStore());
+// The previous real command, so a correction ("no, I meant …") knows what phrase
+// it is fixing.
+let lastCommand: string | null = null;
 const net = createNetworkMonitor({ navigator, target: window });
 let draining = false;
 
@@ -1047,6 +1058,7 @@ void jobQueue.init().then(() => {
   renderQueue();
   if (net.online()) void drainQueue(); // finish anything left queued from a prior session
 });
+void phrasebook.init(); // load any phrases taught in a previous session
 renderNetState();
 
 // ---- "what left this device" ledger recording ----------------------------
@@ -1068,6 +1080,61 @@ function recordLedger(source: Source, job: string, reason: string, sent: string,
   ledger.record({ source: source as LedgerSource, job, reason, sent, ms });
 }
 
+/**
+ * PERSONAL PHRASEBOOK meta-commands, resolved entirely on-device (no model call,
+ * nothing leaves the machine):
+ *   - teach: "when I say X, do Y" / "teach X means Y" — map phrase X to the op
+ *     the deterministic parser makes of Y, and remember it.
+ *   - correction: "no, I meant Y" / "actually Y" — remember that the PREVIOUS
+ *     command should have meant Y, then apply Y now.
+ * The target Y is turned into an op by the mode's rule parser (so a phrase is
+ * only saved when it maps to a real, validated op). Non-English voice goes
+ * through the cloud translate path and never reaches these English patterns.
+ * Returns true/false when it handled the utterance, or null when it is not a
+ * phrasebook meta-command (→ normal routing).
+ */
+async function handlePhrasebookMeta(utterance: string): Promise<boolean | null> {
+  if (!isEnglish(currentLanguage)) return null;
+
+  const teach = parseTeachCommand(utterance);
+  if (teach) {
+    const op = mode.parse(teach.target);
+    if ('clarify' in op) {
+      verifierEl.textContent = `I couldn't turn "${teach.target}" into a command, so I didn't save it.`;
+      say(`I couldn't turn ${teach.target} into a command, so I didn't save it.`);
+      return false;
+    }
+    await phrasebook.add({ phrase: teach.phrase, op: op as Record<string, unknown>, mode: mode.id, kind: 'phrase' });
+    setBadge('rules', 'exact'); // learned locally — private
+    opJsonEl.textContent = JSON.stringify({ learn: teach.phrase, as: op }, null, 2);
+    verifierEl.textContent = `Learned: when you say "${teach.phrase}", I'll ${teach.target}. (${phrasebook.count()} saved)`;
+    say(`Got it. When you say ${teach.phrase}, I'll ${teach.target}.`);
+    return true;
+  }
+
+  const corr = parseCorrectionCommand(utterance);
+  if (corr && lastCommand) {
+    const op = mode.parse(corr.target);
+    if ('clarify' in op) {
+      verifierEl.textContent = `I couldn't turn "${corr.target}" into a command, so I didn't save the correction.`;
+      say(`I couldn't understand ${corr.target}, so I didn't save it.`);
+      return false;
+    }
+    await phrasebook.add({ phrase: lastCommand, op: op as Record<string, unknown>, mode: mode.id, kind: 'correction' });
+    setBadge('rules', 'exact'); // correction stored + applied locally — private
+    opJsonEl.textContent = JSON.stringify(op, null, 2);
+    const step = controller.applyResult(op as Record<string, unknown>);
+    if (step.ok) renderAll();
+    verifierEl.textContent = step.ok
+      ? `Fixed, and I'll remember "${lastCommand}" means ${corr.target}.`
+      : `Saved the correction, but couldn't apply it: ${step.error ?? 'invalid'}.`;
+    say(`Thanks — I'll remember that next time.`);
+    return true;
+  }
+
+  return null;
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Accessibility requests short-circuit BEFORE routing: "make this house
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
@@ -1076,6 +1143,13 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Show her words immediately; the English translation fills in once the cloud
   // (or on-device) fusion call returns it.
   showCaptionHeard(utterance);
+
+  // PERSONAL PHRASEBOOK: teach ("when I say X, do Y") and correction ("no, I
+  // meant …") are handled locally — no model call, nothing leaves the device.
+  const metaHandled = await handlePhrasebookMeta(utterance);
+  if (metaHandled !== null) return metaHandled;
+  // This is a real command: a later correction ("no, I meant …") refers to it.
+  lastCommand = utterance;
 
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source
@@ -1150,7 +1224,15 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // TRANSLATES and emits the same typed op in one Firebase AI Logic call.
     const toCloud = translateInCloud(currentLanguage, { ...env, deviceLangReady });
     const langOpt = translated ? currentLanguage : undefined;
-    let outcome = await fuseIntent(utterance, ctx, { forceCloud: toCloud, lang: langOpt });
+    // PERSONAL PHRASEBOOK few-shot: the user's learned mappings for this command.
+    // Attached to the on-device Nano call only (it stays on the device). It is
+    // withheld from a first cloud call (no-device / translate) and only sent to
+    // the cloud on the escalation below, where the router already went cloud.
+    const fewShot = phrasebook.fewShotFor(utterance, mode.id);
+    let outcome = await fuseIntent(utterance, ctx, {
+      forceCloud: toCloud, lang: langOpt,
+      fewShot: toCloud ? undefined : fewShot,
+    });
     // Primary inference: a cloud answer stores its payload; on-device/rules are
     // private. The reason follows the planned route (on-device → private).
     recordLedger(
@@ -1162,8 +1244,15 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
       // retry physically contacts the cloud, so its send is recorded even if the
       // on-device answer is ultimately kept.
-      const retry = await fuseIntent(utterance, ctx, { forceCloud: true, lang: langOpt });
-      recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], commandPayload(utterance, ctx), retry.ms);
+      // Sanctioned escalation: the router already went to the cloud, so the few
+      // relevant phrasebook examples may ride along (and only those).
+      const retry = await fuseIntent(utterance, ctx, {
+        forceCloud: true, lang: langOpt, fewShot, examplesCloudOk: true,
+      });
+      const escalatedPayload = fewShot
+        ? `${commandPayload(utterance, ctx)}\nphrasebook examples: ${phrasebook.select(utterance, mode.id).length}`
+        : commandPayload(utterance, ctx);
+      recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], escalatedPayload, retry.ms);
       ({ outcome, escalated } = pickEscalated(outcome, retry));
     }
     result = outcome.result;
