@@ -29,7 +29,7 @@ import {
   type Source,
 } from './ai/hybrid';
 import {
-  buildCropRect, deixisToOp, isDeicticAdjust, matchCandidateByLabel,
+  DEIXIS_MIN_CONFIDENCE, buildCropRect, deixisToOp, isDeicticAdjust, matchCandidateByLabel,
   type DeixisCandidate,
 } from './ai/deixis';
 import { captureCropFromVideo } from './input/frameCapture';
@@ -625,10 +625,12 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
   const pointedId = viewport.pick(lastPointer.clientX, lastPointer.clientY);
   const kindOf = (id: string): string => controller.deixisInfo?.(id)?.kind ?? id.replace(/[-_]?\d+$/, '');
   const items = controller.listItems();
+  // ui listItems indent children with "· " markers — prompt noise, strip them.
+  const cleanLabel = (l: string): string => l.replace(/^(?:· )+/, '').trim();
   // Pointed element first — the prompt tells the model "pointed" = the first.
   const candidates: DeixisCandidate[] = [
-    ...(pointedId ? [{ id: pointedId, kind: kindOf(pointedId), label: items.find((i) => i.id === pointedId)?.label.trim() }] : []),
-    ...items.filter((i) => i.id !== pointedId).map((i) => ({ id: i.id, kind: kindOf(i.id), label: i.label.trim() })),
+    ...(pointedId ? [{ id: pointedId, kind: kindOf(pointedId), label: cleanLabel(items.find((i) => i.id === pointedId)?.label ?? '') || undefined }] : []),
+    ...items.filter((i) => i.id !== pointedId).map((i) => ({ id: i.id, kind: kindOf(i.id), label: cleanLabel(i.label) || undefined })),
   ];
   let image: DeixisImage | null = null;
   let pointerPx: { x: number; y: number } | null = null;
@@ -655,6 +657,9 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
     `${commandPayload(utterance)}\nimage: ${imageNote}\npointer: ${pointedId ? `on ${pointedId}` : 'not on a canvas element'}`,
     outcome.ms,
   );
+  // A guessed target is worse than no answer: fall through to fusion, which
+  // never applies an op on a hunch (it clarifies or escalates instead).
+  if (res.confidence < DEIXIS_MIN_CONFIDENCE) return null;
   const finish = (ok: boolean, msg: string): boolean => {
     setBadge(outcome.source, 'pointed');
     routerPanel.add({

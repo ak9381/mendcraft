@@ -128,6 +128,12 @@ Never invent ids. Unsure => "target":"none" with low confidence.`;
 
 export type DeixisProperty = 'brightness' | 'color' | 'size';
 
+/** Below this the resolution is a guess — the caller ignores it and lets the
+ *  ordinary fusion path have its normal go (pointing never makes it worse).
+ *  Kept below the parser's 0.5 default so an answer with NO confidence field
+ *  still counts. */
+export const DEIXIS_MIN_CONFIDENCE = 0.35;
+
 export interface DeixisResolution {
   /** A candidate id, 'pointed' (first candidate), or 'none'. */
   target: string;

@@ -7,6 +7,7 @@ import {
   BRIGHTNESS_STEP,
   DEIXIS_CONSTRAINT,
   DEIXIS_CROP_PX,
+  DEIXIS_MIN_CONFIDENCE,
   adjustBrightness,
   buildCropRect,
   buildDeixisPrompt,
@@ -106,6 +107,10 @@ describe('parseDeixisResult', () => {
     expect(parseDeixisResult(null, ids)).toBeNull();
     expect(parseDeixisResult([], ids)).toBeNull();
     expect(parseDeixisResult({ target: 'pointed', property: 'teleport' }, ids)).toBeNull();
+  });
+  it('an answer with NO confidence field still clears the apply gate', () => {
+    const r = parseDeixisResult({ target: 'pointed', property: 'size' }, ids);
+    expect(r!.confidence).toBeGreaterThanOrEqual(DEIXIS_MIN_CONFIDENCE);
   });
 });
 
