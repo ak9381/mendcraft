@@ -7,6 +7,11 @@ import type { HandEvent } from './input/hands';
 
 export const SIM_ACTIVE = new URLSearchParams(window.location.search).get('sim') === '1';
 
+/** A declarative "feature beat" the shell performs (via playDemo's onFeature):
+ *  on-device hand-adapt pick, offline/online toggle, or accepting an a11y fix.
+ *  Keeps the demo script data-only; main.ts owns each implementation. */
+export type SimFeature = 'adapt' | 'offline' | 'online' | 'accept-a11y';
+
 export interface SimStep {
   label: string;
   utterance?: string;
@@ -16,6 +21,11 @@ export interface SimStep {
    *  the cloud calls (abstract ops + text) against the private on-device count.
    *  The shell handles the reveal in onStep; playDemo just skips the export. */
   revealLedger?: boolean;
+  /** A declarative feature beat handled by onFeature before any utterance. */
+  feature?: SimFeature;
+  /** Switch the spoken/written language (e.g. 'kn') before the utterance — drives
+   *  the live caption bar and the honest "Cloud · Kannada" badge path. */
+  lang?: string;
 }
 
 /**
@@ -27,9 +37,18 @@ export interface SimStep {
 export const PLAN_DEMO: SimStep[] = [
   { label: 'Two-bedroom plan', utterance: 'two bedroom plan' },
   { label: 'Make the shared wall 4 meters', utterance: 'make this wall 4 meters' },
-  { label: 'Thicken it by 50 mm', utterance: 'thicker by 50' },
+  { label: 'Intent fusion: thicken it', utterance: 'thicker by 50' },
   { label: 'Add a door to it', utterance: 'add a door' },
+  { label: 'Teach a personal phrase (on-device)', utterance: 'teach beef it up means thicker by 20' },
+  { label: 'Use the phrase I just taught', utterance: 'beef it up' },
+  { label: 'Adapt to my hand (numbers only, on-device)', feature: 'adapt' },
+  { label: 'Go offline', feature: 'offline' },
+  { label: 'Queue a studio plan while offline', utterance: 'studio apartment', delayMs: 1700 },
+  { label: 'Back online — drain the cloud queue', feature: 'online', delayMs: 1900 },
+  { label: 'Say it in Kannada (live caption)', lang: 'kn', utterance: 'ಈ ಗೋಡೆಯನ್ನು ದಪ್ಪ ಮಾಡು', delayMs: 1700 },
+  { label: 'Back to English', lang: 'en' },
   { label: 'Check accessibility', utterance: 'check accessibility' },
+  { label: 'Accept the accessibility fix', feature: 'accept-a11y' },
   { label: 'Export the DXF', action: undefined },
   { label: 'See what left this device', revealLedger: true },
 ];
@@ -57,6 +76,7 @@ export const UI_DEMO: SimStep[] = [
   { label: 'Make it 56 pixels tall', utterance: 'make it 56 pixels tall' },
   { label: 'Bigger heading', utterance: 'bigger heading' },
   { label: 'Check accessibility', utterance: 'check accessibility' },
+  { label: 'Accept the accessibility fix', feature: 'accept-a11y' },
   { label: 'Export the HTML', action: undefined },
   { label: 'See what left this device', revealLedger: true },
 ];
@@ -150,13 +170,18 @@ export async function playDemo(
   runUtterance: (text: string) => Promise<void>,
   onStep: (step: SimStep, index: number) => void,
   onExport: () => void,
+  onFeature?: (step: SimStep, index: number) => void | Promise<void>,
 ): Promise<void> {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     onStep(step, i);
+    // A declarative feature / language beat runs first (it may set the language
+    // the following utterance is spoken in).
+    if ((step.feature || step.lang) && onFeature) await onFeature(step, i);
     if (step.utterance) await runUtterance(step.utterance);
     else if (step.action) await step.action();
     else if (step.revealLedger) { /* onStep opens the ledger; no export here */ }
+    else if (step.feature || step.lang) { /* handled by onFeature; no export */ }
     else onExport();
     await new Promise((resolve) => setTimeout(resolve, step.delayMs ?? 1400));
   }

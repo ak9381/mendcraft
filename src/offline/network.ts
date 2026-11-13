@@ -41,6 +41,10 @@ export interface NetworkMonitor {
   /** Fires only on an actual online↔offline transition. Returns unsubscribe. */
   subscribe(fn: (online: boolean) => void): () => void;
   dispose(): void;
+  /** SIM/testing only: force the online state and notify subscribers, bypassing
+   *  navigator (navigator.onLine is read-only, so the judge-path demo can't flip
+   *  it directly). Not used on the real network path. */
+  simForce(online: boolean): void;
 }
 
 export function createNetworkMonitor(deps: {
@@ -71,6 +75,11 @@ export function createNetworkMonitor(deps: {
       target.removeEventListener('online', onChange);
       target.removeEventListener('offline', onChange);
       listeners.clear();
+    },
+    simForce(next) {
+      if (next === online) return;
+      online = next;
+      for (const fn of listeners) fn(online);
     },
   };
 }

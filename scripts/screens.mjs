@@ -560,6 +560,170 @@ async function main() {
     }
 
     await palctx.close();
+
+    // ─── Hybrid AI feature walks (ai-*): the new on-device/cloud features, each
+    // driven through the judge path and the same shared command/pointer pipeline.
+    const aictx = await browser.newContext({ viewport: { width: 1360, height: 860 } });
+    const ap = await aictx.newPage();
+    ap.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+    ap.on('pageerror', (e) => consoleErrors.push(`pageerror: ${e.message}`));
+
+    // Seed a two-bedroom plan to operate on.
+    await ap.goto(`${BASE}/?sim=1`, { waitUntil: 'networkidle' });
+    await ap.waitForSelector('#viewport svg', { timeout: 5000 });
+    await ap.waitForTimeout(300);
+    await command(ap, 'two bedroom plan');
+    await ap.waitForTimeout(500);
+
+    // ai-fusion — select the shared wall on the canvas (the pinch pointer path),
+    // then a deictic single-op command runs through the hybrid fusion router.
+    // Open the Routing panel to show the planned path vs. the honest actual source.
+    await ap.evaluate(() => {
+      const svg = document.querySelector('#viewport svg');
+      if (!svg) return;
+      const line = [...svg.querySelectorAll('line')].find(
+        (l) => l.getAttribute('stroke') === '#2563eb' && Number(l.getAttribute('stroke-width')) > 2,
+      );
+      if (!line) return;
+      const x1 = +line.getAttribute('x1'), y1 = +line.getAttribute('y1');
+      const x2 = +line.getAttribute('x2'), y2 = +line.getAttribute('y2');
+      const r = svg.getBoundingClientRect();
+      const opts = { bubbles: true, clientX: r.left + (x1 + x2) / 2, clientY: r.top + (y1 + y2) / 2 };
+      svg.dispatchEvent(new MouseEvent('mousedown', opts));
+      window.dispatchEvent(new MouseEvent('mouseup', opts));
+    });
+    await ap.waitForTimeout(200);
+    await command(ap, 'make this wall thicker by 30');
+    await ap.waitForTimeout(300);
+    const hasRouting = !!(await ap.$('#btn-routing'));
+    if (hasRouting) { await ap.click('#btn-routing'); await ap.waitForTimeout(300); }
+    await shot(ap, 'ai-fusion.png');
+    const fusionBadge = await badge(ap);
+    assert(!!fusionBadge, `fusion/deictic command produced a source badge ("${fusionBadge}")`);
+    const routed = await ap.evaluate(
+      () => document.querySelectorAll('.mc-router-row, #router-log li, [data-router-row]').length,
+    );
+    console.log(`routing entries after fusion: ${routed}`);
+    if (hasRouting) { await ap.click('#btn-routing'); await ap.waitForTimeout(150); }
+
+    // ai-a11y — run the accessibility check (deterministic code checks); the panel
+    // lists each issue with its cited standard and a one-click fix. Accept the
+    // fixes and confirm the issue count drops (the fix really applied, undoably).
+    await command(ap, 'check accessibility');
+    await ap.waitForSelector('.mc-a11y-panel:not([hidden])', { timeout: 3000 });
+    await ap.waitForTimeout(300);
+    await shot(ap, 'ai-a11y.png');
+    const a11yCount = await ap.evaluate(() => document.querySelectorAll('.mc-a11y-row').length);
+    assert(a11yCount >= 1, `accessibility check listed ${a11yCount} issue(s)`);
+    const fixOutcome = await ap.evaluate(() => {
+      const btn = [...document.querySelectorAll('.mc-a11y-panel button')]
+        .find((b) => /fix all/i.test(b.textContent || '') && !b.disabled);
+      if (!btn) return 'no-fixable';
+      btn.click();
+      return 'clicked';
+    });
+    await ap.waitForTimeout(400);
+    const a11yAfter = await ap.evaluate(() => document.querySelectorAll('.mc-a11y-row').length);
+    assert(
+      fixOutcome !== 'clicked' || a11yAfter < a11yCount,
+      `accepting the accessibility fix reduced issues (${a11yCount} → ${a11yAfter}, ${fixOutcome})`,
+    );
+    if (await ap.$('#btn-a11y')) { await ap.click('#btn-a11y'); await ap.waitForTimeout(150); }
+
+    // ai-adapt — simulated hand metrics (numbers only, no camera) drive the
+    // on-device profile pick; the toast + hand-profile panel show the result.
+    // mcSim.adapt() runs the pick AND opens the hand-profile panel with the same
+    // simulated metrics (the toolbar button would reset them to the empty sampler).
+    await ap.evaluate(() => (window.mcSim && window.mcSim.adapt && window.mcSim.adapt()));
+    await ap.waitForTimeout(450);
+    await shot(ap, 'ai-adapt.png');
+    const toastText = await ap.evaluate(() => {
+      const t = document.getElementById('mc-toast');
+      return t && !t.hidden ? (t.textContent || '') : '';
+    });
+    assert(!!toastText, `hand-adapt toast shown ("${toastText.slice(0, 48)}")`);
+    const adaptPinches = await ap.evaluate(
+      () => (document.querySelector('.mc-hands-panel, [class*="hands"]')?.textContent || ''),
+    );
+    console.log(`hand panel reflects simulated metrics: ${/pinch/i.test(adaptPinches)}`);
+    if (await ap.$('#btn-hands')) { await ap.click('#btn-hands'); await ap.waitForTimeout(150); }
+
+    // ai-offline — go offline (real navigator flip), queue a big cloud job, then
+    // reconnect so the queue drains to the honest on-device result (ready to apply).
+    await aictx.setOffline(true);
+    await ap.waitForTimeout(300);
+    await command(ap, 'studio apartment');
+    await ap.waitForTimeout(700);
+    // The queue card sits at the top of the side panel; scroll it into view and
+    // clear the lingering adapt toast so the offline queue is the clear subject.
+    await ap.evaluate(() => {
+      document.getElementById('panel')?.scrollTo(0, 0);
+      const t = document.getElementById('mc-toast');
+      if (t) t.hidden = true;
+    });
+    await ap.waitForTimeout(150);
+    await shot(ap, 'ai-offline.png');
+    const netText = await ap.evaluate(() => document.getElementById('net-state')?.textContent || '');
+    assert(/offline/i.test(netText), `network indicator reads offline ("${netText}")`);
+    const queuedCount = await ap.evaluate(() => {
+      const s = document.getElementById('queue-section');
+      return s && !s.hidden ? s.querySelectorAll('.queue-item').length : 0;
+    });
+    assert(queuedCount >= 1, `a cloud job was queued while offline (${queuedCount})`);
+    await aictx.setOffline(false);
+    await ap.waitForTimeout(1200);
+    const drainStatuses = await ap.evaluate(
+      () => [...document.querySelectorAll('.queue-item-status')].map((e) => (e.textContent || '').trim()),
+    );
+    assert(
+      drainStatuses.length === 0 || drainStatuses.some((s) => /ready|running/i.test(s)),
+      `queue drained on reconnect (${drainStatuses.join(' | ') || 'empty'})`,
+    );
+
+    // ai-ledger — "what left this device": the running tally of cloud calls (with
+    // the abstract payload that was sent) vs. the private on-device events.
+    await ap.click('#btn-ledger');
+    await ap.waitForSelector('.mc-ledger-panel:not([hidden])', { timeout: 3000 });
+    await ap.waitForTimeout(300);
+    await shot(ap, 'ai-ledger.png');
+    assert(await ap.isVisible('.mc-ledger-panel'), 'ledger panel lists what left the device');
+    await ap.click('#btn-ledger');
+    await ap.waitForTimeout(150);
+
+    // ai-kannada — switch the language to Kannada; the live caption bar shows the
+    // (simulated) transcript, and the badge stays honest about the source.
+    await ap.selectOption('#lang-select', 'kn');
+    await ap.waitForTimeout(300);
+    await command(ap, 'ಈ ಗೋಡೆಯನ್ನು ದಪ್ಪ ಮಾಡು');
+    await ap.waitForTimeout(400);
+    await shot(ap, 'ai-kannada.png');
+    const caption = await ap.evaluate(() => {
+      const c = document.getElementById('caption-bar');
+      return c && !c.hidden ? (document.getElementById('caption-heard')?.textContent || '') : '';
+    });
+    assert(!!caption, `live caption shows the Kannada transcript ("${caption}")`);
+    await ap.selectOption('#lang-select', 'en');
+    await ap.waitForTimeout(250);
+
+    // ai-phrase — teach a personal phrase entirely on-device (no model call,
+    // nothing leaves the machine); the confirmation + op panel prove it was saved.
+    await command(ap, 'teach beef it up means thicker by 20');
+    await ap.waitForTimeout(400);
+    // Scroll the side panel so the learned-op JSON and the "Learned:" confirmation
+    // are both in frame.
+    await ap.evaluate(() => document.getElementById('panel')?.scrollTo(0, 9999));
+    await ap.waitForTimeout(150);
+    await shot(ap, 'ai-phrase.png');
+    const learned = await ap.evaluate(() => document.getElementById('verifier-result')?.textContent || '');
+    assert(/learn/i.test(learned), `phrasebook learned the phrase on-device ("${learned.trim().slice(0, 60)}")`);
+
+    // ai-point (point-and-say) is a camera-deixis feature: it needs a live video
+    // frame to crop around the pinch, which the headless judge path has no way to
+    // supply, so no deterministic screenshot is produced here. The deictic command
+    // path it falls through to is exercised by ai-fusion above.
+    console.log('ai-point: skipped — point-and-say needs a live camera frame (not reproducible headless).');
+
+    await aictx.close();
   } finally {
     await browser.close();
   }

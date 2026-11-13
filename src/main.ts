@@ -11,7 +11,7 @@ import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
 import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
 import { createReferencePanel } from './ui/referencePanel';
-import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo } from './sim';
+import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo, type SimStep } from './sim';
 import {
   initDeviceModel,
   checkDeviceAvailability,
@@ -489,13 +489,14 @@ function applyActiveProfile(adaptation: ProfileAdaptation): void {
   handsPanel.setAdaptation(resolved);
 }
 
-/** Run the on-device adaptation once enough pinches are sampled. */
-async function runAdaptation(force = false): Promise<void> {
+/** Run the on-device adaptation once enough pinches are sampled. `injected` lets
+ *  the judge path feed simulated metrics (no camera) through the same pick. */
+async function runAdaptation(force = false, injected?: HandMetrics): Promise<void> {
   if (adapting) return;
   if (!force && (adaptedOnce || !metricsSampler.ready())) return;
   adapting = true;
   try {
-    const metrics: HandMetrics = metricsSampler.snapshot();
+    const metrics: HandMetrics = injected ?? metricsSampler.snapshot();
     handsPanel.setMetrics(metrics);
     const result = await adaptHandProfile(metrics);
     lastAdaptation = result;
@@ -817,7 +818,11 @@ async function runAccessibilityCheck(): Promise<boolean> {
 // the cloud automatically and each result becomes a previewable fix (Apply /
 // Reject). Single-op edits never queue — they stay on-device (Nano / rules).
 
-const cloudConfigured = isFirebaseConfigured();
+// In the judge path there is no real Firebase key, but the offline-first queue is
+// one of the features the demo needs to show. Treating the cloud as "configured"
+// in SIM (only) lets a big job queue while offline and then drain to the honest
+// rules result on reconnect — the real queue mechanism, labelled SIM throughout.
+const cloudConfigured = isFirebaseConfigured() || SIM_ACTIVE;
 const jobQueue = createJobQueue(createIndexedDbStore());
 // PERSONAL PHRASEBOOK (ai/phrasebook): the user's own phrasings + corrections,
 // kept on-device in IndexedDB and fed to Nano as few-shot examples. Private —
@@ -1775,8 +1780,55 @@ void prepareHybrid().then(async (status) => {
 
 // ---- sim mode ----
 
+// Plausible-but-simulated hand metrics (numbers only — never video) so the judge
+// path can drive the on-device profile pick and see the toast without a camera.
+const SIM_HAND_METRICS: HandMetrics = {
+  pinchEffort: 0.82, tremor: 0.055, pinchMs: 520, fatigue: 0.55,
+  pinches: 14, frames: 420, sessionMs: 90_000,
+};
+
+/** Perform a declarative feature beat from the demo script (hand-adapt, offline
+ *  toggle, accept an accessibility fix, switch language). Mirrors what a judge
+ *  would do by hand, so the same code paths run as in real use. */
+async function runSimFeature(step: SimStep): Promise<void> {
+  if (step.lang) {
+    const lang = resolveLanguage(step.lang);
+    langSelect.value = lang.code;
+    applyLanguage(lang, true);
+  }
+  switch (step.feature) {
+    case 'adapt':
+      await runAdaptation(true, SIM_HAND_METRICS);
+      break;
+    case 'offline':
+      net.simForce(false);
+      break;
+    case 'online':
+      net.simForce(true);
+      break;
+    case 'accept-a11y': {
+      const fixables = currentA11yIssues().filter((i) => i.fix);
+      if (fixables.length) applyAllA11yFixes(fixables);
+      else say('No automatic accessibility fixes to accept.');
+      break;
+    }
+  }
+}
+
 if (SIM_ACTIVE) {
   mountSimCursor(viewportEl, handleHandEvent);
+  // A tiny judge-path seam the screenshot walk uses to drive a camera-less beat
+  // (the hand-adapt pick) through the real on-device path.
+  (window as unknown as { mcSim?: Record<string, () => void> }).mcSim = {
+    adapt: () => {
+      void runAdaptation(true, SIM_HAND_METRICS);
+      // Open the hand-profile panel showing the SAME simulated numbers the pick
+      // used (clicking the toolbar button would reset them to the empty sampler).
+      handsPanel.setMetrics(SIM_HAND_METRICS);
+      handsPanel.open();
+      toggleButton(btnHands, true);
+    },
+  };
   const btnDemo = document.getElementById('btn-demo') as HTMLButtonElement | null;
   btnDemo?.addEventListener('click', () => {
     btnDemo.disabled = true;
@@ -1793,6 +1845,7 @@ if (SIM_ACTIVE) {
         }
       },
       () => btnExport.click(),
+      runSimFeature,
     ).finally(() => {
       btnDemo.disabled = false;
     });

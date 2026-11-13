@@ -73,4 +73,20 @@ describe('createNetworkMonitor', () => {
     target.dispatchEvent(new Event('online'));
     expect(seen).toEqual([]);
   });
+
+  it('simForce overrides state and notifies, debouncing a no-op force', () => {
+    // The judge path drives offline/online without touching navigator (onLine is
+    // read-only), so simForce must flip online() and fan out to subscribers once.
+    const { monitor } = setup(true);
+    const seen: boolean[] = [];
+    monitor.subscribe((o) => seen.push(o));
+
+    monitor.simForce(true); // already online — no change, no notify
+    monitor.simForce(false);
+    monitor.simForce(false); // duplicate — debounced
+    monitor.simForce(true);
+
+    expect(seen).toEqual([false, true]);
+    expect(monitor.online()).toBe(true);
+  });
 });
