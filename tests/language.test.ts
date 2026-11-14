@@ -17,7 +17,11 @@ import {
   buildCaption,
   localize,
   pickVoice,
+  confirmPhrase,
+  opConfirmKey,
+  pickSpeechRoute,
   type LanguageEnv,
+  type SpeechEnv,
 } from '../src/ai/language';
 import { fuseIntent, setModelsForTest, type FusionContext, type TextGenModel } from '../src/ai/hybrid';
 import { setActiveMode } from '../src/core/modes';
@@ -178,5 +182,78 @@ describe('fuseIntent with a language (cloud translate + op in one call)', () => 
     expect('translation' in r.result).toBe(false); // split off before coercion
     expect(r.translation).toBe('put a door here');
     expect(r.confidence).toBe(0.9);
+  });
+});
+
+// ─── spoken op confirmations (fixed phrase table) ────────────────────────────
+
+describe('opConfirmKey', () => {
+  it('maps common ops to a verb key', () => {
+    expect(opConfirmKey('move')).toBe('moved');
+    expect(opConfirmKey('move_many')).toBe('moved');
+    expect(opConfirmKey('delete')).toBe('deleted');
+    expect(opConfirmKey('rotate')).toBe('rotated');
+    expect(opConfirmKey('scale')).toBe('resized');
+    expect(opConfirmKey('set_width')).toBe('resized');
+    expect(opConfirmKey('add_wall')).toBe('added');
+    expect(opConfirmKey('duplicate')).toBe('duplicated');
+    expect(opConfirmKey('undo')).toBe('undone');
+    expect(opConfirmKey('redo')).toBe('redone');
+    expect(opConfirmKey('rename')).toBe('renamed');
+  });
+
+  it('falls back to the generic "done" for unknown or missing ops', () => {
+    expect(opConfirmKey('wobble')).toBe('done');
+    expect(opConfirmKey(null)).toBe('done');
+    expect(opConfirmKey(undefined)).toBe('done');
+  });
+});
+
+describe('confirmPhrase', () => {
+  it('speaks the English verb for English', () => {
+    expect(confirmPhrase('move', EN)).toBe('Moved.');
+    expect(confirmPhrase('delete', EN)).toBe('Deleted.');
+    expect(confirmPhrase(null, EN)).toBe('Done.');
+  });
+
+  it('speaks the Kannada verb for Kannada (never free text)', () => {
+    expect(confirmPhrase('move', KN)).toBe('ಸರಿಸಲಾಗಿದೆ.');
+    expect(confirmPhrase('add_wall', KN)).toBe('ಸೇರಿಸಲಾಗಿದೆ.');
+    // generic fallback is localized too
+    expect(confirmPhrase('wobble', KN)).toBe('ಆಯಿತು.');
+  });
+});
+
+// ─── speech route decision ───────────────────────────────────────────────────
+
+const base: SpeechEnv = { cloudReady: true, audioSupported: true, synthHasVoice: true };
+
+describe('pickSpeechRoute', () => {
+  it('mutes everything when muted', () => {
+    expect(pickSpeechRoute(KN, base, true)).toBe('silent');
+    expect(pickSpeechRoute(EN, base, true)).toBe('silent');
+  });
+
+  it('uses the cloud voice for her language when cloud + SDK audio are ready', () => {
+    expect(pickSpeechRoute(KN, base, false)).toBe('cloud');
+  });
+
+  it('keeps English on speechSynthesis even when the cloud is available', () => {
+    expect(pickSpeechRoute(EN, base, false)).toBe('synth');
+  });
+
+  it('falls back to synth for her language when the cloud is unavailable', () => {
+    expect(pickSpeechRoute(KN, { ...base, cloudReady: false }, false)).toBe('synth');
+    expect(pickSpeechRoute(KN, { ...base, audioSupported: false }, false)).toBe('synth');
+  });
+
+  it('stays silent for her language with no cloud and no matching voice', () => {
+    expect(pickSpeechRoute(KN, { cloudReady: false, audioSupported: false, synthHasVoice: false }, false))
+      .toBe('silent');
+  });
+
+  it('always lets English speak via synth (English always has a voice)', () => {
+    expect(pickSpeechRoute(EN, { cloudReady: false, audioSupported: false, synthHasVoice: false }, false))
+      .toBe('synth');
   });
 });

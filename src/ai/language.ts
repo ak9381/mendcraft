@@ -155,6 +155,94 @@ export function localize(key: PhraseKey, lang: Language): string {
 }
 
 // ---------------------------------------------------------------------------
+// Spoken op confirmations. After a voice command lands an op we speak a SHORT
+// fixed confirmation in the active language — "Moved." / "ಸರಿಸಲಾಗಿದೆ." — never
+// free-generated text. The on-screen verifier keeps the detailed English
+// message; only the spoken line comes from this fixed table, so a cloud/synth
+// voice never improvises. An op with no entry falls back to the generic "done".
+
+export type ConfirmKey =
+  | 'moved' | 'deleted' | 'rotated' | 'resized' | 'added'
+  | 'duplicated' | 'undone' | 'redone' | 'renamed' | 'styled' | 'done';
+
+/** Common editor ops → a confirmation phrase key. Mode-agnostic: plan, ui and
+ *  part ops share these verbs. Anything not listed speaks the generic "Done." */
+const OP_CONFIRM: Record<string, ConfirmKey> = {
+  move: 'moved', move_many: 'moved', move_end: 'moved', move_opening: 'moved', set_pos: 'moved', align: 'moved',
+  delete: 'deleted',
+  rotate: 'rotated', mirror: 'rotated',
+  scale: 'resized', offset: 'resized', set_size: 'resized', set_sizing: 'resized',
+  set_width: 'resized', set_length: 'resized', set_height: 'resized', set_thickness: 'resized', set_sill: 'resized',
+  add: 'added', add_wall: 'added', add_door: 'added', add_window: 'added', add_room: 'added',
+  add_text: 'added', add_fixture: 'added', add_opening: 'added', add_frame: 'added',
+  add_node: 'added', add_dim: 'added', hole: 'added', wrap: 'added',
+  duplicate: 'duplicated', array: 'duplicated',
+  undo: 'undone', redo: 'redone',
+  rename: 'renamed', set_text: 'renamed',
+  set_fill: 'styled', set_font: 'styled', set_style: 'styled', set_swing: 'styled', set_layout: 'styled',
+};
+
+const CONFIRM_PHRASES: Record<ConfirmKey, Record<string, string>> = {
+  moved: { en: 'Moved.', kn: 'ಸರಿಸಲಾಗಿದೆ.' },
+  deleted: { en: 'Deleted.', kn: 'ಅಳಿಸಲಾಗಿದೆ.' },
+  rotated: { en: 'Rotated.', kn: 'ತಿರುಗಿಸಲಾಗಿದೆ.' },
+  resized: { en: 'Resized.', kn: 'ಗಾತ್ರ ಬದಲಾಯಿಸಲಾಗಿದೆ.' },
+  added: { en: 'Added.', kn: 'ಸೇರಿಸಲಾಗಿದೆ.' },
+  duplicated: { en: 'Duplicated.', kn: 'ನಕಲು ಮಾಡಲಾಗಿದೆ.' },
+  undone: { en: 'Undone.', kn: 'ರದ್ದುಗೊಳಿಸಲಾಗಿದೆ.' },
+  redone: { en: 'Redone.', kn: 'ಮತ್ತೆ ಮಾಡಲಾಗಿದೆ.' },
+  renamed: { en: 'Renamed.', kn: 'ಹೆಸರು ಬದಲಾಯಿಸಲಾಗಿದೆ.' },
+  styled: { en: 'Updated.', kn: 'ನವೀಕರಿಸಲಾಗಿದೆ.' },
+  done: { en: 'Done.', kn: 'ಆಯಿತು.' },
+};
+
+/** Map an applied op's name to its confirmation key (generic 'done' fallback). */
+export function opConfirmKey(opName: string | null | undefined): ConfirmKey {
+  if (!opName) return 'done';
+  return OP_CONFIRM[opName] ?? 'done';
+}
+
+/** The short spoken confirmation for an applied op, in the active language. */
+export function confirmPhrase(opName: string | null | undefined, lang: Language): string {
+  const row = CONFIRM_PHRASES[opConfirmKey(opName)];
+  return row[lang.code] ?? row.en;
+}
+
+// ---------------------------------------------------------------------------
+// Speech route decision. English (and any offline / no-cloud case) uses the
+// browser's speechSynthesis with the best matching voice; her language, when
+// online with the cloud reachable and the SDK able to emit audio, uses the
+// Gemini cloud voice through Firebase AI Logic (logged to the ledger). Muting
+// silences everything. Pure, so the branch table is unit-tested without audio.
+
+export type SpeechRoute = 'cloud' | 'synth' | 'silent';
+
+export interface SpeechEnv {
+  /** Firebase AI Logic is configured and App Check passed. */
+  cloudReady: boolean;
+  /** The installed web SDK can return audio output (responseModalities AUDIO). */
+  audioSupported: boolean;
+  /** speechSynthesis has a usable voice for this language. */
+  synthHasVoice: boolean;
+}
+
+/**
+ * Pick where a confirmation is spoken. Cloud TTS is reserved for a non-English
+ * language that the browser can't voice well: it needs the cloud reachable AND
+ * SDK audio support. English, and any case where the cloud path is unavailable,
+ * use speechSynthesis; with no voice at all we stay silent (the screen-reader
+ * line already carries the text) rather than mispronounce.
+ */
+export function pickSpeechRoute(lang: Language, env: SpeechEnv, muted: boolean): SpeechRoute {
+  if (muted) return 'silent';
+  if (!isEnglish(lang) && env.cloudReady && env.audioSupported) return 'cloud';
+  if (env.synthHasVoice) return 'synth';
+  // English always has a usable browser voice; a non-English language without
+  // one stays silent rather than voicing it in the wrong accent.
+  return isEnglish(lang) ? 'synth' : 'silent';
+}
+
+// ---------------------------------------------------------------------------
 // Voice selection for speechSynthesis. Pure over a plain voice list so it is
 // testable without the browser. Prefer an exact BCP-47 match (kn-IN), then any
 // voice for the base language (kn-*), else none → the caller stays text-only.

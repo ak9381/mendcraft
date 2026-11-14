@@ -1,0 +1,39 @@
+---
+# Firebase AI Logic server prompt template (dotprompt format).
+# Template ID: template_part_design  → Remote Config key: template_part_design
+# Called from src/ai/hybrid.ts runBigCloudJob() for part-mode "design a 3D helper
+# object". The client sends templateVariables { request, preamble }; CODE keeps
+# only a known template name + finite numeric params, so this only shapes the
+# model and is never trusted.
+model: googleai/gemini-3.5-flash-lite
+config:
+  temperature: 0.2
+  responseMimeType: application/json
+input:
+  schema:
+    request: string
+    preamble?: string
+  default:
+    preamble: ""
+output:
+  schema:
+    template?: string
+    clarify?: string
+    params?(object):
+      cupDiameterMm?: number
+      heightMm?: number
+      wallMm?: number
+      angleDeg?: number
+      phoneThicknessMm?: number
+      widthMm?: number
+      depthMm?: number
+      rodDiameterMm?: number
+      diameterMm?: number
+---
+{{preamble}}
+You design a 3D-printable helper object. Reply with ONE JSON object only: {"template":"cupGrip|phoneStand|hook|utensilHolder","params":{...}}.
+Pick the closest template to the request and set only numeric params you are confident about:
+cupGrip: cupDiameterMm, heightMm, wallMm. phoneStand: angleDeg, phoneThicknessMm, widthMm.
+hook: depthMm, rodDiameterMm. utensilHolder: diameterMm, heightMm, wallMm. All mm, angles in degrees.
+If the request is unclear, reply {"clarify":"<short question>"}.
+Request: "{{request}}"

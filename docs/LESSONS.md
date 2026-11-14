@@ -22,3 +22,4 @@ the listed Chrome items, recipes, quality items and polish. Bug fixes always all
 - Time-box: finish small and green rather than big and red. Write what is left in your final output.
 
 ## Run log (append one line per run: date, run name, lesson)
+- 2026-11-14 · Firebase quick wins + replies in her language · Spoken confirmations must come from a fixed en/kn phrase table keyed off the applied op (never free TTS); reserve the cloud Gemini voice for her language only (English stays on browser speechSynthesis) so the ledger isn't spammed and every reply has a synth fallback. Gemini TTS returns raw L16 PCM — wrap it in a WAV header before decodeAudioData. `useLimitedUseAppCheckTokens` is a client-only getAI flag; console replay-protection enforcement is a separate human step that must go LAST, after the limited-use build is live.

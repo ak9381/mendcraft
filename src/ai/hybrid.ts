@@ -139,6 +139,22 @@ export interface MultimodalGenModel {
   ): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
 }
 
+/** One inline audio part returned by the cloud TTS model (base64 PCM/wav). */
+export interface AudioPart {
+  inlineData: { mimeType: string; data: string };
+}
+
+/**
+ * Cloud text-to-speech model (ONLY_IN_CLOUD, responseModalities AUDIO). Returns
+ * audio inline-data parts rather than text; used to speak a short confirmation
+ * in the user's language when the browser has no good voice for it. @beta.
+ */
+export interface AudioGenModel {
+  generateContent(
+    request: string,
+  ): Promise<{ response: { inlineDataParts?: () => AudioPart[] | undefined } }>;
+}
+
 interface Models {
   intent: TextGenModel | null;
   template: TextGenModel | null;
@@ -158,6 +174,8 @@ interface Models {
   handAdapt?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
+  /** Cloud TTS model (spoken replies in her language); null if unsupported. */
+  tts?: AudioGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -173,6 +191,7 @@ export interface ModelOverrides {
   a11yExplain?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
+  tts?: AudioGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -354,6 +373,7 @@ async function ensureModels(): Promise<Models | null> {
       a11yExplain: testOverrides.a11yExplain ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
+      tts: testOverrides.tts ?? null,
     };
   }
   if (!isEnabled()) {
@@ -388,9 +408,14 @@ async function initFirebase(): Promise<Models | null> {
     await initTelemetry(app);
     const cloudModel = remoteSettings().cloudModel;
 
-    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema } =
+    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema, ResponseModality } =
       await import('firebase/ai');
-    const ai = getAI(app, { backend: new GoogleAIBackend() });
+    // useLimitedUseAppCheckTokens: each Firebase AI Logic request carries a
+    // fresh single-use App Check token (for replay protection) instead of the
+    // reusable one. This is a CLIENT opt-in only; console replay-protection
+    // enforcement is a separate human step (see docs/CONSOLE-STEPS.md) and must
+    // be turned on only after a limited-use build is live.
+    const ai = getAI(app, { backend: new GoogleAIBackend(), useLimitedUseAppCheckTokens: true });
 
     // Build all cloud schemas from the ACTIVE mode's plain-JSON constraints, so
     // the cloud and on-device paths share one source of truth per mode.
@@ -525,7 +550,30 @@ async function initFirebase(): Promise<Models | null> {
       promptTemplate = null;
     }
 
-    cached = { intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate };
+    // Cloud TTS model (@beta): ONLY_IN_CLOUD audio output for spoken replies in
+    // a language the browser can't voice well (e.g. Kannada). The model name and
+    // prebuilt voice come from Remote Config (sane defaults). Guarded so an SDK
+    // without audio output / the TTS model never breaks init — the caller then
+    // falls back to browser speechSynthesis.
+    let tts: AudioGenModel | null = null;
+    try {
+      const rc = remoteSettings();
+      tts = getGenerativeModel(ai, {
+        mode: InferenceMode.ONLY_IN_CLOUD,
+        inCloudParams: {
+          model: rc.ttsModel,
+          generationConfig: {
+            responseModalities: [ResponseModality.AUDIO],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: rc.ttsVoice } } },
+          },
+        },
+      }) as unknown as AudioGenModel;
+    } catch (err) {
+      noteError('cloud tts model', err);
+      tts = null;
+    }
+
+    cached = { intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -1124,6 +1172,56 @@ export async function explainAccessibility(
   // citation, so an empty item list simply keeps those.
   recordInference('rules', 'a11y-explain', Date.now() - t0);
   return { items: [], source: 'rules' };
+}
+
+/** A spoken confirmation synthesized in the cloud: base64 audio + its mime. */
+export interface SpeechAudio {
+  mimeType: string;
+  dataBase64: string;
+  source: Source;
+  ms: number;
+}
+
+/** Best-effort: is the cloud TTS model built and ready? True only after
+ *  prepareHybrid() has run and the SDK provided an audio-output model. Used by
+ *  the speech-route decision to know whether the cloud voice is an option. */
+export function cloudTtsReady(): boolean {
+  return cached?.tts != null;
+}
+
+/** 4s budget: a hung TTS call must fall back to speechSynthesis promptly, never
+ *  leave the user without a reply. */
+const TTS_TIMEOUT_MS = 4000;
+
+/**
+ * SPOKEN REPLY IN HER LANGUAGE (cloud): synthesize a SHORT fixed confirmation
+ * (from language.confirmPhrase — never free text) as audio via Firebase AI
+ * Logic, for a language the browser can't voice well. Returns the base64 audio
+ * + mime so the caller plays it with Web Audio and records the cloud call in the
+ * ledger; returns null on any failure so the caller falls back to speechSynthesis.
+ */
+export async function synthesizeSpeech(text: string): Promise<SpeechAudio | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.tts || !text.trim()) return null;
+  try {
+    const { response } = await withTimeout(models.tts.generateContent(text), TTS_TIMEOUT_MS, 'tts');
+    const part = response.inlineDataParts?.()?.find((p) => p.inlineData?.data);
+    if (!part) {
+      noteError('tts', new Error('cloud TTS returned no audio'));
+      return null;
+    }
+    recordInference('cloud', 'tts', Date.now() - t0);
+    return {
+      mimeType: part.inlineData.mimeType || 'audio/L16;rate=24000',
+      dataBase64: part.inlineData.data,
+      source: 'cloud',
+      ms: Date.now() - t0,
+    };
+  } catch (err) {
+    noteError('tts model', err);
+    return null;
+  }
 }
 
 export interface AdaptHandResult extends ProfileAdaptation {

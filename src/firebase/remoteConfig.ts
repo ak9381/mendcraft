@@ -13,12 +13,18 @@ export interface RemoteSettings {
   promptPreamble: string;
   /** Server prompt-template IDs per big job; '' = use the inline prompt. */
   templateIds: { plan: string; screen: string; part: string };
+  /** Cloud text-to-speech model name (spoken replies in her language). */
+  ttsModel: string;
+  /** Prebuilt cloud voice name for TTS (e.g. a Chirp3 HD voice). */
+  ttsVoice: string;
 }
 
 export const REMOTE_DEFAULTS: RemoteSettings = {
   cloudModel: 'gemini-3.5-flash-lite',
   promptPreamble: '',
   templateIds: { plan: '', screen: '', part: '' },
+  ttsModel: 'gemini-2.5-flash-preview-tts',
+  ttsVoice: 'Kore',
 };
 
 const KEYS = {
@@ -27,6 +33,8 @@ const KEYS = {
   planTemplate: 'template_plan_generate',
   screenTemplate: 'template_screen_generate',
   partTemplate: 'template_part_design',
+  ttsModel: 'cloud_tts_model',
+  ttsVoice: 'cloud_tts_voice',
 } as const;
 
 /** 30 min, matching the Android sample's minimumFetchIntervalInSeconds = 1800. */
@@ -68,6 +76,8 @@ function read(getString: (rc: any, key: string) => string, rc: any): RemoteSetti
       screen: getString(rc, KEYS.screenTemplate),
       part: getString(rc, KEYS.partTemplate),
     },
+    ttsModel: nonEmpty(getString(rc, KEYS.ttsModel), REMOTE_DEFAULTS.ttsModel),
+    ttsVoice: nonEmpty(getString(rc, KEYS.ttsVoice), REMOTE_DEFAULTS.ttsVoice),
   };
 }
 
@@ -92,6 +102,8 @@ export async function initRemoteConfig(
       [KEYS.planTemplate]: REMOTE_DEFAULTS.templateIds.plan,
       [KEYS.screenTemplate]: REMOTE_DEFAULTS.templateIds.screen,
       [KEYS.partTemplate]: REMOTE_DEFAULTS.templateIds.part,
+      [KEYS.ttsModel]: REMOTE_DEFAULTS.ttsModel,
+      [KEYS.ttsVoice]: REMOTE_DEFAULTS.ttsVoice,
     };
     await fetchAndActivate(rc);
     current = read(getString, rc);

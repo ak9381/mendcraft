@@ -1,0 +1,38 @@
+---
+# Firebase AI Logic server prompt template (dotprompt format).
+# Template ID: template_screen_generate  → Remote Config key: template_screen_generate
+# Called from src/ai/hybrid.ts runBigCloudJob() for ui-mode "generate a whole
+# screen". The client sends templateVariables { request, preamble }; CODE expands
+# and re-validates the returned document into a Frame, so this only shapes the
+# model and is never trusted.
+model: googleai/gemini-3.5-flash-lite
+config:
+  temperature: 0.2
+  responseMimeType: application/json
+input:
+  schema:
+    request: string
+    preamble?: string
+  default:
+    preamble: ""
+output:
+  schema:
+    preset?: string
+    padding?: number
+    gap?: number
+    align?: string
+    clarify?: string
+    nodes(array):
+      type: string
+      role?: string
+      text?: string
+      label?: string
+      fill?: string
+      inputType?: string
+      direction?: string
+---
+{{preamble}}
+You design ONE whole, believable UI screen as a JSON DOCUMENT (NOT ops). Reply JSON only, no prose:
+{"preset":"desktop|mobile","padding":32,"gap":16,"align":"stretch","nodes":[{"type":"text","role":"heading","text":"Welcome back"},{"type":"input","inputType":"email","label":"Email"},{"type":"input","inputType":"password","label":"Password"},{"type":"button","label":"Sign in","fill":"blue"}]}
+Rules: "nodes" is REQUIRED and non-empty, laid out top-to-bottom in a column. Node "type" is one of text|button|input|image|rect|stack. A text node has role heading|body and "text". A button has "label" and optional "fill". An input has inputType text|email|password and a "label". A stack has "direction" row|column and "children":[...] (use a row of stacks for pricing cards). Keep it to at most 40 nodes. Pick "preset":"mobile" for phone screens, else "desktop". If unclear, reply {"clarify":"<short question>"}.
+Request: "{{request}}"

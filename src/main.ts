@@ -23,6 +23,8 @@ import {
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
+  synthesizeSpeech,
+  cloudTtsReady,
   type DeviceModelStatus,
   type DeixisImage,
   type FusionContext,
@@ -54,9 +56,11 @@ import { createRouterPanel } from './ui/routerPanel';
 import {
   LANGUAGES, DEFAULT_LANGUAGE, resolveLanguage, isEnglish, shouldTranslate,
   translateInCloud, languageBadgeLabel, buildCaption, localize, pickVoice,
+  confirmPhrase, pickSpeechRoute,
   type Language,
 } from './ai/language';
 import { checkLanguageAvailability } from './ai/hybrid';
+import { base64ToBytes, wrapPcmAsWav } from './core/audio';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
@@ -87,6 +91,11 @@ import {
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
 const LANG_KEY = 'mendcraft.lang';
+const MUTE_KEY = 'mendcraft.muted';
+
+// Spoken replies can be muted (near the language picker). Restored per session.
+let muted = false;
+try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* storage blocked */ }
 
 // The spoken/written language (Akash's mom speaks Kannada). Restored from a
 // prior session; drives speech recognition lang, routing (translate in the
@@ -134,6 +143,7 @@ app.innerHTML = `
       <select id="lang-select" aria-label="Language">${LANGUAGES
         .map((l) => `<option value="${l.code}"${l.code === currentLanguage.code ? ' selected' : ''}>${l.label}</option>`)
         .join('')}</select>
+      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 Voice</button>
     </label>
     <button id="btn-help" type="button" class="ghost" aria-label="Help and guided tour">Help / tour</button>
     ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
@@ -276,21 +286,88 @@ function say(message: string): void {
   srLive.textContent = message; // screen-reader text always updates
   // The active hand profile's voiceVerbosity tunes spoken output: 'terse' keeps
   // the screen-reader text but skips text-to-speech (less chatter for confident
-  // users); 'standard'/'coached' speak normally.
+  // users); 'standard'/'coached' speak normally. Mute silences it too.
+  if (activeProfile.voiceVerbosity === 'terse' || muted) return;
+  speakSynth(message);
+}
+
+/** speechSynthesis in the active language. If no matching voice exists for a
+ *  non-English language, stay text-only (the screen-reader line already
+ *  updated) rather than mispronouncing it with an English voice. */
+function speakSynth(message: string): void {
+  if (!('speechSynthesis' in window)) return;
+  const voice = pickVoice(window.speechSynthesis.getVoices(), currentLanguage);
+  if (!voice && !isEnglish(currentLanguage)) return;
+  const utter = new SpeechSynthesisUtterance(message);
+  utter.rate = 1.1;
+  utter.lang = currentLanguage.speechLang;
+  if (voice) utter.voice = voice as SpeechSynthesisVoice;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+/** Does speechSynthesis have a usable voice for the active language? English
+ *  always does; a non-English language needs an actual matching voice. */
+function synthHasVoice(): boolean {
+  if (isEnglish(currentLanguage)) return true;
+  if (!('speechSynthesis' in window)) return false;
+  return pickVoice(window.speechSynthesis.getVoices(), currentLanguage) != null;
+}
+
+/**
+ * Speak the SHORT fixed confirmation for an applied op in the active language
+ * (language.confirmPhrase — never free text). English and the offline/no-cloud
+ * case use speechSynthesis; her language, when the cloud + SDK audio are
+ * available, uses the Gemini cloud voice (logged to the ledger as a cloud call).
+ */
+function speakConfirm(opName: string | null | undefined): void {
+  const text = confirmPhrase(opName, currentLanguage);
+  srLive.textContent = text; // screen-reader text always updates
   if (activeProfile.voiceVerbosity === 'terse') return;
-  if ('speechSynthesis' in window) {
-    // Speak in the chosen language. If no matching voice exists for a non-English
-    // language, stay text-only (the screen-reader line above already updated)
-    // rather than mispronouncing it with an English voice.
-    const voice = pickVoice(window.speechSynthesis.getVoices(), currentLanguage);
-    if (!voice && !isEnglish(currentLanguage)) return;
-    const utter = new SpeechSynthesisUtterance(message);
-    utter.rate = 1.1;
-    utter.lang = currentLanguage.speechLang;
-    if (voice) utter.voice = voice as SpeechSynthesisVoice;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utter);
+  const route = pickSpeechRoute(
+    currentLanguage,
+    {
+      cloudReady: routerEnv().cloudReady && net.online(),
+      audioSupported: cloudTtsReady(),
+      synthHasVoice: synthHasVoice(),
+    },
+    muted,
+  );
+  if (route === 'silent') return;
+  if (route === 'synth') { speakSynth(text); return; }
+  void speakCloud(text);
+}
+
+/** Synthesize a confirmation in the cloud and play it with Web Audio; log the
+ *  cloud call in the ledger. Any failure falls back to speechSynthesis so a
+ *  reply is never lost. */
+async function speakCloud(text: string): Promise<void> {
+  try {
+    const audio = await synthesizeSpeech(text);
+    if (!audio) { speakSynth(text); return; }
+    // The audio bytes DID leave the device — record the honest cloud call.
+    recordLedger('cloud', 'tts', 'spoken reply', `speak: ${JSON.stringify(text)} (${currentLanguage.englishName})`, audio.ms);
+    await playCloudAudio(audio.dataBase64, audio.mimeType);
+  } catch {
+    speakSynth(text);
   }
+}
+
+let audioCtx: AudioContext | null = null;
+/** Decode base64 cloud audio (PCM wrapped as WAV, or a container format) and
+ *  play it through Web Audio. */
+async function playCloudAudio(dataBase64: string, mimeType: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+  if (!Ctx) throw new Error('no Web Audio'); // caller falls back to speechSynthesis
+  audioCtx ??= new Ctx();
+  const bytes = wrapPcmAsWav(base64ToBytes(dataBase64), mimeType);
+  const copy = bytes.slice(); // own ArrayBuffer for decodeAudioData
+  const buffer = await audioCtx.decodeAudioData(copy.buffer);
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioCtx.destination);
+  source.start();
 }
 
 let lastStatusAnnounced = '';
@@ -1418,7 +1495,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     }
     const queuedNote = route === 'enqueue' ? ' Queued a cloud version for when you reconnect.' : '';
     verifierEl.textContent = `${step.message ?? 'Done.'} (${source}).${queuedNote}`;
-    say(`${step.message ?? 'Done.'}${queuedNote}`);
+    // Spoken reply comes from the fixed phrase table in the active language
+    // (whole-design generate has no single op → generic "Done."); the detailed
+    // English message stays on-screen above.
+    speakConfirm('done');
     renderAll();
     viewport.fit?.(); // re-fit whenever a whole plan is (re)generated
     announceWarnings();
@@ -1526,6 +1606,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     );
     if (verdict.matchesIntent) {
       verifierEl.textContent = `${step.message ?? 'Matches intent'} (${verdict.source}).`;
+      // Spoken reply: the fixed confirmation phrase for this op in the active
+      // language (cloud voice for her language, else speechSynthesis). The
+      // detailed English message stays on-screen above.
+      speakConfirm((step.op as { op?: string }).op);
     } else {
       verifierEl.textContent = `Possible mismatch: ${verdict.issue ?? 'unverified'} (${verdict.source}).`;
       say(verdict.issue ?? 'That may not match what you asked for.');
@@ -1534,7 +1618,6 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     verifierEl.textContent = step.message ?? 'Done.';
   }
   announceWarnings();
-  if (step.message && step.op) say(step.message);
   return true;
 }
 
@@ -1619,6 +1702,23 @@ if (!voice.supported) {
 langSelect.value = currentLanguage.code;
 langSelect.addEventListener('change', () => {
   applyLanguage(resolveLanguage(langSelect.value), true);
+});
+
+// Mute toggle for spoken replies (next to the language picker).
+const btnMute = el<HTMLButtonElement>('btn-mute');
+function renderMute(): void {
+  btnMute.setAttribute('aria-pressed', String(muted));
+  btnMute.classList.toggle('active', muted);
+  btnMute.textContent = muted ? '🔇 Muted' : '🔊 Voice';
+}
+renderMute();
+btnMute.addEventListener('click', () => {
+  muted = !muted;
+  try { localStorage.setItem(MUTE_KEY, muted ? '1' : '0'); } catch { /* storage blocked */ }
+  if (muted && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+  renderMute();
+  // Confirm the toggle itself (unmute speaks; mute is already silent).
+  if (!muted) speakConfirm('done');
 });
 // Apply the restored language once at startup: set recognition lang + probe Nano.
 voice.setLang(currentLanguage.speechLang);
