@@ -1,9 +1,11 @@
 // Firestore-backed RelayTransport. Rooms live at rooms/{roomId} (an
 // unguessable capability token — see firestore.rules); messages are an
 // append-only subcollection rooms/{roomId}/messages read via onSnapshot.
-// Firestore is NOT enabled on the mendcraft project yet, so probeFirestore()
-// must fail soft: callers fall back to the fake transport and show an honest
-// "Firestore not ready" state instead of crashing.
+// Firestore IS enabled on the mendcraft project (the (default) Native-mode
+// database, firestore.rules deployed by the pipeline). probeFirestore() still
+// fails soft when the build is unconfigured, the device is offline, or the probe
+// times out: callers fall back to the fake transport and show an honest
+// "can't reach the room" state instead of crashing.
 
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { validateMessage, type RelayMessage } from './protocol';
@@ -17,8 +19,8 @@ const PROBE_TIMEOUT_MS = 5000;
 
 /**
  * Try to stand up a Firestore transport. Resolves {ok:false} (never throws)
- * when Firebase is unconfigured, the Firestore database does not exist yet,
- * rules deny access, or the probe times out.
+ * when Firebase is unconfigured, the device is offline, rules deny access, or
+ * the probe times out.
  */
 export async function probeFirestore(): Promise<FirestoreProbe> {
   if (!isFirebaseConfigured()) return { ok: false, reason: 'Firebase is not configured (rules-only build).' };
@@ -27,8 +29,9 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
     const fs = await import('firebase/firestore');
     const db = fs.getFirestore(app);
     // One cheap read decides everything: success (even "no such doc") means the
-    // database exists and rules allow room reads; permission-denied means rules
-    // are not deployed; not-found/unavailable means Firestore is not enabled.
+    // database is reachable and rules allow room reads; permission-denied means
+    // the sign-in/rules path is blocking; unavailable means we can't reach
+    // Firestore right now (offline).
     await Promise.race([
       // Lowercase id — outside the token alphabet, so it can never collide
       // with (or reveal the existence of) a real room.
@@ -77,8 +80,8 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
     const code = (err as { code?: string }).code ?? '';
     const reason =
       code === 'permission-denied'
-        ? 'Firestore rules are not deployed yet.'
-        : 'Firestore is not enabled on this project yet.';
+        ? "The relay room isn't reachable (check you're signed in)."
+        : "Can't reach Firestore right now — check your connection.";
     return { ok: false, reason };
   }
 }

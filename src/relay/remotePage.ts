@@ -144,14 +144,14 @@ export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions
   const shareBtn = root.querySelector<HTMLButtonElement>('#remote-share')!;
   const previewEl = root.querySelector<HTMLVideoElement>('#remote-preview')!;
 
-  // Transport: Firestore when the project has it; otherwise an honest local
-  // fallback so the page still demonstrates its states (nothing to pair with
-  // cross-device until Firestore is enabled).
+  // Transport: Firestore when the room is reachable (it is enabled); otherwise an
+  // honest local fallback so the page still demonstrates its states (there is no
+  // laptop online in the room to pair with yet).
   const probe = await probeFirestore();
   const transport: RelayTransport = probe.ok ? probe.transport : createFakeTransport();
   transportBadge.textContent = transport.kind === 'firestore' ? 'Firestore' : 'local demo';
   transportBadge.className = `badge ${transport.kind === 'firestore' ? 'badge-cloud' : 'badge-rules'}`;
-  if (!probe.ok) noteEl.textContent = `Waiting for Firestore: ${probe.reason} Pairing cannot reach a laptop yet.`;
+  if (!probe.ok) noteEl.textContent = `Can't reach a room: ${probe.reason} Pairing cannot reach a laptop yet.`;
 
   let session: GuestSession | null = null;
   let shareTimer = 0;

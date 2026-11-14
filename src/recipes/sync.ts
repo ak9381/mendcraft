@@ -54,7 +54,7 @@ export async function syncRecipeBook(store: RecipeStore, bookId: string): Promis
   } catch (err) {
     const code = (err as { code?: string }).code ?? '';
     const reason = code === 'permission-denied'
-      ? 'Firestore rules for recipe books are not deployed yet.'
+      ? "Can't reach this recipe book (check you're signed in)."
       : 'Recipe cloud sync unavailable (local book still works).';
     console.warn('[mendcraft] recipe sync:', err);
     return { ok: false, reason };

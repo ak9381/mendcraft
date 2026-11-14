@@ -93,6 +93,13 @@ op. On-device Nano picks which recipe a phrase means. Recipes also drive a WiZ
 lamp and the music player (clamped device intents) and show up as privacy-safe
 cards on the iPad `/control` room.
 
+A recipe can also replay inside an **in-canvas browser panel**
+(`src/recipes/browserDriver.ts`): it steps a same-origin iframe through the taught
+sequence, highlighting each target and pausing for an explicit confirm before any
+submit (the confirm gate is recomputed at replay time, so a real form submit stops
+even without a send/pay/delete word). Cross-origin pages fall back to open-in-tab
+with the remaining steps listed — it never silently bypasses the confirm.
+
 ---
 
 ## Relay + iPad `/control` + phone remotes
@@ -106,11 +113,13 @@ The entry fork lives in `src/boot.ts`; the Relay protocol/session/transport in
   ledger + offline queue, lamp/music + captions, SVG wireframe, and a fullscreen
   orbit **3D review** extruded from the snapshot primitives), a `/remote` + `/phone`
   controller, and a `fake-transport` fallback so the demo runs with no backend.
-- **Needs a real device / human step:** Firestore is **not enabled** in this
-  project, so cross-device frames use stills over the fallback, not WebRTC. Real
-  phone↔laptop pairing over Firestore, the WiZ lamp (needs the local Node UDP
-  bridge: `npm run wiz-bridge`), and Apple Music (needs a MusicKit token — honest
-  stub otherwise) each require a real device or console step. The Android shell
+- **Needs a real device / human step:** Firestore **is** enabled (the `(default)`
+  Native-mode database, with `firestore.rules` deployed by the pipeline), so real
+  phone↔laptop pairing works — but cross-device sync needs **both devices online
+  and in the same room/book**, and the frames are low-rate stills over Firestore,
+  not WebRTC. The WiZ lamp (needs the local Node UDP bridge: `npm run wiz-bridge`)
+  and Apple Music (needs a MusicKit token — honest stub otherwise) each require a
+  real device or console step. The Android shell
   (`android/`, Capacitor) boots to `/remote`; its opt-in AccessibilityService is
   allowlisted and **never auto-sends** WhatsApp drafts (`src/assist/policy.ts`).
 
@@ -199,9 +208,10 @@ test suite.
 
 ## Honest limits
 
-- **Firestore is off** in this project — cross-device paths use stills over a
-  fallback transport, not WebRTC; `/control` only ever receives the privacy-safe
-  snapshot, never the full document.
+- **Cross-device sync is still-based, not WebRTC** — Firestore is enabled, but
+  frames go over it as low-rate stills and sync needs **both devices online in the
+  same room/book**; when no room is reachable the demo transport takes over.
+  `/control` only ever receives the privacy-safe snapshot, never the full document.
 - **Kannada rules accuracy is 0** by design (the offline rule parser is
   English-only); Kannada is deliberately routed to the cloud or clarified, and the
   badge says so.

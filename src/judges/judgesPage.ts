@@ -64,7 +64,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
             <li>On-device Gemini Nano needs <strong>desktop Chrome</strong> with the model downloaded; elsewhere it falls back to cloud or rules (the badge is honest about it).</li>
             <li><strong>Kannada</strong> always goes to the cloud (translate + intent in one call) — Nano is English-only here.</li>
             <li>Real-device features — the camera pinch, the WiZ lamp bridge, phone pairing over Firestore — can’t be shown on this hosted page; the sim walks stand in for them.</li>
-            <li>The sim and /control fall back to an in-page fake transport when Firestore isn’t configured, and say so rather than faking a live link.</li>
+            <li>The sim and /control fall back to an in-page fake transport when no paired room is reachable, and say so rather than faking a live link.</li>
           </ul>
         </section>
 

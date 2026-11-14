@@ -757,7 +757,8 @@ function ensurePairing(): Promise<void> {
 async function initPairing(): Promise<void> {
   pairPanel.setStatus('Starting a room…');
   // SIM and unconfigured builds use the in-page fake transport; otherwise probe
-  // Firestore and fall back gracefully (it is not enabled on the project yet).
+  // Firestore (enabled on the project) and fall back gracefully if the room
+  // can't be reached right now.
   if (SIM_ACTIVE || !isFirebaseConfigured()) {
     relayTransport = createFakeTransport();
     pairPanel.setTransportNote(SIM_ACTIVE
@@ -770,7 +771,7 @@ async function initPairing(): Promise<void> {
       pairPanel.setTransportNote('Transport: Firestore room (commands + low-rate camera stills).');
     } else {
       relayTransport = createFakeTransport();
-      pairPanel.setTransportNote(`Waiting for Firestore: ${probe.reason} A real phone cannot join yet; the demo transport is active.`);
+      pairPanel.setTransportNote(`Can't reach a room: ${probe.reason} A real phone cannot join yet; the demo transport is active.`);
     }
   }
   hostSession = await createHostSession(relayTransport);

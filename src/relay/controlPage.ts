@@ -4,10 +4,10 @@
 // and renders the privacy-safe ControlSnapshot the laptop publishes — never
 // camera, landmarks or audio (those never reach the snapshot).
 //
-// Live sync needs Firestore + a paired room. When Firestore is missing or no
-// room is given, the page falls back to the in-page fake transport driven by the
-// deterministic demo (sim.playControlDemo) and says so honestly — it never fakes
-// a live connection.
+// Live sync needs a reachable room (Firestore is enabled) with the laptop online
+// in it. When no room is given or the room can't be reached, the page falls back
+// to the in-page fake transport driven by the deterministic demo
+// (sim.playControlDemo) and says so honestly — it never fakes a live connection.
 
 import '../style.css';
 import { groupCode, parseJoinInput } from './protocol';
@@ -392,7 +392,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       return;
     }
     if (!liveTransport) {
-      bannerEl.textContent = 'Live join needs Firestore, which is not enabled yet. Staying on the demo feed.';
+      bannerEl.textContent = 'Live join needs a reachable room with the laptop online in it. Staying on the demo feed.';
       return;
     }
     const roomId = await resolveRoomId(liveTransport, parsed);
