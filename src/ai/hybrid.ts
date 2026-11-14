@@ -35,6 +35,7 @@ import {
   PROFILE_CONSTRAINT, buildAdaptPrompt, coerceProfileAdaptation, type ProfileAdaptation,
 } from '../input/handProfile';
 import type { HandMetrics } from '../input/handMetrics';
+import { buildRecipePickPrompt, parseRecipePick, type RecipeRef } from '../recipes/match';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
@@ -886,6 +887,44 @@ export async function fuseIntent(
   const result = mode.parse(normalizeTranscript(utterance));
   recordInference('rules', 'fuse', Date.now() - t0);
   return { result, confidence: ruleConfidence(result), source: 'rules', ms: Date.now() - t0 };
+}
+
+/** RECIPE PICK (taught-once recipes): map an utterance to one saved recipe id.
+ *  Same hybrid shape as fuseIntent — PREFER_ON_DEVICE via the fusion model,
+ *  `forceCloud` for non-English (Kannada goes to the cloud like other Kannada
+ *  text; the caller records that send in the ledger). The pick is parsed
+ *  STRICTLY against the known ids (an invented id becomes null). Returns null
+ *  when no model is available at all → the caller's rules matcher is the floor. */
+export interface RecipePickOutcome {
+  id: string | null;
+  confidence: number;
+  source: Source;
+  ms: number;
+}
+
+export async function pickRecipeHybrid(
+  utterance: string,
+  candidates: readonly RecipeRef[],
+  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string } },
+): Promise<RecipePickOutcome | null> {
+  if (candidates.length === 0) return null;
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
+  if (!models || !primary) return null;
+  try {
+    const prompt = buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
+    const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
+    const response = await callWithCloudRetry(primary, retry, prompt, 'recipe-pick');
+    if (!response) return null;
+    const pick = parseRecipePick(extractJson(response.text()), candidates.map((c) => c.id));
+    const source = sourceOf(response);
+    recordInference(source, 'recipe-pick', Date.now() - t0);
+    return { ...pick, source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('recipe pick', err);
+    return null;
+  }
 }
 
 /** The still frame sent with a point-and-say command (one tight JPEG crop). */

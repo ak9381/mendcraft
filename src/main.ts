@@ -1,6 +1,6 @@
 import './style.css';
 import { getActiveMode, listModes, setActiveMode } from './core/modes';
-import type { ModeController, ViewportHandle } from './core/controller';
+import type { ModeController, StepResult, ViewportHandle } from './core/controller';
 import type { HandEvent } from './input/hands';
 import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from './input/presence';
 import { createHandOverlay } from './ui/handOverlay';
@@ -86,6 +86,15 @@ import {
   createPhrasebook, createIndexedDbPhrasebookStore,
   parseTeachCommand, parseCorrectionCommand,
 } from './ai/phrasebook';
+import { describeRecipe, type Recipe, type RecipeStep } from './recipes/model';
+import {
+  createRecipeRecorder, makeDesignerRecipe, opSignature, detectRepeat, type SaveResult,
+} from './recipes/recorder';
+import { parseRecipeMeta, matchRecipe } from './recipes/match';
+import { buildReplayOps, buildReplayBatch } from './recipes/replay';
+import { createRecipeStore } from './recipes/storage';
+import { recipeBookId, syncRecipeBook } from './recipes/sync';
+import { pickRecipeHybrid } from './ai/hybrid';
 import { createPairPanel } from './ui/pairPanel';
 import { createLampPanel } from './ui/lampPanel';
 import { lampStateLabel, type LampState } from './devices/wiz';
@@ -172,6 +181,8 @@ app.innerHTML = `
     <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
     <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
     <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
+    <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
+    <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
     <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
     <div id="progress-wrap" hidden>
       <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
@@ -215,6 +226,12 @@ app.innerHTML = `
         <h2>Cloud queue <span id="queue-count" class="queue-count"></span></h2>
         <p id="queue-note" class="queue-note"></p>
         <ul id="queue-list" class="queue-list"></ul>
+      </section>
+      <section id="recipes-section" aria-label="Recipe book" hidden>
+        <h2>Recipe book <span id="recipes-count" class="queue-count"></span></h2>
+        <p id="recipes-note" class="queue-note"></p>
+        <div id="recipe-confirm" class="recipe-confirm" hidden></div>
+        <ul id="recipes-list" class="recipe-list"></ul>
       </section>
       <section>
         <h2>Objects</h2>
@@ -1387,6 +1404,363 @@ renderNetState();
 
 /** The abstract design payload sent for a command: the command text plus the
  *  compact scene context the model needs — never any device-only signal. */
+// ---------------------------------------------------------------------------
+// "TAUGHT ONCE, DONE FOREVER" RECIPES (src/recipes/*): a Teach toggle records
+// applied ops from the shared op log into a draft; "save this as <name>" keeps
+// it as a validated JSON recipe (local-first, best-effort Firestore sync);
+// "do <name>" replays it — rules alias/fuzzy match first, then the hybrid Nano
+// pick (Kannada forced to the cloud like other Kannada text, ledger-recorded) —
+// always behind an explicit confirm, applied as ONE undoable step.
+
+const recipeStore = createRecipeStore(typeof localStorage !== 'undefined' ? localStorage : null);
+const recipeRecorder = createRecipeRecorder();
+const btnTeach = el<HTMLButtonElement>('btn-teach');
+const btnRecipes = el<HTMLButtonElement>('btn-recipes');
+const recipesSection = el<HTMLElement>('recipes-section');
+const recipesNote = el<HTMLParagraphElement>('recipes-note');
+const recipesCountEl = el<HTMLSpanElement>('recipes-count');
+const recipesListEl = el<HTMLUListElement>('recipes-list');
+const recipeConfirmEl = el<HTMLDivElement>('recipe-confirm');
+
+/** Guard so a replay's own batch never re-enters the recorder/repeat detector. */
+let replayingRecipe = false;
+/** Rolling applied-op window for the "that looked like a repeat" offer. */
+const recentOps: Record<string, unknown>[] = [];
+const recentSigs: string[] = [];
+/** The detected repeated sequence, held until "save this as <name>" (or lost
+ *  to the next detection). NEVER auto-saved. */
+let suggestedSteps: RecipeStep[] | null = null;
+let pendingRun: Recipe | null = null;
+
+function newRecipeId(): string {
+  return `rcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function noteAppliedOp(step: StepResult): void {
+  if (replayingRecipe || !step.ok || !step.op || typeof step.op !== 'object') return;
+  const op = step.op as Record<string, unknown>;
+  if (typeof op.op !== 'string') return;
+  if (recipeRecorder.active()) {
+    recipeRecorder.note(op);
+    renderTeachState();
+    return;
+  }
+  if (op.op === 'select' || op.op === 'select_set' || op.op === 'undo' || op.op === 'redo') return;
+  recentOps.push(op);
+  recentSigs.push(opSignature(op));
+  if (recentOps.length > 24) {
+    recentOps.shift();
+    recentSigs.shift();
+  }
+  const len = detectRepeat(recentSigs);
+  if (len) {
+    suggestedSteps = recentOps.slice(-len).map((o) => ({ op: o }));
+    recentOps.length = 0;
+    recentSigs.length = 0; // one offer per detection
+    showToast(`That looked like the same ${len} steps twice — say "save this as <name>" to keep it as a recipe.`);
+  }
+}
+
+// Wrap the controller ONCE so every applied op — voice, text, pinch drag
+// fallback, a11y fix — reaches the recorder through the same op-log seam.
+{
+  const rawApplyResult = controller.applyResult.bind(controller);
+  controller.applyResult = (r) => {
+    const s = rawApplyResult(r);
+    noteAppliedOp(s);
+    return s;
+  };
+  const rawApplyOp = controller.applyOp.bind(controller);
+  controller.applyOp = (r) => {
+    const s = rawApplyOp(r);
+    noteAppliedOp(s);
+    return s;
+  };
+}
+
+function renderTeachState(): void {
+  const on = recipeRecorder.active();
+  btnTeach.setAttribute('aria-pressed', String(on));
+  btnTeach.classList.toggle('teach-on', on);
+  btnTeach.textContent = on ? `● Teaching (${recipeRecorder.count()})` : 'Teach';
+}
+
+function startTeaching(): void {
+  recipeRecorder.start();
+  renderTeachState();
+  showToast('Teaching. Do the task once, then say "save this as <name>".');
+  say('Teaching. Do the task once, then say save this as, and a name.');
+}
+
+function cancelTeaching(): void {
+  recipeRecorder.cancel();
+  renderTeachState();
+  verifierEl.textContent = 'Stopped teaching — nothing was saved.';
+  say('Stopped teaching.');
+}
+
+function saveRecipeAs(name: string): boolean {
+  const meta = {
+    id: newRecipeId(),
+    name,
+    language: currentLanguage.code,
+    mode: mode.id,
+    taughtBy: 'you',
+    now: Date.now(),
+  };
+  let result: SaveResult;
+  if (recipeRecorder.active()) {
+    result = recipeRecorder.save(meta);
+  } else if (suggestedSteps) {
+    result = makeDesignerRecipe(suggestedSteps, meta);
+    if (result.ok) suggestedSteps = null;
+  } else {
+    verifierEl.textContent = 'Nothing to save — press Teach (or say "start teaching") first.';
+    say('Nothing to save yet. Say start teaching first.');
+    return false;
+  }
+  if (!result.ok) {
+    verifierEl.textContent = `Couldn't save the recipe: ${result.error}`;
+    say('I could not save that recipe.');
+    return false;
+  }
+  const err = recipeStore.upsert(result.recipe);
+  if (err) {
+    verifierEl.textContent = `Couldn't save the recipe: ${err}`;
+    return false;
+  }
+  renderTeachState();
+  recipesSection.hidden = false;
+  opJsonEl.textContent = JSON.stringify({ savedRecipe: result.recipe.name, steps: result.recipe.steps.length }, null, 2);
+  verifierEl.textContent = `Saved “${result.recipe.name}” — ${describeRecipe(result.recipe)}. Say "do ${result.recipe.name}" to run it.`;
+  say(`Saved ${result.recipe.name}. Say do ${result.recipe.name} to run it.`);
+  void syncRecipes();
+  return true;
+}
+
+/** Show the explicit confirm (pinch/click) before any replay touches the doc. */
+function stageRecipeRun(recipe: Recipe, source: Source, reason: RouteReason, translated = false): void {
+  pendingRun = recipe;
+  recipesSection.hidden = false;
+  recipeConfirmEl.hidden = false;
+  recipeConfirmEl.innerHTML = '';
+  const p = document.createElement('p');
+  p.textContent = `Run “${recipe.name}”? ${describeRecipe(recipe)}. Applies as one undo step.`;
+  const run = document.createElement('button');
+  run.type = 'button';
+  run.textContent = `Run “${recipe.name}”`;
+  run.addEventListener('click', () => runPendingRecipe());
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'ghost';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => {
+    clearRecipeConfirm();
+    verifierEl.textContent = 'Recipe cancelled — nothing was applied.';
+  });
+  recipeConfirmEl.append(p, run, cancel);
+  setBadge(source, reason, translated);
+  verifierEl.textContent = `Found recipe “${recipe.name}”. Confirm to run it.`;
+  say(`Ready to run ${recipe.name}, ${recipe.steps.length} steps. Press run to confirm.`);
+  run.focus();
+}
+
+function clearRecipeConfirm(): void {
+  pendingRun = null;
+  recipeConfirmEl.hidden = true;
+  recipeConfirmEl.innerHTML = '';
+}
+
+function runPendingRecipe(): void {
+  const recipe = pendingRun;
+  if (!recipe) return;
+  clearRecipeConfirm();
+  // No cursor plumbing yet, so a replay lands at the recipe's recorded spot
+  // (steps are stored anchor-relative; buildReplayOps rebases them).
+  const ops = buildReplayOps(recipe);
+  replayingRecipe = true;
+  let step: StepResult;
+  try {
+    if (mode.id === 'part') {
+      // Part mode has no 'batch' op — apply sequentially (one undo per step).
+      let okCount = 0;
+      let lastErr: string | undefined;
+      for (const op of ops) {
+        const s = controller.applyOp(op);
+        if (s.ok) okCount++;
+        else lastErr = s.error;
+      }
+      step = okCount > 0 ? { ok: true, warnings: [] } : { ok: false, error: lastErr, warnings: [] };
+    } else {
+      step = controller.applyOp(buildReplayBatch(ops));
+    }
+  } finally {
+    replayingRecipe = false;
+  }
+  if (!step.ok) {
+    verifierEl.textContent = `Couldn't run “${recipe.name}”: ${step.error ?? 'invalid steps'}`;
+    say(`I couldn't run ${recipe.name}.`);
+    return;
+  }
+  renderAll();
+  opJsonEl.textContent = JSON.stringify({ ranRecipe: recipe.name, steps: ops.length }, null, 2);
+  verifierEl.textContent = `Ran “${recipe.name}” — ${ops.length} steps as one undo.`;
+  speakConfirm('done');
+  announceWarnings();
+}
+
+function mkCardBtn(label: string, ghost: boolean, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  if (ghost) b.className = 'ghost';
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderRecipes(): void {
+  const recipes = recipeStore.list();
+  recipesCountEl.textContent = recipes.length ? String(recipes.length) : '';
+  recipesListEl.innerHTML = '';
+  recipesNote.textContent = recipes.length
+    ? 'Say "do <name>" (or press Run). A recipe replays as one undoable step.'
+    : 'No recipes yet. Press Teach, do a task once, then say "save this as <name>".';
+  for (const r of recipes) {
+    const li = document.createElement('li');
+    li.className = 'recipe-card';
+    const title = document.createElement('p');
+    title.className = 'recipe-name';
+    title.textContent = r.name;
+    const desc = document.createElement('p');
+    desc.className = 'recipe-desc';
+    const aka = r.aliases.length ? ` · aka ${r.aliases.join(', ')}` : '';
+    desc.textContent = `${describeRecipe(r)} · ${r.device} · taught by ${r.taughtBy || 'you'}${aka}`;
+    const actions = document.createElement('div');
+    actions.className = 'recipe-actions';
+    actions.append(
+      mkCardBtn('Run', false, () => stageRecipeRun(r, 'rules', 'exact')),
+      mkCardBtn('Rename', true, () => {
+        const name = window.prompt(`Rename “${r.name}” to:`, r.name)?.trim();
+        if (name && recipeStore.rename(r.id, name, Date.now())) void syncRecipes();
+      }),
+      mkCardBtn('Aliases', true, () => {
+        const raw = window.prompt('Other phrases that should run this recipe (comma-separated):', r.aliases.join(', '));
+        if (raw === null) return;
+        if (recipeStore.setAliases(r.id, raw.split(','), Date.now())) void syncRecipes();
+      }),
+      mkCardBtn('Delete', true, () => {
+        if (!window.confirm(`Delete recipe “${r.name}”? This can't be undone.`)) return;
+        if (recipeStore.remove(r.id, Date.now())) void syncRecipes();
+      }),
+    );
+    li.append(title, desc, actions);
+    recipesListEl.appendChild(li);
+  }
+}
+
+btnTeach.addEventListener('click', () => {
+  if (!recipeRecorder.active()) {
+    startTeaching();
+    return;
+  }
+  if (recipeRecorder.count() === 0) {
+    cancelTeaching();
+    return;
+  }
+  const name = window.prompt(`Save these ${recipeRecorder.count()} steps as:`)?.trim();
+  if (name) saveRecipeAs(name);
+  else cancelTeaching();
+});
+
+btnRecipes.addEventListener('click', () => {
+  recipesSection.hidden = !recipesSection.hidden;
+  btnRecipes.setAttribute('aria-pressed', String(!recipesSection.hidden));
+});
+
+/**
+ * Recipe meta-commands, checked BEFORE routing:
+ *   teach:  "start teaching" / ಕಲಿಸು — local, no model.
+ *   save:   "save this as <name>" / "<ಹೆಸರು> ಅಂತ ಉಳಿಸು" — local, no model.
+ *   run:    "do <name>" / "<ಹೆಸರು> ಮಾಡು" — alias/fuzzy rules match first, then
+ *           the hybrid Nano pick (structured recipe-id output; Kannada forces
+ *           the cloud like all Kannada text, and that send hits the ledger).
+ * A 'run' with no matching recipe returns null → the utterance routes normally.
+ */
+async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
+  const meta = parseRecipeMeta(utterance);
+  if (!meta) return null;
+  if (meta.kind === 'start') {
+    setBadge('rules', 'exact');
+    startTeaching();
+    return true;
+  }
+  if (meta.kind === 'cancel') {
+    if (!recipeRecorder.active()) return null; // plain "stop" → normal routing
+    setBadge('rules', 'exact');
+    cancelTeaching();
+    return true;
+  }
+  if (meta.kind === 'save') {
+    setBadge('rules', 'exact');
+    return saveRecipeAs(meta.name);
+  }
+  // meta.kind === 'run'
+  const candidates = recipeStore.list().map((r) => ({ id: r.id, name: r.name, aliases: r.aliases }));
+  if (candidates.length === 0) return null;
+  const t0 = performance.now();
+  const ruleHit = matchRecipe(meta.name, candidates) ?? matchRecipe(utterance, candidates);
+  if (ruleHit) {
+    const recipe = recipeStore.get(ruleHit.id)!;
+    recordLedger('rules', 'recipe pick', REASON_TEXT.exact, '');
+    routerPanel.add({ utterance, planned: 'rules', source: 'rules', reason: 'exact', escalated: false, ms: performance.now() - t0 });
+    stageRecipeRun(recipe, 'rules', 'exact');
+    return true;
+  }
+  const env = routerEnv();
+  if (!env.deviceReady && !env.cloudReady) return null;
+  const translated = shouldTranslate(currentLanguage);
+  const toCloud = translateInCloud(currentLanguage, { ...env, deviceLangReady });
+  const pick = await pickRecipeHybrid(utterance, candidates, {
+    forceCloud: toCloud,
+    lang: translated ? currentLanguage : undefined,
+  });
+  if (!pick) return null;
+  const reason: RouteReason = pick.source === 'on-device' ? 'private' : 'no-device';
+  // Honest ledger line for the pick — a cloud call shows exactly what rode along
+  // (the utterance + the recipe names it had to choose from).
+  recordLedger(
+    pick.source, 'recipe pick',
+    pick.source === 'cloud' ? REASON_TEXT[reason] : REASON_TEXT.private,
+    `${commandPayload(utterance)}\nrecipes: ${candidates.map((c) => c.name).join(', ')}`,
+    pick.ms,
+  );
+  if (!pick.id || pick.confidence < 0.4) return null; // not a recipe → route normally
+  const recipe = recipeStore.get(pick.id);
+  if (!recipe) return null;
+  routerPanel.add({
+    utterance, planned: toCloud ? 'cloud' : 'on-device',
+    source: pick.source, reason, confidence: pick.confidence, escalated: false,
+    ms: performance.now() - t0,
+  });
+  stageRecipeRun(recipe, pick.source, reason, translated);
+  return true;
+}
+
+const recipeBook = recipeBookId({
+  getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  setItem: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } },
+});
+
+async function syncRecipes(): Promise<void> {
+  const res = await syncRecipeBook(recipeStore, recipeBook);
+  if (!res.ok) recipesNote.title = res.reason; // quiet: local book still works
+}
+
+recipeStore.subscribe(renderRecipes);
+renderRecipes();
+renderTeachState();
+void syncRecipes(); // best-effort cloud merge at boot (fails soft offline)
+
 function commandPayload(utterance: string, ctx?: FusionContext): string {
   const base = `command: ${JSON.stringify(utterance)}`;
   if (!ctx) return base;
@@ -1460,6 +1834,12 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Show her words immediately; the English translation fills in once the cloud
   // (or on-device) fusion call returns it.
   showCaptionHeard(utterance);
+
+  // RECIPES: "start teaching" / "save this as <name>" / "do <name>" (English
+  // and Kannada fixed phrases). Teach/save are local; a recipe run is matched
+  // by rules first, then the hybrid Nano pick. Null → not a recipe command.
+  const recipeHandled = await handleRecipeMeta(utterance);
+  if (recipeHandled !== null) return recipeHandled;
 
   // PERSONAL PHRASEBOOK: teach ("when I say X, do Y") and correction ("no, I
   // meant …") are handled locally — no model call, nothing leaves the device.

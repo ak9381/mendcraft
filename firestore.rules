@@ -33,6 +33,21 @@ service cloud.firestore {
       }
     }
 
+    // "Taught once" recipe books — same capability-URL model as rooms: the
+    // book id is a 24-char high-entropy token generated once per browser, so
+    // knowing it IS the capability. One doc per book holding only the merged
+    // {recipes, deleted} maps (validated client-side on every load; recipes are
+    // declarative JSON steps, never code). No list → ids can't be enumerated.
+    match /recipebooks/{bookId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if bookId.size() == 24
+        && request.resource.data.keys().hasOnly(['recipes', 'deleted'])
+        && request.resource.data.recipes is map
+        && request.resource.data.deleted is map;
+      allow delete: if false; // deletes are tombstones inside the book doc
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
