@@ -11,7 +11,19 @@ import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
 import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
 import { createReferencePanel } from './ui/referencePanel';
-import { SIM_ACTIVE, demoFor, mountSimCursor, playDemo, type SimStep } from './sim';
+import { SIM_ACTIVE, createSimPlayback, demoFor, mountSimCursor, playDemo, type SimStep } from './sim';
+import {
+  TOUR_STEPS,
+  resolveTourSteps,
+  stepForward,
+  stepBack,
+  atFirst,
+  atLast,
+  stepCounter,
+  tourDismissed,
+  markTourDismissed,
+  type TourStepDef,
+} from './ui/tour';
 import {
   initDeviceModel,
   checkDeviceAvailability,
@@ -231,6 +243,7 @@ app.innerHTML = `
   <div id="status-live" class="sr-only" aria-live="polite"></div>
   <div id="mc-toast" class="mc-toast" role="status" aria-live="polite" hidden></div>
   <div id="onboarding" hidden></div>
+  <div id="tour" hidden></div>
 `;
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -2179,8 +2192,11 @@ if (SIM_ACTIVE) {
     },
   };
   const btnDemo = document.getElementById('btn-demo') as HTMLButtonElement | null;
-  btnDemo?.addEventListener('click', () => {
+  const startDemo = () => {
+    if (!btnDemo || btnDemo.disabled) return;
     btnDemo.disabled = true;
+    const playback = createSimPlayback();
+    const controls = mountSimControls(playback);
     void playDemo(
       demoFor(mode.id),
       runUtterance,
@@ -2195,10 +2211,71 @@ if (SIM_ACTIVE) {
       },
       () => btnExport.click(),
       runSimFeature,
+      playback,
     ).finally(() => {
+      controls.remove();
       btnDemo.disabled = false;
+      if (!playback.isAborted()) showTryItYourself();
     });
+  };
+  btnDemo?.addEventListener('click', startDemo);
+  // Judges' page deep-links (/?sim=1&play=1) auto-start the walk after mount.
+  if (new URLSearchParams(window.location.search).get('play') === '1') {
+    setTimeout(startDemo, 600);
+  }
+}
+
+/** Floating Pause / Next / Skip bar shown while a sim walk plays. Pinch-operable
+ *  (real buttons, ≥44px) and keyboard-operable like any toolbar button. */
+function mountSimControls(playback: ReturnType<typeof createSimPlayback>): { remove: () => void } {
+  const bar = document.createElement('div');
+  bar.className = 'sim-controls';
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Demo playback controls');
+  const pause = document.createElement('button');
+  pause.type = 'button';
+  pause.textContent = 'Pause';
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.textContent = 'Next';
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.textContent = 'Skip';
+  bar.append(pause, next, skip);
+  document.body.appendChild(bar);
+  pause.addEventListener('click', () => {
+    const paused = playback.toggle();
+    pause.textContent = paused ? 'Resume' : 'Pause';
   });
+  next.addEventListener('click', () => playback.requestNext());
+  skip.addEventListener('click', () => playback.skip());
+  return { remove: () => bar.remove() };
+}
+
+/** After a walk ends, invite the judge into the live app with three real
+ *  commands to try. Non-blocking toast-style card; Esc or a button dismisses. */
+function showTryItYourself(): void {
+  const existing = document.getElementById('try-yourself');
+  if (existing) existing.remove();
+  const card = document.createElement('div');
+  card.id = 'try-yourself';
+  card.className = 'try-yourself';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-label', 'Try it yourself');
+  const hints = mode.hints.slice(0, 3).map((h) => h.command);
+  card.innerHTML = `
+    <h2>Now try it yourself</h2>
+    <p>Say or type one of these:</p>
+    <ul>${hints.map((h) => `<li>“${h}”</li>`).join('')}</ul>
+    <div class="try-actions">
+      <a class="primary" href="/">Exit the demo → live app</a>
+      <button type="button" class="ghost" id="try-close">Keep exploring here</button>
+    </div>`;
+  document.body.appendChild(card);
+  const close = () => card.remove();
+  card.querySelector<HTMLButtonElement>('#try-close')?.addEventListener('click', close);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  card.querySelector<HTMLAnchorElement>('a')?.focus();
 }
 
 // ---- onboarding: a real guided flow, skippable at every step ----
@@ -2217,7 +2294,10 @@ const ONBOARD_STEPS: OnboardStep[] = [
 ];
 
 const onboarding = createOnboarding();
-btnHelp.addEventListener('click', () => onboarding.open(0));
+const tour = createTour();
+// "Help / tour" (and the first-load prompt) open the judges' chooser, which
+// leads to either the guided tour, the camera setup, or the /judges page.
+btnHelp.addEventListener('click', () => tour.openWelcome());
 
 function createOnboarding() {
   const overlay = el<HTMLDivElement>('onboarding');
@@ -2441,13 +2521,218 @@ function createOnboarding() {
   };
 }
 
+// ---- judges' guided tour over the REAL app ----
+//
+// A welcome chooser (tour / camera / judges page), then steps that spotlight
+// actual controls in the running editor, then a chooser of the three walks.
+// Steps whose element is absent in the current mode are skipped (resolveTourSteps).
+function createTour() {
+  const overlay = el<HTMLDivElement>('tour');
+  let phase: 'welcome' | 'steps' | 'end' | null = null;
+  let steps: TourStepDef[] = [];
+  let index = 0;
+  let restoreFocus: HTMLElement | null = null;
+
+  function close(remember = true): void {
+    if (remember) markTourDismissed(localStorage);
+    phase = null;
+    overlay.hidden = true;
+    overlay.innerHTML = '';
+    window.removeEventListener('resize', reposition);
+    restoreFocus?.focus();
+  }
+
+  function button(label: string, onClick: () => void, variant = ''): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.className = 'tour-btn' + (variant ? ` ${variant}` : '');
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // --- welcome chooser ---
+  function renderWelcome(): void {
+    overlay.innerHTML = '';
+    overlay.classList.remove('tour-spotlighting');
+    const card = document.createElement('div');
+    card.className = 'tour-card tour-centered';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-label', 'Judges welcome');
+    const h = document.createElement('h2');
+    h.tabIndex = -1;
+    h.textContent = 'Judges: take the 2-minute tour 👋';
+    const p = document.createElement('p');
+    p.textContent =
+      'It spotlights the real controls in the running app — no camera or mic needed. ' +
+      'You can set up the camera instead, or open the judges’ page for the 30-second path.';
+    const actions = document.createElement('div');
+    actions.className = 'tour-actions';
+    actions.append(
+      button('Take the tour', () => startSteps(), 'primary'),
+      button('Set up the camera', () => { close(); onboarding.open(0); }, 'ghost'),
+      button('Judges’ page →', () => { close(); window.location.href = '/judges'; }, 'ghost'),
+      button('Not now', () => close(), 'ghost skip-tour'),
+    );
+    card.append(h, p, actions);
+    overlay.appendChild(card);
+    h.focus();
+  }
+
+  // --- spotlight steps ---
+  function startSteps(): void {
+    steps = resolveTourSteps(TOUR_STEPS, (sel) => document.querySelector(sel) != null);
+    index = 0;
+    phase = 'steps';
+    if (steps.length === 0) { renderEnd(); return; }
+    window.addEventListener('resize', reposition);
+    renderStep();
+  }
+
+  let spotlightEl: HTMLDivElement | null = null;
+  let calloutEl: HTMLDivElement | null = null;
+
+  function reposition(): void {
+    if (phase !== 'steps' || !spotlightEl || !calloutEl) return;
+    const target = document.querySelector(steps[index].selector) as HTMLElement | null;
+    if (!target) return;
+    const r = target.getBoundingClientRect();
+    spotlightEl.style.left = `${r.left - 8}px`;
+    spotlightEl.style.top = `${r.top - 8}px`;
+    spotlightEl.style.width = `${r.width + 16}px`;
+    spotlightEl.style.height = `${r.height + 16}px`;
+    const cardW = Math.min(360, window.innerWidth - 24);
+    let left = r.left + r.width / 2 - cardW / 2;
+    left = Math.max(12, Math.min(left, window.innerWidth - cardW - 12));
+    let top = r.bottom + 14;
+    if (top + 200 > window.innerHeight) top = Math.max(12, r.top - 214);
+    calloutEl.style.left = `${left}px`;
+    calloutEl.style.top = `${top}px`;
+    calloutEl.style.width = `${cardW}px`;
+  }
+
+  function renderStep(): void {
+    overlay.innerHTML = '';
+    overlay.classList.add('tour-spotlighting');
+    const step = steps[index];
+    const target = document.querySelector(step.selector) as HTMLElement | null;
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+    spotlightEl = document.createElement('div');
+    spotlightEl.className = 'tour-spotlight';
+    overlay.appendChild(spotlightEl);
+
+    calloutEl = document.createElement('div');
+    calloutEl.className = 'tour-card tour-callout';
+    calloutEl.setAttribute('role', 'dialog');
+    calloutEl.setAttribute('aria-modal', 'true');
+    calloutEl.setAttribute('aria-label', step.title);
+    const counter = document.createElement('p');
+    counter.className = 'tour-counter';
+    counter.textContent = stepCounter(index, steps.length);
+    const h = document.createElement('h2');
+    h.tabIndex = -1;
+    h.textContent = step.title;
+    const p = document.createElement('p');
+    p.textContent = step.body;
+    const actions = document.createElement('div');
+    actions.className = 'tour-actions';
+    if (!atFirst(index)) {
+      actions.append(button('Back', () => { index = stepBack(index, steps.length); renderStep(); }, 'ghost'));
+    }
+    const last = atLast(index, steps.length);
+    actions.append(button(last ? 'Choose a walk' : 'Next', () => {
+      if (last) { renderEnd(); return; }
+      index = stepForward(index, steps.length);
+      renderStep();
+    }, 'primary'));
+    actions.append(button('Skip', () => close(), 'ghost skip-tour'));
+    calloutEl.append(counter, h, p, actions);
+    overlay.appendChild(calloutEl);
+    reposition();
+    h.focus();
+  }
+
+  // --- end: choose a walk ---
+  function renderEnd(): void {
+    phase = 'end';
+    overlay.innerHTML = '';
+    overlay.classList.remove('tour-spotlighting');
+    window.removeEventListener('resize', reposition);
+    const card = document.createElement('div');
+    card.className = 'tour-card tour-centered';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-label', 'Choose a walk');
+    const h = document.createElement('h2');
+    h.tabIndex = -1;
+    h.textContent = 'That’s the tour. Watch a 1-minute walk:';
+    const p = document.createElement('p');
+    p.textContent = 'Each walk is scripted and deterministic — Pause / Next / Skip included, then “Try it yourself”.';
+    const walks = document.createElement('div');
+    walks.className = 'tour-actions tour-walks';
+    walks.append(
+      button('Plan · 2D floor plan', () => { window.location.href = '/?sim=1&play=1'; }, 'primary'),
+      button('Part · 3D cup grip', () => { window.location.href = '/?sim=1&mode=part&play=1'; }, 'primary'),
+      button('UI · login screen', () => { window.location.href = '/?sim=1&mode=ui&play=1'; }, 'primary'),
+    );
+    const foot = document.createElement('div');
+    foot.className = 'tour-actions';
+    foot.append(
+      button('Judges’ page →', () => { close(); window.location.href = '/judges'; }, 'ghost'),
+      button('Close', () => close(), 'ghost skip-tour'),
+    );
+    card.append(h, p, walks, foot);
+    overlay.appendChild(card);
+    h.focus();
+  }
+
+  overlay.addEventListener('keydown', (e) => {
+    if (phase == null) return;
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (phase === 'steps' && e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (atLast(index, steps.length)) renderEnd();
+      else { index = stepForward(index, steps.length); renderStep(); }
+      return;
+    }
+    if (phase === 'steps' && e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (!atFirst(index)) { index = stepBack(index, steps.length); renderStep(); }
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = overlay.querySelectorAll<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const lastEl = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+    else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+  });
+
+  return {
+    openWelcome(): void {
+      restoreFocus = (document.activeElement as HTMLElement) ?? btnHelp;
+      phase = 'welcome';
+      overlay.hidden = false;
+      renderWelcome();
+    },
+  };
+}
+
 let onboardedAlready = false;
 try {
   onboardedAlready = localStorage.getItem(ONBOARD_KEY) === '1';
 } catch {
   onboardedAlready = false;
 }
-if (!onboardedAlready && !SIM_ACTIVE) onboarding.open(0);
+// First load no longer forces the camera onboarding on a judge. Instead it
+// offers the 2-minute guided tour (camera setup stays one click away inside it).
+// A judge who has dismissed it before is left alone.
+if (!SIM_ACTIVE && !tourDismissed(localStorage) && !onboardedAlready) {
+  tour.openWelcome();
+}
 
 if (!navigator.mediaDevices?.getUserMedia) {
   btnCamera.disabled = true;

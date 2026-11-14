@@ -1842,3 +1842,152 @@ button.primary:hover {
 .c-appliance-detail { opacity: 0.75; font-size: 0.9em; margin-left: 6px; }
 .c-tag.tag-appliance-on { color: #7ee081; }
 .c-tag.tag-appliance-off { opacity: 0.7; }
+
+/* ---- judges' guided tour (spotlights real controls) ---- */
+#tour {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none; /* only the cards/spotlight capture input */
+}
+#tour[hidden] { display: none; }
+/* Welcome + end cards dim the whole screen; the spotlight phase dims via the
+   ring's huge box-shadow instead, so the highlighted control stays bright. */
+#tour:not(.tour-spotlighting)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  pointer-events: auto;
+}
+.tour-spotlight {
+  position: absolute;
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.66), 0 0 0 3px var(--accent);
+  pointer-events: none;
+  transition: all 0.18s ease;
+}
+.tour-card {
+  position: absolute;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.4em;
+  max-width: 460px;
+  pointer-events: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.tour-card.tour-centered {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 2em);
+  max-width: 480px;
+}
+.tour-card h2 { margin: 0 0 0.5em; font-size: 1.2em; color: var(--text); text-transform: none; }
+.tour-card p { margin: 0 0 0.6em; line-height: 1.5; color: var(--text); }
+.tour-counter { color: var(--text-dim); font-size: 0.85em; margin: 0 0 0.3em !important; }
+.tour-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  margin-top: 1em;
+  align-items: center;
+}
+.tour-walks { flex-direction: column; align-items: stretch; }
+.tour-btn {
+  min-height: 44px;
+  padding: 0 1em;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e2128;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.tour-btn.primary { background: var(--accent); border-color: var(--accent); color: #07111f; font-weight: 600; }
+.tour-btn.ghost { background: transparent; }
+.tour-btn.skip-tour { margin-left: auto; color: var(--text-dim); }
+.tour-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- sim walk playback controls (Pause / Next / Skip) ---- */
+.sim-controls {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5em;
+  z-index: 58;
+  background: rgba(16, 18, 23, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px;
+}
+.sim-controls button {
+  min-height: 44px;
+  min-width: 64px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #1e2128;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.sim-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- "try it yourself" card after a walk ---- */
+.try-yourself {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 59;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1.2em;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.try-yourself h2 { margin: 0 0 0.4em; font-size: 1.1em; text-transform: none; color: var(--text); }
+.try-yourself ul { margin: 0.4em 0 0.8em; padding-left: 1.1em; color: var(--text); }
+.try-yourself li { margin: 0.2em 0; }
+.try-actions { display: flex; flex-wrap: wrap; gap: 0.5em; align-items: center; }
+.try-actions .primary {
+  min-height: 44px; display: inline-flex; align-items: center; padding: 0 1em;
+  background: var(--accent); color: #07111f; border-radius: 8px; font-weight: 600; text-decoration: none;
+}
+.try-actions .ghost {
+  min-height: 44px; padding: 0 1em; background: transparent; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 8px; font: inherit; cursor: pointer;
+}
+
+/* ---- static /judges page ---- */
+.judges-page { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; color: var(--text); }
+.judges-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.judges-head .brand { font-weight: 700; font-size: 1.3rem; }
+.judges-sub { color: var(--text-dim); }
+.judges-lede { line-height: 1.6; color: var(--text); max-width: 70ch; }
+.judges-lede code, .judges-list code, .judges-path code { background: #1e2128; padding: 1px 5px; border-radius: 5px; }
+.judges-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; margin: 16px 0;
+}
+.judges-card h2 { margin: 0 0 12px; font-size: 1.1rem; text-transform: none; }
+.judges-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.judges-path ol, .judges-list { line-height: 1.55; }
+.judges-list { padding-left: 1.1em; }
+.judges-list li { margin: 0.35em 0; }
+.judges-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.judges-table th, .judges-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.judges-table .j-on { color: var(--accent-2); font-weight: 600; }
+.judges-table .j-cloud { color: var(--accent); font-weight: 600; }
+.judges-table .j-rules { color: var(--text-dim); font-weight: 600; }
+.judges-note { color: var(--text-dim); font-size: 0.88rem; margin: 10px 0 0; }
+.judges-cta {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px;
+  background: var(--accent); color: #07111f; border-radius: 8px; font-weight: 600; text-decoration: none;
+}
+.judges-card a:not(.judges-cta) { color: var(--accent); }
+.judges-foot { margin-top: 20px; }
+@media (max-width: 760px) { .judges-grid { grid-template-columns: 1fr; } }

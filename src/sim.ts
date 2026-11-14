@@ -9,7 +9,9 @@ import type { HandEvent } from './input/hands';
 // here so the Play-demo surface stays in src/sim.ts.
 export { playControlDemo } from './relay/controlSnapshot';
 
-export const SIM_ACTIVE = new URLSearchParams(window.location.search).get('sim') === '1';
+export const SIM_ACTIVE =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('sim') === '1';
 
 /** A declarative "feature beat" the shell performs (via playDemo's onFeature):
  *  on-device hand-adapt pick, offline/online toggle, or accepting an a11y fix.
@@ -177,14 +179,74 @@ export function mountSimCursor(container: HTMLElement, onEvent: (e: HandEvent) =
   };
 }
 
+/**
+ * Playback controller for the sim walk: Pause/Resume, Next (cut the current
+ * step's wait short and advance) and Skip (abort the rest of the walk). It is a
+ * pure, testable state machine — playDemo consults it between and during steps.
+ * `onChange` lets the shell re-render its Pause/Next/Skip buttons.
+ */
+export interface SimPlayback {
+  isPaused(): boolean;
+  isAborted(): boolean;
+  pause(): void;
+  resume(): void;
+  /** Toggle pause; returns the new paused state. */
+  toggle(): boolean;
+  /** Request advancing to the next step now (consumed once by the wait loop). */
+  requestNext(): void;
+  /** Abort the remainder of the walk. */
+  skip(): void;
+  /** Reset to a fresh run (not paused, not aborted, no pending next). */
+  reset(): void;
+  /** True once if a Next was requested; clears the request. */
+  consumeNext(): boolean;
+}
+
+export function createSimPlayback(onChange?: () => void): SimPlayback {
+  let paused = false;
+  let aborted = false;
+  let nextPending = false;
+  const changed = () => onChange?.();
+  return {
+    isPaused: () => paused,
+    isAborted: () => aborted,
+    pause() { if (!paused) { paused = true; changed(); } },
+    resume() { if (paused) { paused = false; changed(); } },
+    toggle() { paused = !paused; changed(); return paused; },
+    requestNext() { nextPending = true; changed(); },
+    skip() { if (!aborted) { aborted = true; paused = false; changed(); } },
+    reset() { paused = false; aborted = false; nextPending = false; changed(); },
+    consumeNext() { if (!nextPending) return false; nextPending = false; return true; },
+  };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Wait up to `ms`, but honour the playback controls: abort/Next cut it short,
+ *  Pause holds here without counting toward the elapsed time. */
+async function waitWithControls(ms: number, playback?: SimPlayback): Promise<void> {
+  if (!playback) { await sleep(ms); return; }
+  const tick = 60;
+  let waited = 0;
+  while (waited < ms) {
+    if (playback.isAborted()) return;
+    if (playback.consumeNext()) return; // Next: skip the remaining wait
+    if (playback.isPaused()) { await sleep(tick); continue; } // hold, don't advance
+    await sleep(tick);
+    waited += tick;
+  }
+}
+
 export async function playDemo(
   steps: SimStep[],
   runUtterance: (text: string) => Promise<void>,
   onStep: (step: SimStep, index: number) => void,
   onExport: () => void,
   onFeature?: (step: SimStep, index: number) => void | Promise<void>,
+  playback?: SimPlayback,
 ): Promise<void> {
   for (let i = 0; i < steps.length; i++) {
+    if (playback?.isAborted()) return;
     const step = steps[i];
     onStep(step, i);
     // A declarative feature / language beat runs first (it may set the language
@@ -195,6 +257,6 @@ export async function playDemo(
     else if (step.revealLedger) { /* onStep opens the ledger; no export here */ }
     else if (step.feature || step.lang) { /* handled by onFeature; no export */ }
     else onExport();
-    await new Promise((resolve) => setTimeout(resolve, step.delayMs ?? 1400));
+    await waitWithControls(step.delayMs ?? 1400, playback);
   }
 }

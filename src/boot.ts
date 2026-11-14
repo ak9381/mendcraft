@@ -3,7 +3,7 @@
 //   /remote (or ?view=remote)  → the phone remote + camera page
 //   everything else            → the existing editor (src/main.ts, unchanged)
 
-import { isControlRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
+import { isControlRoute, isJudgesRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
 
 // Inside the thin Android shell (Capacitor) the bundle is served from
 // https://localhost/ with no path — the native app IS the remote, so route
@@ -25,6 +25,9 @@ if (isIosShell || isPhoneRoute(window.location.pathname, window.location.search)
 } else if (isControlRoute(window.location.pathname, window.location.search)) {
   const { mountControlPage } = await import('./relay/controlPage');
   await mountControlPage(document.querySelector<HTMLDivElement>('#app')!);
+} else if (isJudgesRoute(window.location.pathname, window.location.search)) {
+  const { mountJudgesPage } = await import('./judges/judgesPage');
+  await mountJudgesPage(document.querySelector<HTMLDivElement>('#app')!);
 } else {
   await import('./main');
 }

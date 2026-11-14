@@ -106,6 +106,12 @@ export function isControlRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'control';
 }
 
+/** Does this location want the static /judges page (the guided-tour landing)? */
+export function isJudgesRoute(pathname: string, search: string): boolean {
+  if (/^\/judges\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'judges';
+}
+
 // ---- message envelope -------------------------------------------------------
 
 // 'control' is the read-only iPad dashboard: it subscribes to a host's room and
