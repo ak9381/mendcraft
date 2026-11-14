@@ -36,6 +36,10 @@ const DEVICE_LABEL: Record<DeviceId, string> = {
   other: 'Other device',
 };
 const APPLIANCE_LABEL: Record<ApplianceState, string> = { on: 'On', off: 'Off', unknown: 'Unknown' };
+const DEVICE_RUN_LABEL: Record<string, string> = {
+  designer: '✏️ Designer', browser: '🌐 Browser', lamp: '💡 Lamp',
+  music: '🎵 Music', android: '🤖 Phone', iphone: '📱 Phone',
+};
 
 export async function mountControlPage(root: HTMLElement): Promise<void> {
   document.title = 'Mendcraft control room';
@@ -84,6 +88,12 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
         </section>
 
+        <section class="card card-recipes" aria-label="Shared recipes">
+          <h2>Recipe book</h2>
+          <ul id="c-recipes" class="c-recipes"><li class="card-empty">No shared recipes yet.</li></ul>
+          <p id="c-run-status" class="card-note" role="status" aria-live="polite"></p>
+        </section>
+
         <section class="card card-appliances" aria-label="Lamp and music">
           <h2>Room</h2>
           <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span> <span id="c-lamp-detail" class="c-appliance-detail"></span></p>
@@ -111,6 +121,15 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     connBadge.textContent = text;
     connBadge.className = `badge badge-${kind}`;
   }
+
+  let runSeq = 0;
+  function setRunStatus(text: string): void {
+    $<HTMLParagraphElement>('c-run-status').textContent = text;
+  }
+  const RUN_STATUS_TEXT: Record<string, string> = {
+    queued: 'Queued', running: 'Running', 'awaiting-confirm': 'Waiting for a confirm on the target',
+    done: 'Done', error: 'Error', rejected: 'Rejected',
+  };
 
   function render(snap: ControlSnapshot): void {
     bytesEl.textContent = `${formatBytes(snapshotBytes(snap))} · rev ${snap.rev}`;
@@ -208,6 +227,45 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       trEl.textContent = '';
     }
 
+    // Shared recipe book — big cards anyone in the room can tap to Run. The run
+    // request goes to the laptop over the relay; anything that sends still needs
+    // a confirm on the target device (shown via run status).
+    const recipesEl = $<HTMLUListElement>('c-recipes');
+    recipesEl.innerHTML = '';
+    if (!snap.recipes.length) {
+      recipesEl.innerHTML = '<li class="card-empty">No shared recipes yet.</li>';
+    }
+    for (const r of snap.recipes) {
+      const li = document.createElement('li');
+      li.className = 'c-recipe-card';
+      const info = document.createElement('div');
+      info.className = 'c-recipe-info';
+      info.innerHTML = `<span class="c-recipe-name">${esc(r.name)}</span>`
+        + `<span class="c-recipe-sum">${esc(r.summary)}</span>`
+        + `<span class="c-recipe-meta"><span class="c-tag">${esc(DEVICE_RUN_LABEL[r.device] ?? r.device)}</span> · taught by ${esc(r.taughtBy || 'you')}</span>`;
+      const runBtn = document.createElement('button');
+      runBtn.type = 'button';
+      runBtn.className = 'c-recipe-run';
+      runBtn.textContent = 'Run';
+      runBtn.addEventListener('click', () => {
+        if (!session?.sendRun) {
+          setRunStatus(`Can't run “${r.name}” — not connected to the laptop.`);
+          return;
+        }
+        const runId = `run-${++runSeq}-${r.id.slice(0, 8)}`;
+        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => undefined);
+        setRunStatus(`Asked the laptop to run “${r.name}”…`);
+      });
+      li.append(info, runBtn);
+      recipesEl.appendChild(li);
+    }
+    if (snap.omitted.recipes) {
+      const li = document.createElement('li');
+      li.className = 'card-note';
+      li.textContent = `+${snap.omitted.recipes} more recipes hidden`;
+      recipesEl.appendChild(li);
+    }
+
     // 3D review (compact wireframe preview).
     const sceneEl = $<HTMLDivElement>('c-scene');
     sceneEl.innerHTML = renderScene(snap);
@@ -232,6 +290,11 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       else setConn('waiting for laptop…', 'rules');
     });
     session.onSnapshot(render);
+    session.onRunStatus((s) => {
+      const label = RUN_STATUS_TEXT[s.status] ?? s.status;
+      const where = s.step && s.total ? ` (step ${s.step}/${s.total})` : '';
+      setRunStatus(`${label}${where}${s.detail ? ` — ${s.detail}` : ''}`);
+    });
     bannerEl.textContent = '';
     joinForm.hidden = true;
   }

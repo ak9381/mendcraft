@@ -27,6 +27,7 @@ export const AI_FEED_MAX = 12;
 export const LEDGER_CALLS_MAX = 12;
 export const QUEUE_MAX = 20;
 export const PRIMITIVES_MAX = 120;
+export const RECIPES_MAX = 24;
 const UTTERANCE_MAX = 80;
 const CAPTION_MAX = 140;
 const SUMMARY_MAX = 120;
@@ -99,12 +100,25 @@ export interface QueueEntry {
   seq: number;
 }
 
+/** One shared-recipe card for the iPad dashboard: what it does, which device
+ *  runs it, who taught it. No steps/ops leave — just the summary line. */
+export interface RecipeCard {
+  id: string;
+  name: string;
+  device: string;
+  taughtBy: string;
+  /** One human line ("7 steps · adds room…" or "Opens mail.example.com"). */
+  summary: string;
+  steps: number;
+}
+
 /** What the caps dropped — surfaced so the dashboard never hides truncation. */
 export interface SnapshotOmissions {
   aiFeed: number;
   ledgerCalls: number;
   queue: number;
   primitives: number;
+  recipes: number;
 }
 
 export interface ControlSnapshot {
@@ -118,6 +132,7 @@ export interface ControlSnapshot {
   appliances: ApplianceSnapshot;
   caption: CaptionLine | null;
   scene: SceneSnapshot | null;
+  recipes: RecipeCard[];
   omitted: SnapshotOmissions;
 }
 
@@ -147,6 +162,16 @@ export interface ControlSnapshotInput {
   appliances?: { lamp?: ApplianceState; music?: ApplianceState; lampDetail?: string; musicTitle?: string };
   caption?: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null;
   scene?: SceneInput | null;
+  recipes?: RecipeCardInput[];
+}
+
+export interface RecipeCardInput {
+  id: string;
+  name: string;
+  device: string;
+  taughtBy?: string;
+  summary?: string;
+  steps?: number;
 }
 
 const EMPTY_COUNTS: LedgerCounts = { cloud: 0, onDevice: 0, rules: 0, private: 0, bytesSent: 0 };
@@ -217,6 +242,18 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     };
   }
 
+  const recipeAll = (input.recipes ?? [])
+    .filter((r) => typeof r?.id === 'string' && r.id && typeof r.name === 'string' && r.name)
+    .map((r): RecipeCard => ({
+      id: safeText(r.id, 64),
+      name: safeText(r.name, LABEL_MAX),
+      device: safeText(r.device ?? '', 16),
+      taughtBy: safeText(r.taughtBy ?? '', 40),
+      summary: safeText(r.summary ?? '', SUMMARY_MAX),
+      steps: typeof r.steps === 'number' && Number.isFinite(r.steps) ? Math.max(0, Math.round(r.steps)) : 0,
+    }));
+  const recipes = keepLast(recipeAll, RECIPES_MAX);
+
   let caption: CaptionLine | null = null;
   if (input.caption && input.caption.heard.trim()) {
     const heard = safeText(input.caption.heard, CAPTION_MAX);
@@ -239,11 +276,13 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     appliances: buildAppliances(input.appliances),
     caption,
     scene,
+    recipes: recipes.kept,
     omitted: {
       aiFeed: ai.dropped,
       ledgerCalls: calls.dropped,
       queue: queue.dropped,
       primitives: primitivesDropped,
+      recipes: recipes.dropped,
     },
   };
 }
@@ -372,6 +411,15 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
       }
     : null;
 
+  const recipes: RecipeCardInput[] = (Array.isArray(r.recipes) ? r.recipes : []).map((c) => {
+    const o = (c ?? {}) as Record<string, unknown>;
+    return {
+      id: str(o.id), name: str(o.name), device: str(o.device),
+      taughtBy: str(o.taughtBy), summary: str(o.summary),
+      steps: num(o.steps),
+    };
+  });
+
   const ap = (r.appliances ?? {}) as Record<string, unknown>;
 
   // Re-run the real builder so every cap + redaction is applied identically to
@@ -391,6 +439,7 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     },
     caption,
     scene,
+    recipes,
   });
 }
 
@@ -444,8 +493,16 @@ export function controlDemoSnapshots(): ControlSnapshot[] {
     { source: 'cloud', reason: 'big-job', utterance: 'studio apartment', ms: 420 },
   ];
 
+  const recipes: RecipeCardInput[] = [
+    { id: 'rcp-bath', name: "Amma's bathroom", device: 'designer', taughtBy: 'you', summary: '7 steps · adds room, door ×2 · plan', steps: 7 },
+    { id: 'rcp-cozy', name: 'Evening cozy', device: 'lamp', taughtBy: 'you', summary: 'lamp on · warm', steps: 2 },
+    { id: 'rcp-bhaj', name: 'Play bhajans', device: 'music', taughtBy: 'Aunty', summary: 'play “bhajans”', steps: 1 },
+    { id: 'rcp-wellt', name: 'Tell them I’m well', device: 'browser', taughtBy: 'you', summary: 'Opens mail.example.com · 1 confirm', steps: 4 },
+  ];
+
   const base: ControlSnapshotInput = {
     activeDevice: 'laptop',
+    recipes,
   };
 
   // Lamp + music toggle across the loop so the Play demo shows them changing

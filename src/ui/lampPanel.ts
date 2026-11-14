@@ -5,13 +5,15 @@
 
 import { createWizClient, resolveBridgeUrl } from '../devices/wizClient';
 import { createLampControl } from '../devices/lampControl';
-import type { LampState } from '../devices/wiz';
+import type { LampIntent, LampState } from '../devices/wiz';
 
 export interface LampPanel {
   readonly element: HTMLElement;
   toggle(): void;
   open(): void;
   isOpen(): boolean;
+  /** Run one lamp intent (recipe replay). Opens the panel so the result shows. */
+  apply(intent: LampIntent): Promise<void>;
 }
 
 export function createLampPanel(opts: {
@@ -56,5 +58,9 @@ export function createLampPanel(opts: {
       else root.hidden = true;
     },
     isOpen: () => !root.hidden,
+    apply(intent) {
+      this.open();
+      return control.apply(intent);
+    },
   };
 }

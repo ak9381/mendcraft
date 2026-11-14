@@ -14,6 +14,9 @@ import {
   type RelayCommand,
   type RelayMessage,
   type RelayRole,
+  type RelayRunControl,
+  type RelayRunRequest,
+  type RelayRunStatus,
 } from './protocol';
 import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
 import type { RelayTransport } from './transport';
@@ -39,12 +42,24 @@ export interface HostSession extends SessionBase {
   onMusic(cb: (music: MusicStatus) => void): void;
   /** Publish the latest privacy-safe state to the room for any /control iPad. */
   publishState(snapshot: ControlSnapshot): Promise<void>;
+  /** A "run this recipe" request from a /control iPad (or phone). */
+  onRun(cb: (run: RelayRunRequest) => void): void;
+  /** A confirm/cancel for a run that stopped on a send/submit step. */
+  onRunControl(cb: (control: RelayRunControl) => void): void;
+  /** Publish live run status back to the room (what step, awaiting-confirm…). */
+  publishRunStatus(status: RelayRunStatus): Promise<void>;
 }
 
-/** Read-only iPad dashboard view of a host's room. */
+/** Read-only-ish iPad dashboard view: it reads snapshots, and can REQUEST a run
+ *  (which still needs a confirm on the target for anything that sends). */
 export interface ControlSession extends SessionBase {
   readonly roomId: string;
   onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
+  onRunStatus(cb: (status: RelayRunStatus) => void): void;
+  /** Ask the owning device to run a recipe. */
+  sendRun(run: RelayRunRequest): Promise<void>;
+  /** Approve / reject a confirm-gated step on the target device. */
+  sendRunControl(control: RelayRunControl): Promise<void>;
 }
 
 export interface GuestSession extends SessionBase {
@@ -108,6 +123,8 @@ export async function createHostSession(
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
   let musicCb: ((music: MusicStatus) => void) | null = null;
+  let runCb: ((run: RelayRunRequest) => void) | null = null;
+  let runControlCb: ((control: RelayRunControl) => void) | null = null;
   // The most recent snapshot, re-sent whenever a /control iPad announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -119,6 +136,17 @@ export async function createHostSession(
   }
 
   core.listen((msg) => {
+    // Run requests + confirms may come from a /control iPad or the phone. They
+    // don't touch phone-pairing state and are handled before the control
+    // early-return below.
+    if (msg.type === 'run') {
+      runCb?.(msg.run);
+      return;
+    }
+    if (msg.type === 'runControl') {
+      runControlCb?.(msg.runControl);
+      return;
+    }
     if (msg.from === 'control') {
       // A read-only dashboard, not a remote: never changes pairing. Replay the
       // latest state so it populates immediately.
@@ -160,6 +188,14 @@ export async function createHostSession(
     onMusic: (cb) => {
       musicCb = cb;
     },
+    onRun: (cb) => {
+      runCb = cb;
+    },
+    onRunControl: (cb) => {
+      runControlCb = cb;
+    },
+    publishRunStatus: (status) =>
+      transport.publish(token, { v: 1, from: 'host', type: 'runStatus', runStatus: status }),
     publishState,
     close: async () => {
       await transport.clearAlias(code).catch(() => undefined);
@@ -205,6 +241,7 @@ export async function createControlSession(
 ): Promise<ControlSession> {
   const core = makeCore('control', transport, roomId);
   let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
+  let runStatusCb: ((s: RelayRunStatus) => void) | null = null;
   // Buffer the newest snapshot so a callback registered after the host's replay
   // (the hello → republish round-trip can land before onSnapshot is wired) still
   // sees current state immediately — the same contract onState has.
@@ -218,6 +255,8 @@ export async function createControlSession(
       core.setState(advancePair(core.state, 'peer-hello'));
       lastSnapshot = snap;
       snapshotCb?.(snap);
+    } else if (msg.type === 'runStatus') {
+      runStatusCb?.(msg.runStatus);
     } else if (msg.type === 'bye' && msg.from === 'host') {
       core.setState(advancePair(core.state, 'peer-bye'));
     }
@@ -232,6 +271,12 @@ export async function createControlSession(
       snapshotCb = cb;
       if (lastSnapshot) cb(lastSnapshot);
     },
+    onRunStatus: (cb) => {
+      runStatusCb = cb;
+    },
+    sendRun: (run) => transport.publish(roomId, { v: 1, from: 'control', type: 'run', run }),
+    sendRunControl: (control) =>
+      transport.publish(roomId, { v: 1, from: 'control', type: 'runControl', runControl: control }),
     close: () => core.close(),
   };
 }

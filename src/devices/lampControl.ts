@@ -13,6 +13,9 @@ export interface LampControl {
   readonly element: HTMLElement;
   /** Re-check the bridge + current bulb state. */
   refresh(): Promise<void>;
+  /** Apply one lamp intent programmatically (recipe replay); same path as the
+   *  buttons, so it honestly surfaces a bridge-offline state. */
+  apply(intent: LampIntent): Promise<void>;
   destroy(): void;
 }
 
@@ -171,6 +174,7 @@ export function createLampControl(client: WizClient, opts: LampControlOptions = 
   return {
     element: root,
     refresh,
+    apply,
     destroy() {
       root.remove();
     },

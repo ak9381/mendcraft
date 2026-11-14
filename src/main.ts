@@ -92,6 +92,8 @@ import {
 } from './recipes/recorder';
 import { parseRecipeMeta, matchRecipe } from './recipes/match';
 import { buildReplayOps, buildReplayBatch } from './recipes/replay';
+import { buildDeviceActions } from './recipes/deviceRun';
+import { buildBrowserPlan } from './recipes/browser';
 import { createRecipeStore } from './recipes/storage';
 import { recipeBookId, syncRecipeBook } from './recipes/sync';
 import { pickRecipeHybrid } from './ai/hybrid';
@@ -104,7 +106,7 @@ import { probeFirestore } from './relay/firestoreTransport';
 import {
   createGuestSession, createHostSession, type GuestSession, type HostSession,
 } from './relay/session';
-import { buildJoinUrl, pairStateLabel, type RelayCommand } from './relay/protocol';
+import { buildJoinUrl, pairStateLabel, type RelayCommand, type RunStatusKind } from './relay/protocol';
 import {
   buildControlSnapshot, type AiFeedInput, type ApplianceState, type DeviceId, type ScenePrimitive,
 } from './relay/controlSnapshot';
@@ -796,6 +798,31 @@ async function initPairing(): Promise<void> {
   // The phone's music player relays its state (title/playing/volume, no audio);
   // mirror it onto the /control dashboard.
   hostSession.onMusic((music) => setControlMusic(music));
+  // A /control iPad (or phone) can request a saved recipe run. The laptop owns
+  // the recipe book and the devices, so it executes and publishes live status.
+  hostSession.onRun((run) => void handleRelayRun(run));
+}
+
+/** Execute a recipe requested over the relay and publish its status back. */
+async function handleRelayRun(run: { runId: string; recipeId: string; device: string; by?: string }): Promise<void> {
+  const recipe = recipeStore.get(run.recipeId);
+  const status = (s: RunStatusKind, detail?: string, step?: number, total?: number): void => {
+    void hostSession?.publishRunStatus({ runId: run.runId, recipeId: run.recipeId, status: s, detail, step, total }).catch(() => undefined);
+  };
+  if (!recipe) {
+    status('error', 'recipe not found');
+    return;
+  }
+  status('running', `${run.by ? `${run.by}: ` : ''}${recipe.name}`, 0, recipe.steps.length);
+  if (recipe.device === 'designer') {
+    // Designer recipes don't send anything; stage the usual confirm so a human
+    // at the laptop approves before the scene changes.
+    stageRecipeRun(recipe, 'rules', 'exact');
+    status('awaiting-confirm', 'confirm on the laptop to apply', 0, recipe.steps.length);
+    return;
+  }
+  const res = await runDeviceRecipe(recipe);
+  status(res.ok ? 'done' : 'error', res.detail, recipe.steps.length, recipe.steps.length);
 }
 
 btnPair.addEventListener('click', () => {
@@ -1122,6 +1149,10 @@ function publishControlSnapshot(): void {
       rev: controlRev,
       primitives: controlScenePrimitives(),
     },
+    recipes: recipeStore.list().map((r) => ({
+      id: r.id, name: r.name, device: r.device,
+      taughtBy: r.taughtBy, summary: describeRecipe(r), steps: r.steps.length,
+    })),
   });
   void hostSession.publishState(snap).catch(() => undefined);
 }
@@ -1414,6 +1445,12 @@ renderNetState();
 
 const recipeStore = createRecipeStore(typeof localStorage !== 'undefined' ? localStorage : null);
 const recipeRecorder = createRecipeRecorder();
+/** Hard allowlist for browser recipes — the ONLY hosts a browser step may open
+ *  (same-origin app pages + the demo mail host). Everything else is refused. */
+const BROWSER_ALLOWLIST: readonly string[] = [
+  typeof window !== 'undefined' ? window.location.hostname : 'localhost',
+  'mail.example.com',
+];
 const btnTeach = el<HTMLButtonElement>('btn-teach');
 const btnRecipes = el<HTMLButtonElement>('btn-recipes');
 const recipesSection = el<HTMLElement>('recipes-section');
@@ -1571,10 +1608,54 @@ function clearRecipeConfirm(): void {
   recipeConfirmEl.innerHTML = '';
 }
 
+/** Run a lamp recipe through the shared lamp panel (same path as the buttons,
+ *  so a bridge-offline state is surfaced honestly). Returns a status line. */
+async function runLampRecipe(recipe: Recipe): Promise<{ ok: boolean; detail: string }> {
+  const plan = buildDeviceActions('lamp', recipe.steps);
+  if (!plan.ok) return { ok: false, detail: plan.error };
+  try {
+    for (const a of plan.actions) if (a.device === 'lamp') await lampPanel.apply(a.intent);
+    return { ok: true, detail: `${plan.actions.length} lamp step(s)` };
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message };
+  }
+}
+
+/** Dispatch a non-designer recipe to its device. Music plays on the paired phone
+ *  (no audio on the laptop), browser recipes open the in-canvas panel. */
+async function runDeviceRecipe(recipe: Recipe): Promise<{ ok: boolean; detail: string }> {
+  if (recipe.device === 'lamp') return runLampRecipe(recipe);
+  if (recipe.device === 'music') {
+    // Validate the steps so an unrunnable recipe still reports honestly; the
+    // audio element lives on the phone /remote, so we announce rather than play.
+    const plan = buildDeviceActions('music', recipe.steps);
+    return plan.ok
+      ? { ok: true, detail: 'music plays on the paired phone remote' }
+      : { ok: false, detail: plan.error };
+  }
+  if (recipe.device === 'browser') {
+    const plan = buildBrowserPlan(recipe.steps, { allowedHosts: BROWSER_ALLOWLIST, slots: recipe.slots });
+    return plan.ok
+      ? { ok: true, detail: `${plan.steps.length} step(s), ${plan.confirmCount} confirm(s) — opens the browser panel` }
+      : { ok: false, detail: plan.error };
+  }
+  return { ok: false, detail: `no runner for ${recipe.device}` };
+}
+
 function runPendingRecipe(): void {
   const recipe = pendingRun;
   if (!recipe) return;
   clearRecipeConfirm();
+  if (recipe.device !== 'designer') {
+    verifierEl.textContent = `Running “${recipe.name}” on the ${recipe.device}…`;
+    void runDeviceRecipe(recipe).then((res) => {
+      verifierEl.textContent = res.ok
+        ? `Ran “${recipe.name}” — ${res.detail}.`
+        : `Couldn't run “${recipe.name}”: ${res.detail}`;
+      if (res.ok) speakConfirm('done');
+    });
+    return;
+  }
   // No cursor plumbing yet, so a replay lands at the recipe's recorded spot
   // (steps are stored anchor-relative; buildReplayOps rebases them).
   const ops = buildReplayOps(recipe);

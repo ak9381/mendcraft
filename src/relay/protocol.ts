@@ -139,10 +139,53 @@ export interface MusicStatus {
   volume: number;
 }
 
+/** The recipe devices a run request can be addressed to. Kept inline (not
+ *  imported from recipes) so the protocol stays DOM/feature-free. */
+export const RUN_DEVICES: readonly string[] = ['designer', 'browser', 'lamp', 'music', 'android', 'iphone'];
+
+/** "Run this saved recipe" — sent from the iPad /control dashboard (or a phone)
+ *  into the room; the device that owns the recipe executes it. */
+export interface RelayRunRequest {
+  runId: string;
+  recipeId: string;
+  /** Which device owns / should run it. */
+  device: string;
+  /** Who tapped Run (display only). */
+  by?: string;
+}
+
+export type RunStatusKind = 'queued' | 'running' | 'awaiting-confirm' | 'done' | 'error' | 'rejected';
+
+/** Live status of a run, published by the executing device back to the room. */
+export interface RelayRunStatus {
+  runId: string;
+  recipeId: string;
+  status: RunStatusKind;
+  /** 1-based current step and total, when known. */
+  step?: number;
+  total?: number;
+  detail?: string;
+}
+
+/** Confirm / cancel a run that stopped on a send/submit-style step. Sent back to
+ *  the executing device from whoever is allowed to approve (control or host). */
+export interface RelayRunControl {
+  runId: string;
+  decision: 'confirm' | 'cancel';
+  /** The step index being approved (defensive; the device re-checks). */
+  step?: number;
+}
+
 export type RelayMessage =
   | { v: 1; from: RelayRole; type: 'hello' }
   | { v: 1; from: RelayRole; type: 'bye' }
   | { v: 1; from: RelayRole; type: 'cmd'; cmd: RelayCommand }
+  /** Run a saved recipe on its owning device. */
+  | { v: 1; from: RelayRole; type: 'run'; run: RelayRunRequest }
+  /** Live run status back to the room. */
+  | { v: 1; from: RelayRole; type: 'runStatus'; runStatus: RelayRunStatus }
+  /** Approve / reject a confirm-gated step. */
+  | { v: 1; from: RelayRole; type: 'runControl'; runControl: RelayRunControl }
   /** A low-rate JPEG still from the phone camera — goes ONLY to the paired
    *  laptop via the room, never to Firebase AI, and is never ledgered. */
   | { v: 1; from: RelayRole; type: 'frame'; mimeType: string; dataBase64: string }
@@ -171,6 +214,52 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (typeof c.text === 'string') out.text = c.text;
   if (typeof c.dx === 'number') out.dx = c.dx;
   if (typeof c.dy === 'number') out.dy = c.dy;
+  return out;
+}
+
+const RUN_STATUS_KINDS: readonly string[] = ['queued', 'running', 'awaiting-confirm', 'done', 'error', 'rejected'];
+
+const idLike = (v: unknown): v is string =>
+  typeof v === 'string' && v.length > 0 && v.length <= 64;
+
+const maybeStep = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1000 ? v : undefined;
+
+/** Validate a recipe-run request from the wire; null when malformed. */
+export function validateRunRequest(raw: unknown): RelayRunRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (!idLike(r.runId) || !idLike(r.recipeId)) return null;
+  if (typeof r.device !== 'string' || !RUN_DEVICES.includes(r.device)) return null;
+  const out: RelayRunRequest = { runId: r.runId, recipeId: r.recipeId, device: r.device };
+  if (typeof r.by === 'string' && r.by.length <= 60) out.by = r.by;
+  return out;
+}
+
+/** Validate a run-status payload from the wire; null when malformed. */
+export function validateRunStatus(raw: unknown): RelayRunStatus | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const s = raw as Record<string, unknown>;
+  if (!idLike(s.runId) || !idLike(s.recipeId)) return null;
+  if (typeof s.status !== 'string' || !RUN_STATUS_KINDS.includes(s.status)) return null;
+  const out: RelayRunStatus = { runId: s.runId, recipeId: s.recipeId, status: s.status as RunStatusKind };
+  const step = maybeStep(s.step);
+  const total = maybeStep(s.total);
+  if (step !== undefined) out.step = step;
+  if (total !== undefined) out.total = total;
+  if (typeof s.detail === 'string' && s.detail.length <= 200) out.detail = s.detail;
+  return out;
+}
+
+/** Validate a run-control (confirm/cancel) payload from the wire; null when malformed. */
+export function validateRunControl(raw: unknown): RelayRunControl | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const c = raw as Record<string, unknown>;
+  if (!idLike(c.runId)) return null;
+  if (c.decision !== 'confirm' && c.decision !== 'cancel') return null;
+  const out: RelayRunControl = { runId: c.runId, decision: c.decision };
+  const step = maybeStep(c.step);
+  if (step !== undefined) out.step = step;
   return out;
 }
 
@@ -207,6 +296,18 @@ export function validateMessage(raw: unknown): RelayMessage | null {
     case 'cmd': {
       const cmd = validateCommand(m.cmd);
       return cmd ? { v: 1, from, type: 'cmd', cmd } : null;
+    }
+    case 'run': {
+      const run = validateRunRequest(m.run);
+      return run ? { v: 1, from, type: 'run', run } : null;
+    }
+    case 'runStatus': {
+      const runStatus = validateRunStatus(m.runStatus);
+      return runStatus ? { v: 1, from, type: 'runStatus', runStatus } : null;
+    }
+    case 'runControl': {
+      const runControl = validateRunControl(m.runControl);
+      return runControl ? { v: 1, from, type: 'runControl', runControl } : null;
     }
     case 'frame':
       if (typeof m.mimeType !== 'string' || !m.mimeType.startsWith('image/')) return null;
