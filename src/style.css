@@ -1773,6 +1773,33 @@ button.primary:hover {
 .c-wire line { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; }
 .c-wire rect { fill: rgba(79, 156, 255, 0.12); stroke: var(--accent); stroke-width: 2; }
 
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.c-scene-full {
+  font: inherit; font-size: 0.85rem; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line, #334); background: var(--panel-2); color: inherit; cursor: pointer;
+}
+.c-scene-full:hover { border-color: var(--accent); }
+
+/* Fullscreen 3D review overlay — orbit her plan on the iPad with touch. */
+.scene3d-overlay {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  background: #eef2f7;
+}
+.scene3d-overlay[hidden] { display: none; }
+.scene3d-bar {
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: #0b1220; color: #e8eef7;
+}
+.scene3d-title { font-weight: 600; }
+.scene3d-hint { font-size: 0.85rem; opacity: 0.7; margin-left: auto; }
+.scene3d-close {
+  font: inherit; padding: 6px 14px; border-radius: 999px; border: 1px solid #334;
+  background: #1a2334; color: #e8eef7; cursor: pointer;
+}
+.scene3d-close:hover { border-color: var(--accent); }
+.scene3d-stage { flex: 1; min-height: 0; touch-action: none; }
+.scene3d-canvas { display: block; width: 100%; height: 100%; }
+
 @media (max-width: 760px) {
   .card-ai, .card-ledger { grid-column: span 1; }
   .card-scene { grid-row: auto; }

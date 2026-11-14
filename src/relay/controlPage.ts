@@ -67,7 +67,10 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
         </section>
 
         <section class="card card-scene" aria-label="3D review">
-          <h2>3D review</h2>
+          <div class="card-head">
+            <h2>3D review</h2>
+            <button id="c-scene-full" type="button" class="c-scene-full" hidden>⛶ Fullscreen</button>
+          </div>
           <div id="c-scene" class="c-scene"><p class="card-empty">No scene published yet.</p></div>
           <p id="c-scene-sum" class="card-note"></p>
         </section>
@@ -107,6 +110,15 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <p id="c-caption-tr" class="c-caption-tr"></p>
         </section>
       </div>
+
+      <div id="c-scene3d" class="scene3d-overlay" hidden role="dialog" aria-modal="true" aria-label="Fullscreen 3D review">
+        <div class="scene3d-bar">
+          <span id="c-scene3d-title" class="scene3d-title">3D review</span>
+          <span class="scene3d-hint">Drag to orbit · pinch to zoom</span>
+          <button id="c-scene3d-close" type="button" class="scene3d-close">Close ✕</button>
+        </div>
+        <div id="c-scene3d-stage" class="scene3d-stage"></div>
+      </div>
     </div>
   `;
 
@@ -131,7 +143,44 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     done: 'Done', error: 'Error', rejected: 'Rejected',
   };
 
+  // ---- fullscreen 3D review (lazy three.js; extrudes snapshot primitives) ---
+  // The orbit view is built from the SAME privacy-safe primitives as the inline
+  // wireframe — no PlanDoc, camera or landmarks cross the relay. three.js is
+  // dynamically imported only when a judge opens fullscreen.
+  let latest: ControlSnapshot | null = null;
+  let scene3d: import('./sceneView3d').SceneView3d | null = null;
+  const overlay = $<HTMLDivElement>('c-scene3d');
+  const stage = $<HTMLDivElement>('c-scene3d-stage');
+  const fullBtn = $<HTMLButtonElement>('c-scene-full');
+
+  function feed3d(): void {
+    if (scene3d && latest?.scene) scene3d.update(latest.scene.primitives);
+  }
+  async function openScene3d(): Promise<void> {
+    if (!latest?.scene?.primitives.length) return;
+    overlay.hidden = false;
+    $<HTMLSpanElement>('c-scene3d-title').textContent =
+      `${latest.scene.mode} · ${latest.scene.summary}`;
+    if (!scene3d) {
+      const { createSceneView3d } = await import('./sceneView3d');
+      scene3d = createSceneView3d(stage);
+    }
+    feed3d();
+    $<HTMLButtonElement>('c-scene3d-close').focus(); // so Escape (bubbled) closes
+  }
+  function closeScene3d(): void {
+    overlay.hidden = true;
+    scene3d?.dispose();
+    scene3d = null;
+  }
+  fullBtn.addEventListener('click', () => void openScene3d());
+  $<HTMLButtonElement>('c-scene3d-close').addEventListener('click', closeScene3d);
+  overlay.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Escape') closeScene3d();
+  });
+
   function render(snap: ControlSnapshot): void {
+    latest = snap;
     bytesEl.textContent = `${formatBytes(snapshotBytes(snap))} · rev ${snap.rev}`;
 
     $<HTMLParagraphElement>('c-device').textContent = DEVICE_LABEL[snap.activeDevice];
@@ -266,12 +315,16 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       recipesEl.appendChild(li);
     }
 
-    // 3D review (compact wireframe preview).
+    // 3D review (compact wireframe preview; ⛶ opens the fullscreen orbit view).
     const sceneEl = $<HTMLDivElement>('c-scene');
     sceneEl.innerHTML = renderScene(snap);
     $<HTMLParagraphElement>('c-scene-sum').textContent = snap.scene
       ? `${snap.scene.mode} · ${snap.scene.summary} · rev ${snap.scene.rev}${snap.omitted.primitives ? ` (+${snap.omitted.primitives} shapes hidden)` : ''}`
       : '';
+    const has3d = !!snap.scene?.primitives.length;
+    fullBtn.hidden = !has3d;
+    if (!has3d) closeScene3d(); // scene cleared → drop the orbit view
+    else feed3d(); // push the fresh geometry into an open fullscreen view
   }
 
   // ---- connection: live Firestore room, else the honest demo fallback -------
@@ -352,6 +405,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
 
   window.addEventListener('pagehide', () => {
     demoStopped = true;
+    scene3d?.dispose();
     void session?.close();
   });
 }
