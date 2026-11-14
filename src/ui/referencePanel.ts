@@ -7,6 +7,18 @@
 // bypass. URL normalisation is pure (input/urlLogic) and unit-tested.
 
 import { normalizeUrl, hostLabel } from '../input/urlLogic';
+import {
+  runBrowserReplay, startTeaching, frameDoc,
+  type ReplayHost, type ReplayResult, type TeachRecorder,
+} from '../recipes/browserDriver';
+import type { PlannedStep, BrowserStep } from '../recipes/browser';
+
+export interface ReferencePanelOptions {
+  /** The only origin the replay driver will script. Defaults to window.location.origin. */
+  appOrigin?: string;
+  /** Called when a teach recording is stopped with at least one step. */
+  onSaveRecipe?: (steps: BrowserStep[]) => void;
+}
 
 export interface ReferencePanel {
   readonly element: HTMLElement;
@@ -14,13 +26,15 @@ export interface ReferencePanel {
   close(): void;
   toggle(): void;
   isOpen(): boolean;
+  /** Replay a validated browser plan inside the panel. Opens the panel first. */
+  runRecipe(steps: readonly PlannedStep[]): Promise<ReplayResult>;
   dispose(): void;
 }
 
 const LOAD_TIMEOUT_MS = 4000;
 const DEFAULT_URL = 'https://developer.mozilla.org/en-US/docs/Web/HTML';
 
-export function createReferencePanel(): ReferencePanel {
+export function createReferencePanel(opts: ReferencePanelOptions = {}): ReferencePanel {
   const root = document.createElement('section');
   root.className = 'mc-ref-panel';
   root.hidden = true;
@@ -41,13 +55,20 @@ export function createReferencePanel(): ReferencePanel {
   const titleEl = document.createElement('span');
   titleEl.className = 'mc-ref-title';
   titleEl.textContent = 'Reference';
+  const recBtn = document.createElement('button');
+  recBtn.type = 'button';
+  recBtn.className = 'mc-ref-rec';
+  recBtn.textContent = '● Record';
+  recBtn.title = 'Record clicks and typing on this page into a browser recipe';
+  recBtn.setAttribute('aria-label', 'Record this page into a browser recipe');
+  recBtn.addEventListener('click', () => toggleTeach());
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'mc-ref-x';
   closeBtn.textContent = '✕';
   closeBtn.setAttribute('aria-label', 'Close reference panel');
   closeBtn.addEventListener('click', () => close());
-  head.append(grip, titleEl, closeBtn);
+  head.append(grip, titleEl, recBtn, closeBtn);
 
   // ─── address bar ────────────────────────────────────────────────────────────
   const bar = document.createElement('form');
@@ -84,11 +105,19 @@ export function createReferencePanel(): ReferencePanel {
 
   body.append(frame, status);
 
+  // ─── replay step rail (shown beside the frame during a recipe replay) ───────
+  const main = document.createElement('div');
+  main.className = 'mc-ref-main';
+  const rail = document.createElement('div');
+  rail.className = 'mc-ref-rail';
+  rail.hidden = true;
+  main.append(body, rail);
+
   const resizer = document.createElement('div');
   resizer.className = 'mc-ref-resize';
   resizer.setAttribute('aria-hidden', 'true');
 
-  root.append(head, bar, body, resizer);
+  root.append(head, bar, main, resizer);
 
   // ─── frame-refusal detection ────────────────────────────────────────────────
   let timeoutId: number | null = null;
@@ -192,6 +221,65 @@ export function createReferencePanel(): ReferencePanel {
   resizer.addEventListener('pointerup', endResize);
   resizer.addEventListener('pointercancel', endResize);
 
+  // ─── recipe replay: navigate returning a promise, then drive the plan ───────
+  function navigateAsync(url: string): Promise<void> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        frame.removeEventListener('load', finish);
+        resolve();
+      };
+      frame.addEventListener('load', finish);
+      navigate(url);
+      window.setTimeout(finish, LOAD_TIMEOUT_MS + 500);
+    });
+  }
+
+  async function runRecipe(steps: readonly PlannedStep[]): Promise<ReplayResult> {
+    open();
+    rail.hidden = false;
+    const host: ReplayHost = {
+      frame,
+      rail,
+      appOrigin: opts.appOrigin ?? (typeof window !== 'undefined' ? window.location.origin : ''),
+      navigate: navigateAsync,
+      openExternal: (u) => { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch { /* popups blocked */ } },
+    };
+    return runBrowserReplay(host, steps);
+  }
+
+  // ─── teach by recording clicks/typing in a same-origin page ─────────────────
+  let teacher: TeachRecorder | null = null;
+  function toggleTeach(): void {
+    if (teacher) {
+      const steps = teacher.steps.slice();
+      teacher.stop();
+      teacher = null;
+      recBtn.textContent = '● Record';
+      recBtn.classList.remove('recording');
+      rail.hidden = true;
+      if (steps.length) opts.onSaveRecipe?.(steps);
+      return;
+    }
+    if (!frameDoc(frame)) {
+      titleEl.textContent = 'Record needs a same-origin page';
+      return;
+    }
+    rail.hidden = false;
+    rail.innerHTML = '';
+    const note = document.createElement('p');
+    note.className = 'mc-ref-banner';
+    note.textContent = 'Recording… click and type on the page, then Stop to save.';
+    rail.append(note);
+    teacher = startTeaching(frame, (steps) => {
+      note.textContent = `Recording… ${steps.length} step(s) captured.`;
+    });
+    recBtn.textContent = '■ Stop & save';
+    recBtn.classList.add('recording');
+  }
+
   function open(url?: string): void {
     root.hidden = false;
     if (url || !currentUrl) navigate(url ?? DEFAULT_URL);
@@ -200,6 +288,8 @@ export function createReferencePanel(): ReferencePanel {
   function close(): void {
     root.hidden = true;
     clearTimer();
+    if (teacher) { teacher.stop(); teacher = null; recBtn.textContent = '● Record'; recBtn.classList.remove('recording'); }
+    rail.hidden = true;
     // Stop any media/scripts in the frame while hidden.
     frame.src = 'about:blank';
     currentUrl = '';
@@ -211,6 +301,7 @@ export function createReferencePanel(): ReferencePanel {
     close,
     toggle() { root.hidden ? open() : close(); },
     isOpen: () => !root.hidden,
-    dispose() { clearTimer(); root.remove(); },
+    runRecipe,
+    dispose() { clearTimer(); if (teacher) teacher.stop(); root.remove(); },
   };
 }

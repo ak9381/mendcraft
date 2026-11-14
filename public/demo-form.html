@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mendcraft demo · search &amp; contact</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 20px; color: #1b2430; background: #fbfdff; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.note { color: #5b6672; margin: 0 0 20px; }
+    form { max-width: 520px; display: grid; gap: 14px; margin-bottom: 28px; }
+    label { font-weight: 600; display: grid; gap: 4px; }
+    input, textarea { font: inherit; padding: 9px 11px; border: 1px solid #c3ccd6; border-radius: 8px; }
+    button { font: inherit; font-weight: 600; padding: 10px 16px; border: 0; border-radius: 8px; background: #1b64d8; color: #fff; cursor: pointer; }
+    button.secondary { background: #e7edf5; color: #1b2430; }
+    .row { display: flex; gap: 10px; align-items: end; }
+    #result { padding: 12px 14px; border-radius: 8px; background: #e9f6ec; color: #1f5130; min-height: 20px; }
+    #result:empty { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Builder's Corner — demo page</h1>
+  <p class="note">A bundled, same-origin page so a browser recipe can replay in-canvas. Nothing here leaves the device.</p>
+
+  <form id="search-form" aria-label="Search parts">
+    <div class="row">
+      <label style="flex:1">Search parts
+        <input type="search" name="q" placeholder="Search parts" aria-label="Search parts" />
+      </label>
+      <button type="submit">Search</button>
+    </div>
+  </form>
+
+  <form id="contact-form" aria-label="Contact the builder">
+    <label>Your name
+      <input type="text" name="name" placeholder="Your name" aria-label="Your name" />
+    </label>
+    <label>Message
+      <textarea name="message" rows="3" placeholder="Message" aria-label="Message"></textarea>
+    </label>
+    <div class="row">
+      <button type="submit">Send message</button>
+      <button type="button" class="secondary" id="clear">Clear</button>
+    </div>
+  </form>
+
+  <div id="result" role="status"></div>
+
+  <script>
+    var result = document.getElementById('result');
+    document.getElementById('search-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var q = this.q.value.trim();
+      result.textContent = q ? ('Showing results for "' + q + '"') : 'Enter a search term.';
+    });
+    document.getElementById('contact-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      result.textContent = 'Message sent. Thank you, ' + (this.name.value.trim() || 'friend') + '!';
+    });
+    document.getElementById('clear').addEventListener('click', function () {
+      document.getElementById('contact-form').reset();
+      result.textContent = '';
+    });
+  </script>
+</body>
+</html>

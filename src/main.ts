@@ -100,7 +100,7 @@ import {
 import { parseRecipeMeta, matchRecipe } from './recipes/match';
 import { buildReplayOps, buildReplayBatch } from './recipes/replay';
 import { buildDeviceActions } from './recipes/deviceRun';
-import { buildBrowserPlan } from './recipes/browser';
+import { buildBrowserPlan, type BrowserStep } from './recipes/browser';
 import { createRecipeStore } from './recipes/storage';
 import { recipeBookId, syncRecipeBook } from './recipes/sync';
 import { pickRecipeHybrid } from './ai/hybrid';
@@ -569,7 +569,7 @@ const btnLedger = el<HTMLButtonElement>('btn-ledger');
 // hit-testing works for the hand pointer; the float panels sit over the canvas.
 const keyboard = createOnScreenKeyboard();
 document.body.appendChild(keyboard.element);
-const referencePanel = createReferencePanel();
+const referencePanel = createReferencePanel({ onSaveRecipe: (steps) => saveBrowserRecipe(steps) });
 viewportEl.appendChild(referencePanel.element);
 const routerPanel = createRouterPanel();
 viewportEl.appendChild(routerPanel.element);
@@ -1522,6 +1522,58 @@ function newRecipeId(): string {
   return `rcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Save a teach-recorded browser recipe (clicks/typing in a same-origin page). */
+function saveBrowserRecipe(steps: readonly BrowserStep[]): void {
+  if (!steps.length) return;
+  const name = window.prompt(`Save ${steps.length} recorded step(s) as a browser recipe named:`)?.trim();
+  if (!name) { verifierEl.textContent = 'Recording discarded — no name given.'; return; }
+  const now = Date.now();
+  const recipe: Recipe = {
+    id: newRecipeId(), name, aliases: [], language: currentLanguage.code,
+    device: 'browser', taughtBy: 'you',
+    steps: steps.map((s) => ({ op: { ...s } as Record<string, unknown> })),
+    createdAt: now, updatedAt: now,
+  };
+  const err = recipeStore.upsert(recipe);
+  if (err) { verifierEl.textContent = `Couldn't save: ${err}`; return; }
+  recipesSection.hidden = false;
+  renderRecipes();
+  void syncRecipes();
+  verifierEl.textContent = `Saved browser recipe “${name}” (${steps.length} step(s)). Say "do ${name}" to replay.`;
+  say(`Saved ${name}.`);
+}
+
+/** Seed one example browser recipe (same-origin demo page) on first run so a
+ *  replay — including the Send-message confirm stop — is there to demo. */
+function seedBrowserDemoRecipe(): void {
+  if (typeof window === 'undefined') return;
+  const id = 'rcp-demo-browser';
+  const existing = recipeStore.book();
+  if (existing.recipes[id] || existing.deleted[id]) return; // respect a user delete
+  const url = `${window.location.origin}/demo-form.html`;
+  const now = Date.now();
+  const step = (o: Record<string, unknown>): RecipeStep => ({ op: o });
+  const recipe: Recipe = {
+    id, name: 'Demo: search & message', aliases: ['browser demo', 'demo form'],
+    language: 'en', device: 'browser', taughtBy: 'demo',
+    steps: [
+      step({ op: 'open', url }),
+      step({ op: 'find', by: 'placeholder', value: 'Search parts' }),
+      step({ op: 'type', text: 'handrail bracket' }),
+      step({ op: 'click', by: 'button', text: 'Search' }),
+      step({ op: 'wait_for', text: 'Showing results' }),
+      step({ op: 'find', by: 'placeholder', value: 'Your name' }),
+      step({ op: 'type', text: 'Amma' }),
+      step({ op: 'find', by: 'placeholder', value: 'Message' }),
+      step({ op: 'type', text: 'Please call me about the ramp.' }),
+      step({ op: 'click', by: 'button', text: 'Send message' }),
+      step({ op: 'wait_for', text: 'Message sent' }),
+    ],
+    createdAt: now, updatedAt: now,
+  };
+  recipeStore.upsert(recipe);
+}
+
 function noteAppliedOp(step: StepResult): void {
   if (replayingRecipe || !step.ok || !step.op || typeof step.op !== 'object') return;
   const op = step.op as Record<string, unknown>;
@@ -1684,9 +1736,11 @@ async function runDeviceRecipe(recipe: Recipe): Promise<{ ok: boolean; detail: s
   }
   if (recipe.device === 'browser') {
     const plan = buildBrowserPlan(recipe.steps, { allowedHosts: BROWSER_ALLOWLIST, slots: recipe.slots });
-    return plan.ok
-      ? { ok: true, detail: `${plan.steps.length} step(s), ${plan.confirmCount} confirm(s) — opens the browser panel` }
-      : { ok: false, detail: plan.error };
+    if (!plan.ok) return { ok: false, detail: plan.error };
+    // Actually replay inside the in-canvas panel. A cross-origin page falls back
+    // to open-in-tab; a send/submit step stops for an explicit confirm.
+    const res = await referencePanel.runRecipe(plan.steps);
+    return { ok: res.status !== 'error', detail: res.detail };
   }
   return { ok: false, detail: `no runner for ${recipe.device}` };
 }
@@ -1887,6 +1941,7 @@ async function syncRecipes(): Promise<void> {
 }
 
 recipeStore.subscribe(renderRecipes);
+seedBrowserDemoRecipe();
 renderRecipes();
 renderTeachState();
 void syncRecipes(); // best-effort cloud merge at boot (fails soft offline)
