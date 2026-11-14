@@ -18,6 +18,7 @@ the listed Chrome items, recipes, quality items and polish. Bug fixes always all
 - Demo walks live in `src/sim.ts` (`/?sim=1`, `&mode=part`, `&mode=ui`); they need no camera, mic or Nano. Do not break them.
 - Do not restyle the app shell; a UI redesign comes later.
 - Do not use Firebase's FriendlyMeals sample as a base.
+- gitleaks flags high-entropy string constants (e.g. alphabets); add an inline `// gitleaks:allow (reason)` only when it is truly not a secret.
 - `npm ci` can fail on this box; use `npm install` if deps are missing.
 - Time-box: finish small and green rather than big and red. Write what is left in your final output.
 
