@@ -29,6 +29,38 @@ export interface A11yIssue {
   fix?: Record<string, unknown>;
   /** Short human label for the fix button, e.g. "Widen to 850 mm". */
   fixLabel?: string;
+  /** Who proposed the fix — the checks themselves are ALWAYS rules; this only
+   *  labels the suggestion ("Checked by rules · fix suggested by cloud"). */
+  fixSource?: 'rules' | 'on-device' | 'cloud';
+}
+
+/** Verdict of re-running the deterministic checks after a proposed fix. */
+export type FixRecheck =
+  | { ok: true }
+  | { ok: false; reason: 'not-fixed' | 'new-issue'; detail: string };
+
+/**
+ * FIXED RULES DECIDE: after any proposed fix (code-computed or AI-suggested)
+ * is applied, the deterministic checker runs again; the fix stands only if
+ * every targeted issue is gone AND no new issue appeared. Pure — the caller
+ * applies the op, re-checks, and undoes on a rejection.
+ */
+export function recheckFix(
+  before: readonly A11yIssue[],
+  after: readonly A11yIssue[],
+  fixedIds: readonly string[],
+): FixRecheck {
+  const afterIds = new Set(after.map((i) => i.id));
+  const still = fixedIds.filter((id) => afterIds.has(id));
+  if (still.length > 0) {
+    return { ok: false, reason: 'not-fixed', detail: `still flagged: ${still.join(', ')}` };
+  }
+  const beforeIds = new Set(before.map((i) => i.id));
+  const fresh = after.filter((i) => !beforeIds.has(i.id));
+  if (fresh.length > 0) {
+    return { ok: false, reason: 'new-issue', detail: fresh.map((i) => i.message).join('; ') };
+  }
+  return { ok: true };
 }
 
 /** Plan-mode (architectural) thresholds, all mm. min = hard fail below it;

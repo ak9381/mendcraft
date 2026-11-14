@@ -53,17 +53,24 @@ import {
   type InteractionProfile, type ProfileAdaptation,
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
-import { isAccessibilityRequest, type A11yExplanation, type A11yIssue } from './core/a11y';
+import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
   REASON_TEXT,
   finalReason,
+  isPointing,
   pickEscalated,
   planRoute,
   shouldEscalate,
   type RouteDecision,
   type RouteReason,
 } from './ai/router';
+import {
+  STATE_TEXT, buildChoices, choicePrompt, classifyConfidence, describeOp,
+  isDestructiveOp, parseChoiceReply, suggestCommands,
+  type Choice, type ConfidenceState,
+} from './ai/confidence';
+import { exactRuleParse } from './ai/intentFusion';
 import { createRouterPanel } from './ui/routerPanel';
 import {
   LANGUAGES, DEFAULT_LANGUAGE, resolveLanguage, isEnglish, shouldTranslate,
@@ -202,6 +209,7 @@ app.innerHTML = `
     <span class="status-chip">
       <span class="status-k">AI</span>
       <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
+      <span id="conf-state" class="conf-state" hidden></span>
     </span>
     <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
@@ -217,6 +225,7 @@ app.innerHTML = `
         <span id="caption-heard" class="caption-heard"></span>
         <span id="caption-translation" class="caption-translation" hidden></span>
       </div>
+      <div id="choice-bar" class="choice-bar" role="group" aria-label="Did you mean" hidden></div>
       <div id="empty-hint" class="empty-hint">
         <p>${mode.hint}</p>
         <div class="hint-buttons">${hintButtonsHtml}</div>
@@ -270,6 +279,8 @@ const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as
 const viewportEl = el<HTMLDivElement>('viewport');
 const emptyHint = el<HTMLDivElement>('empty-hint');
 const sourceBadge = el<HTMLSpanElement>('source-badge');
+const confStateEl = el<HTMLSpanElement>('conf-state');
+const choiceBarEl = el<HTMLDivElement>('choice-bar');
 const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
@@ -1003,28 +1014,66 @@ function highlightA11yIssue(issue: A11yIssue): void {
   say(issue.message);
 }
 
-function applyA11yFix(issue: A11yIssue): void {
-  if (!issue.fix) return;
-  const step = controller.applyOp(issue.fix);
+/** CONFIRM STEP for every accessibility fix: show a preview (highlight +
+ *  Apply/Cancel) — never auto-applied, whether the fix was computed by the
+ *  rules or suggested by the AI. On Apply the fix is applied, then re-checked
+ *  by the deterministic rules and UNDONE if it didn't fix the issue or broke
+ *  another rule (fixed rules decide; the AI only proposes). */
+function stageA11yFix(label: string, op: Record<string, unknown>, fixedIds: string[], suggestedBy: string): void {
+  const provenance = `Checked by rules · fix suggested by ${suggestedBy}`;
+  presentChoices(`${label} — ${provenance}`, [{ label, result: op, source: 'rules' }], () => {
+    applyCheckedA11yFix(op, fixedIds);
+  }, () => {
+    verifierEl.textContent = 'Fix cancelled — nothing was applied.';
+  });
+  verifierEl.textContent = `Preview: ${label}. ${provenance}. ${choicePrompt(currentLanguage.code, 1)}`;
+  say(`Preview ready: ${label}. Say apply or cancel.`);
+}
+
+function applyCheckedA11yFix(op: Record<string, unknown>, fixedIds: string[]): void {
+  const beforeIssues = currentA11yIssues();
+  const step = controller.applyOp(op);
   if (!step.ok) {
     say(`Could not apply the fix: ${step.error ?? 'invalid op'}`);
+    verifierEl.textContent = `Fix rejected by the op validator: ${step.error ?? 'invalid op'}`;
     return;
   }
-  say(step.message ?? 'Accessibility fix applied.');
+  // FIXED RULES DECIDE: re-run the deterministic checks; an applied fix that
+  // doesn't fix (or breaks another rule) is undone, not kept.
+  const verdict = recheckFix(beforeIssues, currentA11yIssues(), fixedIds);
+  if (!verdict.ok) {
+    controller.applyOp({ op: 'undo' });
+    const why = verdict.reason === 'not-fixed'
+      ? `it didn't fix the issue (${verdict.detail})`
+      : `it broke another rule (${verdict.detail})`;
+    verifierEl.textContent = `Fix rejected by the rules re-check — ${why}. Undone.`;
+    say('The rules re-check rejected that fix, so I undid it.');
+    refreshA11yIssues();
+    return;
+  }
+  verifierEl.textContent = `${fixedIds.length === 1 ? 'Fix' : `${fixedIds.length} fixes`} applied and re-checked by the rules — issue resolved.`;
+  say(step.message ?? 'Accessibility fix applied and re-checked.');
   refreshA11yIssues();
 }
 
-/** Apply every remaining fix as ONE batch op — a single undoable step. */
+function applyA11yFix(issue: A11yIssue): void {
+  if (!issue.fix) return;
+  highlightA11yIssue(issue); // ghost the change target before the confirm
+  stageA11yFix(issue.fixLabel ?? `Fix: ${issue.rule}`, issue.fix, [issue.id], issue.fixSource ?? 'rules (code)');
+}
+
+/** Stage every remaining fix as ONE batch op — a single confirm + undo step. */
 function applyAllA11yFixes(fixable: A11yIssue[]): void {
-  const ops = fixable.map((i) => i.fix).filter((f): f is Record<string, unknown> => !!f);
+  const withFix = fixable.filter((i): i is A11yIssue & { fix: Record<string, unknown> } => !!i.fix);
+  const ops = withFix.map((i) => i.fix);
   if (ops.length === 0) return;
-  const step = controller.applyOp(ops.length === 1 ? ops[0] : { op: 'batch', ops });
-  if (!step.ok) {
-    say(`Could not apply the fixes: ${step.error ?? 'invalid op'}`);
-    return;
-  }
-  say(`Applied ${ops.length} accessibility ${ops.length === 1 ? 'fix' : 'fixes'}.`);
-  refreshA11yIssues();
+  const suggestedBy = withFix.some((i) => i.fixSource === 'cloud') ? 'cloud + rules' : 'rules (code)';
+  stageA11yFix(
+    `Apply ${ops.length} accessibility ${ops.length === 1 ? 'fix' : 'fixes'}`,
+    ops.length === 1 ? ops[0] : { op: 'batch', ops },
+    withFix.map((i) => i.id),
+    suggestedBy,
+  );
 }
 
 /** Re-run the deterministic checks and refresh the panel (after any fix). */
@@ -1907,7 +1956,159 @@ async function handlePhrasebookMeta(utterance: string): Promise<boolean | null> 
   return null;
 }
 
+// ---- confidence states: sure / unsure ("Did you mean…?") / unknown ---------
+// Decisions live in ai/confidence.ts (pure, tested); this block is only the
+// chips' DOM + the voice reply intercept. Nothing is applied until a chip is
+// picked (pinch/click, or say "first"/"second"/"apply"/"cancel" — Kannada too).
+
+interface PendingChoices {
+  choices: Choice[];
+  apply: (choice: Choice) => void;
+  onCancel?: () => void;
+}
+let pendingChoices: PendingChoices | null = null;
+
+/** Show the confidence state next to the honest source badge. */
+function setConfidenceState(state: ConfidenceState | null): void {
+  if (!state) {
+    confStateEl.hidden = true;
+    confStateEl.textContent = '';
+    return;
+  }
+  confStateEl.hidden = false;
+  confStateEl.textContent = STATE_TEXT[state];
+  confStateEl.className = `conf-state conf-${state}`;
+  confStateEl.title = {
+    sure: 'Applied: rules agreed or the model was confident.',
+    unsure: 'Not applied — pick a chip (or say "first"/"second"/"cancel").',
+    unknown: 'Not understood — nothing was applied.',
+  }[state];
+}
+
+function clearChoices(): void {
+  pendingChoices = null;
+  choiceBarEl.hidden = true;
+  choiceBarEl.innerHTML = '';
+}
+
+/** Up to 3 big chips + Cancel. Works with pinch (same pointer stream as the
+ *  mouse), click, and voice via handleChoiceReply. */
+function presentChoices(title: string, choices: Choice[], apply: (c: Choice) => void, onCancel?: () => void): void {
+  clearChoices();
+  pendingChoices = { choices, apply, onCancel };
+  const p = document.createElement('p');
+  p.className = 'choice-title';
+  p.textContent = title;
+  const row = document.createElement('div');
+  row.className = 'choice-row';
+  choices.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'choice-chip';
+    b.textContent = choices.length === 1 ? `Apply: ${c.label}` : `${i + 1}. ${c.label}`;
+    b.title = JSON.stringify(c.result);
+    b.addEventListener('click', () => {
+      clearChoices();
+      apply(c);
+    });
+    row.appendChild(b);
+  });
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'choice-chip choice-cancel';
+  cancel.textContent = currentLanguage.code === 'kn' ? 'ರದ್ದು' : 'Cancel';
+  cancel.addEventListener('click', () => {
+    clearChoices();
+    onCancel?.();
+  });
+  row.appendChild(cancel);
+  choiceBarEl.append(p, row);
+  choiceBarEl.hidden = false;
+}
+
+/** Voice/text reply while chips are up. true/false = handled; null = not a
+ *  choice reply → the stale chips are dropped and the utterance runs as a new
+ *  command (still nothing applied from the old one). */
+function handleChoiceReply(utterance: string): boolean | null {
+  if (!pendingChoices) return null;
+  const pc = pendingChoices;
+  const reply = parseChoiceReply(utterance, pc.choices.length);
+  if (!reply) {
+    clearChoices(); // moved on — the unsure proposal is silently dropped
+    return null;
+  }
+  clearChoices();
+  if (reply.kind === 'cancel') {
+    verifierEl.textContent = 'Cancelled — nothing was applied.';
+    say(currentLanguage.code === 'kn' ? 'ರದ್ದು ಮಾಡಲಾಗಿದೆ.' : 'Cancelled. Nothing was applied.');
+    pc.onCancel?.();
+    return true;
+  }
+  const chosen = pc.choices[reply.index];
+  if (!chosen) {
+    verifierEl.textContent = `There were only ${pc.choices.length} choices — nothing was applied.`;
+    return false;
+  }
+  pc.apply(chosen);
+  return true;
+}
+
+/** Sim/demo confirm: accept a staged single-choice preview programmatically
+ *  (the judge's "Apply" tap, one beat after the preview is shown). */
+function acceptPendingChoice(): void {
+  if (!pendingChoices) return;
+  const pc = pendingChoices;
+  clearChoices();
+  pc.apply(pc.choices[0]);
+}
+
+/** Apply a confirmed/sure command result: op log → render → intent verifier.
+ *  (The tail of the old runUtteranceInner, shared with chip picks.) */
+async function applyCommandResult(result: object, before: string): Promise<boolean> {
+  opJsonEl.textContent = JSON.stringify(result, null, 2);
+  const step = controller.applyResult(result as Record<string, unknown>);
+  if (!step.ok) {
+    verifierEl.textContent = `Rejected: ${step.error ?? 'invalid'}`;
+    say(`I couldn't do that: ${step.error ?? 'invalid command'}`);
+    return false;
+  }
+  renderAll();
+
+  // Single ops get the intent verifier; templates/generate skip it (no `op`).
+  if (step.op) {
+    const after = controller.summary();
+    const verdict = await verifyOp(step.op as never, before, after, step.warnings);
+    // The verifier also leaves the device when it resolves in the cloud: it sends
+    // the op plus before/after scene summaries (abstract geometry, no raw input).
+    recordLedger(
+      verdict.source, 'verify',
+      verdict.source === 'cloud' ? 'verify op' : REASON_TEXT.private,
+      `op: ${JSON.stringify(step.op)}\nbefore: ${before}\nafter: ${after}\nwarnings: ${JSON.stringify(step.warnings)}`,
+    );
+    if (verdict.matchesIntent) {
+      verifierEl.textContent = `${step.message ?? 'Matches intent'} (${verdict.source}).`;
+      // Spoken reply: the fixed confirmation phrase for this op in the active
+      // language (cloud voice for her language, else speechSynthesis). The
+      // detailed English message stays on-screen above.
+      speakConfirm((step.op as { op?: string }).op);
+    } else {
+      verifierEl.textContent = `Possible mismatch: ${verdict.issue ?? 'unverified'} (${verdict.source}).`;
+      say(verdict.issue ?? 'That may not match what you asked for.');
+    }
+  } else {
+    verifierEl.textContent = step.message ?? 'Done.';
+  }
+  announceWarnings();
+  return true;
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
+  // A reply to open "Did you mean…?" chips (or a confirm preview) is resolved
+  // FIRST — before recipes, phrasebook, or routing can eat "first"/"cancel".
+  const choiceHandled = handleChoiceReply(utterance);
+  if (choiceHandled !== null) return choiceHandled;
+  setConfidenceState(null); // each command earns its own state
+
   // Accessibility requests short-circuit BEFORE routing: "make this house
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
   if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
@@ -1985,6 +2186,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   let confidence: number | undefined;
   let escalated = false;
   let translation: string | undefined;
+  let deixisAmbiguous = false;
   if (decision.ruleResult) {
     // Exact-rule short circuit: no model call at all — a private local event.
     result = decision.ruleResult;
@@ -2001,6 +2203,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       if (handled !== null) return handled;
     }
     const ctx = fusionContext();
+    // Pointing language with several candidates and nothing under the cursor
+    // is ambiguous deixis — the confidence classifier raises the bar for it.
+    deixisAmbiguous = isPointing(utterance) && !ctx.hoverId && ctx.nearby.length > 1;
     // Non-English (or a language Nano can't run) goes to the cloud, which
     // TRANSLATES and emits the same typed op in one Firebase AI Logic call.
     const toCloud = translateInCloud(currentLanguage, { ...env, deviceLangReady });
@@ -2051,48 +2256,67 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // source+reason only — the raw command text stays on the laptop.
   noteControlAi({ source, reason, utterance, ms: performance.now() - t0 });
 
-  if ('clarify' in result) {
+  // CONFIDENCE STATE (ai/confidence.ts): sure applies; unsure shows "Did you
+  // mean…?" chips and applies NOTHING until one is picked; unknown explains
+  // itself and suggests commands. The exact-rule path is deterministic → sure.
+  // ruleAgrees = does an independent deterministic parse produce the same op?
+  const isClarifyResult = 'clarify' in result;
+  const altRule = decision.ruleResult ? null : exactRuleParse((u) => mode.parse(u), utterance);
+  const ruleAgrees = altRule ? JSON.stringify(altRule) === JSON.stringify(result) : null;
+  const state = classifyConfidence({
+    valid: !isClarifyResult, clarify: isClarifyResult, source, confidence, ruleAgrees, deixisAmbiguous,
+  });
+  setConfidenceState(state);
+
+  if (state === 'unknown') {
     opJsonEl.textContent = '';
-    verifierEl.textContent = (result as { clarify: string }).clarify;
-    say((result as { clarify: string }).clarify);
+    const q = isClarifyResult ? (result as { clarify: string }).clarify : 'I did not understand that.';
+    const tips = suggestCommands(mode.id).map((s) => `“${s}”`).join(', ');
+    verifierEl.textContent = `${q} Try: ${tips}.`;
+    say(q);
     return false;
   }
 
-  opJsonEl.textContent = JSON.stringify(result, null, 2);
-  const step = controller.applyResult(result as Record<string, unknown>);
-  if (!step.ok) {
-    verifierEl.textContent = `Rejected: ${step.error ?? 'invalid'}`;
-    say(`I couldn't do that: ${step.error ?? 'invalid command'}`);
+  const op = result as Record<string, unknown>;
+  const cancelNote = () => {
+    verifierEl.textContent = 'Cancelled — nothing was applied.';
+  };
+
+  if (state === 'unsure') {
+    const choices = buildChoices([
+      { label: describeOp(op), result: op, source },
+      altRule
+        ? { label: describeOp(altRule as Record<string, unknown>), result: altRule as Record<string, unknown>, source: 'rules' }
+        : null,
+    ]);
+    opJsonEl.textContent = JSON.stringify({ didYouMean: choices.map((c) => c.result) }, null, 2);
+    const prompt = choicePrompt(currentLanguage.code, choices.length);
+    verifierEl.textContent = `Not sure (${Math.round((confidence ?? 0) * 100)}% from ${source}) — nothing applied yet. ${prompt}`;
+    say(prompt);
+    presentChoices('Did you mean…?', choices, (c) => {
+      // The pick IS the confirm; the badge stays honest about who proposed
+      // the chosen interpretation.
+      setBadge(c.source, c.source === 'rules' ? 'exact' : reason, translated);
+      setConfidenceState('sure');
+      void applyCommandResult(c.result, before);
+    }, cancelNote);
     return false;
   }
-  renderAll();
 
-  // Single ops get the intent verifier; templates/generate skip it (no `op`).
-  if (step.op) {
-    const after = controller.summary();
-    const verdict = await verifyOp(step.op as never, before, after, step.warnings);
-    // The verifier also leaves the device when it resolves in the cloud: it sends
-    // the op plus before/after scene summaries (abstract geometry, no raw input).
-    recordLedger(
-      verdict.source, 'verify',
-      verdict.source === 'cloud' ? 'verify op' : REASON_TEXT.private,
-      `op: ${JSON.stringify(step.op)}\nbefore: ${before}\nafter: ${after}\nwarnings: ${JSON.stringify(step.warnings)}`,
-    );
-    if (verdict.matchesIntent) {
-      verifierEl.textContent = `${step.message ?? 'Matches intent'} (${verdict.source}).`;
-      // Spoken reply: the fixed confirmation phrase for this op in the active
-      // language (cloud voice for her language, else speechSynthesis). The
-      // detailed English message stays on-screen above.
-      speakConfirm((step.op as { op?: string }).op);
-    } else {
-      verifierEl.textContent = `Possible mismatch: ${verdict.issue ?? 'unverified'} (${verdict.source}).`;
-      say(verdict.issue ?? 'That may not match what you asked for.');
-    }
-  } else {
-    verifierEl.textContent = step.message ?? 'Done.';
+  // Sure but destructive (delete many / clear / overwrite): preview + explicit
+  // Apply / Cancel — never auto-applied.
+  if (isDestructiveOp(op, fusionContext().selectedIds.length)) {
+    opJsonEl.textContent = JSON.stringify({ preview: op }, null, 2);
+    const prompt = choicePrompt(currentLanguage.code, 1);
+    verifierEl.textContent = `Destructive step: ${describeOp(op)} — not applied yet. ${prompt}`;
+    say(prompt);
+    presentChoices(`Destructive: ${describeOp(op)} — apply?`, [{ label: describeOp(op), result: op, source }], (c) => {
+      void applyCommandResult(c.result, before);
+    }, cancelNote);
+    return false;
   }
-  announceWarnings();
-  return true;
+
+  return applyCommandResult(result, before);
 }
 
 function announceWarnings(): void {
@@ -2608,8 +2832,10 @@ async function runSimFeature(step: SimStep): Promise<void> {
       break;
     case 'accept-a11y': {
       const fixables = currentA11yIssues().filter((i) => i.fix);
-      if (fixables.length) applyAllA11yFixes(fixables);
-      else say('No automatic accessibility fixes to accept.');
+      if (fixables.length) {
+        applyAllA11yFixes(fixables); // stages the confirm preview…
+        acceptPendingChoice(); // …and the judge's "Apply" tap confirms it
+      } else say('No automatic accessibility fixes to accept.');
       break;
     }
     // Relay beats: a simulated phone joins the real host session over the

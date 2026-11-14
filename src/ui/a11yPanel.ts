@@ -133,7 +133,9 @@ export function createA11yPanel(callbacks: A11yPanelCallbacks): A11yPanel {
   }
 
   function setExplanations(items: A11yExplanation[], source: Source): void {
-    sourceTag.textContent = source === 'rules' ? 'explanations: offline' : `explained by ${source}`;
+    sourceTag.textContent = source === 'rules'
+      ? 'Checked by rules · explanations offline'
+      : `Checked by rules · explained by ${source}`;
     sourceTag.className = `mc-a11y-source badge-${source}`;
     for (const issue of issues) {
       const row = rows.get(issue.id);
@@ -151,9 +153,10 @@ export function createA11yPanel(callbacks: A11yPanelCallbacks): A11yPanel {
       if (item.fix && !issue.fix) {
         issue.fix = item.fix;
         issue.fixLabel = 'Apply suggested fix';
+        issue.fixSource = source === 'rules' ? 'rules' : source;
         row.fixBtn.textContent = issue.fixLabel;
         row.fixBtn.disabled = false;
-        row.fixBtn.title = `Proposed by the cloud model: ${JSON.stringify(item.fix)}`;
+        row.fixBtn.title = `Checked by rules · fix suggested by ${issue.fixSource}: ${JSON.stringify(item.fix)}`;
         row.fixBtn.addEventListener('click', () => callbacks.onApply(issue));
       }
     }

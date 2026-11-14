@@ -25,7 +25,10 @@ import {
   checkUiAccessibility,
   contrastRatio,
 } from '../src/ui/design/accessibility';
-import { PLAN_A11Y, UI_A11Y, coerceA11yExplanations, isAccessibilityRequest } from '../src/core/a11y';
+import {
+  PLAN_A11Y, UI_A11Y, coerceA11yExplanations, isAccessibilityRequest, recheckFix,
+  type A11yIssue,
+} from '../src/core/a11y';
 import { coercePlan } from '../src/plan/ai';
 import { explainAccessibility, setModelsForTest } from '../src/ai/hybrid';
 import type { Frame, StackNode, UiDoc, UiNode } from '../src/ui/design/doc';
@@ -377,5 +380,55 @@ describe('explainAccessibility (hybrid)', () => {
     });
     const res = await explainAccessibility(issues, '{}');
     expect(res.source).toBe('rules');
+  });
+});
+
+// ─── Fixed rules decide: re-check of a proposed (AI or code) fix ────────────
+
+describe('recheckFix', () => {
+  const issue = (id: string, message = id): A11yIssue => ({
+    id, rule: 'door-clear-width', severity: 'fail', message,
+    citation: 'ADA 2010 §404.2.3', targetIds: [id.replace(/^door-/, '')],
+  });
+
+  it('accepts a fix that removes the targeted issue and adds none', () => {
+    const before = [issue('door-o1'), issue('door-o2')];
+    const after = [issue('door-o2')];
+    expect(recheckFix(before, after, ['door-o1'])).toEqual({ ok: true });
+  });
+
+  it('rejects a fix that leaves the targeted issue flagged', () => {
+    const before = [issue('door-o1')];
+    const v = recheckFix(before, before, ['door-o1']);
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.reason).toBe('not-fixed');
+      expect(v.detail).toContain('door-o1');
+    }
+  });
+
+  it('rejects a fix that breaks another rule (a new issue appears)', () => {
+    const before = [issue('door-o1')];
+    const after = [issue('corridor-c1', 'Corridor narrowed to 800 mm')];
+    const v = recheckFix(before, after, ['door-o1']);
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.reason).toBe('new-issue');
+      expect(v.detail).toContain('Corridor narrowed');
+    }
+  });
+
+  it('a batch fix must clear EVERY targeted issue', () => {
+    const before = [issue('door-o1'), issue('door-o2')];
+    const after = [issue('door-o2')];
+    const v = recheckFix(before, after, ['door-o1', 'door-o2']);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('not-fixed');
+  });
+
+  it('pre-existing unrelated issues do not block an ok fix', () => {
+    const before = [issue('door-o1'), issue('corridor-c1')];
+    const after = [issue('corridor-c1')];
+    expect(recheckFix(before, after, ['door-o1'])).toEqual({ ok: true });
   });
 });
