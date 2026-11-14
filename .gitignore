@@ -61,3 +61,7 @@ ios/App/*.xcodeproj/xcuserdata/
 ios/capacitor-cordova-ios-plugins/
 *.ipa
 *.dSYM.zip
+
+# Generated command-accuracy eval output (committed record is docs/ACCURACY.md).
+# Anchored to the repo root so the committed datasets in tests/eval/ are kept.
+/eval/

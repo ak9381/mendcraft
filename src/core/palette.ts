@@ -76,7 +76,13 @@ export function createPalette(
     btn.className = 'mc-palette-btn' + (item.stub ? ' stub' : '');
     const stubNote = item.stub ? ' — coming in the next update' : '';
     const key = item.shortcut ? ` (${item.shortcut.toUpperCase()})` : '';
-    btn.setAttribute('aria-label', `${item.label}${key}${stubNote}`);
+    // When the decorative icon is itself a letter/number (e.g. "T"/"H"), a
+    // sighted user reads it immediately before the label with no gap ("TText"),
+    // so WCAG 2.5.3 (Label in Name) wants that same string inside the accessible
+    // name. Concatenate with no space to match the rendered run; symbol/emoji
+    // icons are stripped by assistive tech and need no prefix.
+    const iconWord = /^[a-z0-9]+$/i.test(item.icon.trim()) ? item.icon.trim() : '';
+    btn.setAttribute('aria-label', `${iconWord}${item.label}${key}${stubNote}`);
     btn.title = `${item.label}${item.shortcut ? ` — ${item.shortcut.toUpperCase()}` : ''}${stubNote}${item.placeable ? '. Drag onto the canvas to place.' : ''}`;
     btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label}</span>`;
     btn.dataset.tool = item.toolId;
@@ -96,7 +102,8 @@ export function createPalette(
       btn.type = 'button';
       btn.className = 'mc-palette-btn mc-palette-group';
       btn.dataset.tool = item.toolId;
-      btn.setAttribute('aria-label', `${item.label} — open components`);
+      const groupIconWord = /^[a-z0-9]+$/i.test(item.icon.trim()) ? item.icon.trim() : '';
+      btn.setAttribute('aria-label', `${groupIconWord}${item.label} — open components`);
       btn.title = `${item.label} — pick a component`;
       btn.innerHTML = `<span class="mc-ico" aria-hidden="true">${item.icon}</span><span class="mc-lbl">${item.label} ▾</span>`;
       const flyout = document.createElement('div');
@@ -151,6 +158,9 @@ export interface TrashHandle {
 export function createTrash(host: HTMLElement): TrashHandle {
   const root = document.createElement('div');
   root.className = 'mc-trash';
+  // A labelled icon affordance (drag-to-delete, pointer only). role="img" lets a
+  // plain <div> carry an accessible name; without a role, aria-label is prohibited.
+  root.setAttribute('role', 'img');
   root.setAttribute('aria-label', 'Trash — drag an element here to delete it');
   root.title = 'Drag an element here to delete it (undoable)';
   root.innerHTML =

@@ -175,7 +175,7 @@ app.innerHTML = `
         .join('')}</select>
       <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 Voice</button>
     </label>
-    <button id="btn-help" type="button" class="ghost" aria-label="Help and guided tour">Help / tour</button>
+    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help / tour</button>
     ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
     <button id="btn-camera" type="button" aria-pressed="false">Enable camera</button>
     <button id="btn-register" type="button" hidden>Register me</button>
@@ -255,7 +255,7 @@ app.innerHTML = `
           <button id="btn-say" type="submit">Send</button>
         </form>
         <p id="last-command" class="last-command"></p>
-        <pre id="op-json" aria-label="Last operation (JSON)"></pre>
+        <pre id="op-json" role="status" aria-live="off" aria-label="Last operation (JSON)"></pre>
       </section>
       <section>
         <h2>Verifier</h2>

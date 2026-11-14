@@ -129,6 +129,16 @@ export function parsePlanCommand(utterance: string): PlanParse {
 
   // Whole-plan templates (also the no-AI fallback for "two bedroom plan").
   if (has('bedroom')) {
+    // "bedroom 4 by 3" / "add a bedroom 4 by 3 meters" has explicit room
+    // dimensions — it is a single named room, not a whole-plan template.
+    if (has('by') && nums.length >= 2) {
+      return {
+        op: 'add_room',
+        nums: { x: 0, y: 0, w: nums[0], h: nums[1] },
+        unit: unitOf(tokens, 'm'),
+        name: 'Bedroom',
+      };
+    }
     if (nums[0] === 1 || has('single')) return { generate: 'oneRoom' };
     return { generate: 'twoBedroom' };
   }

@@ -9,12 +9,16 @@
     "preview": "vite preview",
     "wiz-bridge": "node scripts/wiz-bridge.mjs",
     "gen-icons": "node scripts/gen-icons.mjs",
+    "eval:commands": "vitest run --config vitest.eval.config.ts",
+    "a11y:axe": "node scripts/a11y-axe.mjs",
     "test": "vitest run"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",
     "@types/qrcode": "^1.5.6",
     "@types/three": "^0.187.0",
+    "axe-core": "^4.14.0",
+    "puppeteer-core": "^25.17.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "vitest": "^5.1.0"

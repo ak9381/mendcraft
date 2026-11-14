@@ -1755,7 +1755,7 @@ button.primary:hover {
   font-size: 0.85rem;
   font-weight: 600;
   background: rgba(166, 169, 177, 0.18);
-  color: var(--text-dim);
+  color: var(--text); /* was --text-dim: under 4.5:1 on the pill (axe color-contrast) */
 }
 .tag-queued { background: rgba(166, 169, 177, 0.2); }
 .tag-running { background: rgba(79, 156, 255, 0.2); color: #7ab8ff; }
