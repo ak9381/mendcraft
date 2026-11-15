@@ -1,9 +1,12 @@
 // Entry fork — runs BEFORE the editor shell mounts. Firebase Hosting rewrites
 // every path to /index.html, so routing is decided here from the URL:
+//   /                          → the marketing landing
+//   /studio (or ?sim / ?play)  → the hands-free editor
 //   /remote (or ?view=remote)  → the phone remote + camera page
-//   everything else            → the existing editor (src/main.ts, unchanged)
+//   /control                   → the iPad control room
+//   /judges                    → the guided-tour page
 
-import { isControlRoute, isJudgesRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
+import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
 
 // Inside the thin Android shell (Capacitor) the bundle is served from
 // https://localhost/ with no path — the native app IS the remote, so route
@@ -28,6 +31,9 @@ if (isIosShell || isPhoneRoute(window.location.pathname, window.location.search)
 } else if (isJudgesRoute(window.location.pathname, window.location.search)) {
   const { mountJudgesPage } = await import('./judges/judgesPage');
   await mountJudgesPage(document.querySelector<HTMLDivElement>('#app')!);
+} else if (isLandingRoute(window.location.pathname, window.location.search)) {
+  const { mountLandingPage } = await import('./landing/landingPage');
+  mountLandingPage(document.querySelector<HTMLDivElement>('#app')!);
 } else {
   await import('./main');
 }

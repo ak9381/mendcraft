@@ -8,7 +8,7 @@
 //   • non-English → if Nano reports it can run this language on-device, try it
 //     there first; otherwise send the transcript to the cloud through Firebase
 //     AI Logic, which TRANSLATES and emits the same typed op in ONE call. The
-//     badge then reads "Cloud · Kannada" so the source stays honest.
+//     badge then reads "Gemini · cloud · Kannada" so the source stays honest.
 //
 // No Chrome Translator API, no other AI API: the translation happens inside the
 // one Firebase AI Logic fusion call that already produces the op.
@@ -21,7 +21,7 @@ export interface Language {
   code: string;
   /** Native label for the picker: "English", "ಕನ್ನಡ". */
   label: string;
-  /** English name, shown on the badge ("Cloud · Kannada"). */
+  /** English name, shown on the badge ("Gemini · cloud · Kannada"). */
   englishName: string;
   /** Full BCP-47 tag for Web Speech recognition + speechSynthesis. */
   speechLang: string;
@@ -81,7 +81,7 @@ export function translateInCloud(lang: Language, env: LanguageEnv): boolean {
 
 // ---------------------------------------------------------------------------
 // Badge. For a translated command the reason text is the language name, so the
-// honest source badge reads "Cloud · Kannada" / "On-device · Kannada". A command
+// honest source badge reads "Gemini · cloud · Kannada" / "Gemini Nano · on device · Kannada". A command
 // that fell to the deterministic rules floor was NOT translated, so it keeps the
 // normal reason (e.g. "Rules · fallback") — never a misleading language label.
 

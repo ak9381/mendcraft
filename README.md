@@ -9,7 +9,7 @@ the app a phrase once and reuse it forever. Every AI step is honest about where
 it ran and what, if anything, left the device. Built for Google **#BuildHybridAI**.
 
 Not milestone-ware: plan / ui / part modes, the hybrid router, the privacy
-ledger, the offline queue, recipes, Relay + iPad `/control`, and a judges' tour
+ledger, the offline queue, recipes, device pairing + iPad `/control`, and a judges' tour
 are all in the build and exercised by the screenshot walk and the test suite.
 
 ---
@@ -102,9 +102,9 @@ with the remaining steps listed — it never silently bypasses the confirm.
 
 ---
 
-## Relay + iPad `/control` + phone remotes
+## Device pairing + iPad `/control` + phone remotes
 
-The entry fork lives in `src/boot.ts`; the Relay protocol/session/transport in
+The entry fork lives in `src/boot.ts`; the pairing protocol/session/transport in
 `src/relay/*`. **State honestly:**
 
 - **Built & tested:** pairing (`ABCD-EFGH` code / QR), the privacy-safe

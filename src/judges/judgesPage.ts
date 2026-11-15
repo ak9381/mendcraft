@@ -26,8 +26,8 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
       <section class="judges-card judges-path">
         <h2>30-second path (3 clicks)</h2>
         <ol>
-          <li><a class="judges-cta" href="/?sim=1&amp;play=1">① Play the Plan walk</a> — builds a 2-bedroom plan, resizes a wall, goes to Kannada, offline &amp; back, then opens “what left this device”. No camera or mic needed.</li>
-          <li><a class="judges-cta" href="/">② Open the live app</a> and press <strong>Help / tour</strong> → <strong>Take the tour</strong> to spotlight the real controls.</li>
+          <li><a class="judges-cta" href="/studio?sim=1&amp;play=1">① Play the Plan walk</a> — builds a 2-bedroom plan, resizes a wall, goes to Kannada, offline &amp; back, then opens “what left this device”. No camera or mic needed.</li>
+          <li><a class="judges-cta" href="/studio">② Open the editor</a> and press <strong>Help / tour</strong> → <strong>Take the tour</strong> to spotlight the real controls.</li>
           <li><a class="judges-cta" href="/control">③ Open /control</a> on a second screen — the read-only room dashboard.</li>
         </ol>
       </section>
@@ -52,7 +52,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
           <h2>Works with no camera / mic / Nano</h2>
           <ul class="judges-list">
             <li><strong>No camera or mic:</strong> type commands, or run the sim walks (a mouse drag = a pinch).</li>
-            <li><strong>No Gemini Nano:</strong> the rules parser and the cloud still cover every command; the badge shows RULES or CLOUD instead of ON-DEVICE.</li>
+            <li><strong>No Gemini Nano:</strong> the rules parser and the cloud still cover every command; the badge shows Rules or Gemini · cloud instead of Gemini Nano · on device.</li>
             <li><strong>No network:</strong> rules + on-device keep working; big jobs queue and drain on reconnect.</li>
             <li><strong>The sim walks</strong> (<code>/?sim=1</code>) need none of the above and are fully deterministic.</li>
           </ul>
@@ -71,16 +71,16 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
         <section class="judges-card">
           <h2>The three walks</h2>
           <ul class="judges-list">
-            <li><a href="/?sim=1&amp;play=1">Plan 2D</a> — floor plan: resize a wall, teach a phrase, Kannada, offline, accessibility.</li>
-            <li><a href="/?sim=1&amp;mode=part&amp;play=1">Part 3D</a> — a cup grip: thin-wall warning, then the fix, export STL.</li>
-            <li><a href="/?sim=1&amp;mode=ui&amp;play=1">UI login</a> — a login screen: recolour, resize, accessibility, export HTML.</li>
+            <li><a href="/studio?sim=1&amp;play=1">Plan 2D</a> — floor plan: resize a wall, teach a phrase, Kannada, offline, accessibility.</li>
+            <li><a href="/studio?sim=1&amp;mode=part&amp;play=1">Part 3D</a> — a cup grip: thin-wall warning, then the fix, export STL.</li>
+            <li><a href="/studio?sim=1&amp;mode=ui&amp;play=1">UI login</a> — a login screen: recolour, resize, accessibility, export HTML.</li>
           </ul>
           <p class="judges-note">Each walk has Pause / Next / Skip, then a “Try it yourself” hint with three commands to say.</p>
         </section>
       </div>
 
       <footer class="judges-foot">
-        <a class="judges-cta" href="/">Open the live app →</a>
+        <a class="judges-cta" href="/studio">Open the editor →</a>
       </footer>
     </div>
   `;

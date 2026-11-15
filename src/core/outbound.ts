@@ -77,13 +77,13 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
   },
   {
     kind: 'firestore-relay',
-    label: 'Firestore relay room',
+    label: 'Firestore pairing room',
     primitive: '\\b(addDoc|setDoc|updateDoc|writeBatch)\\(',
     files: ['src/relay/firestoreTransport.ts', 'src/recipes/sync.ts'],
     leavesDevice: true,
     note:
       'Phone<->laptop pairing and taught-recipe sync write to a Firestore room doc. ' +
-      'Relay carries privacy-safe control snapshots, taught recipe summaries, commands, and — ' +
+      'The room carries privacy-safe control snapshots, taught recipe summaries, commands, and — ' +
       'ONLY when the user pairs a phone camera — still frames. Frames go to the paired device, never to Gemini.',
   },
   {

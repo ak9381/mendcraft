@@ -95,13 +95,13 @@ describe('translation routing (when to escalate to the cloud)', () => {
 // ─── badge label ─────────────────────────────────────────────────────────────
 
 describe('languageBadgeLabel (honest source · language)', () => {
-  it('a translated non-English command shows "Cloud · Kannada"', () => {
-    expect(languageBadgeLabel('cloud', 'no-device', KN, true)).toBe('Cloud · Kannada');
-    expect(languageBadgeLabel('on-device', 'private', KN, true)).toBe('On-device · Kannada');
+  it('a translated non-English command shows "Gemini · cloud · Kannada"', () => {
+    expect(languageBadgeLabel('cloud', 'no-device', KN, true)).toBe('Gemini · cloud · Kannada');
+    expect(languageBadgeLabel('on-device', 'private', KN, true)).toBe('Gemini Nano · on device · Kannada');
   });
 
   it('English keeps the normal source · reason label', () => {
-    expect(languageBadgeLabel('cloud', 'big-job', EN, false)).toBe('Cloud · big job');
+    expect(languageBadgeLabel('cloud', 'big-job', EN, false)).toBe('Gemini · cloud · big job');
     expect(languageBadgeLabel('rules', 'exact', EN, false)).toBe('Rules · exact command');
   });
 

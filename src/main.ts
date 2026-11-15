@@ -57,6 +57,7 @@ import { createHandProfilePanel } from './ui/handProfilePanel';
 import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
+  SOURCE_TEXT,
   REASON_TEXT,
   finalReason,
   isPointing,
@@ -169,7 +170,7 @@ const modeSwitchHtml = listModes()
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <header id="topbar">
-    <span class="brand">Mendcraft</span>
+    <a class="brand" href="/">Mendcraft</a>
     <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
     <label id="lang-pick" class="lang-pick" title="Spoken and written language">
       <span class="sr-only">Language</span>
@@ -450,7 +451,7 @@ function setBadge(source: Source, reason?: RouteReason, translated = false): voi
   sourceBadge.className = `badge badge-${source}`;
   const label = reason
     ? languageBadgeLabel(source, reason, currentLanguage, translated)
-    : source.toUpperCase().replace('-', ' ');
+    : SOURCE_TEXT[source];
   sourceBadge.textContent = label;
   const why = reason ? ` Route: ${REASON_TEXT[reason]}.` : '';
   sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
@@ -3034,7 +3035,7 @@ function showTryItYourself(): void {
     <p>Say or type one of these:</p>
     <ul>${hints.map((h) => `<li>“${h}”</li>`).join('')}</ul>
     <div class="try-actions">
-      <a class="primary" href="/">Exit the demo → live app</a>
+      <a class="primary" href="/studio">Exit the demo → live app</a>
       <button type="button" class="ghost" id="try-close">Keep exploring here</button>
     </div>`;
   document.body.appendChild(card);

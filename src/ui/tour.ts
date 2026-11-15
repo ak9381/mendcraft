@@ -40,7 +40,7 @@ export const TOUR_STEPS: TourStepDef[] = [
     id: 'badge',
     selector: '#source-badge',
     title: 'Honest AI-source badge',
-    body: 'Every result shows where it came from — RULES, ON-DEVICE (Gemini Nano), CLOUD (gemini flash-lite) or SIM — with the router’s reason. It never pretends.',
+    body: 'Every result shows where it came from — Rules, Gemini Nano · on device, Gemini · cloud, or SIM — with the router’s reason. It never pretends.',
   },
   {
     id: 'ledger',

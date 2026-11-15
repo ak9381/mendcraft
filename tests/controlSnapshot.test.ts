@@ -46,7 +46,7 @@ describe('buildControlSnapshot — privacy', () => {
     expect(json).not.toContain('thicker by 50');
     expect(json).not.toContain('two bedroom plan');
     // source + reason + badge still carried for the private events.
-    expect(snap.ai[1]).toMatchObject({ source: 'on-device', reason: 'private', badge: 'On-device · private' });
+    expect(snap.ai[1]).toMatchObject({ source: 'on-device', reason: 'private', badge: 'Gemini Nano · on device · private' });
   });
 
   it('redacts media and landmark blobs that slip into a cloud utterance', () => {

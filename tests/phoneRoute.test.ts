@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPhoneRoute, isRemoteRoute, isControlRoute } from '../src/relay/protocol';
+import { isPhoneRoute, isRemoteRoute, isControlRoute, isLandingRoute, isStudioRoute } from '../src/relay/protocol';
 
 // The iPhone PWA's manifest start_url is /phone — boot.ts routes it to the
 // remote page's compact "lamp & music" variant. These guard that the three
@@ -15,8 +15,9 @@ describe('isPhoneRoute (PWA start_url)', () => {
     expect(isPhoneRoute('/anything', '?foo=1&view=phone')).toBe(true);
   });
 
-  it('does not match the editor, /remote or /control', () => {
+  it('does not match the editor, landing, /remote or /control', () => {
     expect(isPhoneRoute('/', '')).toBe(false);
+    expect(isPhoneRoute('/studio', '')).toBe(false);
     expect(isPhoneRoute('/remote', '')).toBe(false);
     expect(isPhoneRoute('/control', '')).toBe(false);
     expect(isPhoneRoute('/phoney', '')).toBe(false);
@@ -30,5 +31,36 @@ describe('isPhoneRoute (PWA start_url)', () => {
     expect(isControlRoute('/phone', '')).toBe(false);
     expect(isPhoneRoute('/remote', '')).toBe(false);
     expect(isPhoneRoute('/control', '')).toBe(false);
+  });
+});
+
+describe('isLandingRoute / isStudioRoute', () => {
+  it('treats exact / as the marketing landing', () => {
+    expect(isLandingRoute('/', '')).toBe(true);
+    expect(isStudioRoute('/', '')).toBe(false);
+  });
+
+  it('sends /studio and judge sim/play flags to the editor', () => {
+    expect(isStudioRoute('/studio', '')).toBe(true);
+    expect(isStudioRoute('/studio/', '')).toBe(true);
+    expect(isStudioRoute('/', '?view=studio')).toBe(true);
+    expect(isStudioRoute('/', '?sim=1')).toBe(true);
+    expect(isStudioRoute('/', '?play=1')).toBe(true);
+    expect(isStudioRoute('/', '?mode=part')).toBe(true);
+    expect(isLandingRoute('/studio', '')).toBe(false);
+    expect(isLandingRoute('/', '?sim=1')).toBe(false);
+    expect(isLandingRoute('/', '?play=1')).toBe(false);
+  });
+
+  it('stays disjoint from phone, remote, control and judges', () => {
+    expect(isLandingRoute('/', '?view=phone')).toBe(false);
+    expect(isLandingRoute('/', '?view=remote')).toBe(false);
+    expect(isLandingRoute('/', '?view=control')).toBe(false);
+    expect(isLandingRoute('/', '?view=judges')).toBe(false);
+    expect(isLandingRoute('/control', '')).toBe(false);
+    expect(isLandingRoute('/judges', '')).toBe(false);
+    expect(isStudioRoute('/control', '')).toBe(false);
+    expect(isPhoneRoute('/studio', '')).toBe(false);
+    expect(isControlRoute('/studio', '')).toBe(false);
   });
 });

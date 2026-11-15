@@ -46,7 +46,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
   root.innerHTML = `
     <div class="control-page">
       <header class="control-head">
-        <span class="brand">Mendcraft</span>
+        <a class="brand" href="/">Mendcraft</a>
         <span class="control-sub">control room</span>
         <span id="control-conn" class="badge badge-rules">connecting…</span>
         <span id="control-bytes" class="control-bytes"></span>
@@ -63,7 +63,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
         <section class="card card-device" aria-label="Active device">
           <h2>Working on</h2>
           <p id="c-device" class="c-device">—</p>
-          <p class="card-note">From Relay presence.</p>
+          <p class="card-note">From the devices in this room.</p>
         </section>
 
         <section class="card card-scene" aria-label="3D review">

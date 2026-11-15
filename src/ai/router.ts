@@ -122,8 +122,8 @@ export function finalReason(planned: RouteDecision, actual: Source, escalated: b
 }
 
 export const SOURCE_TEXT: Record<Source, string> = {
-  'on-device': 'On-device',
-  cloud: 'Cloud',
+  'on-device': 'Gemini Nano · on device',
+  cloud: 'Gemini · cloud',
   rules: 'Rules',
 };
 
@@ -138,7 +138,7 @@ export const REASON_TEXT: Record<RouteReason, string> = {
   pointed: 'point + say',
 };
 
-/** Badge text: "Cloud · big job", "On-device · private", "Rules · exact command". */
+/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private", "Rules · exact command". */
 export function badgeLabel(source: Source, reason: RouteReason): string {
   return `${SOURCE_TEXT[source]} · ${REASON_TEXT[reason]}`;
 }

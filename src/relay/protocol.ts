@@ -112,6 +112,27 @@ export function isJudgesRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'judges';
 }
 
+/** The hands-free editor lives at /studio (and under judge sim/play query flags). */
+export function isStudioRoute(pathname: string, search: string): boolean {
+  if (/^\/studio\/?$/.test(pathname)) return true;
+  const q = new URLSearchParams(search);
+  if (q.get('view') === 'studio') return true;
+  // Judge walks and sim mode still belong to the editor, even if the path is /.
+  if (q.has('sim') || q.has('play') || q.has('mode')) return true;
+  return false;
+}
+
+/** The marketing landing is only exact `/` (no other view/sim/play flags). */
+export function isLandingRoute(pathname: string, search: string): boolean {
+  if (!(pathname === '/' || pathname === '')) return false;
+  if (isStudioRoute(pathname, search)) return false;
+  if (isRemoteRoute(pathname, search)) return false;
+  if (isPhoneRoute(pathname, search)) return false;
+  if (isControlRoute(pathname, search)) return false;
+  if (isJudgesRoute(pathname, search)) return false;
+  return true;
+}
+
 // ---- message envelope -------------------------------------------------------
 
 // 'control' is the read-only iPad dashboard: it subscribes to a host's room and

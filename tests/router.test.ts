@@ -158,10 +158,10 @@ describe('finalReason (badge honesty: planned vs actual)', () => {
 
 describe('badgeLabel', () => {
   it('formats source · reason', () => {
-    expect(badgeLabel('cloud', 'big-job')).toBe('Cloud · big job');
-    expect(badgeLabel('on-device', 'private')).toBe('On-device · private');
-    expect(badgeLabel('cloud', 'low-confidence')).toBe('Cloud · low confidence');
-    expect(badgeLabel('cloud', 'no-device')).toBe('Cloud · no on-device AI');
+    expect(badgeLabel('cloud', 'big-job')).toBe('Gemini · cloud · big job');
+    expect(badgeLabel('on-device', 'private')).toBe('Gemini Nano · on device · private');
+    expect(badgeLabel('cloud', 'low-confidence')).toBe('Gemini · cloud · low confidence');
+    expect(badgeLabel('cloud', 'no-device')).toBe('Gemini · cloud · no on-device AI');
     expect(badgeLabel('rules', 'exact')).toBe('Rules · exact command');
     expect(badgeLabel('rules', 'offline')).toBe('Rules · offline');
     expect(badgeLabel('rules', 'fallback')).toBe('Rules · fallback');
@@ -179,7 +179,7 @@ describe('formatLogEntry (dev panel line)', () => {
       escalated: true,
       ms: 41.6,
     };
-    expect(formatLogEntry(e)).toBe('"put a door here" → Cloud · low confidence (0.81, 42 ms, escalated)');
+    expect(formatLogEntry(e)).toBe('"put a door here" → Gemini · cloud · low confidence (0.81, 42 ms, escalated)');
   });
   it('flags a planned-vs-actual mismatch and truncates long utterances', () => {
     const e: RouteLogEntry = {
