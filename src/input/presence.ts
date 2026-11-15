@@ -54,6 +54,9 @@ export interface PresenceFrame {
   /** Rejected hands' points (mirrored) for a dimmed draw. */
   rejectedHands: Pt[][];
   faces: FaceFrame[];
+  /** The operator's (or main) face mesh, for optional on-device face cues.
+   *  Never drawn, stored or sent anywhere. */
+  operatorFace?: { x: number; y: number; z?: number }[] | null;
   facing: boolean;
   registered: boolean;
   paused: boolean;
@@ -129,6 +132,7 @@ export function createPresenceTracker(
 
   let lastFacing = false;
   let lastPaused = false;
+  let focusFace: { x: number; y: number; z?: number }[] | null = null;
   const facingSubs = new Set<(f: boolean) => void>();
   const pauseSubs = new Set<(p: boolean) => void>();
 
@@ -158,6 +162,7 @@ export function createPresenceTracker(
 
     // Facing is judged on the tracked operator (or the main face pre-registration).
     const focusIdx = operator.registered ? operatorIdx : mainIdx;
+    focusFace = focusIdx !== null ? (result.faceLandmarks[focusIdx] ?? null) : null;
     if (focusIdx !== null) {
       const c = candidates[focusIdx];
       const facing = facingTracker.update(headPose(result.faceLandmarks[focusIdx], c.matrix), now);
@@ -232,6 +237,7 @@ export function createPresenceTracker(
       hands: frames,
       rejectedHands: rejectedPts,
       faces: faceFrames(),
+      operatorFace: focusFace,
       facing: lastFacing,
       registered: operator.registered,
       paused,
