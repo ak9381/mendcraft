@@ -11,6 +11,7 @@ import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
 import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
 import { createReferencePanel } from './ui/referencePanel';
+import { createOverflowMenu, type OverflowMenu } from './ui/overflowMenu';
 import { SIM_ACTIVE, createSimPlayback, demoFor, mountSimCursor, playDemo, type SimStep } from './sim';
 import {
   TOUR_STEPS,
@@ -154,12 +155,14 @@ const hintButtonsHtml = mode.hints
   .map((h) => `<button type="button" data-cmd="${h.command}">${h.label}</button>`)
   .join('');
 
+const MODE_SHORT_LABEL: Record<string, string> = { plan: 'Plan', part: 'Part', ui: 'UI' };
 const modeSwitchHtml = listModes()
   .map((m) => {
     const active = m.id === mode.id;
     const soon = m.status === 'coming-soon';
-    const title = soon ? `${m.label} — coming soon` : m.description;
-    return `<button type="button" class="mode-btn${active ? ' active' : ''}" data-mode="${m.id}" aria-pressed="${active}" ${soon ? 'disabled' : ''} title="${title}">${m.label}${soon ? ' · soon' : ''}</button>`;
+    const short = MODE_SHORT_LABEL[m.id] ?? m.label;
+    const title = soon ? `${m.label} — coming soon` : `${m.label}: ${m.description}`;
+    return `<button type="button" class="mode-btn${active ? ' active' : ''}" data-mode="${m.id}" aria-pressed="${active}" ${soon ? 'disabled' : ''} title="${title}">${short}${soon ? ' · soon' : ''}</button>`;
   })
   .join('');
 
@@ -173,30 +176,14 @@ app.innerHTML = `
       <select id="lang-select" aria-label="Language">${LANGUAGES
         .map((l) => `<option value="${l.code}"${l.code === currentLanguage.code ? ' selected' : ''}>${l.label}</option>`)
         .join('')}</select>
-      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 Voice</button>
+      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
     </label>
-    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help / tour</button>
+    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help</button>
     ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
-    <button id="btn-camera" type="button" aria-pressed="false">Enable camera</button>
+    <button id="btn-camera" type="button" aria-pressed="false">Camera</button>
     <button id="btn-register" type="button" hidden>Register me</button>
     <button id="btn-reregister" type="button" hidden>Re-register</button>
-    <button id="btn-mic" type="button" aria-pressed="false">Enable mic</button>
-    <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
-    <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
-    <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
-    <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
-    <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
-    <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
-    <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
-    <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
-    <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
-    <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
-    <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
-    <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
-    <div id="progress-wrap" hidden>
-      <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
-      <span id="progress-label">0%</span>
-    </div>
+    <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
     <div class="spacer"></div>
     <button id="btn-undo" type="button">Undo</button>
     <button id="btn-redo" type="button">Redo</button>
@@ -204,6 +191,27 @@ app.innerHTML = `
     <button id="btn-export" type="button">${mode.exportLabel}</button>
     ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
+    <div id="more-wrap" class="more-wrap">
+      <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
+      <div id="more-menu" class="more-menu" role="menu" hidden>
+        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
+        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
+        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
+        <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
+        <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
+        <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
+        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
+        <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
+        <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
+        <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
+        <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
+        <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
+        <div id="progress-wrap" hidden>
+          <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+          <span id="progress-label">0%</span>
+        </div>
+      </div>
+    </div>
   </header>
   <div id="statusbar" role="group" aria-label="System status">
     <span class="status-chip">
@@ -2442,6 +2450,13 @@ if (viewport.toggle3D) {
   });
 }
 
+// One-row toolbar: overflow tools live under More. Relayout when 3D appears.
+const overflowMenu: OverflowMenu = createOverflowMenu({
+  topbar: el<HTMLElement>('topbar'),
+  wrap: el<HTMLElement>('more-wrap'),
+});
+overflowMenu.layout();
+
 // ---- voice ----
 
 const voice: VoiceController = createVoiceController((utterance) => void runUtterance(utterance));
@@ -2462,8 +2477,11 @@ langSelect.addEventListener('change', () => {
 const btnMute = el<HTMLButtonElement>('btn-mute');
 function renderMute(): void {
   btnMute.setAttribute('aria-pressed', String(muted));
+  btnMute.setAttribute('aria-label', muted ? 'Muted' : 'Voice');
   btnMute.classList.toggle('active', muted);
-  btnMute.textContent = muted ? '🔇 Muted' : '🔊 Voice';
+  btnMute.innerHTML = muted
+    ? '🔇 <span class="btn-label">Muted</span>'
+    : '🔊 <span class="btn-label">Voice</span>';
 }
 renderMute();
 btnMute.addEventListener('click', () => {
@@ -2474,6 +2492,7 @@ btnMute.addEventListener('click', () => {
   // Confirm the toggle itself (unmute speaks; mute is already silent).
   if (!muted) speakConfirm('done');
 });
+overflowMenu.layout();
 // Apply the restored language once at startup: set recognition lang + probe Nano.
 voice.setLang(currentLanguage.speechLang);
 refreshDeviceLangReady();
@@ -2482,7 +2501,7 @@ btnMic.addEventListener('click', () => {
   const nowOn = btnMic.getAttribute('aria-pressed') !== 'true';
   btnMic.setAttribute('aria-pressed', String(nowOn));
   btnMic.classList.toggle('active', nowOn);
-  btnMic.textContent = nowOn ? 'Mic on' : 'Enable mic';
+  btnMic.textContent = nowOn ? 'Mic on' : 'Mic';
   voice.setAlwaysOn(nowOn);
   say(nowOn ? localize('listening', currentLanguage) : localize('micOff', currentLanguage));
 });
@@ -2502,9 +2521,13 @@ function placeCursor(x: number, y: number): void {
     return;
   }
   const rect = viewportEl.getBoundingClientRect();
+  const size = handCursor.offsetWidth || 22;
+  const half = size / 2;
+  const left = Math.min(Math.max(x * rect.width, half), Math.max(half, rect.width - half));
+  const top = Math.min(Math.max(y * rect.height, half), Math.max(half, rect.height - half));
   handCursor.hidden = false;
-  handCursor.style.left = `${x * rect.width}px`;
-  handCursor.style.top = `${y * rect.height}px`;
+  handCursor.style.left = `${left}px`;
+  handCursor.style.top = `${top}px`;
 }
 
 function toClient(x: number, y: number): { clientX: number; clientY: number } {
@@ -2697,7 +2720,7 @@ async function enableCamera(): Promise<boolean> {
     setCameraBusy(false);
     btnCamera.setAttribute('aria-pressed', 'false');
     btnCamera.classList.remove('active');
-    btnCamera.textContent = 'Enable camera';
+    btnCamera.textContent = 'Camera';
     fail('fail-camera', 'Could not access the camera — pinch gestures are unavailable. Voice and text still work.');
     syncOperatorButtons();
     resetPresenceStatus();
@@ -2713,7 +2736,7 @@ function disableCamera(): void {
   resumeHint.hidden = true;
   btnCamera.setAttribute('aria-pressed', 'false');
   btnCamera.classList.remove('active');
-  btnCamera.textContent = 'Enable camera';
+  btnCamera.textContent = 'Camera';
   handCursor.hidden = true;
   syncOperatorButtons();
   keyboard.setAutoOpen(false);
@@ -3279,6 +3302,7 @@ function createTour() {
   function close(remember = true): void {
     if (remember) markTourDismissed(localStorage);
     phase = null;
+    overflowMenu.close();
     overlay.hidden = true;
     overlay.innerHTML = '';
     window.removeEventListener('resize', reposition);
@@ -3340,6 +3364,7 @@ function createTour() {
     if (phase !== 'steps' || !spotlightEl || !calloutEl) return;
     const target = document.querySelector(steps[index].selector) as HTMLElement | null;
     if (!target) return;
+    overflowMenu.reveal(target);
     const r = target.getBoundingClientRect();
     spotlightEl.style.left = `${r.left - 8}px`;
     spotlightEl.style.top = `${r.top - 8}px`;
@@ -3360,6 +3385,7 @@ function createTour() {
     overlay.classList.add('tour-spotlighting');
     const step = steps[index];
     const target = document.querySelector(step.selector) as HTMLElement | null;
+    overflowMenu.reveal(target);
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
     spotlightEl = document.createElement('div');
