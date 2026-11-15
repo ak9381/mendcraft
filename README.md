@@ -125,6 +125,15 @@ The entry fork lives in `src/boot.ts`; the pairing protocol/session/transport in
 
 ---
 
+## First-run setup and a gesture for every button
+
+- **Set up hands** (More menu, or say "set up" / "ಹೊಂದಿಸು"; opens by itself the first time the camera turns on): measures her comfortable reach (that small box then covers the whole screen), how firmly she can pinch (thresholds sit inside it), and how steady her hand is (smoothing and dwell time). Numbers only, saved in this browser's localStorage. Code: `src/setup/calibration.ts`, `src/setup/setupState.ts`, `src/ui/setupPanel.ts`.
+- **Record or replace a gesture in 3 tries**: poses are normalised for position, size and rotation; a try that doesn't match the others is asked for again (`src/input/gestureTemplates.ts`).
+- **Map any toolbar button to a gesture or a spoken phrase** (Kannada kept as typed). Her bindings win over the defaults.
+- **Optional face cues**: a held smile or raised eyebrows confirm something already waiting (chips, recipe card). They never start an action (`src/input/faceCues.ts`).
+- **Default gestures** (`src/input/gestureCatalog.ts`, recogniser `src/input/motionGestures.ts`, dispatch `src/input/gestureDispatch.ts`): V = undo, three fingers = redo, palm flip = More, hold a pinch still = mic, open palm 1 s = stop/cancel, palm swipe = back/forward (panels), two-finger swipe = scroll, twist = rotate, air tap = tap, fingertip circle = select inside, palm raise/lower/tap = lamp (while the lamp panel is open), both palms = rest mode, wave = wake. Held poses need 400 ms so tremor doesn't fire them. Buttons with a gesture show a small badge; every button in the toolbar, menus and panels is also pinchable, or clickable by hovering (dwell).
+- Not wired yet: music volume and skip-track gestures are recognised but music plays on the phone, so they wait on the device-connection redesign.
+
 ## Judges' tour and `/judges`
 
 - `http://localhost:5173/?sim=1` — the scripted demo (no camera/mic/Nano). A

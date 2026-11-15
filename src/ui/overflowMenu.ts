@@ -3,6 +3,7 @@
 // Undo / Redo / 3D) moves into a 44px-row menu so the bar never wraps.
 
 export const ALWAYS_OVERFLOW_IDS = [
+  'btn-setup',
   'btn-gestures',
   'btn-hands',
   'btn-keyboard',

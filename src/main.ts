@@ -107,6 +107,16 @@ import { createRecipeStore } from './recipes/storage';
 import { recipeBookId, syncRecipeBook } from './recipes/sync';
 import { pickRecipeHybrid } from './ai/hybrid';
 import { createPairPanel } from './ui/pairPanel';
+import { createSetupPanel, type SetupTarget } from './ui/setupPanel';
+import { loadSetup, bindingForPhrase, isSetupPhrase, restPhrase, type SetupData } from './setup/setupState';
+import { remapToReach, isFullReach } from './setup/calibration';
+import { createMotionRecognizer, type MotionEvent } from './input/motionGestures';
+import { bindableGestures, catalogGesture } from './input/gestureCatalog';
+import { resolveGesture, nextRestState } from './input/gestureDispatch';
+import { matchTemplate } from './input/gestureTemplates';
+import { createFaceCueDetector, faceRatios } from './input/faceCues';
+import { createDwellClicker } from './input/dwell';
+import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
 import { lampStateLabel, type LampState } from './devices/wiz';
 import type { MusicStatus } from './relay/protocol';
@@ -195,6 +205,7 @@ app.innerHTML = `
     <div id="more-wrap" class="more-wrap">
       <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
       <div id="more-menu" class="more-menu" role="menu" hidden>
+        <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
         <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
         <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
         <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
@@ -636,7 +647,9 @@ function showToast(message: string): void {
 function applyActiveProfile(adaptation: ProfileAdaptation): void {
   const resolved = resolveActiveProfile(adaptation, handsPanel.getOverride());
   activeProfile = resolved.profile;
-  tracker?.setPinchThreshold(activeProfile.pinchOn, activeProfile.pinchOff);
+  // Her calibrated pinch (setup) wins over the profile's preset thresholds.
+  const cal = setupData.calibration;
+  tracker?.setPinchThreshold(cal ? cal.pinchOn : activeProfile.pinchOn, cal ? cal.pinchOff : activeProfile.pinchOff);
   document.documentElement.style.setProperty('--mc-target-scale', String(activeProfile.targetScale));
   handsPanel.setAdaptation(resolved);
 }
@@ -667,6 +680,248 @@ async function runAdaptation(force = false, injected?: HandMetrics): Promise<voi
 function toggleButton(btn: HTMLButtonElement, on: boolean): void {
   btn.setAttribute('aria-pressed', String(on));
   btn.classList.toggle('active', on);
+}
+
+
+// ---- first-run setup + a gesture for every button ----
+// Pure logic: setup/calibration, setup/setupState, input/motionGestures,
+// input/gestureCatalog, input/gestureDispatch, input/gestureTemplates,
+// input/faceCues, input/dwell. Everything measured stays in localStorage.
+let setupData: SetupData = loadSetup();
+const motion = createMotionRecognizer();
+const dwell = createDwellClicker(900);
+const faceCues = createFaceCueDetector();
+let resting = false;
+let lastClosedPanel: HTMLElement | null = null;
+let lastHand: { x: number; y: number } | null = null;
+let customHeld: { id: string; since: number; fired: boolean } | null = null;
+const unwiredNoted = new Set<string>();
+
+const gestureGuide = createGestureGuide();
+gesturesPanel.element.appendChild(gestureGuide.element);
+
+const restBanner = document.createElement('div');
+restBanner.className = 'mc-rest-banner';
+restBanner.setAttribute('role', 'status');
+restBanner.hidden = true;
+restBanner.innerHTML = 'Resting: gestures paused. Wave to wake. <span lang="kn">ಕೈ ಬೀಸಿ</span>';
+viewportEl.appendChild(restBanner);
+
+const COMMAND_TARGETS: SetupTarget[] = [
+  { id: 'confirm', label: 'Confirm (what is waiting)' },
+  { id: 'cancel', label: 'Stop / cancel' },
+  { id: 'rest-toggle', label: 'Rest mode on/off' },
+];
+
+function buttonLabel(b: HTMLElement): string {
+  const c = b.cloneNode(true) as HTMLElement;
+  c.querySelectorAll('.mc-ghint').forEach((n) => n.remove());
+  return (b.getAttribute('aria-label') ?? c.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function setupTargets(): SetupTarget[] {
+  const out: SetupTarget[] = [];
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#topbar button[id]')) {
+    if (b.id === 'btn-ai' || b.id === 'btn-register' || b.id === 'btn-reregister') continue;
+    const label = buttonLabel(b);
+    if (label) out.push({ id: b.id, label });
+  }
+  return [...out, ...COMMAND_TARGETS];
+}
+
+const setupPanel = createSetupPanel({
+  targets: setupTargets,
+  gestures: () => bindableGestures().map((g) => ({ id: g.id, label: `${g.glyph} ${g.label}` })),
+  cameraOn: () => tracker !== null,
+  enableCamera: () => enableCamera(),
+  onChange: (d) => { setupData = d; applySetup(); },
+  say: (t) => say(t),
+});
+viewportEl.appendChild(setupPanel.element);
+const btnSetup = el<HTMLButtonElement>('btn-setup');
+btnSetup.addEventListener('click', () => {
+  overflowMenu.close();
+  if (setupPanel.isOpen()) setupPanel.close(); else setupPanel.open();
+  toggleButton(btnSetup, setupPanel.isOpen());
+});
+
+function refreshHints(): void {
+  applyGestureHints(el<HTMLElement>('topbar'), setupData.bindings, setupData.templates, setupData.showHints);
+}
+
+function applySetup(): void {
+  const cal = setupData.calibration;
+  if (cal) {
+    motion.setReach(cal.reach.x1 - cal.reach.x0, cal.reach.y1 - cal.reach.y0);
+    dwell.setDwell(cal.dwellMs);
+  } else {
+    motion.setReach(1, 1);
+    dwell.setDwell(activeProfile.dwellMs);
+  }
+  if (setupData.faceBaseline) faceCues.setBaseline([setupData.faceBaseline]);
+  applyActiveProfile(lastAdaptation);
+  refreshHints();
+}
+
+/** Map a raw mirrored hand point through her calibrated reach box. */
+function reachPoint(x: number, y: number): { x: number; y: number } {
+  const r = setupData.calibration?.reach;
+  if (!r || isFullReach(r)) return { x, y };
+  return remapToReach({ x, y }, r);
+}
+
+function setResting(on: boolean): void {
+  if (resting === on) return;
+  resting = on;
+  restBanner.hidden = !on;
+  document.body.classList.toggle('mc-resting', on);
+  if (on) { handCursor.classList.remove('pinching'); viewport.endDrag?.(); }
+  say(on ? 'Resting. Gestures paused. Wave to wake.' : 'Awake. Gestures on.');
+}
+
+/** Panels a palm swipe "back" can close, newest first. */
+function topOpenPanel(): HTMLElement | null {
+  const open = [...viewportEl.children].filter((c): c is HTMLElement =>
+    c instanceof HTMLElement && c.tagName === 'SECTION' && !c.hidden && c !== restBanner);
+  return open[open.length - 1] ?? null;
+}
+
+function closeTopPanel(): boolean {
+  if (overflowMenu.isOpen()) { overflowMenu.close(); return true; }
+  const panel = topOpenPanel();
+  if (!panel) return false;
+  const x = panel.querySelector<HTMLButtonElement>('.mc-panel-x, .mc-ref-x, .mc-lamp-x, button[aria-label^="Close"]');
+  if (x) x.click(); else panel.hidden = true;
+  lastClosedPanel = panel;
+  return true;
+}
+
+function scrollUnderCursor(dir: 1 | -1): void {
+  let node: Element | null = lastPointer ? document.elementFromPoint(lastPointer.clientX, lastPointer.clientY) : null;
+  while (node && node !== document.body) {
+    const st = getComputedStyle(node);
+    if (/(auto|scroll)/.test(st.overflowY) && node.scrollHeight > node.clientHeight + 2) break;
+    node = node.parentElement;
+  }
+  const target = node && node !== document.body ? node : el<HTMLElement>('panel');
+  target.scrollBy({ top: dir * 240, behavior: 'smooth' });
+}
+
+function selectArea(box: { x0: number; y0: number; x1: number; y1: number }): void {
+  const a = reachPoint(box.x0, box.y0), b = reachPoint(box.x1, box.y1);
+  const ids = new Set<string>();
+  for (let i = 0; i <= 4; i++) {
+    for (let j = 0; j <= 4; j++) {
+      const { clientX, clientY } = toClient(a.x + ((b.x - a.x) * i) / 4, a.y + ((b.y - a.y) * j) / 4);
+      const id = viewport.pick(clientX, clientY);
+      if (id) ids.add(id);
+    }
+  }
+  if (ids.size === 0) { say('Nothing inside the circle.'); return; }
+  const multi = controller.applyOp({ op: 'select_set', ids: [...ids] });
+  if (!multi.ok) controller.selectId([...ids][0]);
+  renderAll();
+  say(`${ids.size} selected.`);
+}
+
+let lampOn = true;
+function lampButton(sel: string): void {
+  lampPanel.element.querySelector<HTMLButtonElement>(sel)?.click();
+}
+
+/** Something is waiting for a yes (chips, recipe card, a11y preview)? */
+function somethingPending(): boolean {
+  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
+}
+
+/** Run a button or command target. Returns false if nothing ran. */
+function runTarget(target: string, value?: number): boolean {
+  switch (target) {
+    case 'confirm':
+      viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      return true;
+    case 'cancel':
+      window.speechSynthesis?.cancel();
+      if (handleChoiceReply('cancel') !== null) return true;
+      return closeTopPanel();
+    case 'nav-back':
+      return closeTopPanel();
+    case 'nav-forward':
+      if (lastClosedPanel && lastClosedPanel.hidden) { lastClosedPanel.hidden = false; return true; }
+      return false;
+    case 'scroll-up': scrollUnderCursor(-1); return true;
+    case 'scroll-down': scrollUnderCursor(1); return true;
+    case 'rotate': void runUtterance(`rotate ${value && value < 0 ? 345 : 15}`); return true;
+    case 'tap':
+      if (!lastHand) return false;
+      handleHandEvent({ type: 'pinch-tap', x: lastHand.x, y: lastHand.y });
+      return true;
+    case 'lamp-up': lampButton('.lamp-dim-up'); return true;
+    case 'lamp-down': lampButton('.lamp-dim-down'); return true;
+    case 'lamp-toggle': lampOn = !lampOn; lampButton(lampOn ? '.lamp-on' : '.lamp-off'); return true;
+    case 'rest-toggle':
+    case 'wake':
+      setResting(nextRestState(resting, target));
+      return true;
+    default: {
+      const node = document.getElementById(target);
+      if (node instanceof HTMLButtonElement && !node.disabled) { node.click(); return true; }
+      return false;
+    }
+  }
+}
+
+function handleMotion(ev: MotionEvent): void {
+  gestureGuide.highlight(ev.id);
+  const r = resolveGesture(ev.id, {
+    context: lampPanel.isOpen() ? 'devices' : 'studio',
+    resting,
+    bindings: setupData.bindings,
+  });
+  if (r.kind === 'ignored') {
+    const g = catalogGesture(ev.id);
+    if (r.reason === 'unwired' && g && !unwiredNoted.has(g.id)) {
+      unwiredNoted.add(g.id);
+      showToast(`${g.label}: recognised. ${g.note ?? 'Not wired yet.'}`);
+    }
+    return;
+  }
+  if (ev.id === 'circle' && r.target === 'select-area' && ev.box) { selectArea(ev.box); return; }
+  const ran = runTarget(r.target, ev.value);
+  const g = catalogGesture(ev.id);
+  if (ran && g && g.kind === 'discrete' && !['rest-toggle', 'wake'].includes(r.target)) {
+    const info = gestureLabel(ev.id, setupData.templates);
+    announceStatus(`${info?.label ?? ev.id}: ${g.does}`);
+  } else if (ran && r.source === 'custom') {
+    announceStatus(`Your gesture: ${r.target}`);
+  }
+}
+
+/** Custom recorded poses: fire once when held 500 ms. */
+function matchCustom(points: readonly { x: number; y: number }[] | undefined, now: number): string | null {
+  if (!points || setupData.templates.length === 0) { customHeld = null; return null; }
+  const m = matchTemplate(points, setupData.templates);
+  if (!m) { customHeld = null; return null; }
+  const id = `custom:${m.id}`;
+  if (!customHeld || customHeld.id !== id) { customHeld = { id, since: now, fired: false }; return null; }
+  if (!customHeld.fired && now - customHeld.since >= 500) { customHeld.fired = true; return id; }
+  return null;
+}
+
+/** Elements a pinch (or dwell) clicks directly: any button/link/control in the
+ *  toolbar, menus, side panel and floating panels (the canvas keeps its own
+ *  pick/drag path). */
+const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
+function handClickable(clientX: number, clientY: number): HTMLElement | null {
+  const hit = document.elementFromPoint(clientX, clientY);
+  const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
+  if (!ctl || !ctl.closest(HAND_CLICK_ZONES)) return null;
+  if ((ctl as HTMLButtonElement).disabled) return null;
+  return ctl;
+}
+function activateControl(ctl: HTMLElement): void {
+  if (ctl instanceof HTMLSelectElement || (ctl instanceof HTMLInputElement && ctl.type === 'text')) ctl.focus();
+  else ctl.click();
 }
 
 btnGestures.addEventListener('click', () => {
@@ -875,12 +1130,30 @@ function processGestureFrame(f: PresenceFrame): void {
   // locked operator's hands (empty while paused).
   if (f.paused) {
     gestureRecognizer.reset();
+    motion.reset();
     gesturesPanel.feedPreview('none');
+    setupPanel.feedHand(null, performance.now());
     return;
   }
-  const res = gestureRecognizer.update({ hands: f.hands.map((h) => h.points), now: performance.now() });
+  const now = performance.now();
+  const hands = f.hands.map((h) => h.points);
+  setupPanel.feedHand(hands[0] ?? null, now);
+  setupPanel.feedFace(f.operatorFace ?? null);
+  // While the setup wizard is capturing, gestures don't trigger buttons.
+  if (setupPanel.isOpen()) { motion.reset(); return; }
+  const evs = motion.update({ hands, now });
+  const custom = matchCustom(hands[0], now);
+  if (custom) evs.push({ id: custom });
+  for (const ev of evs) handleMotion(ev);
+  // Optional face cues only CONFIRM something already waiting.
+  if (setupData.faceCues && faceCues.hasBaseline()) {
+    const cue = faceCues.update(faceRatios(f.operatorFace ?? []), now);
+    if (cue && !resting && somethingPending()) { runTarget('confirm'); announceStatus(cue === 'smile' ? 'Smile: confirmed.' : 'Eyebrows: confirmed.'); }
+  }
+  if (resting) { gestureRecognizer.reset(); return; }
+  const res = gestureRecognizer.update({ hands, now });
   gesturesPanel.feedPreview(res.gesture);
-  for (const g of res.fired) runGestureAction(gestureMap[g]);
+  for (const g of res.fired) { gestureGuide.highlight(g === 'pinch' ? null : g); runGestureAction(gestureMap[g]); }
   // Two-hand pinch-zoom nudges the viewport zoom when mapped to "zoom".
   if (res.gesture === 'two-hand-zoom' && gestureMap['two-hand-zoom'] === 'zoom' && Math.abs(res.zoomDelta) > 0.015) {
     const key = res.zoomDelta > 0 ? '=' : '-';
@@ -2172,6 +2445,12 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // FIRST — before recipes, phrasebook, or routing can eat "first"/"cancel".
   const choiceHandled = handleChoiceReply(utterance);
   if (choiceHandled !== null) return choiceHandled;
+  // Her own voice shortcuts (setup) and the setup / rest phrases run locally.
+  const boundTarget = bindingForPhrase(setupData, utterance);
+  if (boundTarget) return runTarget(boundTarget);
+  if (isSetupPhrase(utterance)) { setupPanel.open(); toggleButton(btnSetup, true); return true; }
+  const rp = restPhrase(utterance);
+  if (rp) { setResting(rp === 'rest'); return true; }
   setConfidenceState(null); // each command earns its own state
 
   // Accessibility requests short-circuit BEFORE routing: "make this house
@@ -2503,6 +2782,7 @@ btnMic.addEventListener('click', () => {
   btnMic.setAttribute('aria-pressed', String(nowOn));
   btnMic.classList.toggle('active', nowOn);
   btnMic.textContent = nowOn ? 'Mic on' : 'Mic';
+  refreshHints();
   voice.setAlwaysOn(nowOn);
   say(nowOn ? localize('listening', currentLanguage) : localize('micOff', currentLanguage));
 });
@@ -2542,7 +2822,7 @@ function toClient(x: number, y: number): { clientX: number; clientY: number } {
 let smX: number | null = null;
 let smY: number | null = null;
 function smoothAim(x: number, y: number): { x: number; y: number } {
-  const keep = activeProfile.smoothing;
+  const keep = setupData.calibration?.smoothing ?? activeProfile.smoothing;
   if (keep <= 0 || smX === null || smY === null) { smX = x; smY = y; return { x, y }; }
   smX += (x - smX) * (1 - keep);
   smY += (y - smY) * (1 - keep);
@@ -2555,7 +2835,15 @@ viewportEl.addEventListener('pointermove', (e: PointerEvent) => {
   lastPointer = { clientX: e.clientX, clientY: e.clientY, cameraNorm: null };
 }, { passive: true });
 
-function handleHandEvent(e: HandEvent): void {
+function handleHandEvent(raw: HandEvent): void {
+  // Calibrated reach: her comfortable box covers the whole screen.
+  let e = raw;
+  if ('x' in raw && 'y' in raw) {
+    const p = reachPoint(raw.x, raw.y);
+    e = { ...raw, x: p.x, y: p.y } as HandEvent;
+    lastHand = { x: raw.x, y: raw.y };
+  }
+  if (resting && e.type !== 'tracking' && e.type !== 'lost') return;
   switch (e.type) {
     case 'tracking': {
       const s = smoothAim(e.x, e.y);
@@ -2566,6 +2854,15 @@ function handleHandEvent(e: HandEvent): void {
       lastPointer = { clientX, clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(clientX, clientY)) break;
+      // Dwell-click fallback: hover a button and wait (setup toggle, or the
+      // assist profile's dwell click mode).
+      if (!resting && (setupData.dwellClick || activeProfile.clickMode === 'dwell')) {
+        const ctl = handClickable(clientX, clientY);
+        const d = dwell.update(ctl, performance.now());
+        handCursor.style.setProperty('--dwell', String(d.progress));
+        handCursor.classList.toggle('dwelling', d.progress > 0);
+        if (d.fire && ctl) { activateControl(ctl); handCursor.classList.remove('dwelling'); }
+      }
       viewport.hover?.(clientX, clientY); // ghost previews track the open hand
       break;
     }
@@ -2584,6 +2881,9 @@ function handleHandEvent(e: HandEvent): void {
       lastPointer = { clientX, clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       // A pinch over the on-screen keyboard presses the key under the cursor.
       if (keyboard.isOpen() && keyboard.pressAt(clientX, clientY)) break;
+      // Every button is pinchable: toolbar, More menu, panels, setup, chips.
+      const ctl = handClickable(clientX, clientY);
+      if (ctl) { activateControl(ctl); break; }
       if (viewport.tap?.(clientX, clientY)) {
         renderAll(); // a palette/tool consumed the tap
         break;
@@ -2714,6 +3014,12 @@ async function enableCamera(): Promise<boolean> {
     // Hands mode on: focusing a text field now raises the on-screen keyboard.
     keyboard.setAutoOpen(true);
     announceStatus('Camera on.');
+    applyActiveProfile(lastAdaptation);
+    if (!setupData.completed && !SIM_ACTIVE && !setupPanel.isOpen()) {
+      setupPanel.open();
+      toggleButton(btnSetup, true);
+      return true;
+    }
     say('Camera on. Pinch to select or drag. Press "Register me" to lock onto your face.');
     return true;
   } catch {
@@ -3510,3 +3816,6 @@ if (!navigator.mediaDevices?.getUserMedia) {
 }
 
 renderAll();
+
+// Apply saved setup (calibration, hints) once everything above exists.
+applySetup();
