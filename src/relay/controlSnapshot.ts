@@ -328,7 +328,7 @@ const DEVICES: readonly DeviceId[] = ['laptop', 'phone', 'other'];
 const APPLIANCES: readonly ApplianceState[] = ['on', 'off', 'unknown'];
 const SOURCES: readonly Source[] = ['on-device', 'cloud', 'rules'];
 const STATUSES: readonly JobStatus[] = ['queued', 'running', 'ready', 'error'];
-const KINDS: readonly JobKind[] = ['plan', 'ui', 'a11y'];
+const KINDS: readonly JobKind[] = ['plan', 'a11y'];
 
 function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;

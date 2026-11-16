@@ -100,35 +100,6 @@ export const PLAN_DEMO: SimStep[] = [
   { label: 'See what left this device', revealLedger: true },
 ];
 
-/** Frozen demo for the 3D part mode (reachable via ?mode=part&sim=1). */
-export const PART_DEMO: SimStep[] = [
-  { label: 'Build a cup grip', utterance: 'cup grip' },
-  { label: 'Select the sleeve', utterance: 'select sleeve' },
-  { label: 'Make it narrower (triggers a thin-wall warning)', utterance: 'make it narrower by 7' },
-  { label: 'Fix the wall', utterance: 'make it wider by 7' },
-  { label: 'Export the STL', action: undefined },
-  { label: 'See what left this device', revealLedger: true },
-];
-
-/**
- * Frozen demo for the UI-design mode (reachable via ?mode=ui&sim=1): a login
- * screen (rules fallback, no AI) → select the sign-in button → recolour it green,
- * make it taller, enlarge the heading (all visible edits) → export the HTML.
- * All deterministic, no network.
- */
-export const UI_DEMO: SimStep[] = [
-  { label: 'Login screen', utterance: 'login screen' },
-  { label: 'Select the button', utterance: 'select the button' },
-  { label: 'Make the button green', utterance: 'make the button green' },
-  { label: 'Make it 56 pixels tall', utterance: 'make it 56 pixels tall' },
-  { label: 'Bigger heading', utterance: 'bigger heading' },
-  { label: 'Check accessibility', utterance: 'check accessibility' },
-  { label: 'Accept the accessibility fix', feature: 'accept-a11y' },
-  { label: 'Export the HTML', action: undefined },
-  { label: 'See what left this device', revealLedger: true },
-];
-
-
 /** Frozen demo for on-canvas picture references (?sim=1&demo=refs). */
 export const REFERENCES_DEMO: SimStep[] = [
   { label: 'Find drawing references', utterance: 'find me references for drawings' },
@@ -141,8 +112,6 @@ export const DEMO_SCRIPT = PLAN_DEMO;
 
 /** The demo script for the active mode id. */
 export function demoFor(modeId: string): SimStep[] {
-  if (modeId === 'part') return PART_DEMO;
-  if (modeId === 'ui') return UI_DEMO;
   if (modeId === 'refs') return REFERENCES_DEMO;
   return PLAN_DEMO;
 }

@@ -204,7 +204,7 @@ const model = (text: string, inferenceSource?: string): TextGenModel => ({
 });
 
 const ctx: FusionContext = {
-  space: 'part', unit: 'mm', cursor: null, hoverId: null, selectedIds: [], nearby: [],
+  space: 'plan', unit: 'mm', cursor: null, hoverId: null, selectedIds: [], nearby: [],
 };
 
 describe('fuseIntent forceCloud (escalation execution)', () => {
@@ -214,26 +214,26 @@ describe('fuseIntent forceCloud (escalation execution)', () => {
   });
 
   it('forceCloud uses the cloud-only fusion twin and reports cloud', async () => {
-    setActiveMode('part');
+    setActiveMode('plan');
     setModelsForTest({
       enabled: true,
       fusion: model('{"clarify":"should not be used","confidence":0.1}', 'on_device'),
-      fusionCloud: model('{"op":"move","target":"selected","dx":-10,"dy":0,"dz":0,"confidence":0.9}'),
+      fusionCloud: model('{"op":"undo","confidence":0.9}'),
     });
-    const r = await fuseIntent('move it a bit left', ctx, { forceCloud: true });
+    const r = await fuseIntent('take that last thing back', ctx, { forceCloud: true });
     expect(r.source).toBe('cloud');
     expect(r.confidence).toBe(0.9);
-    expect(r.result).toEqual({ op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 });
+    expect(r.result).toEqual({ op: 'undo' });
   });
 
   it('forceCloud with no cloud model falls to the deterministic rules floor', async () => {
-    setActiveMode('part');
+    setActiveMode('plan');
     setModelsForTest({
       enabled: true,
-      fusion: model('{"op":"move","target":"selected","dx":-10,"dy":0,"dz":0,"confidence":0.9}', 'on_device'),
+      fusion: model('{"op":"redo","confidence":0.9}', 'on_device'),
     });
-    const r = await fuseIntent('uh move move left 10', ctx, { forceCloud: true });
+    const r = await fuseIntent('uh undo undo', ctx, { forceCloud: true });
     expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 });
+    expect(r.result).toEqual({ op: 'undo' });
   });
 });

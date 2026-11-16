@@ -198,12 +198,10 @@
 
   <section class="sec rule" id="modes" aria-labelledby="h-modes">
     <div class="wrap">
-      <div class="sec-h"><h2 class="d2 rv" id="h-modes">Three modes. One way of working.</h2><p class="lede rv d1s">Say “Plan mode”, “UI mode” or “Part mode”, or pinch the mode name at the top of the editor.</p></div>
+      <div class="sec-h"><h2 class="d2 rv" id="h-modes">Floor plans you can talk to.</h2><p class="lede rv d1s">Draw, check and walk through a plan with your voice and hands. Ask “what’s the wall thickness?” even with no signal.</p></div>
       <div class="modes">
         <div class="mtabs" role="tablist" aria-label="Modes">
           <button role="tab" id="mt-plan" aria-selected="true" aria-controls="mpanel" data-lmode="plan"><b>Plan</b><span>CAD floor plans with real measurements</span></button>
-          <button role="tab" id="mt-ui" aria-selected="false" aria-controls="mpanel" data-lmode="ui" tabindex="-1"><b>UI</b><span>Web and app screens</span></button>
-          <button role="tab" id="mt-part" aria-selected="false" aria-controls="mpanel" data-lmode="part" tabindex="-1"><b>Part</b><span>Small parts for 3D printing</span></button>
         </div>
         <div class="mpanel rv" role="tabpanel" id="mpanel" aria-labelledby="mt-plan">
           <div class="mfig"><svg id="modeFig" role="img" aria-label="Sample floor plan"></svg></div>
@@ -269,7 +267,7 @@
   <div class="ed">
     <div class="ed-top">
       <div class="doc"><h1 id="h-ed" tabindex="-1">Ground floor plan</h1><p id="docSub">Lakshmi’s flat, saved on this device</p></div>
-      <div class="seg" role="group" aria-label="Mode"><button aria-pressed="true" data-emode="plan">Plan</button><button aria-pressed="false" data-emode="ui">UI</button><button aria-pressed="false" data-emode="part">Part</button></div>
+      <div class="seg" role="group" aria-label="Mode"><button aria-pressed="true" data-emode="plan">Plan</button></div>
       <div class="ed-status">
         <button class="route" id="routeBadge" aria-haspopup="dialog"><span class="sig cloud" id="rbSig">Gemini · cloud</span><span class="why" id="rbWhy">Kannada detected → cloud</span></button>
         <button class="net" id="netBtn" aria-pressed="false"><svg class="i" aria-hidden="true"><use id="netIc" href="#i-wifi"/></svg><span id="netTx">Online</span><span class="q" id="netQ" hidden></span></button>

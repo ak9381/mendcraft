@@ -69,11 +69,9 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
         </section>
 
         <section class="judges-card">
-          <h2>The three walks</h2>
+          <h2>The walk</h2>
           <ul class="judges-list">
             <li><a href="/studio?sim=1&amp;play=1">Plan 2D</a> — floor plan: resize a wall, teach a phrase, any language, offline, accessibility.</li>
-            <li><a href="/studio?sim=1&amp;mode=part&amp;play=1">Part 3D</a> — a cup grip: thin-wall warning, then the fix, export STL.</li>
-            <li><a href="/studio?sim=1&amp;mode=ui&amp;play=1">UI login</a> — a login screen: recolour, resize, accessibility, export HTML.</li>
           </ul>
           <p class="judges-note">Each walk has Pause / Next / Skip, then a “Try it yourself” hint with three commands to say.</p>
         </section>

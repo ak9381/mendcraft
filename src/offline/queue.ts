@@ -13,7 +13,7 @@
 // monotonic `seq` that breaks ties when two jobs are created in the same tick,
 // so persistence round-trips preserve the exact run order.
 
-export type JobKind = 'plan' | 'ui' | 'a11y';
+export type JobKind = 'plan' | 'a11y';
 
 /** queued → running (draining) → ready (cloud answered, awaiting accept/reject)
  *  or error (cloud failed; stays queued for the next reconnect). */

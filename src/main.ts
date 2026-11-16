@@ -91,7 +91,7 @@ import { checkLanguageAvailability, type FusionOutcome } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
-import { generatePlan, generateUi } from './ai/hybrid';
+import { generatePlan } from './ai/hybrid';
 import { isFirebaseConfigured } from './firebase/app';
 import {
   createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
@@ -205,8 +205,8 @@ const hintButtonsHtml = mode.hints
   .map((h) => `<button type="button" data-cmd="${h.command}">${h.label}</button>`)
   .join('');
 
-const MODE_SHORT_LABEL: Record<string, string> = { plan: 'Plan', part: 'Part', ui: 'UI' };
-const modeSwitchHtml = listModes()
+const MODE_SHORT_LABEL: Record<string, string> = { plan: 'Plan' };
+const modeSwitchHtml = listModes().length < 2 ? '' : listModes()
   .map((m) => {
     const active = m.id === mode.id;
     const soon = m.status === 'coming-soon';
@@ -323,7 +323,6 @@ app.innerHTML = `
     <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
     <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
     <button id="btn-export" type="button">${mode.exportLabel}</button>
-    ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
     <div id="more-wrap" class="more-wrap">
       <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
@@ -624,7 +623,6 @@ function applyLanguage(pick: string, announce: boolean): void {
 
 // ---- controller + renderer (mode-provided) ----
 
-if (mode.id === 'ui') viewportEl.classList.add('ui-mode');
 const controller: ModeController = await mode.createController();
 const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controller, (id) => {
   if (!id) return;
@@ -1662,7 +1660,7 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
     }
   }
   const outcome = await resolveDeixis(utterance, image, {
-    pointer: pointerPx, candidates, space: mode.id as 'plan' | 'ui',
+    pointer: pointerPx, candidates, space: 'plan',
   });
   if (!outcome) return null;
   const res = outcome.resolution;
@@ -1961,18 +1959,17 @@ let draining = false;
  *  and re-fetchable on the next reconnect), keyed by job id. */
 type StagedResult =
   | { kind: 'plan'; payload: { ops: unknown[] }; source: Source }
-  | { kind: 'ui'; payload: { frame: unknown }; source: Source }
   | { kind: 'a11y'; items: A11yExplanation[]; source: Source };
 const staged = new Map<string, StagedResult>();
 /** Job ids with an accept/reject in flight — guards against a double-click
  *  re-entering acceptJob before the async remove settles (double-apply). */
 const settling = new Set<string>();
 
-const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', ui: 'Screen', a11y: 'A11y audit' };
+const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', a11y: 'A11y audit' };
 
-/** Only plan/ui modes queue generation jobs; part stays fully synchronous. */
+/** Plan generation jobs queue when offline. */
 function bigJobKind(): JobKind | null {
-  return mode.id === 'plan' || mode.id === 'ui' ? (mode.id as JobKind) : null;
+  return mode.id === 'plan' ? 'plan' : null;
 }
 
 function netEnv() {
@@ -2134,16 +2131,6 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
       await jobQueue.setStatus(job.id, 'ready');
     } else {
       await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no plan');
-    }
-  } else {
-    const res = await generateUi(prompt);
-    recordLedger(res.source, 'generate (queued)',
-      res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private, commandPayload(prompt));
-    if (res.frame) {
-      staged.set(job.id, { kind: 'ui', payload: { frame: res.frame }, source: res.source });
-      await jobQueue.setStatus(job.id, 'ready');
-    } else {
-      await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no screen');
     }
   }
 }
@@ -3361,36 +3348,9 @@ btnRedo.addEventListener('click', () => {
   renderAll();
 });
 btnExport.addEventListener('click', async () => {
-  // UI mode opens an accessible export panel (preview + code + download/copy)
-  // instead of silently downloading files; other modes export directly.
-  if (mode.id === 'ui') {
-    const { uiHtmlOf, uiSvgOf, uiFrameSizeOf } = await import('./ui/design/controller');
-    const html = uiHtmlOf(controller);
-    if (!html) { say('Nothing to export yet — create a screen first.'); return; }
-    const size = uiFrameSizeOf(controller);
-    const { openExportPanel } = await import('./ui/design/exportPanel');
-    openExportPanel({ html, svg: uiSvgOf(controller), frameW: size?.w, frameH: size?.h, onStatus: (m) => say(m) });
-    return;
-  }
   controller.export();
   say(`${mode.exportLabel}.`);
 });
-
-// UI mode only: copy the active frame's single-file HTML to the clipboard.
-const btnCopyHtml = document.getElementById('btn-copy-html') as HTMLButtonElement | null;
-if (btnCopyHtml) {
-  btnCopyHtml.addEventListener('click', async () => {
-    const { uiHtmlOf } = await import('./ui/design/controller');
-    const html = uiHtmlOf(controller);
-    if (!html) { say('Nothing to copy yet — create a screen first.'); return; }
-    try {
-      await navigator.clipboard.writeText(html);
-      say('HTML copied to clipboard.');
-    } catch {
-      say('Could not access the clipboard.');
-    }
-  });
-}
 
 if (viewport.toggle3D) {
   btn3d.hidden = false;
@@ -4512,8 +4472,6 @@ function createTour() {
     walks.className = 'tour-actions tour-walks';
     walks.append(
       button('Plan · 2D floor plan', () => { window.location.href = '/?sim=1&play=1'; }, 'primary'),
-      button('Part · 3D cup grip', () => { window.location.href = '/?sim=1&mode=part&play=1'; }, 'primary'),
-      button('UI · login screen', () => { window.location.href = '/?sim=1&mode=ui&play=1'; }, 'primary'),
     );
     const foot = document.createElement('div');
     foot.className = 'tour-actions';

@@ -54,7 +54,7 @@ export const DRAWING_REFERENCES_RECIPE: Recipe = {
   aliases: ['find drawing references', 'drawing references', 'find me references for drawings'],
   language: 'en',
   device: 'designer',
-  mode: 'ui',
+  mode: 'plan',
   taughtBy: 'mendcraft',
   steps: [{ op: { op: 'search_references', query: 'drawings' } }],
   createdAt: 0,

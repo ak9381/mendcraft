@@ -12,7 +12,7 @@ export interface RemoteSettings {
   /** Prepended to the big cloud-job prompts; '' = no change. */
   promptPreamble: string;
   /** Server prompt-template IDs per big job; '' = use the inline prompt. */
-  templateIds: { plan: string; screen: string; part: string };
+  templateIds: { plan: string };
   /** Cloud text-to-speech model name (spoken replies in her language). */
   ttsModel: string;
   /** Prebuilt cloud voice name for TTS (e.g. a Chirp3 HD voice). */
@@ -22,7 +22,7 @@ export interface RemoteSettings {
 export const REMOTE_DEFAULTS: RemoteSettings = {
   cloudModel: 'gemini-3.5-flash-lite',
   promptPreamble: '',
-  templateIds: { plan: '', screen: '', part: '' },
+  templateIds: { plan: '' },
   ttsModel: 'gemini-2.5-flash-preview-tts',
   ttsVoice: 'Kore',
 };
@@ -31,8 +31,6 @@ const KEYS = {
   cloudModel: 'cloud_model',
   promptPreamble: 'cloud_prompt_preamble',
   planTemplate: 'template_plan_generate',
-  screenTemplate: 'template_screen_generate',
-  partTemplate: 'template_part_design',
   ttsModel: 'cloud_tts_model',
   ttsVoice: 'cloud_tts_voice',
 } as const;
@@ -73,8 +71,6 @@ function read(getString: (rc: any, key: string) => string, rc: any): RemoteSetti
     promptPreamble: getString(rc, KEYS.promptPreamble),
     templateIds: {
       plan: getString(rc, KEYS.planTemplate),
-      screen: getString(rc, KEYS.screenTemplate),
-      part: getString(rc, KEYS.partTemplate),
     },
     ttsModel: nonEmpty(getString(rc, KEYS.ttsModel), REMOTE_DEFAULTS.ttsModel),
     ttsVoice: nonEmpty(getString(rc, KEYS.ttsVoice), REMOTE_DEFAULTS.ttsVoice),
@@ -100,8 +96,6 @@ export async function initRemoteConfig(
       [KEYS.cloudModel]: REMOTE_DEFAULTS.cloudModel,
       [KEYS.promptPreamble]: REMOTE_DEFAULTS.promptPreamble,
       [KEYS.planTemplate]: REMOTE_DEFAULTS.templateIds.plan,
-      [KEYS.screenTemplate]: REMOTE_DEFAULTS.templateIds.screen,
-      [KEYS.partTemplate]: REMOTE_DEFAULTS.templateIds.part,
       [KEYS.ttsModel]: REMOTE_DEFAULTS.ttsModel,
       [KEYS.ttsVoice]: REMOTE_DEFAULTS.ttsVoice,
     };

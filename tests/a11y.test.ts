@@ -18,20 +18,11 @@ import {
   turningCircleFits,
 } from '../src/plan/accessibility';
 import {
-  bestTextColor,
-  checkContrast,
-  checkLabels,
-  checkTargetSizes,
-  checkUiAccessibility,
-  contrastRatio,
-} from '../src/ui/design/accessibility';
-import {
-  PLAN_A11Y, UI_A11Y, coerceA11yExplanations, isAccessibilityRequest, recheckFix,
+  PLAN_A11Y, coerceA11yExplanations, isAccessibilityRequest, recheckFix,
   type A11yIssue,
 } from '../src/core/a11y';
 import { coercePlan } from '../src/plan/ai';
 import { explainAccessibility, setModelsForTest } from '../src/ai/hybrid';
-import type { Frame, StackNode, UiDoc, UiNode } from '../src/ui/design/doc';
 
 function run(engine: PlanEngine, env: Record<string, unknown>) {
   const v = validatePlanOp(env);
@@ -192,113 +183,6 @@ describe('ramps and steps', () => {
 });
 
 // ─── UI mode ────────────────────────────────────────────────────────────────
-
-let nextId = 0;
-function stack(children: UiNode[], fill?: string): StackNode {
-  return {
-    id: `s${nextId++}`, type: 'stack', direction: 'column', gap: 16, padding: 24,
-    align: 'stretch', justify: 'start', children, ...(fill ? { fill } : {}),
-  };
-}
-function frameOf(children: UiNode[], background = '#ffffff'): Frame {
-  return {
-    id: `f${nextId++}`, type: 'frame', name: 'Test', preset: 'desktop',
-    w: 1440, h: 900, background, root: stack(children),
-  };
-}
-function docOf(children: UiNode[], background?: string): UiDoc {
-  return { frames: [frameOf(children, background)], selectedId: null };
-}
-
-describe('WCAG contrast math', () => {
-  it('computes the canonical ratios', () => {
-    expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 5);
-    expect(contrastRatio('#ffffff', '#ffffff')).toBeCloseTo(1, 5);
-    expect(contrastRatio('#767676', '#ffffff')!).toBeGreaterThan(4.5);
-    expect(contrastRatio('#8a8a8a', '#ffffff')!).toBeLessThan(4.5);
-    expect(contrastRatio('not-a-colour', '#ffffff')).toBeNull();
-  });
-
-  it('picks the highest-contrast replacement text colour', () => {
-    expect(bestTextColor('#ffffff')).toBe('#0f172a');
-    expect(bestTextColor('#0f172a')).toBe('#ffffff');
-  });
-});
-
-describe('UI contrast check', () => {
-  it('flags low-contrast body text with a recolour fix', () => {
-    const doc = docOf([
-      { id: 't1', type: 'text', role: 'body', text: 'hello', size: 16, weight: 400, color: '#8a8a8a' },
-    ]);
-    const issues = checkContrast(doc);
-    expect(issues).toHaveLength(1);
-    expect(issues[0].fix).toMatchObject({ op: 'set_style', target: 't1', color: '#0f172a' });
-  });
-
-  it('lets the same grey pass as LARGE text (3:1 threshold)', () => {
-    const doc = docOf([
-      { id: 't1', type: 'text', role: 'heading', text: 'hello', size: UI_A11Y.largeTextPx, weight: 400, color: '#8a8a8a' },
-    ]);
-    expect(checkContrast(doc)).toHaveLength(0);
-  });
-
-  it('checks button labels against the button fill, using ancestor stack fills', () => {
-    const inner = stack(
-      [{ id: 'b1', type: 'button', label: 'Go', fill: '#fbbf24', textColor: '#ffffff', radius: 8, height: 44 }],
-      '#111111',
-    );
-    const doc: UiDoc = { frames: [frameOf([inner])], selectedId: null };
-    const issues = checkContrast(doc);
-    expect(issues).toHaveLength(1);
-    expect(issues[0].targetIds).toEqual(['b1']);
-  });
-});
-
-describe('UI target size check', () => {
-  it('flags short buttons and small icons with resize fixes', () => {
-    const doc = docOf([
-      { id: 'b1', type: 'button', label: 'Go', fill: '#2563eb', textColor: '#ffffff', radius: 8, height: 32 },
-      { id: 'i1', type: 'icon', fill: '#2563eb', size: 24 },
-    ]);
-    const issues = checkTargetSizes(doc);
-    expect(issues).toHaveLength(2);
-    expect(issues.find((i) => i.targetIds[0] === 'b1')?.fix).toMatchObject({ op: 'set_size', h: UI_A11Y.minTargetPx });
-    expect(issues.find((i) => i.targetIds[0] === 'i1')?.fix).toMatchObject({ op: 'set_size', w: UI_A11Y.minTargetPx });
-  });
-
-  it('passes 44 px targets', () => {
-    const doc = docOf([
-      { id: 'b1', type: 'button', label: 'Go', fill: '#2563eb', textColor: '#ffffff', radius: 8, height: 44 },
-    ]);
-    expect(checkTargetSizes(doc)).toHaveLength(0);
-  });
-});
-
-describe('UI label check', () => {
-  it('flags inputs with no label or placeholder', () => {
-    const doc = docOf([
-      { id: 'in1', type: 'input', label: '', placeholder: '', inputType: 'text', height: 44 },
-      { id: 'in2', type: 'input', label: 'Email', placeholder: '', inputType: 'email', height: 44 },
-    ]);
-    const issues = checkLabels(doc);
-    expect(issues).toHaveLength(1);
-    expect(issues[0].targetIds).toEqual(['in1']);
-    expect(issues[0].fix).toMatchObject({ op: 'set_text', target: 'in1' });
-  });
-
-  it('checkUiAccessibility aggregates all rules', () => {
-    const doc = docOf([
-      { id: 't1', type: 'text', role: 'body', text: 'x', size: 16, weight: 400, color: '#8a8a8a' },
-      { id: 'in1', type: 'input', label: '', placeholder: '', inputType: 'text', height: 32 },
-    ]);
-    const rules = checkUiAccessibility(doc).map((i) => i.rule);
-    expect(rules).toContain('contrast');
-    expect(rules).toContain('target-size');
-    expect(rules).toContain('missing-label');
-  });
-});
-
-// ─── Request detection + cloud explanation coercion ────────────────────────
 
 describe('accessibility request detection', () => {
   it('matches the spec phrasings', () => {

@@ -5,17 +5,11 @@
 
 import { type Op } from '../core/ops';
 import { parseRefinedQuery, refinePrompt } from '../references/query';
-import { isTemplateName, type TemplateName } from '../core/templates';
 import { getActiveMode } from '../core/modes';
-import { parseCommand, isTemplateCommand } from '../core/ruleParser';
 import { coercePlanGenerate } from '../plan/ai';
 import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
 import { buildPlanTemplate, type PlanTemplateName } from '../plan/templates';
 import { validatePlanOp, type PlanOp } from '../plan/ops';
-import { coerceUiGenerate } from '../ui/design/ai';
-import { parseUiCommand, isUiGenerate } from '../ui/design/ruleParser';
-import { buildUiTemplate } from '../ui/design/templates';
-import type { Frame, FramePreset } from '../ui/design/doc';
 import {
   buildFusionConstraint,
   buildFusionPrompt,
@@ -88,23 +82,11 @@ export interface GeneratePlanResult {
   source: Source;
 }
 
-/** UI-mode "generate a whole screen" result (a validated Frame or a clarify). */
-export interface GenerateUiResult {
-  frame?: Frame;
-  clarify?: string;
-  note?: string;
-  source: Source;
-}
-
 export interface VerifyResult {
   matchesIntent: boolean;
   issue: string | null;
   source: Source;
 }
-
-export type TemplateResult =
-  | { template: TemplateName; params: Record<string, number>; source: Source }
-  | { clarify: string; source: Source };
 
 export interface HybridStatus {
   appCheck: AppCheckStatus;
@@ -816,17 +798,6 @@ function extractJson(text: string): unknown {
   }
 }
 
-function numericParams(raw: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (typeof raw === 'object' && raw !== null) {
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      const n = typeof v === 'string' ? Number(v) : v;
-      if (typeof n === 'number' && Number.isFinite(n)) out[k] = n;
-    }
-  }
-  return out;
-}
-
 type ModelResponse = { text: () => string; inferenceSource?: string };
 
 /**
@@ -1102,7 +1073,7 @@ export async function resolveDeixis(
   opts: {
     pointer: { x: number; y: number } | null;
     candidates: readonly DeixisCandidate[];
-    space: 'plan' | 'ui';
+    space: 'plan';
   },
 ): Promise<DeixisOutcome | null> {
   const t0 = Date.now();
@@ -1180,33 +1151,6 @@ Printability warnings: ${JSON.stringify(warnings)}`;
   return { matchesIntent: warnings.length === 0, issue: warnings[0] ?? null, source: 'rules' };
 }
 
-export async function generateTemplate(prompt: string): Promise<TemplateResult> {
-  const models = await ensureModels();
-  if (models?.template) {
-    try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
-      const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.part, 'template',
-      );
-      const parsed = response ? extractJson(response.text()) : null;
-      if (typeof parsed === 'object' && parsed !== null) {
-        const o = parsed as Record<string, unknown>;
-        if (isTemplateName(o.template)) {
-          const source = sourceOf(response!);
-          recordInference(source, 'generate-template');
-          return { template: o.template, params: numericParams(o.params), source };
-        }
-      }
-    } catch (err) {
-      noteError('template model', err);
-    }
-  }
-  recordInference('rules', 'generate-template');
-  const ruled = parseCommand(prompt);
-  if (isTemplateCommand(ruled)) return { ...ruled, source: 'rules' };
-  return { clarify: 'Which design: cup grip, phone stand, hook, or utensil holder?', source: 'rules' };
-}
-
 /**
  * Plan-mode "generate a whole plan" (ONLY_IN_CLOUD, same hybrid wrapper as the
  * part template path). The cloud model returns {ops:[...]}; code re-validates
@@ -1257,55 +1201,6 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
     if (ops.length) return { ops, note, source: 'rules' };
   }
   return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
-}
-
-/**
- * UI-mode "generate a whole screen" (same hybrid wrapper as the plan generate
- * path). The cloud model returns a compact DOCUMENT; code expands + re-validates
- * it into a Frame. Falls back to the deterministic rule parser + a UI template
- * (login / landing / pricing) when the cloud is unavailable, so "login screen"
- * works with no AI.
- */
-export async function generateUi(prompt: string): Promise<GenerateUiResult> {
-  const models = await ensureModels();
-  if (models?.template) {
-    try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
-      const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.screen, 'ui generate',
-      );
-      const coerced = response ? coerceUiGenerate(extractJson(response.text())) : null;
-      if (coerced && 'frame' in coerced) {
-        const source = sourceOf(response!);
-        recordInference(source, 'generate-ui');
-        return { frame: coerced.frame, source };
-      }
-      if (coerced && 'clarify' in coerced) {
-        const source = sourceOf(response!);
-        recordInference(source, 'generate-ui');
-        return { clarify: coerced.clarify, source };
-      }
-      noteError('ui generate', new Error('cloud screen was empty or invalid; using a template'));
-    } catch (err) {
-      noteError('ui generate model', err);
-    }
-  }
-  recordInference('rules', 'generate-ui');
-  // Rules fallback: a named template → an expanded, validated Frame.
-  const ruled = parseUiCommand(prompt);
-  const mobile = /\b(mobile|phone)\b/.test(prompt.toLowerCase());
-  const preset: FramePreset = mobile ? 'mobile' : 'desktop';
-  let template = isUiGenerate(ruled) ? ruled.generate : null;
-  let note: string | undefined;
-  if (!template && getActiveMode().isDesignRequest(prompt)) {
-    template = 'login';
-    note = 'Cloud design was unavailable — built a login template instead.';
-  }
-  if (template) {
-    const frame = buildUiTemplate(template, isUiGenerate(ruled) ? ruled.preset ?? preset : preset);
-    if (frame) return { frame, note, source: 'rules' };
-  }
-  return { clarify: 'Try "login screen", "landing hero", "pricing section", or "mobile frame".', source: 'rules' };
 }
 
 /** Cloud explanations (and optional alternative fixes) for a11y issues. */

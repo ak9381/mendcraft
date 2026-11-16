@@ -167,9 +167,7 @@ export function choicePrompt(langCode: string, count: number): string {
 }
 
 /** Suggestions shown when a command is unknown — per mode, always runnable. */
-export function suggestCommands(modeId: string): string[] {
-  if (modeId === 'ui') return ['make the button green', 'make it 56 pixels tall', 'check accessibility'];
-  if (modeId === 'part') return ['cup grip', 'make it wider by 5', 'undo'];
+export function suggestCommands(_modeId: string): string[] {
   return ['add a door', 'make this wall 4 meters', 'check accessibility'];
 }
 
