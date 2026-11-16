@@ -127,24 +127,35 @@ actions is declared as the `chrome-extension` outbound kind (leaves device: no).
 The reference panel also uses the extension, when it is connected, to open a
 site that refuses to be framed (LinkedIn, Google, Spotify, Instagram, Facebook,
 X, WhatsApp, GitHub login) in a real Chrome tab, instead of sitting on
-"Loading…".
+"Loading…". Hands-free reference search uses that same extension to open a
+real Google Images or Pinterest tab, overlay numbered badges, and bring a
+picked picture back to the canvas. The extension never types into any field,
+including password or payment fields.
 
+### Picture references — the real web, Openverse fallback, and Gemini drawings
 
-### Picture references — Openverse and Wikimedia Commons
+When she says "find me references for drawings" (or "show me pictures of …")
+and picks **Search the web**, Mendcraft asks the Chrome extension to open a
+real Google Images or Pinterest tab. If the extension is not connected, it
+falls back to the Openverse API (`api.openverse.org`) and the Wikimedia
+Commons API (`commons.wikimedia.org`) and says so on the canvas. Only the
+**search text** leaves the device; the camera, hand landmarks, face mesh and
+raw voice audio never do. Results appear as numbered cards, each with its
+source and licence.
 
-When she says "find me references for drawings" (or "show me pictures of …"),
-Mendcraft searches the Openverse API (`api.openverse.org`) and the Wikimedia
-Commons API (`commons.wikimedia.org`). Only the **search text** leaves the
-device; the camera, hand landmarks, face mesh and raw voice audio never do.
-Results appear as numbered cards on the canvas, each with its source and
-licence. A "Search on the web" card can open a full-page search in the Chrome
-extension, or in a new tab if the extension is not connected — she pinches to
-confirm before anything opens.
+When she picks **Generate with Gemini** (or says "draw me a reference of …" /
+asks for landing-page inspirations or mockups), a cloud **text** Gemini model
+returns 3–4 SVG sketches or layout frames, shown as numbered cards labeled
+**Gemini · cloud**. That call is a ledger row with job `ref-generate`. Only
+the request text is sent — never sensors, photos, or an image-generating
+model. Image generation on Firebase AI Logic needs the paid Blaze plan;
+billing is not enabled.
 
-A fuzzy or non-English request may be turned into a short English search query
-by Gemini Nano on the device, or by Gemini in the cloud when Nano cannot run
-that language. That call is a ledger row with job `references`. Only the
-request text is sent, never sensors or the images themselves.
+A fuzzy or non-English web-search request may be turned into a short English
+search query by Gemini Nano on the device, or by Gemini in the cloud when
+Nano cannot run that language. That call is a ledger row with job
+`references`. Only the request text is sent, never sensors or the images
+themselves.
 
 ## Backstops
 

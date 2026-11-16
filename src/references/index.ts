@@ -8,4 +8,4 @@ export { stepRefGestures, emptyRefGestureState, isPinching, isOpenPalm, pinchPoi
 export { fixtureHits, fixtureSearch, DRAWING_REFERENCES_RECIPE, isReferenceRecipe, recipeSearchQuery } from './demo';
 export { createReferenceBoard, type ReferenceBoard, type ReferenceBoardOpts, type ApplyResult } from './board';
 export { googleImagesUrl, pinterestSearchUrl, searchPageUrl, bestImageUrl, collectResultImages, applyRefsCommand, emptyOverlay, pickByNumber, imageAtPoint } from './browserSearch';
-export { sanitizeSvg, parseGeneratedOptions, generatedToHits, fixtureGenerated, refinePromptForMockups, svgDataUrl } from './mockups';
+export { sanitizeSvg, parseGeneratedOptions, generatedToHits, fixtureGenerated, refinePromptForMockups, svgDataUrl, REF_GENERATE_CONSTRAINT } from './mockups';

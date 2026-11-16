@@ -50,6 +50,8 @@ import { coerceConnector, type Connector } from '../devices/connector';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
+import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
+import type { GenerateKind, RefHit } from '../references/types';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -200,6 +202,8 @@ interface Models {
   effectCheckCloud?: MultimodalGenModel | null;
   /** Add-a-device: write a declarative connector once (ONLY_IN_CLOUD). */
   connectorWriter?: TextGenModel | null;
+  /** Reference drawings / layout frames as SVG JSON (ONLY_IN_CLOUD, text model). */
+  refGenerate?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -223,6 +227,7 @@ export interface ModelOverrides {
   effectCheck?: MultimodalGenModel | null;
   effectCheckCloud?: MultimodalGenModel | null;
   connectorWriter?: TextGenModel | null;
+  refGenerate?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -422,6 +427,7 @@ async function ensureModels(): Promise<Models | null> {
       effectCheck: testOverrides.effectCheck ?? null,
       effectCheckCloud: testOverrides.effectCheckCloud ?? null,
       connectorWriter: testOverrides.connectorWriter ?? null,
+      refGenerate: testOverrides.refGenerate ?? null,
     };
   }
   if (!isEnabled()) {
@@ -674,9 +680,19 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // Reference drawings and layout frames: a cloud *text* model returns SVG
+    // JSON. Image-generating models need the Blaze plan; billing is not enabled.
+    const refGenerate = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(REF_GENERATE_CONSTRAINT, Schema) },
+      },
+    });
+
     cached = {
       intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
-      deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter,
+      deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
   } catch (err) {
@@ -1563,6 +1579,36 @@ export async function refineSearchQuery(
     return { query, source, ms: Date.now() - t0 };
   } catch (err) {
     noteError('refine-search', err);
+    return null;
+  }
+}
+
+/** Gemini SVG reference drawings or layout frames (cloud text model only).
+ *  Image-generating models are not used — they need Blaze billing, which is
+ *  not enabled. Returns 3–4 sanitized cards labeled Gemini · cloud, or null. */
+export async function generateReferenceOptions(
+  query: string,
+  kind: GenerateKind,
+): Promise<{ hits: RefHit[]; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const model = models?.refGenerate;
+  if (!model) return null;
+  const q = query.trim();
+  if (!q) return null;
+  try {
+    const { response } = await withTimeout(
+      model.generateContent(refinePromptForMockups(q, kind)),
+      CLOUD_GENERATE_TIMEOUT_MS,
+      'ref-generate',
+    );
+    const options = parseGeneratedOptions(response.text(), kind);
+    if (options.length < 3) return null;
+    const source = sourceOf(response);
+    recordInference(source, 'ref-generate', Date.now() - t0);
+    return { hits: generatedToHits(options), source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('ref-generate', err);
     return null;
   }
 }

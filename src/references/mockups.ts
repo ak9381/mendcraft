@@ -202,3 +202,23 @@ export function fixtureGenerated(query: string, kind: GenerateKind): GeneratedOp
 function escapeText(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
+
+/** Cloud JSON schema for Gemini SVG options (text model, not image generation). */
+export const REF_GENERATE_CONSTRAINT: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    options: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          kind: { type: 'string' },
+          svg: { type: 'string' },
+        },
+        required: ['title', 'svg'],
+      },
+    },
+  },
+  required: ['options'],
+};

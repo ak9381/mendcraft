@@ -127,7 +127,7 @@ import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
 import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch, searchPageUrl, type RefHit, type SearchEngine } from './references';
-import { refineSearchQuery } from './ai/hybrid';
+import { refineSearchQuery, generateReferenceOptions } from './ai/hybrid';
 import { parseChromeIntent, intentToRequest } from './extension/intents';
 import { createExtensionBridge } from './extension/bridge';
 import { addClip, emptyClips, type ClipsState } from './extension/clips';
@@ -1226,7 +1226,16 @@ const refBoard = createReferenceBoard({
       const { fixtureGenerated, generatedToHits } = await import('./references/mockups');
       return generatedToHits(fixtureGenerated(query, kind));
     }
-    return null;
+    const r = await generateReferenceOptions(query, kind);
+    if (!r) return null;
+    recordLedger(
+      'cloud',
+      'ref-generate',
+      kind === 'layout' ? 'Gemini layout frames' : 'Gemini reference drawings',
+      query,
+      r.ms,
+    );
+    return r.hits;
   },
 });
 viewportEl.appendChild(refBoard.element);

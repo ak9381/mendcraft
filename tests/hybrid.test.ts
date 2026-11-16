@@ -12,6 +12,7 @@ import {
   prepareHybrid,
   setModelsForTest,
   verifyOp,
+  generateReferenceOptions,
   type TextGenModel,
 } from '../src/ai/hybrid';
 import { partMode, setActiveMode } from '../src/core/modes';
@@ -533,5 +534,35 @@ describe('isDesignRequest', () => {
     expect(isDesignRequest('move left 10')).toBe(false);
     expect(isDesignRequest('make it taller by 5')).toBe(false);
     expect(isDesignRequest('cup grip')).toBe(false);
+  });
+});
+
+describe('generateReferenceOptions (SVG text model, no image billing)', () => {
+  const svg = (n: number) => `<svg viewBox="0 0 10 10"><circle cx="${n}" cy="2" r="1"/></svg>`;
+  const payload = JSON.stringify({
+    options: [
+      { title: 'Front view', kind: 'drawing', svg: svg(2) },
+      { title: 'Side view', kind: 'drawing', svg: svg(5) + '<script>alert(1)</script>' },
+      { title: 'Top view', kind: 'drawing', svg: svg(8) },
+    ],
+  });
+
+  it('returns 3–4 sanitized Gemini · cloud cards from the cloud text model', async () => {
+    setModelsForTest({ enabled: true, refGenerate: model(payload) });
+    const r = await generateReferenceOptions('hand holding a cup', 'drawing');
+    expect(r).not.toBeNull();
+    expect(r!.hits).toHaveLength(3);
+    expect(r!.hits.every((h) => h.credit === 'Gemini · cloud')).toBe(true);
+    expect(r!.hits.every((h) => h.source === 'Gemini')).toBe(true);
+    expect(r!.hits[1].thumbUrl.startsWith('data:image/svg+xml')).toBe(true);
+    expect(r!.source).toBe('cloud');
+    expect(r!.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns null when the cloud model is missing or the reply is unusable', async () => {
+    setModelsForTest({ enabled: true });
+    expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
+    setModelsForTest({ enabled: true, refGenerate: model('{"options":[]}') });
+    expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
   });
 });

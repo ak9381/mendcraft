@@ -163,6 +163,7 @@ export const CLOUD_LEDGER_JOBS: readonly string[] = [
   'lang-detect',
   'spotify',
   'references',
+  'ref-generate',
 ];
 
 /** Strip the parenthetical state suffix a ledger job can carry, e.g.
