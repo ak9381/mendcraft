@@ -122,6 +122,9 @@ import { resolveGesture, nextRestState } from './input/gestureDispatch';
 import { matchTemplate } from './input/gestureTemplates';
 import { createFaceCueDetector, faceRatios } from './input/faceCues';
 import { createDwellClicker } from './input/dwell';
+import { createOneEuroFilter } from './input/oneEuro';
+import { createClickCooldown } from './input/clickCooldown';
+import { parseListenPhrase } from './input/listening';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
@@ -277,6 +280,10 @@ app.innerHTML = `
         .join('')}</select>
       <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
     </label>
+    <span id="listen-chip" class="status-chip" data-state="listening" title="Say ‘Mendcraft sleep’ so background speech cannot fire commands. Say ‘Mendcraft wake’ to listen again.">
+      <span class="status-k">Mic</span>
+      <span id="listen-state" class="status-v">Listening</span>
+    </span>
     <span class="status-chip">
       <span class="status-k">AI</span>
       <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
@@ -363,6 +370,8 @@ const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
 const trackingStateEl = el<HTMLSpanElement>('tracking-state');
+const listenChip = el<HTMLSpanElement>('listen-chip');
+const listenStateEl = el<HTMLSpanElement>('listen-state');
 const pinchMeterEl = el<HTMLSpanElement>('pinch-meter');
 const pinchMeterFill = el<HTMLSpanElement>('pinch-meter-fill');
 const pinchMeterLabel = el<HTMLSpanElement>('pinch-meter-label');
@@ -815,6 +824,9 @@ function toggleButton(btn: HTMLButtonElement, on: boolean): void {
 let setupData: SetupData = loadSetup();
 const motion = createMotionRecognizer();
 const dwell = createDwellClicker(900);
+const cursorFilter = createOneEuroFilter();
+const clickCooldown = createClickCooldown();
+let voiceListening = true;
 const faceCues = createFaceCueDetector();
 let resting = false;
 let lastClosedPanel: HTMLElement | null = null;
@@ -903,6 +915,18 @@ function setResting(on: boolean): void {
   document.body.classList.toggle('mc-resting', on);
   if (on) { handCursor.classList.remove('pinching'); viewport.endDrag?.(); }
   say(on ? 'Resting. Gestures paused. Wave to wake.' : 'Awake. Gestures on.');
+}
+
+function setListening(on: boolean): void {
+  if (voiceListening === on) {
+    say(on ? 'Already listening.' : 'Already sleeping. Say Mendcraft wake to listen.');
+    return;
+  }
+  voiceListening = on;
+  listenChip.dataset.state = on ? 'listening' : 'sleep';
+  listenStateEl.textContent = on ? 'Listening' : 'Sleeping';
+  document.body.classList.toggle('mc-voice-sleep', !on);
+  say(on ? 'Listening. Commands are on.' : 'Sleeping. Say Mendcraft wake when you want me to listen.');
 }
 
 /** Panels a palm swipe "back" can close, newest first. */
@@ -1567,6 +1591,21 @@ function processGestureFrame(f: PresenceFrame): void {
 // ---- command pipeline (shared by voice, text, and sim) ----
 
 async function runUtterance(utterance: string): Promise<void> {
+  const listen = parseListenPhrase(utterance);
+  if (listen === 'wake') {
+    lastCommandEl.textContent = `"${utterance}"`;
+    setListening(true);
+    return;
+  }
+  if (listen === 'sleep') {
+    lastCommandEl.textContent = `"${utterance}"`;
+    setListening(false);
+    return;
+  }
+  if (!voiceListening) {
+    lastCommandEl.textContent = 'Sleeping. Say “Mendcraft wake” to listen.';
+    return;
+  }
   lastCommandEl.textContent = `"${utterance}"`;
   let ok = false;
   try {
@@ -3465,17 +3504,13 @@ function aimPointer(clientX: number, clientY: number): { clientX: number; client
   return { clientX, clientY, id };
 }
 
-// Pointer smoothing for the AIMING phase only: the active profile's `smoothing`
-// EMA steadies a shaky hover/cursor, while commit actions (tap, drag) stay on raw
-// coordinates for accuracy. Reset whenever the pinch state changes.
-let smX: number | null = null;
-let smY: number | null = null;
-function smoothAim(x: number, y: number): { x: number; y: number } {
+// Pointer smoothing for the AIMING phase only: a One-Euro filter steadies a
+// shaky hover/cursor (cutoff rises with speed so a reach is not laggy), while
+// commit actions (tap, drag) stay on raw coordinates. Reset on pinch or lost.
+function smoothAim(x: number, y: number, now = performance.now()): { x: number; y: number } {
   const keep = setupData.calibration?.smoothing ?? activeProfile.smoothing;
-  if (keep <= 0 || smX === null || smY === null) { smX = x; smY = y; return { x, y }; }
-  smX += (x - smX) * (1 - keep);
-  smY += (y - smY) * (1 - keep);
-  return { x: smX, y: smY };
+  cursorFilter.setSmoothing(keep);
+  return cursorFilter.filter(x, y, now);
 }
 
 // Mouse/touch pointers feed point-and-say too (same pointer layer as pinch);
@@ -3519,7 +3554,7 @@ function handleHandEvent(raw: HandEvent): void {
   if (resting && e.type !== 'tracking' && e.type !== 'lost') return;
   switch (e.type) {
     case 'tracking': {
-      const s = smoothAim(e.x, e.y);
+      const s = smoothAim(e.x, e.y, performance.now());
       const raw = toClient(s.x, s.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
@@ -3531,20 +3566,26 @@ function handleHandEvent(raw: HandEvent): void {
       refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY });
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
-      // Dwell-to-select is always available as a fallback for people who can't
-      // pinch: hover a button or a canvas object and wait.
+      // Dwell is a first-class click, equal to pinch and voice (a pinch can
+      // hurt). Hover a button or a canvas object and wait for the ring to fill.
       if (!resting) {
+        const now = performance.now();
         const ctl = handClickable(aimed.clientX, aimed.clientY);
         const target: unknown = ctl ?? aimed.id ?? null;
-        const d = dwell.update(target, performance.now());
+        const d = dwell.update(target, now);
         handCursor.style.setProperty('--dwell', String(d.progress));
         handCursor.classList.toggle('dwelling', d.progress > 0);
         if (d.fire) {
           handCursor.classList.remove('dwelling');
-          if (ctl) activateControl(ctl);
-          else if (aimed.id) {
-            if (!viewport.tap?.(aimed.clientX, aimed.clientY)) controller.selectId(aimed.id);
-            renderAll();
+          if (!clickCooldown.ready(now)) {
+            dwell.reset();
+          } else {
+            clickCooldown.arm(now);
+            if (ctl) activateControl(ctl);
+            else if (aimed.id) {
+              if (!viewport.tap?.(aimed.clientX, aimed.clientY)) controller.selectId(aimed.id);
+              renderAll();
+            }
           }
         }
       }
@@ -3552,7 +3593,7 @@ function handleHandEvent(raw: HandEvent): void {
       break;
     }
     case 'pinch-start': {
-      smX = null; smY = null; // commit on raw coordinates
+      cursorFilter.reset(); // commit on raw coordinates
       const raw = toClient(e.x, e.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
@@ -3564,25 +3605,30 @@ function handleHandEvent(raw: HandEvent): void {
       break;
     }
     case 'pinch-tap': {
+      const now = performance.now();
       const raw = toClient(e.x, e.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
       onboarding.notifyPinch();
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
-      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      if (!clickCooldown.ready(now)) break;
+      const consumed = (): void => { clickCooldown.arm(now); };
+      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) { consumed(); break; }
       // A pinch over the on-screen keyboard presses the key under the cursor.
-      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) break;
+      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) { consumed(); break; }
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
       const ctl = handClickable(aimed.clientX, aimed.clientY);
-      if (ctl) { activateControl(ctl); break; }
+      if (ctl) { activateControl(ctl); consumed(); break; }
       if (viewport.tap?.(aimed.clientX, aimed.clientY)) {
         renderAll(); // a palette/tool consumed the tap
+        consumed();
         break;
       }
       const id = aimed.id ?? viewport.pick(aimed.clientX, aimed.clientY);
       if (id) {
         controller.selectId(id);
         renderAll();
+        consumed();
       }
       break;
     }
@@ -3604,7 +3650,7 @@ function handleHandEvent(raw: HandEvent): void {
       viewport.endDrag?.();
       break;
     case 'lost':
-      smX = null; smY = null;
+      cursorFilter.reset();
       handCursor.hidden = true;
       viewport.endDrag?.();
       break;
