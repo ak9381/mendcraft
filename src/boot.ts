@@ -5,7 +5,7 @@
 //   /remote (or ?view=remote)  → the phone remote + camera page
 //   /control                   → the iPad control room
 //   /judges                    → the guided-tour page
-//   /spotify                   → Spotify OAuth callback (token exchange, then bounce back)
+//   /spotify                   → Spotify OAuth callback (token exchange, then close the pop-up or bounce back)
 
 import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
 

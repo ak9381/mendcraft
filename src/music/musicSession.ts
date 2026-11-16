@@ -16,6 +16,7 @@ import {
   clearTokens,
   getValidAccessToken,
   isNativeMusicShell,
+  listenSpotifyAuthResult,
   loadTokens,
   readClientId,
   spotifyStatus,
@@ -72,6 +73,7 @@ export function createMusicSession(opts: {
   let sdk: SdkPlayer | null = null;
   let sdkTried = false;
   let changeCb: ((s: MusicSessionState) => void) | null = null;
+  let stopAuthListen: (() => void) | null = null;
   let cached: { title: string; artist: string; playing: boolean; volume: number } | null = null;
   const apiOpts = (): api.SpotifyApiOptions => ({ onCall: opts.onCall });
 
@@ -301,6 +303,15 @@ export function createMusicSession(opts: {
     }
     const started = await startSpotifyConnect({});
     if (!started.ok) return { ok: false, detail: started.error, via: 'local' };
+    if (started.mode === 'popup') {
+      stopAuthListen?.();
+      stopAuthListen = listenSpotifyAuthResult((notice) => {
+        stopAuthListen = null;
+        if (notice.ok) void refreshFromSpotify();
+        else emit();
+      });
+      return { ok: true, detail: 'Sign in to Spotify in the pop-up. This page stays open.', via: 'spotify' };
+    }
     return { ok: true, detail: 'Opening Spotify…', via: 'spotify' };
   }
 
@@ -338,6 +349,8 @@ export function createMusicSession(opts: {
       cb(snapshot());
     },
     destroy() {
+      stopAuthListen?.();
+      stopAuthListen = null;
       local.destroy();
       sdk?.disconnect();
       sdk = null;

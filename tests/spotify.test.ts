@@ -2,24 +2,34 @@ import { describe, expect, it } from 'vitest';
 import {
   base64UrlEncode,
   buildAuthorizeUrl,
+  canHostSpotifyAuthInIframe,
   codeChallenge,
   completeSpotifyRedirect,
   generateCodeVerifier,
   getValidAccessToken,
   isAccessTokenFresh,
+  isSpotifyAuthNotice,
+  isSpotifyAuthPopup,
+  listenSpotifyAuthResult,
   loadTokens,
+  notifySpotifyAuthResult,
   parseOAuthCallback,
   readClientId,
   refreshAccessToken,
   saveTokens,
   spotifyRedirectUri,
   spotifyStatus,
+  startSpotifyConnect,
   tokensFromResponse,
+  SPOTIFY_AUTH_EVENT,
+  SPOTIFY_POPUP_NAME,
   SPOTIFY_SCOPES,
   SPOTIFY_TOKEN_URL,
   type StorageLike,
+  type SpotifyAuthNotice,
   type SpotifyTokens,
 } from '../src/music/spotifyAuth';
+import { handleSpotifyCallback } from '../src/music/spotifyCallback';
 import {
   pickSearchHit,
   redactLedger,
@@ -288,5 +298,148 @@ describe('intent mapping', () => {
     expect(parseMusicIntent('ಹಾಡು ಹಾಕು')).toEqual({ type: 'play' });
     expect(parseMusicIntent('गाना चलाओ')).toEqual({ type: 'play' });
     expect(parseMusicIntent('ಮುಂದಿನ ಹಾಡು')).toEqual({ type: 'next' });
+  });
+});
+
+describe('Spotify sign-in pop-up', () => {
+  it('cannot host accounts.spotify.com in the in-canvas iframe (XFO deny + frame-ancestors)', () => {
+    // Headers observed 2026-11-16 via curl -I https://accounts.spotify.com/
+    const headers = {
+      'x-frame-options': 'deny',
+      'content-security-policy':
+        "base-uri 'none'; frame-ancestors 'self' http://*.spotify.net http://*.spotify.com https://*.spotify.net https://*.spotify.com; object-src 'none'",
+    };
+    expect(canHostSpotifyAuthInIframe(headers, 'https://mendcraft.web.app')).toBe(false);
+    expect(canHostSpotifyAuthInIframe({ 'X-Frame-Options': 'sameorigin' }, 'https://mendcraft.web.app')).toBe(false);
+    expect(canHostSpotifyAuthInIframe({
+      'content-security-policy': "frame-ancestors https://mendcraft.web.app",
+    }, 'https://mendcraft.web.app')).toBe(true);
+  });
+
+  it('treats a named pop-up or an opener as the auth pop-up', () => {
+    expect(isSpotifyAuthPopup({ opener: {}, name: '' })).toBe(true);
+    expect(isSpotifyAuthPopup({ opener: null, name: SPOTIFY_POPUP_NAME })).toBe(true);
+    expect(isSpotifyAuthPopup({ opener: null, name: '' })).toBe(false);
+  });
+
+  it('opens a blank pop-up before navigating it, and does not leave the opener', async () => {
+    const storage = memoryStorage();
+    const navigated: string[] = [];
+    let opened: { url: string; name: string; features: string } | null = null;
+    const popup = {
+      closed: false,
+      location: { assign: (u: string) => { navigated.push(u); } },
+    };
+    const result = await startSpotifyConnect({
+      env: ENV,
+      storage,
+      origin: 'https://mendcraft.web.app',
+      returnPath: '/studio',
+      native: false,
+      assign: (u) => { throw new Error('should not full-page redirect: ' + u); },
+      openPopup: (url, name, features) => {
+        opened = { url, name, features };
+        return popup;
+      },
+    });
+    expect(result).toEqual({ ok: true, mode: 'popup' });
+    expect(opened?.url).toBe('about:blank');
+    expect(opened?.name).toBe(SPOTIFY_POPUP_NAME);
+    expect(navigated).toHaveLength(1);
+    expect(navigated[0]).toMatch(/^https:\/\/accounts\.spotify\.com\/authorize\?/);
+    expect(navigated[0]).toContain('redirect_uri=' + encodeURIComponent('https://mendcraft.web.app/spotify'));
+  });
+
+  it('falls back to a full-page redirect when the pop-up is blocked', async () => {
+    const redirects: string[] = [];
+    const result = await startSpotifyConnect({
+      env: ENV,
+      storage: memoryStorage(),
+      origin: 'https://mendcraft.web.app',
+      native: false,
+      openPopup: () => null,
+      assign: (u) => redirects.push(u),
+    });
+    expect(result).toEqual({ ok: true, mode: 'redirect' });
+    expect(redirects).toHaveLength(1);
+    expect(redirects[0]).toMatch(/^https:\/\/accounts\.spotify\.com\/authorize\?/);
+  });
+
+  it('falls back when the pop-up closes before it can be navigated', async () => {
+    const redirects: string[] = [];
+    const result = await startSpotifyConnect({
+      env: ENV,
+      storage: memoryStorage(),
+      origin: 'https://mendcraft.web.app',
+      native: false,
+      openPopup: () => ({ closed: true, location: { assign: () => { throw new Error('closed'); } } }),
+      assign: (u) => redirects.push(u),
+    });
+    expect(result).toEqual({ ok: true, mode: 'redirect' });
+    expect(redirects).toHaveLength(1);
+  });
+
+  it('notifies the opener and BroadcastChannel without sending tokens', () => {
+    const posted: Array<{ data: unknown; origin: string }> = [];
+    const channel: unknown[] = [];
+    const notice = notifySpotifyAuthResult({ ok: true }, {
+      origin: 'https://mendcraft.web.app',
+      postToOpener: (data, origin) => posted.push({ data, origin }),
+      postToChannel: (data) => channel.push(data),
+    });
+    expect(notice).toEqual({ type: SPOTIFY_AUTH_EVENT, ok: true });
+    expect(JSON.stringify(notice)).not.toMatch(/accessToken|refreshToken|Bearer/i);
+    expect(posted).toEqual([{ data: notice, origin: 'https://mendcraft.web.app' }]);
+    expect(channel).toEqual([notice]);
+    expect(isSpotifyAuthNotice(notice)).toBe(true);
+    expect(isSpotifyAuthNotice({ type: 'other', ok: true })).toBe(false);
+  });
+
+  it('listenSpotifyAuthResult accepts same-origin notices and ignores others', () => {
+    const got: SpotifyAuthNotice[] = [];
+    const listeners: Array<(ev: MessageEvent) => void> = [];
+    const unsub = listenSpotifyAuthResult((n) => got.push(n), {
+      origin: 'https://mendcraft.web.app',
+      addWindowListener: (fn) => { listeners.push(fn); },
+      removeWindowListener: () => {},
+      channel: null,
+    });
+    listeners[0]({ origin: 'https://evil.example', data: { type: SPOTIFY_AUTH_EVENT, ok: true } } as MessageEvent);
+    listeners[0]({ origin: 'https://mendcraft.web.app', data: { type: 'other', ok: true } } as MessageEvent);
+    listeners[0]({ origin: 'https://mendcraft.web.app', data: { type: SPOTIFY_AUTH_EVENT, ok: true } } as MessageEvent);
+    expect(got).toEqual([{ type: SPOTIFY_AUTH_EVENT, ok: true }]);
+    unsub();
+  });
+
+  it('the /spotify pop-up notifies the opener and closes instead of leaving Mendcraft', async () => {
+    const closes: number[] = [];
+    const replaces: string[] = [];
+    const notices: Array<{ ok: boolean; error?: string }> = [];
+    await handleSpotifyCallback({
+      isPopup: true,
+      complete: async () => ({ ok: true, returnTo: '/studio' }),
+      notify: (n) => notices.push(n),
+      close: () => { closes.push(1); },
+      replace: (url) => replaces.push(url),
+      delay: (fn) => { fn(); },
+    });
+    expect(notices).toEqual([{ ok: true }]);
+    expect(closes).toEqual([1]);
+    expect(replaces).toEqual([]);
+  });
+
+  it('the /spotify full-page callback still returns to the page she came from', async () => {
+    const closes: number[] = [];
+    const replaces: string[] = [];
+    await handleSpotifyCallback({
+      isPopup: false,
+      complete: async () => ({ ok: false, error: 'access_denied', returnTo: '/studio' }),
+      notify: () => {},
+      close: () => { closes.push(1); },
+      replace: (url) => replaces.push(url),
+      delay: (fn) => { fn(); },
+    });
+    expect(closes).toEqual([]);
+    expect(replaces).toEqual(['/studio']);
   });
 });

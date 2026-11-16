@@ -3,9 +3,15 @@
 // (`VITE_SPOTIFY_CLIENT_ID`); when it is missing the UI shows "Spotify not set
 // up" and the built-in public-domain player keeps working.
 //
-// Redirect URI is always `${origin}/spotify`. Inside a Capacitor native shell
-// that bounce cannot return to the app, so Connect is sent to the hosted web
-// app instead (see isNativeMusicShell).
+// Redirect URI is always `${origin}/spotify`. Connect opens a small pop-up so
+// she never leaves Mendcraft; the pop-up finishes PKCE at /spotify, tells the
+// opener over postMessage + BroadcastChannel (tokens stay in localStorage),
+// and closes. If the pop-up is blocked, we fall back to a full-page redirect.
+// The in-canvas browser panel cannot host this: it is an iframe, and
+// accounts.spotify.com sends X-Frame-Options: DENY plus CSP frame-ancestors
+// limited to Spotify origins. Inside a Capacitor native shell the bounce
+// cannot return to the app, so Connect is sent to the hosted web app instead
+// (see isNativeMusicShell).
 
 export const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
 export const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
@@ -383,7 +389,184 @@ export async function completeSpotifyRedirect(
   }
 }
 
-/** Start the OAuth redirect (browser only). Throws a clear error in a native shell. */
+export const SPOTIFY_POPUP_NAME = 'mendcraft-spotify';
+export const SPOTIFY_POPUP_FEATURES =
+  'popup=yes,width=480,height=740,menubar=no,toolbar=no,location=yes,status=no,resizable=yes,scrollbars=yes';
+export const SPOTIFY_AUTH_EVENT = 'mendcraft.spotify.auth';
+export const SPOTIFY_AUTH_CHANNEL = 'mendcraft.spotify.auth';
+
+export type SpotifyAuthNotice = {
+  type: typeof SPOTIFY_AUTH_EVENT;
+  ok: boolean;
+  error?: string;
+};
+
+export type AuthPopupLike = {
+  closed: boolean;
+  location: { assign: (url: string) => void };
+  close?: () => void;
+};
+
+export type OpenAuthPopup = (url: string, name: string, features: string) => AuthPopupLike | null;
+
+export function isSpotifyAuthNotice(data: unknown): data is SpotifyAuthNotice {
+  if (!data || typeof data !== 'object') return false;
+  const d = data as Record<string, unknown>;
+  return d.type === SPOTIFY_AUTH_EVENT && typeof d.ok === 'boolean'
+    && (d.error === undefined || typeof d.error === 'string');
+}
+
+/** True when this window is the Spotify sign-in pop-up (name or opener). */
+export function isSpotifyAuthPopup(
+  win: { opener: unknown; name?: string } | null | undefined = typeof window === 'undefined' ? undefined : window,
+): boolean {
+  if (!win) return false;
+  if (win.name === SPOTIFY_POPUP_NAME) return true;
+  return Boolean(win.opener && win.opener !== win);
+}
+
+/** accounts.spotify.com cannot be shown in an iframe when these headers are present. */
+export function canHostSpotifyAuthInIframe(
+  headers: Record<string, string>,
+  embedderOrigin: string,
+): boolean {
+  const get = (name: string): string => {
+    const key = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+    return (key ? headers[key] : '') ?? '';
+  };
+  const xfo = get('x-frame-options').trim().toLowerCase();
+  if (xfo === 'deny' || xfo === 'sameorigin') return false;
+  const csp = get('content-security-policy');
+  const match = /frame-ancestors\s+([^;]+)/i.exec(csp);
+  if (!match) return true;
+  const sources = match[1].trim().split(/\s+/).filter(Boolean);
+  if (sources.includes("'none'")) return false;
+  if (sources.includes('*')) return true;
+  return sources.some((src) => frameAncestorAllows(src, embedderOrigin));
+}
+
+function frameAncestorAllows(src: string, origin: string): boolean {
+  const raw = src.replace(/^["']|["']$/g, '');
+  if (raw === "'self'" || raw === 'self') return false;
+  if (raw === '*') return true;
+  try {
+    const embedder = new URL(origin);
+    const wild = /^([a-z][a-z0-9+.-]*):\/\/\*\.([a-z0-9.-]+)(?::(\d+))?$/i.exec(raw);
+    if (wild) {
+      if (embedder.protocol !== `${wild[1]}:`) return false;
+      const host = wild[2];
+      return embedder.hostname === host || embedder.hostname.endsWith(`.${host}`);
+    }
+    return new URL(raw).origin === embedder.origin;
+  } catch {
+    return false;
+  }
+}
+
+/** Open a blank pop-up in the same click turn, before any await, so the browser
+ *  still counts it as a user gesture. */
+export function openAuthPopupBlank(openFn?: OpenAuthPopup): AuthPopupLike | null {
+  const open: OpenAuthPopup = openFn ?? ((url, name, features) => {
+    try {
+      return window.open(url, name, features);
+    } catch {
+      return null;
+    }
+  });
+  return open('about:blank', SPOTIFY_POPUP_NAME, SPOTIFY_POPUP_FEATURES);
+}
+
+export function notifySpotifyAuthResult(
+  result: { ok: boolean; error?: string },
+  opts: {
+    origin?: string;
+    postToOpener?: (data: SpotifyAuthNotice, origin: string) => void;
+    postToChannel?: (data: SpotifyAuthNotice) => void;
+  } = {},
+): SpotifyAuthNotice {
+  const notice: SpotifyAuthNotice = result.ok
+    ? { type: SPOTIFY_AUTH_EVENT, ok: true }
+    : { type: SPOTIFY_AUTH_EVENT, ok: false, error: result.error };
+  const origin = opts.origin ?? (typeof window !== 'undefined' ? window.location.origin : '');
+  const postToOpener = opts.postToOpener ?? ((data, targetOrigin) => {
+    try {
+      window.opener?.postMessage(data, targetOrigin);
+    } catch { /* opener may be gone or cross-origin until we are back */ }
+  });
+  postToOpener(notice, origin);
+  if (opts.postToChannel) {
+    opts.postToChannel(notice);
+  } else if (typeof BroadcastChannel !== 'undefined') {
+    const channel = new BroadcastChannel(SPOTIFY_AUTH_CHANNEL);
+    try {
+      channel.postMessage(notice);
+    } finally {
+      channel.close();
+    }
+  }
+  return notice;
+}
+
+export function listenSpotifyAuthResult(
+  onResult: (notice: SpotifyAuthNotice) => void,
+  opts: {
+    origin?: string;
+    addWindowListener?: (fn: (event: MessageEvent) => void) => void;
+    removeWindowListener?: (fn: (event: MessageEvent) => void) => void;
+    channel?: { onmessage: ((event: MessageEvent) => void) | null; close?: () => void } | null;
+  } = {},
+): () => void {
+  const origin = opts.origin ?? (typeof window !== 'undefined' ? window.location.origin : '');
+  let settled = false;
+  const handle = (notice: SpotifyAuthNotice) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onResult(notice);
+  };
+  const onMessage = (event: MessageEvent) => {
+    if (origin && event.origin !== origin) return;
+    if (isSpotifyAuthNotice(event.data)) handle(event.data);
+  };
+  const add = opts.addWindowListener ?? ((fn) => window.addEventListener('message', fn));
+  const remove = opts.removeWindowListener ?? ((fn) => window.removeEventListener('message', fn));
+  add(onMessage);
+
+  let channel = opts.channel;
+  if (channel === undefined && typeof BroadcastChannel !== 'undefined') {
+    channel = new BroadcastChannel(SPOTIFY_AUTH_CHANNEL);
+  }
+  if (channel) {
+    channel.onmessage = (event: MessageEvent) => {
+      if (isSpotifyAuthNotice(event.data)) handle(event.data);
+    };
+  }
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== TOKENS_KEY || !event.newValue) return;
+    handle({ type: SPOTIFY_AUTH_EVENT, ok: true });
+  };
+  if (typeof window !== 'undefined' && opts.addWindowListener === undefined) {
+    window.addEventListener('storage', onStorage);
+  }
+
+  function cleanup(): void {
+    remove(onMessage);
+    try { channel?.close?.(); } catch { /* already closed */ }
+    if (typeof window !== 'undefined' && opts.addWindowListener === undefined) {
+      window.removeEventListener('storage', onStorage);
+    }
+  }
+
+  return () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+  };
+}
+
+/** Start Spotify sign-in in a pop-up (browser only). Falls back to a full-page
+ *  redirect if the pop-up is blocked. Refuses in a native shell. */
 export async function startSpotifyConnect(opts: {
   env?: SpotifyEnv;
   storage?: StorageLike | null;
@@ -391,11 +574,19 @@ export async function startSpotifyConnect(opts: {
   returnPath?: string;
   native?: boolean;
   assign?: (url: string) => void;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  openPopup?: OpenAuthPopup;
+  preferRedirect?: boolean;
+}): Promise<{ ok: true; mode: 'popup' | 'redirect' } | { ok: false; error: string }> {
   const native = opts.native ?? isNativeMusicShell();
   if (native) return { ok: false, error: NATIVE_NOTE };
   const clientId = readClientId(opts.env);
   if (!clientId) return { ok: false, error: NOT_SET_UP };
+  // Open the blank pop-up before any await so the click is still a user gesture.
+  const popup = opts.preferRedirect
+    ? null
+    : (opts.openPopup
+      ? openAuthPopupBlank(opts.openPopup)
+      : (typeof window !== 'undefined' ? openAuthPopupBlank() : null));
   const origin = opts.origin ?? (typeof window !== 'undefined' ? window.location.origin : WEB_APP_ORIGIN);
   const redirectUri = spotifyRedirectUri(origin);
   const storage = opts.storage === undefined ? defaultStorage() : opts.storage;
@@ -404,7 +595,15 @@ export async function startSpotifyConnect(opts: {
   savePkceSession({ verifier, state, redirectUri }, storage);
   saveReturnPath(opts.returnPath ?? (typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : '/studio'), storage);
   const url = await buildAuthorizeUrl({ clientId, redirectUri, verifier, state });
+  if (popup && !popup.closed) {
+    try {
+      popup.location.assign(url);
+      return { ok: true, mode: 'popup' };
+    } catch {
+      try { popup.close?.(); } catch { /* ignore */ }
+    }
+  }
   const assign = opts.assign ?? ((href: string) => { window.location.assign(href); });
   assign(url);
-  return { ok: true };
+  return { ok: true, mode: 'redirect' };
 }
