@@ -126,7 +126,7 @@ import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestur
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
-import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch } from './references';
+import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch, searchPageUrl, type RefHit, type SearchEngine } from './references';
 import { refineSearchQuery } from './ai/hybrid';
 import { parseChromeIntent, intentToRequest } from './extension/intents';
 import { createExtensionBridge } from './extension/bridge';
@@ -907,7 +907,8 @@ function topOpenPanel(): HTMLElement | null {
 }
 
 function closeTopPanel(): boolean {
-  if (refBoard.isGridOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+  if (refBoard.isGridOpen() || refBoard.isChooserOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+  if (refsTabOpen) { void chromeBridge.request('closeRefs'); refsTabOpen = false; say('References closed.'); return true; }
   if (overflowMenu.isOpen()) { overflowMenu.close(); return true; }
   const panel = topOpenPanel();
   if (!panel) return false;
@@ -967,7 +968,8 @@ function runTarget(target: string, value?: number): boolean {
       return true;
     case 'cancel':
       window.speechSynthesis?.cancel();
-      if (refBoard.isGridOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+      if (refBoard.isGridOpen() || refBoard.isChooserOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+      if (refsTabOpen) { void chromeBridge.request('closeRefs'); refsTabOpen = false; say('References closed.'); return true; }
       if (!chromeConfirmEl.hidden) { clearChromeConfirm(); return true; }
       if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
@@ -977,8 +979,12 @@ function runTarget(target: string, value?: number): boolean {
     case 'nav-forward':
       if (lastClosedPanel && lastClosedPanel.hidden) { lastClosedPanel.hidden = false; return true; }
       return false;
-    case 'scroll-up': scrollUnderCursor(-1); return true;
-    case 'scroll-down': scrollUnderCursor(1); return true;
+    case 'scroll-up':
+      if (refsTabOpen) { void chromeBridge.request('refsCommand', { cmd: 'scrollUp' }); return true; }
+      scrollUnderCursor(-1); return true;
+    case 'scroll-down':
+      if (refsTabOpen) { void chromeBridge.request('refsCommand', { cmd: 'scrollDown' }); return true; }
+      scrollUnderCursor(1); return true;
     case 'rotate': void runUtterance(`rotate ${value && value < 0 ? 345 : 15}`); return true;
     case 'tap':
       if (!lastHand) return false;
@@ -1130,6 +1136,27 @@ btnMusic.addEventListener('click', () => {
   toggleButton(btnMusic, musicPanel.isOpen());
 });
 
+let refsTabOpen = false;
+let lastRefsEngine: SearchEngine = 'google';
+let lastRefsQuery = '';
+let lastRefsCursorAt = 0;
+
+function hitFromExtImage(data: { url?: string; title?: string; text?: string } | undefined, engine: SearchEngine, query: string): RefHit | null {
+  if (!data?.url) return null;
+  const src = engine === 'pinterest' ? 'Pinterest' : 'Google Images';
+  return {
+    id: `web-${Date.now()}`,
+    title: (data.title || data.text || query || 'Reference').slice(0, 80),
+    thumbUrl: data.url,
+    fullUrl: data.url,
+    pageUrl: data.url,
+    creator: '',
+    source: src,
+    license: '',
+    credit: src,
+  };
+}
+
 const refBoard = createReferenceBoard({
   fixtures: SIM_ACTIVE,
   refineQuery: refineSearchQuery,
@@ -1146,6 +1173,60 @@ const refBoard = createReferenceBoard({
       return;
     }
     window.open(url, '_blank', 'noopener');
+  },
+  extensionConnected: () => chromeBridge.isConnected(),
+  isBrowserOpen: () => refsTabOpen,
+  async openBrowserSearch(query, engine) {
+    lastRefsEngine = engine;
+    lastRefsQuery = query;
+    const url = searchPageUrl(query, engine);
+    const res = await chromeBridge.request('openRefs', { query, engine, url });
+    if (!res.ok) {
+      refsTabOpen = false;
+      const detail = res.error === 'not-connected'
+        ? 'Chrome extension not connected. Load it from chrome://extensions, then Reload, to search in a real tab.'
+        : 'I could not open a Chrome tab for that search.';
+      return { ok: false, detail };
+    }
+    refsTabOpen = true;
+    const where = engine === 'pinterest' ? 'Pinterest' : 'Google Images';
+    const detail = `Opened ${where} for “${query}”. Say number three, next page, or pinch the highlighted picture. Palm or “close” to come back.`;
+    return { ok: true, detail };
+  },
+  async closeBrowser() {
+    if (!refsTabOpen) return;
+    await chromeBridge.request('closeRefs');
+    refsTabOpen = false;
+  },
+  async sendBrowserCommand(cmd) {
+    if (!refsTabOpen) return { ok: false, detail: 'No references tab is open.' };
+    const payload =
+      cmd.type === 'scroll' ? { cmd: cmd.dir === 'up' ? 'scrollUp' as const : 'scrollDown' as const }
+      : cmd.type === 'nextPage' ? { cmd: 'nextPage' as const }
+      : cmd.type === 'highlight' ? { cmd: 'highlight' as const, index: cmd.index }
+      : cmd.type === 'cursor' ? { cmd: 'cursor' as const, cursor: { x: cmd.x ?? 0.5, y: cmd.y ?? 0.5 } }
+      : cmd.type === 'pick' ? { cmd: 'pick' as const, index: cmd.index }
+      : { cmd: 'pick' as const };
+    if (cmd.type === 'close') {
+      await chromeBridge.request('closeRefs');
+      refsTabOpen = false;
+      return { ok: true, detail: 'References tab closed.' };
+    }
+    const res = await chromeBridge.request('refsCommand', payload);
+    if (!res.ok) {
+      if (res.error === 'no-refs-tab') refsTabOpen = false;
+      return { ok: false, detail: res.error || 'The references tab did not respond.' };
+    }
+    const hit = res.data?.kind === 'image' ? hitFromExtImage(res.data, lastRefsEngine, lastRefsQuery) : undefined;
+    if (hit) refsTabOpen = true;
+    return { ok: true, detail: hit ? `Picked “${hit.title}”.` : 'OK', hit: hit ?? undefined };
+  },
+  async generate(query, kind) {
+    if (SIM_ACTIVE) {
+      const { fixtureGenerated, generatedToHits } = await import('./references/mockups');
+      return generatedToHits(fixtureGenerated(query, kind));
+    }
+    return null;
   },
 });
 viewportEl.appendChild(refBoard.element);
@@ -2477,7 +2558,7 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
     recordLedger('rules', 'recipe pick', REASON_TEXT.exact, '');
     routerPanel.add({ utterance, planned: 'rules', source: 'rules', reason: 'exact', escalated: false, ms: performance.now() - t0 });
     if (isReferenceRecipe(recipe)) {
-      const result = await refBoard.apply(makeSearch(recipeSearchQuery(recipe), utterance, { fuzzy: false }));
+      const result = await refBoard.apply(makeSearch(recipeSearchQuery(recipe), utterance, { fuzzy: false, explicit: true, preferred: 'search' }));
       verifierEl.textContent = result.detail;
       return result.ok;
     }
@@ -2811,7 +2892,8 @@ async function handleChromeIntent(utterance: string): Promise<boolean | null> {
       const res = await chromeBridge.request('getLastCopied');
       clip = res.data ?? null;
     }
-    const added = addClip(clipsState, { kind: clip?.kind, text: clip?.text, url: clip?.url, title: clip?.title });
+    const kind = clip?.kind === 'link' ? 'link' as const : clip?.kind === 'text' ? 'text' as const : undefined;
+    const added = addClip(clipsState, { kind, text: clip?.text, url: clip?.url, title: clip?.title });
     if (!added.clip) {
       const msg = 'Nothing to send. Say copy this or copy the link first.';
       verifierEl.textContent = msg;
@@ -2894,7 +2976,7 @@ async function handleChromeIntent(utterance: string): Promise<boolean | null> {
 async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Reference grid: "the second one" / "next" / "close" must win over choice
   // chips and music while results are on the canvas.
-  if (refBoard.isGridOpen() || refBoard.hasSelection()) {
+  if (refBoard.isGridOpen() || refBoard.hasSelection() || refBoard.isChooserOpen() || refsTabOpen) {
     const handled = await refBoard.handleUtterance(utterance);
     if (handled) {
       setBadge('rules', 'exact');
@@ -3374,6 +3456,30 @@ viewportEl.addEventListener('pointermove', (e: PointerEvent) => {
   lastPointer = { clientX: e.clientX, clientY: e.clientY, cameraNorm: null };
 }, { passive: true });
 
+function driveRefsHand(e: HandEvent): boolean {
+  if (!refsTabOpen) return false;
+  if (e.type === 'tracking') {
+    const now = performance.now();
+    if (now - lastRefsCursorAt > 120) {
+      lastRefsCursorAt = now;
+      void chromeBridge.request('refsCommand', { cmd: 'cursor', cursor: { x: e.x, y: e.y } });
+    }
+    return false;
+  }
+  if (e.type === 'pinch-tap' || e.type === 'pinch-start') {
+    void (async () => {
+      const res = await chromeBridge.request('refsCommand', { cmd: 'pick' });
+      const hit = res.data?.kind === 'image' ? hitFromExtImage(res.data, lastRefsEngine, lastRefsQuery) : null;
+      if (hit) {
+        refBoard.placeExternal(hit);
+        say(`Placed “${hit.title}” on the canvas.`);
+      }
+    })();
+    return true;
+  }
+  return false;
+}
+
 function handleHandEvent(raw: HandEvent): void {
   // Calibrated reach: her comfortable box covers the whole screen.
   let e = raw;
@@ -3393,6 +3499,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Hand coords are mirrored to screen space (x = 1 - camera x); store the
       // camera-frame position so point-and-say can crop the frame there.
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
+      driveRefsHand(e);
       refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY });
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
@@ -3424,7 +3531,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.classList.add('pinching');
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
-      if (refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
       viewport.beginDrag?.(aimed.clientX, aimed.clientY);
       break;
     }
@@ -3434,7 +3541,7 @@ function handleHandEvent(raw: HandEvent): void {
       placeCursorClient(aimed.clientX, aimed.clientY);
       onboarding.notifyPinch();
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
-      if (refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
       // A pinch over the on-screen keyboard presses the key under the cursor.
       if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) break;
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.

@@ -6,14 +6,14 @@ import { WEB_SEARCH_ID, type GridBox, type GridItem, type RefHit } from './types
 export const IMAGES_PER_PAGE = 7;
 
 /** Build the visible items for one page: images, then the web-search card. */
-export function pageItems(hits: RefHit[]): GridItem[] {
+export function pageItems(hits: RefHit[], opts: { includeWeb?: boolean } = {}): GridItem[] {
   const items: GridItem[] = hits.slice(0, IMAGES_PER_PAGE).map((hit, i) => ({
     id: hit.id,
     index: i + 1,
     kind: 'image' as const,
     hit,
   }));
-  items.push({ id: WEB_SEARCH_ID, index: items.length + 1, kind: 'web' });
+  if (opts.includeWeb !== false) items.push({ id: WEB_SEARCH_ID, index: items.length + 1, kind: 'web' });
   return items;
 }
 

@@ -13,7 +13,7 @@ export const EXT_SOURCE = 'mendcraft-extension';
 export const EXT_VERSION = 1 as const;
 
 export const EXT_ACTIONS: readonly ExtAction[] = [
-  'copyThis', 'copyLink', 'pasteHere', 'switchTab', 'openTab', 'getStatus', 'getLastCopied',
+  'copyThis', 'copyLink', 'pasteHere', 'switchTab', 'openTab', 'getStatus', 'getLastCopied', 'openRefs', 'refsCommand', 'closeRefs',
 ];
 
 export interface ExtRequest {
@@ -25,7 +25,7 @@ export interface ExtRequest {
 }
 
 export interface ExtClip {
-  kind: 'text' | 'link';
+  kind: 'text' | 'link' | 'image';
   text?: string;
   url?: string;
   title?: string;
@@ -78,13 +78,13 @@ export function parseExtResult(raw: unknown): ExtResult | null {
       if (!ALLOWED_DATA_KEYS.has(key) || typeof raw.data[key] === 'function') return null;
     }
     const kind = raw.data.kind;
-    if (kind !== undefined && kind !== 'text' && kind !== 'link') return null;
+    if (kind !== undefined && kind !== 'text' && kind !== 'link' && kind !== 'image') return null;
     const skipped = raw.data.skipped;
     if (skipped !== undefined && skipped !== 'password' && skipped !== 'payment') return null;
     const tabId = raw.data.tabId;
     if (tabId !== undefined && (typeof tabId !== 'number' || !Number.isFinite(tabId))) return null;
     data = {
-      kind: kind === 'link' ? 'link' : 'text',
+      kind: kind === 'link' ? 'link' : kind === 'image' ? 'image' : 'text',
       text: asString(raw.data.text, 20_000),
       url: asString(raw.data.url, 2000),
       title: asString(raw.data.title, 300),

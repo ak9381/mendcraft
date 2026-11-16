@@ -11,6 +11,48 @@ var APP_HOSTS = {
 
 var LAST_KEY = 'mendcraft.lastCopied';
 
+var refsSession = { tabId: null, appTabId: null, appWindowId: null };
+
+function googleImagesUrl(query) {
+  return 'https://www.google.com/search?udm=2&tbm=isch&q=' + encodeURIComponent(String(query || 'drawings').trim() || 'drawings');
+}
+
+function pinterestSearchUrl(query) {
+  return 'https://www.pinterest.com/search/pins/?q=' + encodeURIComponent(String(query || 'drawings').trim() || 'drawings');
+}
+
+function isAllowedRefsUrl(url) {
+  try {
+    var u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function focusTab(tabId) {
+  if (!tabId) return;
+  try {
+    var tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (e) { /* tab may be gone */ }
+}
+
+async function sendToRefs(action, payload, tries) {
+  var n = tries == null ? 8 : tries;
+  if (!refsSession.tabId) return { ok: false, error: 'no-refs-tab' };
+  var last = { ok: false, error: 'no-content-script' };
+  for (var i = 0; i < n; i++) {
+    last = await sendToTab(refsSession.tabId, action, payload);
+    if (last.ok || last.error !== 'no-content-script') return last;
+    await new Promise(function (r) { setTimeout(r, 250); });
+  }
+  return last;
+}
+
+
 function isAppUrl(url) {
   try {
     var u = new URL(url);
@@ -108,7 +150,7 @@ function findTabByQuery(query, tabs) {
   return scored[0] ? scored[0].tab : null;
 }
 
-async function handle(msg) {
+async function handle(msg, sender) {
   var action = msg && msg.action;
   var requestId = msg && msg.requestId;
   var payload = (msg && msg.payload) || {};
@@ -148,6 +190,52 @@ async function handle(msg) {
     }
   }
 
+  if (action === 'openRefs') {
+    var url = String(payload.url || '');
+    if (!url) {
+      url = payload.engine === 'pinterest' ? pinterestSearchUrl(payload.query) : googleImagesUrl(payload.query);
+    }
+    if (!isAllowedRefsUrl(url) || !/^https?:\/\//i.test(url)) {
+      return resultOf(requestId, action, false, undefined, 'bad-url');
+    }
+    var appTabId = sender && sender.tab && sender.tab.id ? sender.tab.id : refsSession.appTabId;
+    var appWindowId = sender && sender.tab && sender.tab.windowId ? sender.tab.windowId : refsSession.appWindowId;
+    try {
+      var created = await chrome.tabs.create({ url: url, active: true });
+      refsSession = { tabId: created.id, appTabId: appTabId, appWindowId: appWindowId };
+      // Give the content script a moment, then start badges. Retry if the
+      // page is still on a consent interstitial.
+      await sendToRefs('refsStart', { query: payload.query || '' }, 12);
+      return resultOf(requestId, action, true, { kind: 'link', url: url, title: created.title || '', tabId: created.id });
+    } catch (e) {
+      return resultOf(requestId, action, false, undefined, 'open-failed');
+    }
+  }
+
+  if (action === 'refsCommand') {
+    if (!refsSession.tabId) return resultOf(requestId, action, false, undefined, 'no-refs-tab');
+    try { await chrome.tabs.update(refsSession.tabId, { active: true }); } catch (e) { /* ok */ }
+    var sent = await sendToRefs('refsCommand', payload, 4);
+    if (!sent.ok) return resultOf(requestId, action, false, sent.data, sent.error || 'refs-failed');
+    var data = sent.data || {};
+    if (data.kind === 'image' && data.url && refsSession.appTabId) {
+      // After a pick, bring Mendcraft back so she sees the card on the canvas.
+      await focusTab(refsSession.appTabId);
+    }
+    return resultOf(requestId, action, true, data);
+  }
+
+  if (action === 'closeRefs') {
+    var tid = refsSession.tabId;
+    var app = refsSession.appTabId;
+    refsSession = { tabId: null, appTabId: app, appWindowId: refsSession.appWindowId };
+    if (tid) {
+      try { await chrome.tabs.remove(tid); } catch (e) { /* already closed */ }
+    }
+    if (app) await focusTab(app);
+    return resultOf(requestId, action, true, { kind: 'link', title: 'closed', tabId: app });
+  }
+
   var tab = await targetTab();
   if (!tab || !tab.id) return resultOf(requestId, action, false, undefined, 'no-tab');
 
@@ -184,11 +272,16 @@ async function handle(msg) {
   return resultOf(requestId, action, false, undefined, 'unknown-action');
 }
 
-function onMessage(msg, _sender, sendResponse) {
+function onMessage(msg, sender, sendResponse) {
   if (!msg || msg.type !== 'mendcraft-ext' || msg.v !== 1) return;
-  handle(msg).then(function (res) { sendResponse(res); });
+  handle(msg, sender).then(function (res) { sendResponse(res); });
   return true;
 }
 
 chrome.runtime.onMessage.addListener(onMessage);
 chrome.runtime.onMessageExternal.addListener(onMessage);
+
+chrome.tabs.onRemoved.addListener(function (id) {
+  if (refsSession.tabId === id) refsSession.tabId = null;
+});
+

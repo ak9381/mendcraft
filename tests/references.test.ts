@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { installMiniDom } from './helpers/minidom';
 import { validateRecipe } from '../src/recipes/model';
 import { DEFAULT_PINCH_ON, pinchGapRatio } from '../src/input/handLogic';
 import { OPEN, PINCH, POINT, place } from './helpers/hands';
@@ -39,6 +40,8 @@ import {
   parseGeneratedOptions,
   generatedToHits,
   fixtureGenerated,
+  createReferenceBoard,
+  makeSearch,
   type RefHit,
   type GridBox,
 } from '../src/references';
@@ -452,5 +455,90 @@ describe('Gemini generated drawings and layouts (SVG, no billing)', () => {
     expect(opts.length).toBeGreaterThanOrEqual(3);
     expect(opts.every((o) => o.kind === 'drawing' && o.svg.includes('<svg'))).toBe(true);
     expect(generatedToHits(opts)[0].credit).toBe('Gemini · cloud');
+  });
+});
+
+describe('chooser, fallback grid, and generate cards', () => {
+  installMiniDom();
+  it('shows a two-option card unless the path is explicit', async () => {
+    const board = createReferenceBoard({ fixtures: true });
+    document.body.append(board.element);
+    const res = await board.apply(parseReferenceIntent('find me references for drawings')!);
+    expect(res.ok).toBe(true);
+    expect(board.isChooserOpen()).toBe(true);
+    expect(board.element.querySelector('.mc-ref-chooser')?.hidden).toBe(false);
+    expect(board.element.querySelectorAll('.mc-ref-choose-card')).toHaveLength(2);
+    board.element.remove();
+  });
+
+  it('falls back to the picture grid and says so when the extension is missing', async () => {
+    const board = createReferenceBoard({ fixtures: true, extensionConnected: () => false });
+    document.body.append(board.element);
+    const res = await board.apply(makeSearch('cats', 'search the web for pictures of cats', {
+      explicit: true, preferred: 'search', fuzzy: false,
+    }));
+    expect(board.isChooserOpen()).toBe(false);
+    const banner = board.element.querySelector('.mc-ref-fallback') as HTMLElement;
+    expect(banner.hidden).toBe(false);
+    expect(banner.textContent).toMatch(/extension/i);
+    expect(res.ok).toBe(true);
+    expect(res.detail).toMatch(/extension/i);
+    expect(board.element.querySelectorAll('.mc-ref-card').length).toBeGreaterThan(0);
+    board.element.remove();
+  });
+
+  it('opens a real tab when the extension is connected, instead of the Openverse grid', async () => {
+    const calls: Array<[string, string]> = [];
+    const board = createReferenceBoard({
+      fixtures: true,
+      extensionConnected: () => true,
+      openBrowserSearch: async (q, e) => {
+        calls.push([q, e]);
+        return { ok: true, detail: `Opened Google Images for “${q}”.` };
+      },
+    });
+    const res = await board.apply(makeSearch('drawings', 'search the web for drawings', {
+      explicit: true, preferred: 'search', engine: 'google',
+    }));
+    expect(calls).toEqual([['drawings', 'google']]);
+    expect(res.ok).toBe(true);
+    expect(board.isGridOpen()).toBe(false);
+    expect(board.isChooserOpen()).toBe(false);
+  });
+
+  it('generates numbered Gemini drawing cards and places one by number', async () => {
+    const board = createReferenceBoard({ fixtures: true });
+    document.body.append(board.element);
+    const res = await board.apply(parseReferenceIntent('draw me a reference of a hand holding a cup')!);
+    expect(res.ok).toBe(true);
+    expect(board.isChooserOpen()).toBe(false);
+    const cards = [...board.element.querySelectorAll('.mc-ref-card')];
+    expect(cards.length).toBeGreaterThanOrEqual(3);
+    expect(cards.every((c) => !c.classList.contains('mc-ref-card-web'))).toBe(true);
+    expect(board.element.textContent).toMatch(/Gemini · cloud/);
+    const pick = await board.apply({ type: 'pick', index: 2 });
+    expect(pick.ok).toBe(true);
+    expect(board.confirm()).toBe(true);
+    expect(board.element.querySelector('.mc-ref-node-credit')?.textContent).toBe('Gemini · cloud');
+    board.element.remove();
+  });
+
+  it('places a picture returned from the references tab', () => {
+    const board = createReferenceBoard({ fixtures: true });
+    document.body.append(board.element);
+    const node = board.placeExternal({
+      id: 'web-1',
+      title: 'A cup',
+      thumbUrl: 'https://cdn.example/cup.jpg',
+      fullUrl: 'https://cdn.example/cup.jpg',
+      pageUrl: 'https://cdn.example/cup.jpg',
+      creator: '',
+      source: 'Google Images',
+      license: '',
+      credit: 'Google Images',
+    });
+    expect(node.hit.credit).toBe('Google Images');
+    expect(board.element.querySelector('.mc-ref-node-credit')?.textContent).toBe('Google Images');
+    board.element.remove();
   });
 });

@@ -19,6 +19,8 @@ From Mendcraft Studio, say:
   the last copied item into the focused field of the active tab. It never
   submits the form.
 - **“switch to Gmail”** (or any tab name) — focuses that Chrome tab.
+- **“find me references for X”** — after she picks **Search the web**, opens a real Google Images tab (or Pinterest if she says “on Pinterest”), overlays large numbered badges on the visible pictures, and listens for “number 3”, “next page”, hand scroll, pinch, or dwell. The picked picture comes back onto the Mendcraft canvas. **“close”** or an open palm closes the tab and returns focus to Studio.
+
 
 ## What it will not do
 
@@ -64,7 +66,13 @@ The extension is `externally_connectable` only from:
 
 - `https://mendcraft.web.app`
 - `https://mendcraft.firebaseapp.com`
-- `http://localhost:5173` (and `http://127.0.0.1:5173`) for local development
+- `http://localhost:5173` and `http://127.0.0.1:5173` for local development
+- `http://localhost:4173` and `http://127.0.0.1:4173` for a local preview build
+
+If the extension is not installed or not connected, Studio falls back to an on-canvas picture grid and says so.
+
+Hands-free reference search never types into any field, including password or payment fields. Google Images and Pinterest may still show cookie or login walls, change their layout so badges miss a result, or only give thumbnail URLs that later fail to load on the canvas.
+
 
 Mendcraft treats every reply from the extension as data. It never evaluates it
 as code.

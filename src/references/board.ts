@@ -5,7 +5,8 @@ import './board.css';
 // voice drive it; mouse still works because each card is a real button.
 
 import { parseReferenceIntent } from './intent';
-import type { IntentContext, GridItem, PlacedRef, RefHit, ReferenceIntent, SearchPage } from './types';
+import type { GenerateKind, IntentContext, GridItem, PlacedRef, RefHit, ReferenceIntent, SearchEngine, SearchIntent, SearchPage } from './types';
+import { fixtureGenerated, generatedToHits } from './mockups';
 import { layoutGrid, pageItems, itemByIndex, stepHover, snapHover } from './grid';
 import { emptyRefGestureState, type RefGestureState } from './gestures';
 import { fixtureSearch } from './demo';
@@ -29,6 +30,22 @@ export interface ReferenceBoardOpts {
   onStatus?: (text: string) => void;
   /** Use fixture pictures (sim / screenshot / offline). */
   fixtures?: boolean;
+  /** True when the Mendcraft Chrome extension is connected. */
+  extensionConnected?: () => boolean;
+  /** Open a real Google Images or Pinterest tab. */
+  openBrowserSearch?: (query: string, engine: SearchEngine) => Promise<ApplyResult>;
+  /** Drive the open references tab (scroll, next page, pick, close). */
+  sendBrowserCommand?: (cmd: {
+    type: 'scroll' | 'nextPage' | 'highlight' | 'cursor' | 'pick' | 'close';
+    dir?: 'up' | 'down';
+    index?: number;
+    x?: number;
+    y?: number;
+  }) => Promise<{ ok: boolean; detail: string; hit?: RefHit }>;
+  isBrowserOpen?: () => boolean;
+  closeBrowser?: () => Promise<void>;
+  /** Gemini SVG drawings or layout frames (3–4 cards). */
+  generate?: (query: string, kind: GenerateKind) => Promise<RefHit[] | null>;
 }
 
 export interface ApplyResult {
@@ -47,6 +64,8 @@ export interface ReferenceBoard {
   showDemoGrid(query?: string): void;
   pendingConfirm(): boolean;
   confirm(): boolean;
+  isChooserOpen(): boolean;
+  placeExternal(hit: RefHit, at?: { x: number; y: number }): PlacedRef;
 }
 
 interface BoardState {
@@ -112,7 +131,16 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
   confirmBar.className = 'mc-ref-confirm';
   confirmBar.hidden = true;
 
-  grid.append(head, status, cards, confirmBar);
+  const banner = document.createElement('p');
+  banner.className = 'mc-ref-fallback';
+  banner.hidden = true;
+  banner.textContent = 'Chrome extension not connected — showing a picture grid instead. In Chrome open chrome://extensions, then click Reload on Mendcraft, to search Google Images or Pinterest in a real tab.';
+
+  const chooser = document.createElement('div');
+  chooser.className = 'mc-ref-chooser';
+  chooser.hidden = true;
+
+  grid.append(head, status, banner, chooser, cards, confirmBar);
 
   const nodes = document.createElement('div');
   nodes.className = 'mc-ref-nodes';
@@ -122,6 +150,10 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
   let st = emptyState();
   let gstate: RefGestureState = emptyRefGestureState();
   let boxes = layoutGrid([], 1, 1);
+  let pendingRequest: SearchIntent | null = null;
+  let chooserOpen = false;
+  let fallback = false;
+  let generated = false;
 
   const speak = (t: string) => opts.speak?.(t);
   const note = (t: string) => {
@@ -145,7 +177,15 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
   }
 
   function paintCards(): void {
+    banner.hidden = !fallback;
+    chooser.hidden = !chooserOpen;
+    cards.hidden = chooserOpen;
+    grid.classList.toggle('mc-ref-generated', generated);
     cards.innerHTML = '';
+    if (chooserOpen) {
+      layout();
+      return;
+    }
     for (const item of st.items) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -175,7 +215,7 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
         img.draggable = false;
         const cap = document.createElement('span');
         cap.className = 'mc-ref-credit';
-        cap.textContent = `${item.hit.source} · ${item.hit.license}${item.hit.creator ? ` · ${item.hit.creator}` : ''}`;
+        cap.textContent = item.hit.source === 'Gemini' ? 'Gemini · cloud' : `${item.hit.source} · ${item.hit.license}${item.hit.creator ? ` · ${item.hit.creator}` : ''}`;
         btn.append(img, cap);
         btn.setAttribute('aria-label', `${item.index}. ${item.hit.title}. ${item.hit.credit}`);
       }
@@ -288,15 +328,179 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
   }
 
   function closeGrid(): boolean {
-    if (!st.open) return false;
+    const wasOpen = st.open || chooserOpen;
+    if (!wasOpen) return false;
     st.open = false;
+    chooserOpen = false;
+    fallback = false;
+    generated = false;
+    pendingRequest = null;
     st.hoveredId = null;
     st.selectedId = null;
     st.pending = null;
     grid.hidden = true;
+    chooser.hidden = true;
+    banner.hidden = true;
     setPending(null);
     note('References closed.');
     return true;
+  }
+
+  function showChooser(intent: SearchIntent): ApplyResult {
+    pendingRequest = intent;
+    chooserOpen = true;
+    fallback = false;
+    st.open = true;
+    st.query = intent.query;
+    grid.hidden = false;
+    title.textContent = `References for “${intent.query}”`;
+    hint.textContent = 'Pinch a card, or say “search” or “generate”.';
+    chooser.hidden = false;
+    cards.hidden = true;
+    banner.hidden = true;
+    const preferGen = intent.preferred === 'generate';
+    chooser.innerHTML = '';
+    const opts2: Array<{ id: 'search' | 'generate'; n: number; title: string; sub: string; def: boolean }> = [
+      { id: 'search', n: 1, title: 'Search the web', sub: intent.engine === 'pinterest' ? 'Open Pinterest in a real Chrome tab' : 'Open Google Images in a real Chrome tab', def: !preferGen },
+      { id: 'generate', n: 2, title: 'Generate with Gemini', sub: intent.generateKind === 'layout' ? 'Layout mockups on the canvas · Gemini · cloud' : 'Reference drawings on the canvas · Gemini · cloud', def: preferGen },
+    ];
+    for (const o of opts2) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mc-ref-card mc-ref-choose-card' + (o.def ? ' selected' : '');
+      btn.dataset.choice = o.id;
+      btn.id = o.id === 'search' ? 'btn-ref-choose-search' : 'btn-ref-choose-generate';
+      const num = document.createElement('span');
+      num.className = 'mc-ref-num';
+      num.textContent = String(o.n);
+      const lab = document.createElement('span');
+      lab.className = 'mc-ref-web-label';
+      lab.textContent = o.title;
+      const sub = document.createElement('span');
+      sub.className = 'mc-ref-credit';
+      sub.textContent = o.sub + (o.def ? ' · suggested' : '');
+      btn.append(num, lab, sub);
+      btn.setAttribute('aria-label', `${o.n}. ${o.title}. ${o.sub}`);
+      btn.addEventListener('click', () => { void apply(o.id === 'search' ? { type: 'chooseSearch' } : { type: 'chooseGenerate' }); });
+      chooser.append(btn);
+    }
+    const detail = preferGen
+      ? 'Say generate, or pinch card 2, to get Gemini options. Say search, or pinch card 1, for a real web tab.'
+      : 'Say search, or pinch card 1, to open a real web tab. Say generate, or pinch card 2, for Gemini options.';
+    note(detail);
+    speak(detail);
+    return { ok: true, detail };
+  }
+
+  async function startWebSearch(intent: SearchIntent): Promise<ApplyResult> {
+    chooserOpen = false;
+    pendingRequest = intent;
+    if (opts.extensionConnected?.() && opts.openBrowserSearch) {
+      chooserOpen = false;
+      st.open = false;
+      grid.hidden = true;
+      chooser.hidden = true;
+      banner.hidden = true;
+      const res = await opts.openBrowserSearch(intent.query, intent.engine);
+      if (res.ok) return res;
+      // Connected but the tab did not open — fall back to the on-canvas grid.
+    }
+    fallback = true;
+    generated = false;
+    const detailPrefix = 'Chrome extension not connected — showing a picture grid instead. ';
+    const res = await runSearch(intent.query, 1, intent.raw, intent.fuzzy);
+    if (res.ok) {
+      const detail = detailPrefix + res.detail;
+      note(detail);
+      speak('Extension not connected. Here is a picture grid instead. Load the Mendcraft extension to search in a real tab.');
+      return { ok: true, detail };
+    }
+    return res;
+  }
+
+  async function startGenerate(intent: SearchIntent): Promise<ApplyResult> {
+    chooserOpen = false;
+    fallback = false;
+    generated = true;
+    pendingRequest = intent;
+    const q = intent.query.trim();
+    if (!q) return { ok: false, detail: 'What should I generate?' };
+    st.loading = true;
+    st.open = true;
+    st.query = q;
+    st.selectedId = null;
+    st.hoveredId = null;
+    grid.hidden = false;
+    chooser.hidden = true;
+    cards.hidden = false;
+    banner.hidden = true;
+    title.textContent = intent.generateKind === 'layout' ? `Layouts for “${q}”` : `Drawings of “${q}”`;
+    hint.textContent = 'Pinch a card to pick · hover and wait to dwell · say “number two”';
+    note('Generating with Gemini…');
+    speak('Generating with Gemini.');
+    paintCards();
+    try {
+      let hits: RefHit[] | null = null;
+      if (opts.generate) hits = await opts.generate(q, intent.generateKind);
+      else if (opts.fixtures) hits = generatedToHits(fixtureGenerated(q, intent.generateKind));
+      if (!hits?.length) {
+        st.loading = false;
+        const detail = 'Gemini could not generate options just now.';
+        note(detail);
+        speak(detail);
+        return { ok: false, detail };
+      }
+      st.hits = hits;
+      st.hasMore = false;
+      st.page = 1;
+      st.items = pageItems(hits, { includeWeb: false });
+      st.loading = false;
+      paintCards();
+      const detail = `Here are ${hits.length} Gemini options. Pinch one, or say number two. Each card is labeled Gemini · cloud.`;
+      note(detail);
+      speak(detail);
+      return { ok: true, detail };
+    } catch (err) {
+      st.loading = false;
+      const detail = `Generate failed: ${(err as Error).message}`;
+      note(detail);
+      speak('I could not generate just now.');
+      return { ok: false, detail };
+    }
+  }
+
+  async function driveBrowser(intent: ReferenceIntent): Promise<ApplyResult | null> {
+    if (!opts.isBrowserOpen?.() || !opts.sendBrowserCommand) return null;
+    if (intent.type === 'more') {
+      const res = await opts.sendBrowserCommand({ type: 'nextPage' });
+      return { ok: res.ok, detail: res.detail || 'Next page.' };
+    }
+    if (intent.type === 'prevPage') {
+      const res = await opts.sendBrowserCommand({ type: 'scroll', dir: 'up' });
+      return { ok: res.ok, detail: res.detail || 'Scrolled up.' };
+    }
+    if (intent.type === 'pick' || intent.type === 'pickHover') {
+      const res = await opts.sendBrowserCommand({ type: 'pick', index: intent.type === 'pick' ? intent.index : undefined });
+      if (res.hit) {
+        placeHit(res.hit);
+        const detail = `Placed “${res.hit.title || 'this picture'}” on the canvas. ${res.hit.credit}`;
+        note(detail);
+        speak(detail);
+        return { ok: true, detail };
+      }
+      return { ok: false, detail: res.detail || 'I could not pick that picture.' };
+    }
+    if (intent.type === 'next' || intent.type === 'prev') {
+      const res = await opts.sendBrowserCommand({ type: 'scroll', dir: intent.type === 'next' ? 'down' : 'up' });
+      return { ok: res.ok, detail: res.detail || (intent.type === 'next' ? 'Scrolled down.' : 'Scrolled up.') };
+    }
+    if (intent.type === 'close') {
+      await opts.closeBrowser?.();
+      const detail = 'References tab closed.';
+      speak('Closed.');
+      return { ok: true, detail };
+    }
+    return null;
   }
 
   async function runSearch(query: string, page: number, raw?: string, fuzzy?: boolean): Promise<ApplyResult> {
@@ -318,6 +522,7 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
       }
     }
 
+    generated = false;
     st.loading = true;
     st.open = true;
     st.query = q;
@@ -430,8 +635,18 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
   async function apply(intent: ReferenceIntent): Promise<ApplyResult> {
     switch (intent.type) {
       case 'search':
-        return runSearch(intent.query, 1, intent.raw, intent.fuzzy);
-      case 'more':
+        if (!intent.explicit) return showChooser(intent);
+        if (intent.preferred === 'generate') return startGenerate(intent);
+        return startWebSearch(intent);
+      case 'chooseSearch':
+        if (!pendingRequest) return { ok: false, detail: 'Say what to look for first.' };
+        return startWebSearch({ ...pendingRequest, preferred: 'search', explicit: true });
+      case 'chooseGenerate':
+        if (!pendingRequest) return { ok: false, detail: 'Say what to generate first.' };
+        return startGenerate({ ...pendingRequest, preferred: 'generate', explicit: true });
+      case 'more': {
+        const via = await driveBrowser(intent);
+        if (via) return via;
         if (!st.open) return { ok: false, detail: 'There is no search open.' };
         if (!st.hasMore) {
           const detail = 'That was the last page.';
@@ -440,11 +655,17 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
           return { ok: false, detail };
         }
         return runSearch(st.query, st.page + 1);
-      case 'prevPage':
+      }
+      case 'prevPage': {
+        const via = await driveBrowser(intent);
+        if (via) return via;
         if (!st.open) return { ok: false, detail: 'There is no search open.' };
         if (st.page <= 1) return { ok: false, detail: 'This is the first page.' };
         return runSearch(st.query, st.page - 1);
+      }
       case 'next': {
+        const viaN = await driveBrowser(intent);
+        if (viaN) return viaN;
         st.hoveredId = stepHover(st.hoveredId ?? st.selectedId, st.items, 1);
         st.selectedId = st.hoveredId;
         highlight();
@@ -455,6 +676,8 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
         return { ok: !!it, detail };
       }
       case 'prev': {
+        const viaP = await driveBrowser(intent);
+        if (viaP) return viaP;
         st.hoveredId = stepHover(st.hoveredId ?? st.selectedId, st.items, -1);
         st.selectedId = st.hoveredId;
         highlight();
@@ -465,12 +688,16 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
         return { ok: !!it, detail };
       }
       case 'pick': {
+        const viaPk = await driveBrowser(intent);
+        if (viaPk) return viaPk;
         const it = itemByIndex(st.items, intent.index);
         if (!it) return { ok: false, detail: `There is no number ${intent.index} on this page.` };
         await onCardActivate(it);
         return { ok: true, detail: `Selected number ${it.index}.` };
       }
       case 'pickHover': {
+        const viaH = await driveBrowser(intent);
+        if (viaH) return viaH;
         const it = selectedItem();
         if (!it) return { ok: false, detail: 'Point at a card first, then say pick this.' };
         await onCardActivate(it);
@@ -489,6 +716,8 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
       case 'smaller':
         return resizeSelected(0.8);
       case 'close': {
+        const viaC = await driveBrowser(intent);
+        if (viaC) return viaC;
         const ok = closeGrid();
         const detail = ok ? 'References closed.' : 'The reference grid is already closed.';
         speak(ok ? 'Closed.' : detail);
@@ -499,10 +728,6 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
         note('Pinch to open a web search.');
         speak('Pinch to open a web search.');
         return { ok: true, detail: 'Pinch to open a web search.' };
-      case 'chooseSearch':
-        return { ok: false, detail: 'Choose Search the web first.' };
-      case 'chooseGenerate':
-        return { ok: false, detail: 'Choose Generate with Gemini first.' };
     }
   }
 
@@ -536,7 +761,12 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
     hasSelection: () => !!(st.selectedId || st.selectedPlacedId),
     apply,
     async handleUtterance(utterance: string) {
-      const ctx: IntentContext = { gridOpen: st.open, hasSelection: !!(st.selectedId || st.selectedPlacedId) };
+      const ctx: IntentContext = {
+        gridOpen: st.open && !chooserOpen,
+        chooserOpen,
+        browserOpen: Boolean(opts.isBrowserOpen?.()),
+        hasSelection: !!(st.selectedId || st.selectedPlacedId),
+      };
       const intent = parseReferenceIntent(utterance, ctx);
       if (!intent) return null;
       return apply(intent);
@@ -603,6 +833,12 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
     },
     pendingConfirm: () => st.pending !== null,
     confirm,
+    isChooserOpen: () => chooserOpen,
+    placeExternal(hit, at) {
+      const node = placeHit(hit, at);
+      note(`Placed “${hit.title}” on the canvas. ${hit.credit}`);
+      return node;
+    },
   };
 
   return board;
