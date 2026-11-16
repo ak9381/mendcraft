@@ -26,7 +26,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
       <section class="judges-card judges-path">
         <h2>30-second path (3 clicks)</h2>
         <ol>
-          <li><a class="judges-cta" href="/studio?sim=1&amp;play=1">① Play the Plan walk</a> — builds a 2-bedroom plan, resizes a wall, goes to Kannada, offline &amp; back, then opens “what left this device”. No camera or mic needed.</li>
+          <li><a class="judges-cta" href="/studio?sim=1&amp;play=1">① Play the Plan walk</a> — builds a 2-bedroom plan, resizes a wall, speaks Kannada, Hindi, Spanish &amp; Japanese, offline &amp; back, then opens “what left this device”. No camera or mic needed.</li>
           <li><a class="judges-cta" href="/studio">② Open the editor</a> and press <strong>Help / tour</strong> → <strong>Take the tour</strong> to spotlight the real controls.</li>
           <li><a class="judges-cta" href="/control">③ Open /control</a> on a second screen — the read-only room dashboard.</li>
         </ol>
@@ -42,7 +42,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
               <tr><td>Hand-adapt (effort/tremor)</td><td class="j-on">On-device (Nano)</td><td>The raw numbers are personal; the pick stays local.</td></tr>
               <tr><td>Simple commands</td><td class="j-rules">Rules</td><td>Deterministic parse — no model, no network, instant.</td></tr>
               <tr><td>Fuzzy English intent</td><td class="j-on">On-device (Nano)</td><td>Small, private, offline-capable when the model is present.</td></tr>
-              <tr><td>Big jobs &amp; Kannada</td><td class="j-cloud">Cloud</td><td>Templates, translation and heavier reasoning Nano can’t do.</td></tr>
+              <tr><td>Big jobs &amp; languages Nano can’t run</td><td class="j-cloud">Cloud</td><td>Templates, translation (Kannada, Hindi…) and heavier reasoning Nano can’t do.</td></tr>
             </tbody>
           </table>
           <p class="judges-note">Every cloud call is listed in the in-app “What left this device” ledger with its byte count.</p>
@@ -62,7 +62,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
           <h2>Honest limits</h2>
           <ul class="judges-list">
             <li>On-device Gemini Nano needs <strong>desktop Chrome</strong> with the model downloaded; elsewhere it falls back to cloud or rules (the badge is honest about it).</li>
-            <li><strong>Kannada</strong> always goes to the cloud (translate + intent in one call) — Nano is English-only here.</li>
+            <li><strong>Polished in English. Speak any language.</strong> Chrome’s on-device Language Detector names the language; Nano handles languages it accepts (English, Spanish, Japanese), others go to the cloud (translate + intent in one call) and the badge says why.</li>
             <li>Real-device features — the camera pinch, the WiZ lamp bridge, phone pairing over Firestore — can’t be shown on this hosted page; the sim walks stand in for them.</li>
             <li>The sim and /control fall back to an in-page fake transport when no paired room is reachable, and say so rather than faking a live link.</li>
           </ul>
@@ -71,7 +71,7 @@ export async function mountJudgesPage(root: HTMLElement): Promise<void> {
         <section class="judges-card">
           <h2>The three walks</h2>
           <ul class="judges-list">
-            <li><a href="/studio?sim=1&amp;play=1">Plan 2D</a> — floor plan: resize a wall, teach a phrase, Kannada, offline, accessibility.</li>
+            <li><a href="/studio?sim=1&amp;play=1">Plan 2D</a> — floor plan: resize a wall, teach a phrase, any language, offline, accessibility.</li>
             <li><a href="/studio?sim=1&amp;mode=part&amp;play=1">Part 3D</a> — a cup grip: thin-wall warning, then the fix, export STL.</li>
             <li><a href="/studio?sim=1&amp;mode=ui&amp;play=1">UI login</a> — a login screen: recolour, resize, accessibility, export HTML.</li>
           </ul>

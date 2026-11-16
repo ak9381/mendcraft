@@ -49,7 +49,7 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
     primitive: 'InferenceMode\\.ONLY_IN_CLOUD',
     files: ['src/ai/hybrid.ts'],
     leavesDevice: true,
-    note: 'Big jobs (generate plan/ui, a11y explain, TTS, escalated intent/deixis) that run in the cloud.',
+    note: 'Big jobs (generate plan/ui, a11y explain, TTS, escalated intent/deixis) and the any-language fallbacks (language detection when Chrome has no on-device detector; translate + intent when Nano cannot run the language) that run in the cloud.',
   },
   {
     kind: 'prefer-on-device',
@@ -110,6 +110,7 @@ export const CLOUD_LEDGER_JOBS: readonly string[] = [
   'verify',
   'a11y-explain',
   'deixis',
+  'lang-detect',
 ];
 
 /** Strip the parenthetical state suffix a ledger job can carry, e.g.

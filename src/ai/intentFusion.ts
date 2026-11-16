@@ -48,6 +48,8 @@ export interface FusionParse {
   confidence: number;
   /** English translation of a non-English transcript, when one was requested. */
   translation?: string;
+  /** Short spoken confirmation in the speaker's language (non-English only). */
+  reply?: string;
 }
 
 /** Context payload caps — the whole prompt must fit Nano's small window. */
@@ -125,7 +127,7 @@ export interface PromptLanguage {
 /** Translation addendum appended when the transcript is in a non-English
  *  language: translate first, then map to an op — all in this one call. */
 export function fusionTranslateGuide(lang: PromptLanguage): string {
-  return `The transcript is spoken ${lang.englishName}. FIRST translate it to English, THEN map that English to one op using the vocabulary above. Put the plain-English translation in a "translation" field. Resolve deixis against Context exactly as described. Do NOT answer in ${lang.englishName}; the op fields and translation are English.`;
+  return `The transcript is spoken ${lang.englishName}. FIRST translate it to English, THEN map that English to one op using the vocabulary above. Put the plain-English translation in a "translation" field. Resolve deixis against Context exactly as described. The op fields and translation are English. ONLY the optional "reply" field is in ${lang.englishName}: a very short spoken confirmation of what the op does (at most 4 words, e.g. "Door added."), no other text.`;
 }
 
 /** Full fusion prompt: the active mode's intent prompt (op vocabulary) + the
@@ -155,7 +157,7 @@ export function buildFusionConstraint(opConstraint: Record<string, unknown>): Re
   const props = (opConstraint.properties as Record<string, unknown> | undefined) ?? {};
   return {
     ...opConstraint,
-    properties: { ...props, confidence: { type: 'number' }, translation: { type: 'string' } },
+    properties: { ...props, confidence: { type: 'number' }, translation: { type: 'string' }, reply: { type: 'string' } },
   };
 }
 
@@ -190,7 +192,7 @@ export function parseFusionResult(raw: unknown, coerce: CoerceFn, utterance: str
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   // Split off the fusion-only fields (confidence, translation) before coercion
   // so the mode validates ONLY its own op vocabulary.
-  const { confidence, translation, ...rest } = raw as Record<string, unknown>;
+  const { confidence, translation, reply, ...rest } = raw as Record<string, unknown>;
   const result = coerce(rest, utterance);
   if (!result) return null;
   const parsed: FusionParse = {
@@ -198,6 +200,9 @@ export function parseFusionResult(raw: unknown, coerce: CoerceFn, utterance: str
     confidence: coerceConfidence(confidence, isClarify(result) ? 0 : DEFAULT_OP_CONFIDENCE),
   };
   if (typeof translation === 'string' && translation.trim()) parsed.translation = translation.trim();
+  // The spoken confirmation in her language: short, plain text only (capped so
+  // a runaway model can't make the speaker read a paragraph).
+  if (typeof reply === 'string' && reply.trim()) parsed.reply = reply.trim().slice(0, 60);
   return parsed;
 }
 

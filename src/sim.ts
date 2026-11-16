@@ -33,9 +33,39 @@ export interface SimStep {
   revealLedger?: boolean;
   /** A declarative feature beat handled by onFeature before any utterance. */
   feature?: SimFeature;
-  /** Switch the spoken/written language (e.g. 'kn') before the utterance — drives
-   *  the live caption bar and the honest "Cloud · Kannada" badge path. */
+  /** Set the language picker ('auto' or a code like 'kn') before the
+   *  utterance — drives detection, the caption bar and the honest badge. */
   lang?: string;
+}
+
+/**
+ * Fake any-language transcripts for the judge path (?sim=1). Each maps to the
+ * English command a real Gemini call would produce, plus the short reply it
+ * would speak back. Detection still runs the REAL on-device logic (script check;
+ * Spanish is Latin script so it falls through to the simulated cloud detector);
+ * only the model answers are faked, and every such step is labelled SIM.
+ * `nano` marks languages Gemini Nano accepts (en/es/ja), so the router shows
+ * on-device for those and cloud for the rest.
+ */
+export interface SimSpeech {
+  text: string;
+  lang: string;
+  english: string;
+  reply: string;
+  nano: boolean;
+}
+
+export const SIM_SPEECH: readonly SimSpeech[] = [
+  { text: 'ಈ ಗೋಡೆಯನ್ನು ದಪ್ಪ ಮಾಡು', lang: 'kn', english: 'thicker by 50', reply: 'ಗೋಡೆ ದಪ್ಪವಾಯಿತು.', nano: false },
+  { text: 'haz la pared un poco más delgada', lang: 'es', english: 'thinner by 20', reply: 'Pared más delgada.', nano: true },
+  { text: 'दीवार में एक दरवाज़ा जोड़ो', lang: 'hi', english: 'add a door', reply: 'दरवाज़ा जोड़ दिया।', nano: false },
+  { text: '元に戻して', lang: 'ja', english: 'undo', reply: '元に戻しました。', nano: true },
+];
+
+/** The fake transcript entry for an utterance, if it is one. */
+export function simSpeechFor(text: string): SimSpeech | null {
+  const t = text.trim();
+  return SIM_SPEECH.find((s) => s.text === t) ?? null;
 }
 
 /**
@@ -55,8 +85,11 @@ export const PLAN_DEMO: SimStep[] = [
   { label: 'Go offline', feature: 'offline' },
   { label: 'Queue a studio plan while offline', utterance: 'studio apartment', delayMs: 1700 },
   { label: 'Back online — drain the cloud queue', feature: 'online', delayMs: 1900 },
-  { label: 'Say it in Kannada (live caption)', lang: 'kn', utterance: 'ಈ ಗೋಡೆಯನ್ನು ದಪ್ಪ ಮಾಡು', delayMs: 1700 },
-  { label: 'Back to English', lang: 'en' },
+  { label: 'Speak any language: Auto detect', lang: 'auto' },
+  { label: 'Kannada (detected on device → cloud)', utterance: SIM_SPEECH[0].text, delayMs: 1700 },
+  { label: 'Spanish (detected in the cloud → Nano)', utterance: SIM_SPEECH[1].text, delayMs: 1700 },
+  { label: 'Hindi (detected on device → cloud)', utterance: SIM_SPEECH[2].text, delayMs: 1700 },
+  { label: 'Japanese (detected on device → Nano)', utterance: SIM_SPEECH[3].text, delayMs: 1700 },
   { label: 'Check accessibility', utterance: 'check accessibility' },
   { label: 'Accept the accessibility fix', feature: 'accept-a11y' },
   { label: 'Pair a phone (QR + short code)', feature: 'relay-pair', delayMs: 1900 },

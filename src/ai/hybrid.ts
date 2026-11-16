@@ -35,6 +35,9 @@ import {
   PROFILE_CONSTRAINT, buildAdaptPrompt, coerceProfileAdaptation, type ProfileAdaptation,
 } from '../input/handProfile';
 import type { HandMetrics } from '../input/handMetrics';
+import {
+  LANG_DETECT_CONSTRAINT, cloudDetectPrompt, parseCloudDetection, type Detection,
+} from './langDetect';
 import { buildRecipePickPrompt, parseRecipePick, type RecipeRef } from '../recipes/match';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import {
@@ -175,6 +178,11 @@ interface Models {
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
+  /** Fusion on Nano with non-English input allowed (en/es/ja), used only when
+   *  Chrome reports the spoken language is available on-device. */
+  fusionLang?: TextGenModel | null;
+  /** Cloud language detector, used only when Chrome's Language Detector is missing. */
+  langDetect?: TextGenModel | null;
   /** Accessibility explainer (ONLY_IN_CLOUD, a11y-explain schema). */
   a11yExplain?: TextGenModel | null;
   /** On-device hand-profile picker (PREFER_ON_DEVICE, numbers-only; never cloud). */
@@ -203,6 +211,8 @@ export interface ModelOverrides {
   intentCloud?: TextGenModel | null;
   verifyCloud?: TextGenModel | null;
   fusionCloud?: TextGenModel | null;
+  fusionLang?: TextGenModel | null;
+  langDetect?: TextGenModel | null;
   a11yExplain?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
@@ -227,6 +237,16 @@ export interface ModelOverrides {
  */
 export const ON_DEVICE_CREATE_OPTIONS = {
   expectedInputs: [{ type: 'text' as const, languages: ['en'] }],
+  expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
+};
+
+/** Languages Gemini Nano accepts as input today (Chrome's Prompt API). A
+ *  non-English command only tries Nano when availability() says the language
+ *  is 'available' for that exact language; otherwise it goes to the cloud. */
+export const NANO_INPUT_LANGUAGES = ['en', 'es', 'ja'] as const;
+
+export const ON_DEVICE_LANG_CREATE_OPTIONS = {
+  expectedInputs: [{ type: 'text' as const, languages: [...NANO_INPUT_LANGUAGES] }],
   expectedOutputs: [{ type: 'text' as const, languages: ['en'] }],
 };
 
@@ -390,6 +410,8 @@ async function ensureModels(): Promise<Models | null> {
       intentCloud: testOverrides.intentCloud ?? null,
       verifyCloud: testOverrides.verifyCloud ?? null,
       fusionCloud: testOverrides.fusionCloud ?? null,
+      fusionLang: testOverrides.fusionLang ?? null,
+      langDetect: testOverrides.langDetect ?? null,
       a11yExplain: testOverrides.a11yExplain ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
@@ -534,6 +556,28 @@ async function initFirebase(): Promise<Models | null> {
         generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
       },
     });
+    // Nano with non-English input (en/es/ja). Same schema as `fusion`; the
+    // caller only routes here after checkLanguageAvailability() said yes.
+    const fusionLang = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
+      },
+      onDeviceParams: {
+        createOptions: ON_DEVICE_LANG_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: fusionConstraint },
+      },
+    });
+    // Cloud language detection: only when Chrome's on-device Language Detector
+    // is missing. Sends the transcript text only (ledger job 'lang-detect').
+    const langDetect = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(LANG_DETECT_CONSTRAINT, Schema) },
+      },
+    });
     const verifyCloud = getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
       inCloudParams: {
@@ -630,7 +674,7 @@ async function initFirebase(): Promise<Models | null> {
     });
 
     cached = {
-      intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter,
     };
     return cached;
@@ -882,6 +926,8 @@ export interface FusionOutcome {
   ms: number;
   /** English translation of a non-English transcript (fusion with a language). */
   translation?: string;
+  /** Short spoken confirmation in the speaker's language (non-English only). */
+  reply?: string;
 }
 
 /**
@@ -914,7 +960,12 @@ export async function fuseIntent(
   const t0 = Date.now();
   const models = await ensureModels();
   const mode = getActiveMode();
-  const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
+  // A non-English command that reached the on-device path uses the Nano
+  // session that accepts that language (the router only sends it here when
+  // Chrome said the language is available on-device).
+  const nonEnglish = !!opts?.lang && opts.lang.code !== 'en';
+  const onDevice = nonEnglish ? (models?.fusionLang ?? models?.fusion) : models?.fusion;
+  const primary = opts?.forceCloud ? models?.fusionCloud : onDevice;
   if (models && primary) {
     try {
       // Privacy gate: the phrasebook may ride a cloud call only on the sanctioned
@@ -945,6 +996,27 @@ export async function fuseIntent(
   const result = mode.parse(normalizeTranscript(utterance));
   recordInference('rules', 'fuse', Date.now() - t0);
   return { result, confidence: ruleConfidence(result), source: 'rules', ms: Date.now() - t0 };
+}
+
+/** CLOUD LANGUAGE DETECTION: only used when Chrome's on-device Language
+ *  Detector is missing and the on-device script/word checks were ambiguous.
+ *  Sends the transcript text only; the caller records it in the ledger as
+ *  'lang-detect'. Returns null with no cloud model or on any failure. */
+export async function detectLanguageCloud(text: string): Promise<{ detection: Detection; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const model = models?.langDetect;
+  if (!model) return null;
+  try {
+    const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(text)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
+    const detection = parseCloudDetection(extractJson(response.text()));
+    if (!detection) return null;
+    recordInference('cloud', 'lang-detect', Date.now() - t0);
+    return { detection, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('lang-detect', err);
+    return null;
+  }
 }
 
 /** RECIPE PICK (taught-once recipes): map an utterance to one saved recipe id.

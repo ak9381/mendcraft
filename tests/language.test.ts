@@ -32,9 +32,12 @@ const KN = resolveLanguage('kn');
 // ─── picker registry ─────────────────────────────────────────────────────────
 
 describe('language picker registry', () => {
-  it('ships English (default) and Kannada, and is easy to extend', () => {
+  it('ships English (default) first plus common languages, Kannada just one of them', () => {
     expect(DEFAULT_LANGUAGE.code).toBe('en');
-    expect(LANGUAGES.map((l) => l.code)).toEqual(['en', 'kn']);
+    expect(LANGUAGES[0].code).toBe('en');
+    const codes = LANGUAGES.map((l) => l.code);
+    for (const c of ['kn', 'hi', 'es', 'ja']) expect(codes).toContain(c);
+    expect(new Set(codes).size).toBe(codes.length); // no duplicates
     // Every row carries the pieces the picker / speech / badge need.
     for (const l of LANGUAGES) {
       expect(l.label).toBeTruthy();
@@ -226,34 +229,23 @@ describe('confirmPhrase', () => {
 
 // ─── speech route decision ───────────────────────────────────────────────────
 
-const base: SpeechEnv = { cloudReady: true, audioSupported: true, synthHasVoice: true };
-
-describe('pickSpeechRoute', () => {
+describe('pickSpeechRoute (speechSynthesis only)', () => {
   it('mutes everything when muted', () => {
-    expect(pickSpeechRoute(KN, base, true)).toBe('silent');
-    expect(pickSpeechRoute(EN, base, true)).toBe('silent');
+    expect(pickSpeechRoute(KN, { synthHasVoice: true }, true)).toBe('silent');
+    expect(pickSpeechRoute(EN, { synthHasVoice: true }, true)).toBe('silent');
   });
 
-  it('uses the cloud voice for her language when cloud + SDK audio are ready', () => {
-    expect(pickSpeechRoute(KN, base, false)).toBe('cloud');
+  it('speaks her language when the browser has a voice for it', () => {
+    const env: SpeechEnv = { synthHasVoice: true };
+    expect(pickSpeechRoute(KN, env, false)).toBe('lang');
   });
 
-  it('keeps English on speechSynthesis even when the cloud is available', () => {
-    expect(pickSpeechRoute(EN, base, false)).toBe('synth');
+  it('falls back to English when there is no voice for her language', () => {
+    expect(pickSpeechRoute(KN, { synthHasVoice: false }, false)).toBe('english');
   });
 
-  it('falls back to synth for her language when the cloud is unavailable', () => {
-    expect(pickSpeechRoute(KN, { ...base, cloudReady: false }, false)).toBe('synth');
-    expect(pickSpeechRoute(KN, { ...base, audioSupported: false }, false)).toBe('synth');
-  });
-
-  it('stays silent for her language with no cloud and no matching voice', () => {
-    expect(pickSpeechRoute(KN, { cloudReady: false, audioSupported: false, synthHasVoice: false }, false))
-      .toBe('silent');
-  });
-
-  it('always lets English speak via synth (English always has a voice)', () => {
-    expect(pickSpeechRoute(EN, { cloudReady: false, audioSupported: false, synthHasVoice: false }, false))
-      .toBe('synth');
+  it('English always speaks English', () => {
+    expect(pickSpeechRoute(EN, { synthHasVoice: false }, false)).toBe('english');
+    expect(pickSpeechRoute(EN, { synthHasVoice: true }, false)).toBe('english');
   });
 });

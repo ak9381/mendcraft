@@ -29,7 +29,7 @@ can actually reach another machine.
 | kind | leaves device | what is sent | what is NOT sent |
 | --- | --- | --- | --- |
 | **cloud-ai-model** | yes (cloud modes only) | command text + design ops; for point-and-say, one cropped still | camera/hand/face/voice streams |
-| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan/ui, a11y-explain, TTS, escalated intent/deixis | raw sensor data |
+| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan/ui, a11y-explain, escalated intent/deixis; any-language fallbacks: `lang-detect` and non-English translate + intent | raw sensor data, voice audio |
 | **prefer-on-device** (`PREFER_ON_DEVICE`) | sometimes | runs on Nano; on fallback sends the same abstract text. Every fallback is a ledger cloud call | sensor streams |
 | **on-device-only** (`ONLY_ON_DEVICE`) | **no** | hand-adaptive profile pick runs with no `inCloudParams` — raw hand numbers can never leave, even if Nano is missing | everything |
 | **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
@@ -63,6 +63,26 @@ or uses her bound gesture), at most three stills per run, never stored, and
 every cloud call is a ledger row (`add device · identify` / `· verify`).
 Voice-only mode ("add the lamp") sends no image at all. The connector writer
 (`ONLY_IN_CLOUD`) receives only the device kind and brand as text.
+
+### Speak any language — text only, never audio
+
+Mendcraft is polished in English. Speak any language. For a non-English
+command, only the **recognised text** can leave, never the voice audio (speech
+recognition gives us text; the audio is never handed to Gemini):
+
+- **Language detection** runs on the device first: Chrome's built-in Language
+  Detector (a small Chrome model, labelled "Chrome AI · on device"), then a
+  Unicode script check and an English word check. Only in Auto mode, only for
+  ambiguous Latin-script text, and only when Chrome's detector is missing, the
+  transcript is sent to Gemini in the cloud to name the language. Each such call
+  is a ledger row with job `lang-detect` (`lang-detect (simulated)` in SIM).
+- **Turning it into a command**: Gemini Nano first when Chrome says Nano can run
+  that language (today English, Spanish, Japanese); otherwise one cloud call
+  translates + returns the English op (ledger job `intent`, with the router's
+  reason, e.g. "Hindi: Nano can't run Hindi here → cloud").
+- **Spoken replies** use the browser's own `speechSynthesis` — in her language
+  when a voice exists, otherwise English. No reply audio is generated in the
+  cloud by default (the `tts` job stays declared for the optional cloud voice).
 
 ### Phone↔laptop relay — a peer path, not the cloud AI
 

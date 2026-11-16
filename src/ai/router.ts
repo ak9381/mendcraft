@@ -155,6 +155,8 @@ export interface RouteLogEntry {
   confidence?: number;
   escalated: boolean;
   ms: number;
+  /** Plain-words routing note, e.g. "Hindi: Nano can't run Hindi here → cloud". */
+  note?: string;
 }
 
 /** One compact dev-panel line, e.g.
@@ -165,5 +167,6 @@ export function formatLogEntry(e: RouteLogEntry): string {
   const mismatch = e.planned !== e.source && !e.escalated ? ` planned ${e.planned} →` : ' →';
   const conf = typeof e.confidence === 'number' ? `${e.confidence.toFixed(2)}, ` : '';
   const esc = e.escalated ? ', escalated' : '';
-  return `${quoted}${mismatch} ${badgeLabel(e.source, e.reason)} (${conf}${Math.round(e.ms)} ms${esc})`;
+  const note = e.note ? ` — ${e.note}` : '';
+  return `${quoted}${mismatch} ${badgeLabel(e.source, e.reason)} (${conf}${Math.round(e.ms)} ms${esc})${note}`;
 }

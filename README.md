@@ -3,7 +3,7 @@
 **Hands-free design for people with limited hand use.** The builder's mom has
 arthritis and speaks Kannada; typing and a mouse hurt. Mendcraft lets her design
 with a small **pinch** (camera hand-tracking) and short **voice** commands, in
-English or Kannada. She can draw a floor **plan**, lay out a **UI** screen, or
+English or any other language (polished in English). She can draw a floor **plan**, lay out a **UI** screen, or
 fall back to a 3D **part** (a cup grip, a hook) and export it — and she can teach
 the app a phrase once and reuse it forever. Every AI step is honest about where
 it ran and what, if anything, left the device. Built for Google **#BuildHybridAI**.
@@ -30,8 +30,8 @@ every edit carries an honest **AI-source badge** — `ON-DEVICE`, `CLOUD`, `RULE
 | **Hand-profile pick** (effort/tremor/pinch metrics → preset) | `ONLY_ON_DEVICE` | Raw hand metrics are sensitive; the numbers never leave the device |
 | **Point-and-say** (deixis from a camera crop + pointer) | multimodal Nano | The only image path, user-initiated and logged |
 | **Big generate** (plan / screen / part from a longer request) | cloud `gemini-3.5-flash-lite` | Needs more reasoning than Nano; escalated on low confidence |
-| **Kannada** (non-English → translate + op in ONE call) | cloud | Nano is English-only here; one honest round trip |
-| **Spoken replies in her language** | cloud TTS (`gemini-2.5-flash-preview-tts`) | Natural Kannada voice; English stays on the free browser `speechSynthesis` |
+| **Any language** (detected on device by Chrome's Language Detector; cloud `lang-detect` only if that API is missing) | Nano for en/es/ja, else cloud translate + op in ONE call | Polished in English. Speak any language. The badge and Routing panel say why |
+| **Spoken replies in her language** | browser `speechSynthesis` | The model's short reply in her language when a voice exists, otherwise English; nothing leaves the device |
 
 Firebase pieces wired in:
 

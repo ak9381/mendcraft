@@ -16,7 +16,7 @@ const tween=(ms,f,done)=>{const t0=performance.now();const fr=t=>{const p=Math.m
 const RM=()=>P.reduce||matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* preferences */
-const P0={dwell:800,tap:56,smooth:50,ui:'en',speak:'both',capKn:true,capEn:true,cap:22,units:'m',reduce:false,local:false,gest:{pinch:'click',hold:'grab',palm:'listen',mid:'undo',fist:'cancel',tilt:'scroll'}};
+const P0={dwell:800,tap:56,smooth:50,ui:'en',speak:'auto',capKn:true,capEn:true,cap:22,units:'m',reduce:false,local:false,gest:{pinch:'click',hold:'grab',palm:'listen',mid:'undo',fist:'cancel',tilt:'scroll'}};
 const saved=store.get('prefs',{});
 const P=Object.assign({},P0,saved);P.gest=Object.assign({},P0.gest,saved.gest||{});
 const saveP=()=>store.set('prefs',P);
@@ -37,7 +37,7 @@ const JOB={
  en:{where:'device',eng:'nano',why:'English command → on device',need:'English command'},
  summary:{where:'device',eng:'nano',why:'Private summary → on device',need:'Summary'},
  local:{where:'device',eng:'local',why:'No AI needed'},
- kn:{where:'cloud',eng:'cloud',why:'Kannada speech → cloud',need:'Kannada speech',kind:'voice'},
+ kn:{where:'cloud',eng:'cloud',why:'Kannada detected → cloud',need:'Non-English speech',kind:'voice'},
  render:{where:'cloud',eng:'cloud',why:'Big render → cloud',need:'Room render',kind:'job'},
  sketch:{where:'cloud',eng:'cloud',why:'Photo cleanup → cloud',need:'Sketch photo',kind:'image'},
  gen:{where:'cloud',eng:'cloud',why:'Whole screen from a description → cloud',need:'Screen draft',kind:'job'},
@@ -48,9 +48,9 @@ const JOB={
 const S={screen:'landing',online:true,device:'laptop',mode:'plan',tool:'select',hands:true,listening:true,
  G:clone(G0),sel:'bedroom',ui:{sel:'cta',btnH:56},part:{grip:38,len:90},hist:[],fut:[],edits:9,over:[],lf:'all',
  lamp:{on:true,level:70},music:{playing:true,i:0,pos:38},queue:[],playing:null,pstep:0,teach:{mode:'idle',steps:[]},
- last:{eng:'cloud',why:'Kannada speech → cloud'},stay:{en:23,sum:6},
+ last:{eng:'cloud',why:'Kannada detected → cloud'},stay:{en:23,sum:6},
  feed:[
-  {t:ago(6),eng:'cloud',what:'Added a window to the bedroom',why:'Kannada speech → cloud',call:'plan.addWindow("bedroom")'},
+  {t:ago(6),eng:'cloud',what:'Added a window to the bedroom',why:'Kannada detected → cloud',call:'plan.addWindow("bedroom")'},
   {t:ago(7),eng:'hand',what:'Selected the bedroom',why:'Hand points stay on this device'},
   {t:ago(11),eng:'nano',what:'Zoomed to fit the plan',why:'English command → on device',call:'view.zoomToFit()'},
   {t:ago(18),eng:'cloud',what:'Rendered a preview of the living room',why:'Big render → cloud',call:'render.preview("living")'},
@@ -59,11 +59,11 @@ const S={screen:'landing',online:true,device:'laptop',mode:'plan',tool:'select',
   {t:ago(34),eng:'cloud',what:'Turned a sketch photo into walls',why:'Photo cleanup → cloud',call:'plan.importSketch(photo)'},
   {t:ago(41),eng:'cloud',what:'Sent from the queue: moved the kitchen wall',why:'Back online, so the queue sent it',call:'plan.moveWall("kitchen", +0.3)'}],
  ledger:[
-  {t:ago(6),kind:'voice',title:'Kannada voice clip, 3.4 s',detail:'Audio only.',heard:'ಮಲಗುವ ಕೋಣೆಗೆ ಒಂದು ಕಿಟಕಿ ಸೇರಿಸು',why:'Kannada speech → cloud',secs:3.4,kb:54},
+  {t:ago(6),kind:'voice',title:'Kannada command, as text',detail:'Text only. No audio.',heard:'ಮಲಗುವ ಕೋಣೆಗೆ ಒಂದು ಕಿಟಕಿ ಸೇರಿಸು',why:'Kannada detected → cloud',secs:3.4,kb:54},
   {t:ago(18),kind:'job',title:'Room preview render',detail:'Room outlines, sizes and finishes for the living room. No photos, no camera video.',why:'Big render → cloud',kb:212},
   {t:ago(34),kind:'image',title:'Sketch photo',detail:'One photo of a paper sketch.',why:'Photo cleanup → cloud',kb:380},
-  {t:ago(41),kind:'voice',title:'Kannada voice clip, 2.1 s',detail:'Audio only.',heard:'ಅಡುಗೆಮನೆಯ ಗೋಡೆ ಸರಿಸು',why:'Kannada speech → cloud',secs:2.1,kb:34,fromQ:true},
-  {t:ago(52),kind:'voice',title:'Kannada voice clip, 2.8 s',detail:'Audio only.',heard:'ವಾಸದ ಕೋಣೆಯನ್ನು ಅಳತೆ ಮಾಡು',why:'Kannada speech → cloud',secs:2.8,kb:45}],
+  {t:ago(41),kind:'voice',title:'Kannada command, as text',detail:'Text only. No audio.',heard:'ಅಡುಗೆಮನೆಯ ಗೋಡೆ ಸರಿಸು',why:'Kannada detected → cloud',secs:2.1,kb:34,fromQ:true},
+  {t:ago(52),kind:'voice',title:'Kannada command, as text',detail:'Text only. No audio.',heard:'ವಾಸದ ಕೋಣೆಯನ್ನು ಅಳತೆ ಮಾಡು',why:'Kannada detected → cloud',secs:2.8,kb:45}],
  recipes:[
   {id:'morning',name:'Morning setup',say:'Good morning, Mendcraft',kn:'ಶುಭೋದಯ',gesture:'Or an open palm, held for 1 second',used:14,steps:[{t:'Open the last project'},{t:'Set the lamp to 70%',fx:'lamp70'},{t:'Play the Focus playlist',fx:'play'},{t:'Read out yesterday’s changes'}]},
   {id:'bath',name:'Add my standard bathroom',say:'Add my bathroom',kn:'ನನ್ನ ಬಚ್ಚಲುಮನೆ ಸೇರಿಸು',gesture:'Or pinch twice',used:6,steps:[{t:'Draw a 2.4 × 1.8 m room beside the plan',fx:'bath'},{t:'Add a 0.8 m door on the longest wall'},{t:'Add a 0.6 m window'},{t:'Name it “Bath 2”'}]},
@@ -97,7 +97,7 @@ function decide(type){
 function addFeed(eng,what,why,call){S.feed.unshift({t:Date.now(),eng,what,why,call:call||''});if(S.feed.length>40)S.feed.pop()}
 function addLedger(r,d,fromQ){
  const kind=r.kind||JOB[r.type].kind||(r.lang?'voice':'text');let title=r.ltitle||r.label,detail=r.ldetail||'',kb=r.kb||({job:212,image:360,text:2}[kind]||2),secs=0;
- if(kind==='voice'){secs=r.secs||1.4;title=`${r.lang==='kn'?'Kannada':'English'} voice clip, ${secs.toFixed(1)} s`;detail='Audio only.';kb=Math.round(secs*16)}
+ if(kind==='voice'){secs=r.secs||1.4;title=`${r.lang==='kn'?'Kannada':'English'} command, as text`;detail='Text only. No audio.';kb=1}
  const e={t:Date.now(),kind,title,detail,heard:r.lang==='kn'?r.said:null,why:d.why,secs,kb,fromQ:!!fromQ,fresh:true};S.ledger.unshift(e);
  setTimeout(()=>{e.fresh=false},2400);
 }
@@ -120,7 +120,7 @@ function flush(){
 function summary(){
  const L=S.ledger;if(!L.length)return 'Nothing has left this device today. Everything ran here.';
  const v=L.filter(e=>e.kind==='voice'),im=L.filter(e=>e.kind==='image'),jb=L.filter(e=>e.kind==='job'),tx=L.filter(e=>e.kind==='text');const parts=[];
- if(v.length)parts.push(`${plural(v.length,'voice clip')} (${Math.max(1,Math.round(v.reduce((a,e)=>a+e.secs,0)))} seconds of audio)`);
+ if(v.length)parts.push(`${plural(v.length,'spoken command')} as text (no audio)`);
  if(im.length)parts.push(plural(im.length,'sketch photo'));if(jb.length)parts.push(plural(jb.length,'big job'));if(tx.length)parts.push(plural(tx.length,'text request'));
  return `Today, ${plural(L.length,'thing')} left this device: ${and(parts)}. Your camera video and hand movements never left.`;
 }
@@ -170,7 +170,7 @@ function say(p){
  const words=said.split(' ');let i=0;const act=p.act(),call=val(p.call);
  own.classList.remove('wait');oth.classList.add('wait');oth.textContent='…';own.textContent='';
  const finish=()=>{
-  const req={type:p.type,lang:p.lang,said,secs:p.secs,call,label:kn?`Kannada voice clip, ${p.secs.toFixed(1)} s`:said,
+  const req={type:p.type,lang:p.lang,said,secs:p.secs,call,label:kn?'Kannada command, as text':said,
    act:()=>{const d=act();if(own.textContent===said){oth.textContent=tr;oth.classList.remove('wait')}else if(kn)toast(`Translated: ${tr}`);return d}};
   if(p.type==='render')Object.assign(req,{label:'Room preview render',ltitle:MORE.render.ltitle,ldetail:MORE.render.ldetail,kb:212});
   const d=run(req);
@@ -265,7 +265,7 @@ function fitTools(){const tb=$('#toolbar');if(!tb.clientWidth)return;const items
  S.over=items.filter(b=>b.hidden).map(b=>b.dataset.tool)}
 function renderMore(){const over=S.over.map(id=>TOOLS[S.mode].find(t=>t[0]===id)).filter(Boolean);
  $('#moreMenu').innerHTML=(over.length?`<h4>Tools that didn’t fit</h4>${over.map(([id,l])=>`<button class="mi" role="menuitem" data-tool="${id}">${ic(id)}<span>${l}</span></button>`).join('')}`:'')+`<h4>Actions, and where they run</h4>`+ACTIONS[S.mode].map(([id,n,l])=>`<button class="mi" role="menuitem" data-act="${id}">${ic(n)}<span>${l}</span>${MORE[id]?sigHTML(decide(MORE[id].type).eng):''}</button>`).join('')}
-function renderSay(){const L=PH.filter(p=>P.speak==='both'||p.lang===P.speak);
+function renderSay(){const L=PH.filter(p=>P.speak==='both'||P.speak==='auto'||p.lang===P.speak);
  $('#sayMenu').innerHTML=`<h4>Pick a phrase to say</h4>`+L.map(p=>`<button class="mi" role="menuitem" data-say="${p.id}">${ic('mic')}<span class="ph"><small>${p.lang==='kn'?'Kannada':'English'}</small><span${p.lang==='kn'?' lang="kn"':''}>${esc(val(p.said))}</span></span>${sigHTML(decide(p.type).eng)}</button>`).join('')}
 let openM=null,kbd=false;
 function openMenu(btn,menu,fill){closeMenus();fill();menu.hidden=false;btn.setAttribute('aria-expanded','true');openM={btn,menu};if(kbd){const f=menu.querySelector('[role=menuitem]');if(f)f.focus()}}
@@ -311,7 +311,7 @@ function renderLedgers(){[$('#ledgerMain'),$('#ledgerDlg').open?$('#ledgerDrawer
 /* control room */
 function renderTV(){
  const D=DEV[S.device];$('#devName').textContent=D.name;$('#devSub').textContent=D.sub;$('#devModel').textContent=D.model;
- $('#devFacts').innerHTML=`<div><dt>Hands</dt><dd>${S.hands?'Tracking, right hand':'Hand cursor off'}</dd></div><div><dt>Voice</dt><dd>${S.listening?'<span lang="kn">ಕನ್ನಡ</span> and English':'Not listening'}</dd></div><div><dt>Network</dt><dd>${S.online?(P.local?'Cloud paused':'Online'):'Airplane mode'}</dd></div>`;
+ $('#devFacts').innerHTML=`<div><dt>Hands</dt><dd>${S.hands?'Tracking, right hand':'Hand cursor off'}</dd></div><div><dt>Voice</dt><dd>${S.listening?'Any language (auto)':'Not listening'}</dd></div><div><dt>Network</dt><dd>${S.online?(P.local?'Cloud paused':'Online'):'Airplane mode'}</dd></div>`;
  $$('[data-dev]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.dev===S.device)));
  $('#tvFeed').innerHTML=S.feed.slice(0,8).map(f=>`<li><time>${clock(f.t)}</time>${sigHTML(f.eng)}<span class="what">${esc(f.what)}</span>${f.call?`<span class="call">${esc(f.call)}</span>`:''}<span class="why">${esc(f.why)}</span></li>`).join('');
  keep($('#tvLedger'),()=>{$('#tvLedger').innerHTML=`<p class="mid" style="font-size:clamp(24px,2vw,30px)">${esc(summary())}</p><ol class="llist">${S.ledger.slice(0,3).map(e=>lrow(e,true)).join('')}</ol><button class="btn btn-q" data-go="ledger" style="justify-self:start">Open the full ledger</button>`});
@@ -366,7 +366,7 @@ function renderSettings(){renderGest();
  $('#capOpts').innerHTML=[[20,'Large'],[22,'Larger'],[28,'Largest']].map(([v,n])=>opt('cap',v,P.cap,n,'',`<span aria-hidden="true" style="font-size:${v}px;line-height:1.2">Aa <span lang="kn">ಅಆ</span></span>`)).join('');
  $('#unitOpts').innerHTML=opt('units','m',P.units,'Metres','3.5 m by 2.8 m')+opt('units','ft',P.units,'Feet and inches','11′ 6″ by 9′ 2″');
  $('#dwell').value=P.dwell;$('#smooth').value=P.smooth;syncRange();
- $('#uiLang').value=P.ui;$('#speak').value=P.speak;$('#capKn').checked=P.capKn;$('#capEn').checked=P.capEn;$('#rmSw').setAttribute('aria-checked',String(P.reduce))}
+ $('#uiLang').value=P.ui;$('#speak').value=P.speak==='both'?'auto':P.speak;$('#capKn').checked=P.capKn;$('#capEn').checked=P.capEn;$('#rmSw').setAttribute('aria-checked',String(P.reduce))}
 function syncRange(){const d=$('#dwell'),sm=$('#smooth');d.style.setProperty('--p',((d.value-300)/17)+'%');sm.style.setProperty('--p',sm.value+'%');$('#dwellOut').textContent=(d.value/1000).toFixed(1)+' s';$('#smoothOut').textContent=sm.value+'%'}
 function applyPrefs(){const R=document.documentElement;R.style.setProperty('--tap',P.tap+'px');R.style.setProperty('--cap',P.cap+'px');R.classList.toggle('rm',P.reduce);$('#lnKn').hidden=!P.capKn;$('#lnEn').hidden=!P.capEn;requestAnimationFrame(fitTools)}
 
@@ -427,10 +427,10 @@ const HD=[
  {id:'speaker',f:dSpeaker,x:890,y:478,s:.78,w:110,h:150,n:'Speaker',st:()=>HS.playing?'Playing':'Paused'},
  {id:'browser',f:dBrowser,x:334,y:500,s:.8,w:240,h:160,n:'Chrome',st:()=>HS.scroll>.5?'Scrolled down':'A web page'}];
 const HSEQ=[
- {d:'lamp',lang:'kn',said:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',tr:'Dim the lamp',via:'cloud',why:'Kannada speech → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
+ {d:'lamp',lang:'kn',said:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',tr:'Dim the lamp',via:'cloud',why:'Kannada detected → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
  {d:'speaker',lang:'en',said:'Pause the music',tr:'ಹಾಡನ್ನು ನಿಲ್ಲಿಸು',via:'dev',why:'English command → on device',fx:{playing:false},call:'music.pause()',app:'Mendcraft Home app'},
  {d:'phone',lang:'en',said:'Read my last message',tr:'ನನ್ನ ಕೊನೆಯ ಸಂದೇಶ ಓದು',via:'dev',why:'English command → on device',fx:{read:1},call:'messages.readLatest()',app:'Mendcraft phone app'},
- {d:'tablet',lang:'kn',said:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',tr:'Show the plan on the iPad',via:'cloud',why:'Kannada speech → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
+ {d:'tablet',lang:'kn',said:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',tr:'Show the plan on the iPad',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
  {d:'browser',lang:'en',said:'Scroll down a bit',tr:'ಸ್ವಲ್ಪ ಕೆಳಗೆ ಸರಿಸು',via:'dev',why:'English command → on device',fx:{scroll:1},call:'page.scroll(0.5)',app:'Mendcraft for Chrome'},
  {d:'laptop',lang:'en',said:'Make the kitchen a bit bigger',tr:'ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು',via:'dev',why:'English command → on device',fx:{kg:1,ksel:1},call:'plan.resizeRoom("kitchen", +0.5)',app:'Mendcraft Studio'}];
 const HS0={lamp:.8,playing:true,kg:0,ksel:0,read:0,tab:0,scroll:0};
@@ -475,10 +475,10 @@ function hCompose(){Object.assign(HS,{lamp:.3,kg:1,ksel:1,act:'lamp',cloud:1});h
 
 /* device explorer */
 const XD=[
- {id:'lamp',n:'Desk lamp',k:'Any smart lamp',d:'Brightness and warmth, by voice or a slow pinch and lift.',f:dLamp,w:160,h:240,say:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',alt:'Dim the lamp',lang:'kn',via:'cloud',why:'Kannada speech → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
+ {id:'lamp',n:'Desk lamp',k:'Any smart lamp',d:'Brightness and warmth, by voice or a slow pinch and lift.',f:dLamp,w:160,h:240,say:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',alt:'Dim the lamp',lang:'kn',via:'cloud',why:'Kannada detected → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
  {id:'music',n:'Music',k:'Speaker or phone',d:'Play, pause, skip and set the volume without reaching for anything.',f:dSpeaker,w:110,h:150,say:'Pause the music',alt:'ಹಾಡನ್ನು ನಿಲ್ಲಿಸು',lang:'en',via:'dev',why:'English command → on device',fx:{playing:false},call:'music.pause()',app:'Mendcraft Home app'},
  {id:'phone',n:'Phone',k:'Android or iPhone',d:'Read and reply to messages, answer calls and scroll, from across the room.',f:dPhone,w:80,h:164,say:'Read my last message',alt:'ನನ್ನ ಕೊನೆಯ ಸಂದೇಶ ಓದು',lang:'en',via:'dev',why:'English command → on device',fx:{read:1},call:'messages.readLatest()',app:'Mendcraft phone app'},
- {id:'ipad',n:'iPad',k:'Second screen',d:'A second canvas beside you, or the control room propped up on the desk.',f:dTablet,w:128,h:176,say:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',alt:'Show the plan on the iPad',lang:'kn',via:'cloud',why:'Kannada speech → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
+ {id:'ipad',n:'iPad',k:'Second screen',d:'A second canvas beside you, or the control room propped up on the desk.',f:dTablet,w:128,h:176,say:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',alt:'Show the plan on the iPad',lang:'kn',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
  {id:'web',n:'The browser',k:'Chrome',d:'Scroll pages, press buttons and fill in forms, anywhere on the web.',f:dBrowser,w:240,h:160,say:'Scroll down a bit',alt:'ಸ್ವಲ್ಪ ಕೆಳಗೆ ಸರಿಸು',lang:'en',via:'dev',why:'English command → on device',fx:{scroll:1},call:'page.scroll(0.5)',app:'Mendcraft for Chrome'},
  {id:'design',n:'Design tools',k:'Laptop',d:'Floor plans, app screens and printable parts. One of the things your hands and voice can do.',f:dLaptop,w:240,h:150,say:'Make the kitchen a bit bigger',alt:'ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು',lang:'en',via:'dev',why:'English command → on device',fx:{kg:1,ksel:1},call:'plan.resizeRoom("kitchen", +0.5)',app:'Mendcraft Studio'}];
 let xi=0,xRaf=0,xPulse=null,xTim=[];const XS=Object.assign({t:0},HS0);
@@ -513,7 +513,7 @@ function playFilm(){fT.forEach(clearTimeout);fT=[0];const cur=$('#fCur'),prog=$(
  at2(1700,()=>tween(800*sp,p=>prog.style.strokeDashoffset=214*(1-p)));
  at2(2600,()=>{$('#fT1').setAttribute('cx',38);$('#fT2').setAttribute('cx',42);setTimeout(()=>{$('#fT1').setAttribute('cx',33);$('#fT2').setAttribute('cx',47)},250);FV.sel='kitchen';drawFilm();prog.style.strokeDashoffset=214});
  const ws='ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು'.split(' ');ws.forEach((w,i)=>at2(3100+i*320,()=>{kn.textContent=ws.slice(0,i+1).join(' ')}));
- at2(4500,()=>fSig('cloud','Kannada speech → cloud'));
+ at2(4500,()=>fSig('cloud','Kannada detected → cloud'));
  at2(5100,()=>{en.textContent='Make the kitchen a bit bigger';tween(700*sp,p=>{k.w=3+.5*p;drawFilm();cur.style.left=fAt(k)[0]})});
  at2(6200,()=>tst.classList.add('on'));
  at2(9600,()=>{$('#fPlay').hidden=false;$('#fPlayTx').textContent='Play it again';tst.classList.remove('on');fT=[]})}
@@ -530,7 +530,7 @@ function seqDemo(cur){$('#seqDemo').innerHTML=`<div class="seqhead"><div><h3>Win
 function seqPlay(){if(sdOn)return;sdOn=true;seqDemo(0);let i=0;const dt=RM()?400:950;const tick=()=>{i++;if(i>=WIND.steps.length){sdOn=false;seqDemo(-1);const b=$('#sdPlay');if(b)b.focus();return}updSeq($('#seqDemo'),i);sdT.push(setTimeout(tick,dt))};sdT.push(setTimeout(tick,dt))}
 
 /* airplane demo */
-const AIR={on:true,jobs:[{l:'Room preview render',s:'queue'},{l:'Kannada voice clip, 2.4 s',s:'queue'}]};
+const AIR={on:true,jobs:[{l:'Room preview render',s:'queue'},{l:'Kannada command, as text',s:'queue'}]};
 function renderAir(){$('#airWid').innerHTML=`<button class="sw" role="switch" aria-checked="${AIR.on}" id="airSw"><span class="trk" aria-hidden="true"></span><span>Airplane mode<small>${AIR.on?'Edits still work. Cloud jobs wait.':'Online. The queue sends itself.'}</small></span></button><div>${AIR.jobs.map(j=>`<div class="qrow"><span>${j.l}</span><span class="sig ${j.s==='queue'?'queue':'cloud'}">${j.s==='queue'?'Waiting for Gemini · cloud':'Sent to Gemini · cloud'}</span></div>`).join('')}</div>`}
 function airToggle(){AIR.on=!AIR.on;if(AIR.on)AIR.jobs.forEach(j=>j.s='queue');renderAir();$('#airSw').focus();if(!AIR.on)AIR.jobs.forEach((j,i)=>setTimeout(()=>{if(!AIR.on){j.s='sent';const f=document.activeElement&&document.activeElement.id==='airSw';renderAir();if(f)$('#airSw').focus()}},700+i*700))}
 
@@ -541,7 +541,7 @@ function airToggle(){AIR.on=!AIR.on;if(AIR.on)AIR.jobs.forEach(j=>j.s='queue');r
 
 /* how Gemini powers Mendcraft */
 const GX=[
- {id:'kn',lab:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',lang:'kn',said:'“ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು”',sub:'Spoken in Kannada: “Dim the lamp”',eng:'cloud',cap:'kn',why:'Kannada speech → cloud',call:'lamp.setBrightness(30)',app:'home'},
+ {id:'kn',lab:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',lang:'kn',said:'“ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು”',sub:'Spoken in Kannada: “Dim the lamp”',eng:'cloud',cap:'kn',why:'Kannada detected → cloud',call:'lamp.setBrightness(30)',app:'home'},
  {id:'en',lab:'Pause the music',lang:'en',said:'“Pause the music”',sub:'Spoken in English',eng:'nano',cap:'intent',why:'English command → on device',call:'music.pause()',app:'home'},
  {id:'off',lab:'Make the kitchen bigger, offline',lang:'en',said:'“Make the kitchen a bit bigger”',sub:'Spoken in English, in airplane mode',eng:'nano',cap:'offline',why:'Offline edit → on device',call:'plan.resizeRoom("kitchen", +0.5)',app:'studio'},
  {id:'hand',lab:'A shaky pinch',lang:'en',said:'A pinch with a slight tremor',sub:'No words, just a gesture',eng:'nano',cap:'hand',why:'Hand-adaptive input → on device',call:'input.tune(0.9, 0.6)',app:'input'},
@@ -640,7 +640,7 @@ document.addEventListener('change',e=>{const t=e.target;
  if(t.name==='tap'){P.tap=+t.value;saveP();applyPrefs();toast(`Targets are now at least ${P.tap} px.`);return}
  if(t.name==='cap'){P.cap=+t.value;saveP();applyPrefs();return}
  if(t.name==='units'){P.units=t.value;saveP();render();return}
- if(t.id==='uiLang'){P.ui=t.value;saveP();toast('Saved. In this prototype, only the English and Kannada captions are wired up.');return}
+ if(t.id==='uiLang'){P.ui=t.value;saveP();toast('Saved. The interface is polished in English; you can speak any language.');return}
  if(t.id==='speak'){P.speak=t.value;saveP();return}
  if(t.id==='capKn'||t.id==='capEn'){if(!$('#capKn').checked&&!$('#capEn').checked){t.checked=true;toast('Captions need at least one line.');return}P.capKn=$('#capKn').checked;P.capEn=$('#capEn').checked;saveP();applyPrefs()}});
 $('#moreBtn').addEventListener('click',e=>{e.stopPropagation();openM&&openM.menu.id==='moreMenu'?closeMenus():openMenu($('#moreBtn'),$('#moreMenu'),renderMore)});

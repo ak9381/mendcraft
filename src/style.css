@@ -1157,7 +1157,7 @@ a.brand:hover { color: var(--accent); }
   list-style: none;
   overflow-y: auto;
   font-size: 12.5px;
-  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Noto Sans Kannada', monospace, system-ui;
 }
 .mc-router-row {
   display: flex;

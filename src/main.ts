@@ -36,8 +36,7 @@ import {
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
-  synthesizeSpeech,
-  cloudTtsReady,
+  detectLanguageCloud,
   type DeviceModelStatus,
   type DeixisImage,
   type FusionContext,
@@ -75,13 +74,17 @@ import {
 import { exactRuleParse } from './ai/intentFusion';
 import { createRouterPanel } from './ui/routerPanel';
 import {
-  LANGUAGES, DEFAULT_LANGUAGE, resolveLanguage, isEnglish, shouldTranslate,
+  LANGUAGES, DEFAULT_LANGUAGE, AUTO_PICK, LANGUAGE_PROMISE, resolveLanguage, resolvePick,
+  recognitionLanguage, autoLabel, findLanguage, isEnglish, shouldTranslate,
   translateInCloud, languageBadgeLabel, buildCaption, localize, pickVoice,
-  confirmPhrase, pickSpeechRoute,
+  pickReply, pickSpeechRoute, langRouteNote,
   type Language,
 } from './ai/language';
-import { checkLanguageAvailability } from './ai/hybrid';
-import { base64ToBytes, wrapPcmAsWav } from './core/audio';
+import {
+  chromeDetectorAvailable, detectOnDevice, detectionLabel, planDetection, type Detection,
+} from './ai/langDetect';
+import { simSpeechFor } from './sim';
+import { checkLanguageAvailability, type FusionOutcome } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
@@ -142,24 +145,35 @@ import {
 const ONBOARD_KEY = 'mendcraft.onboarded';
 const MODE_KEY = 'mendcraft.mode';
 const LANG_KEY = 'mendcraft.lang';
+const LANG_LAST_KEY = 'mendcraft.lang.last';
 const MUTE_KEY = 'mendcraft.muted';
 
 // Spoken replies can be muted (near the language picker). Restored per session.
 let muted = false;
 try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch { /* storage blocked */ }
 
-// The spoken/written language (Akash's mom speaks Kannada). Restored from a
-// prior session; drives speech recognition lang, routing (translate in the
-// cloud when non-English), the badge, captions, and confirmations.
-let currentLanguage: Language = DEFAULT_LANGUAGE;
+// "Polished in English. Speak any language." The picker holds 'auto' (the
+// default: detect every command) or a language code. `lastDetected` is what
+// Auto listens in next (Web Speech needs a language up front).
+let langPick: string = AUTO_PICK;
+let lastDetected: Language | null = null;
 try {
-  currentLanguage = resolveLanguage(localStorage.getItem(LANG_KEY));
+  langPick = resolvePick(localStorage.getItem(LANG_KEY));
+  lastDetected = findLanguage(localStorage.getItem(LANG_LAST_KEY)) ?? null;
 } catch {
-  // Storage blocked — default to English.
+  // Storage blocked — Auto, listening in the browser language.
 }
-// Does Nano report it can run the current language on-device? Refreshed on
-// startup and on every language change; false means the cloud does the translate.
+const browserLang = typeof navigator !== 'undefined' ? navigator.language : 'en-US';
+// The language of the command being handled (set per utterance by detection;
+// between commands, the language recognition listens in). Drives routing
+// (translate when non-English), the badge, captions and spoken replies.
+let currentLanguage: Language = recognitionLanguage(langPick, lastDetected, browserLang);
+// Does Nano report it can run the current language on-device? Set per command
+// after detection; false means the cloud does the translate.
 let deviceLangReady = false;
+// The model's short reply in her language for the command in flight (spoken by
+// speakConfirm when the op is verified, if the browser has a voice for it).
+let pendingReply: string | null = null;
 
 // Restore a chosen (ready) mode: ?mode= wins, then localStorage, else default.
 try {
@@ -191,10 +205,10 @@ app.innerHTML = `
   <header id="topbar">
     <a class="brand" href="/">Mendcraft</a>
     <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
-    <label id="lang-pick" class="lang-pick" title="Spoken and written language">
-      <span class="sr-only">Language</span>
-      <select id="lang-select" aria-label="Language">${LANGUAGES
-        .map((l) => `<option value="${l.code}"${l.code === currentLanguage.code ? ' selected' : ''}>${l.label}</option>`)
+    <label id="lang-pick" class="lang-pick" title="${LANGUAGE_PROMISE} Auto detects the language of each command and listens in the last one it heard; pick a language if it mishears you.">
+      <span class="sr-only">Speech language</span>
+      <select id="lang-select" aria-label="Speech language. ${LANGUAGE_PROMISE}"><option value="${AUTO_PICK}"${langPick === AUTO_PICK ? ' selected' : ''}>${autoLabel(currentLanguage)}</option>${LANGUAGES
+        .map((l) => `<option value="${l.code}"${l.code === langPick ? ' selected' : ''}>${l.label}</option>`)
         .join('')}</select>
       <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
     </label>
@@ -241,6 +255,7 @@ app.innerHTML = `
       <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
       <span id="conf-state" class="conf-state" hidden></span>
     </span>
+    <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
     <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
@@ -343,6 +358,7 @@ const commandForm = el<HTMLFormElement>('command-box');
 const commandInput = el<HTMLInputElement>('command-input');
 const netStateEl = el<HTMLSpanElement>('net-state');
 const langSelect = el<HTMLSelectElement>('lang-select');
+const langStateEl = el<HTMLSpanElement>('lang-state');
 const captionBar = el<HTMLDivElement>('caption-bar');
 const captionHeard = el<HTMLSpanElement>('caption-heard');
 const captionTranslation = el<HTMLSpanElement>('caption-translation');
@@ -364,83 +380,41 @@ function say(message: string): void {
   speakSynth(message);
 }
 
-/** speechSynthesis in the active language. If no matching voice exists for a
- *  non-English language, stay text-only (the screen-reader line already
- *  updated) rather than mispronouncing it with an English voice. */
-function speakSynth(message: string): void {
+/** speechSynthesis. UI text is English-only, so say() speaks English; a reply
+ *  in her language passes that language (and only when a voice exists for it —
+ *  pickReply already fell back to English otherwise). */
+function speakSynth(message: string, lang: Language = DEFAULT_LANGUAGE): void {
   if (!('speechSynthesis' in window)) return;
-  const voice = pickVoice(window.speechSynthesis.getVoices(), currentLanguage);
-  if (!voice && !isEnglish(currentLanguage)) return;
+  const voice = pickVoice(window.speechSynthesis.getVoices(), lang);
+  if (!voice && !isEnglish(lang)) return;
   const utter = new SpeechSynthesisUtterance(message);
   utter.rate = 1.1;
-  utter.lang = currentLanguage.speechLang;
+  utter.lang = lang.speechLang;
   if (voice) utter.voice = voice as SpeechSynthesisVoice;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utter);
 }
 
-/** Does speechSynthesis have a usable voice for the active language? English
- *  always does; a non-English language needs an actual matching voice. */
-function synthHasVoice(): boolean {
-  if (isEnglish(currentLanguage)) return true;
+/** Does speechSynthesis have a usable voice for this language? */
+function synthHasVoice(lang: Language = currentLanguage): boolean {
+  if (isEnglish(lang)) return true;
   if (!('speechSynthesis' in window)) return false;
-  return pickVoice(window.speechSynthesis.getVoices(), currentLanguage) != null;
+  return pickVoice(window.speechSynthesis.getVoices(), lang) != null;
 }
 
 /**
- * Speak the SHORT fixed confirmation for an applied op in the active language
- * (language.confirmPhrase — never free text). English and the offline/no-cloud
- * case use speechSynthesis; her language, when the cloud + SDK audio are
- * available, uses the Gemini cloud voice (logged to the ledger as a cloud call).
+ * Speak the short confirmation for an applied op: in her language (the model's
+ * own short reply, or the offline Kannada phrase) when the browser has a voice
+ * for it, otherwise the English verb in English. speechSynthesis only — nothing
+ * leaves the device for a spoken reply.
  */
 function speakConfirm(opName: string | null | undefined): void {
-  const text = confirmPhrase(opName, currentLanguage);
-  srLive.textContent = text; // screen-reader text always updates
+  const reply = pickReply(opName, currentLanguage, pendingReply, synthHasVoice());
+  pendingReply = null;
+  srLive.textContent = reply.text; // screen-reader text always updates
   if (activeProfile.voiceVerbosity === 'terse') return;
-  const route = pickSpeechRoute(
-    currentLanguage,
-    {
-      cloudReady: routerEnv().cloudReady && net.online(),
-      audioSupported: cloudTtsReady(),
-      synthHasVoice: synthHasVoice(),
-    },
-    muted,
-  );
-  if (route === 'silent') return;
-  if (route === 'synth') { speakSynth(text); return; }
-  void speakCloud(text);
-}
-
-/** Synthesize a confirmation in the cloud and play it with Web Audio; log the
- *  cloud call in the ledger. Any failure falls back to speechSynthesis so a
- *  reply is never lost. */
-async function speakCloud(text: string): Promise<void> {
-  try {
-    const audio = await synthesizeSpeech(text);
-    if (!audio) { speakSynth(text); return; }
-    // The audio bytes DID leave the device — record the honest cloud call.
-    recordLedger('cloud', 'tts', 'spoken reply', `speak: ${JSON.stringify(text)} (${currentLanguage.englishName})`, audio.ms);
-    await playCloudAudio(audio.dataBase64, audio.mimeType);
-  } catch {
-    speakSynth(text);
-  }
-}
-
-let audioCtx: AudioContext | null = null;
-/** Decode base64 cloud audio (PCM wrapped as WAV, or a container format) and
- *  play it through Web Audio. */
-async function playCloudAudio(dataBase64: string, mimeType: string): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-  if (!Ctx) throw new Error('no Web Audio'); // caller falls back to speechSynthesis
-  audioCtx ??= new Ctx();
-  const bytes = wrapPcmAsWav(base64ToBytes(dataBase64), mimeType);
-  const copy = bytes.slice(); // own ArrayBuffer for decodeAudioData
-  const buffer = await audioCtx.decodeAudioData(copy.buffer);
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioCtx.destination);
-  source.start();
+  if (pickSpeechRoute(reply.lang, { synthHasVoice: synthHasVoice(reply.lang) }, muted) === 'silent') return;
+  speakSynth(reply.text, reply.lang);
 }
 
 let lastStatusAnnounced = '';
@@ -468,13 +442,13 @@ const SOURCE_TOOLTIP: Record<'on-device' | 'cloud' | 'rules', string> = {
   rules: 'Answered by the built-in deterministic parser — fully offline, no AI.',
 };
 
-function setBadge(source: Source, reason?: RouteReason, translated = false): void {
+function setBadge(source: Source, reason?: RouteReason, translated = false, note?: string | null): void {
   sourceBadge.className = `badge badge-${source}`;
   const label = reason
     ? languageBadgeLabel(source, reason, currentLanguage, translated)
     : SOURCE_TEXT[source];
   sourceBadge.textContent = label;
-  const why = reason ? ` Route: ${REASON_TEXT[reason]}.` : '';
+  const why = reason ? ` Route: ${REASON_TEXT[reason]}${note ? ` (${note})` : ''}.` : '';
   sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
   sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
 }
@@ -512,24 +486,95 @@ function showCaptionTranslation(heard: string, translation?: string): void {
 
 // ---- language picker -------------------------------------------------------
 
-/** Re-ask Nano whether it can run the current language on-device. Reset to
- *  false synchronously first so a command spoken before the probe resolves never
- *  routes on the PREVIOUS language's cached answer (safe default: cloud). */
-function refreshDeviceLangReady(): void {
-  const lang = currentLanguage;
-  deviceLangReady = false;
-  void checkLanguageAvailability(lang.code).then((ready) => {
-    if (currentLanguage === lang) deviceLangReady = ready;
-  });
+/** Nano language availability, cached per code (a cheap availability() query,
+ *  no download). False = the cloud translates. */
+const nanoLangCache = new Map<string, boolean>();
+async function nanoCanRun(lang: Language): Promise<boolean> {
+  if (SIM_ACTIVE) return simSpeechNano(lang.code);
+  const hit = nanoLangCache.get(lang.code);
+  if (hit !== undefined) return hit;
+  const ready = await checkLanguageAvailability(lang.code);
+  if (!isEnglish(lang)) nanoLangCache.set(lang.code, ready); // en follows the base model status
+  return ready;
 }
 
-function applyLanguage(lang: Language, announce: boolean): void {
-  currentLanguage = lang;
-  try { localStorage.setItem(LANG_KEY, lang.code); } catch { /* storage blocked */ }
-  voice.setLang(lang.speechLang);
-  refreshDeviceLangReady();
+/** SIM: pretend Nano runs English, Spanish and Japanese (as real Chrome does). */
+function simSpeechNano(code: string): boolean {
+  return code === 'en' || code === 'es' || code === 'ja';
+}
+
+/** Show what recognition listens in and how the last command's language was found. */
+function renderLangState(detection: Detection | null): void {
+  const listening = recognitionLanguage(langPick, lastDetected, browserLang);
+  const autoOpt = langSelect.querySelector<HTMLOptionElement>(`option[value="${AUTO_PICK}"]`);
+  if (autoOpt) autoOpt.textContent = autoLabel(listening);
+  const sim = SIM_ACTIVE && detection && (detection.via === 'cloud' || detection.via === 'chrome') ? 'SIM · ' : '';
+  langStateEl.textContent = detection
+    ? `${sim}${detectionLabel(detection)}`
+    : `${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${listening.englishName}`;
+  langStateEl.title = `${LANGUAGE_PROMISE} Listening in ${listening.englishName}.`;
+}
+
+/**
+ * Work out the language of one command (ai/langDetect): Chrome's on-device
+ * Language Detector, then the on-device script/word checks, then — only in
+ * Auto, only for ambiguous Latin text, only without Chrome's detector — Gemini
+ * in the cloud (recorded in the ledger). Sets currentLanguage + deviceLangReady.
+ */
+async function detectCommandLanguage(text: string): Promise<Detection> {
+  const listening = recognitionLanguage(langPick, lastDetected, browserLang);
+  const sim = SIM_ACTIVE ? simSpeechFor(text) : null;
+  const device = SIM_ACTIVE ? null : await detectOnDevice(text);
+  const cloudReady = sim ? true : routerEnv().cloudReady && net.online();
+  const plan = planDetection({
+    text, pick: langPick, listening, device,
+    deviceAvailable: SIM_ACTIVE ? false : chromeDetectorAvailable(),
+    cloudReady,
+  });
+  let detection: Detection;
+  if (plan.kind === 'done') {
+    detection = plan.detection;
+    if (detection.via === 'chrome' || detection.via === 'script' || detection.via === 'words') {
+      recordLedger('on-device', 'lang-detect', REASON_TEXT.private, '');
+    }
+  } else if (sim) {
+    // SIM: the model answer is faked; the ledger line says so.
+    detection = { lang: resolveLanguage(sim.lang), confidence: 0.93, via: 'cloud' };
+    recordLedger('cloud', 'lang-detect (simulated)', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, 0);
+  } else {
+    const t0 = performance.now();
+    const r = await detectLanguageCloud(text);
+    // The transcript left the device whether or not an answer came back.
+    recordLedger('cloud', 'lang-detect', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, r?.ms ?? performance.now() - t0);
+    detection = r?.detection ?? plan.fallback;
+  }
+  currentLanguage = detection.lang;
+  deviceLangReady = isEnglish(detection.lang) ? routerEnv().deviceReady : await nanoCanRun(detection.lang);
+  // Auto follows her: a confident detection becomes the next listening language.
+  if (langPick === AUTO_PICK && detection.via !== 'hint' && detection.confidence >= 0.6
+    && detection.lang.code !== lastDetected?.code) {
+    lastDetected = detection.lang;
+    try { localStorage.setItem(LANG_LAST_KEY, detection.lang.code); } catch { /* storage blocked */ }
+    voice.setLang(detection.lang.speechLang);
+  }
+  renderLangState(detection);
+  return detection;
+}
+
+/** Apply the picker ('auto' or a code). UI and announcements stay English. */
+function applyLanguage(pick: string, announce: boolean): void {
+  langPick = resolvePick(pick);
+  try { localStorage.setItem(LANG_KEY, langPick); } catch { /* storage blocked */ }
+  currentLanguage = recognitionLanguage(langPick, lastDetected, browserLang);
+  voice.setLang(currentLanguage.speechLang);
+  void nanoCanRun(currentLanguage).then((ready) => { deviceLangReady = ready; });
   captionBar.hidden = true; // stale translation from the old language
-  if (announce) say(localize('languageSet', lang));
+  renderLangState(null);
+  if (announce) {
+    say(langPick === AUTO_PICK
+      ? `Auto language. Listening in ${currentLanguage.englishName}. Speak any language.`
+      : `Listening in ${currentLanguage.englishName}.`);
+  }
 }
 
 // ---- controller + renderer (mode-provided) ----
@@ -714,7 +759,7 @@ const restBanner = document.createElement('div');
 restBanner.className = 'mc-rest-banner';
 restBanner.setAttribute('role', 'status');
 restBanner.hidden = true;
-restBanner.innerHTML = 'Resting: gestures paused. Wave to wake. <span lang="kn">ಕೈ ಬೀಸಿ</span>';
+restBanner.textContent = 'Resting: gestures paused. Wave to wake.';
 viewportEl.appendChild(restBanner);
 
 const COMMAND_TARGETS: SetupTarget[] = [
@@ -1424,7 +1469,7 @@ function stageA11yFix(label: string, op: Record<string, unknown>, fixedIds: stri
   }, () => {
     verifierEl.textContent = 'Fix cancelled — nothing was applied.';
   });
-  verifierEl.textContent = `Preview: ${label}. ${provenance}. ${choicePrompt(currentLanguage.code, 1)}`;
+  verifierEl.textContent = `Preview: ${label}. ${provenance}. ${choicePrompt('en', 1)}`;
   say(`Preview ready: ${label}. Say apply or cancel.`);
 }
 
@@ -2469,7 +2514,7 @@ function presentChoices(title: string, choices: Choice[], apply: (c: Choice) => 
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.className = 'choice-chip choice-cancel';
-  cancel.textContent = currentLanguage.code === 'kn' ? 'ರದ್ದು' : 'Cancel';
+  cancel.textContent = 'Cancel';
   cancel.addEventListener('click', () => {
     clearChoices();
     onCancel?.();
@@ -2493,7 +2538,7 @@ function handleChoiceReply(utterance: string): boolean | null {
   clearChoices();
   if (reply.kind === 'cancel') {
     verifierEl.textContent = 'Cancelled — nothing was applied.';
-    say(currentLanguage.code === 'kn' ? 'ರದ್ದು ಮಾಡಲಾಗಿದೆ.' : 'Cancelled. Nothing was applied.');
+    say('Cancelled. Nothing was applied.');
     pc.onCancel?.();
     return true;
   }
@@ -2573,6 +2618,11 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
   if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
 
+  // ANY LANGUAGE: find out which language this command is in (on-device
+  // first; a cloud check only when it must, and the ledger records it).
+  pendingReply = null;
+  await detectCommandLanguage(utterance);
+
   // Show her words immediately; the English translation fills in once the cloud
   // (or on-device) fusion call returns it.
   showCaptionHeard(utterance);
@@ -2595,7 +2645,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // plus the reason, and every decision lands in the Routing dev panel.
   const t0 = performance.now();
   const translated = shouldTranslate(currentLanguage); // non-English → translate path
-  const env = routerEnv();
+  // SIM: a fake any-language transcript runs as if Nano + cloud were both here,
+  // so the judge sees the router pick on-device (es/ja) vs cloud (kn/hi).
+  const env = SIM_ACTIVE && simSpeechFor(utterance) ? { deviceReady: true, cloudReady: true } : routerEnv();
   const isBig = controller.isDesignRequest(utterance);
   const decision = planRoute(utterance, (u) => mode.parse(u), isBig, env);
 
@@ -2624,7 +2676,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     }
     if (!step.ok) {
       verifierEl.textContent = `Could not build: ${step.error ?? 'unknown error'}`;
-      say(localize('couldNotBuild', currentLanguage));
+      say(localize('couldNotBuild', DEFAULT_LANGUAGE));
       renderAll();
       return false;
     }
@@ -2646,6 +2698,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   let confidence: number | undefined;
   let escalated = false;
   let translation: string | undefined;
+  let simulated = false;
   let deixisAmbiguous = false;
   if (decision.ruleResult) {
     // Exact-rule short circuit: no model call at all — a private local event.
@@ -2675,18 +2728,22 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // withheld from a first cloud call (no-device / translate) and only sent to
     // the cloud on the escalation below, where the router already went cloud.
     const fewShot = phrasebook.fewShotFor(utterance, mode.id);
-    let outcome = await fuseIntent(utterance, ctx, {
+    // SIM: a fake any-language transcript gets a faked model answer (labelled
+    // SIM); everything around it — detection, routing, badge, ledger — is real.
+    const simOutcome = SIM_ACTIVE ? simFuse(utterance, toCloud) : null;
+    let outcome = simOutcome ?? await fuseIntent(utterance, ctx, {
       forceCloud: toCloud, lang: langOpt,
       fewShot: toCloud ? undefined : fewShot,
     });
     // Primary inference: a cloud answer stores its payload; on-device/rules are
     // private. The reason follows the planned route (on-device → private).
+    const langNoteNow = langRouteNote(currentLanguage, { ...env, deviceLangReady }, outcome.source, false);
     recordLedger(
-      outcome.source, 'intent',
-      outcome.source === 'cloud' ? REASON_TEXT[decision.reason] : REASON_TEXT.private,
+      outcome.source, simOutcome ? 'intent (simulated)' : 'intent',
+      outcome.source === 'cloud' ? (langNoteNow ?? REASON_TEXT[decision.reason]) : REASON_TEXT.private,
       commandPayload(utterance, ctx), outcome.ms,
     );
-    if (shouldEscalate(outcome.source, outcome.confidence, env)) {
+    if (!simOutcome && shouldEscalate(outcome.source, outcome.confidence, env)) {
       // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
       // retry physically contacts the cloud, so its send is recorded even if the
       // on-device answer is ultimately kept.
@@ -2705,12 +2762,16 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     source = outcome.source;
     confidence = outcome.confidence;
     translation = outcome.translation;
+    if (translated) pendingReply = outcome.reply ?? null;
+    simulated = !!simOutcome;
   }
   // Pair her words with the English translation the model returned.
   showCaptionTranslation(utterance, translation);
   const reason = finalReason(decision, source, escalated);
-  setBadge(source, reason, translated);
-  routerPanel.add({ utterance, planned: decision.path, source, reason, confidence, escalated, ms: performance.now() - t0 });
+  const langNote = langRouteNote(currentLanguage, { ...env, deviceLangReady }, source, escalated);
+  const note = langNote && simulated ? `SIM · ${langNote}` : langNote;
+  setBadge(source, reason, translated, note);
+  routerPanel.add({ utterance, planned: decision.path, source, reason, confidence, escalated, ms: performance.now() - t0, note: note ?? undefined });
   // Mirror the routed event to the /control dashboard feed. Only a cloud event
   // carries its utterance (it already left the device); private events are
   // source+reason only — the raw command text stays on the laptop.
@@ -2750,7 +2811,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
         : null,
     ]);
     opJsonEl.textContent = JSON.stringify({ didYouMean: choices.map((c) => c.result) }, null, 2);
-    const prompt = choicePrompt(currentLanguage.code, choices.length);
+    const prompt = choicePrompt('en', choices.length);
     verifierEl.textContent = `Not sure (${Math.round((confidence ?? 0) * 100)}% from ${source}) — nothing applied yet. ${prompt}`;
     say(prompt);
     presentChoices('Did you mean…?', choices, (c) => {
@@ -2767,7 +2828,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Apply / Cancel — never auto-applied.
   if (isDestructiveOp(op, fusionContext().selectedIds.length)) {
     opJsonEl.textContent = JSON.stringify({ preview: op }, null, 2);
-    const prompt = choicePrompt(currentLanguage.code, 1);
+    const prompt = choicePrompt('en', 1);
     verifierEl.textContent = `Destructive step: ${describeOp(op)} — not applied yet. ${prompt}`;
     say(prompt);
     presentChoices(`Destructive: ${describeOp(op)} — apply?`, [{ label: describeOp(op), result: op, source }], (c) => {
@@ -2777,6 +2838,23 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   }
 
   return applyCommandResult(result, before);
+}
+
+/** SIM only: the faked Gemini answer for a fake any-language transcript —
+ *  the English command it maps to, run through the real rule parser. Nano
+ *  "answers" for languages it accepts (es/ja) unless the router chose cloud. */
+function simFuse(utterance: string, toCloud: boolean): FusionOutcome | null {
+  const sim = simSpeechFor(utterance);
+  if (!sim) return null;
+  const result = mode.parse(sim.english);
+  return {
+    result,
+    confidence: 0.9,
+    source: sim.nano && !toCloud ? 'on-device' : 'cloud',
+    ms: sim.nano && !toCloud ? 180 : 620,
+    translation: sim.english,
+    reply: sim.reply,
+  };
 }
 
 function announceWarnings(): void {
@@ -2842,7 +2920,7 @@ if (viewport.toggle3D) {
     btn3d.setAttribute('aria-pressed', String(now));
     btn3d.classList.toggle('active', now);
     btn3d.textContent = now ? '2D view' : '3D view';
-    say(now ? localize('view3d', currentLanguage) : localize('view2d', currentLanguage));
+    say(now ? localize('view3d', DEFAULT_LANGUAGE) : localize('view2d', DEFAULT_LANGUAGE));
   });
 }
 
@@ -2864,9 +2942,9 @@ if (!voice.supported) {
 
 // ---- language picker wiring (after `voice`, which applyLanguage drives) ----
 
-langSelect.value = currentLanguage.code;
+langSelect.value = langPick;
 langSelect.addEventListener('change', () => {
-  applyLanguage(resolveLanguage(langSelect.value), true);
+  applyLanguage(langSelect.value, true);
 });
 
 // Mute toggle for spoken replies (next to the language picker).
@@ -2889,9 +2967,9 @@ btnMute.addEventListener('click', () => {
   if (!muted) speakConfirm('done');
 });
 overflowMenu.layout();
-// Apply the restored language once at startup: set recognition lang + probe Nano.
+// Apply the restored picker once at startup: set recognition lang + probe Nano.
 voice.setLang(currentLanguage.speechLang);
-refreshDeviceLangReady();
+void nanoCanRun(currentLanguage).then((ready) => { deviceLangReady = ready; });
 
 btnMic.addEventListener('click', () => {
   const nowOn = btnMic.getAttribute('aria-pressed') !== 'true';
@@ -2900,7 +2978,7 @@ btnMic.addEventListener('click', () => {
   btnMic.textContent = nowOn ? 'Mic on' : 'Mic';
   refreshHints();
   voice.setAlwaysOn(nowOn);
-  say(nowOn ? localize('listening', currentLanguage) : localize('micOff', currentLanguage));
+  say(nowOn ? localize('listening', DEFAULT_LANGUAGE) : localize('micOff', DEFAULT_LANGUAGE));
 });
 
 // ---- hand tracking ----
@@ -3318,9 +3396,9 @@ const SIM_HAND_METRICS: HandMetrics = {
  *  would do by hand, so the same code paths run as in real use. */
 async function runSimFeature(step: SimStep): Promise<void> {
   if (step.lang) {
-    const lang = resolveLanguage(step.lang);
-    langSelect.value = lang.code;
-    applyLanguage(lang, true);
+    const pick = resolvePick(step.lang);
+    langSelect.value = pick;
+    applyLanguage(pick, true);
   }
   switch (step.feature) {
     case 'adapt':

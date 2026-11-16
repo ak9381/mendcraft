@@ -89,7 +89,7 @@
   <div class="stage night">
     <div class="hero wrap">
       <h1 id="h-land" tabindex="-1"><span class="d1 rv">Mendcraft.</span><span class="tagline rv d1s">Your hands and voice, in control of everything.</span></h1>
-      <p class="lede rv d2s">Dim the lamp, pause the music, reply on your phone, browse the web and design with real tools, all with small pinches and plain speech, in English and <span lang="kn">ಕನ್ನಡ</span>. Made for people whose hands are limited by arthritis, tremor or weak grip.</p>
+      <p class="lede rv d2s">Dim the lamp, pause the music, reply on your phone, browse the web and design with real tools, all with small pinches and plain speech. Polished in English. Speak any language. Made for people whose hands are limited by arthritis, tremor or weak grip.</p>
       <div class="ctas rv d3s"><button class="btn btn-p" data-go="editor">Try Mendcraft</button><button class="btn btn-s" data-scroll="film">Watch the film</button></div>
       <p class="built rv d3s">Built with Gemini and Firebase</p>
     </div>
@@ -101,7 +101,7 @@
         <p><span class="lg" lang="kn">ಕನ್ನಡ</span><span class="tx" lang="kn" id="hKn">ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು</span></p>
         <p><span class="lg">English</span><span class="tx" id="hEn">Dim the lamp</span></p>
       </div>
-      <div class="hroute" aria-hidden="true"><span class="k">Understood by</span><span class="sig cloud" id="hSig">Gemini · cloud</span><span class="why" id="hWhy">Kannada speech → cloud</span></div>
+      <div class="hroute" aria-hidden="true"><span class="k">Understood by</span><span class="sig cloud" id="hSig">Gemini · cloud</span><span class="why" id="hWhy">Kannada detected → cloud</span></div>
       <div class="hroute" aria-hidden="true"><span class="k">Gemini picked</span><span class="call" id="hCall">lamp.setBrightness(30)</span><span class="app" id="hApp">Carried out by the Mendcraft Home app</span></div>
       <button class="btn btn-q" id="hPause" aria-pressed="false"><svg class="i" aria-hidden="true"><use id="hPauseIc" href="#i-pause"/></svg><span id="hPauseTx">Pause motion</span></button>
     </div>
@@ -128,12 +128,12 @@
       <div class="sec-h"><h2 class="d2 rv" id="h-film">How it works.</h2><p class="lede rv d1s">Three moves, always in this order. No grip, no drag and no double-click anywhere.</p></div>
       <div class="film">
         <div class="frame night rv" role="group" aria-label="Film placeholder showing the Mendcraft editor">
-          <div class="fr-top"><svg aria-hidden="true"><use href="#i-mk"/></svg>Ground floor plan<span class="r"><span class="why" id="fWhy">Kannada speech → cloud</span><span class="sig cloud" id="fSig">Gemini · cloud</span></span></div>
+          <div class="fr-top"><svg aria-hidden="true"><use href="#i-mk"/></svg>Ground floor plan<span class="r"><span class="why" id="fWhy">Kannada detected → cloud</span><span class="sig cloud" id="fSig">Gemini · cloud</span></span></div>
           <div class="fr-cv">
             <svg id="fPlan" aria-hidden="true"></svg>
             <div class="fcur" id="fCur" aria-hidden="true"><svg viewBox="0 0 80 80" width="64" height="64"><use href="#i-ring"/><circle id="fProg" cx="40" cy="40" r="34" fill="none" stroke="#6E80FF" stroke-width="5" stroke-linecap="round" stroke-dasharray="214" stroke-dashoffset="70" transform="rotate(-90 40 40)"/><circle id="fT1" cx="33" cy="40" r="5.5" fill="#F2F0EA"/><circle id="fT2" cx="47" cy="40" r="5.5" fill="#F2F0EA"/></svg></div>
             <button class="fplay" id="fPlay"><span class="pc"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg></span><span><span id="fPlayTx">Play the film</span><small>1:30, film placeholder</small></span></button>
-            <div class="ftoast" id="fToast" aria-hidden="true">Added to the ledger: Kannada voice clip, 3.1 s</div>
+            <div class="ftoast" id="fToast" aria-hidden="true">Added to the ledger: Kannada command, as text</div>
           </div>
           <div class="fr-cap" aria-hidden="true">
             <p><span class="lg" lang="kn">ಕನ್ನಡ</span><span class="tx" lang="kn" id="fKn">ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು</span></p>
@@ -142,7 +142,7 @@
         </div>
         <ol class="steps3">
           <li class="rv"><span class="n">1</span><div><h3>Show your hand</h3><p>Your webcam finds your hand. A small pinch clicks. If pinching hurts, hold still on a target and Mendcraft clicks for you.</p></div></li>
-          <li class="rv d1s"><span class="n">2</span><div><h3>Say what you want</h3><p>In English or Kannada, switching mid-sentence if you like. Captions show both languages as you speak.</p></div></li>
+          <li class="rv d1s"><span class="n">2</span><div><h3>Say what you want</h3><p>Polished in English. Speak any language: Mendcraft detects it, and captions show your words beside the English.</p></div></li>
           <li class="rv d2s"><span class="n">3</span><div><h3>See where it ran</h3><p>Every request shows whether it ran on this device or in the cloud, and why, in plain words.</p></div></li>
         </ol>
       </div>
@@ -163,7 +163,7 @@
             <li data-cap="intent"><span><b>Private intent</b><span>Turns short English requests into commands, without sending anything.</span></span></li>
             <li data-cap="offline"><span><b>Offline edits</b><span>Keeps working with no connection at all.</span></span></li></ul></div>
           <div class="gbox" id="gb-cloud"><span class="k">Understanding</span><h3>Gemini</h3><span class="sub">In the cloud · via Firebase AI Logic</span><ul>
-            <li data-cap="kn"><span><b>Kannada speech</b><span>Understands spoken Kannada and replies with a command.</span></span></li>
+            <li data-cap="kn"><span><b>Any language</b><span>Understands Kannada, Hindi and other languages Nano can't run yet, and turns them into the same commands.</span></span></li>
             <li data-cap="render"><span><b>Big renders</b><span>Photoreal previews of a room, made from your plan.</span></span></li>
             <li data-cap="a11y"><span><b>The accessibility checker</b><span>Reviews a screen for contrast, target size and labels, and explains each fix.</span></span></li></ul></div>
         </div>
@@ -189,7 +189,7 @@
         </article>
         <article class="mo rv d2s">
           <h3>A live “What left this device” ledger.</h3>
-          <p>Every voice clip, photo and job sent to the cloud is listed with its size and the reason, then summed up in one plain sentence.</p>
+          <p>Every command, photo and job sent to the cloud is listed with its size and the reason, then summed up in one plain sentence.</p>
           <div class="wid"><p class="lsum" id="miniSum"></p><button class="btn btn-q" data-go="ledger" style="justify-self:start">Open the ledger</button></div>
         </article>
       </div>
@@ -218,7 +218,7 @@
       <div>
         <h2 class="d2 rv" id="h-rcp">Taught once, done forever.</h2>
         <p class="lede rv d1s" style="margin-top:24px">Show Mendcraft a routine one time. After that, say its name or make its gesture, and the whole thing runs hands-free, across every device it touches.</p>
-        <ol class="t3 rv d2s"><li><span>1</span>Say “Watch me”, in English or Kannada</li><li><span>2</span>Do the steps once, at your own pace</li><li><span>3</span>Give it a name and, if you like, a gesture</li></ol>
+        <ol class="t3 rv d2s"><li><span>1</span>Say “Watch me”, in any language</li><li><span>2</span>Do the steps once, at your own pace</li><li><span>3</span>Give it a name and, if you like, a gesture</li></ol>
         <button class="btn btn-p" data-go="recipes">Open the recipe book</button>
       </div>
       <div class="seqbox night rv" id="seqDemo" aria-label="Example recipe: Wind down"></div>
@@ -235,7 +235,7 @@
       <ul class="plist rv d1s">
         <li><b>No grip, drag or double-click</b><span>Every action works with a pinch, a dwell or your voice.</span></li>
         <li><b>Your timing, not ours</b><span>Set dwell anywhere from 0.3 to 2 seconds. Nothing times out while you think.</span></li>
-        <li><b>Captions on every word</b><span>Live captions in Kannada and English, large and high contrast.</span></li>
+        <li><b>Captions on every word</b><span>Live captions in your language with the English beside it, large and high contrast.</span></li>
         <li><b>Your camera stays yours</b><span>Video and hand points are processed on your device and never uploaded.</span></li>
         <li><b>Undo anything, out loud</b><span>Say “undo” or <span lang="kn">“ರದ್ದುಮಾಡು”</span> at any time, as often as you need.</span></li>
         <li><b>Clear contrast everywhere</b><span>Every screen meets WCAG 2.2 AA, and body text meets AAA.</span></li>
@@ -258,7 +258,7 @@
       <div><button class="mark" data-go="landing" aria-label="Mendcraft, home"><svg aria-hidden="true"><use href="#i-mk"/></svg>Mendcraft</button><p class="muted" style="margin-top:12px;max-width:36ch">Hands and voice, in control of everything around you.</p><p class="built" style="margin-top:16px">Built with Gemini and Firebase</p></div>
       <div><h3>Product</h3><ul><li><button class="lk" data-go="editor">Editor</button></li><li><button class="lk" data-go="recipes">Recipe book</button></li><li><button class="lk" data-go="control-room">Control room</button></li></ul></div>
       <div><h3>Trust</h3><ul><li><button class="lk" data-scroll="gemini">How Gemini powers Mendcraft</button></li><li><button class="lk" data-go="ledger">What left this device</button></li><li><button class="lk" data-scroll="promises">Accessibility promises</button></li><li><button class="lk" data-go="preferences">Privacy settings</button></li></ul></div>
-      <div><h3>Contact</h3><ul><li>hello@mendcraft.app</li><li>English and <span lang="kn">&nbsp;ಕನ್ನಡ</span>&nbsp;today</li></ul></div>
+      <div><h3>Contact</h3><ul><li>hello@mendcraft.app</li><li>Polished in English. Speak any language.</li></ul></div>
       <p class="fine"><span>Mendcraft is a design prototype. Names, plans and figures are sample data.</span><span>On-device AI needs Chrome on desktop.</span></p>
     </div>
   </footer>
@@ -271,7 +271,7 @@
       <div class="doc"><h1 id="h-ed" tabindex="-1">Ground floor plan</h1><p id="docSub">Lakshmi’s flat, saved on this device</p></div>
       <div class="seg" role="group" aria-label="Mode"><button aria-pressed="true" data-emode="plan">Plan</button><button aria-pressed="false" data-emode="ui">UI</button><button aria-pressed="false" data-emode="part">Part</button></div>
       <div class="ed-status">
-        <button class="route" id="routeBadge" aria-haspopup="dialog"><span class="sig cloud" id="rbSig">Gemini · cloud</span><span class="why" id="rbWhy">Kannada speech → cloud</span></button>
+        <button class="route" id="routeBadge" aria-haspopup="dialog"><span class="sig cloud" id="rbSig">Gemini · cloud</span><span class="why" id="rbWhy">Kannada detected → cloud</span></button>
         <button class="net" id="netBtn" aria-pressed="false"><svg class="i" aria-hidden="true"><use id="netIc" href="#i-wifi"/></svg><span id="netTx">Online</span><span class="q" id="netQ" hidden></span></button>
         <button class="net" id="openLedger"><svg class="i" aria-hidden="true"><use href="#i-ledger"/></svg><span id="olTx">5 left this device</span></button>
       </div>
@@ -388,13 +388,13 @@
           <div class="opts" role="radiogroup" aria-label="Target size" id="sizeOpts"></div>
         </section>
         <section class="ssec" id="p-lang" aria-labelledby="h-l">
-          <div><h2 id="h-l">Language and units</h2><p class="lead">Mendcraft understands Kannada and English today. Captions can show either line, or both.</p></div>
+          <div><h2 id="h-l">Language and units</h2><p class="lead">Polished in English. Speak any language. Mendcraft detects the language of each command; captions can show your words, the English, or both.</p></div>
           <div class="stack">
             <div class="two">
-              <div class="fld"><label for="uiLang">Interface language</label><span class="sel"><select class="inp" id="uiLang"><option value="en">English</option><option value="kn" lang="kn">ಕನ್ನಡ (Kannada)</option><option value="hi" lang="hi">हिन्दी (Hindi)</option><option value="ta" lang="ta">தமிழ் (Tamil)</option><option value="es" lang="es">Español</option><option value="pt" lang="pt">Português</option><option value="fr" lang="fr">Français</option><option value="de" lang="de">Deutsch</option><option value="ja" lang="ja">日本語</option><option value="ar" lang="ar">العربية</option></select></span></div>
-              <div class="fld"><label for="speak">I speak</label><span class="sel"><select class="inp" id="speak"><option value="both">Kannada and English</option><option value="en">English only</option><option value="kn">Kannada only</option></select></span></div>
+              <div class="fld"><label for="uiLang">Interface language</label><span class="sel"><select class="inp" id="uiLang"><option value="en">English</option></select></span></div>
+              <div class="fld"><label for="speak">I speak</label><span class="sel"><select class="inp" id="speak"><option value="auto">Any language (detect it)</option><option value="en">English</option><option value="kn" lang="kn">ಕನ್ನಡ (Kannada)</option><option value="hi" lang="hi">हिन्दी (Hindi)</option><option value="es" lang="es">Español (Spanish)</option><option value="ja" lang="ja">日本語 (Japanese)</option></select></span></div>
             </div>
-            <fieldset class="fld" style="border:0;padding:0;margin:0"><legend class="fl" style="margin-bottom:4px">Captions show</legend><div class="checks"><label class="ck"><input type="checkbox" id="capKn">Kannada line</label><label class="ck"><input type="checkbox" id="capEn">English line</label></div></fieldset>
+            <fieldset class="fld" style="border:0;padding:0;margin:0"><legend class="fl" style="margin-bottom:4px">Captions show</legend><div class="checks"><label class="ck"><input type="checkbox" id="capKn">My language line</label><label class="ck"><input type="checkbox" id="capEn">English line</label></div></fieldset>
             <div class="fld"><span class="fl" id="capSzL">Caption size</span><div class="opts" role="radiogroup" aria-labelledby="capSzL" id="capOpts"></div></div>
             <div class="fld"><span class="fl" id="unitL">Measurements</span><div class="opts" role="radiogroup" aria-labelledby="unitL" id="unitOpts"></div></div>
           </div>
@@ -428,7 +428,7 @@
       <li><span class="sig dev">Gemini Nano · on device</span><div><b>Hand-adaptive input</b><p>Gemini Nano in Chrome tunes dwell, smoothing and reach to how your hand moves. Hand points come from an on-device tracker and are never uploaded.</p></div></li>
       <li><span class="sig dev">Gemini Nano · on device</span><div><b>Private intent</b><p>Short English commands and summaries of your own work. Fast, private and nothing is sent.</p></div></li>
       <li><span class="sig dev">Gemini Nano · on device</span><div><b>Offline edits</b><p>Keeps working with no connection at all.</p></div></li>
-      <li><span class="sig cloud">Gemini · cloud</span><div><b>Kannada speech</b><p>Gemini Nano doesn’t understand Kannada yet, so the clip goes to Gemini in the cloud through Firebase AI Logic.</p></div></li>
+      <li><span class="sig cloud">Gemini · cloud</span><div><b>Other languages</b><p>Chrome detects the language on your device. If Gemini Nano can’t run it yet (Kannada, Hindi and more), the words, never the audio, go to Gemini in the cloud through Firebase AI Logic.</p></div></li>
       <li><span class="sig cloud">Gemini · cloud</span><div><b>Big renders and the accessibility checker</b><p>Room previews, sketch photos, whole screens and accessibility reviews need the larger model.</p></div></li>
       <li><span class="sig queue">Queued for Gemini · cloud</span><div><b>Cloud jobs while offline, or while the cloud is paused</b><p>They wait, then send themselves. Every one is listed in the ledger.</p></div></li>
     </ul>

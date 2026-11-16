@@ -51,8 +51,8 @@ export const TOUR_STEPS: TourStepDef[] = [
   {
     id: 'language',
     selector: '#lang-select',
-    title: 'Her language',
-    body: 'Switch to Kannada and speak. Non-English goes to the cloud for translate + intent in one call, and the badge says so honestly.',
+    title: 'Any language',
+    body: 'Polished in English. Speak any language. Auto detects it on your device; Gemini Nano handles it when it can, otherwise the cloud translates and the badge says why.',
   },
   {
     id: 'network',
