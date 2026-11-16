@@ -29,7 +29,7 @@ can actually reach another machine.
 | kind | leaves device | what is sent | what is NOT sent |
 | --- | --- | --- | --- |
 | **cloud-ai-model** | yes (cloud modes only) | command text + design ops; for point-and-say, one cropped still | camera/hand/face/voice streams |
-| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan/ui, a11y-explain, escalated intent/deixis; any-language fallbacks: `lang-detect` and non-English translate + intent | raw sensor data, voice audio |
+| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan, a11y-explain, CAD copilot (copilot-answer, guideline-explain, client-email draft, 3D materials, cad-tool on escalation), escalated intent/deixis; any-language fallbacks: `lang-detect` and non-English translate + intent | raw sensor data, voice audio |
 | **prefer-on-device** (`PREFER_ON_DEVICE`) | sometimes | runs on Nano; on fallback sends the same abstract text. Every fallback is a ledger cloud call | sensor streams |
 | **on-device-only** (`ONLY_ON_DEVICE`) | **no** | hand-adaptive profile pick runs with no `inCloudParams` — raw hand numbers can never leave, even if Nano is missing | everything |
 | **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
@@ -167,3 +167,11 @@ themselves.
   reason. A `PREFER_ON_DEVICE` call that fell back to the cloud shows CLOUD.
 - **Confirm before apply/send**: any unsure or destructive change needs an
   explicit pinch/tap; nothing auto-sends.
+
+
+## CAD copilot and site book
+
+- Plan questions (wall thickness, room sizes, door widths) are answered on the device from the drawing data; nothing is sent.
+- Hard questions, guideline explanations, client email drafts and 3D materials go to Gemini via Firebase AI Logic as text (question + abstract plan summary).
+- The site checklist and change-log titles sync to Firestore (`sitebooks/{id}`); full plan snapshots used for revert stay on the device.
+- Client emails are only drafts: Mendcraft opens the user's mail app after a confirm and never sends.

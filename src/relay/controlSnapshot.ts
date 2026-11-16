@@ -112,6 +112,28 @@ export interface RecipeCard {
   steps: number;
 }
 
+/** One change-log entry for the iPad: who changed what, why, and its review
+ *  state. No geometry or snapshots leave — just the human line. */
+export interface ChangeCard {
+  id: string;
+  who: 'her' | 'nano' | 'gemini' | 'rules';
+  title: string;
+  why: string;
+  status: 'pending' | 'applied' | 'rejected' | 'reverted';
+}
+
+/** One site-checklist question for the iPad. */
+export interface ChecklistCard {
+  id: string;
+  question: string;
+  status: 'open' | 'answered' | 'emailed' | 'done';
+  offline: boolean;
+  answer?: string;
+}
+
+export const CHANGES_MAX = 12;
+export const CHECKLIST_MAX = 12;
+
 /** What the caps dropped — surfaced so the dashboard never hides truncation. */
 export interface SnapshotOmissions {
   aiFeed: number;
@@ -133,6 +155,10 @@ export interface ControlSnapshot {
   caption: CaptionLine | null;
   scene: SceneSnapshot | null;
   recipes: RecipeCard[];
+  /** Reviewed change log (newest last); present when there are entries. */
+  changes?: ChangeCard[];
+  /** Site checklist; present when there are items. */
+  checklist?: ChecklistCard[];
   omitted: SnapshotOmissions;
 }
 
@@ -163,6 +189,8 @@ export interface ControlSnapshotInput {
   caption?: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null;
   scene?: SceneInput | null;
   recipes?: RecipeCardInput[];
+  changes?: { id: string; actor: string; title: string; why?: string; status: string }[];
+  checklist?: { id: string; question: string; status: string; askedOffline?: boolean; answer?: string }[];
 }
 
 export interface RecipeCardInput {
@@ -266,6 +294,23 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     };
   }
 
+  const WHO = ['her', 'nano', 'gemini', 'rules'] as const;
+  const CST = ['pending', 'applied', 'rejected', 'reverted'] as const;
+  const IST = ['open', 'answered', 'emailed', 'done'] as const;
+  const changes = keepLast((input.changes ?? [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && (WHO as readonly string[]).includes(c.actor) && (CST as readonly string[]).includes(c.status))
+    .map((c): ChangeCard => ({
+      id: safeText(c.id, 40), who: c.actor as ChangeCard['who'], status: c.status as ChangeCard['status'],
+      title: safeText(c.title ?? '', LABEL_MAX), why: safeText(c.why ?? '', SUMMARY_MAX),
+    })), CHANGES_MAX).kept;
+  const checklist = keepLast((input.checklist ?? [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && typeof c.question === 'string' && c.question.trim() && (IST as readonly string[]).includes(c.status))
+    .map((c): ChecklistCard => ({
+      id: safeText(c.id, 40), question: safeText(c.question, SUMMARY_MAX), status: c.status as ChecklistCard['status'],
+      offline: c.askedOffline === true,
+      ...(c.answer ? { answer: safeText(c.answer, SUMMARY_MAX) } : {}),
+    })), CHECKLIST_MAX).kept;
+
   return {
     v: SNAPSHOT_VERSION,
     rev: Number.isFinite(input.rev) ? Math.round(input.rev as number) : 0,
@@ -277,6 +322,8 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     caption,
     scene,
     recipes: recipes.kept,
+    ...(changes.length ? { changes } : {}),
+    ...(checklist.length ? { checklist } : {}),
     omitted: {
       aiFeed: ai.dropped,
       ledgerCalls: calls.dropped,
@@ -440,6 +487,14 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     caption,
     scene,
     recipes,
+    changes: (Array.isArray(r.changes) ? r.changes : []).map((c) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return { id: str(o.id), actor: str(o.who), title: str(o.title), why: str(o.why), status: str(o.status) };
+    }),
+    checklist: (Array.isArray(r.checklist) ? r.checklist : []).map((c) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return { id: str(o.id), question: str(o.question), status: str(o.status), askedOffline: o.offline === true, answer: str(o.answer) || undefined };
+    }),
   });
 }
 

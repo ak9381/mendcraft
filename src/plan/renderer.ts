@@ -4,6 +4,9 @@
 // wheel/keyboard pan+zoom. An optional three.js overlay extrudes the walls to
 // 3D as a *view* (not a second editor). Implements the generic ViewportHandle.
 
+import { filterLayers, isLayerId, type LayerId } from '../cad/layers';
+import type { MaterialPlan } from '../cad/materials';
+import type { ExtrudeView, WalkStep } from './extrude3d';
 import type { ModeController, ViewportHandle } from '../core/controller';
 import { createToolController, type OverlayDraw, type ToolContext } from '../core/tools';
 import { createFullscreenControl, createPalette, createTrash } from '../core/palette';
@@ -66,7 +69,8 @@ export function createPlanRenderer(
   // the overall size re-fits automatically (see render()).
   let fitSig: string | null = null;
 
-  const doc = (): PlanDoc => controller.snapshot() as PlanDoc;
+  const hidden = new Set<LayerId>();
+  const doc = (): PlanDoc => filterLayers(controller.snapshot() as PlanDoc, hidden);
   const toScreen = (p: Point) => ({ x: originX + p.x * scale, y: originY - p.y * scale });
   function toWorld(clientX: number, clientY: number): Point {
     const rect = svg.getBoundingClientRect();
@@ -794,14 +798,24 @@ export function createPlanRenderer(
   resize.observe(container);
 
   // ---- optional 3D extrude view ----
-  let view3d: { update(): void; dispose(): void } | null = null;
+  let view3d: ExtrudeView | null = null;
+  let loading3d: Promise<ExtrudeView> | null = null;
+  let pendingMaterials: MaterialPlan | null = null;
+  function ensure3D(): Promise<ExtrudeView> {
+    if (view3d) return Promise.resolve(view3d);
+    loading3d ??= import('./extrude3d').then(({ createExtrudeView }) => {
+      view3d = createExtrudeView(container, () => doc(), WALL_HEIGHT_MM);
+      svg.style.display = 'none';
+      if (pendingMaterials) view3d.setMaterials(pendingMaterials);
+      view3d.update();
+      loading3d = null;
+      return view3d;
+    });
+    return loading3d;
+  }
   function toggle3D(on: boolean): boolean {
     if (on && !view3d) {
-      void import('./extrude3d').then(({ createExtrudeView }) => {
-        view3d = createExtrudeView(container, () => doc(), WALL_HEIGHT_MM);
-        svg.style.display = 'none';
-        view3d.update();
-      });
+      void ensure3D();
       return true;
     }
     if (!on && view3d) {
@@ -870,6 +884,42 @@ export function createPlanRenderer(
       return aimAt(clientX, clientY, radiusPx);
     },
     toggle3D,
+    is3D: () => !!view3d || !!loading3d,
+    zoom(factor) {
+      const rect = svg.getBoundingClientRect();
+      const cx = (rect.width || 800) / 2;
+      const cy = (rect.height || 600) / 2;
+      const f = Math.min(4, Math.max(0.25, factor));
+      originX = cx - (cx - originX) * f;
+      originY = cy - (cy - originY) * f;
+      scale *= f;
+      fitted = true;
+      render();
+    },
+    setLayerHidden(layer, isHidden) {
+      if (!isLayerId(layer)) return;
+      if (isHidden) hidden.add(layer); else hidden.delete(layer);
+      render();
+      view3d?.update();
+    },
+    hiddenLayers: () => [...hidden],
+    async setMaterials(plan) {
+      pendingMaterials = plan as MaterialPlan;
+      const v = await ensure3D();
+      v.setMaterials(pendingMaterials);
+    },
+    async walk(on, room) {
+      if (!on) {
+        if (view3d) view3d.walk(false);
+        return false;
+      }
+      const v = await ensure3D();
+      return v.walk(true, room);
+    },
+    walkStep(step) {
+      view3d?.walkStep(step as WalkStep);
+    },
+    walking: () => !!view3d?.walking(),
     dispose() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);

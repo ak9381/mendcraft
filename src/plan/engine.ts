@@ -147,6 +147,16 @@ export class PlanEngine {
     return { ok: true, warnings: this.warnings() };
   }
 
+  /** Replace the whole document with an earlier snapshot (change-log revert).
+   *  Itself one undoable step. Ids keep counting up, so nothing collides. */
+  restore(doc: PlanDoc): PlanApplyResult {
+    this.undoStack.push(this.state);
+    this.redoStack = [];
+    this.state = normalizeSelection(structuredClone(doc));
+    this.revision += 1;
+    return { ok: true, warnings: this.warnings() };
+  }
+
   /** Apply a whole generated plan atomically from a blank document (one undo). */
   applyGenerated(ops: PlanOp[]): PlanApplyResult {
     let working: PlanDoc = emptyPlan();
@@ -454,6 +464,8 @@ export class PlanEngine {
         const fixture: Fixture = {
           id, kind: op.kind, x: op.x, y: op.y, w: op.w, d: op.d,
           rotation: normalizeAngle(op.rotation),
+          ...(op.steps !== undefined ? { steps: op.steps } : {}),
+          ...(op.rise !== undefined ? { rise: op.rise } : {}),
         };
         return { ...state, fixtures: [...state.fixtures, fixture], selectedId: id, selectedIds: [id] };
       }

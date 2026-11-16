@@ -38,6 +38,19 @@ service cloud.firestore {
     // knowing it IS the capability. One doc per book holding only the merged
     // {recipes, deleted} maps (validated client-side on every load; recipes are
     // declarative JSON steps, never code). No list → ids can't be enumerated.
+    // Site checklist + reviewed change log (cad/sync.ts). Capability id like
+    // the recipe book; metadata only, bounded lists.
+    match /sitebooks/{bookId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if bookId.size() == 24
+        && request.resource.data.keys().hasOnly(['changes', 'checklist', 'updatedAt'])
+        && request.resource.data.changes is list
+        && request.resource.data.changes.size() <= 80
+        && request.resource.data.checklist is list
+        && request.resource.data.checklist.size() <= 60;
+      allow delete: if false;
+    }
     match /recipebooks/{bookId} {
       allow get: if true;
       allow list: if false;

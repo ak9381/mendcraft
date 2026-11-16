@@ -117,6 +117,16 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <p id="c-run-status" class="card-note" role="status" aria-live="polite"></p>
         </section>
 
+        <section class="card card-changes" aria-label="Change review">
+          <h2>Changes to review</h2>
+          <ul id="c-changes" class="c-feed"><li class="card-empty">No changes yet.</li></ul>
+        </section>
+
+        <section class="card card-checklist" aria-label="Site checklist">
+          <h2>Site checklist</h2>
+          <ul id="c-checklist" class="c-feed"><li class="card-empty">No site questions yet.</li></ul>
+        </section>
+
         <section class="card card-queue" aria-label="Offline job queue">
           <h2>Cloud queue</h2>
           <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
@@ -335,6 +345,32 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       li.className = 'card-note';
       li.textContent = `+${snap.omitted.recipes} more recipes hidden`;
       recipesEl.appendChild(li);
+    }
+
+    // Reviewed change log: who changed what and why; pending ones are marked.
+    const WHO_LABEL: Record<string, string> = { her: 'You', nano: 'Nano · on device', gemini: 'Gemini · cloud', rules: 'Rules · on device' };
+    const changesEl = $<HTMLUListElement>('c-changes');
+    changesEl.innerHTML = '';
+    const changes = snap.changes ?? [];
+    if (!changes.length) changesEl.innerHTML = '<li class="card-empty">No changes yet.</li>';
+    for (const c of [...changes].reverse()) {
+      const li = document.createElement('li');
+      li.className = `c-row c-change c-change-${c.status}`;
+      li.innerHTML = `<span class="c-tag tag-${esc(c.status)}">${esc(c.status === 'pending' ? 'waiting' : c.status)}</span>`
+        + `<span class="c-row-text"><b>${esc(c.title)}</b> · ${esc(WHO_LABEL[c.who] ?? c.who)}${c.why ? `<br><small>${esc(c.why)}</small>` : ''}</span>`;
+      changesEl.appendChild(li);
+    }
+    // Site checklist questions (asked offline at the site).
+    const checklistEl = $<HTMLUListElement>('c-checklist');
+    checklistEl.innerHTML = '';
+    const items = snap.checklist ?? [];
+    if (!items.length) checklistEl.innerHTML = '<li class="card-empty">No site questions yet.</li>';
+    for (const it of items) {
+      const li = document.createElement('li');
+      li.className = `c-row c-check c-check-${it.status}`;
+      li.innerHTML = `<span class="c-tag tag-${esc(it.status)}">${esc(it.status)}</span>`
+        + `<span class="c-row-text">${esc(it.question)}${it.offline ? ' <small>(asked offline)</small>' : ''}${it.answer ? `<br><small>${esc(it.answer)}</small>` : ''}</span>`;
+      checklistEl.appendChild(li);
     }
 
     // 3D review (compact wireframe preview; ⛶ opens the fullscreen orbit view).

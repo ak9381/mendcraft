@@ -6,7 +6,7 @@ import { PlanEngine } from './engine';
 import { validatePlanOp, type PlanOp } from './ops';
 import { buildPlanTemplate, isPlanTemplateName } from './templates';
 import { toDxf, toJson } from './export';
-import { mmToMetresLabel, wallLength } from './doc';
+import { emptyPlan, mmToMetresLabel, wallLength, type PlanDoc } from './doc';
 import { generatePlan } from '../ai/hybrid';
 import type { DeixisTargetInfo } from '../ai/deixis';
 import type { ListItem, ModeController, StepResult } from '../core/controller';
@@ -133,6 +133,16 @@ export function createPlanController(): ModeController {
       const applied = engine.applyGenerated(valid);
       if (!applied.ok) return { ok: false, error: applied.error, warnings: [] };
       return { ok: true, message: 'Plan created.', warnings: applied.warnings };
+    },
+
+    restoreSnapshot(snapshot): StepResult {
+      const d = snapshot as Partial<PlanDoc> | null;
+      if (!d || !Array.isArray(d.walls) || !Array.isArray(d.openings)) {
+        return { ok: false, error: 'That snapshot is not a plan.', warnings: [] };
+      }
+      const doc: PlanDoc = { ...emptyPlan(), ...d } as PlanDoc;
+      const applied = engine.restore(doc);
+      return { ok: applied.ok, message: 'Plan restored.', warnings: applied.warnings };
     },
 
     dragSelectedMm(dxMm, dyMm): StepResult {

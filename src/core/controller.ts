@@ -76,6 +76,10 @@ export interface ModeController {
    *  (ai/deixis.deixisToOp). Omitted by modes without deictic adjustments. */
   deixisInfo?(id: string): DeixisTargetInfo | null;
 
+  /** Replace the document with an earlier snapshot() (change-log revert), as
+   *  one undoable step. Omitted by modes without snapshots. */
+  restoreSnapshot?(snapshot: unknown): StepResult;
+
   /** Download the current document (STL for part; DXF + JSON for plan). */
   export(): void;
 
@@ -107,5 +111,18 @@ export interface ViewportHandle {
   hover?(clientX: number, clientY: number): void;
   /** Toggle a secondary view (plan: extrude walls to 3D). */
   toggle3D?(on: boolean): boolean;
+  /** Is the 3D view showing? */
+  is3D?(): boolean;
+  /** Zoom the 2D view: factor > 1 zooms in. */
+  zoom?(factor: number): void;
+  /** Hide / show a drawing layer (view only; the plan is untouched). */
+  setLayerHidden?(layer: string, hidden: boolean): void;
+  hiddenLayers?(): string[];
+  /** 3D: apply a material/lighting plan (cad/materials MaterialPlan). */
+  setMaterials?(plan: unknown): Promise<void>;
+  /** 3D first-person walkthrough. Turns the 3D view on if needed. */
+  walk?(on: boolean, room?: string): Promise<boolean>;
+  walkStep?(step: string): void;
+  walking?(): boolean;
   dispose(): void;
 }

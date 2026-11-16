@@ -129,6 +129,9 @@ export interface AddFixtureOp {
   w: number;
   d: number;
   rotation: number;
+  /** Stairs only: number of risers (drawn treads) and the rise per step, mm. */
+  steps?: number;
+  rise?: number;
 }
 /** Rigidly translate a SET of walls/fixtures by (dx, dy) in one step. Unlike a
  *  batch of `move` ops, shared endpoints move exactly once (no cascade). */
@@ -450,7 +453,12 @@ export function validatePlanOp(raw: unknown): PlanValidation {
         return fail('add_fixture needs numeric x, y, w, d');
       // Rotation is degrees — never unit-converted.
       const rotation = toNum(rawNum(raw, 'rotation')) ?? 0;
-      return { ok: true, op: { op: 'add_fixture', kind: str(raw.kind) ?? 'fixture', x, y, w, d: dd, rotation } };
+      const op: AddFixtureOp = { op: 'add_fixture', kind: str(raw.kind) ?? 'fixture', x, y, w, d: dd, rotation };
+      const steps = toNum(rawNum(raw, 'steps'));
+      const rise = toNum(rawNum(raw, 'rise'));
+      if (steps !== undefined) op.steps = Math.round(clamp(steps, 2, 40));
+      if (rise !== undefined) op.rise = clamp(rise, 80, 300);
+      return { ok: true, op };
     }
     case 'move_many': {
       const ids = Array.isArray(raw.ids) ? raw.ids.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : [];

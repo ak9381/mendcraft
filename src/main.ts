@@ -91,6 +91,20 @@ import { checkLanguageAvailability, type FusionOutcome } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
+import { createChangeLog, planDigest, ACTOR_LABEL, type Actor, type ChangeEntry } from './cad/changeLog';
+import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type EmailDraft } from './cad/siteChecklist';
+import { withChangeRecording } from './cad/recording';
+import { checkGuidelines, summarizeReport, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
+import { proposeStair } from './cad/stairs';
+import { answerPlanQuestion } from './cad/planQA';
+import { parseCopilot } from './cad/copilot';
+import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
+import { LAYER_LABEL, type LayerId } from './cad/layers';
+import { presetFor, PHOTO_RENDER_NOTE, type MaterialPlan } from './cad/materials';
+import { siteBookId, syncSiteBook } from './cad/sync';
+import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
+import { askCopilot, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
+import type { PlanDoc } from './plan/doc';
 import { generatePlan } from './ai/hybrid';
 import { isFirebaseConfigured } from './firebase/app';
 import {
@@ -321,6 +335,7 @@ app.innerHTML = `
     <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
     <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
+    <button id="btn-copilot" type="button" aria-pressed="false" title="Copilot: review AI changes, guideline check, site checklist, history">Copilot</button>
     <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
     <button id="btn-export" type="button">${mode.exportLabel}</button>
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
@@ -393,6 +408,7 @@ const btnAi = el<HTMLButtonElement>('btn-ai');
 const btnUndo = el<HTMLButtonElement>('btn-undo');
 const btnRedo = el<HTMLButtonElement>('btn-redo');
 const btn3d = el<HTMLButtonElement>('btn-3d');
+const btnCopilot = el<HTMLButtonElement>('btn-copilot');
 const btnExport = el<HTMLButtonElement>('btn-export');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
 const progressBar = el<HTMLDivElement>('progress-bar');
@@ -486,7 +502,14 @@ const SOURCE_TOOLTIP: Record<'on-device' | 'cloud' | 'rules', string> = {
   rules: 'Answered by the built-in deterministic parser — fully offline, no AI.',
 };
 
+// Change-log context (who / why for the next recorded edit).
+let applyingReviewed = false;
+let lastUtteranceAt = 0;
+let lastUtteranceText = '';
+let lastUtteranceSource: ChangeEntry['source'] = 'rules';
+
 function setBadge(source: Source, reason?: RouteReason, translated = false, note?: string | null): void {
+  lastUtteranceSource = source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules';
   sourceBadge.className = `badge badge-${source}`;
   const label = reason
     ? languageBadgeLabel(source, reason, currentLanguage, translated)
@@ -623,7 +646,18 @@ function applyLanguage(pick: string, announce: boolean): void {
 
 // ---- controller + renderer (mode-provided) ----
 
-const controller: ModeController = await mode.createController();
+// Every drawing change goes through the change log: her own edits are recorded
+// as applied; accepted AI proposals and reverts are recorded by the log itself.
+const changeLog = createChangeLog(typeof localStorage !== 'undefined' ? localStorage : null);
+const siteChecklist = createSiteChecklist(typeof localStorage !== 'undefined' ? localStorage : null);
+window.addEventListener('pagehide', () => changeLog.flush());
+const rawController: ModeController = await mode.createController();
+const controller: ModeController = withChangeRecording(rawController, {
+  log: changeLog,
+  suppressed: () => applyingReviewed,
+  why: () => (Date.now() - lastUtteranceAt < 8000 && lastUtteranceText ? `You said: "${lastUtteranceText}"` : 'Direct edit (pinch / mouse)'),
+  source: () => (Date.now() - lastUtteranceAt < 8000 ? lastUtteranceSource : 'rules'),
+});
 const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controller, (id) => {
   if (!id) return;
   controller.selectId(id);
@@ -1910,6 +1944,8 @@ function publishControlSnapshot(): void {
       rev: controlRev,
       primitives: controlScenePrimitives(),
     },
+    changes: controlChanges(),
+    checklist: controlChecklist(),
     recipes: recipeStore.list().map((r) => ({
       id: r.id, name: r.name, device: r.device,
       taughtBy: r.taughtBy, summary: describeRecipe(r), steps: r.steps.length,
@@ -1954,6 +1990,534 @@ const phrasebook = createPhrasebook(createIndexedDbPhrasebookStore());
 let lastCommand: string | null = null;
 const net = createNetworkMonitor({ navigator, target: window });
 let draining = false;
+
+// ---- CAD copilot + reviewed changes + site checklist (src/cad) -----------
+// Her words → a typed CAD tool. Rules first; Nano on the device when rules
+// miss; cloud Gemini only for the hard parts. Every AI drawing change is a
+// PENDING proposal in the change log until she accepts it (pinch / click /
+// "accept"); her own edits are logged as applied. Offline, hard questions
+// become the site checklist.
+
+const REGION_KEY = 'mendcraft.region';
+let guidelineRegion: RegionId = (() => {
+  try {
+    const r = localStorage.getItem(REGION_KEY);
+    return r && (REGION_IDS as readonly string[]).includes(r) ? (r as RegionId) : 'international';
+  } catch { return 'international'; }
+})();
+let lastReport: GuidelineReport | null = null;
+
+function planDoc(): PlanDoc {
+  return rawController.snapshot() as PlanDoc;
+}
+function isOnline(): boolean {
+  return net.online();
+}
+function sourceToActor(source: Source): Actor {
+  return source === 'cloud' ? 'gemini' : source === 'on-device' ? 'nano' : 'rules';
+}
+
+const copilotPanel = createCopilotPanel({
+  onAccept: (id) => acceptChange(id),
+  onReject: (id) => rejectChange(id),
+  onAcceptAll: () => acceptAllChanges(),
+  onRevert: (id) => stageRevert(id),
+  onIssueShow: (issue) => highlightA11yIssue(issue),
+  onIssueFix: (issue) => proposeIssueFix(issue, 'rules'),
+  onRegion: (r) => {
+    guidelineRegion = r;
+    try { localStorage.setItem(REGION_KEY, r); } catch { /* session only */ }
+    void runGuidelineCheck(r, false);
+  },
+  onRecheck: () => void runGuidelineCheck(guidelineRegion, false),
+  onAskGemini: (id) => void askChecklistItem(id),
+  onRemoveItem: (id) => { siteChecklist.remove(id); },
+  onEmailClient: () => void emailClient(),
+  onOpenDraft: (d) => confirmOpenDraft(d),
+  onCancelDraft: () => { copilotPanel.setDraft(null); say('Email draft closed. Nothing was sent.'); },
+});
+viewportEl.appendChild(copilotPanel.element);
+const walkControls = createWalkControls(
+  (step) => { viewport.walkStep?.(step); },
+  () => { void runCadTool({ tool: 'walkthrough', args: { on: false } }, 'her', 'Exit walk', 'rules'); },
+);
+viewportEl.appendChild(walkControls.element);
+
+let cpRenderQueued = false;
+function refreshCopilot(): void {
+  if (cpRenderQueued) return;
+  cpRenderQueued = true;
+  requestAnimationFrame(() => {
+    cpRenderQueued = false;
+    copilotPanel.setChanges(changeLog.entries());
+    copilotPanel.setChecklist(siteChecklist.items(), isOnline());
+    const pend = changeLog.pending().length;
+    btnCopilot.textContent = pend ? `Copilot (${pend})` : 'Copilot';
+    publishControlSnapshot();
+  });
+}
+changeLog.subscribe(refreshCopilot);
+siteChecklist.subscribe(refreshCopilot);
+net.subscribe((online) => {
+  refreshCopilot();
+  if (online) {
+    void syncSite();
+    const open = siteChecklist.open().length;
+    if (open) {
+      showToast(`Back online. ${open} site question${open === 1 ? '' : 's'} waiting in your checklist.`);
+      say(`Back online. You have ${open} site question${open === 1 ? '' : 's'}. Ask Gemini, or email the client.`);
+    }
+  }
+});
+btnCopilot.addEventListener('click', () => {
+  if (copilotPanel.isOpen()) copilotPanel.close();
+  else copilotPanel.open(changeLog.pending().length ? 'review' : copilotPanel.tab());
+  toggleButton(btnCopilot, copilotPanel.isOpen());
+});
+
+const siteBook = (() => {
+  try { return siteBookId(localStorage); } catch { return null; }
+})();
+async function syncSite(): Promise<void> {
+  if (!siteBook || !isOnline()) return;
+  const r = await syncSiteBook(changeLog, siteChecklist, siteBook);
+  if (!r.ok) console.info('[mendcraft]', r.reason);
+}
+
+/** Stage an AI (or rules) drawing change for her review. Nothing applies yet. */
+function proposeChange(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; source: ChangeEntry['source'] }): ChangeEntry {
+  const e = changeLog.propose({ ...p, before: planDigest(rawController.snapshot()) });
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  const by = ACTOR_LABEL[p.actor];
+  verifierEl.textContent = `${by} suggests: ${p.title}. Waiting for you. Pinch Accept, or say "accept".`;
+  // The confirm chip doubles as the pinch target for the newest proposal.
+  presentChoices(`${by} suggests: ${p.title}`, [{ label: p.title, result: p.op, source: p.source }], () => acceptChange(e.id), () => rejectChange(e.id));
+  return e;
+}
+
+function acceptChange(id: string): void {
+  const e = changeLog.get(id);
+  if (!e) return;
+  applyingReviewed = true;
+  let res: { ok: boolean; error?: string };
+  try {
+    res = changeLog.accept(id, {
+      snapshot: () => rawController.snapshot(),
+      apply: (op) => {
+        const step = rawController.applyOp(op);
+        return { ok: step.ok, error: step.error };
+      },
+      summary: () => planDigest(rawController.snapshot()),
+    });
+  } finally {
+    applyingReviewed = false;
+  }
+  if (pendingChoices) clearChoices();
+  if (!res.ok) {
+    verifierEl.textContent = `Couldn't apply "${e.title}": ${res.error ?? 'invalid'}`;
+    say(`I couldn't apply that: ${res.error ?? 'invalid change'}.`);
+    return;
+  }
+  renderAll();
+  verifierEl.textContent = `Accepted: ${e.title}. Undo or revert it any time from History.`;
+  say(`Done. ${e.title}.`);
+  if (lastReport) void runGuidelineCheck(guidelineRegion, false, true);
+}
+
+function rejectChange(id: string): void {
+  const e = changeLog.get(id);
+  if (!e || !changeLog.reject(id)) return;
+  verifierEl.textContent = `Rejected: ${e.title}. Nothing changed.`;
+  say('Rejected. Nothing changed.');
+}
+
+function acceptAllChanges(): void {
+  const ids = changeLog.pending().map((e) => e.id);
+  for (const id of ids) acceptChange(id);
+  if (ids.length > 1) say(`Accepted ${ids.length} changes.`);
+}
+
+function stageRevert(id: string): void {
+  const e = changeLog.get(id);
+  if (!e) return;
+  const later = changeLog.revertImpact(id);
+  const label = later.length ? `Revert "${e.title}" and ${later.length} later change${later.length === 1 ? '' : 's'}` : `Revert "${e.title}"`;
+  presentChoices(label, [{ label: 'Revert', result: { revert: id }, source: 'rules' }], () => {
+    applyingReviewed = true;
+    let r: { ok: boolean; error?: string; count?: number };
+    try {
+      r = changeLog.revert(id, {
+        restore: (doc) => {
+          const step = rawController.restoreSnapshot?.(doc) ?? { ok: false, error: 'This view cannot restore.' };
+          return { ok: step.ok, error: step.error };
+        },
+        summary: () => planDigest(rawController.snapshot()),
+      });
+    } finally {
+      applyingReviewed = false;
+    }
+    if (!r.ok) { say(r.error ?? 'Could not revert.'); verifierEl.textContent = r.error ?? 'Could not revert.'; return; }
+    renderAll();
+    verifierEl.textContent = `Reverted ${r.count} change${r.count === 1 ? '' : 's'}. You can undo the revert too.`;
+    say(`Reverted ${r.count === 1 ? 'that change' : `${r.count} changes`}.`);
+  }, () => { verifierEl.textContent = 'Revert cancelled.'; });
+  say(`${label}? Say apply or cancel.`);
+}
+
+/** The deterministic guideline check (+ Gemini explanations when online). */
+async function runGuidelineCheck(region: RegionId, speak = true, quiet = false): Promise<boolean> {
+  const report = checkGuidelines(planDoc(), region);
+  lastReport = report;
+  const summary = summarizeReport(report);
+  copilotPanel.setReport(report.issues, region, `${summary} ${GUIDELINE_NOTE}`);
+  if (quiet) return true;
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  setBadge('rules', 'exact');
+  recordLedger('rules', 'guideline-check', 'measured on this device', '');
+  verifierEl.textContent = `${summary} ${GUIDELINE_NOTE}`;
+  if (speak) say(report.issues.length ? `${summary.replace(/^.*?: /, '')} I've marked them on the plan.` : 'Guideline check: nothing flagged.');
+  const ids = [...new Set(report.issues.flatMap((i) => i.targetIds))];
+  if (ids.length) {
+    const sel = rawController.applyOp({ op: 'select_set', ids });
+    if (!sel.ok && ids[0]) rawController.selectId(ids[0]);
+    renderAll();
+  }
+  if (!report.issues.length) return true;
+  if (!isOnline() || !cloudConfigured) {
+    siteChecklist.add(`Explain the guideline findings (${report.region.label}) and suggest fixes`, controller.summary().slice(0, 300), true);
+    verifierEl.textContent += ' Gemini will explain these when you are back online (saved to your site checklist).';
+    return true;
+  }
+  const sent = report.issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
+  copilotPanel.setBusy('Gemini is explaining the findings…');
+  const res = await explainAccessibility(sent, controller.summary());
+  copilotPanel.setBusy(null);
+  recordLedger(res.source, 'guideline-explain', res.source === 'cloud' ? 'explain findings' : REASON_TEXT.private, `issues: ${JSON.stringify(sent)}`);
+  if (res.items.length) {
+    const byId = new Map(res.items.map((x) => [x.id, x]));
+    const merged = report.issues.map((i) => {
+      const x = byId.get(i.id);
+      if (!x) return i;
+      return { ...i, message: `${i.message} ${x.explanation}`, ...(x.fix && !i.fix ? { fix: x.fix as Record<string, unknown>, fixLabel: 'Gemini fix', fixSource: res.source } : {}) };
+    });
+    lastReport = { ...report, issues: merged };
+    copilotPanel.setReport(merged, region, `${summary} ${GUIDELINE_NOTE}`);
+  }
+  return true;
+}
+
+function proposeIssueFix(issue: A11yIssue, by: 'rules' | 'cloud' | 'on-device'): void {
+  if (!issue.fix) return;
+  const src = issue.fixSource ?? by;
+  highlightA11yIssue(issue);
+  proposeChange({
+    actor: sourceToActor(src as Source), tool: 'fix_guideline', title: issue.fixLabel ?? 'Guideline fix',
+    why: issue.message.slice(0, 280), op: issue.fix, source: src === 'cloud' ? 'cloud' : src === 'on-device' ? 'on-device' : 'rules',
+  });
+}
+
+/** Answer a hard question: Gemini when online, else the site checklist. */
+async function handleHardQuestion(question: string): Promise<boolean> {
+  if (!isOnline() || !cloudConfigured) {
+    siteChecklist.add(question, controller.summary().slice(0, 300), !isOnline());
+    copilotPanel.open('checklist');
+    toggleButton(btnCopilot, true);
+    setBadge('rules', 'offline');
+    recordLedger('rules', 'site-checklist', 'saved on this device (offline)', '');
+    verifierEl.textContent = `Saved to your site checklist: "${question}". When the signal is back, ask Gemini or email the client.`;
+    say('No signal right now. I saved that to your site checklist.');
+    return true;
+  }
+  copilotPanel.setBusy('Asking Gemini…');
+  const res = await askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  copilotPanel.setBusy(null);
+  if (!res) {
+    siteChecklist.add(question, controller.summary().slice(0, 300), false);
+    verifierEl.textContent = `Gemini couldn't answer right now. Saved to your site checklist: "${question}".`;
+    say("Gemini couldn't answer right now, so I saved it to your checklist.");
+    copilotPanel.open('checklist');
+    return true;
+  }
+  setBadge('cloud', 'big-job');
+  recordLedger('cloud', 'copilot-answer', 'hard question', `question: ${JSON.stringify(question)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
+  copilotPanel.setAnswer({ question, text: res.answer, by: 'Gemini · cloud' });
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  verifierEl.textContent = res.answer;
+  say(res.answer);
+  for (const call of res.calls) {
+    const act = toolToAction(call);
+    if (act.kind === 'op') {
+      proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || question, op: act.op, source: 'cloud' });
+    }
+  }
+  return true;
+}
+
+async function askChecklistItem(id: string): Promise<void> {
+  const it = siteChecklist.get(id);
+  if (!it) return;
+  if (!isOnline() || !cloudConfigured) { say('Still no signal. I will keep it on the list.'); return; }
+  copilotPanel.setBusy('Asking Gemini…');
+  const res = await askCopilot(it.question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  copilotPanel.setBusy(null);
+  if (!res) { say("Gemini couldn't answer that right now."); return; }
+  recordLedger('cloud', 'copilot-answer', 'site checklist item', `question: ${JSON.stringify(it.question)}`, res.ms);
+  siteChecklist.answer(id, res.answer, 'gemini');
+  say(res.answer);
+  for (const call of res.calls) {
+    const act = toolToAction(call);
+    if (act.kind === 'op') proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || it.question, op: act.op, source: 'cloud' });
+  }
+}
+
+async function emailClient(): Promise<boolean> {
+  const items = siteChecklist.items().filter((i) => i.status === 'open' || i.status === 'answered');
+  if (!items.length) { say('Your site checklist is empty.'); return false; }
+  copilotPanel.open('checklist');
+  toggleButton(btnCopilot, true);
+  let draft = fallbackEmail(items);
+  let by = 'Drafted on this device (no signal). Gemini can polish it when you are online.';
+  if (isOnline() && cloudConfigured) {
+    copilotPanel.setBusy('Gemini is drafting the email…');
+    const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary());
+    copilotPanel.setBusy(null);
+    if (res) {
+      draft = res.draft;
+      by = 'Drafted by Gemini · cloud. Read it first.';
+      recordLedger('cloud', 'client-email', 'draft from site checklist', `questions: ${items.length}`, res.ms);
+    }
+  }
+  copilotPanel.setDraft({ draft, by });
+  verifierEl.textContent = 'Email draft ready below. Nothing is sent. Pinch "Open in my mail app" to open it there.';
+  say('Here is the draft. Read it, then pinch Open in my mail app. Nothing is sent until you press send there.');
+  return true;
+}
+
+/** Her confirm (pinch) → open her own mail app with the draft. Never sends. */
+function confirmOpenDraft(d: EmailDraft): void {
+  presentChoices('Open this email in your mail app? (You press send there.)', [{ label: 'Open in mail app', result: { mailto: true }, source: 'rules' }], () => {
+    window.open(mailtoUrl(d), '_blank');
+    for (const it of siteChecklist.items()) if (it.status === 'open' || it.status === 'answered') siteChecklist.mark(it.id, 'emailed');
+    copilotPanel.setDraft(null);
+    verifierEl.textContent = 'Opened in your mail app. Nothing was sent from Mendcraft.';
+    say('Opened in your mail app.');
+  }, () => { verifierEl.textContent = 'Not opened. The draft is still here.'; });
+}
+
+/** Run one typed CAD tool call. `actor` = who asked (her) or proposed (AI). */
+async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Source): Promise<boolean> {
+  const act = toolToAction(call);
+  if (act.kind === 'error') { verifierEl.textContent = act.error; say(act.error); return false; }
+  opJsonEl.textContent = JSON.stringify({ tool: call.tool, args: call.args, by: actor }, null, 2);
+  if (act.kind === 'op') {
+    if (actor === 'her' || act.op.op === 'select') {
+      const step = controller.applyOp(act.op);
+      if (!step.ok) { say(`I couldn't do that: ${step.error ?? 'invalid'}`); verifierEl.textContent = `Rejected: ${step.error}`; return false; }
+      renderAll();
+      verifierEl.textContent = step.message ?? 'Done.';
+      speakConfirm(String(act.op.op));
+      return true;
+    }
+    proposeChange({ actor, tool: call.tool, title: describeCall(call), why, op: act.op, source: source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules' });
+    return true;
+  }
+  const a = call.args;
+  switch (act.action) {
+    case 'add_stair': {
+      const p = proposeStair(planDoc(), {
+        floorHeight: typeof a.floorHeight === 'number' ? a.floorHeight : null,
+        region: guidelineRegion, width: typeof a.width === 'number' ? a.width : undefined,
+        dir: a.dir === 'down' ? 'down' : 'up',
+      });
+      setBadge(source, source === 'rules' ? 'exact' : 'private');
+      recordLedger(source, 'stair-design', 'computed on this device', '');
+      // Staircase math is deterministic code, so the proposer is the rules
+      // (or Nano/Gemini if they picked the tool); it still waits for her OK.
+      proposeChange({
+        actor: actor === 'her' ? 'rules' : actor, tool: 'add_stair',
+        title: `Add a staircase: ${p.plan.risers} steps × ${Math.round(p.plan.rise)} mm, tread ${p.plan.tread} mm`,
+        why: `${p.summary} ${why ? `You said: "${why}".` : ''}`.trim(), op: p.op, source: 'rules',
+      });
+      say(`${p.summary} Pinch Accept to place it.`);
+      return true;
+    }
+    case 'fix_guideline': {
+      const issue = lastReport?.issues.find((i) => i.id === a.issueId);
+      if (!issue?.fix) { say('I could not find that finding. Run the guideline check first.'); return false; }
+      proposeIssueFix(issue, source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules');
+      return true;
+    }
+    case 'guideline_check': {
+      const region = typeof a.region === 'string' && (REGION_IDS as readonly string[]).includes(a.region) ? (a.region as RegionId) : guidelineRegion;
+      if (region !== guidelineRegion) { guidelineRegion = region; try { localStorage.setItem(REGION_KEY, region); } catch { /* */ } }
+      return runGuidelineCheck(region);
+    }
+    case 'measure': {
+      const q = String(a.question ?? why);
+      const ans = answerPlanQuestion(planDoc(), q);
+      if (!ans) return handleHardQuestion(q);
+      setBadge(source === 'cloud' ? 'cloud' : source, source === 'rules' ? 'exact' : 'private');
+      recordLedger('rules', 'plan-question', 'read from the drawing on this device', '');
+      copilotPanel.setAnswer({ question: q, text: ans.text, by: `From your drawing · on this device${source === 'on-device' ? ' (Nano understood the question)' : ''}` });
+      if (ans.ids.length) {
+        const sel = rawController.applyOp({ op: 'select_set', ids: ans.ids });
+        if (!sel.ok) rawController.selectId(ans.ids[0]);
+        renderAll();
+      }
+      verifierEl.textContent = ans.text;
+      say(ans.text);
+      return true;
+    }
+    case 'ask_gemini':
+      return handleHardQuestion(String(a.question ?? why));
+    case 'zoom': {
+      if (a.to === 'fit') viewport.fit?.();
+      else viewport.zoom?.(a.to === 'in' ? 1.4 : 1 / 1.4);
+      say(a.to === 'fit' ? 'Whole plan.' : a.to === 'in' ? 'Zoomed in.' : 'Zoomed out.');
+      return true;
+    }
+    case 'show_layer': {
+      const visible = a.visible !== false;
+      viewport.setLayerHidden?.(String(a.layer), !visible);
+      const label = LAYER_LABEL[a.layer as LayerId] ?? String(a.layer);
+      verifierEl.textContent = `${label} ${visible ? 'shown' : 'hidden'} (view only, the drawing is unchanged).`;
+      say(`${label} ${visible ? 'shown' : 'hidden'}.`);
+      return true;
+    }
+    case 'view_3d': {
+      const on = a.on !== false;
+      if (!on && viewport.walking?.()) { await viewport.walk?.(false); walkControls.show(false); }
+      const now = viewport.toggle3D ? viewport.toggle3D(on) : false;
+      btn3d.setAttribute('aria-pressed', String(now));
+      say(now ? '3D view.' : 'Plan view.');
+      return true;
+    }
+    case 'walkthrough': {
+      if (a.on === false) {
+        await viewport.walk?.(false);
+        walkControls.show(false);
+        verifierEl.textContent = 'Walk ended. Still in 3D; say "back to plan" for the drawing.';
+        say('Walk ended.');
+        return true;
+      }
+      if (!viewport.walk) { say('Walkthrough is not available here.'); return false; }
+      const ok = await viewport.walk(true, typeof a.room === 'string' ? a.room : undefined);
+      btn3d.setAttribute('aria-pressed', 'true');
+      walkControls.show(ok);
+      setBadge('rules', 'private');
+      recordLedger('rules', 'walkthrough', 'runs on this device', '');
+      verifierEl.textContent = 'Walking through your plan, on this device. Say forward, back, turn left, turn right, or stop. Or pinch the big buttons.';
+      say('Walking through your plan. Say forward, turn left, turn right, or stop.');
+      return ok;
+    }
+    case 'walk_step':
+      viewport.walkStep?.(String(a.step));
+      return true;
+    case 'set_materials': {
+      const style = String(a.style ?? why);
+      let plan: MaterialPlan = presetFor(style);
+      let by = 'a preset on this device';
+      if (isOnline() && cloudConfigured) {
+        copilotPanel.setBusy('Gemini is choosing materials and light…');
+        const res = await proposeMaterials(style, controller.summary());
+        copilotPanel.setBusy(null);
+        if (res) {
+          plan = res.plan;
+          by = 'Gemini · cloud';
+          recordLedger('cloud', 'materials', '3D materials as data', `request: ${JSON.stringify(style)}\nrooms: ${controller.summary().slice(0, 300)}`, res.ms);
+          setBadge('cloud', 'big-job');
+        }
+      } else {
+        setBadge('rules', isOnline() ? 'private' : 'offline');
+      }
+      await viewport.setMaterials?.(plan);
+      btn3d.setAttribute('aria-pressed', 'true');
+      const names = `walls ${plan.walls.name}, floor ${plan.floor.name}`;
+      verifierEl.textContent = `3D: ${plan.label} (${names}) by ${by}. ${plan.notes} ${PHOTO_RENDER_NOTE}`;
+      copilotPanel.setAnswer({ question: 'Convert to 3D', text: `${plan.label}: ${names}. ${plan.notes}`, by: `${by}. ${PHOTO_RENDER_NOTE}` });
+      say(`Here it is in 3D: ${plan.label}. ${names}.`);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/** Copilot rules pass (early in the pipeline). Null = not a copilot request. */
+async function handleCopilot(utterance: string): Promise<boolean | null> {
+  const intent = parseCopilot(utterance, { walking: viewport.walking?.() ?? false });
+  if (!intent) return null;
+  lastUtteranceText = utterance;
+  lastUtteranceAt = Date.now();
+  lastUtteranceSource = 'rules';
+  if (intent.kind === 'checklist-add') {
+    siteChecklist.add(intent.question, controller.summary().slice(0, 300), !isOnline());
+    copilotPanel.open('checklist');
+    say('Added to your site checklist.');
+    return true;
+  }
+  if (intent.kind === 'meta') {
+    switch (intent.meta) {
+      case 'open-checklist': copilotPanel.open('checklist'); toggleButton(btnCopilot, true); say(`${siteChecklist.open().length} open site questions.`); return true;
+      case 'open-changes': copilotPanel.open('history'); toggleButton(btnCopilot, true); say('Here is every change.'); return true;
+      case 'email-client': return emailClient();
+      case 'accept': {
+        const p = changeLog.pending();
+        if (!p.length) return null; // let the chip/other handlers have it
+        acceptChange(p[p.length - 1].id);
+        return true;
+      }
+      case 'accept-all': if (!changeLog.pending().length) { say('Nothing is waiting.'); return true; } acceptAllChanges(); return true;
+      case 'reject': {
+        const p = changeLog.pending();
+        if (!p.length) return null;
+        rejectChange(p[p.length - 1].id);
+        return true;
+      }
+      case 'reject-all': for (const e of changeLog.pending()) changeLog.reject(e.id); say('Rejected everything waiting.'); return true;
+      case 'revert-last': {
+        const last = [...changeLog.entries()].reverse().find((e) => e.status === 'applied');
+        if (!last) { say('Nothing to revert.'); return true; }
+        stageRevert(last.id);
+        return true;
+      }
+    }
+  }
+  if (intent.kind === 'tool') return runCadTool(intent.call, 'her', utterance, 'rules');
+  return null;
+}
+
+/** Copilot fallback for questions the rules didn't catch: Nano understands
+ *  (on device, works offline), numbers still come from the drawing; hard
+ *  questions go to Gemini, or to the site checklist with no signal. */
+async function handleCopilotQuestion(utterance: string): Promise<boolean | null> {
+  if (!isHardQuestion(utterance)) return null;
+  const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() });
+  if (picked) {
+    recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : REASON_TEXT.private, picked.source === 'cloud' ? commandPayload(utterance) : '', picked.ms);
+    lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';
+    if (picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
+      const tool = cadTool(picked.call.tool);
+      // Nano/Gemini-picked EDITS become pending proposals; views, checks and
+      // measurements run straight away (they don't change the drawing).
+      const actor: Actor = tool?.kind === 'edit' ? sourceToActor(picked.source) : 'her';
+      return runCadTool(picked.call, actor, utterance, picked.source);
+    }
+  }
+  return handleHardQuestion(utterance);
+}
+
+function controlChanges() {
+  return changeLog.entries().map((e) => ({ id: e.id, actor: e.actor, title: e.title, why: e.why, status: e.status }));
+}
+function controlChecklist() {
+  return siteChecklist.items().map((i) => ({ id: i.id, question: i.question, status: i.status, askedOffline: i.askedOffline, answer: i.answer }));
+}
+refreshCopilot();
+void syncSite();
 
 /** Cloud results awaiting the user's accept/reject. Kept in memory only (large,
  *  and re-fetchable on the next reconnect), keyed by job id. */
@@ -3045,6 +3609,13 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
   if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
 
+  // CAD COPILOT (src/cad): guideline check, staircase, 2D→3D, walkthrough,
+  // plan questions, layers/zoom, review (accept/reject/revert), site checklist.
+  const copilotHandled = await handleCopilot(utterance);
+  if (copilotHandled !== null) return copilotHandled;
+  lastUtteranceText = utterance;
+  lastUtteranceAt = Date.now();
+
   // ANY LANGUAGE: find out which language this command is in (on-device
   // first; a cloud check only when it must, and the ledger records it).
   pendingReply = null;
@@ -3094,6 +3665,13 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     recordLedger('rules', 'command', 'reference intent', utterance);
     verifierEl.textContent = refHandled.detail;
     return refHandled.ok;
+  }
+
+  // Questions the copilot rules missed: Nano understands on the device; hard
+  // ones go to Gemini, or to the site checklist with no signal.
+  if (!decisionIsExactEdit(utterance)) {
+    const q = await handleCopilotQuestion(utterance);
+    if (q !== null) return q;
   }
 
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
@@ -4539,3 +5117,10 @@ renderAll();
 
 // Apply saved setup (calibration, hints) once everything above exists.
 applySetup();
+
+/** Does the plan rule parser read this as a concrete edit? (then it is not a
+ *  question for the copilot, even if it ends with "?"). */
+function decisionIsExactEdit(utterance: string): boolean {
+  const r = mode.parse(utterance) as Record<string, unknown>;
+  return !!r && typeof r === 'object' && !('clarify' in r);
+}

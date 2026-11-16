@@ -1,0 +1,152 @@
+// "Convert my 2D to 3D": the plan's own 3D view, dressed by Gemini. Gemini
+// proposes materials and lighting as STRUCTURED DATA (colours, roughness, sun
+// angle) which code validates and applies to the three.js scene. No image
+// model is used (photo renders need paid billing, which is off).
+
+export interface SurfaceLook { color: string; roughness: number; name: string }
+
+export interface MaterialPlan {
+  label: string;
+  walls: SurfaceLook;
+  floor: SurfaceLook;
+  structure: SurfaceLook;
+  furniture: SurfaceLook;
+  sanitary: SurfaceLook;
+  lighting: {
+    sunIntensity: number;
+    /** Compass angle of the sun, degrees (0 = north / +y, 90 = east / +x). */
+    sunAzimuth: number;
+    /** Height of the sun above the horizon, degrees. */
+    sunElevation: number;
+    sunColor: string;
+    ambientIntensity: number;
+    skyColor: string;
+  };
+  notes: string;
+}
+
+export const PHOTO_RENDER_NOTE = 'Photo-style render needs paid image billing, which is off. Using live 3D with Gemini materials instead.';
+
+const SURFACES = ['walls', 'floor', 'structure', 'furniture', 'sanitary'] as const;
+
+export const MATERIAL_PRESETS: Record<'default' | 'warm' | 'bright' | 'evening', MaterialPlan> = {
+  default: {
+    label: 'Plain model',
+    walls: { color: '#cbd5e1', roughness: 0.9, name: 'Grey card' },
+    floor: { color: '#e5e7eb', roughness: 0.95, name: 'Plain floor' },
+    structure: { color: '#94a3b8', roughness: 0.85, name: 'Concrete' },
+    furniture: { color: '#b08968', roughness: 0.85, name: 'Wood' },
+    sanitary: { color: '#e2e8f0', roughness: 0.6, name: 'Ceramic' },
+    lighting: { sunIntensity: 1.2, sunAzimuth: 135, sunElevation: 55, sunColor: '#ffffff', ambientIntensity: 1.4, skyColor: '#eef2f7' },
+    notes: '',
+  },
+  warm: {
+    label: 'Warm home',
+    walls: { color: '#f3e9dc', roughness: 0.9, name: 'Warm white plaster' },
+    floor: { color: '#a47148', roughness: 0.7, name: 'Teak wood' },
+    structure: { color: '#8d8478', roughness: 0.8, name: 'Kota stone' },
+    furniture: { color: '#7f5539', roughness: 0.75, name: 'Walnut' },
+    sanitary: { color: '#f8f9fa', roughness: 0.4, name: 'Glazed ceramic' },
+    lighting: { sunIntensity: 1.5, sunAzimuth: 120, sunElevation: 40, sunColor: '#fff1d6', ambientIntensity: 1.1, skyColor: '#f6efe6' },
+    notes: 'Warm plaster walls and a wooden floor in morning light.',
+  },
+  bright: {
+    label: 'Bright and airy',
+    walls: { color: '#ffffff', roughness: 0.85, name: 'White paint' },
+    floor: { color: '#d6d3d1', roughness: 0.5, name: 'Light marble' },
+    structure: { color: '#a8a29e', roughness: 0.7, name: 'Light concrete' },
+    furniture: { color: '#c8b6a6', roughness: 0.8, name: 'Oak' },
+    sanitary: { color: '#ffffff', roughness: 0.3, name: 'White ceramic' },
+    lighting: { sunIntensity: 1.8, sunAzimuth: 180, sunElevation: 65, sunColor: '#ffffff', ambientIntensity: 1.6, skyColor: '#f1f5f9' },
+    notes: 'White walls, light marble and strong midday sun.',
+  },
+  evening: {
+    label: 'Evening',
+    walls: { color: '#e9e3d5', roughness: 0.9, name: 'Cream paint' },
+    floor: { color: '#6b4f3a', roughness: 0.7, name: 'Dark wood' },
+    structure: { color: '#78716c', roughness: 0.8, name: 'Stone' },
+    furniture: { color: '#5c4033', roughness: 0.75, name: 'Rosewood' },
+    sanitary: { color: '#f1f5f9', roughness: 0.4, name: 'Ceramic' },
+    lighting: { sunIntensity: 0.9, sunAzimuth: 260, sunElevation: 12, sunColor: '#ffb870', ambientIntensity: 0.7, skyColor: '#2f3a4f' },
+    notes: 'Low warm sun from the west, darker floor.',
+  },
+};
+
+/** Plain-JSON schema for the cloud response (converted to a Firebase Schema). */
+const SURFACE_SCHEMA = {
+  type: 'object',
+  properties: { color: { type: 'string' }, roughness: { type: 'number' }, name: { type: 'string' } },
+};
+export const MATERIAL_CONSTRAINT: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    label: { type: 'string' },
+    walls: SURFACE_SCHEMA, floor: SURFACE_SCHEMA, structure: SURFACE_SCHEMA,
+    furniture: SURFACE_SCHEMA, sanitary: SURFACE_SCHEMA,
+    lighting: {
+      type: 'object',
+      properties: {
+        sunIntensity: { type: 'number' }, sunAzimuth: { type: 'number' }, sunElevation: { type: 'number' },
+        sunColor: { type: 'string' }, ambientIntensity: { type: 'number' }, skyColor: { type: 'string' },
+      },
+    },
+    notes: { type: 'string' },
+  },
+  required: ['walls', 'floor', 'lighting'],
+};
+
+export const MATERIAL_PROMPT = `You are an interior designer dressing a simple 3D model of a floor plan. Choose realistic materials and daylight that suit the request. Reply with ONE JSON object only: {"label":"<2-4 words>","walls":{"color":"#rrggbb","roughness":0..1,"name":"<material>"},"floor":{...},"structure":{...},"furniture":{...},"sanitary":{...},"lighting":{"sunIntensity":0.3..2.5,"sunAzimuth":0..360,"sunElevation":5..85,"sunColor":"#rrggbb","ambientIntensity":0.3..2,"skyColor":"#rrggbb"},"notes":"<one sentence>"}. Hex colours only.`;
+
+const HEX = /^#[0-9a-f]{6}$/i;
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+const num = (v: unknown, fb: number, lo: number, hi: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : fb;
+const hex = (v: unknown, fb: string) => (typeof v === 'string' && HEX.test(v.trim()) ? v.trim().toLowerCase() : fb);
+
+/** Untrusted model JSON → a safe MaterialPlan (missing parts fall back to the
+ *  base preset), or null when nothing usable came back. */
+export function coerceMaterialPlan(raw: unknown, base: MaterialPlan = MATERIAL_PRESETS.default): MaterialPlan | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  let usable = 0;
+  const out: MaterialPlan = JSON.parse(JSON.stringify(base));
+  for (const k of SURFACES) {
+    const s = o[k];
+    if (!s || typeof s !== 'object') continue;
+    const r = s as Record<string, unknown>;
+    if (typeof r.color === 'string' && HEX.test(r.color.trim())) usable++;
+    out[k] = {
+      color: hex(r.color, base[k].color),
+      roughness: num(r.roughness, base[k].roughness, 0, 1),
+      name: typeof r.name === 'string' && r.name.trim() ? r.name.trim().slice(0, 40) : base[k].name,
+    };
+  }
+  const l = o.lighting && typeof o.lighting === 'object' ? (o.lighting as Record<string, unknown>) : {};
+  out.lighting = {
+    sunIntensity: num(l.sunIntensity, base.lighting.sunIntensity, 0.2, 3),
+    sunAzimuth: ((num(l.sunAzimuth, base.lighting.sunAzimuth, -720, 720) % 360) + 360) % 360,
+    sunElevation: num(l.sunElevation, base.lighting.sunElevation, 2, 89),
+    sunColor: hex(l.sunColor, base.lighting.sunColor),
+    ambientIntensity: num(l.ambientIntensity, base.lighting.ambientIntensity, 0.2, 2.5),
+    skyColor: hex(l.skyColor, base.lighting.skyColor),
+  };
+  if (usable === 0) return null;
+  out.label = typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : 'Gemini look';
+  out.notes = typeof o.notes === 'string' ? o.notes.trim().slice(0, 200) : '';
+  return out;
+}
+
+/** Offline / no-cloud: pick a preset from her words. */
+export function presetFor(utterance: string): MaterialPlan {
+  const t = utterance.toLowerCase();
+  if (/\b(evening|night|sunset|dusk)\b/.test(t)) return MATERIAL_PRESETS.evening;
+  if (/\b(bright|airy|white|modern|marble)\b/.test(t)) return MATERIAL_PRESETS.bright;
+  return MATERIAL_PRESETS.warm;
+}
+
+/** Sun direction vector (x east, y north, z up) for three.js. */
+export function sunVector(l: MaterialPlan['lighting']): { x: number; y: number; z: number } {
+  const az = (l.sunAzimuth * Math.PI) / 180;
+  const el = (l.sunElevation * Math.PI) / 180;
+  return { x: Math.sin(az) * Math.cos(el), y: Math.cos(az) * Math.cos(el), z: Math.sin(el) };
+}

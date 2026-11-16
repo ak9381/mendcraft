@@ -46,6 +46,10 @@ import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
 import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
 import type { GenerateKind, RefHit } from '../references/types';
+import { CAD_TOOL_CONSTRAINT, cadToolPrompt, coerceToolCall, type ToolCall } from '../cad/tools';
+import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
+import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, type MaterialPlan } from '../cad/materials';
+import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -186,6 +190,13 @@ interface Models {
   connectorWriter?: TextGenModel | null;
   /** Reference drawings / layout frames as SVG JSON (ONLY_IN_CLOUD, text model). */
   refGenerate?: TextGenModel | null;
+  /** CAD copilot: Nano picks ONE typed CAD tool (PREFER_ON_DEVICE) + cloud twin. */
+  cadTool?: TextGenModel | null;
+  cadToolCloud?: TextGenModel | null;
+  /** CAD copilot: hard questions, client email drafts, 3D materials (ONLY_IN_CLOUD). */
+  copilotAnswer?: TextGenModel | null;
+  copilotEmail?: TextGenModel | null;
+  copilotMaterials?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -210,6 +221,11 @@ export interface ModelOverrides {
   effectCheckCloud?: MultimodalGenModel | null;
   connectorWriter?: TextGenModel | null;
   refGenerate?: TextGenModel | null;
+  cadTool?: TextGenModel | null;
+  cadToolCloud?: TextGenModel | null;
+  copilotAnswer?: TextGenModel | null;
+  copilotEmail?: TextGenModel | null;
+  copilotMaterials?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -410,6 +426,11 @@ async function ensureModels(): Promise<Models | null> {
       effectCheckCloud: testOverrides.effectCheckCloud ?? null,
       connectorWriter: testOverrides.connectorWriter ?? null,
       refGenerate: testOverrides.refGenerate ?? null,
+      cadTool: testOverrides.cadTool ?? null,
+      cadToolCloud: testOverrides.cadToolCloud ?? null,
+      copilotAnswer: testOverrides.copilotAnswer ?? null,
+      copilotEmail: testOverrides.copilotEmail ?? null,
+      copilotMaterials: testOverrides.copilotMaterials ?? null,
     };
   }
   if (!isEnabled()) {
@@ -672,7 +693,25 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // CAD copilot. Nano picks a typed tool on the device; the cloud twin only
+    // runs if the on-device call throws. Hard questions, email drafts and 3D
+    // materials are cloud-only text/JSON models (no image models: no billing).
+    const cadTool = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(CAD_TOOL_CONSTRAINT, Schema) } },
+      onDeviceParams: { createOptions: ON_DEVICE_CREATE_OPTIONS, promptOptions: { responseConstraint: CAD_TOOL_CONSTRAINT } },
+    });
+    const cloudJson = (constraint: Record<string, unknown>) => getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(constraint, Schema) } },
+    });
+    const cadToolCloud = cloudJson(CAD_TOOL_CONSTRAINT);
+    const copilotAnswer = cloudJson(COPILOT_ANSWER_CONSTRAINT);
+    const copilotEmail = cloudJson(EMAIL_CONSTRAINT);
+    const copilotMaterials = cloudJson(MATERIAL_CONSTRAINT);
+
     cached = {
+      cadTool, cadToolCloud, copilotAnswer, copilotEmail, copilotMaterials,
       intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
@@ -1504,6 +1543,116 @@ export async function generateReferenceOptions(
     return { hits: generatedToHits(options), source, ms: Date.now() - t0 };
   } catch (err) {
     noteError('ref-generate', err);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CAD copilot (src/cad). Nano on the device understands her request and picks
+// a typed tool; cloud Gemini handles only the hard parts. Every result is
+// untrusted JSON, re-checked by the cad/ coercers before anything uses it.
+
+/** Nano (on device) picks ONE CAD tool for her words. `allowCloud` = may the
+ *  cloud twin run if the on-device call throws (false when offline). */
+export async function pickCadTool(
+  utterance: string,
+  summary: string,
+  opts: { allowCloud: boolean },
+): Promise<{ call: ToolCall; confidence: number; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.cadTool) return null;
+  try {
+    const prompt = `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${utterance}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
+    const response = await callWithCloudRetry(models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool');
+    if (!response) return null;
+    const raw = extractJson(response.text());
+    const call = coerceToolCall(raw);
+    if (!call) return null;
+    const c = (raw as { confidence?: unknown }).confidence;
+    const confidence = typeof c === 'number' && Number.isFinite(c) ? Math.min(1, Math.max(0, c > 1 ? c / 100 : c)) : 0.6;
+    const source = sourceOf(response);
+    recordInference(source, 'cad-tool', Date.now() - t0);
+    return { call, confidence, source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('cad tool', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini answers a hard question about the plan (2-4 sentences) and may
+ *  suggest tool calls, which the app stages as PENDING changes. */
+export async function askCopilot(
+  question: string,
+  summary: string,
+  region: string,
+): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotAnswer) return null;
+  try {
+    const { response } = await withTimeout(
+      models.copilotAnswer.generateContent(withPreamble(copilotAnswerPrompt(question, summary.slice(0, 1500), region))),
+      CLOUD_GENERATE_TIMEOUT_MS * 2,
+      'copilot answer',
+    );
+    const raw = extractJson(response.text()) as { answer?: unknown; calls?: unknown; why?: unknown } | null;
+    const answer = raw && typeof raw.answer === 'string' ? raw.answer.trim().slice(0, 1200) : '';
+    if (!answer) return null;
+    const calls = Array.isArray(raw!.calls) ? raw!.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
+    recordInference('cloud', 'copilot-answer', Date.now() - t0);
+    return { answer, calls, why: typeof raw!.why === 'string' ? raw!.why.slice(0, 300) : '', source: 'cloud', ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('copilot answer', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini drafts a short client email from the site checklist. The app
+ *  only ever SHOWS it and opens her mail app on her confirm; nothing is sent. */
+export async function draftClientEmail(
+  items: { question: string; answer?: string }[],
+  summary: string,
+): Promise<{ draft: EmailDraft; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotEmail || items.length === 0) return null;
+  try {
+    const { response } = await withTimeout(
+      models.copilotEmail.generateContent(withPreamble(emailPrompt(items, summary))),
+      CLOUD_GENERATE_TIMEOUT_MS * 2,
+      'client email',
+    );
+    const draft = coerceEmailDraft(extractJson(response.text()));
+    if (!draft) return null;
+    recordInference('cloud', 'client-email', Date.now() - t0);
+    return { draft, source: 'cloud', ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('client email', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini proposes 3D materials + lighting as structured data. */
+export async function proposeMaterials(
+  request: string,
+  summary: string,
+): Promise<{ plan: MaterialPlan; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotMaterials) return null;
+  try {
+    const { response } = await withTimeout(
+      models.copilotMaterials.generateContent(withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`)),
+      CLOUD_GENERATE_TIMEOUT_MS * 2,
+      'materials',
+    );
+    const plan = coerceMaterialPlan(extractJson(response.text()));
+    if (!plan) return null;
+    recordInference('cloud', 'materials', Date.now() - t0);
+    return { plan, source: 'cloud', ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('materials', err);
     return null;
   }
 }
