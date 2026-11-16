@@ -1,18 +1,25 @@
 // MendcraftGimbal — OPTIONAL Apple DockKit control for a DockKit stand
 // (Insta360 Flow 2 Pro). The add-a-device flow never needs it: it works with a
 // hand-held phone, a plain stand, the laptop camera, or no camera at all.
-// When a DockKit stand IS docked, this turns the phone to face the device Nano
-// found, with DockKit's own face tracking switched OFF (it would otherwise pull
-// the camera back to her face).
+//
+// While Mendcraft is in the foreground, DockKit's own face tracking is OFF
+// (otherwise the Flow 2 Pro keeps following her face and the preview never
+// shows the device or her hands). We aim instead from the web layer: at the
+// MediaPipe hand-midpoint centroid in normal use, or by a point / pan-tilt
+// nudge in Add a device, then hold so the device stays in frame. System
+// tracking is re-enabled only when the app backgrounds.
 //
 // STATUS: written on Linux, NOT compiled or run yet (no Mac/Xcode on the build
-// box, gimbal not delivered). Everything is behind `#if canImport(DockKit)` and
+// box). Everything is behind `#if canImport(DockKit)` and
 // `@available(iOS 18.0, *)` (manual motor control, setOrientation, is iOS 18+),
 // so older SDKs/OSes compile and report available:false.
 // Axis convention to verify on the device: DockKit Vector3D x = pitch (tilt),
 // y = yaw (pan), z = roll; angles in radians; relative:true = from current pose.
+//
+// Copy this file into ios/App/App after `npx cap add ios` (see ios-src/README.md).
 
 import Foundation
+import UIKit
 import Capacitor
 #if canImport(DockKit)
 import DockKit
@@ -27,11 +34,56 @@ public class MendcraftGimbalPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "aim", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "release", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSystemTrackingEnabled", returnType: CAPPluginReturnPromise),
     ]
+
+    private var fgObserver: NSObjectProtocol?
+    private var bgObserver: NSObjectProtocol?
 
     public override func load() {
         #if canImport(DockKit)
-        if #available(iOS 18.0, *) { DockWatcher.shared.start() }
+        if #available(iOS 18.0, *) {
+            DockWatcher.shared.start()
+            MendcraftGimbalPlugin.requestSystemTrackingOff()
+            fgObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                DockWatcher.shared.start()
+                MendcraftGimbalPlugin.requestSystemTrackingOff()
+            }
+            bgObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                MendcraftGimbalPlugin.requestSystemTrackingOn()
+            }
+        }
+        #endif
+    }
+
+    deinit {
+        if let fgObserver { NotificationCenter.default.removeObserver(fgObserver) }
+        if let bgObserver { NotificationCenter.default.removeObserver(bgObserver) }
+    }
+
+    /// Call from the view controller on appear as well, so this still runs if
+    /// the plugin load timing misses the first active notification.
+    @objc public static func requestSystemTrackingOff() {
+        #if canImport(DockKit)
+        if #available(iOS 18.0, *) {
+            Task { await DockWatcher.shared.setSystemTrackingEnabled(false) }
+        }
+        #endif
+    }
+
+    @objc public static func requestSystemTrackingOn() {
+        #if canImport(DockKit)
+        if #available(iOS 18.0, *) {
+            Task { await DockWatcher.shared.setSystemTrackingEnabled(true) }
+        }
         #endif
     }
 
@@ -76,16 +128,23 @@ public class MendcraftGimbalPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func release(_ call: CAPPluginCall) {
+        // Hold: do not hand control back to DockKit face tracking while we are
+        // in the foreground (that would pull the camera onto her face).
+        call.resolve()
+    }
+
+    @objc func setSystemTrackingEnabled(_ call: CAPPluginCall) {
+        let enabled = call.getBool("enabled") ?? false
         #if canImport(DockKit)
         if #available(iOS 18.0, *) {
             Task {
-                await DockWatcher.shared.release()
-                call.resolve()
+                await DockWatcher.shared.setSystemTrackingEnabled(enabled)
+                call.resolve(["ok": true])
             }
             return
         }
         #endif
-        call.resolve()
+        call.resolve(["ok": false])
     }
 }
 
@@ -107,6 +166,8 @@ actor DockWatcher {
             for try await change in try DockAccessoryManager.shared.accessoryStateChanges {
                 if change.state == .docked, let acc = change.accessory {
                     accessory = acc
+                    // Fresh dock: DockKit may have turned face tracking on.
+                    await setSystemTrackingEnabled(false)
                 } else if change.state == .undocked {
                     accessory = nil
                 }
@@ -118,18 +179,17 @@ actor DockWatcher {
 
     func isDocked() -> Bool { accessory != nil }
 
+    func setSystemTrackingEnabled(_ enabled: Bool) async {
+        try? await DockAccessoryManager.shared.setSystemTrackingEnabled(enabled)
+    }
+
     func aim(yaw: Double, pitch: Double, seconds: Double) async throws -> Bool {
         guard let acc = accessory else { return false }
-        // Our own aiming: switch DockKit's system (face) tracking off first.
         try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
         let target = Vector3D(x: pitch, y: yaw, z: 0)
         let ms = Int64(max(0.3, min(4.0, seconds)) * 1000)
         try await acc.setOrientation(target, duration: .milliseconds(ms), relative: true)
         return true
-    }
-
-    func release() async {
-        try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true)
     }
 }
 #endif

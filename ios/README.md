@@ -39,12 +39,18 @@ The iPhone experience ships two ways:
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
 
-## Add-a-device native plugins (`ios/plugins/`, not compiled yet)
+## Add-a-device native plugins (`ios-src/`, not compiled yet)
 
-Written on the Linux build box, **not compiled or run** — no Mac/Xcode here and
-the gimbal hasn't arrived. After `npx cap add ios`, drag the three files into
-the `App` target and set the Main storyboard's view controller class to
-`MendcraftViewController`.
+Written on the Linux build box, **not compiled or run** — no Mac/Xcode here.
+After `npx cap add ios`, copy these three files into `ios/App/App` and add
+them to the App target; set the Main storyboard's view controller class to
+`MendcraftViewController`. See `ios-src/README.md`.
+
+```sh
+cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
+cp ios-src/MendcraftViewController.swift ios/App/App/
+cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
+```
 
 - `MendcraftLanPlugin.swift` — UDP/HTTP to private LAN IPs only (same port
   allowlist as `src/devices/connector.ts`), WiZ broadcast discovery, Bonjour
@@ -53,7 +59,11 @@ the `App` target and set the Main storyboard's view controller class to
   `com.apple.developer.networking.multicast` entitlement (Apple must approve it)
   for the broadcast.
 - `MendcraftGimbalPlugin.swift` — **optional** DockKit aiming (Insta360 Flow 2
-  Pro). Manual pan/tilt with `setOrientation(relative:)`, system face tracking
-  off. iOS 18+, behind `#if canImport(DockKit)`; reports `available:false`
-  otherwise. Nothing in the flow requires it.
-- `MendcraftViewController.swift` — registers both plugins.
+  Pro). System face tracking is turned **off** on launch, on resume
+  (`didBecomeActive`), when a stand docks, and from `viewDidAppear`. Manual
+  pan/tilt with `setOrientation(relative:)`. iOS 18+, behind
+  `#if canImport(DockKit)`; reports `available:false` otherwise. Nothing in
+  the flow requires it. The web layer aims at her hands, or in Add a device
+  lets her point or nudge and then holds the frame.
+- `MendcraftViewController.swift` — registers both plugins and re-asserts
+  system tracking off on appear.

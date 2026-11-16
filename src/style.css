@@ -2444,6 +2444,10 @@ body.mc-resting .hand-cursor { opacity: 0.35; }
 .mc-ad-why.ok { color: var(--accent-2); }
 .mc-ad-why.no { color: var(--warn); }
 .mc-ad-gimbal { margin: 0; font-size: 12px; color: var(--text-dim); }
+.mc-ad-nudge { margin-top: 12px; }
+.mc-ad-nudge .mc-ad-note { margin: 0 0 8px; }
+.mc-ad-nudge-btns button { min-width: 72px; }
+
 .mc-ad-modeline { display: flex; align-items: center; justify-content: space-between; color: var(--text-dim); }
 .mc-ad-frames { display: flex; gap: 8px; flex-wrap: wrap; }
 .mc-ad-frames figure { margin: 0; flex: 1 1 120px; max-width: 140px; }

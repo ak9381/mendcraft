@@ -10,6 +10,7 @@ import {
 import { isPrivateIPv4 } from '../devices/connector';
 import { loadDevices, type PairedDevice } from '../devices/connectorCache';
 import type { IdentifyHint } from '../devices/identify';
+import type { NudgeDir } from '../devices/gimbalFollow';
 
 export interface AddDeviceServices {
   sim: boolean;
@@ -21,6 +22,10 @@ export interface AddDeviceServices {
   say(text: string): void;
   onDone?(outcome: FlowOutcome): void;
   onStep?(ev: StepEvent): void;
+  onOpen?(): void;
+  onClose?(): void;
+  /** Manual gimbal pan/tilt (only wired when a DockKit stand is docked). */
+  nudge?(dir: NudgeDir): void;
 }
 
 export interface AddDevicePanel {
@@ -62,6 +67,7 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
   let pendingConfirm: ((ok: boolean) => void) | null = null;
   let pendingHost: ((h: string | null) => void) | null = null;
   let running = false;
+  let lastGimbal = false;
 
   root.querySelector('.mc-panel-x')!.addEventListener('click', () => api.close());
 
@@ -72,8 +78,26 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
       : '';
   }
 
+  function appendNudge(into: HTMLElement): void {
+    if (!svc.nudge) return;
+    const row = document.createElement('div');
+    row.className = 'mc-ad-nudge';
+    row.innerHTML = `<p class="mc-ad-note">Point at the device, or nudge the stand. It will stay in frame.</p>
+      <div class="mc-ad-btns mc-ad-nudge-btns">
+        <button type="button" class="ghost" data-nudge="left" aria-label="Nudge left">← Left</button>
+        <button type="button" class="ghost" data-nudge="right" aria-label="Nudge right">Right →</button>
+        <button type="button" class="ghost" data-nudge="up" aria-label="Nudge up">↑ Up</button>
+        <button type="button" class="ghost" data-nudge="down" aria-label="Nudge down">↓ Down</button>
+      </div>`;
+    row.querySelectorAll<HTMLButtonElement>('[data-nudge]').forEach((b) => {
+      b.addEventListener('click', () => svc.nudge?.(b.dataset.nudge as NudgeDir));
+    });
+    into.append(row);
+  }
+
   async function renderChooser(preselect?: AddMode): Promise<AddMode> {
     const env = await svc.env();
+    lastGimbal = env.gimbal;
     const options: ModeOption[] = detectModes({ ...env, sim: svc.sim });
     const best = preselect ?? defaultMode(options);
     body.innerHTML = `<p class="mc-ad-lead">How do you want to add it? I checked what works here.</p>
@@ -84,7 +108,8 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
           <small>${MODE_LABELS[o.mode].detail}</small></span>
           <span class="mc-ad-why ${o.available ? 'ok' : 'no'}">${o.mode === best ? 'Suggested · ' : ''}${esc(o.why)}</span>
         </button>`).join('')}</div>
-      <p class="mc-ad-gimbal">Gimbal (optional extra): ${env.gimbal ? 'DockKit stand found — it will turn to face the device.' : 'not needed. A plain stand or your hand works.'}</p>`;
+      <p class="mc-ad-gimbal">Gimbal (optional extra): ${env.gimbal ? 'DockKit stand found — it will stop following you. Point at the device or nudge the stand; it stays in frame.' : 'not needed. A plain stand or your hand works.'}</p>`;
+    if (env.gimbal) appendNudge(body);
     body.querySelectorAll<HTMLButtonElement>('.mc-ad-mode').forEach((b) => b.addEventListener('click', () => {
       const m = b.dataset.mode as AddMode;
       const opt = options.find((o) => o.mode === m)!;
@@ -101,6 +126,7 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
       <div class="mc-ad-action"></div>
       <div class="mc-ad-result" aria-live="polite"></div>`;
     body.querySelector('.mc-ad-change')!.addEventListener('click', () => { api.cancel(); void renderChooser(mode); });
+    if (lastGimbal) appendNudge(body);
   }
 
   function onStep(ev: StepEvent): void {
@@ -205,12 +231,13 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
     element: root,
     async open(opts = {}) {
       root.hidden = false;
+      svc.onOpen?.();
       renderDevices();
       if (running) return;
       if (opts.mode) { await start(opts.mode, { ...(opts.hint ?? {}), ...(opts.words ? { words: opts.words } : {}) }); return; }
       await renderChooser();
     },
-    close() { api.cancel(); root.hidden = true; },
+    close() { api.cancel(); root.hidden = true; svc.onClose?.(); },
     isOpen: () => !root.hidden,
     awaitingConfirm: () => pendingConfirm !== null,
     confirm() { if (!pendingConfirm) return false; pendingConfirm(true); return true; },

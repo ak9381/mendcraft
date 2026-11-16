@@ -4,9 +4,9 @@
 //
 //   MendcraftLan    ios/plugins/MendcraftLanPlugin.swift    — UDP/HTTP on the LAN,
 //                   WiZ broadcast discovery, Bonjour browse (the web can't).
-//   MendcraftGimbal ios/plugins/MendcraftGimbalPlugin.swift — Apple DockKit:
-//                   manual pan/tilt of a DockKit stand (Insta360 Flow 2 Pro),
-//                   with system face tracking switched OFF.
+//   MendcraftGimbal ios-src/MendcraftGimbalPlugin.swift — Apple DockKit:
+//                   system face tracking OFF for the life of the app (launch +
+//                   resume); we aim at her hands, or (Add a device) by point/nudge.
 
 import type { JsonTemplate } from './connector';
 import type { FoundDevice } from './addDeviceFlow';
@@ -22,8 +22,10 @@ export interface GimbalPlugin {
   isAvailable(): Promise<{ available: boolean; reason?: string }>;
   /** Relative move in radians: yaw = pan (+ right), pitch = tilt (+ up). */
   aim(opts: { yaw: number; pitch: number; seconds?: number }): Promise<{ ok: boolean }>;
-  /** Hand control back to DockKit's own face tracking. */
+  /** Stop our move; system face tracking stays OFF while Mendcraft is open. */
   release(): Promise<void>;
+  /** DockKit face tracking. Must be called with enabled:false on launch and resume. */
+  setSystemTrackingEnabled?(opts: { enabled: boolean }): Promise<{ ok: boolean }>;
 }
 
 interface CapacitorGlobal {
@@ -70,7 +72,11 @@ export function aimAngles(box: { x: number; y: number; w: number; h: number }, f
 }
 
 /** Aim the gimbal at a box. False when there's no iOS shell / DockKit stand. */
-export async function aimGimbalAt(box: { x: number; y: number; w: number; h: number }, w: unknown = globalThis): Promise<boolean> {
+export async function aimGimbalAt(
+  box: { x: number; y: number; w: number; h: number },
+  w: unknown = globalThis,
+  seconds = 1.2,
+): Promise<boolean> {
   const g = getGimbalPlugin(w);
   if (!g) return false;
   try {
@@ -78,7 +84,19 @@ export async function aimGimbalAt(box: { x: number; y: number; w: number; h: num
     if (!a.available) return false;
     const { yaw, pitch } = aimAngles(box);
     if (yaw === 0 && pitch === 0) return true;
-    return (await g.aim({ yaw, pitch, seconds: 1.2 })).ok;
+    return (await g.aim({ yaw, pitch, seconds })).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Turn DockKit system (face) tracking off. Safe no-op on the web. */
+export async function disableSystemTracking(w: unknown = globalThis): Promise<boolean> {
+  const g = getGimbalPlugin(w);
+  if (!g?.setSystemTrackingEnabled) return false;
+  try {
+    const r = await g.setSystemTrackingEnabled({ enabled: false });
+    return r.ok !== false;
   } catch {
     return false;
   }

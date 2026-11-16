@@ -139,7 +139,8 @@ import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cach
 import { builtinWizConnector, connectorKey, isWizIdentity, runAction } from './devices/connector';
 import { identityFromWords, deviceNameIn, isAddDevicePhrase } from './devices/identify';
 import { bridgeHealthy, discoverDevices, makeTransports } from './devices/discovery';
-import { aimGimbalAt, getGimbalPlugin, isIosShell } from './devices/native';
+import { aimGimbalAt, disableSystemTracking, getGimbalPlugin, isIosShell } from './devices/native';
+import { createGimbalFollow } from './devices/gimbalFollow';
 import { createSimWorld } from './devices/simDevice';
 import { identifyDevice, writeDeviceConnector, checkDeviceEffect } from './ai/hybrid';
 import { lampStateLabel, type LampState } from './devices/wiz';
@@ -1203,12 +1204,31 @@ function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }
     },
     saveConnector: (c) => cacheConnector(c),
     discover: (_id, c) => discoverDevices(c),
-    aim: (box) => aimGimbalAt(box),
+    aim: async (box) => {
+      const ok = await aimGimbalAt(box);
+      gimbalFollow.setMode('hold');
+      return ok;
+    },
     run: (c, a, h) => runAction(c, a, {}, h, transports),
     check: (b, a, cue) => checkDeviceEffect(b, a, cue),
     saveDevice: (d) => { cachePairedDevice(d); },
   };
 }
+
+const gimbalFollow = createGimbalFollow({
+  aim: (box) => aimGimbalAt(box, globalThis, 0.45),
+  nudge: async (yaw, pitch) => {
+    const g = getGimbalPlugin();
+    if (!g) return false;
+    try {
+      const a = await g.isAvailable();
+      if (!a.available) return false;
+      return (await g.aim({ yaw, pitch, seconds: 0.6 })).ok;
+    } catch {
+      return false;
+    }
+  },
+});
 
 const addDevicePanel = createAddDevicePanel({
   sim: SIM_ACTIVE,
@@ -1221,6 +1241,9 @@ const addDevicePanel = createAddDevicePanel({
   deps: addDeviceDeps,
   enableCamera: () => void enableCamera(),
   say: (t) => say(t),
+  onOpen: () => gimbalFollow.setMode('point'),
+  onClose: () => gimbalFollow.setMode('hands'),
+  nudge: (dir) => { void gimbalFollow.nudge(dir); },
   // Honest ledger: each model call that ran, and what it sent if it was cloud.
   onStep: (ev) => {
     if (ev.sim || ev.state === 'active' || (ev.source !== 'cloud' && ev.source !== 'on-device')) return;
@@ -3503,6 +3526,7 @@ function onPresenceFrame(f: PresenceFrame): void {
   }
 
   processGestureFrame(f);
+  gimbalFollow.onFrame(f.hands, performance.now());
 }
 
 function updatePinchMeter(strength: number, pinching: boolean, visible: boolean): void {
@@ -3621,6 +3645,12 @@ btnCamera.addEventListener('click', () => {
     void enableCamera();
   }
 });
+
+void disableSystemTracking();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void disableSystemTracking();
+});
+window.addEventListener('focus', () => { void disableSystemTracking(); });
 
 btnRegister.addEventListener('click', () => {
   registerOperator();
