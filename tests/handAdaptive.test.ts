@@ -101,11 +101,11 @@ describe('createHandMetricsSampler', () => {
   /** One open→approach→complete→release pinch at the given times/depth. */
   function pinchFrames(t0: number, deepest: number): MetricsFrame[] {
     return [
-      { t: t0, points: handAt(0.6) },        // open
-      { t: t0 + 10, points: handAt(0.45) },  // approach (< pinchOff)
-      { t: t0 + 20, points: handAt(0.30) },  // completes (< pinchOn)
+      { t: t0, points: handAt(0.80) },        // open
+      { t: t0 + 10, points: handAt(0.58) },  // approach (< pinchOff, still above pinchOn)
+      { t: t0 + 20, points: handAt(0.40) },  // completes (< pinchOn)
       { t: t0 + 30, points: handAt(deepest) }, // deepest squeeze
-      { t: t0 + 40, points: handAt(0.6) },   // release (> pinchOff)
+      { t: t0 + 40, points: handAt(0.80) },   // release (> pinchOff)
     ];
   }
 
@@ -128,9 +128,9 @@ describe('createHandMetricsSampler', () => {
 
   it('ignores an aborted approach that never crosses the pinch-on threshold', () => {
     const s = createHandMetricsSampler();
-    s.push({ t: 0, points: handAt(0.6) });
-    s.push({ t: 10, points: handAt(0.45) }); // approach only (never < pinchOn)
-    s.push({ t: 20, points: handAt(0.6) });  // release
+    s.push({ t: 0, points: handAt(0.80) });
+    s.push({ t: 10, points: handAt(0.58) }); // approach only (never < pinchOn)
+    s.push({ t: 20, points: handAt(0.80) });  // release
     expect(s.snapshot().pinches).toBe(0);
   });
 
@@ -145,8 +145,8 @@ describe('createHandMetricsSampler', () => {
   });
 
   it('uses handLogic thresholds and derives sessionMs from timestamps', () => {
-    expect(DEFAULT_PINCH_ON).toBe(0.35);
-    expect(DEFAULT_PINCH_OFF).toBe(0.48);
+    expect(DEFAULT_PINCH_ON).toBe(0.50);
+    expect(DEFAULT_PINCH_OFF).toBe(0.64);
     const s = createHandMetricsSampler();
     for (const f of pinchFrames(1000, 0.2)) s.push(f);
     expect(s.snapshot().sessionMs).toBe(40);

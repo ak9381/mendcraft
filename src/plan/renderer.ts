@@ -20,6 +20,7 @@ import {
 } from './tools';
 import { createPropsPanel } from './propsPanel';
 import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp } from './editing';
+import { pickPlan, DEFAULT_AIM_RADIUS_PX } from './hitTest';
 import { fixtureSpec, fixtureSymbol, fixtureLocalToWorld } from './fixtures';
 import { setPlanCursor } from './ruleParser';
 import {
@@ -44,27 +45,6 @@ function el<K extends keyof SVGElementTagNameMap>(name: K, attrs: Record<string,
   const node = document.createElementNS(SVG, name);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
   return node;
-}
-
-/** Shortest distance from point p to segment a-b (mm). */
-function distToSegment(p: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len2 = dx * dx + dy * dy;
-  if (len2 < 1e-6) return Math.hypot(p.x - a.x, p.y - a.y);
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-}
-
-function pointInPolygon(p: Point, poly: Point[]): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i];
-    const b = poly[j];
-    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 }
 
 export function createPlanRenderer(
@@ -134,35 +114,25 @@ export function createPlanRenderer(
     originY = H / 2 + cy * scale;
   }
 
-  // ---- hit-testing ----
+  // ---- hit-testing (doors/windows, fixture slack, optional magnet radius) ----
+  let hoveredId: string | null = null;
+
+  function aimAt(clientX: number, clientY: number, radiusPx = 0) {
+    const hit = pickPlan(doc(), toWorld(clientX, clientY), scale, radiusPx / Math.max(scale, 1e-6));
+    if (!hit) return { clientX, clientY, id: null as string | null };
+    const s = toScreen(hit.point);
+    const rect = svg.getBoundingClientRect();
+    return { clientX: rect.left + s.x, clientY: rect.top + s.y, id: hit.id as string | null };
+  }
+
   function pick(clientX: number, clientY: number): string | null {
-    const p = toWorld(clientX, clientY);
-    const d = doc();
-    let best: { id: string; dist: number } | null = null;
-    for (const w of d.walls) {
-      const dist = distToSegment(p, w.a, w.b);
-      const slack = Math.max(w.thickness / 2, 120) + 6 / scale;
-      if (dist <= slack && (!best || dist < best.dist)) best = { id: w.id, dist };
-    }
-    if (best) return best.id;
-    for (const f of d.fixtures) {
-      if (pointInPolygon(p, fixturePolygon(f))) return f.id;
-    }
-    for (const t of d.texts) {
-      const halfW = Math.max(t.text.length * t.size * 0.32, t.size);
-      if (Math.abs(p.x - t.x) <= halfW && Math.abs(p.y - t.y) <= t.size * 0.8) return t.id;
-    }
-    for (const room of d.rooms) {
-      const poly = room.wallIds
-        .map((id) => d.walls.find((x) => x.id === id))
-        .filter((x): x is Wall => !!x);
-      const pts: Point[] = [];
-      for (const w of poly) {
-        pts.push(w.a, w.b);
-      }
-      if (pts.length >= 6 && pointInPolygon(p, dedupeLoop(room.wallIds, d))) return room.id;
-    }
-    return null;
+    return aimAt(clientX, clientY, 0).id;
+  }
+
+  function setHovered(id: string | null): void {
+    if (id === hoveredId) return;
+    hoveredId = id;
+    render();
   }
 
   function dedupeLoop(wallIds: string[], d: PlanDoc): Point[] {
@@ -384,13 +354,17 @@ export function createPlanRenderer(
 
     drawGrid(W, H);
 
+    const isSel = (id: string): boolean =>
+      d.selectedIds?.length ? d.selectedIds.includes(id) : id === d.selectedId;
+    const isHover = (id: string): boolean => !!hoveredId && id === hoveredId && !isSel(id);
+
     // Room fills + labels.
     for (const room of d.rooms) {
       const pts = dedupeLoop(room.wallIds, d);
       if (pts.length >= 3) {
         const poly = el('polygon', {
           points: pts.map((p) => { const s = toScreen(p); return `${s.x},${s.y}`; }).join(' '),
-          fill: room.id === d.selectedId ? '#dbeafe' : '#f1f5f9',
+          fill: isSel(room.id) ? '#dbeafe' : isHover(room.id) ? '#fef3c7' : '#f1f5f9',
           stroke: 'none',
         });
         svg.appendChild(poly);
@@ -403,9 +377,6 @@ export function createPlanRenderer(
       }
     }
 
-    const isSel = (id: string): boolean =>
-      d.selectedIds?.length ? d.selectedIds.includes(id) : id === d.selectedId;
-
     // Walls (no per-wall length labels — they clutter the drawing and sit on
     // door arcs; dimensions are shown separately for the selection + explicit
     // dims + overall outer size below).
@@ -413,10 +384,11 @@ export function createPlanRenderer(
       const a = toScreen(w.a);
       const b = toScreen(w.b);
       const selected = isSel(w.id);
+      const hover = isHover(w.id);
       svg.appendChild(el('line', {
         x1: a.x, y1: a.y, x2: b.x, y2: b.y,
-        stroke: selected ? '#2563eb' : '#1f2937',
-        'stroke-width': Math.max(2, w.thickness * scale),
+        stroke: selected ? '#2563eb' : hover ? '#f59e0b' : '#1f2937',
+        'stroke-width': Math.max(2, w.thickness * scale) + (hover ? 2 : 0),
         'stroke-linecap': 'round',
       }));
     }
@@ -454,11 +426,12 @@ export function createPlanRenderer(
         // Plain opening: thin jamb ticks at either end of the gap.
         svg.appendChild(el('line', { x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y, stroke: '#f59e0b', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
       }
-      if (isSel(o.id)) {
+      if (isSel(o.id) || isHover(o.id)) {
         svg.appendChild(el('line', {
           x1: sa.x, y1: sa.y, x2: sb.x, y2: sb.y,
-          stroke: '#2563eb', 'stroke-width': Math.max(4, wall.thickness * scale + 4),
-          'stroke-opacity': 0.25, 'stroke-linecap': 'round',
+          stroke: isSel(o.id) ? '#2563eb' : '#f59e0b',
+          'stroke-width': Math.max(4, wall.thickness * scale + 4),
+          'stroke-opacity': 0.35, 'stroke-linecap': 'round',
         }));
       }
     }
@@ -469,8 +442,9 @@ export function createPlanRenderer(
     for (const f of d.fixtures) {
       const spec = fixtureSpec(f.kind);
       const selected = isSel(f.id);
-      const stroke = selected ? '#2563eb' : '#b45309';
-      const fill = selected ? 'rgba(37,99,235,0.12)' : 'rgba(180,83,9,0.07)';
+      const hover = isHover(f.id);
+      const stroke = selected ? '#2563eb' : hover ? '#f59e0b' : '#b45309';
+      const fill = selected ? 'rgba(37,99,235,0.12)' : hover ? 'rgba(245,158,11,0.16)' : 'rgba(180,83,9,0.07)';
       if (spec.outline === 'round') {
         const c0 = toScreen({ x: f.x, y: f.y });
         svg.appendChild(el('circle', { cx: c0.x, cy: c0.y, r: (Math.min(f.w, f.d) / 2) * scale, fill, stroke, 'stroke-width': selected ? 2 : 1.2 }));
@@ -512,7 +486,8 @@ export function createPlanRenderer(
     for (const t of d.texts) {
       const c = toScreen({ x: t.x, y: t.y });
       const selected = isSel(t.id);
-      const node = textNode(c.x, c.y, t.text, Math.max(9, t.size * scale), selected ? '#1d4ed8' : '#334155', 'middle');
+      const hover = isHover(t.id);
+      const node = textNode(c.x, c.y, t.text, Math.max(9, t.size * scale), selected ? '#1d4ed8' : hover ? '#d97706' : '#334155', 'middle');
       node.setAttribute('data-text-id', t.id);
       node.style.cursor = 'text';
       svg.appendChild(node);
@@ -889,6 +864,10 @@ export function createPlanRenderer(
     hover(clientX, clientY) {
       setPlanCursor(toWorld(clientX, clientY));
       toolCtl.hover({ x: clientX, y: clientY, source: 'pinch' });
+      setHovered(aimAt(clientX, clientY, DEFAULT_AIM_RADIUS_PX).id);
+    },
+    aim(clientX, clientY, radiusPx = DEFAULT_AIM_RADIUS_PX) {
+      return aimAt(clientX, clientY, radiusPx);
     },
     toggle3D,
     dispose() {

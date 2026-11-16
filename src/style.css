@@ -361,13 +361,38 @@ a.brand:hover { color: var(--accent); }
   border: 3px solid var(--accent);
   border-radius: 50%;
   pointer-events: none;
-  z-index: 5;
-  transition: background 0.1s, width 0.15s, height 0.15s;
+  z-index: 8;
+  box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(0, 0, 0, 0.35);
+  transition: background 0.1s, width 0.15s, height 0.15s, border-color 0.1s;
 }
 
 .hand-cursor.pinching {
   background: rgba(79, 156, 255, 0.4);
 }
+
+.hand-cursor.snapped {
+  border-color: #f59e0b;
+}
+
+.pinch-meter {
+  display: inline-block;
+  width: 56px;
+  height: 8px;
+  margin: 0 0.35em;
+  background: #2a2e38;
+  border-radius: 4px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+.pinch-meter > span {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: #38bdf8;
+  transition: width 0.08s linear, background 0.08s;
+}
+.pinch-meter.armed > span { background: #facc15; }
+.pinch-meter.pinching > span { background: #4ade80; }
 
 #panel {
   background: var(--panel);

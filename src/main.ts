@@ -48,6 +48,7 @@ import {
 } from './ai/deixis';
 import { captureCropFromVideo } from './input/frameCapture';
 import { createHandMetricsSampler, type HandMetrics } from './input/handMetrics';
+import { DEFAULT_AIM_RADIUS_PX } from './plan/hitTest';
 import {
   PROFILES, resolveActiveProfile, summarizeAdaptation,
   type InteractionProfile, type ProfileAdaptation,
@@ -268,6 +269,11 @@ app.innerHTML = `
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
+    <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard.">
+      <span class="status-k">Pinch</span>
+      <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
+      <span id="pinch-meter-label" class="status-v">—</span>
+    </span>
     <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
     <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
       <span class="status-k">Chrome</span>
@@ -346,6 +352,9 @@ const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
 const trackingStateEl = el<HTMLSpanElement>('tracking-state');
+const pinchMeterEl = el<HTMLSpanElement>('pinch-meter');
+const pinchMeterFill = el<HTMLSpanElement>('pinch-meter-fill');
+const pinchMeterLabel = el<HTMLSpanElement>('pinch-meter-label');
 const partsList = el<HTMLUListElement>('parts-list');
 const opJsonEl = el<HTMLPreElement>('op-json');
 const lastCommandEl = el<HTMLParagraphElement>('last-command');
@@ -745,10 +754,9 @@ function showToast(message: string): void {
  * Apply a resolved adaptation (Nano/rules pick, or a manual override) to the
  * shared pointer layer. Applied today: pinch thresholds (setPinchThreshold),
  * target/cursor size (--mc-target-scale), pointer smoothing (smoothAim, read
- * from activeProfile), and voice verbosity (say()). snapRadiusScale / clickMode
- * / dwellMs are carried on the profile as the chosen configuration for the
- * snap + dwell subsystems to read, but are not yet wired into the drag path —
- * summarizeAdaptation deliberately does not claim them.
+ * from activeProfile), and voice verbosity (say()). snapRadiusScale widens the
+ * magnet that snaps the cursor onto the nearest canvas object; dwellMs is the
+ * hover-to-select fallback (always on for objects, and for buttons too).
  */
 function applyActiveProfile(adaptation: ProfileAdaptation): void {
   const resolved = resolveActiveProfile(adaptation, handsPanel.getOverride());
@@ -3234,10 +3242,6 @@ handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
 
 function placeCursor(x: number, y: number): void {
-  if (tracker) {
-    handCursor.hidden = true;
-    return;
-  }
   const rect = viewportEl.getBoundingClientRect();
   const size = handCursor.offsetWidth || 22;
   const half = size / 2;
@@ -3248,9 +3252,27 @@ function placeCursor(x: number, y: number): void {
   handCursor.style.top = `${top}px`;
 }
 
+function placeCursorClient(clientX: number, clientY: number): void {
+  const rect = viewportEl.getBoundingClientRect();
+  const w = rect.width || 1;
+  const h = rect.height || 1;
+  placeCursor((clientX - rect.left) / w, (clientY - rect.top) / h);
+}
+
 function toClient(x: number, y: number): { clientX: number; clientY: number } {
   const rect = viewportEl.getBoundingClientRect();
   return { clientX: rect.left + x * rect.width, clientY: rect.top + y * rect.height };
+}
+
+/** Magnet radius in CSS px, scaled by the active interaction profile. */
+function aimRadiusPx(): number {
+  return DEFAULT_AIM_RADIUS_PX * (activeProfile.targetScale ?? 1) * (activeProfile.snapRadiusScale ?? 1);
+}
+
+function aimPointer(clientX: number, clientY: number): { clientX: number; clientY: number; id: string | null } {
+  if (viewport.aim) return viewport.aim(clientX, clientY, aimRadiusPx());
+  const id = viewport.pick(clientX, clientY);
+  return { clientX, clientY, id };
 }
 
 // Pointer smoothing for the AIMING phase only: the active profile's `smoothing`
@@ -3284,48 +3306,62 @@ function handleHandEvent(raw: HandEvent): void {
   switch (e.type) {
     case 'tracking': {
       const s = smoothAim(e.x, e.y);
-      placeCursor(s.x, s.y);
-      const { clientX, clientY } = toClient(s.x, s.y);
+      const raw = toClient(s.x, s.y);
+      const aimed = aimPointer(raw.clientX, raw.clientY);
+      placeCursorClient(aimed.clientX, aimed.clientY);
+      handCursor.classList.toggle('snapped', !!aimed.id);
       // Hand coords are mirrored to screen space (x = 1 - camera x); store the
       // camera-frame position so point-and-say can crop the frame there.
-      lastPointer = { clientX, clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
+      lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
-      if (keyboard.isOpen() && keyboard.hoverAt(clientX, clientY)) break;
-      // Dwell-click fallback: hover a button and wait (setup toggle, or the
-      // assist profile's dwell click mode).
-      if (!resting && (setupData.dwellClick || activeProfile.clickMode === 'dwell')) {
-        const ctl = handClickable(clientX, clientY);
-        const d = dwell.update(ctl, performance.now());
+      if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
+      // Dwell-to-select is always available as a fallback for people who can't
+      // pinch: hover a button or a canvas object and wait.
+      if (!resting) {
+        const ctl = handClickable(aimed.clientX, aimed.clientY);
+        const target: unknown = ctl ?? aimed.id ?? null;
+        const d = dwell.update(target, performance.now());
         handCursor.style.setProperty('--dwell', String(d.progress));
         handCursor.classList.toggle('dwelling', d.progress > 0);
-        if (d.fire && ctl) { activateControl(ctl); handCursor.classList.remove('dwelling'); }
+        if (d.fire) {
+          handCursor.classList.remove('dwelling');
+          if (ctl) activateControl(ctl);
+          else if (aimed.id) {
+            if (!viewport.tap?.(aimed.clientX, aimed.clientY)) controller.selectId(aimed.id);
+            renderAll();
+          }
+        }
       }
-      viewport.hover?.(clientX, clientY); // ghost previews track the open hand
+      viewport.hover?.(aimed.clientX, aimed.clientY);
       break;
     }
     case 'pinch-start': {
       smX = null; smY = null; // commit on raw coordinates
-      placeCursor(e.x, e.y);
+      const raw = toClient(e.x, e.y);
+      const aimed = aimPointer(raw.clientX, raw.clientY);
+      placeCursorClient(aimed.clientX, aimed.clientY);
       handCursor.classList.add('pinching');
-      const { clientX, clientY } = toClient(e.x, e.y);
-      viewport.beginDrag?.(clientX, clientY);
+      handCursor.classList.toggle('snapped', !!aimed.id);
+      lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      viewport.beginDrag?.(aimed.clientX, aimed.clientY);
       break;
     }
     case 'pinch-tap': {
-      placeCursor(e.x, e.y);
+      const raw = toClient(e.x, e.y);
+      const aimed = aimPointer(raw.clientX, raw.clientY);
+      placeCursorClient(aimed.clientX, aimed.clientY);
       onboarding.notifyPinch();
-      const { clientX, clientY } = toClient(e.x, e.y);
-      lastPointer = { clientX, clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       // A pinch over the on-screen keyboard presses the key under the cursor.
-      if (keyboard.isOpen() && keyboard.pressAt(clientX, clientY)) break;
+      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) break;
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
-      const ctl = handClickable(clientX, clientY);
+      const ctl = handClickable(aimed.clientX, aimed.clientY);
       if (ctl) { activateControl(ctl); break; }
-      if (viewport.tap?.(clientX, clientY)) {
+      if (viewport.tap?.(aimed.clientX, aimed.clientY)) {
         renderAll(); // a palette/tool consumed the tap
         break;
       }
-      const id = viewport.pick(clientX, clientY);
+      const id = aimed.id ?? viewport.pick(aimed.clientX, aimed.clientY);
       if (id) {
         controller.selectId(id);
         renderAll();
@@ -3333,6 +3369,7 @@ function handleHandEvent(raw: HandEvent): void {
       break;
     }
     case 'pinch-move': {
+      // Follow the hand during a drag — don't remagnet mid-gesture.
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
@@ -3387,6 +3424,8 @@ function onPresenceFrame(f: PresenceFrame): void {
     const plural = handCount === 1 ? 'hand' : 'hands';
     trackingStateEl.textContent = `${handCount} ${plural} · ${fps} fps · ${quality}`;
   }
+  const primary = f.hands[0];
+  updatePinchMeter(primary ? primary.pinchStrength : 0, primary?.pinching ?? false, !f.paused && !!primary);
 
   facingStateEl.textContent = f.registered
     ? f.facing ? 'facing screen' : 'looking away'
@@ -3404,11 +3443,21 @@ function onPresenceFrame(f: PresenceFrame): void {
   processGestureFrame(f);
 }
 
+function updatePinchMeter(strength: number, pinching: boolean, visible: boolean): void {
+  const pct = visible ? Math.round(Math.max(0, Math.min(1, strength)) * 100) : 0;
+  pinchMeterFill.style.width = `${pct}%`;
+  pinchMeterEl.setAttribute('aria-valuenow', String(pct));
+  pinchMeterEl.classList.toggle('armed', visible && !pinching && strength >= 0.6);
+  pinchMeterEl.classList.toggle('pinching', visible && pinching);
+  pinchMeterLabel.textContent = !visible ? '—' : pinching ? 'pinching' : `${pct}%`;
+}
+
 function resetPresenceStatus(): void {
   fpsStamps = [];
   facingStateEl.textContent = '—';
   operatorStateEl.textContent = '—';
   trackingStateEl.textContent = 'camera off';
+  updatePinchMeter(0, false, false);
 }
 
 function setCameraBusy(busy: boolean): void {

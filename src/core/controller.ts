@@ -93,6 +93,8 @@ export interface ViewportHandle {
   fit?(): void;
   /** Screen → object id under the given client (CSS px) coordinates. */
   pick(clientX: number, clientY: number): string | null;
+  /** Magnet-aim: snap a pointer onto the nearest object within `radiusPx`. */
+  aim?(clientX: number, clientY: number, radiusPx?: number): { clientX: number; clientY: number; id: string | null };
   /** Begin a world-space drag of the current selection; true if it grabbed. */
   beginDrag?(clientX: number, clientY: number): boolean;
   /** Continue a world-space drag (with snap); true if handled. */

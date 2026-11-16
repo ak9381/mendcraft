@@ -31,9 +31,9 @@ export interface CatalogGesture {
 
 export const GESTURE_CATALOG: readonly CatalogGesture[] = [
   // ---- core ----
-  { id: 'point', label: 'Point', kn: 'ಬೆರಳು ತೋರಿಸು', scope: 'core', does: 'Move the cursor', glyph: '☝', kind: 'pointer', wired: true },
-  { id: 'pinch', label: 'Soft pinch', kn: 'ಮೆತ್ತಗೆ ಚಿವುಟು', scope: 'core', does: 'Click or select (any button)', glyph: '🤏', kind: 'pointer', wired: true },
-  { id: 'pinch-drag', label: 'Pinch and hold, move', kn: 'ಚಿವುಟಿ ಎಳೆ', scope: 'core', does: 'Drag or move', glyph: '🤏↔', kind: 'pointer', wired: true },
+  { id: 'point', label: 'Point', kn: 'ಬೆರಳು ತೋರಿಸು', scope: 'core', does: 'Move the cursor (snaps to nearby objects)', glyph: '☝', kind: 'pointer', wired: true },
+  { id: 'pinch', label: 'Soft pinch', kn: 'ಮೆತ್ತಗೆ ಚಿವುಟು', scope: 'core', does: 'Select an object or click a button', glyph: '🤏', kind: 'pointer', wired: true },
+  { id: 'pinch-drag', label: 'Pinch and hold, move', kn: 'ಚಿವುಟಿ ಎಳೆ', scope: 'core', does: 'Hold the pinch and move to drag the object', glyph: '🤏↔', kind: 'pointer', wired: true },
   { id: 'double-pinch', label: 'Double pinch', kn: 'ಎರಡು ಬಾರಿ ಚಿವುಟು', scope: 'core', does: 'Open the palette (or confirm; set in Gestures)', glyph: '🤏🤏', kind: 'discrete', wired: true },
   { id: 'palm-hold', label: 'Open palm, hold 1 s', kn: 'ಅಂಗೈ ತೋರಿಸಿ ಹಿಡಿ', scope: 'core', does: 'Stop or cancel', target: 'cancel', glyph: '✋', kind: 'discrete', wired: true },
   { id: 'pinch-hold-still', label: 'Hold a pinch still', kn: 'ಚಿವುಟಿ ಹಿಡಿ', scope: 'core', does: 'Talk (voice on/off)', target: 'btn-mic', glyph: '🤏🎙', kind: 'discrete', wired: true },
@@ -59,7 +59,7 @@ export const GESTURE_CATALOG: readonly CatalogGesture[] = [
   // ---- safety ----
   { id: 'both-palms', label: 'Both palms open', kn: 'ಎರಡೂ ಅಂಗೈ', scope: 'safety', does: 'Rest mode (pause all gestures)', target: 'rest-toggle', glyph: '🙌', kind: 'discrete', wired: true },
   { id: 'wave', label: 'Wave', kn: 'ಕೈ ಬೀಸು', scope: 'safety', does: 'Wake up from rest', target: 'wake', glyph: '👋', kind: 'discrete', wired: true },
-  { id: 'dwell', label: 'Hover and wait', kn: 'ಮೇಲೆ ಇಟ್ಟು ಕಾಯಿ', scope: 'safety', does: 'Click without pinching (dwell)', glyph: '⏱', kind: 'pointer', wired: true },
+  { id: 'dwell', label: 'Hover and wait', kn: 'ಮೇಲೆ ಇಟ್ಟು ಕಾಯಿ', scope: 'safety', does: 'Hover and wait to select, if a pinch is hard', glyph: '⏱', kind: 'pointer', wired: true },
 ];
 
 export const SCOPE_LABELS: Record<GestureScope, string> = {

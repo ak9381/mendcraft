@@ -21,9 +21,14 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
   { idle: '#e879f9', pinch: '#4ade80' },
 ];
 
-export const DEFAULT_PINCH_ON = 0.35;
-export const DEFAULT_PINCH_OFF = 0.48;
-export const TAP_MOVE_LIMIT = 0.03;
+// Loose by default so a soft / incomplete close (arthritis, tremor) still
+// registers. Values are thumb–index gap ÷ wrist–middle-MCP (hand size), so
+// they stay stable as the hand moves toward or away from the camera.
+// Calibration and the interaction profile may tighten or loosen these.
+export const DEFAULT_PINCH_ON = 0.50;
+export const DEFAULT_PINCH_OFF = 0.64;
+/** Movement (in mirrored screen units) that disqualifies a pinch from being a tap. */
+export const TAP_MOVE_LIMIT = 0.045;
 
 export type HandEvent =
   | { type: 'pinch-tap'; x: number; y: number; hand?: number }
@@ -51,6 +56,12 @@ export interface HandFrame {
   owner: boolean;
   /** Midpoint of thumb + index tips (screen space). */
   pinchPoint: Pt;
+  /** Aim point used for the cursor and pick (index→midpoint blend). */
+  aim: Pt;
+  /** Thumb–index gap ÷ hand size. */
+  pinchRatio: number;
+  /** 0 = open, 1 = fully closed past the on-threshold. */
+  pinchStrength: number;
   color: string;
 }
 
@@ -64,6 +75,48 @@ interface SlotState {
 }
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** Thumb-tip ↔ index-tip gap normalised by wrist ↔ middle-MCP (hand size). */
+export function pinchGapRatio(lm: readonly Pt[]): number {
+  if (lm.length <= MIDDLE_MCP) return Infinity;
+  const handSize = dist(lm[WRIST], lm[MIDDLE_MCP]) || 1;
+  return dist(lm[THUMB_TIP], lm[INDEX_TIP]) / handSize;
+}
+
+/**
+ * How close a pinch is to registering: 0 while clearly open, rising as the
+ * fingers close, ~0.8 at the on-threshold, 1 when shut. Used by the HUD meter
+ * and to blend the cursor from the index tip toward the pinch midpoint.
+ */
+export function pinchStrength(ratio: number, pinchOn: number, pinchOff = pinchOn + 0.14): number {
+  if (!(pinchOn > 0) || !Number.isFinite(ratio)) return 0;
+  if (ratio >= pinchOff) return 0;
+  // Firmly closed (well past the on-threshold) reads as 1; the on-threshold
+  // itself sits at 0.85 so the HUD fills before the pinch actually fires.
+  const firm = pinchOn * 0.4;
+  if (ratio <= firm) return 1;
+  if (ratio > pinchOn) return 0.85 * (pinchOff - ratio) / Math.max(pinchOff - pinchOn, 1e-6);
+  return 0.85 + 0.15 * (pinchOn - ratio) / Math.max(pinchOn - firm, 1e-6);
+}
+
+/**
+ * Cursor / pick point for a hand. While the hand is open this sits on the
+ * index tip (natural pointing). As the pinch closes it eases toward the
+ * thumb–index midpoint, which is stable as the tips move together and matches
+ * the ring drawn on the skeleton overlay.
+ */
+export function aimPoint(points: readonly Pt[], pinchOn: number, pinchOff?: number): Pt {
+  const index = points[INDEX_TIP];
+  const thumb = points[THUMB_TIP];
+  if (!index && !thumb) return { x: 0.5, y: 0.5 };
+  if (!index) return thumb;
+  if (!thumb) return index;
+  const t = pinchStrength(pinchGapRatio(points), pinchOn, pinchOff);
+  return {
+    x: index.x + ((thumb.x + index.x) / 2 - index.x) * t,
+    y: index.y + ((thumb.y + index.y) / 2 - index.y) * t,
+  };
+}
 
 /**
  * Feed one frame of up to two hands; emits select/drag events. Only one hand
@@ -125,12 +178,13 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       st.seen = true;
       if (h.label !== undefined) st.label = h.label;
       const lm = h.landmarks;
-      const handSize = dist(lm[WRIST], lm[MIDDLE_MCP]) || 1;
-      const ratio = dist(lm[THUMB_TIP], lm[INDEX_TIP]) / handSize;
+      const ratio = pinchGapRatio(lm);
+      const strength = pinchStrength(ratio, pinchOn, pinchOff);
       // Mirror x so the overlay matches a front-facing camera.
       const points = lm.map((p) => ({ x: 1 - p.x, y: p.y }));
-      const x = points[INDEX_TIP].x;
-      const y = points[INDEX_TIP].y;
+      const aim = aimPoint(points, pinchOn, pinchOff);
+      const x = aim.x;
+      const y = aim.y;
 
       if (!st.pinching && ratio < pinchOn) {
         st.pinching = true;
@@ -164,6 +218,9 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
           x: (points[THUMB_TIP].x + points[INDEX_TIP].x) / 2,
           y: (points[THUMB_TIP].y + points[INDEX_TIP].y) / 2,
         },
+        aim,
+        pinchRatio: ratio,
+        pinchStrength: strength,
         color: st.pinching ? colors.pinch : colors.idle,
       });
     });
@@ -177,6 +234,8 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
   return {
     process,
     setPinchThreshold(on: number, off: number) { pinchOn = on; pinchOff = off; },
+    get pinchOn() { return pinchOn; },
+    get pinchOff() { return pinchOff; },
     get owner() { return owner; },
   };
 }

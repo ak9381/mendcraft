@@ -37,15 +37,15 @@ export const ALL_PROFILES: readonly ProfileName[] = ['precise', 'standard', 'ass
 export const PROFILES: Record<ProfileName, InteractionProfile> = {
   precise: {
     name: 'precise', snapRadiusScale: 0.7, smoothing: 0.15, clickMode: 'pinch',
-    dwellMs: 600, targetScale: 0.9, voiceVerbosity: 'terse', pinchOn: 0.30, pinchOff: 0.42,
+    dwellMs: 600, targetScale: 0.9, voiceVerbosity: 'terse', pinchOn: 0.42, pinchOff: 0.56,
   },
   standard: {
     name: 'standard', snapRadiusScale: 1.0, smoothing: 0.35, clickMode: 'pinch',
-    dwellMs: 700, targetScale: 1.0, voiceVerbosity: 'standard', pinchOn: 0.35, pinchOff: 0.48,
+    dwellMs: 700, targetScale: 1.0, voiceVerbosity: 'standard', pinchOn: 0.50, pinchOff: 0.64,
   },
   assist: {
     name: 'assist', snapRadiusScale: 1.6, smoothing: 0.6, clickMode: 'dwell',
-    dwellMs: 900, targetScale: 1.3, voiceVerbosity: 'coached', pinchOn: 0.42, pinchOff: 0.55,
+    dwellMs: 900, targetScale: 1.3, voiceVerbosity: 'coached', pinchOn: 0.60, pinchOff: 0.74,
   },
 };
 
