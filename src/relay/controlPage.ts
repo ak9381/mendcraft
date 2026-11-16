@@ -43,6 +43,7 @@ const DEVICE_RUN_LABEL: Record<string, string> = {
 
 export async function mountControlPage(root: HTMLElement): Promise<void> {
   document.title = 'Mendcraft control room';
+  document.body.classList.add('control-room');
   root.innerHTML = `
     <div class="control-page">
       <header class="control-head">
@@ -61,34 +62,53 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
 
       <div class="control-grid">
         <section class="card card-device" aria-label="Active device">
-          <h2>Working on</h2>
+          <h2>This device</h2>
           <p id="c-device" class="c-device">—</p>
-          <p class="card-note">From the devices in this room.</p>
+          <p class="card-note">The machine she is working on in this room.</p>
+        </section>
+
+        <section class="card card-lamp card-appliances" aria-label="Lamp">
+          <h2>Lamp</h2>
+          <p class="c-appliance-line"><span id="c-lamp" class="c-tag">unknown</span></p>
+          <p id="c-lamp-detail" class="c-appliance-detail"></p>
+          <p class="card-note">Read-only. Change it from the editor or /remote.</p>
+        </section>
+
+        <section class="card card-music card-appliances" aria-label="Music">
+          <h2>Music</h2>
+          <p class="c-appliance-line"><span id="c-music" class="c-tag">unknown</span></p>
+          <p id="c-music-detail" class="c-appliance-detail"></p>
+          <p class="card-note">Spotify when connected, otherwise the built-in player.</p>
         </section>
 
         <section class="card card-scene" aria-label="3D review">
           <div class="card-head">
             <h2>3D review</h2>
-            <button id="c-scene-full" type="button" class="c-scene-full" hidden>⛶ Fullscreen</button>
+            <button id="c-scene-full" type="button" class="c-scene-full" hidden>Fullscreen</button>
           </div>
           <div id="c-scene" class="c-scene"><p class="card-empty">No scene published yet.</p></div>
           <p id="c-scene-sum" class="card-note"></p>
         </section>
 
-        <section class="card card-ai" aria-label="AI request feed">
-          <h2>AI requests</h2>
-          <ul id="c-ai" class="c-feed"><li class="card-empty">No requests yet.</li></ul>
-        </section>
-
         <section class="card card-ledger" aria-label="What left this device">
-          <h2>What left this device</h2>
+          <h2>On-device vs cloud</h2>
+          <div class="c-ledger-stats">
+            <div class="c-stat c-stat-device">
+              <span class="c-stat-value" id="c-ledger-private">—</span>
+              <span class="c-stat-label">Stayed on device</span>
+            </div>
+            <div class="c-stat c-stat-cloud">
+              <span class="c-stat-value" id="c-ledger-cloud">—</span>
+              <span class="c-stat-label">Went to the cloud</span>
+            </div>
+          </div>
           <p id="c-ledger-counts" class="c-counts"></p>
           <ul id="c-ledger" class="c-feed"><li class="card-empty">Nothing has left this device.</li></ul>
         </section>
 
-        <section class="card card-queue" aria-label="Offline job queue">
-          <h2>Cloud queue</h2>
-          <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
+        <section class="card card-ai" aria-label="AI request feed">
+          <h2>AI requests</h2>
+          <ul id="c-ai" class="c-feed"><li class="card-empty">No requests yet.</li></ul>
         </section>
 
         <section class="card card-recipes" aria-label="Shared recipes">
@@ -97,11 +117,9 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <p id="c-run-status" class="card-note" role="status" aria-live="polite"></p>
         </section>
 
-        <section class="card card-appliances" aria-label="Lamp and music">
-          <h2>Room</h2>
-          <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span> <span id="c-lamp-detail" class="c-appliance-detail"></span></p>
-          <p class="c-appliance">Music: <span id="c-music" class="c-tag">unknown</span> <span id="c-music-detail" class="c-appliance-detail"></span></p>
-          <p class="card-note">Read-only mirror. Control the lamp from the editor or /remote. Music is Spotify when connected, otherwise the built-in player (studio or /remote).</p>
+        <section class="card card-queue" aria-label="Offline job queue">
+          <h2>Cloud queue</h2>
+          <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
         </section>
 
         <section class="card card-caption" aria-label="Live captions">
@@ -220,6 +238,10 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     const c = snap.ledger.counts;
     $<HTMLParagraphElement>('c-ledger-counts').textContent =
       `${c.cloud} cloud · ${c.private} private (on-device ${c.onDevice} + rules ${c.rules}) · ${formatBytes(c.bytesSent)} sent`;
+    const priv = root.querySelector<HTMLElement>('#c-ledger-private');
+    const cloud = root.querySelector<HTMLElement>('#c-ledger-cloud');
+    if (priv) priv.textContent = String(c.private);
+    if (cloud) cloud.textContent = String(c.cloud);
     const ledgerEl = $<HTMLUListElement>('c-ledger');
     ledgerEl.innerHTML = '';
     if (!snap.ledger.calls.length) {
