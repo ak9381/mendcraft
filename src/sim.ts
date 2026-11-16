@@ -128,6 +128,14 @@ export const UI_DEMO: SimStep[] = [
   { label: 'See what left this device', revealLedger: true },
 ];
 
+
+/** Frozen demo for on-canvas picture references (?sim=1&demo=refs). */
+export const REFERENCES_DEMO: SimStep[] = [
+  { label: 'Find drawing references', utterance: 'find me references for drawings' },
+  { label: 'Pick the second one', utterance: 'the second one' },
+  { label: 'Place it on the canvas', utterance: 'place it' },
+];
+
 /** Back-compat alias (defaults to the plan hero demo). */
 export const DEMO_SCRIPT = PLAN_DEMO;
 
@@ -135,6 +143,7 @@ export const DEMO_SCRIPT = PLAN_DEMO;
 export function demoFor(modeId: string): SimStep[] {
   if (modeId === 'part') return PART_DEMO;
   if (modeId === 'ui') return UI_DEMO;
+  if (modeId === 'refs') return REFERENCES_DEMO;
   return PLAN_DEMO;
 }
 

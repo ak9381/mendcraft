@@ -1,4 +1,5 @@
 import './style.css';
+import './references/board.css';
 import { getActiveMode, listModes, setActiveMode } from './core/modes';
 import type { ModeController, StepResult, ViewportHandle } from './core/controller';
 import type { HandEvent } from './input/hands';
@@ -124,6 +125,8 @@ import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestur
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
+import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE } from './references';
+import { refineSearchQuery } from './ai/hybrid';
 import { parseChromeIntent, intentToRequest } from './extension/intents';
 import { createExtensionBridge } from './extension/bridge';
 import { addClip, emptyClips, type ClipsState } from './extension/clips';
@@ -902,6 +905,7 @@ function topOpenPanel(): HTMLElement | null {
 }
 
 function closeTopPanel(): boolean {
+  if (refBoard.isGridOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
   if (overflowMenu.isOpen()) { overflowMenu.close(); return true; }
   const panel = topOpenPanel();
   if (!panel) return false;
@@ -946,7 +950,7 @@ function lampButton(sel: string): void {
 
 /** Something is waiting for a yes (chips, recipe card, a11y preview)? */
 function somethingPending(): boolean {
-  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || !chromeConfirmEl.hidden || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
+  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || !chromeConfirmEl.hidden || refBoard.pendingConfirm() || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
 }
 
 /** Run a button or command target. Returns false if nothing ran. */
@@ -954,12 +958,14 @@ function runTarget(target: string, value?: number): boolean {
   switch (target) {
     case 'add-device': void openAddDevice(); return true;
     case 'confirm':
+      if (refBoard.pendingConfirm() && refBoard.confirm()) return true;
       if (!chromeConfirmEl.hidden) { void confirmChromePaste('pinch'); return true; }
       if (addDevicePanel.confirm()) return true;
       viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       return true;
     case 'cancel':
       window.speechSynthesis?.cancel();
+      if (refBoard.isGridOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
       if (!chromeConfirmEl.hidden) { clearChromeConfirm(); return true; }
       if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
@@ -1037,7 +1043,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -1121,6 +1127,26 @@ btnMusic.addEventListener('click', () => {
   musicPanel.toggle();
   toggleButton(btnMusic, musicPanel.isOpen());
 });
+
+const refBoard = createReferenceBoard({
+  fixtures: SIM_ACTIVE,
+  refineQuery: refineSearchQuery,
+  speak: (text) => say(text),
+  onStatus: (text) => { verifierEl.textContent = text; },
+  onCall: ({ job, reason, sent, ms, source }) => {
+    recordLedger(source === 'on-device' ? 'on-device' : source === 'rules' ? 'rules' : 'cloud', job, reason, sent, ms);
+  },
+  openWeb: (url) => {
+    if (chromeBridge.isConnected()) {
+      void chromeBridge.request('openTab', { url }).then((res) => {
+        if (!res.ok) window.open(url, '_blank', 'noopener');
+      });
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
+  },
+});
+viewportEl.appendChild(refBoard.element);
 
 // ---- add a device (camera or voice → Nano names it → cached declarative
 // connector → LAN → pinch to confirm → Nano checks the effect). No gimbal needed.
@@ -2020,6 +2046,10 @@ renderNetState();
 // always behind an explicit confirm, applied as ONE undoable step.
 
 const recipeStore = createRecipeStore(typeof localStorage !== 'undefined' ? localStorage : null);
+if (!recipeStore.get(DRAWING_REFERENCES_RECIPE.id) && !recipeStore.list().some((r) => r.name === DRAWING_REFERENCES_RECIPE.name)) {
+  recipeStore.upsert({ ...DRAWING_REFERENCES_RECIPE, createdAt: Date.now(), updatedAt: Date.now() });
+}
+
 const recipeRecorder = createRecipeRecorder();
 /** Hard allowlist for browser recipes — the ONLY hosts a browser step may open
  *  (same-origin app pages + the demo mail host). Everything else is refused. */
@@ -2422,6 +2452,11 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
     const recipe = recipeStore.get(ruleHit.id)!;
     recordLedger('rules', 'recipe pick', REASON_TEXT.exact, '');
     routerPanel.add({ utterance, planned: 'rules', source: 'rules', reason: 'exact', escalated: false, ms: performance.now() - t0 });
+    if (isReferenceRecipe(recipe)) {
+      const result = await refBoard.apply({ type: 'search', query: recipeSearchQuery(recipe), raw: utterance, fuzzy: false });
+      verifierEl.textContent = result.detail;
+      return result.ok;
+    }
     stageRecipeRun(recipe, 'rules', 'exact');
     return true;
   }
@@ -2833,6 +2868,17 @@ async function handleChromeIntent(utterance: string): Promise<boolean | null> {
 }
 
 async function runUtteranceInner(utterance: string): Promise<boolean> {
+  // Reference grid: "the second one" / "next" / "close" must win over choice
+  // chips and music while results are on the canvas.
+  if (refBoard.isGridOpen() || refBoard.hasSelection()) {
+    const handled = await refBoard.handleUtterance(utterance);
+    if (handled) {
+      setBadge('rules', 'exact');
+      recordLedger('rules', 'command', 'reference intent', utterance);
+      verifierEl.textContent = handled.detail;
+      return handled.ok;
+    }
+  }
   // A reply to open "Did you mean…?" chips (or a confirm preview) is resolved
   // FIRST — before recipes, phrasebook, or routing can eat "first"/"cancel".
   const choiceHandled = handleChoiceReply(utterance);
@@ -2890,6 +2936,16 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // stays on this computer. Null → not a chrome command.
   const chromeHandled = await handleChromeIntent(utterance);
   if (chromeHandled !== null) return chromeHandled;
+
+  // REFERENCES: "find me references for drawings" opens a numbered grid on
+  // the canvas (Openverse + Wikimedia). Unrecognised utterances fall through.
+  const refHandled = await refBoard.handleUtterance(utterance);
+  if (refHandled) {
+    setBadge('rules', 'exact');
+    recordLedger('rules', 'command', 'reference intent', utterance);
+    verifierEl.textContent = refHandled.detail;
+    return refHandled.ok;
+  }
 
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source
@@ -3313,6 +3369,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Hand coords are mirrored to screen space (x = 1 - camera x); store the
       // camera-frame position so point-and-say can crop the frame there.
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
+      refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY });
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
       // Dwell-to-select is always available as a fallback for people who can't
@@ -3343,6 +3400,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.classList.add('pinching');
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      if (refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
       viewport.beginDrag?.(aimed.clientX, aimed.clientY);
       break;
     }
@@ -3352,6 +3410,7 @@ function handleHandEvent(raw: HandEvent): void {
       placeCursorClient(aimed.clientX, aimed.clientY);
       onboarding.notifyPinch();
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      if (refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
       // A pinch over the on-screen keyboard presses the key under the cursor.
       if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) break;
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
@@ -3372,6 +3431,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Follow the hand during a drag — don't remagnet mid-gesture.
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
+      if (refBoard.handleHand(e, { x: clientX, y: clientY })) break;
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
       if (controller.selectedId()) {
         const step = controller.dragSelectedMm(e.dx * controller.dragRangeMm, -e.dy * controller.dragRangeMm);
@@ -3381,6 +3441,7 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      if (lastPointer && refBoard.handleHand(e, { x: lastPointer.clientX, y: lastPointer.clientY })) break;
       viewport.endDrag?.();
       break;
     case 'lost':

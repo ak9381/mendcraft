@@ -1,0 +1,186 @@
+/* On-canvas reference search (src/references/*). Kept beside the module so
+   edits to the global stylesheet cannot drop it. */
+.mc-ref-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+  font-family: var(--font-sans);
+}
+.mc-ref-grid-panel {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: rgb(11 11 10 / 0.82);
+  backdrop-filter: blur(10px);
+}
+.mc-ref-grid-panel[hidden] { display: none; }
+.mc-ref-grid-head {
+  position: absolute;
+  top: 12px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  z-index: 2;
+}
+.mc-ref-grid-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 400;
+  color: var(--text);
+}
+.mc-ref-grid-hint {
+  margin: 0;
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.mc-ref-x {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+}
+.mc-ref-x:hover, .mc-ref-x:focus-visible { border-color: var(--accent); }
+.mc-ref-grid-status {
+  position: absolute;
+  top: 52px;
+  left: 24px;
+  right: 80px;
+  margin: 0;
+  color: var(--accent-2);
+  font-size: 15px;
+  z-index: 2;
+}
+.mc-ref-grid { position: absolute; inset: 0; }
+.mc-ref-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.35);
+}
+.mc-ref-card img {
+  flex: 1;
+  width: 100%;
+  object-fit: cover;
+  background: #222;
+  pointer-events: none;
+}
+.mc-ref-num {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgb(11 11 10 / 0.82);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+.mc-ref-credit, .mc-ref-web-label {
+  display: block;
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text-dim);
+}
+.mc-ref-web-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--text);
+  padding: 16px;
+  text-align: center;
+}
+.mc-ref-card-web { background: linear-gradient(180deg, #22243a, #191917); }
+.mc-ref-card.hovered, .mc-ref-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent), 0 8px 32px rgb(0 0 0 / 0.4);
+  outline: none;
+}
+.mc-ref-card.selected {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px var(--accent-2);
+}
+.mc-ref-confirm {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  z-index: 3;
+  max-width: min(640px, 92%);
+}
+.mc-ref-confirm[hidden] { display: none; }
+.mc-ref-confirm p { margin: 0; }
+.mc-ref-confirm button {
+  font: inherit;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #07111f;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mc-ref-confirm button.ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+.mc-ref-nodes { position: absolute; inset: 0; pointer-events: none; }
+.mc-ref-node {
+  position: absolute;
+  margin: 0;
+  pointer-events: auto;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.3);
+  cursor: pointer;
+}
+.mc-ref-node img { width: 100%; height: calc(100% - 36px); object-fit: cover; display: block; }
+.mc-ref-node-credit {
+  height: 36px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mc-ref-node.selected { border-color: var(--accent-2); box-shadow: 0 0 0 3px var(--accent-2); }

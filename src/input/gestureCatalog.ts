@@ -50,6 +50,7 @@ export const GESTURE_CATALOG: readonly CatalogGesture[] = [
   { id: 'three-fingers', label: 'Three fingers (hold)', kn: 'ಮೂರು ಬೆರಳು', scope: 'studio', does: 'Redo', target: 'btn-redo', glyph: '3☝', kind: 'discrete', wired: true },
   { id: 'palm-flip', label: 'Palm flip', kn: 'ಅಂಗೈ ತಿರುಗಿಸು', scope: 'studio', does: 'Open the More menu', target: 'btn-more', glyph: '✋⇄', kind: 'discrete', wired: true },
   { id: 'circle', label: 'Draw a circle with a fingertip', kn: 'ಬೆರಳಿನಿಂದ ವೃತ್ತ', scope: 'studio', does: 'Select what is inside', target: 'select-area', glyph: '☝◯', kind: 'discrete', wired: true },
+  { id: 'ref-pick', label: 'Pinch a numbered card', kn: 'ಸಂಖ್ಯೆಯನ್ನು ಚಿವುಟು', scope: 'studio', does: 'Pick a reference picture on the canvas', target: 'ref-pick', glyph: '🤏#', kind: 'pointer', wired: true },
   // ---- devices (active while the lamp panel is open) ----
   { id: 'palm-raise', label: 'Raise the palm slowly', kn: 'ಅಂಗೈ ಮೇಲೆತ್ತು', scope: 'devices', does: 'Lamp brighter', target: 'lamp-up', glyph: '✋↑', kind: 'continuous', wired: true },
   { id: 'palm-lower', label: 'Lower the palm slowly', kn: 'ಅಂಗೈ ಇಳಿಸು', scope: 'devices', does: 'Lamp dimmer', target: 'lamp-down', glyph: '✋↓', kind: 'continuous', wired: true },

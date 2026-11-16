@@ -4,6 +4,7 @@
 // before it can reach the engine.
 
 import { type Op } from '../core/ops';
+import { parseRefinedQuery, refinePrompt } from '../references/query';
 import { isTemplateName, type TemplateName } from '../core/templates';
 import { getActiveMode } from '../core/modes';
 import { parseCommand, isTemplateCommand } from '../core/ruleParser';
@@ -1537,4 +1538,31 @@ export async function checkDeviceEffect(
   const source = sourceOf(response!);
   recordInference(source, 'effect-check', Date.now() - t0);
   return { ...parsed, source, ms: Date.now() - t0 };
+}
+
+/** Turn a fuzzy or non-English reference request into a short image-search
+ *  query. Nano first (the intent PREFER_ON_DEVICE model) and the cloud twin
+ *  otherwise. Returns null when no model can run; the caller keeps the local query. */
+export async function refineSearchQuery(
+  request: string,
+): Promise<{ query: string; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.intent) return null;
+  try {
+    const response = await callWithCloudRetry(
+      models.intent,
+      models.intentCloud ?? null,
+      refinePrompt(request),
+      'refine-search',
+    );
+    const query = response ? parseRefinedQuery(response.text()) : null;
+    if (!query) return null;
+    const source = sourceOf(response!);
+    recordInference(source, 'refine-search', Date.now() - t0);
+    return { query, source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('refine-search', err);
+    return null;
+  }
 }
