@@ -13,6 +13,7 @@ import {
 } from '../setup/setupState';
 import { createTemplateRecorder, steadiestFrame } from '../input/gestureTemplates';
 import { faceRatios, type FaceRatios } from '../input/faceCues';
+import { ensureCameraReady } from '../input/cameraShare';
 
 export interface SetupTarget { id: string; label: string }
 export interface SetupGesture { id: string; label: string }
@@ -234,8 +235,11 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     }
   }
 
-  function startTry(): void {
-    if (!opts.cameraOn()) { live.textContent = 'Turn on the camera first.'; return; }
+  async function startTry(): Promise<void> {
+    const wasOn = opts.cameraOn();
+    const ready = await ensureCameraReady(opts);
+    if (!ready.ok) { live.textContent = ready.message; return; }
+    if (!wasOn) render();
     if (!recorder) {
       const label = opts.targets().find((t) => t.id === recordTarget)?.label ?? recordTarget;
       const id = `${recordTarget}`.replace(/^btn-/, '').replace(/[^a-z0-9-]/g, '').slice(0, 30) || 'gesture';

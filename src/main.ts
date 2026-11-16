@@ -4,6 +4,7 @@ import { getActiveMode, listModes, setActiveMode } from './core/modes';
 import type { ModeController, StepResult, ViewportHandle } from './core/controller';
 import type { HandEvent } from './input/hands';
 import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from './input/presence';
+import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
 import { createVoiceController, type VoiceController } from './input/voice';
@@ -3534,13 +3535,15 @@ function setCameraBusy(busy: boolean): void {
 
 async function enableCamera(): Promise<boolean> {
   if (tracker) return true;
-  if (!navigator.mediaDevices?.getUserMedia) {
+  const live = findLiveCameraStream();
+  if (!live && !navigator.mediaDevices?.getUserMedia) {
     fail('fail-camera-unsupported', 'This browser cannot access a camera — pinch gestures are unavailable. Voice and text still work.');
     return false;
   }
   setCameraBusy(true);
+  let t: PresenceTracker | null = null;
   try {
-    const t = createPresenceTracker(handleHandEvent, onPresenceFrame);
+    t = createPresenceTracker(handleHandEvent, onPresenceFrame);
     t.onPauseChange((paused) => {
       resumeHint.hidden = !paused;
       if (paused) {
@@ -3550,7 +3553,7 @@ async function enableCamera(): Promise<boolean> {
         say('Resumed.');
       }
     });
-    await t.start();
+    await t.start(live ?? undefined);
     tracker = t;
     setCameraBusy(false);
     btnCamera.setAttribute('aria-pressed', 'true');
@@ -3570,6 +3573,7 @@ async function enableCamera(): Promise<boolean> {
     say('Camera on. Pinch to select or drag. Press "Register me" to lock onto your face.');
     return true;
   } catch {
+    t?.stop();
     tracker = null;
     setCameraBusy(false);
     btnCamera.setAttribute('aria-pressed', 'false');

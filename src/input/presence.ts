@@ -25,6 +25,7 @@ import {
   type FaceBox,
 } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
+import { resolveCameraStream } from './cameraShare';
 
 export type { HandEvent, HandFrame } from './handLogic';
 export type { FaceBox } from './faceLogic';
@@ -63,7 +64,8 @@ export interface PresenceFrame {
 }
 
 export interface PresenceTracker {
-  start(): Promise<void>;
+  /** Optional existing stream: attach tracking to a live preview instead of a new getUserMedia. */
+  start(existing?: MediaStream): Promise<void>;
   stop(): void;
   setPinchThreshold(on: number, off: number): void;
   /** Lock onto the current main (largest, most frontal) face. Returns false if none. */
@@ -114,6 +116,7 @@ export function createPresenceTracker(
   let handLm: HandLandmarker | null = null;
   let faceLm: FaceLandmarker | null = null;
   let stream: MediaStream | null = null;
+  let ownsStream = true;
   let rafId = 0;
   let running = false;
   let frameCount = 0;
@@ -261,7 +264,7 @@ export function createPresenceTracker(
     rafId = requestAnimationFrame(loop);
   }
 
-  async function start(): Promise<void> {
+  async function start(existing?: MediaStream): Promise<void> {
     const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
     // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
     // locked-down GPUs, software renderers) cannot create it, so fall back to the
@@ -283,7 +286,14 @@ export function createPresenceTracker(
       }),
     );
 
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    const picked = resolveCameraStream(existing);
+    if (picked.stream) {
+      stream = picked.stream;
+      ownsStream = false;
+    } else {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+      ownsStream = true;
+    }
     video.srcObject = stream;
     await video.play();
 
@@ -294,7 +304,9 @@ export function createPresenceTracker(
   function stop(): void {
     running = false;
     cancelAnimationFrame(rafId);
-    for (const track of stream?.getTracks() ?? []) track.stop();
+    if (ownsStream) {
+      for (const track of stream?.getTracks() ?? []) track.stop();
+    }
     stream = null;
     video.srcObject = null;
     handLm?.close();
