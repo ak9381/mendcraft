@@ -151,6 +151,11 @@ import { addClip, emptyClips, type ClipsState } from './extension/clips';
 import { describeConfirm, initialConfirm, reduceConfirm, trimPreview, type ConfirmState } from './extension/confirm';
 import { createClipsLayer } from './ui/clipsLayer';
 import { createAddDevicePanel } from './ui/addDevicePanel';
+import { createDevicesHub } from './ui/devicesHub';
+import { loadConnectors, loadDevices } from './devices/connectorCache';
+import { connectSpeaker, controlUrl, hubCards, isConnectDemo, loadSpeakers, saveSpeaker, speakerRequest } from './devices/hub';
+import { listDevices as spotifyListDevices, transferPlayback as spotifyTransfer } from './music/spotifyApi';
+import { isSpotifyConnected } from './music/musicSession';
 import type { AddMode, FlowDeps } from './devices/addDeviceFlow';
 import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cachePairedDevice } from './devices/connectorCache';
 import { builtinWizConnector, connectorKey, isWizIdentity, runAction } from './devices/connector';
@@ -1443,6 +1448,91 @@ el<HTMLButtonElement>('btn-add-device').addEventListener('click', () => {
   if (addDevicePanel.isOpen()) addDevicePanel.close(); else void openAddDevice();
 });
 
+// ---- CONNECT ANYTHING (demo-connect-anything branch) ----------------------
+// Opens nearly empty: the CAD canvas plus a tray of devices. Prebuilt links
+// (browser, iPad, Android, gimbal), connectors Gemini wrote (saved, reusable
+// offline), and speakers reached through Spotify Connect.
+const CONNECT_DEMO = isConnectDemo(window.location.search);
+let roomPhone = false;
+const devicesHub = createDevicesHub({
+  onLink: (id) => void hubLink(id),
+  onAddNew: () => { if (addDevicePanel.isOpen()) addDevicePanel.close(); else void openAddDevice(); },
+  onSpeaker: (brand) => void hubSpeaker(brand),
+});
+viewportEl.appendChild(devicesHub.element);
+let hubLast = '';
+async function refreshHub(): Promise<void> {
+  if (devicesHub.element.hidden) return;
+  const g = getGimbalPlugin();
+  let gimbal = false;
+  if (g) { try { gimbal = (await g.isAvailable()).available; } catch { gimbal = false; } }
+  const online = navigator.onLine;
+  const cards = hubCards(
+    { camera: tracker !== null, room: hostSession ? { token: hostSession.token, phone: roomPhone } : null, iosApp: isIosShell(), gimbal, online },
+    loadConnectors(), loadDevices(), loadSpeakers(),
+  );
+  const key = JSON.stringify([cards, online]);
+  if (key === hubLast) return;
+  hubLast = key;
+  devicesHub.render(cards, online);
+}
+async function hubLink(id: string): Promise<void> {
+  switch (id) {
+    case 'browser':
+      devicesHub.setNote('Allow the camera when the browser asks. Pinch and hand pointing work after that.');
+      await enableCamera();
+      break;
+    case 'ipad': {
+      if (!navigator.onLine) { devicesHub.setNote('The iPad joins over the internet. Try again when you are online.'); break; }
+      await ensurePairing();
+      if (!hostSession) { devicesHub.setNote('Could not open a room right now.'); break; }
+      devicesHub.setNote(`Open this on the iPad (room code ${hostSession.code}):`, controlUrl(window.location.origin, hostSession.token));
+      publishControlSnapshot();
+      break;
+    }
+    case 'android':
+      if (!pairPanel.element.hidden) break;
+      btnPair.click();
+      devicesHub.setNote('Scan the code with the Android phone camera. It becomes a remote and a second camera.');
+      break;
+    case 'gimbal':
+      devicesHub.setNote(isIosShell()
+        ? 'Dock the iPhone on the DockKit stand. Mendcraft turns off face tracking and aims at your hands.'
+        : 'The gimbal works from the Mendcraft iPhone app: open it on an iPhone with a DockKit stand and dock it.');
+      break;
+  }
+  void refreshHub();
+}
+async function hubSpeaker(brand: string): Promise<void> {
+  devicesHub.setNote(`Looking for ${brand || 'your speaker'} in Spotify…`);
+  const res = await connectSpeaker(brand, {
+    connected: () => isSpotifyConnected(),
+    listDevices: () => spotifyListDevices({ onCall: ({ job, reason, sent, ms }) => recordLedger('cloud', job, reason, sent, ms) }),
+    transferPlayback: (deviceId) => spotifyTransfer(deviceId, { onCall: ({ job, reason, sent, ms }) => recordLedger('cloud', job, reason, sent, ms) }, true),
+  }, (name) => new Promise<boolean>((resolve) => {
+    presentChoices(`Play on "${name}" through Spotify Connect?`, [{ label: `Connect ${name}`, result: { speaker: name }, source: 'rules' }],
+      () => resolve(true), () => resolve(false));
+    say(`Found ${name}. Pinch to connect it.`);
+  }));
+  if (res.ok) {
+    saveSpeaker(res.link);
+    devicesHub.setNote(`${res.device.name} is connected. Say "play music" or "volume 30".`);
+    say(`${res.device.name} connected.`);
+  } else {
+    devicesHub.setNote(res.detail);
+    if (res.reason === 'spotify') say('Connect Spotify first, from Music.');
+  }
+  void refreshHub();
+}
+if (CONNECT_DEMO) {
+  document.body.classList.add('mc-connect');
+  devicesHub.show(true);
+  void refreshHub();
+  window.setInterval(() => void refreshHub(), 2500);
+  window.addEventListener('online', () => void refreshHub());
+  window.addEventListener('offline', () => void refreshHub());
+}
+
 
 /** Incoming phone commands ride the exact paths mouse/pinch already use:
  *  the Undo/Redo/Mic buttons, the shared runUtterance pipeline, and the
@@ -1503,6 +1593,8 @@ async function initPairing(): Promise<void> {
   hostSession.onState((s) => {
     pairPanel.setStatus(pairStateLabel(s, 'host'));
     pairPanel.setPaired(s === 'paired');
+    roomPhone = s === 'paired';
+    void refreshHub();
     if (s === 'paired') {
       say('Phone remote connected.');
       // Push current state so a /control iPad in the room populates immediately.
@@ -3599,6 +3691,8 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Her own voice shortcuts (setup) and the setup / rest phrases run locally.
   const boundTarget = bindingForPhrase(setupData, utterance);
   if (boundTarget) return runTarget(boundTarget);
+  const speakerBrand = speakerRequest(utterance);
+  if (speakerBrand !== null) { void hubSpeaker(speakerBrand); return true; }
   if (isAddDevicePhrase(utterance)) { void openAddDevice(utterance); return true; }
   if (isSetupPhrase(utterance)) { setupPanel.open(); toggleButton(btnSetup, true); return true; }
   const rp = restPhrase(utterance);
@@ -5104,7 +5198,7 @@ try {
 // First load no longer forces the camera onboarding on a judge. Instead it
 // offers the 2-minute guided tour (camera setup stays one click away inside it).
 // A judge who has dismissed it before is left alone.
-if (!SIM_ACTIVE && !tourDismissed(localStorage) && !onboardedAlready) {
+if (!SIM_ACTIVE && !CONNECT_DEMO && !tourDismissed(localStorage) && !onboardedAlready) {
   tour.openWelcome();
 }
 

@@ -100,6 +100,7 @@ export function buildConnectorPrompt(id: DeviceIdentity): string {
 Rules: transports only "udp" (ports ${ALLOWED_UDP_PORTS.join(', ')}) or "http" (ports ${ALLOWED_HTTP_PORTS.join(', ')}, methods GET/POST/PUT, path starting with "/").
 discovery.method one of ${DISCOVERY_METHODS.join(', ')}. Never include a host or IP. Up to 6 actions with ids like "power-on", "power-off", "brightness".
 Each action: params (name, type number|boolean, min, max, default), request with payloadJson (udp) or path + bodyJson (http) where values are "{{paramName}}" placeholders, and successCue = what a camera would SEE when it worked.
+Known local APIs: WiZ bulbs (udp 38899, {"method":"setPilot","params":{"state":true}}); Shelly plugs (http GET /relay/0?turn=on|off on port 80); Tasmota plugs (http GET /cm?cmnd=Power%20On|Off on port 80). A TV only if it has a plain HTTP API on an allowed port.
 Set test.action to a visible action and test.prepare to its opposite (e.g. power-off then power-on). Only use the device's documented local protocol; if it has none, return {"supported": false, "actions": [], "discovery": {"method": "manual"}}.`;
 }
 

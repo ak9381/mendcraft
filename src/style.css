@@ -3270,3 +3270,42 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-walk-btn { min-height: 72px; font-size: 18px; font-weight: 600; }
 .mc-walk .walk-back { grid-column: 2; }
 .mc-walk .walk-exit { grid-column: 3; background: var(--danger); color: #fff; border-color: transparent; }
+
+/* ---- Connect anything (demo-connect-anything branch) ---- */
+.mc-hub {
+  position: absolute; z-index: 30; top: 176px; left: 16px; bottom: 96px;
+  width: 340px; max-width: calc(100% - 32px);
+  display: flex; flex-direction: column; gap: 10px; padding: 14px;
+  background: rgb(25 25 23 / 0.92); color: var(--text);
+  backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+.mc-hub[hidden] { display: none; }
+.mc-hub-head h2 { margin: 0; font-family: var(--font-display); font-size: 26px; font-weight: 400; }
+.mc-hub-sub { margin: 4px 0 0; font-size: 14px; color: var(--text-dim); }
+.mc-hub-add {
+  min-height: 64px; border-radius: 16px; border: 0; cursor: pointer;
+  background: var(--accent); color: #0b0b0a; font: inherit; font-size: 19px; font-weight: 600;
+}
+.mc-hub-add:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-hub-note { border: 1px solid var(--accent); border-radius: 12px; padding: 8px 10px; font-size: 14px; display: flex; flex-direction: column; gap: 6px; }
+.mc-hub-note p { margin: 0; }
+.mc-hub-note a { color: var(--accent); word-break: break-all; }
+.mc-hub-body { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.mc-hub-sec h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.mc-hub-card { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin-top: 8px; background: rgb(255 255 255 / 0.03); }
+.mc-hub-card p { margin: 4px 0 8px; font-size: 13px; color: var(--text-dim); }
+.mc-hub-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.mc-hub-state { font-size: 12px; color: var(--text-dim); }
+.mc-hub-connected { box-shadow: inset 4px 0 0 var(--accent-2); }
+.mc-hub-connected .mc-hub-state { color: var(--accent-2); }
+.mc-hub-needs { opacity: 0.7; }
+.mc-hub-empty { margin: 6px 0; font-size: 13px; color: var(--text-dim); }
+.mc-hub-speaker { display: flex; gap: 6px; margin-top: 8px; }
+.mc-hub-speaker input { flex: 1; min-height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); padding: 0 10px; font: inherit; }
+/* Nearly-empty demo shell: canvas, Add a device, the essentials. */
+body.mc-connect #topbar > *:not(#btn-camera):not(#btn-mic):not(#btn-copilot):not(#more-wrap) { display: none !important; }
+body.mc-connect #btn-add-device { display: none !important; }
+body.mc-connect #history-island, body.mc-connect #parts-list, body.mc-connect #recipes-section { display: none !important; }
+.mc-hub-note[hidden] { display: none; }
