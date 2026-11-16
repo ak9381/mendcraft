@@ -121,6 +121,8 @@ import { createFaceCueDetector, faceRatios } from './input/faceCues';
 import { createDwellClicker } from './input/dwell';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
+import { createMusicPanel } from './ui/musicPanel';
+import { parseMusicIntent } from './music/musicIntent';
 import { createAddDevicePanel } from './ui/addDevicePanel';
 import type { AddMode, FlowDeps } from './devices/addDeviceFlow';
 import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cachePairedDevice } from './devices/connectorCache';
@@ -238,6 +240,7 @@ app.innerHTML = `
         <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
         <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
         <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
+        <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
         <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
         <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
         <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
@@ -917,6 +920,12 @@ function runTarget(target: string, value?: number): boolean {
     case 'lamp-up': lampButton('.lamp-dim-up'); return true;
     case 'lamp-down': lampButton('.lamp-dim-down'); return true;
     case 'lamp-toggle': lampOn = !lampOn; lampButton(lampOn ? '.lamp-on' : '.lamp-off'); return true;
+    case 'volume':
+      void musicPanel.apply({ type: 'volumeAdjust', delta: (value ?? 1) * 0.1 });
+      return true;
+    case 'next-track':
+      void musicPanel.apply({ type: value !== undefined && value < 0 ? 'prev' : 'next' });
+      return true;
     case 'rest-toggle':
     case 'wake':
       setResting(nextRestState(resting, target));
@@ -932,7 +941,7 @@ function runTarget(target: string, value?: number): boolean {
 function handleMotion(ev: MotionEvent): void {
   gestureGuide.highlight(ev.id);
   const r = resolveGesture(ev.id, {
-    context: lampPanel.isOpen() ? 'devices' : 'studio',
+    context: (lampPanel.isOpen() || musicPanel.isOpen()) ? 'devices' : 'studio',
     resting,
     bindings: setupData.bindings,
   });
@@ -969,7 +978,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-add-device, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -1037,6 +1046,21 @@ viewportEl.appendChild(lampPanel.element);
 btnLamp.addEventListener('click', () => {
   lampPanel.toggle();
   toggleButton(btnLamp, lampPanel.isOpen());
+});
+
+const btnMusic = el<HTMLButtonElement>('btn-music');
+const musicPanel = createMusicPanel({
+  onState: (s) => setControlMusic({
+    title: s.via === 'spotify' && s.title ? `Spotify · ${s.title}` : s.title,
+    playing: s.playing,
+    volume: s.volume,
+  }),
+  onCall: ({ job, reason, sent, ms }) => recordLedger('cloud', job, reason, sent, ms),
+});
+viewportEl.appendChild(musicPanel.element);
+btnMusic.addEventListener('click', () => {
+  musicPanel.toggle();
+  toggleButton(btnMusic, musicPanel.isOpen());
 });
 
 // ---- add a device (camera or voice → Nano names it → cached declarative
@@ -1603,7 +1627,8 @@ let controlDevice: DeviceId = 'laptop';
 let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
 let controlRev = 0;
 // Appliance state mirrored to the /control dashboard. Lamp comes from the editor
-// lamp panel (laptop ↔ bridge); music arrives from the phone over the relay.
+// lamp panel (laptop ↔ bridge); music comes from Spotify / the built-in player
+// (this laptop) and is also relayed from a paired phone remote.
 // 'unknown' until we actually know — never a fabricated "connected".
 let controlLamp: ApplianceState = 'unknown';
 let controlLampDetail: string | undefined;
@@ -2170,12 +2195,10 @@ async function runLampRecipe(recipe: Recipe): Promise<{ ok: boolean; detail: str
 async function runDeviceRecipe(recipe: Recipe): Promise<{ ok: boolean; detail: string }> {
   if (recipe.device === 'lamp') return runLampRecipe(recipe);
   if (recipe.device === 'music') {
-    // Validate the steps so an unrunnable recipe still reports honestly; the
-    // audio element lives on the phone /remote, so we announce rather than play.
     const plan = buildDeviceActions('music', recipe.steps);
-    return plan.ok
-      ? { ok: true, detail: 'music plays on the paired phone remote' }
-      : { ok: false, detail: plan.error };
+    if (!plan.ok) return { ok: false, detail: plan.error };
+    for (const a of plan.actions) if (a.device === 'music') await musicPanel.applyAction(a.action);
+    return { ok: true, detail: `${plan.actions.length} music step(s)` };
   }
   if (recipe.device === 'browser') {
     const plan = buildBrowserPlan(recipe.steps, { allowedHosts: BROWSER_ALLOWLIST, slots: recipe.slots });
@@ -2639,6 +2662,19 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   if (metaHandled !== null) return metaHandled;
   // This is a real command: a later correction ("no, I meant …") refers to it.
   lastCommand = utterance;
+
+  // MUSIC: "play / pause / next / play some old Kannada songs" run here, so
+  // they never hit the design model. Spotify if connected, else the built-in
+  // player. Unrecognised utterances fall through to the hybrid router.
+  const musicIntent = parseMusicIntent(utterance);
+  if (musicIntent) {
+    const result = await musicPanel.apply(musicIntent);
+    setBadge('rules', 'exact');
+    recordLedger('rules', 'command', 'music intent', utterance);
+    verifierEl.textContent = result.detail;
+    say(result.detail);
+    return result.ok;
+  }
 
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source

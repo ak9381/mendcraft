@@ -5,8 +5,9 @@
 //   /remote (or ?view=remote)  → the phone remote + camera page
 //   /control                   → the iPad control room
 //   /judges                    → the guided-tour page
+//   /spotify                   → Spotify OAuth callback (token exchange, then bounce back)
 
-import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute } from './relay/protocol';
+import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
 
 // Inside the thin Android shell (Capacitor) the bundle is served from
 // https://localhost/ with no path — the native app IS the remote, so route
@@ -14,15 +15,22 @@ import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRo
 type CapGlobal = { isNativePlatform?: () => boolean; getPlatform?: () => string };
 const cap = (window as unknown as { Capacitor?: CapGlobal }).Capacitor;
 const isNativeShell = Boolean(cap?.isNativePlatform?.());
-// The iOS shell is the iPhone lamp & music remote (compact /phone variant).
+// The iOS shell boots the full Mendcraft app (setup, gestures, Add a device,
+// DockKit gimbal); the old lamp & music remote stays at /phone.
 const isIosShell = isNativeShell && cap?.getPlatform?.() === 'ios';
 
-if (isIosShell || isPhoneRoute(window.location.pathname, window.location.search)) {
+if (isSpotifyRoute(window.location.pathname, window.location.search)) {
+  // OAuth redirect: exchange the auth code, stash tokens, go back to the page
+  // she came from. On the iOS Capacitor shell this route is not used — Connect
+  // opens the web app instead (the hosted /spotify URL cannot return into the app).
+  const { handleSpotifyCallback } = await import('./music/spotifyCallback');
+  await handleSpotifyCallback();
+} else if (isPhoneRoute(window.location.pathname, window.location.search)) {
   // /phone is the iPhone PWA install target: the remote page in its compact
   // "lamp & music" variant (large play/pause, volume, lamp on/off/dim).
   const { mountRemotePage } = await import('./relay/remotePage');
   await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!, { variant: 'phone' });
-} else if (isNativeShell || isRemoteRoute(window.location.pathname, window.location.search)) {
+} else if ((isNativeShell && !isIosShell) || isRemoteRoute(window.location.pathname, window.location.search)) {
   const { mountRemotePage } = await import('./relay/remotePage');
   await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!);
 } else if (isControlRoute(window.location.pathname, window.location.search)) {

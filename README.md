@@ -118,7 +118,7 @@ The entry fork lives in `src/boot.ts`; the pairing protocol/session/transport in
   phone↔laptop pairing works — but cross-device sync needs **both devices online
   and in the same room/book**, and the frames are low-rate stills over Firestore,
   not WebRTC. The WiZ lamp (needs the local Node UDP bridge: `npm run wiz-bridge`)
-  and Apple Music (needs a MusicKit token — honest stub otherwise) each require a
+  and Spotify Premium (needs a free Spotify developer Client ID in `VITE_SPOTIFY_CLIENT_ID`; otherwise an honest "Spotify not set up" state and the built-in public-domain player) each require a
   real device or console step. The Android shell
   (`android/`, Capacitor) boots to `/remote`; its opt-in AccessibilityService is
   allowlisted and **never auto-sends** WhatsApp drafts (`src/assist/policy.ts`).
@@ -132,7 +132,7 @@ The entry fork lives in `src/boot.ts`; the pairing protocol/session/transport in
 - **Map any toolbar button to a gesture or a spoken phrase** (Kannada kept as typed). Her bindings win over the defaults.
 - **Optional face cues**: a held smile or raised eyebrows confirm something already waiting (chips, recipe card). They never start an action (`src/input/faceCues.ts`).
 - **Default gestures** (`src/input/gestureCatalog.ts`, recogniser `src/input/motionGestures.ts`, dispatch `src/input/gestureDispatch.ts`): V = undo, three fingers = redo, palm flip = More, hold a pinch still = mic, open palm 1 s = stop/cancel, palm swipe = back/forward (panels), two-finger swipe = scroll, twist = rotate, air tap = tap, fingertip circle = select inside, palm raise/lower/tap = lamp (while the lamp panel is open), both palms = rest mode, wave = wake. Held poses need 400 ms so tremor doesn't fire them. Buttons with a gesture show a small badge; every button in the toolbar, menus and panels is also pinchable, or clickable by hovering (dwell).
-- Not wired yet: music volume and skip-track gestures are recognised but music plays on the phone, so they wait on the device-connection redesign.
+- **Music:** Spotify Premium is the default source when connected (play/pause/skip/volume, voice search like "play some old Kannada songs"). Without a Client ID or before she connects, the built-in public-domain player is used. Pinch-slide (volume) and two-finger swipe (skip) work while the Music or Lamp panel is open. Code: `src/music/`. Redirect URI is `${origin}/spotify`.
 
 ## Judges' tour and `/judges`
 
@@ -224,11 +224,13 @@ test suite.
 - **Kannada rules accuracy is 0** by design (the offline rule parser is
   English-only); Kannada is deliberately routed to the cloud or clarified, and the
   badge says so.
-- **WiZ lamp / Apple Music / Android assist / point-and-say** need a real device,
-  the local bridge, a developer token, or a live camera frame respectively; each
+- **WiZ lamp / Spotify / Android assist / point-and-say** need a real device,
+  the local bridge, a Spotify Client ID + Premium account, or a live camera frame respectively; each
   degrades to an honest "not configured" state rather than faking a connection.
-- **iOS** ships as a PWA remote (`/phone`); no `.ipa` is built here (Capacitor iOS
-  needs a Mac). No app-automation on iOS.
+  Spotify sign-in uses PKCE in the web app; the iOS Capacitor shell cannot finish
+  the `/spotify` redirect yet — connect at https://mendcraft.web.app instead.
+- **iOS** is a Capacitor shell of the full app (built on a Mac) plus the PWA remote
+  (`/phone`). No app-automation on iOS. Spotify connect is done in the web app.
 
 ---
 

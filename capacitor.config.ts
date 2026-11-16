@@ -13,12 +13,11 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
   },
   ios: {
-    // The iOS shell is the lamp & music remote only (no Instagram/WhatsApp
-    // assist — that is Android-only). Run `npx cap add ios` on a Mac to
-    // generate the Xcode project in ios/; see ios/README.md. The webview boots
-    // the same dist/ bundle at path '/', so boot.ts's isNativeShell branch
-    // mounts the full remote; set the webview URL to '/phone' (or add an iOS
-    // branch in boot.ts) to get the compact lamp & music variant on device.
+    // The iOS shell boots the full Mendcraft app (setup, gestures, Add a
+    // device, DockKit gimbal, music). Instagram/WhatsApp assist is Android-only.
+    // The compact lamp & music remote stays at /phone. Spotify sign-in must be
+    // completed in the web app (https://mendcraft.web.app) — the /spotify
+    // redirect cannot return to this webview yet.
     contentInset: 'always',
   },
 };

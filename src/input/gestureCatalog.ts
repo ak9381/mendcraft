@@ -54,8 +54,8 @@ export const GESTURE_CATALOG: readonly CatalogGesture[] = [
   { id: 'palm-raise', label: 'Raise the palm slowly', kn: 'ಅಂಗೈ ಮೇಲೆತ್ತು', scope: 'devices', does: 'Lamp brighter', target: 'lamp-up', glyph: '✋↑', kind: 'continuous', wired: true },
   { id: 'palm-lower', label: 'Lower the palm slowly', kn: 'ಅಂಗೈ ಇಳಿಸು', scope: 'devices', does: 'Lamp dimmer', target: 'lamp-down', glyph: '✋↓', kind: 'continuous', wired: true },
   { id: 'palm-tap', label: 'Palm tap (toward the screen)', kn: 'ಅಂಗೈ ತಟ್ಟು', scope: 'devices', does: 'Lamp on / off', target: 'lamp-toggle', glyph: '✋•', kind: 'discrete', wired: true },
-  { id: 'pinch-slide', label: 'Pinch and slide sideways', kn: 'ಚಿವುಟಿ ಸರಿಸು', scope: 'devices', does: 'Music volume', target: 'volume', glyph: '🤏⇆', kind: 'continuous', wired: false, note: 'music plays on the phone; waits on the device-connection redesign' },
-  { id: 'two-finger-swipe-side', label: 'Two fingers swipe sideways', kn: 'ಎರಡು ಬೆರಳು ಪಕ್ಕಕ್ಕೆ', scope: 'devices', does: 'Skip track', target: 'next-track', glyph: '✌→', kind: 'discrete', wired: false, note: 'music plays on the phone; waits on the device-connection redesign' },
+  { id: 'pinch-slide', label: 'Pinch and slide sideways', kn: 'ಚಿವುಟಿ ಸರಿಸು', scope: 'devices', does: 'Music volume', target: 'volume', glyph: '🤏⇆', kind: 'continuous', wired: true },
+  { id: 'two-finger-swipe-side', label: 'Two fingers swipe sideways', kn: 'ಎರಡು ಬೆರಳು ಪಕ್ಕಕ್ಕೆ', scope: 'devices', does: 'Skip track', target: 'next-track', glyph: '✌→', kind: 'discrete', wired: true },
   // ---- safety ----
   { id: 'both-palms', label: 'Both palms open', kn: 'ಎರಡೂ ಅಂಗೈ', scope: 'safety', does: 'Rest mode (pause all gestures)', target: 'rest-toggle', glyph: '🙌', kind: 'discrete', wired: true },
   { id: 'wave', label: 'Wave', kn: 'ಕೈ ಬೀಸು', scope: 'safety', does: 'Wake up from rest', target: 'wake', glyph: '👋', kind: 'discrete', wired: true },

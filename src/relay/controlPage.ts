@@ -101,7 +101,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <h2>Room</h2>
           <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span> <span id="c-lamp-detail" class="c-appliance-detail"></span></p>
           <p class="c-appliance">Music: <span id="c-music" class="c-tag">unknown</span> <span id="c-music-detail" class="c-appliance-detail"></span></p>
-          <p class="card-note">Read-only mirror. Control the lamp from the editor or /remote; music plays on /remote.</p>
+          <p class="card-note">Read-only mirror. Control the lamp from the editor or /remote. Music is Spotify when connected, otherwise the built-in player (studio or /remote).</p>
         </section>
 
         <section class="card card-caption" aria-label="Live captions">

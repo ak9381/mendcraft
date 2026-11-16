@@ -29,9 +29,13 @@ The iPhone experience ships two ways:
 
 - **No Instagram / WhatsApp automation.** iOS has no equivalent of Android's
   AccessibilityService; the feed-scroll + WhatsApp-draft assist is Android-only.
-  The iOS app is lamp + music + pairing, nothing more.
-- **Apple Music** playback needs a MusicKit developer token; without one the app
-  honestly falls back to its own local-file player (`src/music/appleMusic.ts`).
+  The iOS app is the full Mendcraft app (setup, gestures, Add a device,
+  gimbal, lamp, music); the compact remote stays at /phone.
+- **Spotify** playback needs a Premium account and a Client ID. Sign-in is
+  Authorization Code with PKCE in the *web* app
+  (`https://mendcraft.web.app/spotify`). The Capacitor webview cannot return
+  from that redirect yet (a custom URL scheme comes later), so Connect opens
+  the web app. Without a connection the built-in public-domain player is used.
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
 

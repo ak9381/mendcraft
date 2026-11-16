@@ -17,9 +17,8 @@ import { probeFirestore } from './firestoreTransport';
 import { createGuestSession, resolveRoomId, type GuestSession } from './session';
 import { createWizClient, resolveBridgeUrl } from '../devices/wizClient';
 import { createLampControl } from '../devices/lampControl';
-import { createMusicController } from '../music/musicController';
-import { currentTrack, playerStatusLabel, DEFAULT_TRACKS, type Track } from '../music/player';
-import { appleMusicStatus } from '../music/appleMusic';
+import { createMusicSession, openWebAppToConnect } from '../music/musicSession';
+import { type Track } from '../music/player';
 import { getAssistBridge } from '../assist/bridge';
 
 const FRAME_INTERVAL_MS = 900; // ~1 fps keeps room-doc traffic tiny
@@ -85,7 +84,7 @@ export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions
 
         <div class="remote-music">
           <div class="lamp-head"><span class="lamp-title">Music</span>
-            <span id="remote-music-apple" class="badge badge-rules">Apple Music?</span></div>
+            <span id="remote-music-badge" class="badge badge-rules">Music</span></div>
           <p id="remote-now" class="remote-now" role="status" aria-live="polite">No track</p>
           <div class="remote-music-controls" role="group" aria-label="Playback">
             <button id="remote-prev" type="button" aria-label="Previous track">⏮</button>
@@ -255,24 +254,28 @@ export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions
   lampMount.appendChild(lamp.element);
   void lamp.refresh();
 
-  // ---- Music: our own HTMLAudioElement player; state relayed to /control -----
-  const audio = new Audio();
-  audio.preload = 'none';
-  const music = createMusicController(audio, DEFAULT_TRACKS);
+  // ---- Music: Spotify when connected, else the built-in public-domain player -----
+  const music = createMusicSession();
   const nowEl = root.querySelector<HTMLParagraphElement>('#remote-now')!;
   const playBtn = root.querySelector<HTMLButtonElement>('#remote-playpause')!;
   const volEl = root.querySelector<HTMLInputElement>('#remote-vol')!;
   const trackSel = root.querySelector<HTMLSelectElement>('#remote-tracks')!;
   const filesInput = root.querySelector<HTMLInputElement>('#remote-files')!;
-  const appleBadge = root.querySelector<HTMLSpanElement>('#remote-music-apple')!;
+  const musicBadge = root.querySelector<HTMLSpanElement>('#remote-music-badge')!;
   const musicNote = root.querySelector<HTMLParagraphElement>('#remote-music-note')!;
-
-  // Apple Music is an honest stub: without a MusicKit developer token we say so
-  // and keep our own player. (See src/music/appleMusic.ts.)
-  const apple = appleMusicStatus();
-  appleBadge.textContent = apple.kind === 'ready' ? 'Apple Music ready' : 'Apple Music off';
-  musicNote.textContent =
-    apple.kind === 'ready' ? '' : 'message' in apple ? apple.message : '';
+  const musicHead = root.querySelector('.remote-music .lamp-head')!;
+  const connectBtn = document.createElement('button');
+  connectBtn.type = 'button';
+  connectBtn.id = 'remote-spotify-connect';
+  connectBtn.textContent = 'Connect Spotify';
+  connectBtn.style.marginLeft = 'auto';
+  musicHead.appendChild(connectBtn);
+  const disconnectBtn = document.createElement('button');
+  disconnectBtn.type = 'button';
+  disconnectBtn.id = 'remote-spotify-disconnect';
+  disconnectBtn.textContent = 'Disconnect';
+  disconnectBtn.hidden = true;
+  musicHead.appendChild(disconnectBtn);
 
   function fillTracks(tracks: Track[], index: number): void {
     trackSel.innerHTML = '';
@@ -289,25 +292,39 @@ export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions
   function relayMusic(): void {
     if (!session || session.state() !== 'paired') return;
     const s = music.state();
-    void session.sendMusic({ title: currentTrack(s)?.title ?? '', playing: s.playing, volume: s.volume })
+    const title = s.via === 'spotify' && s.title ? `Spotify · ${s.title}` : s.title;
+    void session.sendMusic({ title, playing: s.playing, volume: s.volume })
       .catch(() => undefined);
   }
   publishMusic = relayMusic;
 
   music.onChange((s) => {
-    nowEl.textContent = playerStatusLabel(s);
+    nowEl.textContent = s.label;
     playBtn.textContent = s.playing ? '❚❚' : '▶';
     playBtn.setAttribute('aria-label', s.playing ? 'Pause' : 'Play');
     if (Number(volEl.value) !== s.volume) volEl.value = String(s.volume);
-    fillTracks(s.tracks, s.index);
+    const loc = music.localController().state();
+    fillTracks(loc.tracks, loc.index);
+    musicBadge.textContent = s.via === 'spotify' ? 'Spotify' : s.status.kind === 'not-configured' ? 'Spotify not set up' : 'Built-in player';
+    musicBadge.className = `badge ${s.via === 'spotify' ? 'badge-device' : 'badge-rules'}`;
+    musicNote.textContent = s.note;
+    connectBtn.hidden = s.status.kind === 'connected';
+    disconnectBtn.hidden = s.status.kind !== 'connected';
+    connectBtn.textContent = s.status.kind === 'native-shell' ? 'Open web app to connect' : s.status.kind === 'not-configured' ? 'Spotify not set up' : 'Connect Spotify';
+    connectBtn.disabled = s.status.kind === 'not-configured';
     relayMusic();
   });
 
-  playBtn.addEventListener('click', () => music.dispatch({ type: 'toggle' }));
-  root.querySelector('#remote-prev')!.addEventListener('click', () => music.dispatch({ type: 'prev' }));
-  root.querySelector('#remote-next')!.addEventListener('click', () => music.dispatch({ type: 'next' }));
-  volEl.addEventListener('input', () => music.dispatch({ type: 'setVolume', volume: Number(volEl.value) }));
-  trackSel.addEventListener('change', () => music.dispatch({ type: 'select', index: Number(trackSel.value) }));
+  playBtn.addEventListener('click', () => void music.apply({ type: 'toggle' }));
+  root.querySelector('#remote-prev')!.addEventListener('click', () => void music.apply({ type: 'prev' }));
+  root.querySelector('#remote-next')!.addEventListener('click', () => void music.apply({ type: 'next' }));
+  volEl.addEventListener('input', () => void music.apply({ type: 'volume', volume: Number(volEl.value) }));
+  trackSel.addEventListener('change', () => music.localController().dispatch({ type: 'select', index: Number(trackSel.value) }));
+  connectBtn.addEventListener('click', () => {
+    if (music.state().status.kind === 'native-shell') openWebAppToConnect();
+    else void music.connect();
+  });
+  disconnectBtn.addEventListener('click', () => music.disconnect());
   const localUrls: string[] = [];
   filesInput.addEventListener('change', () => {
     const picked: Track[] = Array.from(filesInput.files ?? []).map((f, i) => {
@@ -321,7 +338,7 @@ export async function mountRemotePage(root: HTMLElement, opts: RemotePageOptions
         local: true,
       };
     });
-    if (picked.length) music.dispatch({ type: 'addTracks', tracks: picked });
+    if (picked.length) music.localController().dispatch({ type: 'addTracks', tracks: picked });
   });
 
   window.addEventListener('pagehide', () => {

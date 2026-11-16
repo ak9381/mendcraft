@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPhoneRoute, isRemoteRoute, isControlRoute, isLandingRoute, isStudioRoute } from '../src/relay/protocol';
+import { isPhoneRoute, isRemoteRoute, isControlRoute, isLandingRoute, isStudioRoute, isSpotifyRoute } from '../src/relay/protocol';
 
 // The iPhone PWA's manifest start_url is /phone — boot.ts routes it to the
 // remote page's compact "lamp & music" variant. These guard that the three
@@ -62,5 +62,24 @@ describe('isLandingRoute / isStudioRoute', () => {
     expect(isStudioRoute('/control', '')).toBe(false);
     expect(isPhoneRoute('/studio', '')).toBe(false);
     expect(isControlRoute('/studio', '')).toBe(false);
+  });
+});
+
+describe('isSpotifyRoute (OAuth callback)', () => {
+  it('matches /spotify and ?view=spotify', () => {
+    expect(isSpotifyRoute('/spotify', '')).toBe(true);
+    expect(isSpotifyRoute('/spotify/', '')).toBe(true);
+    expect(isSpotifyRoute('/', '?view=spotify')).toBe(true);
+  });
+
+  it('is disjoint from landing, studio, phone, remote and control', () => {
+    expect(isLandingRoute('/spotify', '')).toBe(false);
+    expect(isStudioRoute('/spotify', '')).toBe(false);
+    expect(isPhoneRoute('/spotify', '')).toBe(false);
+    expect(isRemoteRoute('/spotify', '')).toBe(false);
+    expect(isControlRoute('/spotify', '')).toBe(false);
+    expect(isSpotifyRoute('/studio', '')).toBe(false);
+    expect(isSpotifyRoute('/', '')).toBe(false);
+    expect(isLandingRoute('/', '?view=spotify')).toBe(false);
   });
 });

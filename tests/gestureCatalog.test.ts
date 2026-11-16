@@ -187,8 +187,10 @@ describe('dispatch', () => {
     expect(resolveGesture('palm-raise', base)).toEqual({ kind: 'ignored', reason: 'scope' });
     expect(resolveGesture('palm-raise', { ...base, context: 'devices' })).toMatchObject({ kind: 'run', target: 'lamp-up' });
   });
-  it('unwired music gestures are honest about it', () => {
-    expect(resolveGesture('pinch-slide', { ...base, context: 'devices' })).toEqual({ kind: 'ignored', reason: 'unwired' });
+  it('music volume and skip-track run in devices scope', () => {
+    expect(resolveGesture('pinch-slide', { ...base, context: 'devices' })).toMatchObject({ kind: 'run', target: 'volume' });
+    expect(resolveGesture('two-finger-swipe-side', { ...base, context: 'devices' })).toMatchObject({ kind: 'run', target: 'next-track' });
+    expect(resolveGesture('pinch-slide', base)).toEqual({ kind: 'ignored', reason: 'scope' });
   });
   it('her binding wins, and replaces the old default', () => {
     const bindings = [{ target: 'btn-undo', gesture: 'custom:my-v' }];

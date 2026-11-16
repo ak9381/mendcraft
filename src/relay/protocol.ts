@@ -112,6 +112,12 @@ export function isJudgesRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'judges';
 }
 
+/** Spotify OAuth callback: `/spotify` or `?view=spotify`. */
+export function isSpotifyRoute(pathname: string, search: string): boolean {
+  if (/^\/spotify\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'spotify';
+}
+
 /** The hands-free editor lives at /studio (and under judge sim/play query flags). */
 export function isStudioRoute(pathname: string, search: string): boolean {
   if (/^\/studio\/?$/.test(pathname)) return true;
@@ -130,6 +136,7 @@ export function isLandingRoute(pathname: string, search: string): boolean {
   if (isPhoneRoute(pathname, search)) return false;
   if (isControlRoute(pathname, search)) return false;
   if (isJudgesRoute(pathname, search)) return false;
+  if (isSpotifyRoute(pathname, search)) return false;
   return true;
 }
 

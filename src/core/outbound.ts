@@ -70,10 +70,31 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
   {
     kind: 'lan-bridge',
     label: 'Local WiZ lamp bridge',
-    primitive: '\\bfetch\\(',
+    primitive: 'FetchLike',
     files: ['src/devices/wizClient.ts', 'src/devices/discovery.ts'],
     leavesDevice: false,
     note: 'HTTP to 127.0.0.1 (the local Node bridge) which speaks UDP to the lamp on the LAN, and add-a-device connector calls to a private LAN address (192.168/10/172.16 only, enforced by the interpreter). Nothing goes to the internet.',
+  },
+  {
+    kind: 'spotify',
+    label: 'Spotify Web API',
+    primitive: 'api\\.spotify\\.com|accounts\\.spotify\\.com|sdk\\.scdn\\.co',
+    files: ['src/music/spotifyAuth.ts', 'src/music/spotifyApi.ts', 'src/music/spotifySdk.ts'],
+    leavesDevice: true,
+    note: 'Authorization (PKCE) and Connect API calls to accounts.spotify.com / api.spotify.com, plus an optional Web Playback SDK load from sdk.scdn.co so this browser can be a device. Playback commands and search text only — no camera, hand, face, or voice audio. Access tokens stay in this browser localStorage and are never written to the ledger.',
+  },
+  {
+    kind: 'network-fetch',
+    label: 'Declared fetch() call sites',
+    primitive: '\\bfetch\\(',
+    files: [
+      'src/devices/wizClient.ts',
+      'src/devices/discovery.ts',
+      'src/music/spotifyAuth.ts',
+      'src/music/spotifyApi.ts',
+    ],
+    leavesDevice: true,
+    note: 'The only fetch() call sites: the LAN lamp bridge (does not leave the LAN) and Spotify (see the spotify kind). A new fetch() must be added here and documented.',
   },
   {
     kind: 'firestore-relay',
@@ -111,6 +132,7 @@ export const CLOUD_LEDGER_JOBS: readonly string[] = [
   'a11y-explain',
   'deixis',
   'lang-detect',
+  'spotify',
 ];
 
 /** Strip the parenthetical state suffix a ledger job can carry, e.g.

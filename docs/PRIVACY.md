@@ -35,6 +35,8 @@ can actually reach another machine.
 | **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
 | **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames | frames go to the paired device, never to Gemini |
 | **remote-config** | yes | a one-way config pull (model ids, prompt-template ids, flags) | no user data |
+| **spotify** | yes | playback commands and search text to Spotify's API; optional Web Playback SDK | camera, hand, face, voice audio, access tokens (tokens stay in this browser) |
+| **network-fetch** | sometimes | the declared `fetch()` allowlist (LAN lamp bridge + Spotify) | anything not registered here |
 
 ### Point-and-say — the one image-to-cloud path
 
@@ -91,6 +93,19 @@ frames **between the two paired devices** (so the phone camera can drive the
 laptop). Those frames go to Firestore for the paired device to read — they are
 **never** sent to a Gemini model. This is a deliberate, user-initiated pairing
 feature; see `docs/RISKS.md` for the residual risk and mitigation.
+
+### Spotify — user-initiated music, never sensors
+
+When she connects Spotify (Premium) and plays, pauses, skips or asks for a
+track ("play some old Kannada songs"), Mendcraft talks to Spotify's Web API
+(`accounts.spotify.com` / `api.spotify.com`). Only the command and the search
+text leave; the camera, hand landmarks, face mesh and raw voice audio never
+do. Access tokens stay in this browser's `localStorage` and are stripped from
+the ledger (`job: spotify`). If she is not connected, the built-in
+public-domain player stays on this device and nothing is sent to Spotify.
+Inside the iOS (or Android) Capacitor shell, sign-in is opened on the web app
+at https://mendcraft.web.app because the `/spotify` redirect cannot return to
+the app yet.
 
 ## Backstops
 
