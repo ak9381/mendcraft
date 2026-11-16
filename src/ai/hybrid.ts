@@ -37,6 +37,12 @@ import {
 import type { HandMetrics } from '../input/handMetrics';
 import { buildRecipePickPrompt, parseRecipePick, type RecipeRef } from '../recipes/match';
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
+import {
+  CONNECTOR_CONSTRAINT, EFFECT_CONSTRAINT, IDENTIFY_CONSTRAINT,
+  buildConnectorPrompt, buildEffectPrompt, buildIdentifyPrompt, parseEffect, parseIdentity, writerSaysUnsupported,
+  type DeviceIdentity, type EffectVerdict, type IdentifyHint,
+} from '../devices/identify';
+import { coerceConnector, type Connector } from '../devices/connector';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
@@ -177,6 +183,14 @@ interface Models {
   promptTemplate?: TemplateGenModel | null;
   /** Cloud TTS model (spoken replies in her language); null if unsupported. */
   tts?: AudioGenModel | null;
+  /** Add-a-device: name the device from one frame (PREFER_ON_DEVICE, image in). */
+  deviceSee?: MultimodalGenModel | null;
+  deviceSeeCloud?: MultimodalGenModel | null;
+  /** Add-a-device: before/after frames → was the effect visible? (PREFER_ON_DEVICE). */
+  effectCheck?: MultimodalGenModel | null;
+  effectCheckCloud?: MultimodalGenModel | null;
+  /** Add-a-device: write a declarative connector once (ONLY_IN_CLOUD). */
+  connectorWriter?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -193,6 +207,11 @@ export interface ModelOverrides {
   handAdapt?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
+  deviceSee?: MultimodalGenModel | null;
+  deviceSeeCloud?: MultimodalGenModel | null;
+  effectCheck?: MultimodalGenModel | null;
+  effectCheckCloud?: MultimodalGenModel | null;
+  connectorWriter?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -375,6 +394,11 @@ async function ensureModels(): Promise<Models | null> {
       handAdapt: testOverrides.handAdapt ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
+      deviceSee: testOverrides.deviceSee ?? null,
+      deviceSeeCloud: testOverrides.deviceSeeCloud ?? null,
+      effectCheck: testOverrides.effectCheck ?? null,
+      effectCheckCloud: testOverrides.effectCheckCloud ?? null,
+      connectorWriter: testOverrides.connectorWriter ?? null,
     };
   }
   if (!isEnabled()) {
@@ -574,7 +598,41 @@ async function initFirebase(): Promise<Models | null> {
       tts = null;
     }
 
-    cached = { intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts };
+    // Add-a-device (Control Anything-style, with proof): the two camera jobs
+    // prefer Nano with image input; the connector writer is cloud-only and
+    // runs once per brand+kind (the result is cached and reused offline).
+    const identifySchema = toFirebaseSchema(IDENTIFY_CONSTRAINT, Schema);
+    const effectSchema = toFirebaseSchema(EFFECT_CONSTRAINT, Schema);
+    const deviceSee = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: identifySchema } },
+      onDeviceParams: { createOptions: DEIXIS_CREATE_OPTIONS, promptOptions: { responseConstraint: IDENTIFY_CONSTRAINT } },
+    }) as unknown as MultimodalGenModel;
+    const deviceSeeCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: identifySchema } },
+    }) as unknown as MultimodalGenModel;
+    const effectCheck = getGenerativeModel(ai, {
+      mode: InferenceMode.PREFER_ON_DEVICE,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: effectSchema } },
+      onDeviceParams: { createOptions: DEIXIS_CREATE_OPTIONS, promptOptions: { responseConstraint: EFFECT_CONSTRAINT } },
+    }) as unknown as MultimodalGenModel;
+    const effectCheckCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: effectSchema } },
+    }) as unknown as MultimodalGenModel;
+    const connectorWriter = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(CONNECTOR_CONSTRAINT, Schema) },
+      },
+    });
+
+    cached = {
+      intent, template, verify, fusion, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
+      deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter,
+    };
     return cached;
   } catch (err) {
     noteError('Firebase AI init', err);
@@ -1308,4 +1366,103 @@ export async function adaptHandProfile(metrics: HandMetrics): Promise<AdaptHandR
   const rules = coerceProfileAdaptation(null, metrics);
   recordInference('rules', 'hand-adapt', Date.now() - t0);
   return { ...rules, ms: Date.now() - t0 };
+}
+
+// ---------------------------------------------------------------------------
+// ADD A DEVICE (Control Anything-style, plus reuse, a sandbox and proof).
+
+export interface FrameImage { mimeType: string; dataBase64: string }
+
+/** Multimodal hybrid call: PREFER_ON_DEVICE first, cloud twin if it throws. */
+async function callVision(
+  hybridModel: MultimodalGenModel | null | undefined,
+  cloud: MultimodalGenModel | null | undefined,
+  parts: Array<string | ImagePart>,
+  label: string,
+): Promise<ModelResponse | null> {
+  if (hybridModel) {
+    try {
+      const { response } = await withTimeout(hybridModel.generateContent(parts), ON_DEVICE_TIMEOUT_MS, label);
+      return response;
+    } catch (err) {
+      noteError(`${label} (hybrid)`, err);
+    }
+  }
+  if (!cloud) return null;
+  try {
+    const r = await withTimeout(cloud.generateContent(parts), CLOUD_GENERATE_TIMEOUT_MS * 2, `${label} cloud`);
+    return { text: () => r.response.text(), inferenceSource: 'in_cloud' };
+  } catch (err) {
+    noteError(`${label} (cloud)`, err);
+    return null;
+  }
+}
+
+const imagePart = (f: FrameImage): ImagePart => ({ inlineData: { mimeType: f.mimeType, data: f.dataBase64 } });
+
+/** Name the device in ONE camera frame. Null when nothing controllable is seen
+ *  or no model is available. The frame goes only into this call; not stored. */
+export async function identifyDevice(
+  frame: FrameImage,
+  hint?: IdentifyHint,
+): Promise<{ identity: DeviceIdentity; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models) return null;
+  const response = await callVision(models.deviceSee, models.deviceSeeCloud, [buildIdentifyPrompt(hint), imagePart(frame)], 'device identify');
+  const identity = response ? parseIdentity(extractJson(response.text())) : null;
+  if (!identity) return null;
+  const source = sourceOf(response!);
+  recordInference(source, 'device-identify', Date.now() - t0);
+  return { identity, source, ms: Date.now() - t0 };
+}
+
+/** Cloud Gemini writes a declarative connector ONCE. The JSON is validated by
+ *  the fixed interpreter's allowlist (coerceConnector) before it is used. */
+export async function writeDeviceConnector(
+  identity: DeviceIdentity,
+): Promise<{ connector: Connector; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.connectorWriter) return null;
+  try {
+    const { response } = await withTimeout(
+      models.connectorWriter.generateContent(withPreamble(buildConnectorPrompt(identity))),
+      CLOUD_GENERATE_TIMEOUT_MS * 2,
+      'connector writer',
+    );
+    const raw = extractJson(response.text());
+    if (writerSaysUnsupported(raw)) return null;
+    const c = coerceConnector(
+      raw && typeof raw === 'object' ? { brand: identity.brand, deviceKind: identity.kind, ...(raw as object) } : raw,
+      'cloud',
+    );
+    if (!c) { noteError('connector writer', new Error('connector failed the allowlist')); return null; }
+    recordInference('cloud', 'connector-write', Date.now() - t0);
+    return { connector: c, source: 'cloud', ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('connector writer', err);
+    return null;
+  }
+}
+
+/** Compare BEFORE and AFTER frames for the action's success cue. */
+export async function checkDeviceEffect(
+  before: FrameImage,
+  after: FrameImage,
+  cue: string,
+): Promise<{ verdict: EffectVerdict; reason: string; source: Source; ms: number }> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const response = models
+    ? await callVision(models.effectCheck, models.effectCheckCloud, [buildEffectPrompt(cue), imagePart(before), imagePart(after)], 'effect check')
+    : null;
+  const parsed = response ? parseEffect(extractJson(response.text())) : null;
+  if (!parsed) {
+    recordInference('rules', 'effect-check', Date.now() - t0);
+    return { verdict: 'unsure', reason: 'No vision model available to check.', source: 'rules', ms: Date.now() - t0 };
+  }
+  const source = sourceOf(response!);
+  recordInference(source, 'effect-check', Date.now() - t0);
+  return { ...parsed, source, ms: Date.now() - t0 };
 }

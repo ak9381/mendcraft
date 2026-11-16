@@ -71,9 +71,9 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
     kind: 'lan-bridge',
     label: 'Local WiZ lamp bridge',
     primitive: '\\bfetch\\(',
-    files: ['src/devices/wizClient.ts'],
+    files: ['src/devices/wizClient.ts', 'src/devices/discovery.ts'],
     leavesDevice: false,
-    note: 'HTTP to 127.0.0.1 (the local Node bridge) which speaks UDP to the lamp on the LAN. Nothing goes to the internet.',
+    note: 'HTTP to 127.0.0.1 (the local Node bridge) which speaks UDP to the lamp on the LAN, and add-a-device connector calls to a private LAN address (192.168/10/172.16 only, enforced by the interpreter). Nothing goes to the internet.',
   },
   {
     kind: 'firestore-relay',

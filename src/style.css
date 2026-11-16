@@ -2392,3 +2392,59 @@ body.mc-resting .hand-cursor { opacity: 0.35; }
 .hand-cursor.dwelling {
   background: conic-gradient(var(--accent-2) calc(var(--dwell, 0) * 360deg), transparent 0);
 }
+
+/* ---- Add a device (camera → Nano names it → cached connector → verified) ---- */
+.mc-add-device {
+  position: absolute; z-index: 45; top: 64px; right: 16px; width: 440px; max-width: calc(100% - 32px); max-height: calc(100% - 80px);
+  overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); font-size: 14px;
+}
+.mc-add-device[hidden] { display: none; }
+.mc-ad-head { display: flex; align-items: center; gap: 8px; }
+.mc-ad-title { font-weight: 600; font-size: 16px; flex: 1; }
+.mc-add-device .mc-panel-x { background: none; border: none; color: var(--text); cursor: pointer; font-size: 16px; padding: 6px; }
+.mc-ad-lead { margin: 0; color: var(--text-dim); }
+.mc-ad-modes { display: flex; flex-direction: column; gap: 8px; }
+.mc-ad-mode {
+  display: grid; grid-template-columns: 34px 1fr; gap: 4px 10px; text-align: left; padding: 12px; min-height: 64px;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+.mc-ad-mode.suggested { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mc-ad-mode[aria-disabled="true"] { opacity: 0.55; }
+.mc-ad-n { grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(142,157,255,.18); font-weight: 700; }
+.mc-ad-mt { display: flex; flex-direction: column; gap: 2px; }
+.mc-ad-mt small { color: var(--text-dim); }
+.mc-ad-why { grid-column: 2; font-size: 12px; }
+.mc-ad-why.ok { color: var(--accent-2); }
+.mc-ad-why.no { color: var(--warn); }
+.mc-ad-gimbal { margin: 0; font-size: 12px; color: var(--text-dim); }
+.mc-ad-modeline { display: flex; align-items: center; justify-content: space-between; color: var(--text-dim); }
+.mc-ad-frames { display: flex; gap: 8px; flex-wrap: wrap; }
+.mc-ad-frames figure { margin: 0; flex: 1 1 120px; max-width: 140px; }
+.mc-ad-frames img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.mc-ad-frames figcaption { font-size: 11px; color: var(--text-dim); text-align: center; }
+.mc-ad-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mc-ad-steps li { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; align-items: start; }
+.mc-ad-steps li.pending { opacity: 0.45; }
+.mc-ad-steps li.ok .mc-ad-ico { color: var(--accent-2); }
+.mc-ad-steps li.fail .mc-ad-ico { color: var(--warn); }
+.mc-ad-ico { font-weight: 700; text-align: center; }
+.mc-ad-st { display: flex; flex-direction: column; }
+.mc-ad-detail { color: var(--text-dim); font-size: 13px; }
+.mc-ad-src { grid-column: 2; }
+.mc-ad-src .badge { font-size: 11px; }
+.mc-ad-action p { margin: 0 0 8px; }
+.mc-ad-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.mc-ad-btns button { min-height: 52px; padding: 0 18px; font-size: 16px; }
+.mc-ad-ip { flex: 1 1 140px; min-height: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+.mc-ad-note { color: var(--warn); font-size: 13px; }
+.mc-ad-result { display: flex; gap: 12px; align-items: center; }
+.mc-ad-result.bad { color: var(--warn); }
+.mc-ad-tick { flex: 0 0 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 32px; font-weight: 800; background: #16a34a; color: #fff; }
+.mc-ad-tick.amber { background: var(--warn); color: #111; }
+.mc-ad-sub { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.mc-ad-dev { display: flex; gap: 8px; justify-content: space-between; font-size: 13px; }
+.mc-ad-dim { color: var(--text-dim); }
+.mc-ad-ok { color: var(--accent-2); }
+#btn-add-device { font-weight: 700; }

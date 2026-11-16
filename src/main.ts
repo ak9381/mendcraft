@@ -118,6 +118,15 @@ import { createFaceCueDetector, faceRatios } from './input/faceCues';
 import { createDwellClicker } from './input/dwell';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
+import { createAddDevicePanel } from './ui/addDevicePanel';
+import type { AddMode, FlowDeps } from './devices/addDeviceFlow';
+import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cachePairedDevice } from './devices/connectorCache';
+import { builtinWizConnector, connectorKey, isWizIdentity, runAction } from './devices/connector';
+import { identityFromWords, deviceNameIn, isAddDevicePhrase } from './devices/identify';
+import { bridgeHealthy, discoverDevices, makeTransports } from './devices/discovery';
+import { aimGimbalAt, getGimbalPlugin, isIosShell } from './devices/native';
+import { createSimWorld } from './devices/simDevice';
+import { identifyDevice, writeDeviceConnector, checkDeviceEffect } from './ai/hybrid';
 import { lampStateLabel, type LampState } from './devices/wiz';
 import type { MusicStatus } from './relay/protocol';
 import { createFakeTransport, type RelayTransport } from './relay/transport';
@@ -195,6 +204,7 @@ app.innerHTML = `
     <button id="btn-register" type="button" hidden>Register me</button>
     <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
+    <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
     <div class="spacer"></div>
     <button id="btn-undo" type="button">Undo</button>
     <button id="btn-redo" type="button">Redo</button>
@@ -837,11 +847,14 @@ function somethingPending(): boolean {
 /** Run a button or command target. Returns false if nothing ran. */
 function runTarget(target: string, value?: number): boolean {
   switch (target) {
+    case 'add-device': void openAddDevice(); return true;
     case 'confirm':
+      if (addDevicePanel.confirm()) return true;
       viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       return true;
     case 'cancel':
       window.speechSynthesis?.cancel();
+      if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
       return closeTopPanel();
     case 'nav-back':
@@ -911,7 +924,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-add-device, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -979,6 +992,108 @@ viewportEl.appendChild(lampPanel.element);
 btnLamp.addEventListener('click', () => {
   lampPanel.toggle();
   toggleButton(btnLamp, lampPanel.isOpen());
+});
+
+// ---- add a device (camera or voice → Nano names it → cached declarative
+// connector → LAN → pinch to confirm → Nano checks the effect). No gimbal needed.
+
+const simWorld = SIM_ACTIVE ? createSimWorld() : null;
+
+/** One full camera still, downscaled (max 640 px wide), for identify/verify. */
+function captureFullFrame(): { mimeType: string; dataBase64: string } | null {
+  const video = tracker?.videoEl ?? null;
+  if (!video || video.readyState < 2 || !video.videoWidth) return null;
+  try {
+    const scale = Math.min(1, 640 / video.videoWidth);
+    const c = document.createElement('canvas');
+    c.width = Math.round(video.videoWidth * scale); c.height = Math.round(video.videoHeight * scale);
+    c.getContext('2d')!.drawImage(video, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', 0.7);
+    return { mimeType: 'image/jpeg', dataBase64: url.slice(url.indexOf(',') + 1) };
+  } catch { return null; }
+}
+
+function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }; name?: string; words?: string }): Omit<FlowDeps, 'confirm' | 'askHost' | 'onStep'> {
+  const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const words = hint.words ?? '';
+  const name = hint.name ?? deviceNameIn(words)?.name;
+  const flowHint = { ...(hint.pointer ? { pointer: hint.pointer } : {}), ...(name ? { name } : {}) };
+  if (simWorld) {
+    return {
+      sim: true, mode, hint: flowHint, wait,
+      identityFromWords: () => identityFromWords(words || 'add the lamp'),
+      capture: () => simWorld.capture(mode),
+      identify: (f, h) => simWorld.identify(f, h),
+      cachedConnector: (id) => simWorld.cached(connectorKey(id.brand, id.kind)),
+      writeConnector: () => simWorld.write(),
+      saveConnector: () => { /* sim keeps its own in-memory cache */ },
+      discover: () => simWorld.discover(),
+      run: (c, a, h) => simWorld.run(c, a, h),
+      check: () => simWorld.check(),
+      saveDevice: () => { /* sim devices are not saved */ },
+    };
+  }
+  const transports = makeTransports();
+  return {
+    sim: false, mode, hint: flowHint, wait,
+    identityFromWords: () => identityFromWords(words),
+    capture: async () => captureFullFrame(),
+    identify: (f, h) => identifyDevice(f, h),
+    cachedConnector: (id) => getCachedConnector(connectorKey(id.brand, id.kind)),
+    writeConnector: async (id) => {
+      const w = await writeDeviceConnector(id);
+      if (w) return w;
+      // Cloud unreachable (offline / no Firebase): WiZ has a built-in seed.
+      return isWizIdentity(id.brand, id.kind) ? { connector: builtinWizConnector(), source: 'builtin' as const } : null;
+    },
+    saveConnector: (c) => cacheConnector(c),
+    discover: (_id, c) => discoverDevices(c),
+    aim: (box) => aimGimbalAt(box),
+    run: (c, a, h) => runAction(c, a, {}, h, transports),
+    check: (b, a, cue) => checkDeviceEffect(b, a, cue),
+    saveDevice: (d) => { cachePairedDevice(d); },
+  };
+}
+
+const addDevicePanel = createAddDevicePanel({
+  sim: SIM_ACTIVE,
+  env: async () => {
+    const g = getGimbalPlugin();
+    let gimbal = false;
+    if (g) { try { gimbal = (await g.isAvailable()).available; } catch { gimbal = false; } }
+    return { camera: tracker !== null, iosApp: isIosShell(), bridge: SIM_ACTIVE ? false : await bridgeHealthy(), gimbal };
+  },
+  deps: addDeviceDeps,
+  enableCamera: () => void enableCamera(),
+  say: (t) => say(t),
+  // Honest ledger: each model call that ran, and what it sent if it was cloud.
+  onStep: (ev) => {
+    if (ev.sim || ev.state === 'active' || (ev.source !== 'cloud' && ev.source !== 'on-device')) return;
+    const sent: Record<string, string> = {
+      identify: 'one camera still (not stored)', connector: 'device kind + brand (text only)', verify: 'two camera stills (not stored)',
+    };
+    recordLedger(ev.source, `add device · ${ev.step}`, ev.source === 'cloud' ? 'needs the larger model' : 'private, on device',
+      ev.source === 'cloud' ? (sent[ev.step] ?? 'text') : 'nothing', ev.ms);
+  },
+});
+viewportEl.appendChild(addDevicePanel.element);
+
+/** Start "add a device". With her words: a named device and no camera → voice
+ *  mode; camera on → room mode with the name (and where she points); else the
+ *  auto-detected chooser. */
+async function openAddDevice(words?: string): Promise<void> {
+  overflowMenu.close();
+  const named = words ? deviceNameIn(words) : null;
+  const camera = tracker !== null || SIM_ACTIVE;
+  if (named && !camera) { await addDevicePanel.open({ mode: 'voice', words }); return; }
+  if (named && camera) {
+    await addDevicePanel.open({ mode: 'room', words, hint: { name: named.name, ...(lastPointer?.cameraNorm ? { pointer: lastPointer.cameraNorm } : {}) } });
+    return;
+  }
+  await addDevicePanel.open();
+}
+el<HTMLButtonElement>('btn-add-device').addEventListener('click', () => {
+  if (addDevicePanel.isOpen()) addDevicePanel.close(); else void openAddDevice();
 });
 
 let hostSession: HostSession | null = null;
@@ -2448,6 +2563,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // Her own voice shortcuts (setup) and the setup / rest phrases run locally.
   const boundTarget = bindingForPhrase(setupData, utterance);
   if (boundTarget) return runTarget(boundTarget);
+  if (isAddDevicePhrase(utterance)) { void openAddDevice(utterance); return true; }
   if (isSetupPhrase(utterance)) { setupPanel.open(); toggleButton(btnSetup, true); return true; }
   const rp = restPhrase(utterance);
   if (rp) { setResting(rp === 'rest'); return true; }

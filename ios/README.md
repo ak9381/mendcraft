@@ -34,3 +34,22 @@ The iPhone experience ships two ways:
   honestly falls back to its own local-file player (`src/music/appleMusic.ts`).
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
+
+## Add-a-device native plugins (`ios/plugins/`, not compiled yet)
+
+Written on the Linux build box, **not compiled or run** — no Mac/Xcode here and
+the gimbal hasn't arrived. After `npx cap add ios`, drag the three files into
+the `App` target and set the Main storyboard's view controller class to
+`MendcraftViewController`.
+
+- `MendcraftLanPlugin.swift` — UDP/HTTP to private LAN IPs only (same port
+  allowlist as `src/devices/connector.ts`), WiZ broadcast discovery, Bonjour
+  browse (names only; no IP resolve yet). Needs `NSLocalNetworkUsageDescription`,
+  `NSBonjourServices`, `NSAllowsLocalNetworking`, and the
+  `com.apple.developer.networking.multicast` entitlement (Apple must approve it)
+  for the broadcast.
+- `MendcraftGimbalPlugin.swift` — **optional** DockKit aiming (Insta360 Flow 2
+  Pro). Manual pan/tilt with `setOrientation(relative:)`, system face tracking
+  off. iOS 18+, behind `#if canImport(DockKit)`; reports `available:false`
+  otherwise. Nothing in the flow requires it.
+- `MendcraftViewController.swift` — registers both plugins.

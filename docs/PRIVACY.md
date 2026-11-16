@@ -19,7 +19,7 @@ silently.
 
 ## The one-line claim
 
-**The camera frames, hand landmarks, face mesh and raw voice audio never leave this device** — with exactly one, user-initiated, documented exception (point-and-say), and one peer path (phone↔laptop relay). Everything the cloud ever sees is abstract: the command text and the re-validated design ops.
+**The camera frames, hand landmarks, face mesh and raw voice audio never leave this device** — with two user-initiated, documented exceptions (point-and-say, and add-a-device when Nano can't run), and one peer path (phone↔laptop relay). Everything the cloud ever sees is abstract: the command text and the re-validated design ops.
 
 ## Known outbound kinds
 
@@ -32,7 +32,7 @@ can actually reach another machine.
 | **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan/ui, a11y-explain, TTS, escalated intent/deixis | raw sensor data |
 | **prefer-on-device** (`PREFER_ON_DEVICE`) | sometimes | runs on Nano; on fallback sends the same abstract text. Every fallback is a ledger cloud call | sensor streams |
 | **on-device-only** (`ONLY_ON_DEVICE`) | **no** | hand-adaptive profile pick runs with no `inCloudParams` — raw hand numbers can never leave, even if Nano is missing | everything |
-| **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp | nothing reaches the internet |
+| **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
 | **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames | frames go to the paired device, never to Gemini |
 | **remote-config** | yes | a one-way config pull (model ids, prompt-template ids, flags) | no user data |
 
@@ -40,8 +40,8 @@ can actually reach another machine.
 
 When the user says "make **this** bigger" while pointing, the app crops a small
 still around the pointer and may send it to a cloud multimodal model
-(`deixisCloud`, `ONLY_IN_CLOUD`) to resolve which object "this" is. This is the
-**only** path where image data reaches Gemini. It is:
+(`deixisCloud`, `ONLY_IN_CLOUD`) to resolve which object "this" is. Together with
+add-a-device (below) these are the **only** paths where image data can reach Gemini. It is:
 
 - user-initiated (a deictic command), not a background stream;
 - a single cropped frame, not the live camera;
@@ -51,6 +51,18 @@ still around the pointer and may send it to a cloud multimodal model
 The privacy-drift test asserts that the only file constructing an `inlineData`
 model part is `src/ai/hybrid.ts` — so no second image-to-cloud path can appear
 unnoticed.
+
+### Add a device — the second image path (only if Nano can't run)
+
+"Add a device" names the device from ONE still (and later compares a BEFORE and
+an AFTER still) with `PREFER_ON_DEVICE` models (`deviceSee`, `effectCheck`).
+On Chrome with multimodal Nano those stills never leave the laptop. Only if
+Nano is unavailable or fails do they go to the cloud twin (`deviceSeeCloud`,
+`effectCheckCloud`). It is user-initiated (she says "add device", presses +,
+or uses her bound gesture), at most three stills per run, never stored, and
+every cloud call is a ledger row (`add device · identify` / `· verify`).
+Voice-only mode ("add the lamp") sends no image at all. The connector writer
+(`ONLY_IN_CLOUD`) receives only the device kind and brand as text.
 
 ### Phone↔laptop relay — a peer path, not the cloud AI
 
