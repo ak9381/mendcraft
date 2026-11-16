@@ -27,6 +27,18 @@ import {
   isPinching,
   isOpenPalm,
   WEB_SEARCH_ID,
+  googleImagesUrl,
+  pinterestSearchUrl,
+  searchPageUrl,
+  bestImageUrl,
+  collectResultImages,
+  applyRefsCommand,
+  emptyOverlay,
+  pickByNumber,
+  sanitizeSvg,
+  parseGeneratedOptions,
+  generatedToHits,
+  fixtureGenerated,
   type RefHit,
   type GridBox,
 } from '../src/references';
@@ -35,6 +47,7 @@ describe('intent parsing', () => {
   it('parses find / show / references-for search phrases', () => {
     expect(parseReferenceIntent('find me references for drawings')).toEqual({
       type: 'search', query: 'drawings', raw: 'find me references for drawings', fuzzy: false,
+      engine: 'google', preferred: 'search', generateKind: 'drawing', explicit: false,
     });
     expect(parseReferenceIntent('show me pictures of a sitting cat')?.query).toBe('sitting cat');
     expect(parseReferenceIntent('references for flower studies')?.query).toBe('flower studies');
@@ -325,5 +338,119 @@ describe('pinch-select with synthetic landmarks', () => {
     state = stepRefGestures(state, { landmarks: place(PINCH(), 2, 2, 10), pointer, now: 0, boxes, snapRadius: 4 }).state;
     const up = stepRefGestures(state, { landmarks: place(POINT(), 2, 2, 10), pointer, now: 80, boxes, snapRadius: 4 });
     expect(up.events.some((e) => e.type === 'select')).toBe(false);
+  });
+});
+
+describe('real-browser search vs generate path', () => {
+  it('defaults photos / references to search, and inspirations / mockups to generate', () => {
+    const photos = parseReferenceIntent('find me references for drawings');
+    expect(photos).toMatchObject({ preferred: 'search', engine: 'google', explicit: false, query: 'drawings' });
+    const cat = parseReferenceIntent('show me pictures of a sitting cat');
+    expect(cat).toMatchObject({ preferred: 'search', query: 'sitting cat' });
+    const insp = parseReferenceIntent('find me landing page inspirations for an AI company');
+    expect(insp).toMatchObject({
+      preferred: 'generate', generateKind: 'layout', query: 'ai company', explicit: false,
+    });
+    const mock = parseReferenceIntent('show me mockups of a meditation app');
+    expect(mock).toMatchObject({ preferred: 'generate', generateKind: 'layout' });
+  });
+
+  it('treats “draw me a reference of …” as a Gemini drawing, not a web search', () => {
+    const d = parseReferenceIntent('draw me a reference of a hand holding a cup');
+    expect(d).toMatchObject({
+      type: 'search', query: 'hand holding a cup', preferred: 'generate',
+      generateKind: 'drawing', explicit: true,
+    });
+    expect(parseReferenceIntent('sketch me a pose reference of a sitting figure')).toMatchObject({
+      preferred: 'generate', generateKind: 'drawing', explicit: true,
+    });
+  });
+
+  it('opens Pinterest when she says “on Pinterest”, otherwise Google Images', () => {
+    const pin = parseReferenceIntent('find me references for mid-century chairs on Pinterest');
+    expect(pin).toMatchObject({ engine: 'pinterest', query: 'mid-century chairs', preferred: 'search' });
+    expect(searchPageUrl(pin!.query, pin!.engine)).toBe(pinterestSearchUrl('mid-century chairs'));
+    expect(googleImagesUrl('drawings')).toContain('google.com/search');
+    expect(googleImagesUrl('drawings')).toContain('q=drawings');
+    expect(parseReferenceIntent('show me pictures of lamps on Google')?.engine).toBe('google');
+  });
+
+  it('chooser phrases only match while the two-option card is open', () => {
+    expect(parseReferenceIntent('search')).toBeNull();
+    expect(parseReferenceIntent('generate')).toBeNull();
+    expect(parseReferenceIntent('search', { chooserOpen: true })?.type).toBe('chooseSearch');
+    expect(parseReferenceIntent('generate', { chooserOpen: true })?.type).toBe('chooseGenerate');
+    expect(parseReferenceIntent('the second one', { chooserOpen: true })?.type).toBe('chooseGenerate');
+    expect(parseReferenceIntent('number one', { chooserOpen: true })?.type).toBe('chooseSearch');
+  });
+
+  it('lets her drive a real-browser tab with next page, number 3, and close', () => {
+    const ctx = { browserOpen: true };
+    expect(parseReferenceIntent('next page', ctx)?.type).toBe('more');
+    expect(parseReferenceIntent('number 3', ctx)).toEqual({ type: 'pick', index: 3 });
+    expect(parseReferenceIntent('close', ctx)?.type).toBe('close');
+    expect(parseReferenceIntent('number 3')).toBeNull();
+  });
+});
+
+describe('extension overlay: numbered badges and pick', () => {
+  const boxes = [
+    { src: 'https://cdn.example/a.jpg', title: 'A', x: 10, y: 10, w: 200, h: 200 },
+    { src: 'https://cdn.example/b.jpg', href: 'https://www.google.com/imgres?imgurl=https%3A%2F%2Fcdn.example%2Ffull-b.jpg', title: 'B', x: 220, y: 10, w: 200, h: 200 },
+    { src: 'https://cdn.example/icon.png', title: 'icon', x: 10, y: 10, w: 16, h: 16 },
+  ];
+
+  it('numbers visible image results and skips tiny icons', () => {
+    const imgs = collectResultImages(boxes, { w: 800, h: 600 });
+    expect(imgs.map((i) => i.index)).toEqual([1, 2]);
+    expect(imgs[1].src).toBe(bestImageUrl(boxes[1].src, boxes[1].href));
+    expect(imgs[1].src).toBe('https://cdn.example/full-b.jpg');
+  });
+
+  it('picks by number, follows a dwell cursor, and closes', () => {
+    let st = emptyOverlay();
+    const images = collectResultImages(boxes, { w: 800, h: 600 });
+    st = applyRefsCommand(st, { type: 'setImages', images });
+    expect(st.highlighted).toBe(1);
+    st = applyRefsCommand(st, { type: 'highlight', index: 2 });
+    expect(pickByNumber(st, 2)?.title).toBe('B');
+    st = applyRefsCommand(st, { type: 'pick', index: 2 });
+    expect(st.picked?.src).toContain('full-b.jpg');
+    st = applyRefsCommand(st, { type: 'cursor', x: 20, y: 20 });
+    expect(st.highlighted).toBe(1);
+    st = applyRefsCommand(st, { type: 'close' });
+    expect(st.closed).toBe(true);
+  });
+});
+
+describe('Gemini generated drawings and layouts (SVG, no billing)', () => {
+  it('sanitizes SVG and drops scripts or javascript handlers', () => {
+    const dirty = '<svg viewBox="0 0 10 10" onclick="alert(1)"><script>alert(1)</script><circle cx="5" cy="5" r="2"/></svg>';
+    const clean = sanitizeSvg(dirty)!;
+    expect(clean).toContain('<circle');
+    expect(clean).not.toMatch(/script/i);
+    expect(clean).not.toMatch(/onclick/i);
+    expect(sanitizeSvg('<div>nope</div>')).toBeNull();
+  });
+
+  it('parses 3–4 numbered options and labels them Gemini · cloud', () => {
+    const text = JSON.stringify([
+      { title: 'Front view', kind: 'drawing', svg: '<svg viewBox="0 0 10 10"><circle cx="2" cy="2" r="1"/></svg>' },
+      { title: 'Side view', kind: 'drawing', svg: '<svg viewBox="0 0 10 10"><circle cx="8" cy="2" r="1"/></svg>' },
+      { title: 'Top view', kind: 'drawing', svg: '<svg viewBox="0 0 10 10"><circle cx="5" cy="8" r="1"/></svg>' },
+    ]);
+    const opts = parseGeneratedOptions(text, 'drawing');
+    expect(opts).toHaveLength(3);
+    const hits = generatedToHits(opts);
+    expect(hits.every((h) => h.credit === 'Gemini · cloud')).toBe(true);
+    expect(hits.every((h) => h.source === 'Gemini')).toBe(true);
+    expect(hits[0].thumbUrl.startsWith('data:image/svg+xml')).toBe(true);
+  });
+
+  it('fixture drawings for “a hand holding a cup” are numbered line-art cards', () => {
+    const opts = fixtureGenerated('a hand holding a cup', 'drawing');
+    expect(opts.length).toBeGreaterThanOrEqual(3);
+    expect(opts.every((o) => o.kind === 'drawing' && o.svg.includes('<svg'))).toBe(true);
+    expect(generatedToHits(opts)[0].credit).toBe('Gemini · cloud');
   });
 });

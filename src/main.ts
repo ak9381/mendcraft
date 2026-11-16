@@ -126,7 +126,7 @@ import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestur
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
-import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE } from './references';
+import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch } from './references';
 import { refineSearchQuery } from './ai/hybrid';
 import { parseChromeIntent, intentToRequest } from './extension/intents';
 import { createExtensionBridge } from './extension/bridge';
@@ -2477,7 +2477,7 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
     recordLedger('rules', 'recipe pick', REASON_TEXT.exact, '');
     routerPanel.add({ utterance, planned: 'rules', source: 'rules', reason: 'exact', escalated: false, ms: performance.now() - t0 });
     if (isReferenceRecipe(recipe)) {
-      const result = await refBoard.apply({ type: 'search', query: recipeSearchQuery(recipe), raw: utterance, fuzzy: false });
+      const result = await refBoard.apply(makeSearch(recipeSearchQuery(recipe), utterance, { fuzzy: false }));
       verifierEl.textContent = result.detail;
       return result.ok;
     }

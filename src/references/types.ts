@@ -1,6 +1,6 @@
 // Picture-reference search: shared types. Pure data, no DOM, no network.
 
-export type RefSource = 'Openverse' | 'Wikimedia Commons';
+export type RefSource = 'Openverse' | 'Wikimedia Commons' | 'Google Images' | 'Pinterest' | 'Gemini';
 
 export interface RefHit {
   id: string;
@@ -48,8 +48,26 @@ export interface SearchPage {
   hasMore: boolean;
 }
 
+export type SearchEngine = 'google' | 'pinterest';
+export type GenerateKind = 'drawing' | 'layout';
+export type RefPath = 'search' | 'generate';
+
+export type SearchIntent = {
+  type: 'search';
+  query: string;
+  raw: string;
+  fuzzy: boolean;
+  engine: SearchEngine;
+  preferred: RefPath;
+  generateKind: GenerateKind;
+  /** She already named the path (e.g. “on Pinterest”, “draw me”, “generate”). */
+  explicit: boolean;
+};
+
 export type ReferenceIntent =
-  | { type: 'search'; query: string; raw: string; fuzzy: boolean }
+  | SearchIntent
+  | { type: 'chooseSearch' }
+  | { type: 'chooseGenerate' }
   | { type: 'more' }
   | { type: 'prevPage' }
   | { type: 'next' }
@@ -65,6 +83,10 @@ export type ReferenceIntent =
 export interface IntentContext {
   /** The numbered grid is on the canvas. */
   gridOpen?: boolean;
+  /** A real Google Images / Pinterest tab is being driven hands-free. */
+  browserOpen?: boolean;
+  /** The Search vs Generate chooser is on the canvas. */
+  chooserOpen?: boolean;
   /** A card or a placed image is selected. */
   hasSelection?: boolean;
 }

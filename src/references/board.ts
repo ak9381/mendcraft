@@ -499,6 +499,10 @@ export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBo
         note('Pinch to open a web search.');
         speak('Pinch to open a web search.');
         return { ok: true, detail: 'Pinch to open a web search.' };
+      case 'chooseSearch':
+        return { ok: false, detail: 'Choose Search the web first.' };
+      case 'chooseGenerate':
+        return { ok: false, detail: 'Choose Generate with Gemini first.' };
     }
   }
 
