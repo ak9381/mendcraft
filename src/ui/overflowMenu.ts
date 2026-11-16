@@ -1,6 +1,7 @@
-// One-row editor toolbar with a "More" overflow. Core tools stay in the
-// primary row; everything else (and, on a narrow viewport, Camera / Mic /
-// Undo / Redo / 3D) moves into a 44px-row menu so the bar never wraps.
+// Compact session dock with a "More" overflow. Core tools stay in the
+// primary island; everything else (and, on a narrow viewport, Camera / Mic /
+// 3D) moves into a 60px-row menu so the dock never wraps. Undo/redo live in
+// their own island just above the tool palette.
 
 export const ALWAYS_OVERFLOW_IDS = [
   'btn-setup',
@@ -20,11 +21,11 @@ export const ALWAYS_OVERFLOW_IDS = [
 
 /** Lowest priority last — first to move into More when the row is tight. */
 export const OPTIONAL_PRIMARY_IDS = [
-  'btn-demo',
   'btn-camera',
   'btn-mic',
-  'btn-undo',
-  'btn-redo',
+  'btn-export',
+  'btn-add-device',
+  'btn-demo',
   'btn-3d',
   'btn-copy-html',
 ] as const;
@@ -39,10 +40,9 @@ export const PRIMARY_ORDER = [
   'btn-reregister',
   'btn-mic',
   'topbar-spacer',
-  'btn-undo',
-  'btn-redo',
-  'btn-3d',
   'btn-export',
+  'btn-add-device',
+  'btn-3d',
   'btn-copy-html',
   'btn-demo',
   'more-wrap',

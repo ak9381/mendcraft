@@ -10,11 +10,15 @@
   --warn: #f5a623;
   --danger: #ef4444;
   --focus: #8e9dff;
-  --radius: 10px;
+  --radius: 14px;
+  --target: 60px;
+  --target-gap: 8px;
+  --island-radius: 16px;
   --font-display: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Kannada", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font: 17px/1.45 var(--font-sans);
+  font: 17px/1.5 var(--font-sans);
+  font-weight: 400;
   color-scheme: dark;
 }
 
@@ -59,13 +63,22 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.6em 1em;
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--target);
+  min-width: var(--target);
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
 }
 
 button:hover {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(142 157 255 / 0.35);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgb(142 157 255 / 0.28);
 }
 
 button:disabled {
@@ -132,13 +145,13 @@ button.primary:hover {
   max-width: 100%;
 }
 
-/* One row, never shrink below a 44px pinch target. */
+/* Session dock: never shrink below a 60px pinch/dwell target. */
 #topbar > button,
 #topbar .mode-btn,
 #btn-more {
   padding: 0.4em 0.65em;
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--target);
+  min-width: var(--target);
   flex: 0 0 auto;
 }
 
@@ -220,18 +233,18 @@ a.brand:hover { color: var(--accent); }
 }
 .more-menu[hidden] { display: none; }
 .more-menu > button {
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--target);
+  min-width: var(--target);
   width: 100%;
   justify-content: flex-start;
   text-align: left;
   flex: 0 0 auto;
 }
 .more-menu #progress-wrap {
-  min-height: 44px;
+  min-height: var(--target);
   display: flex;
   align-items: center;
-  gap: 0.5em;
+  gap: var(--target-gap);
   padding: 0 0.5em;
 }
 .more-menu #progress-wrap[hidden] { display: none; }
@@ -372,6 +385,12 @@ a.brand:hover { color: var(--accent); }
 
 .hand-cursor.snapped {
   border-color: #f59e0b;
+  box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgb(245 158 11 / 0.55), 0 0 12px rgba(0, 0, 0, 0.35);
+}
+
+.hand-cursor.dwelling {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #fff, 0 0 0 calc(3px + 10px * var(--dwell, 0)) rgb(142 157 255 / 0.45);
 }
 
 .pinch-meter {
@@ -2547,4 +2566,451 @@ button.mc-ref-open {
   border: 0;
   cursor: pointer;
   font: inherit;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Studio floating-island chrome (tldraw-style, 60px spatial targets).
+   Canvas is the only layout; header and sidebar no longer occupy a grid.
+   Each control is a rounded, shadowed card pinned to an edge and can hide
+   without reflow. Scoped to the editor shell (`#app:has(> #layout)`).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#app:has(> #layout) {
+  --island-bg: #ffffff;
+  --island-ink: #0f172a;
+  --island-muted: #475569;
+  --island-line: rgb(15 23 42 / 0.08);
+  --island-shadow: 0 8px 28px rgb(15 23 42 / 0.14), 0 0 0 1px var(--island-line);
+  --island-margin: 16px;
+  display: block;
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: #eef1f6;
+}
+
+#app:has(> #layout) #layout {
+  display: block;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+#app:has(> #layout) #viewport {
+  position: absolute;
+  inset: 0;
+  background: #f7f8fb;
+  overflow: hidden;
+}
+
+/* ---- Shared island surface ---- */
+#app:has(> #layout) #topbar,
+#app:has(> #layout) #statusbar,
+#app:has(> #layout) #panel,
+#app:has(> #layout) #history-island,
+#app:has(> #layout) #zoom-island,
+#app:has(> #layout) .mc-palette {
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: none;
+  border-radius: var(--island-radius);
+  box-shadow: var(--island-shadow);
+}
+
+#app:has(> #layout) #topbar button,
+#app:has(> #layout) #history-island button,
+#app:has(> #layout) #zoom-island button,
+#app:has(> #layout) #panel button,
+#app:has(> #layout) .mode-btn,
+#app:has(> #layout) .mc-palette-btn {
+  background: transparent;
+  color: var(--island-ink);
+  border: 1px solid transparent;
+  min-height: var(--target);
+  min-width: var(--target);
+  font-weight: 500;
+}
+
+#app:has(> #layout) #topbar button:hover,
+#app:has(> #layout) #history-island button:hover,
+#app:has(> #layout) #zoom-island button:hover,
+#app:has(> #layout) #panel button:hover,
+#app:has(> #layout) .mode-btn:hover,
+#app:has(> #layout) .mc-palette-btn:hover {
+  background: #f1f5f9;
+  border-color: rgb(15 23 42 / 0.08);
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 0.22);
+}
+
+#app:has(> #layout) #topbar button:focus-visible,
+#app:has(> #layout) #history-island button:focus-visible,
+#app:has(> #layout) #zoom-island button:focus-visible,
+#app:has(> #layout) #panel button:focus-visible,
+#app:has(> #layout) .mode-btn:focus-visible,
+#app:has(> #layout) .mc-palette-btn:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
+  background: #eff6ff;
+}
+
+#app:has(> #layout) #topbar button.active,
+#app:has(> #layout) .mode-btn.active,
+#app:has(> #layout) .mc-palette-btn.active,
+#app:has(> #layout) #topbar button[aria-pressed="true"] {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+}
+
+#app:has(> #layout) #topbar button.primary,
+#app:has(> #layout) #panel button.primary,
+#app:has(> #layout) #btn-say {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: #0f172a;
+}
+#app:has(> #layout) #topbar button.primary:hover,
+#app:has(> #layout) #btn-say:hover {
+  background: #1e293b;
+  box-shadow: 0 0 0 3px rgb(15 23 42 / 0.2);
+}
+
+/* ---- Top-left: brand + Gemini / agent status ---- */
+#app:has(> #layout) #statusbar {
+  position: absolute;
+  top: var(--island-margin);
+  left: var(--island-margin);
+  z-index: 36;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--target-gap);
+  max-width: min(420px, calc(100vw - 200px));
+  padding: 8px 12px;
+  background: var(--island-bg);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+#app:has(> #layout) #statusbar .brand {
+  font-size: 1.35rem;
+  color: var(--island-ink);
+  margin: 0 4px 0 0;
+  line-height: 1;
+  text-decoration: none;
+}
+#app:has(> #layout) #statusbar #mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: #f1f5f9;
+  border-radius: 14px;
+}
+#app:has(> #layout) #statusbar .mode-btn {
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 12px;
+  border-radius: 12px;
+}
+#app:has(> #layout) #statusbar #lang-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+#app:has(> #layout) #statusbar #lang-select {
+  min-height: var(--target);
+  max-width: 11em;
+}
+#app:has(> #layout) #statusbar .status-k {
+  color: var(--island-muted);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+#app:has(> #layout) #statusbar .status-v {
+  color: var(--island-ink);
+  font-weight: 500;
+}
+#app:has(> #layout) #statusbar .status-chip {
+  background: #f8fafc;
+  border: 1px solid var(--island-line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  min-height: 28px;
+}
+
+/* Keep the status island compact: AI, language, model and tracking stay
+   visible; quieter chips wait until she needs them (e.g. camera on). */
+#app:has(> #layout) #statusbar .status-chip:has(#lang-state),
+#app:has(> #layout) #statusbar .status-chip:has(#facing-state),
+#app:has(> #layout) #statusbar .status-chip:has(#operator-state),
+#app:has(> #layout) #pinch-chip,
+#app:has(> #layout) #statusbar .status-chip:has(#net-state),
+#app:has(> #layout) #chrome-ext-chip {
+  display: none;
+}
+@media (min-width: 900px) {
+  #app:has(> #layout) #statusbar {
+    max-width: min(520px, calc(50vw - 24px));
+  }
+}
+
+/* ---- Bottom-right: session dock (camera, mic, more) ---- */
+#app:has(> #layout) #topbar {
+  position: absolute;
+  right: var(--island-margin);
+  bottom: var(--island-margin);
+  left: auto;
+  top: auto;
+  z-index: 38;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--target-gap);
+  width: auto;
+  max-width: min(400px, calc(100vw - 32px));
+  padding: 6px;
+  background: var(--island-bg);
+  overflow: visible;
+}
+#app:has(> #layout) #topbar .spacer { display: none; }
+#app:has(> #layout) .more-wrap { position: relative; }
+#app:has(> #layout) .more-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+  gap: var(--target-gap);
+  padding: 8px;
+  min-width: 280px;
+}
+#app:has(> #layout) .more-menu > button {
+  color: var(--island-ink);
+  background: transparent;
+  justify-content: flex-start;
+}
+
+/* ---- Bottom-center: undo/redo mini-bar above the tool dock ---- */
+#history-island {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + var(--target-gap));
+  transform: translateX(-50%);
+  z-index: 37;
+  display: flex;
+  gap: var(--target-gap);
+  padding: 6px;
+}
+#zoom-island {
+  position: absolute;
+  left: var(--island-margin);
+  bottom: var(--island-margin);
+  z-index: 37;
+  display: flex;
+  gap: var(--target-gap);
+  padding: 6px;
+}
+#zoom-island #btn-zoom-fit {
+  min-width: 72px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Tool dock (plan/UI palette) sits bottom-centre, above the margin ---- */
+#app:has(> #layout) .mc-palette {
+  left: 50%;
+  top: auto;
+  bottom: calc(var(--island-margin) + var(--target) + 20px);
+  transform: translateX(-50%);
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--target-gap);
+  padding: 6px;
+  z-index: 36;
+}
+#app:has(> #layout) .mc-palette-btn {
+  min-width: var(--target);
+  min-height: var(--target);
+  padding: 4px 6px;
+  gap: 2px;
+  border-radius: 12px;
+  color: var(--island-ink);
+}
+#app:has(> #layout) .mc-palette-btn .mc-ico { font-size: 18px; }
+#app:has(> #layout) .mc-palette-btn .mc-lbl { font-size: 10px; font-weight: 500; color: var(--island-muted); }
+#app:has(> #layout) .mc-palette-btn.active .mc-lbl { color: #1d4ed8; }
+#app:has(> #layout) .mc-flyout {
+  left: 0;
+  bottom: calc(100% + 8px);
+  top: auto;
+  right: auto;
+  grid-template-columns: repeat(2, var(--target));
+  gap: var(--target-gap);
+  padding: 8px;
+  background: var(--island-bg);
+  box-shadow: var(--island-shadow);
+  border: none;
+  border-radius: var(--island-radius);
+}
+#app:has(> #layout) .mc-trash {
+  right: var(--island-margin);
+  bottom: calc(var(--island-margin) + var(--target) + 20px + var(--target-gap));
+  width: var(--target);
+  height: var(--target);
+  background: var(--island-bg);
+  box-shadow: var(--island-shadow);
+  border-color: #cbd5e1;
+  z-index: 34;
+}
+#app:has(> #layout) .mc-fsctl {
+  top: var(--island-margin);
+  right: calc(var(--island-margin) + min(360px, 32vw) + var(--target-gap));
+}
+#app:has(> #layout) .mc-fsctl .mc-palette-btn {
+  min-width: var(--target);
+  min-height: var(--target);
+  background: var(--island-bg);
+  box-shadow: var(--island-shadow);
+}
+#app:has(> #layout) .mc-props {
+  top: calc(var(--island-margin) + 8px);
+  right: calc(var(--island-margin) + min(360px, 32vw) + var(--target-gap));
+  background: var(--island-bg);
+  box-shadow: var(--island-shadow);
+  border: none;
+  border-radius: var(--island-radius);
+  color: var(--island-muted);
+}
+#app:has(> #layout) .mc-status {
+  bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + var(--target) + 48px);
+  background: rgb(15 23 42 / 0.78);
+}
+
+/* ---- Top-right: style / details island (overlays canvas, never a sidebar) ---- */
+#app:has(> #layout) #panel {
+  position: absolute;
+  top: var(--island-margin);
+  right: var(--island-margin);
+  bottom: auto;
+  left: auto;
+  z-index: 35;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  padding: 16px;
+  gap: 1em;
+  color: var(--island-ink);
+  background: var(--island-bg);
+}
+#app:has(> #layout) #panel h2 {
+  color: var(--island-muted);
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+#app:has(> #layout) #command-box input,
+#app:has(> #layout) #panel input,
+#app:has(> #layout) #panel select,
+#app:has(> #layout) #op-json {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  min-height: var(--target);
+}
+#app:has(> #layout) #command-box {
+  display: flex;
+  gap: var(--target-gap);
+  align-items: stretch;
+}
+#app:has(> #layout) #command-box input { flex: 1; min-width: 0; }
+#app:has(> #layout) #verifier-result,
+#app:has(> #layout) #warnings,
+#app:has(> #layout) .last-command,
+#app:has(> #layout) #parts-list {
+  color: var(--island-ink);
+}
+
+/* Language picker in the session dock keeps system-weight type. */
+#app:has(> #layout) #lang-select {
+  color: var(--island-ink);
+  background: #f8fafc;
+  border: 1px solid var(--island-line);
+  min-height: var(--target);
+  border-radius: 12px;
+  font-weight: 400;
+}
+
+/* Floating utility panels: sit below the status island, not under a header. */
+#app:has(> #layout) .mc-router-panel,
+#app:has(> #layout) .mc-ledger,
+#app:has(> #layout) .mc-a11y-panel,
+#app:has(> #layout) .mc-gestures,
+#app:has(> #layout) .mc-setup,
+#app:has(> #layout) .mc-lamp-panel,
+#app:has(> #layout) .mc-music-panel,
+#app:has(> #layout) .mc-add-device,
+#app:has(> #layout) .mc-ref-panel,
+#app:has(> #layout) .mc-pair-panel,
+#app:has(> #layout) .mc-hand-profile {
+  top: auto;
+}
+
+/* Caption + choice bars stay centred over the canvas, clear of islands. */
+#app:has(> #layout) .caption-bar {
+  left: 50%;
+  transform: translateX(-50%);
+  top: 16px;
+  max-width: min(640px, calc(100vw - 480px));
+}
+
+/* Empty-state card: centred, wide, calm. */
+#app:has(> #layout) .empty-hint {
+  max-width: 36em;
+  background: var(--island-bg);
+  color: var(--island-ink);
+  box-shadow: var(--island-shadow);
+  border-radius: var(--island-radius);
+  padding: 1.25em 1.5em;
+}
+#app:has(> #layout) .hint-buttons {
+  gap: var(--target-gap);
+}
+#app:has(> #layout) .hint-buttons button {
+  min-height: var(--target);
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: #0f172a;
+}
+
+/* Narrow widths: keep the canvas edge-to-edge; shrink islands, never stack a sidebar. */
+@media (max-width: 1024px) {
+  #app:has(> #layout) #layout {
+    display: block;
+    grid-template-columns: none;
+    grid-template-rows: none;
+  }
+  #app:has(> #layout) #panel {
+    width: min(320px, calc(100vw - 24px));
+    max-height: min(46vh, calc(100vh - 180px));
+    border-left: none;
+    border-top: none;
+  }
+  #app:has(> #layout) #topbar {
+    max-width: calc(100vw - 32px);
+  }
+  #app:has(> #layout) #statusbar {
+    max-width: calc(100vw - 32px);
+  }
+}
+@media (max-width: 768px) {
+  #app:has(> #layout) #topbar .btn-label { display: none; }
+  #app:has(> #layout) #history-island {
+    left: 50%;
+  }
 }

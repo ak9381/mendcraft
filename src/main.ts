@@ -215,78 +215,8 @@ const modeSwitchHtml = listModes()
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <header id="topbar">
-    <a class="brand" href="/">Mendcraft</a>
-    <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
-    <label id="lang-pick" class="lang-pick" title="${LANGUAGE_PROMISE} Auto detects the language of each command and listens in the last one it heard; pick a language if it mishears you.">
-      <span class="sr-only">Speech language</span>
-      <select id="lang-select" aria-label="Speech language. ${LANGUAGE_PROMISE}"><option value="${AUTO_PICK}"${langPick === AUTO_PICK ? ' selected' : ''}>${autoLabel(currentLanguage)}</option>${LANGUAGES
-        .map((l) => `<option value="${l.code}"${l.code === langPick ? ' selected' : ''}>${l.label}</option>`)
-        .join('')}</select>
-      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
-    </label>
-    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help</button>
-    ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
-    <button id="btn-camera" type="button" aria-pressed="false">Camera</button>
-    <button id="btn-register" type="button" hidden>Register me</button>
-    <button id="btn-reregister" type="button" hidden>Re-register</button>
-    <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
-    <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
-    <div class="spacer"></div>
-    <button id="btn-undo" type="button">Undo</button>
-    <button id="btn-redo" type="button">Redo</button>
-    <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
-    <button id="btn-export" type="button">${mode.exportLabel}</button>
-    ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
-    ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
-    <div id="more-wrap" class="more-wrap">
-      <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
-      <div id="more-menu" class="more-menu" role="menu" hidden>
-        <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
-        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
-        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
-        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
-        <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
-        <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
-        <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
-        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
-        <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
-        <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
-        <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
-        <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
-        <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
-        <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
-        <div id="progress-wrap" hidden>
-          <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
-          <span id="progress-label">0%</span>
-        </div>
-      </div>
-    </div>
-  </header>
-  <div id="statusbar" role="group" aria-label="System status">
-    <span class="status-chip">
-      <span class="status-k">AI</span>
-      <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
-      <span id="conf-state" class="conf-state" hidden></span>
-    </span>
-    <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
-    <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
-    <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
-    <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
-    <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
-    <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard.">
-      <span class="status-k">Pinch</span>
-      <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
-      <span id="pinch-meter-label" class="status-v">—</span>
-    </span>
-    <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
-    <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
-      <span class="status-k">Chrome</span>
-      <span id="chrome-ext-state" class="status-v">not connected</span>
-    </span>
-  </div>
   <div id="layout">
-    <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
+    <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom. Dwell or speak if a pinch is hard.">
       <div id="resume-hint" class="resume-hint" role="status" hidden>Look at the screen to resume</div>
       <p id="privacy-line" class="privacy-line" hidden>Face and hand data stay on this device. Nothing is uploaded.</p>
       <div id="caption-bar" class="caption-bar" role="status" aria-live="polite" hidden>
@@ -336,6 +266,82 @@ app.innerHTML = `
       </section>
     </aside>
   </div>
+  <div id="statusbar" role="group" aria-label="System status">
+    <a class="brand" href="/">Mendcraft</a>
+    ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
+    <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
+    <label id="lang-pick" class="lang-pick" title="${LANGUAGE_PROMISE} Auto detects the language of each command and listens in the last one it heard; pick a language if it mishears you.">
+      <span class="sr-only">Speech language</span>
+      <select id="lang-select" aria-label="Speech language. ${LANGUAGE_PROMISE}"><option value="${AUTO_PICK}"${langPick === AUTO_PICK ? ' selected' : ''}>${autoLabel(currentLanguage)}</option>${LANGUAGES
+        .map((l) => `<option value="${l.code}"${l.code === langPick ? ' selected' : ''}>${l.label}</option>`)
+        .join('')}</select>
+      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
+    </label>
+    <span class="status-chip">
+      <span class="status-k">AI</span>
+      <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
+      <span id="conf-state" class="conf-state" hidden></span>
+    </span>
+    <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
+    <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
+    <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
+    <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
+    <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
+    <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard. You can also speak the command.">
+      <span class="status-k">Pinch</span>
+      <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
+      <span id="pinch-meter-label" class="status-v">—</span>
+    </span>
+    <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
+    <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
+      <span class="status-k">Chrome</span>
+      <span id="chrome-ext-state" class="status-v">not connected</span>
+    </span>
+  </div>
+  <div id="history-island" class="mc-island mc-island-history" role="group" aria-label="Undo and redo">
+    <button id="btn-undo" type="button">Undo</button>
+    <button id="btn-redo" type="button">Redo</button>
+  </div>
+  <div id="zoom-island" class="mc-island mc-island-zoom" role="group" aria-label="Zoom">
+    <button id="btn-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+    <button id="btn-zoom-fit" type="button" title="Zoom to fit the plan" aria-label="Zoom to fit">Fit</button>
+    <button id="btn-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+  </div>
+  <header id="topbar">
+    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help</button>
+    <button id="btn-camera" type="button" aria-pressed="false">Camera</button>
+    <button id="btn-register" type="button" hidden>Register me</button>
+    <button id="btn-reregister" type="button" hidden>Re-register</button>
+    <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
+    <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
+    <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
+    <button id="btn-export" type="button">${mode.exportLabel}</button>
+    ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
+    ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
+    <div id="more-wrap" class="more-wrap">
+      <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
+      <div id="more-menu" class="more-menu" role="menu" hidden>
+        <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
+        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
+        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
+        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
+        <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
+        <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
+        <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
+        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
+        <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
+        <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
+        <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
+        <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
+        <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
+        <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
+        <div id="progress-wrap" hidden>
+          <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+          <span id="progress-label">0%</span>
+        </div>
+      </div>
+    </div>
+  </header>
   <div id="sr-live" class="sr-only" aria-live="polite"></div>
   <div id="status-live" class="sr-only" aria-live="polite"></div>
   <div id="mc-toast" class="mc-toast" role="status" aria-live="polite" hidden></div>
@@ -1051,7 +1057,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #statusbar, #history-island, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -1103,6 +1109,23 @@ el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
 });
 
 // ---- phone relay pairing (QR → /remote page → room over an injected transport)
+
+const controlFeed: AiFeedInput[] = [];
+let controlDevice: DeviceId = 'laptop';
+let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
+let controlRev = 0;
+// Appliance state mirrored to the /control dashboard. Lamp comes from the editor
+// lamp panel (laptop ↔ bridge); music comes from Spotify / the built-in player
+// (this laptop) and is also relayed from a paired phone remote.
+// 'unknown' until we actually know — never a fabricated "connected".
+let controlLamp: ApplianceState = 'unknown';
+let controlLampDetail: string | undefined;
+let controlMusic: ApplianceState = 'unknown';
+let controlMusicTitle: string | undefined;
+
+let hostSession: HostSession | null = null;
+let relayTransport: RelayTransport | null = null;
+let pairingInit: Promise<void> | null = null;
 
 const btnPair = el<HTMLButtonElement>('btn-pair');
 const pairPanel = createPairPanel({
@@ -1364,9 +1387,6 @@ el<HTMLButtonElement>('btn-add-device').addEventListener('click', () => {
   if (addDevicePanel.isOpen()) addDevicePanel.close(); else void openAddDevice();
 });
 
-let hostSession: HostSession | null = null;
-let relayTransport: RelayTransport | null = null;
-let pairingInit: Promise<void> | null = null;
 
 /** Incoming phone commands ride the exact paths mouse/pinch already use:
  *  the Undo/Redo/Mic buttons, the shared runUtterance pipeline, and the
@@ -1821,18 +1841,6 @@ const jobQueue = createJobQueue(createIndexedDbStore());
 // + reason for every AI event, cloud utterances only (private text stays here),
 // the ledger, the queue, captions and a compact scene — never camera, landmarks
 // or audio. Built fresh on every change; a no-op until a phone/iPad pairs.
-const controlFeed: AiFeedInput[] = [];
-let controlDevice: DeviceId = 'laptop';
-let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
-let controlRev = 0;
-// Appliance state mirrored to the /control dashboard. Lamp comes from the editor
-// lamp panel (laptop ↔ bridge); music comes from Spotify / the built-in player
-// (this laptop) and is also relayed from a paired phone remote.
-// 'unknown' until we actually know — never a fabricated "connected".
-let controlLamp: ApplianceState = 'unknown';
-let controlLampDetail: string | undefined;
-let controlMusic: ApplianceState = 'unknown';
-let controlMusicTitle: string | undefined;
 
 /** Compact 2D primitives for the dashboard's wireframe preview. Plan walls are
  *  line segments; other modes fall back to summary-only (empty primitives). */
@@ -3294,6 +3302,17 @@ commandForm.addEventListener('submit', (e) => {
 
 // ---- undo / redo / export / 3D ----
 
+el<HTMLButtonElement>('btn-zoom-in').addEventListener('click', () => {
+  viewportEl.focus();
+  viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true }));
+});
+el<HTMLButtonElement>('btn-zoom-out').addEventListener('click', () => {
+  viewportEl.focus();
+  viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: '-', bubbles: true }));
+});
+el<HTMLButtonElement>('btn-zoom-fit').addEventListener('click', () => {
+  viewport.fit?.();
+});
 btnUndo.addEventListener('click', () => {
   controller.applyOp({ op: 'undo' });
   renderAll();
