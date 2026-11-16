@@ -123,6 +123,11 @@ import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestur
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
+import { parseChromeIntent, intentToRequest } from './extension/intents';
+import { createExtensionBridge } from './extension/bridge';
+import { addClip, emptyClips, type ClipsState } from './extension/clips';
+import { describeConfirm, initialConfirm, reduceConfirm, trimPreview, type ConfirmState } from './extension/confirm';
+import { createClipsLayer } from './ui/clipsLayer';
 import { createAddDevicePanel } from './ui/addDevicePanel';
 import type { AddMode, FlowDeps } from './devices/addDeviceFlow';
 import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cachePairedDevice } from './devices/connectorCache';
@@ -264,6 +269,10 @@ app.innerHTML = `
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
     <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
+    <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
+      <span class="status-k">Chrome</span>
+      <span id="chrome-ext-state" class="status-v">not connected</span>
+    </span>
   </div>
   <div id="layout">
     <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
@@ -274,6 +283,7 @@ app.innerHTML = `
         <span id="caption-translation" class="caption-translation" hidden></span>
       </div>
       <div id="choice-bar" class="choice-bar" role="group" aria-label="Did you mean" hidden></div>
+      <div id="chrome-confirm" class="recipe-confirm chrome-confirm" hidden></div>
       <div id="empty-hint" class="empty-hint">
         <p>${mode.hint}</p>
         <div class="hint-buttons">${hintButtonsHtml}</div>
@@ -329,6 +339,9 @@ const emptyHint = el<HTMLDivElement>('empty-hint');
 const sourceBadge = el<HTMLSpanElement>('source-badge');
 const confStateEl = el<HTMLSpanElement>('conf-state');
 const choiceBarEl = el<HTMLDivElement>('choice-bar');
+const chromeConfirmEl = el<HTMLDivElement>('chrome-confirm');
+const chromeExtChip = el<HTMLSpanElement>('chrome-ext-chip');
+const chromeExtState = el<HTMLSpanElement>('chrome-ext-state');
 const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
@@ -647,7 +660,42 @@ const btnLedger = el<HTMLButtonElement>('btn-ledger');
 // hit-testing works for the hand pointer; the float panels sit over the canvas.
 const keyboard = createOnScreenKeyboard();
 document.body.appendChild(keyboard.element);
-const referencePanel = createReferencePanel({ onSaveRecipe: (steps) => saveBrowserRecipe(steps) });
+// Chrome extension bridge: detect, show "Chrome extension connected", and
+// route copy/paste/tab intents. Replies are treated as data only.
+const chromeBridge = createExtensionBridge();
+let clipsState: ClipsState = emptyClips();
+const clipsLayer = createClipsLayer(clipsState);
+clipsLayer.onChange((s) => { clipsState = s; });
+viewportEl.appendChild(clipsLayer.element);
+let chromeConfirm: ConfirmState = initialConfirm();
+
+function updateChromeChip(): void {
+  const connected = chromeBridge.isConnected();
+  chromeExtChip.classList.toggle('chrome-ext-on', connected);
+  chromeExtState.textContent = connected ? 'extension connected' : 'not connected';
+  chromeExtChip.title = connected
+    ? 'Chrome extension connected. Say copy this, copy the link, send to canvas, paste here, or switch to a tab by name.'
+    : 'Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.';
+}
+
+async function openViaExtension(url: string): Promise<boolean> {
+  if (chromeBridge.isConnected()) {
+    const res = await chromeBridge.request('openTab', { url });
+    if (res.ok) return true;
+  }
+  try { window.open(url, '_blank', 'noopener,noreferrer'); } catch { /* popups blocked */ }
+  return false;
+}
+
+chromeBridge.subscribe(updateChromeChip);
+chromeBridge.start();
+updateChromeChip();
+
+const referencePanel = createReferencePanel({
+  onSaveRecipe: (steps) => saveBrowserRecipe(steps),
+  openExternal: (url) => openViaExtension(url),
+  extensionConnected: () => chromeBridge.isConnected(),
+});
 viewportEl.appendChild(referencePanel.element);
 const routerPanel = createRouterPanel();
 viewportEl.appendChild(routerPanel.element);
@@ -794,6 +842,7 @@ const setupPanel = createSetupPanel({
   enableCamera: () => enableCamera(),
   onChange: (d) => { setupData = d; applySetup(); },
   say: (t) => say(t),
+  extensionConnected: () => chromeBridge.isConnected(),
 });
 viewportEl.appendChild(setupPanel.element);
 const btnSetup = el<HTMLButtonElement>('btn-setup');
@@ -889,7 +938,7 @@ function lampButton(sel: string): void {
 
 /** Something is waiting for a yes (chips, recipe card, a11y preview)? */
 function somethingPending(): boolean {
-  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
+  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || !chromeConfirmEl.hidden || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
 }
 
 /** Run a button or command target. Returns false if nothing ran. */
@@ -897,11 +946,13 @@ function runTarget(target: string, value?: number): boolean {
   switch (target) {
     case 'add-device': void openAddDevice(); return true;
     case 'confirm':
+      if (!chromeConfirmEl.hidden) { void confirmChromePaste('pinch'); return true; }
       if (addDevicePanel.confirm()) return true;
       viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       return true;
     case 'cancel':
       window.speechSynthesis?.cancel();
+      if (!chromeConfirmEl.hidden) { clearChromeConfirm(); return true; }
       if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
       return closeTopPanel();
@@ -978,7 +1029,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -2623,6 +2674,156 @@ async function applyCommandResult(result: object, before: string): Promise<boole
   return true;
 }
 
+
+function clearChromeConfirm(): void {
+  chromeConfirm = initialConfirm();
+  chromeConfirmEl.hidden = true;
+  chromeConfirmEl.innerHTML = '';
+}
+
+function stageChromePaste(preview: string, fieldLabel?: string, tabTitle?: string): void {
+  const step = reduceConfirm(initialConfirm(), {
+    type: 'stage',
+    request: { kind: 'paste', preview, fieldLabel, tabTitle },
+  });
+  chromeConfirm = step.state;
+  chromeConfirmEl.hidden = false;
+  chromeConfirmEl.innerHTML = '';
+  const p = document.createElement('p');
+  p.textContent = describeConfirm(step.state.request!);
+  const yes = document.createElement('button');
+  yes.type = 'button';
+  yes.textContent = 'Confirm paste';
+  yes.addEventListener('click', () => { void confirmChromePaste('button'); });
+  const no = document.createElement('button');
+  no.type = 'button';
+  no.className = 'ghost';
+  no.textContent = 'Cancel';
+  no.addEventListener('click', () => {
+    clearChromeConfirm();
+    verifierEl.textContent = 'Paste cancelled — nothing was inserted.';
+  });
+  chromeConfirmEl.append(p, yes, no);
+  yes.focus();
+}
+
+async function confirmChromePaste(source: 'pinch' | 'button'): Promise<boolean> {
+  const step = reduceConfirm(chromeConfirm, { type: 'confirm', source });
+  if (!step.performPaste) return false;
+  const clip = chromeBridge.lastCopied();
+  const res = await chromeBridge.request('pasteHere', { text: clip?.text, confirmed: true });
+  clearChromeConfirm();
+  if (!res.ok) {
+    const err = res.error === 'password' || res.error === 'payment'
+      ? `That field looks like a ${res.error} field, so I did not paste.`
+      : (res.error === 'no-field' ? 'No text field is focused in the other tab.' : 'Could not paste.');
+    verifierEl.textContent = err;
+    say(err);
+    return false;
+  }
+  const msg = 'Pasted. The form was not submitted.';
+  verifierEl.textContent = msg;
+  say(msg);
+  return true;
+}
+
+/**
+ * Chrome-extension voice commands, resolved on this device. The extension's
+ * replies are parsed as data only. Returns true/false when handled, or null
+ * when the utterance is not a chrome command.
+ */
+async function handleChromeIntent(utterance: string): Promise<boolean | null> {
+  const intent = parseChromeIntent(utterance);
+  if (!intent) return null;
+  setBadge('rules', 'exact');
+  recordLedger('rules', 'command', 'chrome extension intent', utterance);
+
+  if (intent.type === 'send-to-canvas') {
+    let clip = chromeBridge.lastCopied();
+    if (!clip && chromeBridge.isConnected()) {
+      const res = await chromeBridge.request('getLastCopied');
+      clip = res.data ?? null;
+    }
+    const added = addClip(clipsState, { kind: clip?.kind, text: clip?.text, url: clip?.url, title: clip?.title });
+    if (!added.clip) {
+      const msg = 'Nothing to send. Say copy this or copy the link first.';
+      verifierEl.textContent = msg;
+      say(msg);
+      return false;
+    }
+    clipsState = added.state;
+    clipsLayer.render(clipsState);
+    const msg = added.clip.kind === 'link' ? 'Link added to the canvas.' : 'Text added to the canvas.';
+    verifierEl.textContent = msg;
+    say(msg);
+    return true;
+  }
+
+  if (!chromeBridge.isConnected()) {
+    const msg = 'Chrome extension not connected. In Chrome open chrome://extensions, turn on Developer mode, and Load unpacked the extension folder.';
+    verifierEl.textContent = msg;
+    say(msg);
+    return false;
+  }
+
+  if (intent.type === 'copy-this' || intent.type === 'copy-link') {
+    const req = intentToRequest(intent);
+    if (req.action === 'sendToCanvas') return false;
+    const res = await chromeBridge.request(req.action, 'payload' in req ? req.payload : undefined);
+    if (!res.ok) {
+      const msg = res.error === 'no-tab' ? 'I could not find another Chrome tab to copy from.' : 'Could not copy from the other tab.';
+      verifierEl.textContent = msg;
+      say(msg);
+      return false;
+    }
+    const label = res.data?.kind === 'link' ? (res.data.url || 'the link') : trimPreview(res.data?.text || 'the text', 60);
+    verifierEl.textContent = `Copied ${label}. Say send to canvas, or paste here.`;
+    say('Copied.');
+    return true;
+  }
+
+  if (intent.type === 'paste-here') {
+    const inspect = await chromeBridge.request('pasteHere', { confirmed: false });
+    const skipped = inspect.data?.skipped ?? (inspect.error === 'password' || inspect.error === 'payment' ? inspect.error : undefined);
+    if (skipped === 'password' || skipped === 'payment') {
+      const msg = `That field looks like a ${skipped} field, so I will not paste into it.`;
+      verifierEl.textContent = msg;
+      say(msg);
+      return false;
+    }
+    if (inspect.error === 'no-field') {
+      const msg = 'Focus a text field in the other tab first, then say paste here.';
+      verifierEl.textContent = msg;
+      say(msg);
+      return false;
+    }
+    let clip = chromeBridge.lastCopied();
+    if (!clip?.text) {
+      const remembered = await chromeBridge.request('getLastCopied');
+      clip = remembered.data ?? null;
+    }
+    if (!clip?.text) {
+      const msg = 'Nothing to paste. Say copy this first.';
+      verifierEl.textContent = msg;
+      say(msg);
+      return false;
+    }
+    stageChromePaste(clip.text, inspect.data?.fieldLabel, inspect.data?.title || clip.title);
+    verifierEl.textContent = 'Confirm the paste with a pinch, or press Confirm. The form will not be submitted.';
+    say('Pinch to confirm the paste.');
+    return true;
+  }
+
+  if (intent.type === 'switch-tab') {
+    const res = await chromeBridge.request('switchTab', { query: intent.query });
+    const msg = res.ok ? `Switched to ${res.data?.title || intent.query}.` : `I could not find a tab named ${intent.query}.`;
+    verifierEl.textContent = msg;
+    say(msg);
+    return res.ok;
+  }
+  return null;
+}
+
 async function runUtteranceInner(utterance: string): Promise<boolean> {
   // A reply to open "Did you mean…?" chips (or a confirm preview) is resolved
   // FIRST — before recipes, phrasebook, or routing can eat "first"/"cancel".
@@ -2675,6 +2876,12 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     say(result.detail);
     return result.ok;
   }
+
+  // CHROME EXTENSION: copy this / copy the link / send to canvas / paste here
+  // (pinch-confirm) / switch to a tab by name. Local rules; the extension
+  // stays on this computer. Null → not a chrome command.
+  const chromeHandled = await handleChromeIntent(utterance);
+  if (chromeHandled !== null) return chromeHandled;
 
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source

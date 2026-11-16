@@ -26,6 +26,8 @@ export interface SetupPanelOptions {
   enableCamera(): Promise<boolean>;
   onChange(data: SetupData): void;
   say(text: string): void;
+  /** Live check for the Connect Chrome step. */
+  extensionConnected?: () => boolean;
 }
 
 export interface SetupPanel {
@@ -183,7 +185,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
       h('p', 'mc-setup-note', 'Everything stays on this device. No video or hand data is uploaded.'),
     );
     const list = h('ul', 'mc-setup-list');
-    for (const s of ['Reach', 'Pinch', 'Hold still', 'Your gestures', 'Buttons and voice', 'Face cues (optional)']) list.append(h('li', '', s));
+    for (const s of ['Reach', 'Pinch', 'Hold still', 'Your gestures', 'Buttons and voice', 'Face cues (optional)', 'Connect Chrome']) list.append(h('li', '', s));
     body.append(list);
   }
 
@@ -316,11 +318,28 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     }
   }
 
+  function renderChrome(): void {
+    const connected = Boolean(opts.extensionConnected?.());
+    body.append(h('p', 'mc-setup-lead', 'To copy from any Chrome tab and paste with your voice or a pinch, load the Mendcraft extension once. It stays on this computer, never reads password or payment fields, and never submits a form.'));
+    const ol = h('ol', 'mc-setup-list');
+    for (const s of [
+      'Open chrome://extensions in Chrome.',
+      'Turn on Developer mode (top right).',
+      'Click Load unpacked and pick the extension folder (the one with manifest.json).',
+      'Come back here. This step will say “Chrome extension connected” when it is ready.',
+    ]) ol.append(h('li', '', s));
+    body.append(ol);
+    const note = h('p', connected ? 'mc-setup-note mc-setup-chrome-on' : 'mc-setup-note', connected
+      ? 'Chrome extension connected.'
+      : 'You can skip this and do it later. The studio status bar also shows when the extension is connected.');
+    body.append(note);
+  }
+
   function renderDone(): void {
     const c = data.calibration;
     const ul = h('ul', 'mc-setup-list');
     ul.append(h('li', '', c ? `Reach: ${Math.round((c.reach.x1 - c.reach.x0) * 100)}% × ${Math.round((c.reach.y1 - c.reach.y0) * 100)}% of the camera view now covers the whole screen` : 'Reach: not measured (default)'));
-    ul.append(h('li', '', c ? `Pinch: registers at ${c.pinchOn.toFixed(2)} (default 0.35)` : 'Pinch: default'));
+    ul.append(h('li', '', c ? `Pinch: registers at ${c.pinchOn.toFixed(2)} (default is a soft close)` : 'Pinch: default (soft close)'));
     ul.append(h('li', '', c ? `Steadiness: smoothing ${Math.round(c.smoothing * 100)}%, dwell ${c.dwellMs} ms` : 'Steadiness: default'));
     ul.append(h('li', '', `${data.templates.length} recorded gesture${data.templates.length === 1 ? '' : 's'}, ${data.bindings.length} custom shortcut${data.bindings.length === 1 ? '' : 's'}`));
     ul.append(h('li', '', `Face cues: ${data.faceCues ? 'on' : 'off'}`));
@@ -361,6 +380,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
       case 'gestures': renderGestures(); break;
       case 'shortcuts': renderShortcuts(); break;
       case 'face': renderFace(); break;
+      case 'chrome': renderChrome(); break;
       case 'done': renderDone(); break;
     }
   }

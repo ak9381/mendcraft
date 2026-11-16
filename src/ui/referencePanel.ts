@@ -7,6 +7,7 @@
 // bypass. URL normalisation is pure (input/urlLogic) and unit-tested.
 
 import { normalizeUrl, hostLabel } from '../input/urlLogic';
+import { FRAME_LOAD_TIMEOUT_MS, hostBlocksFraming } from './frameHosts';
 import {
   runBrowserReplay, startTeaching, frameDoc,
   type ReplayHost, type ReplayResult, type TeachRecorder,
@@ -18,6 +19,10 @@ export interface ReferencePanelOptions {
   appOrigin?: string;
   /** Called when a teach recording is stopped with at least one step. */
   onSaveRecipe?: (steps: BrowserStep[]) => void;
+  /** When the Chrome extension is connected, "Open in new tab" should use this. */
+  openExternal?: (url: string) => boolean | void | Promise<boolean | void>;
+  /** Live check used when rendering the blocked-frame card. */
+  extensionConnected?: () => boolean;
 }
 
 export interface ReferencePanel {
@@ -31,7 +36,7 @@ export interface ReferencePanel {
   dispose(): void;
 }
 
-const LOAD_TIMEOUT_MS = 4000;
+const LOAD_TIMEOUT_MS = FRAME_LOAD_TIMEOUT_MS;
 const DEFAULT_URL = 'https://developer.mozilla.org/en-US/docs/Web/HTML';
 
 export function createReferencePanel(opts: ReferencePanelOptions = {}): ReferencePanel {
@@ -130,17 +135,32 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
   function showBlocked(url: string): void {
     clearTimer();
     frame.hidden = true;
+    // Do not leave a blocked navigation hanging in the iframe.
+    if (frame.src && frame.src !== 'about:blank') frame.src = 'about:blank';
     status.hidden = false;
     status.innerHTML = '';
+    const viaExt = Boolean(opts.extensionConnected?.());
     const msg = document.createElement('p');
-    msg.textContent = `${hostLabel(url)} did not load here — it may refuse to be embedded.`;
-    const openLink = document.createElement('a');
-    openLink.href = url;
-    openLink.target = '_blank';
-    openLink.rel = 'noopener noreferrer';
-    openLink.className = 'mc-ref-open';
-    openLink.textContent = 'Open in new tab ↗';
-    status.append(msg, openLink);
+    msg.textContent = viaExt
+      ? `${hostLabel(url)} cannot be shown in this panel. Open it in a real Chrome tab — Mendcraft can still copy from it.`
+      : `${hostLabel(url)} did not load here — it may refuse to be embedded.`;
+    status.append(msg);
+    if (viaExt && opts.openExternal) {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'mc-ref-open';
+      openBtn.textContent = 'Open in Chrome';
+      openBtn.addEventListener('click', () => { void opts.openExternal?.(url); });
+      status.append(openBtn);
+    } else {
+      const openLink = document.createElement('a');
+      openLink.href = url;
+      openLink.target = '_blank';
+      openLink.rel = 'noopener noreferrer';
+      openLink.className = 'mc-ref-open';
+      openLink.textContent = 'Open in new tab ↗';
+      status.append(openLink);
+    }
   }
 
   function showLoading(): void {
@@ -167,9 +187,15 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     currentUrl = url;
     input.value = url;
     titleEl.textContent = hostLabel(url);
+    clearTimer();
+    // Known frame-busters (LinkedIn, Google, Spotify, …): skip the iframe
+    // entirely so the panel does not sit on "Loading…" forever.
+    if (hostBlocksFraming(url)) {
+      showBlocked(url);
+      return;
+    }
     frame.hidden = false;
     showLoading();
-    clearTimer();
     frame.src = url;
     timeoutId = window.setTimeout(() => showBlocked(url), LOAD_TIMEOUT_MS);
   }
@@ -245,7 +271,10 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
       rail,
       appOrigin: opts.appOrigin ?? (typeof window !== 'undefined' ? window.location.origin : ''),
       navigate: navigateAsync,
-      openExternal: (u) => { try { window.open(u, '_blank', 'noopener,noreferrer'); } catch { /* popups blocked */ } },
+      openExternal: (u) => {
+        if (opts.openExternal) { void opts.openExternal(u); return; }
+        try { window.open(u, '_blank', 'noopener,noreferrer'); } catch { /* popups blocked */ }
+      },
     };
     return runBrowserReplay(host, steps);
   }

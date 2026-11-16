@@ -92,9 +92,10 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
       'src/devices/discovery.ts',
       'src/music/spotifyAuth.ts',
       'src/music/spotifyApi.ts',
+      'src/references/search.ts',
     ],
     leavesDevice: true,
-    note: 'The only fetch() call sites: the LAN lamp bridge (does not leave the LAN) and Spotify (see the spotify kind). A new fetch() must be added here and documented.',
+    note: 'The only fetch() call sites: the LAN lamp bridge (does not leave the LAN), Spotify (see the spotify kind), and Openverse / Wikimedia Commons reference search (search text only). A new fetch() must be added here and documented.',
   },
   {
     kind: 'firestore-relay',
@@ -115,6 +116,34 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
     leavesDevice: true,
     note: 'Fetches model ids / prompt template ids / flags. A one-way config pull; no user data is sent.',
   },
+  {
+    kind: 'chrome-extension',
+    label: 'Mendcraft Chrome extension',
+    primitive: 'chrome\\.runtime\\.(sendMessage|connect)',
+    files: ['src/extension/bridge.ts'],
+    leavesDevice: false,
+    note:
+      'Messages stay in this Chrome profile: the web app talks to the Mendcraft extension to copy ' +
+      'text or a link from another tab, paste into a focused field after a pinch confirm, switch or ' +
+      'open a tab, or send a clip to the studio canvas. Page text never leaves this computer. ' +
+      'Password and payment fields are skipped. Forms are never auto-submitted.',
+  },
+  {
+    kind: 'openverse',
+    label: 'Openverse image search',
+    primitive: 'api\.openverse\.org',
+    files: ['src/references/search.ts'],
+    leavesDevice: true,
+    note: 'Search text only, when she asks for picture references. Camera, hand, face and voice audio never go here. Each result shows its source and licence.',
+  },
+  {
+    kind: 'wikimedia',
+    label: 'Wikimedia Commons image search',
+    primitive: 'commons\.wikimedia\.org',
+    files: ['src/references/search.ts'],
+    leavesDevice: true,
+    note: 'Search text only, when she asks for picture references. Camera, hand, face and voice audio never go here. Each result shows its source and licence.',
+  },
 ];
 
 /** The ledger job names that are allowed to be a `cloud` event. The drift test
@@ -133,6 +162,7 @@ export const CLOUD_LEDGER_JOBS: readonly string[] = [
   'deixis',
   'lang-detect',
   'spotify',
+  'references',
 ];
 
 /** Strip the parenthetical state suffix a ledger job can carry, e.g.

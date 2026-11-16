@@ -102,6 +102,23 @@ with the remaining steps listed — it never silently bypasses the confirm.
 
 ---
 
+
+## Chrome extension — copy and paste in any tab
+
+A small Manifest V3 extension in `extension/` lets her copy from and paste into
+**any Chrome tab** with voice or a pinch ("copy this", "copy the link", "send to
+canvas", "paste here", "switch to Gmail"). Paste always waits for a pinch-to-confirm
+card in Mendcraft; password and payment fields are skipped; forms are never
+auto-submitted. Install: Chrome → `chrome://extensions` → Developer mode →
+**Load unpacked** → pick the `extension/` folder. The studio status bar shows
+**Chrome extension connected**. First-run setup has a short Connect Chrome step.
+Details and the permission explanation are in `extension/README.md`.
+
+Sites that refuse to be framed (LinkedIn, Google, Spotify, Instagram, Facebook,
+X, WhatsApp, GitHub login) no longer sit on "Loading…" in the reference panel:
+the Open card appears immediately, and with the extension connected it opens a
+real Chrome tab instead.
+
 ## Device pairing + iPad `/control` + phone remotes
 
 The entry fork lives in `src/boot.ts`; the pairing protocol/session/transport in

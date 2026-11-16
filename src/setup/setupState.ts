@@ -9,7 +9,7 @@ import { coerceCalibration, type Calibration } from './calibration';
 import { coerceTemplate, type GestureTemplate } from '../input/gestureTemplates';
 import type { FaceRatios } from '../input/faceCues';
 
-export const SETUP_STEPS = ['welcome', 'reach', 'pinch', 'still', 'gestures', 'shortcuts', 'face', 'done'] as const;
+export const SETUP_STEPS = ['welcome', 'reach', 'pinch', 'still', 'gestures', 'shortcuts', 'face', 'chrome', 'done'] as const;
 export type SetupStep = (typeof SETUP_STEPS)[number];
 
 /** Steps that need the camera (skipped with a note when it is off). */
@@ -23,6 +23,7 @@ export const STEP_TITLES: Record<SetupStep, { en: string; kn: string }> = {
   gestures: { en: 'Your gestures', kn: 'ನಿಮ್ಮ ಸನ್ನೆಗಳು' },
   shortcuts: { en: 'Buttons, gestures and voice', kn: 'ಬಟನ್, ಸನ್ನೆ, ಧ್ವನಿ' },
   face: { en: 'Face cues (optional)', kn: 'ಮುಖದ ಸೂಚನೆ (ಐಚ್ಛಿಕ)' },
+  chrome: { en: 'Connect Chrome', kn: 'ಕ್ರೋಮ್ ಸೇರಿಸಿ' },
   done: { en: 'All set', kn: 'ಸಿದ್ಧ' },
 };
 

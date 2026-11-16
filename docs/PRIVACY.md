@@ -36,7 +36,10 @@ can actually reach another machine.
 | **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames | frames go to the paired device, never to Gemini |
 | **remote-config** | yes | a one-way config pull (model ids, prompt-template ids, flags) | no user data |
 | **spotify** | yes | playback commands and search text to Spotify's API; optional Web Playback SDK | camera, hand, face, voice audio, access tokens (tokens stay in this browser) |
-| **network-fetch** | sometimes | the declared `fetch()` allowlist (LAN lamp bridge + Spotify) | anything not registered here |
+| **network-fetch** | sometimes | the declared `fetch()` allowlist (LAN lamp bridge + Spotify + Openverse / Wikimedia) | anything not registered here |
+| **chrome-extension** | **no** | typed messages to the Mendcraft Chrome extension in this browser (copy text/link, paste after confirm, switch or open a tab, send a clip to the canvas) | camera, hand, face, voice audio; password and payment fields; nothing leaves this computer |
+| **openverse** | yes | the picture-search text to `api.openverse.org` | camera, hand, face, voice audio |
+| **wikimedia** | yes | the picture-search text to `commons.wikimedia.org` | camera, hand, face, voice audio |
 
 ### Point-and-say — the one image-to-cloud path
 
@@ -106,6 +109,42 @@ public-domain player stays on this device and nothing is sent to Spotify.
 Inside the iOS (or Android) Capacitor shell, sign-in is opened on the web app
 at https://mendcraft.web.app because the `/spotify` redirect cannot return to
 the app yet.
+
+### Chrome extension — same computer, never the cloud
+
+The optional Mendcraft Chrome extension lets her copy from and paste into any
+Chrome tab with voice or a pinch. Mendcraft talks to it with
+`chrome.runtime.sendMessage` (and a same-page `postMessage` relay) on
+mendcraft.web.app / mendcraft.firebaseapp.com / localhost:5173 only. Messages
+stay in this Chrome profile: the selected or main text of a page, a tab URL, or
+the last copied clip. The camera, hand landmarks, face mesh and raw voice audio
+never go to the extension, and nothing the extension reads is sent to a server.
+
+Paste always waits for a pinch-to-confirm card in Mendcraft. Password and
+payment fields are skipped. Forms are never auto-submitted. Every one of these
+actions is declared as the `chrome-extension` outbound kind (leaves device: no).
+
+The reference panel also uses the extension, when it is connected, to open a
+site that refuses to be framed (LinkedIn, Google, Spotify, Instagram, Facebook,
+X, WhatsApp, GitHub login) in a real Chrome tab, instead of sitting on
+"Loading…".
+
+
+### Picture references — Openverse and Wikimedia Commons
+
+When she says "find me references for drawings" (or "show me pictures of …"),
+Mendcraft searches the Openverse API (`api.openverse.org`) and the Wikimedia
+Commons API (`commons.wikimedia.org`). Only the **search text** leaves the
+device; the camera, hand landmarks, face mesh and raw voice audio never do.
+Results appear as numbered cards on the canvas, each with its source and
+licence. A "Search on the web" card can open a full-page search in the Chrome
+extension, or in a new tab if the extension is not connected — she pinches to
+confirm before anything opens.
+
+A fuzzy or non-English request may be turned into a short English search query
+by Gemini Nano on the device, or by Gemini in the cloud when Nano cannot run
+that language. That call is a ledger row with job `references`. Only the
+request text is sent, never sensors or the images themselves.
 
 ## Backstops
 
