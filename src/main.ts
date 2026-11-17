@@ -2479,16 +2479,27 @@ async function handleHardQuestion(question: string): Promise<boolean> {
       return applyPlanAnswer(local, question, 'Plan data · on device');
     }
   }
-  const existing = speculative?.getDraft();
-  const same = existing && existing.utterance.trim().toLowerCase() === question.trim().toLowerCase();
-  if (same && existing && (existing.state === 'confirmed' || existing.state === 'corrected' || existing.state === 'withdrawn' || existing.geminiAnswer)) {
-    showSpeculativeDraft(existing, speculative.stats(), { speak: true });
-    return true;
-  }
   const judgement = isPlanJudgementQuestion(question);
   const hard = judgement || isHardQuestion(question);
   const online = isOnline() && cloudConfigured;
   if (online && hard) copilotPanel.setBusy('Asking Gemini…');
+  // Apply the early Gemini result (or fire once more if the final transcript
+  // changed). This is what marks Nano's guess confirmed / corrected / withdrawn.
+  if (speculative && (hard || isPlanQuestion(question))) {
+    try {
+      await speculative.onFinal(question);
+    } catch {
+      // Fall through to the parallel race below.
+    }
+  }
+  const existing = speculative?.getDraft();
+  const same = existing && existing.utterance.trim().toLowerCase() === question.trim().toLowerCase();
+  if (same && existing && (existing.state === 'confirmed' || existing.state === 'corrected' || existing.state === 'withdrawn' || existing.geminiAnswer)) {
+    copilotPanel.setBusy(null);
+    if (existing.geminiAnswer || existing.state !== 'draft') setBadge('cloud', 'big-job');
+    showSpeculativeDraft(existing, speculative.stats(), { speak: true });
+    return true;
+  }
   const raced = await raceHardQuestion({
     judgement,
     hard,
@@ -4409,12 +4420,6 @@ speculative = createSpeculativeEngine({
   pickNano: async (s) => {
     if (!routerEnv().deviceReady) return null;
     const picked = await pickCadTool(s, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS });
-window.addEventListener('mc-speculative', (ev) => {
-  const d = (ev as CustomEvent<{ kind?: string; text?: string }>).detail;
-  if (!d || typeof d.text !== 'string') return;
-  if (d.kind === 'interim') speculative.onInterim(d.text);
-});
-
     if (!picked) return null;
     const plan = picked.call.tool === 'measure' ? answerPlanQuestion(planDoc(), String(picked.call.args.question ?? s)) : null;
     return { call: picked.call, confidence: picked.confidence, answer: plan?.text };
@@ -4433,6 +4438,15 @@ const voice: VoiceController = createVoiceController(
   (utterance) => void runUtterance(utterance),
   (interim) => speculative.onInterim(interim),
 );
+
+const onSpeculativeEvent = (ev: Event): void => {
+  const d = (ev as CustomEvent<{ kind?: string; text?: string }>).detail;
+  if (!d || typeof d.text !== 'string') return;
+  if (d.kind === 'interim') speculative.onInterim(d.text);
+  if (d.kind === 'final') void speculative.onFinal(d.text);
+};
+window.addEventListener('mc-speculative', onSpeculativeEvent);
+document.addEventListener('mc-speculative', onSpeculativeEvent);
 
 if (!voice.supported) {
   btnMic.disabled = true;
