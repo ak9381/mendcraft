@@ -2692,7 +2692,7 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
         copilotPanel.open('review');
         toggleButton(btnCopilot, true);
         copilotPanel.setBusy('Gemini is choosing materials and light…');
-        verifierEl.textContent = 'Gemini is choosing materials and light… Waiting for you to accept the 3D look.';
+        verifierEl.textContent = 'Gemini is choosing materials and light…';
         const res = await proposeMaterials(style, controller.summary());
         copilotPanel.setBusy(null);
         if (res) {
@@ -2745,12 +2745,14 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
  *  copilot request. */
 async function handleCopilot(utterance: string): Promise<boolean | null> {
   if (isSimplePlanQuestion(utterance)) {
+    const t0 = performance.now();
     const local = answerPlanQuestion(planDoc(), utterance);
     if (local) {
       lastUtteranceText = utterance;
       lastUtteranceAt = Date.now();
       lastUtteranceSource = 'rules';
       recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+      document.body.dataset.planQaMs = String(Math.round(performance.now() - t0));
       return applyPlanAnswer(local, utterance, 'Plan data · on device');
     }
   }
