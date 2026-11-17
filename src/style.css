@@ -3140,11 +3140,13 @@ button.mc-ref-open {
 #app:has(> #layout) .caption-bar {
   left: 50%;
   top: auto;
-  bottom: calc(var(--island-margin) + var(--target, 60px) + 28px);
+  /* Above the session dock, tool palette, and undo/redo — not behind them. */
+  bottom: calc(var(--island-margin) + var(--target, 60px) + 20px + 80px + var(--target-gap, 8px) + var(--target, 60px) + 12px);
   transform: translateX(-50%);
   width: max-content;
   max-width: min(36rem, calc(100% - 48px));
   height: auto;
+  z-index: 34;
 }
 #app:has(> #layout):has(.mc-copilot:not([hidden])) .caption-bar {
   left: calc((100% - min(400px, 42vw)) / 2);
@@ -3187,9 +3189,15 @@ button.mc-ref-open {
     max-width: calc(100vw - 32px);
   }
   /* Do not let the brand island span the full width at ~1024px — that
-     overlaps the Room card and the Copilot panel. */
+     overlaps the Room card and the Copilot panel. Stack the room card
+     under the status island so they never share the top edge. */
   #app:has(> #layout) #statusbar {
-    max-width: min(400px, calc(100vw - 32px));
+    max-width: min(380px, calc(100vw - 32px));
+  }
+  #app:has(> #layout) .mc-props {
+    top: calc(var(--island-margin) + 168px);
+    left: var(--island-margin);
+    right: auto;
   }
   #app:has(> #layout) .mc-copilot {
     width: min(360px, calc(100vw - 32px));
