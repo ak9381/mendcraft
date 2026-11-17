@@ -1,7 +1,7 @@
 // Tolerant JSON extraction, failure classification, and retry policy for
 // Gemini structured-output (application/json) calls. Pure — no Firebase.
 
-export type CloudFailKind = 'empty' | 'safety' | 'parse' | '429' | 'timeout' | 'other';
+export type CloudFailKind = 'empty' | 'safety' | 'parse' | '429' | 'high-demand' | 'timeout' | 'other';
 
 const FENCE_RE = /```(?:json)?/gi;
 const TRAILING_COMMA_RE = /,\s*(?=[}\]])/g;
@@ -77,11 +77,12 @@ function blobOf(err: unknown, text = ''): string {
   return `${msg} ${extra} ${text}`.toLowerCase();
 }
 
-/** Classify a failed cloud generate: empty, safety block, parse error, 429, timeout, or other. */
+/** Classify a failed cloud generate: empty, safety block, parse error, 429, high-demand (500/503), timeout, or other. */
 export function classifyCloudFailure(err: unknown, text = ''): CloudFailKind {
   const blob = blobOf(err, text);
   if (/timed out after|timeout/i.test(blob) && /ms|timeout/.test(blob)) return 'timeout';
   if (/\b429\b|resource.?exhausted|rate.?limit|quota.?exceeded|too many requests|retry-after/.test(blob)) return '429';
+  if (/\b(500|503)\b|high\s*demand|overloaded|service unavailable|internal(?:\s+server)?\s+error|unavailable: high/.test(blob)) return 'high-demand';
   if (/block.?reason|safety|blocked|finishreason["']?\s*[:=]\s*["']?safety|prohibited|harm.?categor/.test(blob)) {
     return 'safety';
   }
@@ -126,7 +127,41 @@ export function safeResponseText(response: LooseResponse | null | undefined): Sa
   return { text: '', failKind: 'empty' };
 }
 
+/** Join streaming chunks whether the SDK yields cumulative or delta text. */
+export function mergeStreamText(prev: string, next: string): string {
+  if (!next) return prev;
+  if (!prev) return next;
+  if (next.startsWith(prev)) return next;
+  if (prev.endsWith(next)) return prev;
+  return prev + next;
+}
+
+/**
+ * Read a streaming chunk. Missing text is empty, not a safety block — the
+ * SDK often throws from text() on a thought-only or empty chunk.
+ */
+export function safeStreamChunk(response: LooseResponse | null | undefined): SafeTextResult {
+  if (!response) return { text: '', failKind: null };
+  const block = response.promptFeedback?.blockReason;
+  if (block) return { text: '', failKind: 'safety' };
+  const finish = response.candidates?.[0]?.finishReason;
+  if (finish && /safety|blocklist|prohibited|recitation/i.test(finish)) {
+    return { text: '', failKind: 'safety' };
+  }
+  try {
+    const text = typeof response.text === 'function' ? response.text() : '';
+    if (typeof text === 'string' && text.trim()) return { text, failKind: null };
+  } catch {
+    /* empty chunk — fall through to parts */
+  }
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  const visible = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text!).join('');
+  if (visible.trim()) return { text: visible, failKind: null };
+  return { text: '', failKind: null };
+}
+
 export const RATE_LIMIT_BACKOFF_MS = [1000, 2000] as const;
+export const HIGH_DEMAND_BACKOFF_MS = [400, 1200] as const;
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

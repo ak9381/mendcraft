@@ -3431,6 +3431,14 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-cp-email { width: 100%; margin-top: 10px; min-height: 56px; font-size: 17px; }
 .mc-cp-answer { border-left: 4px solid var(--accent-2); padding-left: 10px; }
 .mc-cp-answer-text { margin: 4px 0; font-size: 17px; }
+.mc-cp-guess { border-left-color: #d97706; }
+.mc-cp-guess .mc-cp-by { color: #b45309; }
+.mc-cp-confirmed { border-left-color: #15803d; }
+.mc-cp-spec { margin: 10px 0 0; padding: 8px 10px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.mc-cp-spec h3 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
+.mc-cp-spec-line { margin: 0; font-size: 13px; color: var(--text-dim); }
+.mc-cp-tag-nano-guess { color: #b45309; }
+.mc-cp-tag-confirmed { color: #15803d; }
 .mc-cp-region { min-height: 44px; border-radius: 10px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 0 8px; font: inherit; font-size: 14px; }
 .mc-cp-summary { margin: 6px 0; font-weight: 600; }
 .mc-cp-issues, .mc-cp-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

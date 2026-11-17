@@ -39,7 +39,10 @@ export interface VoiceController {
   stop(): void;
 }
 
-export function createVoiceController(onCommand: (utterance: string) => void): VoiceController {
+export function createVoiceController(
+  onCommand: (utterance: string) => void,
+  onInterim?: (utterance: string) => void,
+): VoiceController {
   const Ctor = getRecognitionCtor();
   const supported = Ctor !== null;
   let recognition: SpeechRecognition | null = null;
@@ -50,13 +53,15 @@ export function createVoiceController(onCommand: (utterance: string) => void): V
   if (Ctor) {
     recognition = new Ctor();
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     recognition.onresult = (e: SpeechRecognitionEvent) => {
-      const last = e.results[e.results.length - 1];
+      const last = e.results[e.results.length - 1] as { isFinal?: boolean; 0?: { transcript?: string } } | undefined;
       const text = last?.[0]?.transcript?.trim();
-      if (text) onCommand(text);
+      if (!text) return;
+      if (last?.isFinal !== false) onCommand(text);
+      else onInterim?.(text);
     };
 
     recognition.onerror = () => {

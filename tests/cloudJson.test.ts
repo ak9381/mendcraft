@@ -86,6 +86,28 @@ describe('requestJson retry', () => {
     expect(getHybridStatus().lastFailKind).toBeNull();
   });
 
+  it('retries a 500 high-demand error and then succeeds', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    setModelsForTest({
+      enabled: true,
+      copilotAnswer: {
+        generateContent: async () => {
+          n++;
+          if (n === 1) throw new Error('500 Internal Server Error: high demand');
+          return { response: { text: () => '{"answer":"Typical door width is 800 mm.","why":"guide","calls":[]}', inferenceSource: 'in_cloud' } };
+        },
+      },
+    });
+    const promise = askCopilot('how wide should the door be?', 'one room', 'International');
+    await vi.advanceTimersByTimeAsync(400);
+    const res = await promise;
+    vi.useRealTimers();
+    expect(n).toBe(2);
+    expect(res?.answer).toMatch(/800 mm/);
+    expect(res?.model).toBeTruthy();
+  });
+
   it('backs off on 429 and logs the kind when the retry also fails', async () => {
     vi.useFakeTimers();
     setModelsForTest({

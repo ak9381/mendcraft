@@ -27,6 +27,8 @@ export interface ChangeEntry {
   status: ChangeStatus;
   /** Where the proposing model ran. */
   source: 'on-device' | 'cloud' | 'rules';
+  /** Speculative Copilot: a reviewable Nano guess, later confirmed or corrected. */
+  tag?: 'nano-guess' | 'confirmed' | 'corrected' | 'withdrawn';
 }
 
 /** Local-only revert data: the full document just before an entry applied. */
@@ -69,6 +71,7 @@ export function sanitizeEntry(raw: unknown): ChangeEntry | null {
     before: str(o.before, 300),
     ...(typeof o.after === 'string' ? { after: o.after.slice(0, 300) } : {}),
     ...(typeof o.decidedAt === 'number' ? { decidedAt: o.decidedAt } : {}),
+    ...((o.tag === 'nano-guess' || o.tag === 'confirmed' || o.tag === 'corrected' || o.tag === 'withdrawn') ? { tag: o.tag } : {}),
   };
 }
 
@@ -91,14 +94,14 @@ export interface ChangeLog {
   pending(): ChangeEntry[];
   get(id: string): ChangeEntry | undefined;
   /** AI (or rules) proposal → pending. Returns the entry. */
-  propose(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; before: string; source: ChangeEntry['source'] }): ChangeEntry;
+  propose(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; before: string; source: ChangeEntry['source']; tag?: ChangeEntry['tag'] }): ChangeEntry;
   /** Record a change that already happened (her own edit). */
   recordApplied(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown> | null; before: string; after: string; source: ChangeEntry['source']; beforeDoc?: unknown }): ChangeEntry;
   /** Accept a pending entry: snapshot → apply → mark applied. */
   accept(id: string, deps: { snapshot(): unknown; apply: ApplyFn; summary(): string }): { ok: boolean; error?: string };
   reject(id: string): boolean;
   /** Update an applied entry in place (a drag folded into one entry). */
-  amend(id: string, patch: Partial<Pick<ChangeEntry, 'after' | 'decidedAt' | 'title' | 'why'>>): boolean;
+  amend(id: string, patch: Partial<Pick<ChangeEntry, 'after' | 'decidedAt' | 'title' | 'why' | 'tag'>>): boolean;
   /** Entries a revert of `id` would also roll back (applied after it). */
   revertImpact(id: string): ChangeEntry[];
   /** Restore the document from before `id`; later applied entries are marked

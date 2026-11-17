@@ -47,10 +47,14 @@ import {
   classifyCloudFailure,
   delay,
   extractJson,
+  HIGH_DEMAND_BACKOFF_MS,
+  mergeStreamText,
   RATE_LIMIT_BACKOFF_MS,
   safeResponseText,
+  safeStreamChunk,
   type CloudFailKind,
 } from './cloudJson';
+import { HEDGE_AFTER_MS, HEDGE_CLOUD_MODEL, PRIMARY_CLOUD_MODEL, raceHedged } from './hedge';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
 import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
 import type { GenerateKind, RefHit } from '../references/types';
@@ -213,6 +217,8 @@ interface Models {
   cadToolCloud?: TextGenModel | null;
   /** CAD copilot: hard questions, client email drafts, 3D materials (ONLY_IN_CLOUD). */
   copilotAnswer?: TextGenModel | null;
+  /** Backup cloud model (gemini-3.1-flash-lite) for hedged copilot answers. */
+  copilotAnswerHedge?: TextGenModel | null;
   copilotEmail?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
 }
@@ -242,6 +248,7 @@ export interface ModelOverrides {
   cadTool?: TextGenModel | null;
   cadToolCloud?: TextGenModel | null;
   copilotAnswer?: TextGenModel | null;
+  copilotAnswerHedge?: TextGenModel | null;
   copilotEmail?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
   enabled?: boolean;
@@ -399,15 +406,16 @@ export async function generateWithBudget(
       const started = await model.generateContentStream!(prompt);
       try {
         for await (const chunk of started.stream) {
-          const safe = safeResponseText(chunk);
+          const safe = safeStreamChunk(chunk);
           if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
           if (safe.text) {
-            latest = safe.text;
+            latest = mergeStreamText(latest, safe.text);
             try { onChunk?.(latest); } catch { /* UI preview must not fail the call */ }
           }
           if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
         }
       } catch (err) {
+        // A mid-stream parse/text() error is recoverable when we already have text.
         if (!latest) throw err;
       }
       if (started.response) {
@@ -597,6 +605,7 @@ async function ensureModels(): Promise<Models | null> {
       cadTool: testOverrides.cadTool ?? null,
       cadToolCloud: testOverrides.cadToolCloud ?? null,
       copilotAnswer: testOverrides.copilotAnswer ?? null,
+      copilotAnswerHedge: testOverrides.copilotAnswerHedge ?? null,
       copilotEmail: testOverrides.copilotEmail ?? null,
       copilotMaterials: testOverrides.copilotMaterials ?? null,
     };
@@ -874,17 +883,20 @@ async function initFirebase(): Promise<Models | null> {
       responseSchema: toFirebaseSchema(constraint, Schema),
       thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
     });
-    const cloudJson = (constraint: Record<string, unknown>) => getGenerativeModel(ai, {
+    const cloudJson = (constraint: Record<string, unknown>, model = cloudModel) => getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: { model: cloudModel, generationConfig: jsonGen(constraint) },
+      inCloudParams: { model, generationConfig: jsonGen(constraint) },
     });
     const cadToolCloud = cloudJson(CAD_TOOL_CONSTRAINT);
     const copilotAnswer = cloudJson(COPILOT_ANSWER_CONSTRAINT);
+    const copilotAnswerHedge = cloudModel === HEDGE_CLOUD_MODEL
+      ? null
+      : cloudJson(COPILOT_ANSWER_CONSTRAINT, HEDGE_CLOUD_MODEL);
     const copilotEmail = cloudJson(EMAIL_CONSTRAINT);
     const copilotMaterials = cloudJson(MATERIAL_CONSTRAINT);
 
     cached = {
-      cadTool, cadToolCloud, copilotAnswer, copilotEmail, copilotMaterials,
+      cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotMaterials,
       intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
@@ -1008,9 +1020,10 @@ async function callWithCloudRetry(
   cloud: TextGenModel | null,
   prompt: string,
   label: string,
+  timeoutMs: number = ON_DEVICE_TIMEOUT_MS,
 ): Promise<ModelResponse | null> {
   try {
-    const { response } = await withTimeout(hybrid.generateContent(prompt), ON_DEVICE_TIMEOUT_MS, label);
+    const { response } = await withTimeout(hybrid.generateContent(prompt), timeoutMs, label);
     return response;
   } catch (err) {
     noteError(`${label} (hybrid)`, err);
@@ -1435,11 +1448,12 @@ async function requestJson<T>(
   };
 
   let result = await run();
-  if (!result.value && result.kind === '429') {
-    for (const wait of RATE_LIMIT_BACKOFF_MS) {
+  if (!result.value && (result.kind === '429' || result.kind === 'high-demand')) {
+    const waits = result.kind === '429' ? RATE_LIMIT_BACKOFF_MS : HIGH_DEMAND_BACKOFF_MS;
+    for (const wait of waits) {
       await delay(wait);
       result = await run();
-      if (result.value || result.kind !== '429') break;
+      if (result.value || (result.kind !== '429' && result.kind !== 'high-demand')) break;
     }
   } else if (!result.value && (result.kind === 'parse' || result.kind === 'empty' || result.kind === 'timeout')) {
     result = await run();
@@ -1769,14 +1783,14 @@ export async function generateReferenceOptions(
 export async function pickCadTool(
   utterance: string,
   summary: string,
-  opts: { allowCloud: boolean },
+  opts: { allowCloud: boolean; timeoutMs?: number },
 ): Promise<{ call: ToolCall; confidence: number; source: Source; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.cadTool) return null;
   try {
     const prompt = `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${utterance}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
-    const response = await callWithCloudRetry(models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool');
+    const response = await callWithCloudRetry(models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool', opts.timeoutMs);
     if (!response) return null;
     const raw = extractJson(response.text());
     const call = coerceToolCall(raw);
@@ -1794,12 +1808,22 @@ export async function pickCadTool(
 
 /** Cloud Gemini answers a hard question about the plan (2-4 sentences) and may
  *  suggest tool calls, which the app stages as PENDING changes. */
+function coerceCopilotAnswer(raw: unknown): { answer: string; calls: ToolCall[]; why: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const answer = typeof o.answer === 'string' ? o.answer.trim().slice(0, 1200)
+    : typeof o.Answer === 'string' ? o.Answer.trim().slice(0, 1200) : '';
+  if (!answer) return null;
+  const calls = Array.isArray(o.calls) ? o.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
+  return { answer, calls, why: typeof o.why === 'string' ? o.why.slice(0, 300) : '' };
+}
+
 export async function askCopilot(
   question: string,
   summary: string,
   region: string,
   onChunk?: (text: string) => void,
-): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number } | null> {
+): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number; model: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.copilotAnswer) return null;
@@ -1810,25 +1834,26 @@ export async function askCopilot(
       const a = (raw as Record<string, unknown>).answer;
       if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
     };
-    const got = await requestJson(
-      models.copilotAnswer,
-      withPreamble(copilotAnswerPrompt(question, summary, region)),
-      cloudBudgetMs('long'),
-      'copilot answer',
-      (raw) => {
-        if (!raw || typeof raw !== 'object') return null;
-        const o = raw as Record<string, unknown>;
-        const answer = typeof o.answer === 'string' ? o.answer.trim().slice(0, 1200)
-          : typeof o.Answer === 'string' ? o.Answer.trim().slice(0, 1200) : '';
-        if (!answer) return null;
-        const calls = Array.isArray(o.calls) ? o.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
-        return { answer, calls, why: typeof o.why === 'string' ? o.why.slice(0, 300) : '' };
-      },
-      onChunk ? peek : undefined,
-    );
-    if (!got) return null;
+    const prompt = withPreamble(copilotAnswerPrompt(question, summary, region));
+    const budget = cloudBudgetMs('long');
+    const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
+    const run = (model: NonNullable<Models['copilotAnswer']>, label: string) =>
+      requestJson(model, prompt, budget, label, coerceCopilotAnswer, onChunk ? peek : undefined)
+        .then((got) => got ? { ...got.value, source: got.source } : null);
+
+    const raced = await raceHedged({
+      primary: () => run(models.copilotAnswer!, 'copilot answer'),
+      backup: models.copilotAnswerHedge
+        ? () => run(models.copilotAnswerHedge!, 'copilot answer (3.1)')
+        : undefined,
+      hedgeAfterMs: HEDGE_AFTER_MS,
+      primaryModel,
+      backupModel: HEDGE_CLOUD_MODEL,
+    });
+    if (!raced) return null;
+    console.info(`[mendcraft] copilot hedge: ${raced.model} won in ${raced.ms} ms`);
     recordInference('cloud', 'copilot-answer', Date.now() - t0);
-    return { ...got.value, source: got.source, ms: Date.now() - t0 };
+    return { ...raced.value, source: raced.value.source, ms: Date.now() - t0, model: raced.model };
   } catch (err) {
     noteError('copilot answer', err);
     return null;
