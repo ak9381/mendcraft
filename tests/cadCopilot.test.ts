@@ -9,7 +9,7 @@ import { checkGuidelines, guidelineSet, roomKind, GUIDELINE_LABEL, GUIDELINE_NOT
 import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/cad/stairs';
 import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
-import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent } from '../src/cad/copilot';
+import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from '../src/cad/copilot';
 import { coerceMaterialPlan, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
 import { filterLayers, layerFromWords } from '../src/cad/layers';
 import { fixtureSymbol } from '../src/plan/fixtures';
@@ -257,6 +257,9 @@ describe('Nano-first copilot routing', () => {
     expect(shouldNanoPickIntent(true, parseCopilot('hello there'))).toBe(false);
     expect(cadToolPrompt('{}')).toMatch(/set_materials/);
     expect(describeCall({ tool: 'set_materials', args: { style: 'convert 2D to 3D' } })).toMatch(/3D view/);
+    expect(refineCadPick('convert 2D to 3D', { tool: 'view_3d', args: { on: true } }).tool).toBe('set_materials');
+    expect(refineCadPick('3D view', { tool: 'view_3d', args: { on: true } }).tool).toBe('view_3d');
+    expect(refineCadPick('convert 2D to 3D', { tool: 'set_materials', args: { style: 'warm' } }).args).toEqual({ style: 'warm' });
   });
 });
 

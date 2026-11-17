@@ -99,7 +99,7 @@ import { withChangeRecording } from './cad/recording';
 import { checkGuidelines, summarizeReport, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
 import { answerPlanQuestion } from './cad/planQA';
-import { parseCopilot, isInstantCopilot, shouldNanoPickIntent } from './cad/copilot';
+import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
 import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
@@ -2621,6 +2621,7 @@ async function handleCopilot(utterance: string): Promise<boolean | null> {
   if (shouldNanoPickIntent(routerEnv().deviceReady, intent)) {
     const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: false });
     if (picked && picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
+      const call = refineCadPick(utterance, picked.call);
       recordLedger('on-device', 'cad-tool', REASON_TEXT.private, '', picked.ms);
       lastUtteranceText = utterance;
       lastUtteranceAt = Date.now();
@@ -2629,11 +2630,11 @@ async function handleCopilot(utterance: string): Promise<boolean | null> {
       routerPanel.add({
         utterance, planned: 'on-device', source: 'on-device', reason: 'private',
         confidence: picked.confidence, escalated: false, ms: picked.ms,
-        note: `Nano picked ${picked.call.tool}`,
+        note: call.tool === picked.call.tool ? `Nano picked ${call.tool}` : `Nano picked ${picked.call.tool}; using ${call.tool}`,
       });
-      const tool = cadTool(picked.call.tool);
-      const actor: Actor = (tool?.kind === 'edit' || picked.call.tool === 'set_materials') ? 'nano' : 'her';
-      return runCadTool(picked.call, actor, utterance, 'on-device');
+      const tool = cadTool(call.tool);
+      const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? 'nano' : 'her';
+      return runCadTool(call, actor, utterance, 'on-device');
     }
     // Nano missed or was unsure — fall through to the rules parse.
   }
@@ -2698,11 +2699,12 @@ async function handleCopilotQuestion(utterance: string): Promise<boolean | null>
     recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : REASON_TEXT.private, picked.source === 'cloud' ? commandPayload(utterance) : '', picked.ms);
     lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';
     if (picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
-      const tool = cadTool(picked.call.tool);
+      const call = refineCadPick(utterance, picked.call);
+      const tool = cadTool(call.tool);
       // Nano/Gemini-picked EDITS become pending proposals; views, checks and
       // measurements run straight away (they don't change the drawing).
-      const actor: Actor = (tool?.kind === 'edit' || picked.call.tool === 'set_materials') ? sourceToActor(picked.source) : 'her';
-      return runCadTool(picked.call, actor, utterance, picked.source);
+      const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? sourceToActor(picked.source) : 'her';
+      return runCadTool(call, actor, utterance, picked.source);
     }
   }
   return handleHardQuestion(utterance);

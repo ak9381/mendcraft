@@ -148,3 +148,13 @@ export function isInstantCopilot(intent: CopilotIntent | null): boolean {
 export function shouldNanoPickIntent(deviceReady: boolean, intent: CopilotIntent | null): boolean {
   return deviceReady && !!intent && intent.kind === 'tool' && !isInstantCopilot(intent);
 }
+
+/** If Nano only turned the 3D view on, but her words clearly asked to convert
+ *  or dress the model, keep Nano as the router and use the materials tool. */
+export function refineCadPick(utterance: string, call: ToolCall): ToolCall {
+  const rules = parseCopilot(utterance);
+  if (rules?.kind === 'tool' && rules.call.tool === 'set_materials' && call.tool === 'view_3d') {
+    return rules.call;
+  }
+  return call;
+}
