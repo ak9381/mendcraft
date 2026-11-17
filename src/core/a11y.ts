@@ -163,13 +163,16 @@ export function coerceA11yExplanations(
   knownIds: readonly string[],
   coerceOp: (raw: unknown) => object | null,
 ): A11yExplanation[] {
-  if (!isObj(raw) || !Array.isArray(raw.items)) return [];
+  if (!isObj(raw)) return [];
+  const list = Array.isArray(raw.items) ? raw.items : raw.items != null ? [raw.items] : [];
+  const known = new Map(knownIds.map((id) => [id.toLowerCase(), id]));
   const out: A11yExplanation[] = [];
-  for (const item of raw.items) {
+  for (const item of list) {
     if (!isObj(item)) continue;
-    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    const rawId = typeof item.id === 'string' ? item.id.trim() : '';
+    const id = known.get(rawId.toLowerCase()) ?? '';
     const explanation = typeof item.explanation === 'string' ? item.explanation.trim() : '';
-    if (!id || !explanation || !knownIds.includes(id)) continue;
+    if (!id || !explanation) continue;
     const entry: A11yExplanation = { id, explanation };
     if (isObj(item.fix)) {
       const coerced = coerceOp(item.fix);
