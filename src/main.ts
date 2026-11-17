@@ -98,7 +98,7 @@ import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type Ema
 import { withChangeRecording } from './cad/recording';
 import { checkGuidelines, summarizeReport, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
-import { answerPlanQuestion, isPlanQuestion, isSimplePlanQuestion } from './cad/planQA';
+import { answerPlanQuestion, isPlanQuestion, isPlanJudgementQuestion, isSimplePlanQuestion } from './cad/planQA';
 import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
@@ -2661,6 +2661,13 @@ async function handleCopilot(utterance: string): Promise<boolean | null> {
       return applyPlanAnswer(local, utterance, 'Plan data · on device');
     }
   }
+  // Judgement questions ("should we take down this wall?", wheelchair width)
+  // go to the copilot — never become a canvas edit via Nano.
+  if (isPlanJudgementQuestion(utterance)) {
+    lastUtteranceText = utterance;
+    lastUtteranceAt = Date.now();
+    return handleHardQuestion(utterance);
+  }
   const intent = parseCopilot(utterance, { walking: viewport.walking?.() ?? false });
   if (intent && isInstantCopilot(intent) && intent.kind !== 'tool') {
     lastUtteranceText = utterance;
@@ -2756,6 +2763,7 @@ async function handleCopilotQuestion(utterance: string): Promise<boolean | null>
       return applyPlanAnswer(local, utterance, 'Plan data · on device');
     }
   }
+  if (isPlanJudgementQuestion(utterance)) return handleHardQuestion(utterance);
   if (!isHardQuestion(utterance) && !isPlanQuestion(utterance)) return null;
   const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() && isHardQuestion(utterance) });
   if (picked) {
