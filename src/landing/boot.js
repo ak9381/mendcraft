@@ -657,7 +657,7 @@ $('#fPlay').addEventListener('click',playFilm);
 $('#xRun').addEventListener('click',xRun);
 $$('[data-lmode]').forEach(b=>b.addEventListener('click',()=>setLMode(b.dataset.lmode)));
 let demoT=[];
-$('#tvDemo').addEventListener('click',()=>{const b=$('#tvDemo');const stop=()=>{demoT.forEach(clearTimeout);demoT=[];b.querySelector('span').textContent='Run a live demo'};
+$('#tvDemo').addEventListener('click',()=>{const b=$('#tvDemo');const stop=()=>{demoT.forEach(clearTimeout);demoT=[];b.querySelector('span').textContent='Play a sample walk'};
  if(demoT.length){stop();return}b.querySelector('span').textContent='Stop the demo';const p=id=>PH.find(x=>x.id===id);
  demoT=[[0,()=>say(p('l'))],[3400,()=>say(p('m'))],[6400,()=>{S.online=false;toast('Airplane mode on. Cloud jobs will wait.');render()}],[7600,()=>say(p('d'))],[11000,()=>say(p('r'))],[14400,()=>{S.online=true;toast('Back online. Sending what was waiting.');render();flush()}],[19000,stop]].map(([ms,f])=>setTimeout(f,ms))});
 $('#dwellTest').addEventListener('click',()=>{tests++;$('#dwellRes').textContent=`Clicked. ${plural(tests,'test click')} so far, with a ${(P.dwell/1000).toFixed(1)} second dwell.`});

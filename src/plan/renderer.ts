@@ -728,6 +728,8 @@ export function createPlanRenderer(
 
   function textNode(x: number, y: number, s: string, size: number, fill: string, anchor: string): SVGTextElement {
     const t = el('text', { x, y, 'font-size': size, fill, 'text-anchor': anchor, 'font-family': 'system-ui, sans-serif' });
+    t.classList.add('mc-num');
+    t.style.fontVariantNumeric = 'tabular-nums';
     t.textContent = s;
     return t;
   }

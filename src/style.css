@@ -11,9 +11,19 @@
   --danger: #ef4444;
   --focus: #8e9dff;
   --radius: 14px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 40px;
   --target: 60px;
   --target-gap: 8px;
   --island-radius: 16px;
+  --island-pad: 8px;
+  --island-radius-inner: calc(var(--island-radius) - var(--island-pad));
   --font-display: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Kannada", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -72,7 +82,6 @@ button {
 
 button:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(142 157 255 / 0.35);
 }
 
 button:focus-visible {
@@ -113,6 +122,52 @@ button.active {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+h1, h2, h3, h4 {
+  text-wrap: balance;
+}
+
+.mc-num,
+#viewport text,
+.mc-dim-edit,
+.mc-cp-spec-line,
+.mc-ledger-size,
+.mc-hands-metrics dd {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Press shrink — real feedback, not decoration. */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Shimmer skeleton for Nano / Gemini waits. */
+.mc-skel {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mc-skel > span {
+  display: block;
+  height: 10px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgb(15 23 42 / 0.06) 0%, rgb(15 23 42 / 0.12) 50%, rgb(15 23 42 / 0.06) 100%);
+  background-size: 200% 100%;
+  animation: mc-shimmer 1.2s ease-in-out infinite;
+}
+.mc-skel > span:nth-child(2) { width: 72%; }
+.mc-skel > span:nth-child(3) { width: 54%; }
+@keyframes mc-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@keyframes mc-applied-in {
+  from { transform: scale(0.98); opacity: 0.72; }
+  to { transform: none; opacity: 1; }
+}
+.mc-cp-card.mc-cp-applied {
+  animation: mc-applied-in 0.35s ease;
 }
 
 button.ghost {
@@ -1453,7 +1508,7 @@ a.brand:hover { color: var(--accent); }
 .mc-a11y-dot-warn { background: #f59e0b; }
 .mc-a11y-msg { color: var(--text); }
 .mc-a11y-cite { margin: 2px 0 0 16px; font-size: 11px; color: var(--text-dim); }
-.mc-a11y-explain { margin: 4px 0 0 16px; font-size: 12px; color: var(--text-dim); font-style: italic; }
+.mc-a11y-explain { margin: 4px 0 0 16px; font-size: 12px; color: var(--text-dim); }
 .mc-a11y-actions { display: flex; gap: 6px; margin: 6px 0 0 16px; }
 .mc-a11y-actions button {
   background: transparent;
@@ -1999,7 +2054,7 @@ body.control-room {
 .card-scene, .card-ledger, .card-ai, .card-recipes { grid-column: span 6; }
 .card-queue, .card-caption { grid-column: span 6; }
 .card-note { color: var(--text-dim); font-size: 0.9rem; margin: 8px 0 0; }
-.card-empty { color: var(--text-dim); font-style: italic; }
+.card-empty { color: var(--text-dim); }
 .c-device {
   font-family: var(--font-display);
   font-size: clamp(2rem, 3vw, 2.6rem);
@@ -2828,7 +2883,7 @@ button.mc-ref-open {
 #app:has(> #layout) .mc-palette-btn:hover {
   background: #f1f5f9;
   border-color: rgb(15 23 42 / 0.08);
-  box-shadow: 0 0 0 3px rgb(37 99 235 / 0.22);
+  box-shadow: none;
 }
 
 #app:has(> #layout) #topbar button:focus-visible,
@@ -2837,18 +2892,18 @@ button.mc-ref-open {
 #app:has(> #layout) #panel button:focus-visible,
 #app:has(> #layout) .mode-btn:focus-visible,
 #app:has(> #layout) .mc-palette-btn:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid var(--island-ink);
   outline-offset: 2px;
-  background: #eff6ff;
+  background: #f8fafc;
 }
 
 #app:has(> #layout) #topbar button.active,
 #app:has(> #layout) .mode-btn.active,
 #app:has(> #layout) .mc-palette-btn.active,
 #app:has(> #layout) #topbar button[aria-pressed="true"] {
-  background: #dbeafe;
-  color: #1d4ed8;
-  border-color: #93c5fd;
+  background: #f1f5f9;
+  color: var(--island-ink);
+  border-color: rgb(15 23 42 / 0.16);
 }
 
 #app:has(> #layout) #topbar button.primary,
@@ -2861,7 +2916,7 @@ button.mc-ref-open {
 #app:has(> #layout) #topbar button.primary:hover,
 #app:has(> #layout) #btn-say:hover {
   background: #1e293b;
-  box-shadow: 0 0 0 3px rgb(15 23 42 / 0.2);
+  box-shadow: none;
 }
 
 /* ---- Top-left: brand + Gemini / agent status ---- */
@@ -2994,7 +3049,7 @@ button.mc-ref-open {
   z-index: 37;
   display: flex;
   gap: var(--target-gap);
-  padding: 6px;
+  padding: var(--island-pad);
 }
 #zoom-island {
   position: absolute;
@@ -3003,7 +3058,7 @@ button.mc-ref-open {
   z-index: 37;
   display: flex;
   gap: var(--target-gap);
-  padding: 6px;
+  padding: var(--island-pad);
 }
 #zoom-island #btn-zoom-fit {
   min-width: 72px;
@@ -3019,7 +3074,7 @@ button.mc-ref-open {
   flex-direction: row;
   align-items: stretch;
   gap: var(--target-gap);
-  padding: 6px;
+  padding: var(--island-pad);
   z-index: 36;
 }
 #app:has(> #layout) .mc-palette-btn {
@@ -3027,12 +3082,12 @@ button.mc-ref-open {
   min-height: var(--target);
   padding: 4px 6px;
   gap: 2px;
-  border-radius: 12px;
+  border-radius: var(--island-radius-inner);
   color: var(--island-ink);
 }
 #app:has(> #layout) .mc-palette-btn .mc-ico { font-size: 18px; }
 #app:has(> #layout) .mc-palette-btn .mc-lbl { font-size: 10px; font-weight: 500; color: var(--island-muted); }
-#app:has(> #layout) .mc-palette-btn.active .mc-lbl { color: #1d4ed8; }
+#app:has(> #layout) .mc-palette-btn.active .mc-lbl { color: var(--island-ink); }
 #app:has(> #layout) .mc-flyout {
   left: 0;
   bottom: calc(100% + 8px);
@@ -3410,6 +3465,8 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-cp-tab { flex: 1; min-height: 52px; }
 .mc-cp-tab.active { background: var(--accent); color: #0b0b0a; border-color: transparent; font-weight: 600; }
 .mc-cp-busy { margin: 0; padding: 8px 14px; color: var(--accent); font-size: 14px; }
+.mc-cp-busy .mc-cp-busy-text { margin: 0; }
+.mc-cp-busy .mc-skel { margin-top: 10px; }
 .mc-cp-body { overflow-y: auto; padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 12px; }
 .mc-cp-sec h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
 .mc-cp-sec-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -3495,7 +3552,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
   max-width: 240px;
   flex: 0 0 auto;
   margin: 0;
-  padding: 6px;
+  padding: var(--island-pad);
   background: var(--island-bg);
   border-radius: var(--island-radius);
   box-shadow: var(--island-shadow);
@@ -3506,7 +3563,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
   min-height: var(--target);
   padding: 0 14px;
   border: 1px solid var(--island-line);
-  border-radius: 14px;
+  border-radius: var(--island-radius-inner);
   background: #f8fafc;
   color: var(--island-ink);
   font: inherit;
@@ -3519,7 +3576,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
   min-height: var(--target);
   min-width: var(--target);
   padding: 0 12px;
-  border-radius: 14px;
+  border-radius: var(--island-radius-inner);
   background: #0f172a;
   color: #f8fafc;
   border: 1px solid #0f172a;

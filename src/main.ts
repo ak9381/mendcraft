@@ -313,7 +313,7 @@ app.innerHTML = `
       <span id="listen-state" class="status-v">Listening</span>
     </span>
     <span class="status-chip">
-      <span class="status-k">AI</span>
+      <span class="status-k sr-only">Source</span>
       <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
       <span id="conf-state" class="conf-state" hidden></span>
     </span>

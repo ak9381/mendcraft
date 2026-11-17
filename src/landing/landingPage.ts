@@ -6,7 +6,7 @@ import shell from './shell.html?raw';
 import { bootLanding } from './boot.js';
 
 export function mountLandingPage(root: HTMLElement): void {
-  document.title = 'Mendcraft — your hands and voice, in control of everything';
+  document.title = 'Mendcraft — draw and check a floor plan with your voice and hands';
   document.documentElement.classList.add('js', 'mc-land');
   document.body.classList.add('mc-land');
   root.classList.add('mc-land');
