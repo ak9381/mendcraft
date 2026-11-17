@@ -1,3 +1,5 @@
+import { sanitizeRoute, type RouteInfo } from './routeReason';
+
 // Reviewed-change log. EVERY change to the drawing — hers, Nano's, Gemini's or
 // the rules' — lands here with who, what (before → after), when and why.
 // AI changes arrive as PENDING proposals: nothing touches the plan until she
@@ -29,6 +31,8 @@ export interface ChangeEntry {
   source: 'on-device' | 'cloud' | 'rules';
   /** Speculative Copilot: a reviewable Nano guess, later confirmed or corrected. */
   tag?: 'nano-guess' | 'confirmed' | 'corrected' | 'withdrawn';
+  /** Factual copilot routing line (rules / Nano / Gemini / offline / speculative). */
+  route?: RouteInfo;
 }
 
 /** Local-only revert data: the full document just before an entry applied. */
@@ -62,6 +66,7 @@ export function sanitizeEntry(raw: unknown): ChangeEntry | null {
   const status = STATUSES.includes(o.status as ChangeStatus) ? (o.status as ChangeStatus) : null;
   if (!actor || !status || typeof o.at !== 'number') return null;
   const source = o.source === 'on-device' || o.source === 'cloud' ? o.source : 'rules';
+  const route = sanitizeRoute(o.route);
   return {
     id: o.id.slice(0, 40), actor, status, at: o.at, source,
     tool: str(o.tool, 40) || 'edit',
@@ -72,6 +77,7 @@ export function sanitizeEntry(raw: unknown): ChangeEntry | null {
     ...(typeof o.after === 'string' ? { after: o.after.slice(0, 300) } : {}),
     ...(typeof o.decidedAt === 'number' ? { decidedAt: o.decidedAt } : {}),
     ...((o.tag === 'nano-guess' || o.tag === 'confirmed' || o.tag === 'corrected' || o.tag === 'withdrawn') ? { tag: o.tag } : {}),
+    ...(route ? { route } : {}),
   };
 }
 
@@ -94,14 +100,14 @@ export interface ChangeLog {
   pending(): ChangeEntry[];
   get(id: string): ChangeEntry | undefined;
   /** AI (or rules) proposal → pending. Returns the entry. */
-  propose(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; before: string; source: ChangeEntry['source']; tag?: ChangeEntry['tag'] }): ChangeEntry;
+  propose(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; before: string; source: ChangeEntry['source']; tag?: ChangeEntry['tag']; route?: RouteInfo }): ChangeEntry;
   /** Record a change that already happened (her own edit). */
   recordApplied(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown> | null; before: string; after: string; source: ChangeEntry['source']; beforeDoc?: unknown }): ChangeEntry;
   /** Accept a pending entry: snapshot → apply → mark applied. */
   accept(id: string, deps: { snapshot(): unknown; apply: ApplyFn; summary(): string }): { ok: boolean; error?: string };
   reject(id: string): boolean;
   /** Update an applied entry in place (a drag folded into one entry). */
-  amend(id: string, patch: Partial<Pick<ChangeEntry, 'after' | 'decidedAt' | 'title' | 'why' | 'tag'>>): boolean;
+  amend(id: string, patch: Partial<Pick<ChangeEntry, 'after' | 'decidedAt' | 'title' | 'why' | 'tag' | 'route'>>): boolean;
   /** Entries a revert of `id` would also roll back (applied after it). */
   revertImpact(id: string): ChangeEntry[];
   /** Restore the document from before `id`; later applied entries are marked

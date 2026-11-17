@@ -3424,6 +3424,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-cp-when { color: var(--text-dim); }
 .mc-cp-what { margin: 4px 0 2px; font-size: 16px; font-weight: 600; }
 .mc-cp-why, .mc-cp-ba { margin: 2px 0; font-size: 13px; color: var(--text-dim); }
+.mc-cp-route { margin: 2px 0 0; font-size: 12px; line-height: 1.35; color: var(--text-dim); }
 .mc-cp-card-foot, .mc-cp-issue-btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .mc-cp-status { flex: 1; font-size: 13px; color: var(--text-dim); }
 .st-pending { color: var(--accent); } .st-applied { color: var(--accent-2); }
@@ -3433,6 +3434,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-cp-answer-text { margin: 4px 0; font-size: 17px; }
 .mc-cp-guess { border-left-color: #d97706; }
 .mc-cp-guess .mc-cp-by { color: #b45309; }
+.mc-cp-guess .mc-cp-route { color: #b45309; }
 .mc-cp-confirmed { border-left-color: #15803d; }
 .mc-cp-spec { margin: 10px 0 0; padding: 8px 10px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; }
 .mc-cp-spec h3 { margin: 0 0 2px; font-size: 13px; font-weight: 600; }
@@ -3678,6 +3680,7 @@ body.mc-connect #history-island, body.mc-connect #parts-list, body.mc-connect #r
 #app:has(> #layout) .mc-cp-note,
 #app:has(> #layout) .mc-cp-empty,
 #app:has(> #layout) .mc-cp-by,
+#app:has(> #layout) .mc-cp-route,
 #app:has(> #layout) .mc-cp-meta,
 #app:has(> #layout) .mc-cp-why,
 #app:has(> #layout) .mc-cp-ba,
