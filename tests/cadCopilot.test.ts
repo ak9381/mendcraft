@@ -7,7 +7,7 @@ import { validatePlanOp } from '../src/plan/ops';
 import type { PlanDoc } from '../src/plan/doc';
 import { checkGuidelines, guidelineSet, roomKind, GUIDELINE_LABEL, GUIDELINE_NOTE, summarizeReport } from '../src/cad/guidelines';
 import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/cad/stairs';
-import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
+import { answerPlanQuestion, isPlanQuestion, isSimplePlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
 import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick, copilotAnswerPrompt, compactPlanSummary } from '../src/cad/copilot';
 import { coerceMaterialPlan, coerceSetMaterialsOp, colorFromMaterialName, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, CONVERT_LOOK, sunVector } from '../src/cad/materials';
@@ -154,6 +154,11 @@ describe('plan questions (numbers from the drawing)', () => {
     expect(isPlanQuestion('wall thickness')).toBe(true);
     expect(isPlanQuestion('door width of the bathroom')).toBe(true);
     expect(answerPlanQuestion(docOf(house()), 'wall thickness')?.kind).toBe('wall-thickness');
+    expect(isSimplePlanQuestion("what's the wall thickness?")).toBe(true);
+    expect(isSimplePlanQuestion('how big is the bedroom?')).toBe(true);
+    expect(isSimplePlanQuestion('how wide are the doors?')).toBe(true);
+    expect(isSimplePlanQuestion('Does the bathroom door leave enough width for a wheelchair, and what is the wall thickness?')).toBe(false);
+    expect(isSimplePlanQuestion('Should we take down the wall between the kitchen and the living room?')).toBe(false);
   });
 
   it('compacts a plan summary and keeps the copilot prompt short', () => {
