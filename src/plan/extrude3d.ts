@@ -40,6 +40,8 @@ export function createExtrudeView(
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
   renderer.domElement.className = 'plan-3d';
   container.appendChild(renderer.domElement);
 
@@ -51,14 +53,19 @@ export function createExtrudeView(
   const sun = new THREE.DirectionalLight(0xffffff, 1.2);
   sun.position.set(1, -1, 2);
   scene.add(sun);
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.95 });
+  // Interior wall faces sit in shadow of the wall boxes (no bounce light in
+  // this simple scene). A fill keeps matte white paint reading white and
+  // light oak reading warm, not dark olive-grey.
+  const fill = new THREE.AmbientLight(0xffffff, 0.55);
+  scene.add(fill);
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.95, metalness: 0 });
 
   let group = new THREE.Group();
   scene.add(group);
-  const material = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.9 });
-  const structMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85 });
-  const furnMat = new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.85 });
-  const sanMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6 });
+  const material = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.9, metalness: 0 });
+  const structMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85, metalness: 0 });
+  const furnMat = new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.85, metalness: 0 });
+  const sanMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6, metalness: 0 });
 
   /** Add a component's 3D blocks: stairs step up, columns are prisms/cylinders,
    *  everything else is a simple low box at its sensible sitting height. */
@@ -159,6 +166,7 @@ export function createExtrudeView(
     const set = (m: THREE.MeshStandardMaterial, look: { color: string; roughness: number }) => {
       m.color.set(look.color);
       m.roughness = look.roughness;
+      m.metalness = 0;
       m.needsUpdate = true;
     };
     set(material, plan.walls);
@@ -167,12 +175,19 @@ export function createExtrudeView(
     set(furnMat, plan.furniture);
     set(sanMat, plan.sanitary);
     const l = plan.lighting;
-    sun.intensity = l.sunIntensity;
+    sun.intensity = Math.max(l.sunIntensity, 0.6);
     sun.color.set(l.sunColor);
     const v = sunVector(l);
     sun.position.set(v.x, v.y, v.z);
-    hemi.intensity = l.ambientIntensity;
-    scene.background = new THREE.Color(l.skyColor);
+    hemi.color.set(0xffffff);
+    hemi.intensity = Math.max(l.ambientIntensity, 0.9);
+    // Keep a readable interior fill; evening skies stay dimmer but not black.
+    const sky = new THREE.Color(l.skyColor);
+    const skyLum = sky.r * 0.21 + sky.g * 0.72 + sky.b * 0.07;
+    fill.intensity = skyLum < 0.25
+      ? Math.max(0.28, l.ambientIntensity * 0.35)
+      : Math.max(0.5, l.ambientIntensity * 0.35);
+    scene.background = sky;
   }
 
   // ---- first-person walk ----

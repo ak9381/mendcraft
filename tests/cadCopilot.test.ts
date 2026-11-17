@@ -10,7 +10,7 @@ import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/c
 import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
 import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from '../src/cad/copilot';
-import { coerceMaterialPlan, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
+import { coerceMaterialPlan, coerceSetMaterialsOp, colorFromMaterialName, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
 import { filterLayers, layerFromWords } from '../src/cad/layers';
 import { fixtureSymbol } from '../src/plan/fixtures';
 
@@ -226,6 +226,25 @@ describe('3D materials (data, no image model)', () => {
   it('offline presets from her words; sun vector points up', () => {
     expect(presetFor('evening light').label).toBe('Evening');
     expect(sunVector(MATERIAL_PRESETS.warm.lighting).z).toBeGreaterThan(0);
+  });
+  it('resolves paint and wood names when the model skips hex', () => {
+    expect(colorFromMaterialName('matte white paint')).toBe('#f7f6f2');
+    expect(colorFromMaterialName('light oak parquet')).toBe('#e4c9a0');
+    expect(colorFromMaterialName('red')).toBeNull();
+    const p = coerceMaterialPlan({
+      walls: { name: 'matte white paint', color: 'white' },
+      floor: { name: 'light oak parquet', color: 'light oak' },
+      lighting: { sunIntensity: 1.5 },
+    });
+    expect(p?.walls.color).toBe('#f7f6f2');
+    expect(p?.floor.color).toBe('#e4c9a0');
+    const dark = coerceMaterialPlan({
+      walls: { name: 'matte white paint', color: '#4a4a32' },
+      floor: { name: 'light oak parquet', color: '#2a1a10' },
+      lighting: { ambientIntensity: 1 },
+    });
+    expect(dark?.walls.color).toBe('#f7f6f2');
+    expect(dark?.floor.color).toBe('#e4c9a0');
   });
 });
 

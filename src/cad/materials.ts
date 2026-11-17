@@ -123,6 +123,54 @@ export function parseHexColor(v: unknown): string | null {
 }
 const hex = (v: unknown, fb: string) => parseHexColor(v) ?? fb;
 
+/** Paint / wood colour words the model often returns instead of a hex value.
+ *  Generic CSS names like "red" stay unresolved so junk output still falls
+ *  back to the preset. */
+export function colorFromMaterialName(raw: string): string | null {
+  const t = raw.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  if (!t) return null;
+  if (/\blight\s+oak\b|\boak\s+parquet\b|\bwhite\s+oak\b/.test(t)) return '#e4c9a0';
+  if (/\boak\b/.test(t)) return '#d4b08c';
+  if (/\bteak\b/.test(t)) return '#a47148';
+  if (/\bwalnut\b/.test(t)) return '#7f5539';
+  if (/\bparquet\b/.test(t)) return '#e4c9a0';
+  if (t === 'white' || t === 'matt white' || t === 'matte white') return '#f7f6f2';
+  if (/\bwhite\b/.test(t) && !/oak|wood|wash/.test(t)) return '#f7f6f2';
+  if (/\bivory\b|\bcream\b/.test(t)) return '#f4ead3';
+  return null;
+}
+
+function luminance(hexColor: string): number {
+  const n = parseInt(hexColor.slice(1), 16);
+  if (Number.isNaN(n)) return 0;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/** Hex first, then a colour word on the colour field, then a guess from the
+ *  material name. If the name says white/oak but the hex is clearly too dark,
+ *  prefer the named look so walls actually read white and floors read oak. */
+function resolveLookColor(color: unknown, name: string, fb: string): string {
+  const fromHex = parseHexColor(color);
+  const fromWord = typeof color === 'string' ? colorFromMaterialName(color) : null;
+  const fromName = colorFromMaterialName(name);
+  const resolved = fromHex ?? fromWord ?? fromName ?? fb;
+  const label = `${typeof color === 'string' ? color : ''} ${name}`.toLowerCase();
+  if (fromName && /\b(white|ivory|cream)\b/.test(label) && luminance(resolved) < 0.65) {
+    return fromName;
+  }
+  if (fromName && /\b(oak|parquet)\b/.test(label) && luminance(resolved) < 0.35) {
+    return fromName;
+  }
+  return resolved;
+}
+
+function lookColorIsUsable(color: unknown, name: string): boolean {
+  if (parseHexColor(color)) return true;
+  if (typeof color === 'string' && colorFromMaterialName(color)) return true;
+  return !!colorFromMaterialName(name);
+}
+
 /** Untrusted model JSON → a safe MaterialPlan (missing parts fall back to the
  *  base preset), or null when nothing usable came back. */
 export function coerceMaterialPlan(raw: unknown, base: MaterialPlan = MATERIAL_PRESETS.default): MaterialPlan | null {
@@ -134,11 +182,12 @@ export function coerceMaterialPlan(raw: unknown, base: MaterialPlan = MATERIAL_P
     const s = o[k];
     if (!s || typeof s !== 'object') continue;
     const r = s as Record<string, unknown>;
-    if (parseHexColor(r.color)) usable++;
+    const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim().slice(0, 40) : base[k].name;
+    if (lookColorIsUsable(r.color, name)) usable++;
     out[k] = {
-      color: hex(r.color, base[k].color),
+      color: resolveLookColor(r.color, name, base[k].color),
       roughness: num(r.roughness, base[k].roughness, 0, 1),
-      name: typeof r.name === 'string' && r.name.trim() ? r.name.trim().slice(0, 40) : base[k].name,
+      name,
     };
   }
   const l = o.lighting && typeof o.lighting === 'object' ? (o.lighting as Record<string, unknown>) : {};
