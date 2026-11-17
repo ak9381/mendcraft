@@ -28,8 +28,8 @@ const goodRaw = () => ({
   deviceKind: 'smart-bulb', brand: 'WiZ', protocol: 'udp json',
   discovery: { method: 'wiz-udp-broadcast', port: 38899 },
   actions: [
-    { id: 'power-on', label: 'On', params: [], successCue: 'lit', request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true } } } },
-    { id: 'dim', label: 'Dim', params: [{ name: 'level', type: 'number', min: 10, max: 100, default: 50 }], successCue: 'dimmer',
+    { id: 'power-on', verb: 'on', label: 'On', params: [], successCue: 'lit', request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true } } } },
+    { id: 'dim', verb: 'set', label: 'Dim', params: [{ name: 'level', type: 'number', min: 10, max: 100, default: 50 }], successCue: 'dimmer',
       request: { transport: 'udp', port: 38899, payloadJson: '{"method":"setPilot","params":{"dimming":"{{level}}"}}' } },
   ],
   test: { action: 'power-on' },
@@ -81,10 +81,10 @@ describe('connector allowlist (no eval, data only)', () => {
   it('builds an http request on an allowed port only', () => {
     const c = coerceConnector({
       brand: 'Acme', deviceKind: 'fan', discovery: { method: 'mdns', service: '_acme._tcp' },
-      actions: [{ id: 'speed', label: 'Speed', params: [{ name: 's', type: 'number', min: 0, max: 3 }], successCue: 'blades spin',
-        request: { transport: 'http', port: 8080, method: 'post', path: '/api/speed/{{s}}', bodyJson: '{"speed":"{{s}}"}' } }],
+      actions: [{ id: 'speed', verb: 'set', label: 'Speed', params: [{ name: 'speed', type: 'number', min: 0, max: 3 }], successCue: 'blades spin',
+        request: { transport: 'http', port: 8080, method: 'post', path: '/api/speed/{{speed}}', bodyJson: '{"speed":"{{speed}}"}' } }],
     }, 'cloud')!;
-    const p = planRequest(c, 'speed', { s: 2 }, '10.0.0.7');
+    const p = planRequest(c, 'speed', { speed: 2 }, '10.0.0.7');
     expect(p.ok && p.request).toEqual({ transport: 'http', host: '10.0.0.7', port: 8080, method: 'POST', url: 'http://10.0.0.7:8080/api/speed/2', body: { speed: 2 } });
   });
   it('runAction reports a missing transport honestly', async () => {
@@ -105,7 +105,7 @@ describe('connector cache', () => {
   it('round-trips and re-validates on read', () => {
     const s = memStore();
     saveConnector(builtinWizConnector(), s);
-    expect(getCachedConnector(connectorKey('WiZ', 'smart-bulb'), s)?.actions.length).toBe(4);
+    expect(getCachedConnector(connectorKey('WiZ', 'smart-bulb'), s)?.actions.length).toBe(5);
     // tamper: a disallowed port in storage is dropped on read
     const raw = JSON.parse(s.getItem(CONNECTORS_KEY)!);
     raw['wiz|smart-bulb'].actions = raw['wiz|smart-bulb'].actions.map((a: { request: { port: number } }) => ({ ...a, request: { ...a.request, port: 22 } }));
@@ -181,7 +181,7 @@ function fakeDeps(over: Partial<FlowDeps> = {}) {
     capture: async () => frame(`f${++shots}`),
     identify: async () => ({ identity: wizId, source: 'on-device' }),
     cachedConnector: () => null,
-    writeConnector: async () => ({ connector: builtinWizConnector(), source: 'cloud' }),
+    writeConnector: async () => ({ ok: true, connector: builtinWizConnector(), source: 'cloud', text: '{}' }),
     saveConnector: vi.fn(),
     discover: async () => ({ found: [{ host: '192.168.1.42' }], source: 'native', note: '' }),
     confirm: async () => true,
@@ -200,7 +200,7 @@ describe('runAddDevice', () => {
     const { deps, events, sent } = fakeDeps();
     const out = await runAddDevice(deps);
     expect(out.ok && out.verdict).toBe('done');
-    expect(sent).toEqual(['power-off', 'power-on']);
+    expect(sent).toEqual(['power-off', 'power-on', 'status']);
     expect(deps.saveConnector).toHaveBeenCalledOnce();
     expect(deps.saveDevice).toHaveBeenCalledOnce();
     const final = events.filter((e) => e.state !== 'active');
@@ -270,7 +270,7 @@ describe('sim world (?sim=1, no hardware)', () => {
   it('full flow flips the fake lamp and verifies it', async () => {
     const w = createSimWorld((on) => frame(on ? 'on' : 'off'));
     const { deps } = fakeDeps({
-      sim: true, capture: () => w.capture('point'), identify: (f) => w.identify(f), writeConnector: () => w.write(),
+      sim: true, capture: () => w.capture('point'), identify: (f) => w.identify(f), writeConnector: (_i, fb, t) => w.write(fb, t),
       cachedConnector: (id) => w.cached(connectorKey(id.brand, id.kind)), discover: () => w.discover(),
       run: (c, a, h) => w.run(c, a, h), check: () => w.check(),
     });
@@ -346,11 +346,15 @@ describe('hybrid add-device calls', () => {
   it('connector writer output must pass the allowlist', async () => {
     const tm = (t: string): TextGenModel => ({ generateContent: async () => ({ response: { text: () => t } }) });
     setModelsForTest({ connectorWriter: tm(JSON.stringify(goodRaw())) });
-    expect((await writeDeviceConnector(wizId))?.connector.actions.length).toBe(2);
-    setModelsForTest({ connectorWriter: tm(JSON.stringify({ ...goodRaw(), actions: [{ id: 'x', label: 'x', request: { transport: 'udp', port: 22, payloadJson: '{}' } }] })) });
-    expect(await writeDeviceConnector(wizId)).toBeNull();
+    const good = await writeDeviceConnector(wizId);
+    expect(good.ok && good.connector.actions.length).toBe(2);
+    setModelsForTest({ connectorWriter: tm(JSON.stringify({ ...goodRaw(), actions: [{ id: 'x', verb: 'on', label: 'x', request: { transport: 'udp', port: 22, payloadJson: '{}' } }] })) });
+    const bad = await writeDeviceConnector(wizId);
+    expect(bad.ok).toBe(false);
+    expect(!bad.ok && bad.errors.join(' ')).toMatch(/request not allowed/);
     setModelsForTest({ connectorWriter: tm('{"supported":false,"actions":[],"discovery":{"method":"manual"}}') });
-    expect(await writeDeviceConnector(wizId)).toBeNull();
+    const unsup = await writeDeviceConnector(wizId);
+    expect(!unsup.ok && unsup.unsupported).toBe(true);
   });
   it('effect check: Nano verdict, or unsure (rules) with no model', async () => {
     setModelsForTest({ effectCheck: mm('{"verdict":"done","reason":"lit"}', 'on_device') });

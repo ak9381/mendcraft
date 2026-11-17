@@ -1,22 +1,20 @@
 // DECLARATIVE CONNECTORS + FIXED INTERPRETER (pure, DOM-free, no eval).
 //
-// Control Anything (Meta 2026 Indie winner, arXiv 2611.08321) has a cloud agent
-// write a fresh Node program per device and run it unsandboxed, every time. Its
-// own Limitations list (a) no reuse, (b) no sandbox, (c) no proof of the
-// physical effect. Mendcraft's answer for (a) and (b):
+// Cloud Gemini writes a connector ONCE, as DATA: named actions, each one of a
+// fixed set of verbs (on, off, set, toggle, status) with typed params from a
+// fixed vocabulary, mapped to one UDP datagram or one HTTP call.
 //
-//   - Cloud Gemini writes a connector ONCE, as DATA: named actions, each mapped
-//     to one UDP datagram or one HTTP call with typed, ranged params.
 //   - This file is the only thing that turns a connector into a request. It
-//     validates the whole connector against an allowlist (transports, ports,
-//     methods, path shape, template depth), clamps every param, and fills
-//     templates by exact "{{name}}" substitution. Nothing is ever evaluated.
+//     validates the whole connector against an allowlist (verbs, param names,
+//     transports, ports, methods, path shape, template depth), clamps every
+//     param, and fills templates by exact "{{name}}" substitution. Nothing is
+//     ever evaluated.
+//   - checkConnectorDraft() explains every rejection in plain words, so the
+//     writer can be told exactly what to fix and try again.
 //   - The host is never part of the connector: it comes from LAN discovery and
 //     must be a private IPv4 address, so a connector cannot aim at the internet.
-//   - Connectors are cached (connectorCache.ts) and reused offline.
-//
-// (c) — proof of the effect — is the on-device before/after check in
-// addDeviceFlow.ts.
+//   - A connector only counts once the real device answered a test action
+//     (addDeviceFlow.ts); then it is cached (connectorCache.ts) for offline reuse.
 
 export type ParamType = 'number' | 'boolean' | 'enum';
 
@@ -37,8 +35,30 @@ export type RequestSpec =
   | { transport: 'udp'; port: number; payload: JsonTemplate }
   | { transport: 'http'; port: number; method: 'GET' | 'POST' | 'PUT'; path: string; body?: JsonTemplate };
 
+/** The only verbs an action may have. Anything else is rejected. */
+export const ACTION_VERBS = ['on', 'off', 'set', 'toggle', 'status'] as const;
+export type ActionVerb = typeof ACTION_VERBS[number];
+
+/** The only param names an action may use, with hard ranges. A writer's own
+ *  min/max is narrowed to these; unknown names are rejected. */
+export const PARAM_VOCAB: Record<string, { type: ParamType; min?: number; max?: number }> = {
+  brightness: { type: 'number', min: 1, max: 100 },
+  level: { type: 'number', min: 0, max: 100 },
+  volume: { type: 'number', min: 0, max: 100 },
+  kelvin: { type: 'number', min: 2200, max: 6500 },
+  hue: { type: 'number', min: 0, max: 360 },
+  saturation: { type: 'number', min: 0, max: 100 },
+  red: { type: 'number', min: 0, max: 255 },
+  green: { type: 'number', min: 0, max: 255 },
+  blue: { type: 'number', min: 0, max: 255 },
+  speed: { type: 'number', min: 0, max: 100 },
+  channel: { type: 'number', min: 1, max: 999 },
+  state: { type: 'boolean' },
+};
+
 export interface ConnectorAction {
   id: string;
+  verb: ActionVerb;
   label: string;
   /** Kannada label (optional). */
   kn?: string;
@@ -66,6 +86,8 @@ export interface Connector {
   test: { action: string; prepare?: string };
   source: ConnectorSource;
   createdAt: number;
+  /** When the real device acknowledged the test action (unset = never tested). */
+  testedAt?: number;
 }
 
 // ---- allowlist ------------------------------------------------------------
@@ -152,10 +174,15 @@ function coerceParam(raw: unknown): ParamSpec | null {
   if (!isObj(raw)) return null;
   const name = str(raw.name, 24);
   if (!name || !PARAM_RE.test(name)) return null;
-  const type = raw.type;
+  const vocab = PARAM_VOCAB[name];
+  if (!vocab) return null;
+  const type = raw.type ?? vocab.type;
+  if (type !== vocab.type) return null;
   if (type === 'number') {
-    const min = typeof raw.min === 'number' && Number.isFinite(raw.min) ? raw.min : 0;
-    const max = typeof raw.max === 'number' && Number.isFinite(raw.max) ? raw.max : 100;
+    const lo = vocab.min ?? 0;
+    const hi = vocab.max ?? 100;
+    const min = typeof raw.min === 'number' && Number.isFinite(raw.min) ? Math.max(lo, raw.min) : lo;
+    const max = typeof raw.max === 'number' && Number.isFinite(raw.max) ? Math.min(hi, raw.max) : hi;
     if (max < min) return null;
     const d = typeof raw.default === 'number' && Number.isFinite(raw.default) ? Math.min(max, Math.max(min, raw.default)) : min;
     return { name, type, min, max, default: d };
@@ -209,8 +236,12 @@ function coerceAction(raw: unknown): ConnectorAction | null {
   if (!id || !ID_RE.test(id) || !label) return null;
   const params: ParamSpec[] = [];
   if (Array.isArray(raw.params)) {
-    for (const p of raw.params.slice(0, MAX_PARAMS)) { const c = coerceParam(p); if (c) params.push(c); }
+    if (raw.params.length > MAX_PARAMS) return null;
+    for (const p of raw.params) { const c = coerceParam(p); if (!c) return null; params.push(c); }
   }
+  const verb = verbOf(raw.verb, id, params.length);
+  if (!verb) return null;
+  if (verb === 'set' ? !params.length : params.length) return null;
   const request = coerceRequest(raw.request);
   if (!request) return null;
   // Every placeholder must be a declared param — no free variables.
@@ -218,7 +249,57 @@ function coerceAction(raw: unknown): ConnectorAction | null {
   if (request.transport === 'http') for (const m of request.path.matchAll(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g)) used.add(m[1]);
   for (const u of used) if (!params.some((p) => p.name === u)) return null;
   const kn = str(raw.kn, 60);
-  return { id, label, ...(kn ? { kn } : {}), params, request, successCue };
+  return { id, verb, label, ...(kn ? { kn } : {}), params, request, successCue };
+}
+
+/** The action's verb: an explicit one must be in ACTION_VERBS. Older cached
+ *  connectors had no verb; infer it from the id ("power-on" -> on). */
+function verbOf(raw: unknown, id: string, nParams: number): ActionVerb | null {
+  if (raw !== undefined) return (ACTION_VERBS as readonly string[]).includes(raw as string) ? (raw as ActionVerb) : null;
+  if (/(^|-)on$/.test(id)) return 'on';
+  if (/(^|-)off$/.test(id)) return 'off';
+  if (/toggle/.test(id)) return 'toggle';
+  if (/status|state|get/.test(id)) return 'status';
+  return nParams ? 'set' : null;
+}
+
+/** Explain, in plain words, everything wrong with a connector draft. Strict:
+ *  every action needs an explicit verb; an unknown verb, param, port, method
+ *  or placeholder is an error (nothing is dropped quietly). */
+export function checkConnectorDraft(raw: unknown, source: ConnectorSource = 'cloud', now = Date.now()):
+  { ok: true; connector: Connector } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+  if (!isObj(raw)) return { ok: false, errors: ['The reply was not a JSON object.'] };
+  const disc = isObj(raw.discovery) ? raw.discovery : {};
+  if (!DISCOVERY_METHODS.includes(disc.method as DiscoveryMethod)) errors.push(`discovery.method must be one of ${DISCOVERY_METHODS.join(', ')}.`);
+  const acts = Array.isArray(raw.actions) ? raw.actions : [];
+  if (!acts.length) errors.push('There are no actions.');
+  if (acts.length > MAX_ACTIONS) errors.push(`At most ${MAX_ACTIONS} actions.`);
+  const ids = new Set<string>();
+  acts.slice(0, MAX_ACTIONS).forEach((a, i) => {
+    const o = isObj(a) ? a : {};
+    const id = typeof o.id === 'string' ? o.id : `#${i + 1}`;
+    const where = `Action "${id}"`;
+    if (!ID_RE.test(id)) errors.push(`${where}: id must be lower-case words with dashes.`);
+    if (ids.has(id)) errors.push(`${where}: duplicate id.`);
+    ids.add(id);
+    if (!(ACTION_VERBS as readonly string[]).includes(o.verb as string)) errors.push(`${where}: verb must be one of ${ACTION_VERBS.join(', ')} (got ${JSON.stringify(o.verb ?? null)}).`);
+    const ps = Array.isArray(o.params) ? o.params : [];
+    for (const p of ps) {
+      const n = isObj(p) ? p.name : p;
+      if (typeof n !== 'string' || !PARAM_VOCAB[n]) errors.push(`${where}: unknown param ${JSON.stringify(n)}. Allowed: ${Object.keys(PARAM_VOCAB).join(', ')}.`);
+      else if (isObj(p) && p.type !== undefined && p.type !== PARAM_VOCAB[n].type) errors.push(`${where}: param "${n}" must be a ${PARAM_VOCAB[n].type}.`);
+    }
+    if (o.verb === 'set' && !ps.length) errors.push(`${where}: a "set" action needs at least one param.`);
+    if (o.verb !== 'set' && ps.length && (ACTION_VERBS as readonly string[]).includes(o.verb as string)) errors.push(`${where}: only "set" actions take params.`);
+    if (!coerceRequest(o.request)) errors.push(`${where}: request not allowed (udp ports ${ALLOWED_UDP_PORTS.join('/')}, http ports ${ALLOWED_HTTP_PORTS.join('/')}, GET/POST/PUT, path starting with "/").`);
+    else if (!errors.some((e) => e.startsWith(where)) && !coerceAction(o)) errors.push(`${where}: uses a {{placeholder}} that is not one of its params, or has no label.`);
+  });
+  const t = isObj(raw.test) ? raw.test : {};
+  if (typeof t.action !== 'string' || !ids.has(t.action)) errors.push('test.action must name one of the actions.');
+  if (errors.length) return { ok: false, errors: errors.slice(0, 12) };
+  const c = coerceConnector(raw, source, now);
+  return c ? { ok: true, connector: c } : { ok: false, errors: ['The connector failed validation.'] };
 }
 
 /**
@@ -258,6 +339,7 @@ export function coerceConnector(raw: unknown, source: ConnectorSource, now = Dat
     test: { action: testAction, ...(prepare ? { prepare } : {}) },
     source,
     createdAt: typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt) ? raw.createdAt : now,
+    ...(typeof raw.testedAt === 'number' && Number.isFinite(raw.testedAt) ? { testedAt: raw.testedAt } : {}),
   };
 }
 
@@ -303,6 +385,9 @@ export function planRequest(c: Connector, actionId: string, args: Record<string,
   const action = c.actions.find((a) => a.id === actionId);
   if (!action) return { ok: false, error: `No action "${actionId}" in this connector.` };
   if (!isPrivateIPv4(host)) return { ok: false, error: 'Device address must be a private Wi-Fi address (192.168.x.x, 10.x.x.x or 172.16–31.x.x).' };
+  for (const k of Object.keys(args)) {
+    if (!action.params.some((p) => p.name === k)) return { ok: false, error: `"${action.label}" has no setting called "${k}".` };
+  }
   const filled: Record<string, ParamValue> = {};
   for (const p of action.params) filled[p.name] = coerceArg(p, args[p.name]);
   const r = action.request;
@@ -353,23 +438,25 @@ export async function runAction(
 
 // ---- built-in seed --------------------------------------------------------
 
-/** Known-good WiZ connector. Used as the offline seed, in sim mode, and as the
- *  fallback when the cloud writer is unreachable for a WiZ bulb. */
+/** Known-good WiZ connector, written by hand. Used in sim mode and in tests.
+ *  Never used as a silent fallback for a connector Gemini failed to write. */
 export function builtinWizConnector(now = Date.now()): Connector {
   const c = coerceConnector({
     deviceKind: 'smart-bulb', brand: 'WiZ', protocol: 'WiZ JSON-RPC over UDP 38899',
     discovery: { method: 'wiz-udp-broadcast', port: 38899 },
     actions: [
-      { id: 'power-on', label: 'Turn on', kn: 'ಆನ್ ಮಾಡು', params: [], successCue: 'the bulb is lit and the room is brighter',
+      { id: 'power-on', verb: 'on', label: 'Turn on', kn: 'ಆನ್ ಮಾಡು', params: [], successCue: 'the bulb is lit and the room is brighter',
         request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true } } } },
-      { id: 'power-off', label: 'Turn off', kn: 'ಆಫ್ ಮಾಡು', params: [], successCue: 'the bulb is dark',
+      { id: 'power-off', verb: 'off', label: 'Turn off', kn: 'ಆಫ್ ಮಾಡು', params: [], successCue: 'the bulb is dark',
         request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: false } } } },
-      { id: 'brightness', label: 'Brightness', kn: 'ಬೆಳಕು', params: [{ name: 'level', type: 'number', min: 10, max: 100, default: 80 }],
+      { id: 'brightness', verb: 'set', label: 'Brightness', kn: 'ಬೆಳಕು', params: [{ name: 'level', type: 'number', min: 10, max: 100, default: 80 }],
         successCue: 'the bulb brightness changed',
         request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true, dimming: '{{level}}' } } } },
-      { id: 'warmth', label: 'Warm or cool white', kn: 'ಬಿಳಿ ಬಣ್ಣ', params: [{ name: 'kelvin', type: 'number', min: 2200, max: 6500, default: 2700 }],
+      { id: 'warmth', verb: 'set', label: 'Warm or cool white', kn: 'ಬಿಳಿ ಬಣ್ಣ', params: [{ name: 'kelvin', type: 'number', min: 2200, max: 6500, default: 2700 }],
         successCue: 'the light colour changed',
         request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true, temp: '{{kelvin}}' } } } },
+      { id: 'status', verb: 'status', label: 'Read state', params: [], successCue: 'no visible change',
+        request: { transport: 'udp', port: 38899, payload: { method: 'getPilot', params: {} } } },
     ],
     test: { action: 'power-on', prepare: 'power-off' },
   }, 'builtin', now);

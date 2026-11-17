@@ -1,5 +1,5 @@
 // App Check init, split out of src/ai/hybrid.ts. App Check is REQUIRED for
-// Firebase AI Logic: a missing reCAPTCHA key or a failed init is not swallowed —
+// Firebase AI Logic: a missing reCAPTCHA site key or a failed init is not swallowed —
 // the caller falls back to the deterministic rule parser and tells the UI.
 
 import type { FirebaseApp } from 'firebase/app';
@@ -19,10 +19,62 @@ export interface AppCheckResult {
   error?: unknown;
 }
 
+export interface AppCheckDebugOpts {
+  dev?: boolean;
+  hostname?: string;
+  search?: string;
+}
+
+function isLocalHostname(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').split('%')[0];
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+}
+
+function isViteDev(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  const dev = env().DEV;
+  return dev === true || dev === 'true';
+}
+
 /**
- * Start App Check with reCAPTCHA Enterprise. In DEV (or with VITE_APPCHECK_DEBUG)
- * register the debug-token flag first so the emulator token works. Returns a
- * `failed` result rather than throwing, so hybrid.ts can degrade to rules.
+ * Debug App Check is allowed only in a Vite dev build, or on a local server
+ * with `?debug` (the local preview plugin injects the token into HTML).
+ * Production builds never enable it, including on the hosted site with `?debug`.
+ */
+export function shouldUseAppCheckDebug(opts: AppCheckDebugOpts = {}): boolean {
+  if (isViteDev(opts.dev)) return true;
+  const hostname = opts.hostname ?? (typeof location !== 'undefined' ? location.hostname : '');
+  const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
+  if (!isLocalHostname(hostname)) return false;
+  const raw = search.startsWith('?') ? search.slice(1) : search;
+  return new URLSearchParams(raw).has('debug');
+}
+
+/**
+ * Point the Firebase SDK at a pre-registered debug token when allowed.
+ * Prefers a token already injected by the local dev/preview server; in Vite
+ * dev only, falls back to `true` (SDK-generated). Never writes a token in a
+ * production bundle, and never auto-generates one on `?debug` without inject.
+ * Returns whether a debug token is now set.
+ */
+export function applyAppCheckDebugToken(opts: AppCheckDebugOpts = {}): boolean {
+  if (!shouldUseAppCheckDebug(opts)) return false;
+  const g = globalThis as Record<string, unknown>;
+  const target = ((g.self as Record<string, unknown> | undefined) ?? g);
+  if (typeof target.FIREBASE_APPCHECK_DEBUG_TOKEN === 'string' && target.FIREBASE_APPCHECK_DEBUG_TOKEN) {
+    return true;
+  }
+  if (isViteDev(opts.dev)) {
+    target.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Start App Check with reCAPTCHA Enterprise. A local debug token is applied
+ * first, and only in dev or on a local `?debug` server. Returns a `failed`
+ * result rather than throwing, so hybrid.ts can degrade to rules.
  */
 export async function initAppCheck(app: FirebaseApp): Promise<AppCheckResult> {
   const e = env();
@@ -31,10 +83,7 @@ export async function initAppCheck(app: FirebaseApp): Promise<AppCheckResult> {
     return { status: 'failed', message: NO_KEY_MSG };
   }
   try {
-    if (e.DEV === true || e.DEV === 'true' || e.VITE_APPCHECK_DEBUG === 'true') {
-      const g = globalThis as Record<string, unknown>;
-      ((g.self as Record<string, unknown> | undefined) ?? g).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
-    }
+    applyAppCheckDebugToken();
     const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
     initializeAppCheck(app, {
       provider: new ReCaptchaEnterpriseProvider(siteKey),

@@ -147,6 +147,8 @@ export interface SpeakerApi {
   connected(): boolean;
   listDevices(): Promise<SpotifyDevice[]>;
   transferPlayback(deviceId: string): Promise<void>;
+  /** Test seam for the confirm-it-switched polling. */
+  wait?(ms: number): Promise<void>;
 }
 
 export type SpeakerResult =
@@ -170,6 +172,14 @@ export async function connectSpeaker(
   }
   if (!(await confirm(d.name))) return { ok: false, reason: 'declined', detail: 'Okay, not connected.' };
   try { await api.transferPlayback(d.id); } catch (e) { return { ok: false, reason: 'error', detail: e instanceof Error ? e.message : 'Spotify could not switch to the speaker.' }; }
+  // Only counts once Spotify reports the speaker as the active device.
+  const wait = api.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let active = false;
+  for (let i = 0; i < 4 && !active; i++) {
+    await wait(i === 0 ? 400 : 900);
+    try { active = (await api.listDevices()).some((x) => x.id === d.id && x.isActive); } catch { /* try again */ }
+  }
+  if (!active) return { ok: false, reason: 'error', detail: `Spotify accepted the switch, but ${d.name} never became the active speaker. Is it on and awake? Nothing was saved.` };
   const link: SpeakerLink = { key: `spotify|${(brand || d.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`, brand: brand || d.name, deviceName: d.name, addedAt: now() };
   return { ok: true, link, device: d };
 }
@@ -192,7 +202,7 @@ export function savedCards(connectors: Record<string, Connector>, devices: reado
     const c = connectors[d.connectorKey];
     out.push({
       id: d.id, group: 'saved', name: d.name,
-      detail: `${c ? `${c.brand || 'Device'} · ${c.actions.length} actions · written by ${c.source === 'cloud' ? 'Gemini' : c.source === 'builtin' ? 'Mendcraft' : c.source}` : 'Connector missing'} · ${d.host}${d.verified === 'done' ? ' · seen working' : ''}`,
+      detail: `${c ? `${c.brand || 'Device'} · ${c.actions.length} actions · written by ${c.source === 'cloud' ? 'Gemini' : c.source === 'builtin' ? 'Mendcraft' : c.source}${c.testedAt ? ' · device answered the test' : ''}` : 'Connector missing'} · ${d.host}${d.verified === 'done' ? ' · seen working' : ''}`,
       state: c ? 'connected' : 'needs', offline: true,
     });
   }

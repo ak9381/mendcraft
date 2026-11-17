@@ -158,9 +158,10 @@ import { listDevices as spotifyListDevices, transferPlayback as spotifyTransfer 
 import { isSpotifyConnected } from './music/musicSession';
 import type { AddMode, FlowDeps } from './devices/addDeviceFlow';
 import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cachePairedDevice } from './devices/connectorCache';
-import { builtinWizConnector, connectorKey, isWizIdentity, runAction } from './devices/connector';
+import { connectorKey, runAction } from './devices/connector';
 import { identityFromWords, deviceNameIn, isAddDevicePhrase } from './devices/identify';
 import { bridgeHealthy, discoverDevices, makeTransports } from './devices/discovery';
+import { createRateLimiter, safeTransports } from './devices/safety';
 import { aimGimbalAt, disableSystemTracking, getGimbalPlugin, isIosShell } from './devices/native';
 import { createGimbalFollow } from './devices/gimbalFollow';
 import { createSimWorld } from './devices/simDevice';
@@ -1343,6 +1344,12 @@ function captureFullFrame(): { mimeType: string; dataBase64: string } | null {
   } catch { return null; }
 }
 
+/** Every LAN command from a connector: clamped values + a per-device rate limit. */
+const lanTransports = safeTransports(makeTransports(), createRateLimiter(), (notes) => {
+  const n = notes[0];
+  if (n) showToast(`Kept ${n.field} in a safe range (${n.from} → ${n.to}).`);
+});
+
 function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }; name?: string; words?: string }): Omit<FlowDeps, 'confirm' | 'askHost' | 'onStep'> {
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const words = hint.words ?? '';
@@ -1355,7 +1362,7 @@ function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }
       capture: () => simWorld.capture(mode),
       identify: (f, h) => simWorld.identify(f, h),
       cachedConnector: (id) => simWorld.cached(connectorKey(id.brand, id.kind)),
-      writeConnector: () => simWorld.write(),
+      writeConnector: (_id, feedback, onText) => simWorld.write(feedback, onText),
       saveConnector: () => { /* sim keeps its own in-memory cache */ },
       discover: () => simWorld.discover(),
       run: (c, a, h) => simWorld.run(c, a, h),
@@ -1363,19 +1370,15 @@ function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }
       saveDevice: () => { /* sim devices are not saved */ },
     };
   }
-  const transports = makeTransports();
+  const transports = lanTransports;
   return {
     sim: false, mode, hint: flowHint, wait,
     identityFromWords: () => identityFromWords(words),
     capture: async () => captureFullFrame(),
     identify: (f, h) => identifyDevice(f, h),
     cachedConnector: (id) => getCachedConnector(connectorKey(id.brand, id.kind)),
-    writeConnector: async (id) => {
-      const w = await writeDeviceConnector(id);
-      if (w) return w;
-      // Cloud unreachable (offline / no Firebase): WiZ has a built-in seed.
-      return isWizIdentity(id.brand, id.kind) ? { connector: builtinWizConnector(), source: 'builtin' as const } : null;
-    },
+    // No template fallback: a failed or unreachable writer is shown as such.
+    writeConnector: (id, feedback, onText) => writeDeviceConnector(id, feedback, onText),
     saveConnector: (c) => cacheConnector(c),
     discover: (_id, c) => discoverDevices(c),
     aim: async (box) => {

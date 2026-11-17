@@ -3,8 +3,8 @@
 // fake model answers. Nothing here calls a model or touches a network; every
 // step it drives is labelled SIM in the panel.
 
-import { builtinWizConnector, runAction, type Connector } from './connector';
-import type { AddMode, FlowFrame, StepSource } from './addDeviceFlow';
+import { builtinWizConnector, checkConnectorDraft, runAction, type Connector } from './connector';
+import type { AddMode, FlowFrame, StepSource, WriteFeedback, WriteResult } from './addDeviceFlow';
 import type { DeviceIdentity, EffectVerdict, IdentifyHint } from './identify';
 
 export const SIM_LAMP_HOST = '192.168.1.42';
@@ -25,16 +25,32 @@ export function createSimWorld(draw: (lampOn: boolean, mode: AddMode) => FlowFra
       };
     },
     cached: (key: string): Connector | null => written.get(key) ?? null,
-    write: async (): Promise<{ connector: Connector; source: StepSource; ms: number }> => {
-      await pause(900);
-      const c = { ...builtinWizConnector(), source: 'sim' as const };
-      written.set(c.key, c);
-      return { connector: c, source: 'cloud', ms: 2400 };
+    /** Streams a fake draft. Draft 1 has a deliberate mistake (an unknown
+     *  param "dim") so the SIM shows the reject → fix loop; draft 2 is right. */
+    write: async (feedback: WriteFeedback | null, onText: (t: string) => void = () => undefined): Promise<WriteResult> => {
+      const good = builtinWizConnector();
+      const draft: Record<string, unknown> = JSON.parse(JSON.stringify({
+        deviceKind: good.deviceKind, brand: good.brand, protocol: good.protocol, discovery: good.discovery,
+        actions: good.actions.map(({ id, verb, label, params, request, successCue }) => ({ id, verb, label, params, request, successCue })),
+        test: good.test,
+      }));
+      if (!feedback) {
+        const acts = draft.actions as Array<Record<string, unknown>>;
+        acts[2] = { ...acts[2], params: [{ name: 'dim', type: 'number', min: 0, max: 100 }], request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { dimming: '{{dim}}' } } } };
+      }
+      const text = JSON.stringify(draft, null, 1);
+      for (let i = 0; i < text.length; i += 90) { onText(text.slice(0, i + 90)); await pause(35); }
+      const checked = checkConnectorDraft(draft, 'sim');
+      if (!checked.ok) return { ok: false, errors: checked.errors, text, source: 'cloud', ms: 1900 };
+      written.set(checked.connector.key, checked.connector);
+      return { ok: true, connector: checked.connector, source: 'cloud', ms: 2400, text };
     },
     discover: async () => { await pause(400); return { found: [{ host: SIM_LAMP_HOST, name: 'WiZ bulb' }], source: 'native' as StepSource, note: '' }; },
     run: (c: Connector, actionId: string, host: string) => runAction(c, actionId, {}, host, {
       udp: async (_h, _p, payload) => {
         const st = (payload as { params?: { state?: unknown } }).params?.state;
+        const p = payload as { method?: string };
+        if (p.method === 'getPilot') return { result: { state: lampOn, dimming: 80 } };
         if (typeof st === 'boolean') lampOn = st;
         return { result: { success: true } };
       },

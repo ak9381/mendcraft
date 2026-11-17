@@ -5,7 +5,7 @@
 
 import {
   MODE_LABELS, STEP_ORDER, defaultMode, detectModes, runAddDevice, sourceLabel,
-  type AddMode, type FlowDeps, type FlowFrame, type FlowOutcome, type ModeOption, type StepEvent, type StepId,
+  type AddMode, type FlowDeps, type FlowFrame, type FlowOutcome, type ModeOption, type StepEvent, type StepId, type WritingEvent,
 } from '../devices/addDeviceFlow';
 import { isPrivateIPv4 } from '../devices/connector';
 import { loadDevices, type PairedDevice } from '../devices/connectorCache';
@@ -123,10 +123,33 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
     body.innerHTML = `<div class="mc-ad-modeline">${MODE_LABELS[mode].en} <button type="button" class="ghost mc-ad-change">Change</button></div>
       <div class="mc-ad-frames"></div>
       <ol class="mc-ad-steps">${STEP_ORDER.map((s) => `<li data-step="${s}" class="pending"><span class="mc-ad-ico" aria-hidden="true">○</span><span class="mc-ad-st"><b>${STEP_TITLES[s]}</b><span class="mc-ad-detail"></span></span><span class="mc-ad-src"></span></li>`).join('')}</ol>
+      <div class="mc-ad-writing" hidden></div>
       <div class="mc-ad-action"></div>
       <div class="mc-ad-result" aria-live="polite"></div>`;
     body.querySelector('.mc-ad-change')!.addEventListener('click', () => { api.cancel(); void renderChooser(mode); });
     if (lastGimbal) appendNudge(body);
+  }
+
+  /** The live "Gemini is writing" card: plain words on top, the JSON below. */
+  function onWriting(ev: WritingEvent): void {
+    const card = body.querySelector<HTMLElement>('.mc-ad-writing');
+    if (!card) return;
+    card.hidden = false;
+    card.className = `mc-ad-writing ${ev.state}`;
+    const head: Record<WritingEvent['state'], string> = {
+      streaming: ev.attempt === 1 ? 'Gemini is writing the connector…' : `Gemini is fixing it (try ${ev.attempt} of ${ev.max})…`,
+      invalid: `Draft ${ev.attempt} rejected before anything was sent`,
+      testing: `Testing draft ${ev.attempt} on the real device…`,
+      failed: `Draft ${ev.attempt} did not work on the device`,
+      passed: `Draft ${ev.attempt} works on the device`,
+    };
+    const words = plainWords(ev.text);
+    card.innerHTML = `<p class="mc-ad-w-head">${esc(head[ev.state])}</p>
+      ${words.length ? `<ul class="mc-ad-w-words">${words.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+      ${ev.errors?.length ? `${ev.state === 'streaming' ? '<p class="mc-ad-w-sub">Fixing these problems from the last draft:</p>' : ''}<ul class="mc-ad-w-errors" role="alert">${ev.errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+      <pre class="mc-ad-w-json" aria-label="Connector JSON">${esc(ev.text.slice(-4000))}</pre>`;
+    const pre = card.querySelector('pre');
+    if (pre) pre.scrollTop = pre.scrollHeight;
   }
 
   function onStep(ev: StepEvent): void {
@@ -201,6 +224,7 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
       confirm: confirmUi,
       askHost: askHostUi,
       onStep,
+      onWriting,
     };
     try {
       const out = await runAddDevice(deps);
@@ -253,4 +277,18 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/** Readable lines from a (possibly half-written) connector JSON. */
+export function plainWords(text: string): string[] {
+  const out: string[] = [];
+  const proto = /"protocol"\s*:\s*"([^"]{1,80})"/.exec(text);
+  if (proto) out.push(`Talks to it with ${proto[1]}.`);
+  const re = /"verb"\s*:\s*"([a-z]+)"[^{}]*?"label"\s*:\s*"([^"]{1,60})"|"label"\s*:\s*"([^"]{1,60})"[^{}]*?"verb"\s*:\s*"([a-z]+)"/g;
+  for (const m of text.matchAll(re)) {
+    const verb = m[1] ?? m[4];
+    const label = m[2] ?? m[3];
+    out.push(`${label} (${verb})`);
+  }
+  return out.slice(0, 10);
 }

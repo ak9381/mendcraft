@@ -63,7 +63,11 @@ describe('connect anything hub', () => {
 
   it('connects only after her confirm, and saves the link', async () => {
     let moved = '';
-    const api = { connected: () => true, listDevices: async () => [dev('Marshall Acton', 'Speaker', 'm1')], transferPlayback: async (id: string) => { moved = id; } };
+    const api = {
+      connected: () => true, wait: async () => undefined,
+      listDevices: async () => [{ ...dev('Marshall Acton', 'Speaker', 'm1'), isActive: moved === 'm1' }],
+      transferPlayback: async (id: string) => { moved = id; },
+    };
     const no = await connectSpeaker('Marshall', api, async () => false);
     expect(no.ok).toBe(false);
     expect(moved).toBe('');
@@ -73,6 +77,14 @@ describe('connect anything hub', () => {
     const kv = memKV();
     if (yes.ok) saveSpeaker(yes.link, kv);
     expect(loadSpeakers(kv)).toEqual([{ key: 'spotify|marshall', brand: 'Marshall', deviceName: 'Marshall Acton', addedAt: 5 }]);
+  });
+
+  it('fails visibly when the speaker never becomes active', async () => {
+    const r = await connectSpeaker('Marshall', {
+      connected: () => true, wait: async () => undefined,
+      listDevices: async () => [dev('Marshall Acton', 'Speaker', 'm1')], transferPlayback: async () => undefined,
+    }, async () => true);
+    expect(!r.ok && r.detail).toMatch(/never became the active speaker/);
   });
 
   it('asks for Spotify first, and explains when the speaker is not visible', async () => {

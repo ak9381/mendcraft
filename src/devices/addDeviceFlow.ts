@@ -8,18 +8,23 @@
 //
 //   1 look     camera frame (skipped in voice mode)
 //   2 identify Gemini Nano names the device from that ONE frame (cloud fallback)
-//   3 connector cached → reuse offline; else cloud Gemini writes it ONCE as
-//              declarative JSON (built-in WiZ seed if the cloud is unreachable)
+//   3 connector cached → reuse offline; else cloud Gemini writes it as
+//              declarative JSON, streamed live on screen, strictly validated
+//              (bad drafts go back to Gemini with the exact errors)
 //   4 find     LAN discovery (iOS native layer; web = WiZ bridge or a stub)
 //   5 confirm  she pinches to confirm before anything is sent to the device
-//   6 test     prepare → BEFORE frame → test action → AFTER frame
+//   6 test     prepare → BEFORE frame → test action → AFTER frame; the real
+//              device must acknowledge (and report the right state when it
+//              can). On failure the error goes back to Gemini to fix, up to
+//              MAX_WRITE_ATTEMPTS drafts in all. Never a silent template.
 //   7 verify   Gemini Nano compares the two frames → green tick when it can SEE
-//              the effect (Control Anything stopped at transport acks)
+//              the effect, on top of the device's own acknowledgement
 //
 // Unit-tested with fakes; the DOM panel (ui/addDevicePanel.ts) and main.ts
 // supply the real camera, models, transports and confirm.
 
 import type { Connector, RunResult } from './connector';
+import { ackOf, expectedState, stateOf } from './ack';
 import type { DeviceIdentity, EffectVerdict, IdentifyHint } from './identify';
 import type { PairedDevice } from './connectorCache';
 
@@ -69,6 +74,25 @@ export function defaultMode(options: readonly ModeOption[]): AddMode {
   return options.find((o) => o.available)?.mode ?? 'voice';
 }
 
+/** Most connector drafts Gemini gets (first try + fixes). */
+export const MAX_WRITE_ATTEMPTS = 3;
+
+/** What went wrong last time, sent back to the writer. */
+export interface WriteFeedback { attempt: number; errors: string[]; previous: string }
+
+export type WriteResult =
+  | { ok: true; connector: Connector; source: StepSource; ms?: number; text: string }
+  | { ok: false; errors: string[]; text?: string; unsupported?: boolean; unreachable?: boolean; source?: StepSource; ms?: number };
+
+/** The live "Gemini is writing" card. */
+export interface WritingEvent {
+  attempt: number;
+  max: number;
+  state: 'streaming' | 'invalid' | 'testing' | 'failed' | 'passed';
+  text: string;
+  errors?: string[];
+}
+
 export interface FlowDeps {
   sim: boolean;
   /** How she started. Default 'point'. */
@@ -80,7 +104,10 @@ export interface FlowDeps {
   capture(): Promise<FlowFrame | null>;
   identify(f: FlowFrame, hint?: IdentifyHint): Promise<{ identity: DeviceIdentity; source: StepSource; ms?: number } | null>;
   cachedConnector(identity: DeviceIdentity): Connector | null;
-  writeConnector(identity: DeviceIdentity): Promise<{ connector: Connector; source: StepSource; ms?: number } | null>;
+  /** Stream a connector draft. `onText` gets the growing text; `feedback`
+   *  carries the previous draft's errors (validation or real device). */
+  writeConnector(identity: DeviceIdentity, feedback: WriteFeedback | null, onText: (text: string) => void): Promise<WriteResult>;
+  onWriting?(ev: WritingEvent): void;
   saveConnector(c: Connector): void;
   discover(identity: DeviceIdentity, c: Connector): Promise<{ found: FoundDevice[]; source: StepSource; note: string }>;
   /** Ask her for an address when discovery is a stub (null = cancelled). */
@@ -161,19 +188,49 @@ export async function runAddDevice(d: FlowDeps): Promise<FlowOutcome> {
     }
   }
 
-  // 3 connector: cache first (offline, reused), else cloud writes it once.
+  // 3 connector: cache first (offline, reused), else Gemini writes a draft.
   step({ step: 'connector', state: 'active', detail: 'Looking for a saved connector…' });
-  let connector = d.cachedConnector(identity);
-  if (connector) {
-    step({ step: 'connector', state: 'ok', source: 'cache', detail: `Reusing the saved ${connector.brand} connector (${connector.actions.length} actions). No cloud call.` });
+  let attempts = 0;
+  let lastText = '';
+  const writing = (ev: Omit<WritingEvent, 'max'>) => d.onWriting?.({ ...ev, max: MAX_WRITE_ATTEMPTS });
+  /** Draft until one passes validation, or the attempts run out. */
+  const draft = async (feedback: WriteFeedback | null): Promise<Connector | string> => {
+    let fb = feedback;
+    while (attempts < MAX_WRITE_ATTEMPTS) {
+      attempts += 1;
+      step({ step: 'connector', state: 'active', source: 'cloud',
+        detail: attempts === 1 ? 'Gemini is writing a connector…' : `Gemini is fixing the connector (try ${attempts} of ${MAX_WRITE_ATTEMPTS})…` });
+      // While fixing, keep last time's problems on screen next to the new draft.
+      const fixing = fb ? { errors: fb.errors } : {};
+      writing({ attempt: attempts, state: 'streaming', text: '', ...fixing });
+      const w = await d.writeConnector(identity, fb, (text) => { lastText = text; writing({ attempt: attempts, state: 'streaming', text, ...fixing }); });
+      lastText = w.text ?? lastText;
+      if (w.ok) {
+        step({ step: 'connector', state: 'ok', source: w.source, ms: w.ms,
+          detail: `Draft ${attempts}: ${w.connector.protocol}. ${w.connector.actions.map((a) => `${a.label} (${a.verb})`).join(', ')}. Not trusted until the device answers.` });
+        return w.connector;
+      }
+      if (w.unreachable) return 'Gemini could not be reached, so no connector was written. Check the internet and try again.';
+      if (w.unsupported) return `Gemini says ${identity.label} has no documented local control. It may need its own app.`;
+      writing({ attempt: attempts, state: 'invalid', text: lastText, errors: w.errors });
+      step({ step: 'connector', state: 'active', source: w.source,
+        detail: `Draft ${attempts} was rejected before anything was sent: ${w.errors[0]}` });
+      fb = { attempt: attempts, errors: w.errors, previous: lastText };
+    }
+    return `Gemini could not write a valid connector in ${MAX_WRITE_ATTEMPTS} tries. Last problem: ${fb?.errors[0] ?? 'unknown'}`;
+  };
+
+  let connector: Connector;
+  let fromCache = false;
+  const cached = d.cachedConnector(identity);
+  if (cached) {
+    connector = cached;
+    fromCache = true;
+    step({ step: 'connector', state: 'ok', source: 'cache', detail: `Reusing the saved ${cached.brand} connector (${cached.actions.length} actions). No cloud call.` });
   } else {
-    step({ step: 'connector', state: 'active', source: 'cloud', detail: 'Gemini is writing a connector (once)…' });
-    const w = await d.writeConnector(identity);
-    if (!w) return fail('connector', `No safe local connector for ${identity.label}. It may need its own app.`);
-    connector = w.connector;
-    d.saveConnector(connector);
-    step({ step: 'connector', state: 'ok', source: w.source, ms: w.ms,
-      detail: `${connector.protocol}: ${connector.actions.map((a) => a.label).join(', ')}. Saved for offline reuse.` });
+    const c = await draft(null);
+    if (typeof c === 'string') return fail('connector', c);
+    connector = c;
   }
 
   // 4 find on the local network
@@ -189,26 +246,73 @@ export async function runAddDevice(d: FlowDeps): Promise<FlowOutcome> {
   if (!host) return fail('find', disc.note || 'Could not find it on the Wi-Fi.');
   step({ step: 'find', state: 'ok', source: findSource, detail: `${disc.found[0]?.name ?? identity.label} at ${host}` });
 
-  // 5 pinch to confirm
-  const test = connector.actions.find((a) => a.id === connector!.test.action)!;
-  const summary = `Connect ${identity.label} at ${host} and test "${test.label}"?`;
+  // 5 pinch to confirm (once; covers the fix-and-retest loop)
+  const firstTest = connector.actions.find((a) => a.id === connector.test.action)!;
+  const summary = `Connect ${identity.label} at ${host} and test "${firstTest.label}"?${fromCache ? '' : ` If the test fails, Gemini fixes the connector and tests again (up to ${MAX_WRITE_ATTEMPTS} tries).`}`;
   step({ step: 'confirm', state: 'active', detail: `${summary} Pinch to confirm, open palm to cancel.` });
   if (!(await d.confirm(summary))) return fail('confirm', 'Cancelled. Nothing was sent to the device.');
   step({ step: 'confirm', state: 'ok', detail: 'Confirmed.' });
 
-  // 6 test: prepare → before → action → after
-  step({ step: 'test', state: 'active', detail: `Testing "${test.label}"…` });
-  if (connector.test.prepare) {
-    const p = await d.run(connector, connector.test.prepare, host);
-    if (!p.ok) return fail('test', p.error ?? 'The device did not answer.');
-    await d.wait(SETTLE_MS);
+  // 6 test on the real device → fix → test again
+  const runChecked = async (c: Connector, actionId: string): Promise<{ ok: true; reply: unknown } | { ok: false; error: string }> => {
+    const action = c.actions.find((a) => a.id === actionId)!;
+    const r = await d.run(c, actionId, host!);
+    if (!r.ok) return { ok: false, error: `"${action.label}" failed: ${r.error ?? 'the device did not answer'}` };
+    const ack = ackOf(r.reply, action.request.transport);
+    if (!ack.ok) return { ok: false, error: `"${action.label}": ${ack.error}` };
+    return { ok: true, reply: r.reply };
+  };
+  let before: FlowFrame | null = null;
+  let after: FlowFrame | null = null;
+  let test = firstTest;
+  for (;;) {
+    test = connector.actions.find((a) => a.id === connector.test.action)!;
+    step({ step: 'test', state: 'active', detail: `Testing "${test.label}" on the device…` });
+    writing({ attempt: Math.max(1, attempts), state: 'testing', text: lastText || JSON.stringify(connector, null, 1) });
+    let error: string | null = null;
+    if (connector.test.prepare) {
+      const p = await runChecked(connector, connector.test.prepare);
+      if (!p.ok) error = p.error;
+      else await d.wait(SETTLE_MS);
+    }
+    if (!error) {
+      before = camera ? await d.capture() : null;
+      const r = await runChecked(connector, test.id);
+      if (!r.ok) error = r.error;
+      else {
+        await d.wait(SETTLE_MS);
+        after = camera ? await d.capture() : null;
+        // When the connector can read state, the device must agree.
+        const want = expectedState(test.verb);
+        const status = connector.actions.find((a) => a.verb === 'status');
+        const said = stateOf(r.reply);
+        if (want !== null && said !== null && said !== want) error = `"${test.label}" was answered, but the device reports it is ${said ? 'on' : 'off'}.`;
+        else if (want !== null && status) {
+          const s2 = await runChecked(connector, status.id);
+          if (!s2.ok) error = s2.error;
+          else {
+            const now2 = stateOf(s2.reply);
+            if (now2 !== null && now2 !== want) error = `After "${test.label}", "${status.label}" says the device is ${now2 ? 'on' : 'off'}.`;
+          }
+        }
+      }
+    }
+    if (!error) break;
+    writing({ attempt: Math.max(1, attempts), state: 'failed', text: lastText, errors: [error] });
+    if (attempts >= MAX_WRITE_ATTEMPTS) {
+      return fail('test', `${error} Gemini tried ${attempts} version${attempts === 1 ? '' : 's'}; nothing was saved.`);
+    }
+    step({ step: 'test', state: 'active', detail: `${error} Sending the error to Gemini to fix…` });
+    const c = await draft({ attempt: attempts, errors: [`On the real device: ${error}`], previous: lastText || JSON.stringify(connector) });
+    if (typeof c === 'string') return fail('test', `${error} ${c}`);
+    connector = c;
+    fromCache = false;
   }
-  const before = camera ? await d.capture() : null;
-  const r = await d.run(connector, test.id, host);
-  if (!r.ok) return fail('test', r.error ?? 'The device did not answer.');
-  await d.wait(SETTLE_MS);
-  const after = camera ? await d.capture() : null;
-  step({ step: 'test', state: 'ok', detail: `Sent "${test.label}". The device acknowledged.` });
+  writing({ attempt: Math.max(1, attempts), state: 'passed', text: lastText });
+  const tested: Connector = { ...connector, testedAt: now() };
+  d.saveConnector(tested);
+  connector = tested;
+  step({ step: 'test', state: 'ok', detail: `Sent "${test.label}". The device acknowledged${fromCache ? '' : ', so the connector is saved for offline reuse'}.` });
 
   // 7 verify with the camera
   let verdict: EffectVerdict = 'unsure';

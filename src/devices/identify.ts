@@ -5,9 +5,9 @@
 //   identify  : ONE camera frame → what device is this? (PREFER_ON_DEVICE)
 //   write     : identity → declarative connector JSON  (ONLY_IN_CLOUD, once)
 //   check     : BEFORE + AFTER frames + success cue → done / not_done / unsure
-//               (PREFER_ON_DEVICE) — the proof Control Anything lacked.
+//               (PREFER_ON_DEVICE) — proof you can see, beyond a reply.
 
-import { ALLOWED_HTTP_PORTS, ALLOWED_UDP_PORTS, DISCOVERY_METHODS } from './connector';
+import { ACTION_VERBS, ALLOWED_HTTP_PORTS, ALLOWED_UDP_PORTS, DISCOVERY_METHODS, PARAM_VOCAB } from './connector';
 
 export interface DeviceIdentity {
   kind: string;
@@ -61,8 +61,8 @@ export const CONNECTOR_CONSTRAINT = {
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string' }, label: { type: 'string' }, successCue: { type: 'string' },
-          params: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string' }, min: { type: 'number' }, max: { type: 'number' }, default: { type: 'number' } } } },
+          id: { type: 'string' }, verb: { type: 'string', enum: [...ACTION_VERBS] }, label: { type: 'string' }, successCue: { type: 'string' },
+          params: { type: 'array', items: { type: 'object', properties: { name: { type: 'string', enum: Object.keys(PARAM_VOCAB) }, type: { type: 'string' }, min: { type: 'number' }, max: { type: 'number' }, default: { type: 'number' } } } },
           request: {
             type: 'object',
             properties: {
@@ -72,7 +72,7 @@ export const CONNECTOR_CONSTRAINT = {
             required: ['transport'],
           },
         },
-        required: ['id', 'label', 'request'],
+        required: ['id', 'verb', 'label', 'request'],
       },
     },
     test: { type: 'object', properties: { action: { type: 'string' }, prepare: { type: 'string' } } },
@@ -95,13 +95,15 @@ Reply JSON: {"kind": one of ${DEVICE_KINDS.join('|')}, "brand": brand if a logo 
 If no such device is visible use kind "none". Do not guess a brand you cannot see.`;
 }
 
-export function buildConnectorPrompt(id: DeviceIdentity): string {
+export function buildConnectorPrompt(id: DeviceIdentity, feedback?: { attempt: number; errors: string[]; previous: string } | null): string {
+  const fix = feedback ? `\n\nYour draft ${feedback.attempt} did not work. Problems:\n${feedback.errors.slice(0, 8).map((e) => `- ${e.slice(0, 240)}`).join('\n')}\nYour draft was:\n${feedback.previous.slice(0, 2500)}\nWrite a corrected connector. Change only what the problems need.` : '';
   return `Write a LAN connector for a ${id.brand || 'unknown brand'} ${id.kind}${id.model ? ` (${id.model})` : ''} as DATA, not code.
 Rules: transports only "udp" (ports ${ALLOWED_UDP_PORTS.join(', ')}) or "http" (ports ${ALLOWED_HTTP_PORTS.join(', ')}, methods GET/POST/PUT, path starting with "/").
-discovery.method one of ${DISCOVERY_METHODS.join(', ')}. Never include a host or IP. Up to 6 actions with ids like "power-on", "power-off", "brightness".
+discovery.method one of ${DISCOVERY_METHODS.join(', ')}. Never include a host or IP. Up to 6 actions with ids like "power-on", "power-off", "brightness", "status".
+Each action has a verb, exactly one of ${ACTION_VERBS.join(', ')}: on/off/toggle/status take no params; set takes params named only from ${Object.keys(PARAM_VOCAB).join(', ')}. Add a "status" action that reads the device state when the protocol has one (e.g. WiZ getPilot).
 Each action: params (name, type number|boolean, min, max, default), request with payloadJson (udp) or path + bodyJson (http) where values are "{{paramName}}" placeholders, and successCue = what a camera would SEE when it worked.
 Known local APIs: WiZ bulbs (udp 38899, {"method":"setPilot","params":{"state":true}}); Shelly plugs (http GET /relay/0?turn=on|off on port 80); Tasmota plugs (http GET /cm?cmnd=Power%20On|Off on port 80). A TV only if it has a plain HTTP API on an allowed port.
-Set test.action to a visible action and test.prepare to its opposite (e.g. power-off then power-on). Only use the device's documented local protocol; if it has none, return {"supported": false, "actions": [], "discovery": {"method": "manual"}}.`;
+Set test.action to a visible action and test.prepare to its opposite (e.g. power-off then power-on). Only use the device's documented local protocol; if it has none, return {"supported": false, "actions": [], "discovery": {"method": "manual"}}.${fix}`;
 }
 
 export function buildEffectPrompt(cue: string): string {

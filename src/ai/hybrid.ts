@@ -40,7 +40,7 @@ import {
   buildConnectorPrompt, buildEffectPrompt, buildIdentifyPrompt, parseEffect, parseIdentity, writerSaysUnsupported,
   type DeviceIdentity, type EffectVerdict, type IdentifyHint,
 } from '../devices/identify';
-import { coerceConnector, type Connector } from '../devices/connector';
+import { checkConnectorDraft, type Connector } from '../devices/connector';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
@@ -284,7 +284,8 @@ function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
   }
   switch (node.type) {
     case 'number': return S.number();
-    case 'string': return S.string();
+    case 'string':
+      return Array.isArray(node.enum) && typeof S.enumString === 'function' ? S.enumString({ enum: node.enum }) : S.string();
     case 'boolean': return S.boolean();
     case 'array':
       return S.array({ items: toFirebaseSchema((node.items as Record<string, unknown>) ?? { type: 'string' }, S) });
@@ -652,7 +653,7 @@ async function initFirebase(): Promise<Models | null> {
       tts = null;
     }
 
-    // Add-a-device (Control Anything-style, with proof): the two camera jobs
+    // Add-a-device (with proof): the two camera jobs
     // prefer Nano with image input; the connector writer is cloud-only and
     // runs once per brand+kind (the result is cached and reused offline).
     const identifySchema = toFirebaseSchema(IDENTIFY_CONSTRAINT, Schema);
@@ -1392,7 +1393,7 @@ export async function adaptHandProfile(metrics: HandMetrics): Promise<AdaptHandR
 }
 
 // ---------------------------------------------------------------------------
-// ADD A DEVICE (Control Anything-style, plus reuse, a sandbox and proof).
+// ADD A DEVICE (connectors as data, reuse, a sandbox and proof).
 
 export interface FrameImage { mimeType: string; dataBase64: string }
 
@@ -1440,33 +1441,53 @@ export async function identifyDevice(
   return { identity, source, ms: Date.now() - t0 };
 }
 
-/** Cloud Gemini writes a declarative connector ONCE. The JSON is validated by
- *  the fixed interpreter's allowlist (coerceConnector) before it is used. */
+/** Cloud Gemini writes a declarative connector draft, STREAMED: `onText`
+ *  gets the growing JSON so the screen can show it being written. The draft
+ *  is checked strictly (checkConnectorDraft); errors come back for a retry.
+ *  No template fallback: if the cloud can't be reached, that is the answer. */
 export async function writeDeviceConnector(
   identity: DeviceIdentity,
-): Promise<{ connector: Connector; source: Source; ms: number } | null> {
+  feedback: { attempt: number; errors: string[]; previous: string } | null = null,
+  onText: (text: string) => void = () => undefined,
+): Promise<
+  | { ok: true; connector: Connector; source: Source; ms: number; text: string }
+  | { ok: false; errors: string[]; text?: string; unsupported?: boolean; unreachable?: boolean; source?: Source; ms?: number }
+> {
   const t0 = Date.now();
   const models = await ensureModels();
-  if (!models?.connectorWriter) return null;
+  if (!models?.connectorWriter) return { ok: false, unreachable: true, errors: ['Gemini is not available here (offline or not configured).'] };
+  let text = '';
   try {
-    const { response } = await withTimeout(
-      models.connectorWriter.generateContent(withPreamble(buildConnectorPrompt(identity))),
-      CLOUD_GENERATE_TIMEOUT_MS * 2,
-      'connector writer',
-    );
-    const raw = extractJson(response.text());
-    if (writerSaysUnsupported(raw)) return null;
-    const c = coerceConnector(
-      raw && typeof raw === 'object' ? { brand: identity.brand, deviceKind: identity.kind, ...(raw as object) } : raw,
-      'cloud',
-    );
-    if (!c) { noteError('connector writer', new Error('connector failed the allowlist')); return null; }
-    recordInference('cloud', 'connector-write', Date.now() - t0);
-    return { connector: c, source: 'cloud', ms: Date.now() - t0 };
+    const prompt = withPreamble(buildConnectorPrompt(identity, feedback));
+    const writer = models.connectorWriter as unknown as {
+      generateContentStream?: (p: string) => Promise<{ stream: AsyncIterable<{ text(): string }> }>;
+      generateContent(p: string): Promise<{ response: { text(): string } }>;
+    };
+    if (typeof writer.generateContentStream === 'function') {
+      const run = async () => {
+        const { stream } = await writer.generateContentStream!(prompt);
+        for await (const chunk of stream) {
+          try { text += chunk.text(); } catch { /* a chunk with no text */ }
+          onText(text);
+        }
+      };
+      await withTimeout(run(), CLOUD_GENERATE_TIMEOUT_MS * 3, 'connector writer');
+    } else {
+      const { response } = await withTimeout(writer.generateContent(prompt), CLOUD_GENERATE_TIMEOUT_MS * 2, 'connector writer');
+      text = response.text();
+      onText(text);
+    }
   } catch (err) {
     noteError('connector writer', err);
-    return null;
+    return { ok: false, unreachable: true, text, errors: [`Gemini did not finish: ${err instanceof Error ? err.message : String(err)}`] };
   }
+  const ms = Date.now() - t0;
+  recordInference('cloud', 'connector-write', ms);
+  const raw = extractJson(text);
+  if (writerSaysUnsupported(raw)) return { ok: false, unsupported: true, text, errors: ['Gemini says this device has no documented local control.'], source: 'cloud', ms };
+  const checked = checkConnectorDraft(raw && typeof raw === 'object' ? { brand: identity.brand, deviceKind: identity.kind, ...(raw as object) } : raw, 'cloud');
+  if (!checked.ok) return { ok: false, errors: checked.errors, text, source: 'cloud', ms };
+  return { ok: true, connector: checked.connector, source: 'cloud', ms, text };
 }
 
 /** Compare BEFORE and AFTER frames for the action's success cue. */
@@ -1655,4 +1676,17 @@ export async function proposeMaterials(
     noteError('materials', err);
     return null;
   }
+}
+
+/** Dev-only hook so a local headless probe can call cloud Gemini directly.
+ *  Stripped from production builds by `import.meta.env.DEV`. */
+if (import.meta.env.DEV) {
+  (globalThis as unknown as { __mcCloudProbe?: unknown }).__mcCloudProbe = {
+    prepareHybrid,
+    getHybridStatus,
+    askCopilot,
+    draftClientEmail,
+    proposeMaterials,
+    explainAccessibility,
+  };
 }
