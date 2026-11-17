@@ -17,8 +17,17 @@ export type CopilotTab = 'review' | 'checklist' | 'history';
 export interface CopilotAnswerView {
   question: string;
   text: string;
-  /** "From your drawing · on this device", "Gemini · cloud", … */
+  /** "From your drawing · on this device", "Gemini · cloud", "Nano's guess", … */
   by: string;
+  /** Speculative Copilot: this answer is a pending guess. */
+  guess?: boolean;
+  confirmed?: boolean;
+}
+
+export interface SpeculativeStatsView {
+  compared: number;
+  agreed: number;
+  secondsSaved: number;
 }
 
 export interface CopilotPanelDeps {
@@ -50,6 +59,7 @@ export interface CopilotPanel {
   setAnswer(a: CopilotAnswerView | null): void;
   setDraft(d: { draft: EmailDraft; by: string } | null): void;
   setBusy(text: string | null): void;
+  setSpeculativeStats(s: SpeculativeStatsView | null): void;
 }
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -104,11 +114,17 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   let region: RegionId = 'international';
   let answer: CopilotAnswerView | null = null;
   let draft: { draft: EmailDraft; by: string } | null = null;
+  let specStats: SpeculativeStatsView | null = null;
 
   function changeCard(e: ChangeEntry, review: boolean): HTMLElement {
     const card = h('article', `mc-cp-card mc-cp-${e.status} mc-cp-by-${e.actor}`);
     const top = h('div', 'mc-cp-card-top');
-    top.append(h('span', `mc-cp-who who-${e.actor}`, ACTOR_LABEL[e.actor]), h('span', 'mc-cp-when', agoLabel(e.decidedAt ?? e.at)));
+    const who = e.tag === 'nano-guess' ? "Nano's guess"
+      : e.tag === 'confirmed' ? 'Gemini confirmed Nano\'s guess'
+      : e.tag === 'corrected' ? 'Gemini corrected a guess'
+      : e.tag === 'withdrawn' ? "Nano's guess withdrawn"
+      : ACTOR_LABEL[e.actor];
+    top.append(h('span', `mc-cp-who who-${e.actor}${e.tag ? ' mc-cp-tag-' + e.tag : ''}`, who), h('span', 'mc-cp-when', agoLabel(e.decidedAt ?? e.at)));
     const what = h('p', 'mc-cp-what', e.title);
     card.append(top, what);
     if (e.why) card.appendChild(h('p', 'mc-cp-why', `Why: ${e.why}`));
@@ -141,9 +157,19 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     body.appendChild(sec);
 
     if (answer) {
-      const a = h('div', 'mc-cp-sec mc-cp-answer');
+      const a = h('div', `mc-cp-sec mc-cp-answer${answer.guess ? ' mc-cp-guess' : ''}${answer.confirmed ? ' mc-cp-confirmed' : ''}`);
       a.append(h('h3', '', answer.question), h('p', 'mc-cp-answer-text', answer.text), h('p', 'mc-cp-by', answer.by));
       body.appendChild(a);
+    }
+    if (specStats && specStats.compared > 0) {
+      const rate = Math.round((specStats.agreed / specStats.compared) * 100);
+      const s = h('div', 'mc-cp-spec');
+      s.setAttribute('data-speculative-stats', '1');
+      s.append(
+        h('h3', '', 'Speculative Copilot'),
+        h('p', 'mc-cp-spec-line', `Agreement ${specStats.agreed}/${specStats.compared} (${rate}%). ${specStats.secondsSaved.toFixed(1)} s saved.`),
+      );
+      body.appendChild(s);
     }
 
     const g = h('div', 'mc-cp-sec mc-cp-guide');
@@ -280,6 +306,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     setAnswer(a) { answer = a; if (!root.hidden) render(); },
     setDraft(d) { draft = d; if (!root.hidden) render(); },
     setBusy(text) { busy.hidden = !text; busy.textContent = text ?? ''; },
+    setSpeculativeStats(s) { specStats = s; if (!root.hidden) render(); },
   };
 }
 

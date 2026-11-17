@@ -100,6 +100,8 @@ import { checkGuidelines, summarizeReport, GUIDELINE_SETS, REGION_IDS, type Guid
 import { proposeStair } from './cad/stairs';
 import { answerPlanQuestion, isPlanQuestion, isPlanJudgementQuestion, isSimplePlanQuestion } from './cad/planQA';
 import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
+import { raceHardQuestion, NANO_ROUTE_TIMEOUT_MS } from './cad/hardRace';
+import { createSpeculativeEngine, type SpeculativeDraft, type SpeculativeStats } from './cad/speculative';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
 import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
@@ -2239,6 +2241,7 @@ function restoreMaterialsOp(op: Record<string, unknown> | null | undefined): voi
   }
 }
 
+let speculative: ReturnType<typeof createSpeculativeEngine>;
 const copilotPanel = createCopilotPanel({
   onAccept: (id) => acceptChange(id),
   onReject: (id) => rejectChange(id),
@@ -2314,11 +2317,14 @@ async function syncSite(): Promise<void> {
 }
 
 /** Stage an AI (or rules) drawing change for her review. Nothing applies yet. */
-function proposeChange(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; source: ChangeEntry['source'] }): ChangeEntry {
+function proposeChange(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; source: ChangeEntry['source']; tag?: ChangeEntry['tag'] }): ChangeEntry {
   const e = changeLog.propose({ ...p, before: planDigest(rawController.snapshot()) });
   copilotPanel.open('review');
   toggleButton(btnCopilot, true);
-  const by = ACTOR_LABEL[p.actor];
+  const by = p.tag === 'nano-guess' ? "Nano's guess"
+    : p.tag === 'confirmed' ? "Gemini confirmed Nano's guess"
+    : p.tag === 'corrected' ? 'Gemini corrected a guess'
+    : ACTOR_LABEL[p.actor];
   verifierEl.textContent = `${by} suggests: ${p.title}. Waiting for you. Pinch Accept, or say "accept".`;
   // The confirm chip doubles as the pinch target for the newest proposal.
   presentChoices(`${by} suggests: ${p.title}`, [{ label: p.title, result: p.op, source: p.source }], () => acceptChange(e.id), () => rejectChange(e.id));
@@ -2473,9 +2479,31 @@ async function handleHardQuestion(question: string): Promise<boolean> {
       return applyPlanAnswer(local, question, 'Plan data · on device');
     }
   }
-  if (routerEnv().deviceReady) {
-    const picked = await pickCadTool(question, controller.summary(), { allowCloud: false });
-    if (picked && picked.call.tool === 'measure' && picked.confidence >= 0.5) {
+  const existing = speculative?.getDraft();
+  const same = existing && existing.utterance.trim().toLowerCase() === question.trim().toLowerCase();
+  if (same && existing && (existing.state === 'confirmed' || existing.state === 'corrected' || existing.state === 'withdrawn' || existing.geminiAnswer)) {
+    showSpeculativeDraft(existing, speculative.stats(), { speak: true });
+    return true;
+  }
+  const judgement = isPlanJudgementQuestion(question);
+  const hard = judgement || isHardQuestion(question);
+  const online = isOnline() && cloudConfigured;
+  if (online && hard) copilotPanel.setBusy('Asking Gemini…');
+  const raced = await raceHardQuestion({
+    judgement,
+    hard,
+    online,
+    deviceReady: routerEnv().deviceReady,
+    nanoTimeoutMs: NANO_ROUTE_TIMEOUT_MS,
+    pickNano: () => pickCadTool(question, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS }),
+    askCloud: () => askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
+      copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud' });
+    }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
+  });
+  copilotPanel.setBusy(null);
+  if (raced.kind === 'nano-tool') {
+    const picked = raced.pick;
+    if (picked.call.tool === 'measure') {
       const q = String(picked.call.args.question ?? question);
       const ans = answerPlanQuestion(planDoc(), q);
       if (ans) {
@@ -2484,8 +2512,15 @@ async function handleHardQuestion(question: string): Promise<boolean> {
         return applyPlanAnswer(ans, q, 'Plan data · on device', 'Nano understood the question.');
       }
     }
+    recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : 'private', '', picked.ms);
+    lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';
+    setBadge(picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules', picked.source === 'on-device' ? 'private' : 'exact');
+    const call = refineCadPick(question, picked.call);
+    const tool = cadTool(call.tool);
+    const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? (picked.source === 'cloud' ? 'gemini' : picked.source === 'on-device' ? 'nano' : 'her') : 'her';
+    return runCadTool(call, actor, question, picked.source);
   }
-  if (!isOnline() || !cloudConfigured) {
+  if (raced.kind === 'offline') {
     siteChecklist.add(question, controller.summary().slice(0, 300), !isOnline());
     copilotPanel.open('checklist');
     toggleButton(btnCopilot, true);
@@ -2495,31 +2530,27 @@ async function handleHardQuestion(question: string): Promise<boolean> {
     say('No signal right now. I saved that to your site checklist.');
     return true;
   }
-  copilotPanel.setBusy('Asking Gemini…');
-  const res = await askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
-    copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud' });
-  });
-  copilotPanel.setBusy(null);
-  if (!res) {
-    siteChecklist.add(question, controller.summary().slice(0, 300), false);
-    verifierEl.textContent = `Gemini couldn't answer right now. Saved to your site checklist: "${question}".`;
-    say("Gemini couldn't answer right now, so I saved it to your checklist.");
-    copilotPanel.open('checklist');
+  if (raced.kind === 'cloud') {
+    const res = raced.cloud;
+    setBadge('cloud', 'big-job');
+    recordLedger('cloud', 'copilot-answer', res.model ? `hard question · ${res.model}` : 'hard question', `question: ${JSON.stringify(question)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
+    copilotPanel.setAnswer({ question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud' });
+    copilotPanel.open('review');
+    toggleButton(btnCopilot, true);
+    verifierEl.textContent = res.answer;
+    say(res.answer);
+    for (const call of res.calls) {
+      const act = toolToAction(call);
+      if (act.kind === 'op') {
+        proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || question, op: act.op, source: 'cloud' });
+      }
+    }
     return true;
   }
-  setBadge('cloud', 'big-job');
-  recordLedger('cloud', 'copilot-answer', 'hard question', `question: ${JSON.stringify(question)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
-  copilotPanel.setAnswer({ question, text: res.answer, by: 'Gemini · cloud' });
-  copilotPanel.open('review');
-  toggleButton(btnCopilot, true);
-  verifierEl.textContent = res.answer;
-  say(res.answer);
-  for (const call of res.calls) {
-    const act = toolToAction(call);
-    if (act.kind === 'op') {
-      proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || question, op: act.op, source: 'cloud' });
-    }
-  }
+  siteChecklist.add(question, controller.summary().slice(0, 300), false);
+  verifierEl.textContent = `Gemini couldn't answer right now. Saved to your site checklist: "${question}".`;
+  say("Gemini couldn't answer right now, so I saved it to your checklist.");
+  copilotPanel.open('checklist');
   return true;
 }
 
@@ -2858,22 +2889,10 @@ async function handleCopilotQuestion(utterance: string): Promise<boolean | null>
       return applyPlanAnswer(local, utterance, 'Plan data · on device');
     }
   }
-  if (isPlanJudgementQuestion(utterance)) return handleHardQuestion(utterance);
-  if (!isHardQuestion(utterance) && !isPlanQuestion(utterance)) return null;
-  const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() && isHardQuestion(utterance) });
-  if (picked) {
-    recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : REASON_TEXT.private, picked.source === 'cloud' ? commandPayload(utterance) : '', picked.ms);
-    lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';
-    if (picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
-      const call = refineCadPick(utterance, picked.call);
-      const tool = cadTool(call.tool);
-      // Nano/Gemini-picked EDITS become pending proposals; views, checks and
-      // measurements run straight away (they don't change the drawing).
-      const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? sourceToActor(picked.source) : 'her';
-      return runCadTool(call, actor, utterance, picked.source);
-    }
+  if (isPlanJudgementQuestion(utterance) || isHardQuestion(utterance) || isPlanQuestion(utterance)) {
+    return handleHardQuestion(utterance);
   }
-  return handleHardQuestion(utterance);
+  return null;
 }
 
 function controlChanges() {
@@ -4320,7 +4339,94 @@ overflowMenu.layout();
 
 // ---- voice ----
 
-const voice: VoiceController = createVoiceController((utterance) => void runUtterance(utterance));
+const specChangeByDraft = new Map<string, string>();
+function showSpeculativeDraft(d: SpeculativeDraft, stats: SpeculativeStats, opts?: { speak?: boolean }): void {
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  copilotPanel.setSpeculativeStats(stats);
+  document.body.dataset.specState = d.state;
+  document.body.dataset.specVisibleMs = String(d.visibleAt);
+  if (d.answer) {
+    const by = d.state === 'confirmed' ? "Gemini confirmed Nano's guess"
+      : d.state === 'corrected' || d.state === 'withdrawn' ? (d.geminiModel ? `Gemini · ${d.geminiModel}` : 'Gemini · cloud')
+      : "Nano's guess · on device";
+    copilotPanel.setAnswer({
+      question: d.utterance,
+      text: d.answer,
+      by,
+      guess: d.state === 'draft',
+      confirmed: d.state === 'confirmed',
+    });
+    verifierEl.textContent = d.state === 'draft' ? `Nano's guess: ${d.answer}` : d.answer;
+    if (opts?.speak && d.state !== 'draft') say(d.answer);
+  }
+  if (d.tool && d.state !== 'withdrawn') {
+    const call: ToolCall = { tool: d.tool, args: d.args ?? {} };
+    const act = toolToAction(call);
+    if (act.kind === 'op') {
+      const existingId = specChangeByDraft.get(d.id);
+      if (d.state === 'corrected' && existingId) {
+        changeLog.amend(existingId, { tag: 'corrected', why: d.why ?? 'Gemini corrected Nano’s guess.' });
+        changeLog.reject(existingId);
+        specChangeByDraft.delete(d.id);
+        const e = proposeChange({
+          actor: 'gemini', tool: d.tool, title: describeCall(call),
+          why: d.why ?? 'Gemini corrected Nano’s guess.',
+          op: act.op, source: 'cloud', tag: 'corrected',
+        });
+        specChangeByDraft.set(d.id, e.id);
+      } else if (!existingId) {
+        const e = proposeChange({
+          actor: d.state === 'corrected' ? 'gemini' : 'nano',
+          tool: d.tool, title: describeCall(call),
+          why: d.why ?? "Nano's guess while you were still speaking.",
+          op: act.op,
+          source: d.state === 'corrected' ? 'cloud' : 'on-device',
+          tag: d.state === 'confirmed' ? 'confirmed' : d.state === 'corrected' ? 'corrected' : 'nano-guess',
+        });
+        specChangeByDraft.set(d.id, e.id);
+      } else if (d.state === 'confirmed') {
+        changeLog.amend(existingId, { tag: 'confirmed', why: d.why ?? "Gemini confirmed Nano's guess." });
+      }
+    }
+  }
+  if (d.state === 'withdrawn') {
+    const id = specChangeByDraft.get(d.id);
+    if (id) {
+      changeLog.amend(id, { tag: 'withdrawn', why: d.why ?? "Withdrawn: Gemini disagreed with Nano's guess." });
+      changeLog.reject(id);
+      specChangeByDraft.delete(d.id);
+    }
+  }
+}
+
+speculative = createSpeculativeEngine({
+  online: () => isOnline() && cloudConfigured,
+  isSimplePlan: isSimplePlanQuestion,
+  isJudgement: isPlanJudgementQuestion,
+  isHard: isHardQuestion,
+  answerPlan: (s) => answerPlanQuestion(planDoc(), s),
+  pickNano: async (s) => {
+    if (!routerEnv().deviceReady) return null;
+    const picked = await pickCadTool(s, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS });
+    if (!picked) return null;
+    const plan = picked.call.tool === 'measure' ? answerPlanQuestion(planDoc(), String(picked.call.args.question ?? s)) : null;
+    return { call: picked.call, confidence: picked.confidence, answer: plan?.text };
+  },
+  askCloud: async (s) => {
+    const res = await askCopilot(s, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    return res ? { answer: res.answer, calls: res.calls, why: res.why, model: res.model } : null;
+  },
+  onUpdate: (d, stats) => {
+    copilotPanel.setSpeculativeStats(stats);
+    if (d) showSpeculativeDraft(d, stats);
+  },
+});
+
+const voice: VoiceController = createVoiceController(
+  (utterance) => void runUtterance(utterance),
+  (interim) => speculative.onInterim(interim),
+);
 
 if (!voice.supported) {
   btnMic.disabled = true;
