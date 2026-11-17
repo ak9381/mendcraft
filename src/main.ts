@@ -96,9 +96,9 @@ import { recordInference } from './firebase/telemetry';
 import { createChangeLog, planDigest, ACTOR_LABEL, type Actor, type ChangeEntry } from './cad/changeLog';
 import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type EmailDraft } from './cad/siteChecklist';
 import { withChangeRecording } from './cad/recording';
-import { checkGuidelines, summarizeReport, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
+import { checkGuidelines, summarizeReport, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
-import { answerPlanQuestion, isPlanQuestion } from './cad/planQA';
+import { answerPlanQuestion, isPlanQuestion, isSimplePlanQuestion } from './cad/planQA';
 import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
@@ -531,6 +531,17 @@ function setBadge(source: Source, reason?: RouteReason, translated = false, note
   const why = reason ? ` Route: ${REASON_TEXT[reason]}${note ? ` (${note})` : ''}.` : '';
   sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
   sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
+}
+/** Honest badge when the numbers were read from the drawing, not invented by Nano. */
+function setPlanDataBadge(note?: string): void {
+  lastUtteranceSource = 'rules';
+  sourceBadge.className = 'badge badge-rules';
+  sourceBadge.textContent = 'Plan data · on device';
+  const tip = note
+    ? `${note} The numbers come from the drawing; no model guessed them.`
+    : 'Read from the drawing on this device. No model was asked.';
+  sourceBadge.title = tip;
+  sourceBadge.setAttribute('aria-label', `AI source: Plan data · on device. ${tip}`);
 }
 setBadge('rules');
 
@@ -2293,7 +2304,13 @@ const siteBook = (() => {
 async function syncSite(): Promise<void> {
   if (!siteBook || !isOnline()) return;
   const r = await syncSiteBook(changeLog, siteChecklist, siteBook);
-  if (!r.ok) console.info('[mendcraft]', r.reason);
+  if (!r.ok) {
+    console.info('[mendcraft]', r.reason);
+    document.body.dataset.siteSync = 'error';
+    return;
+  }
+  console.info('[mendcraft] site checklist cloud sync ok');
+  document.body.dataset.siteSync = 'ok';
 }
 
 /** Stage an AI (or rules) drawing change for her review. Nothing applies yet. */
@@ -2383,13 +2400,13 @@ async function runGuidelineCheck(region: RegionId, speak = true, quiet = false):
   const report = checkGuidelines(planDoc(), region);
   lastReport = report;
   const summary = summarizeReport(report);
-  copilotPanel.setReport(report.issues, region, `${summary} ${GUIDELINE_NOTE}`);
+  copilotPanel.setReport(report.issues, region, summary);
   if (quiet) return true;
   copilotPanel.open('review');
   toggleButton(btnCopilot, true);
   setBadge('rules', 'exact');
   recordLedger('rules', 'guideline-check', 'measured on this device', '');
-  verifierEl.textContent = `${summary} ${GUIDELINE_NOTE}`;
+  verifierEl.textContent = summary;
   if (speak) say(report.issues.length ? `${summary.replace(/^.*?: /, '')} I've marked them on the plan.` : 'Guideline check: nothing flagged.');
   const ids = [...new Set(report.issues.flatMap((i) => i.targetIds))];
   if (ids.length) {
@@ -2416,7 +2433,7 @@ async function runGuidelineCheck(region: RegionId, speak = true, quiet = false):
       return { ...i, message: `${i.message} ${x.explanation}`, ...(x.fix && !i.fix ? { fix: x.fix as Record<string, unknown>, fixLabel: 'Gemini fix', fixSource: res.source } : {}) };
     });
     lastReport = { ...report, issues: merged };
-    copilotPanel.setReport(merged, region, `${summary} ${GUIDELINE_NOTE}`);
+    copilotPanel.setReport(merged, region, summary);
   }
   return true;
 }
@@ -2432,7 +2449,8 @@ function proposeIssueFix(issue: A11yIssue, by: 'rules' | 'cloud' | 'on-device'):
 }
 
 /** Answer a hard question: Gemini when online, else the site checklist. */
-function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string, by: string): true {
+function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string, by: string, badgeNote?: string): true {
+  setPlanDataBadge(badgeNote);
   const ids = 'ids' in ans && Array.isArray(ans.ids) ? ans.ids : [];
   if (ids.length) {
     const sel = rawController.applyOp({ op: 'select_set', ids });
@@ -2448,11 +2466,12 @@ function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string,
 }
 
 async function handleHardQuestion(question: string): Promise<boolean> {
-  const local = answerPlanQuestion(planDoc(), question);
-  if (local) {
-    setBadge('rules', 'private');
-    recordLedger('rules', 'plan-qa', 'read from the drawing', question);
-    return applyPlanAnswer(local, question, 'Plan data · this device');
+  if (isSimplePlanQuestion(question)) {
+    const local = answerPlanQuestion(planDoc(), question);
+    if (local) {
+      recordLedger('rules', 'plan-qa', 'read from the drawing', question);
+      return applyPlanAnswer(local, question, 'Plan data · on device');
+    }
   }
   if (routerEnv().deviceReady) {
     const picked = await pickCadTool(question, controller.summary(), { allowCloud: false });
@@ -2462,8 +2481,7 @@ async function handleHardQuestion(question: string): Promise<boolean> {
       if (ans) {
         recordLedger('on-device', 'cad-tool', 'private', '', picked.ms);
         lastUtteranceSource = 'on-device';
-        setBadge('on-device', 'private');
-        return applyPlanAnswer(ans, q, 'Nano · plan data');
+        return applyPlanAnswer(ans, q, 'Plan data · on device', 'Nano understood the question.');
       }
     }
   }
@@ -2608,9 +2626,9 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
       const q = String(a.question ?? why);
       const ans = answerPlanQuestion(planDoc(), q);
       if (!ans) return handleHardQuestion(q);
-      setBadge(source === 'cloud' ? 'cloud' : source, source === 'rules' ? 'exact' : 'private');
       recordLedger('rules', 'plan-question', 'read from the drawing on this device', '');
-      copilotPanel.setAnswer({ question: q, text: ans.text, by: `From your drawing · on this device${source === 'on-device' ? ' (Nano understood the question)' : ''}` });
+      setPlanDataBadge(source === 'on-device' ? 'Nano understood the question.' : undefined);
+      copilotPanel.setAnswer({ question: q, text: ans.text, by: source === 'on-device' ? 'Plan data · on device (Nano understood the question)' : 'Plan data · on device' });
       if (ans.ids.length) {
         const sel = rawController.applyOp({ op: 'select_set', ids: ans.ids });
         if (!sel.ok) rawController.selectId(ans.ids[0]);
@@ -2671,7 +2689,10 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
       let by = 'a preset on this device';
       let handedOff = false;
       if (isOnline() && cloudConfigured) {
+        copilotPanel.open('review');
+        toggleButton(btnCopilot, true);
         copilotPanel.setBusy('Gemini is choosing materials and light…');
+        verifierEl.textContent = 'Gemini is choosing materials and light… Waiting for you to accept the 3D look.';
         const res = await proposeMaterials(style, controller.summary());
         copilotPanel.setBusy(null);
         if (res) {
@@ -2692,8 +2713,8 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
         setBadge(source === 'on-device' ? 'on-device' : 'rules', source === 'on-device' ? 'private' : (isOnline() ? 'private' : 'offline'));
       }
       const names = `walls ${plan.walls.name}, floor ${plan.floor.name}`;
-      const reviewable = actor !== 'her' || by === 'Gemini · cloud';
-      if (reviewable) {
+      // Convert-to-3D always waits for Accept — even a local preset is a look change.
+      {
         const previous = (viewport.currentMaterials?.() as MaterialPlan | undefined) ?? null;
         const previous3d = viewport.is3D?.() === true || btn3d.getAttribute('aria-pressed') === 'true';
         await viewport.setMaterials?.(plan);
@@ -2712,12 +2733,6 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
         });
         return true;
       }
-      await viewport.setMaterials?.(plan);
-      btn3d.setAttribute('aria-pressed', 'true');
-      verifierEl.textContent = `3D: ${plan.label} (${names}) by ${by}. ${plan.notes} ${PHOTO_RENDER_NOTE}`;
-      copilotPanel.setAnswer({ question: 'Convert to 3D', text: `${plan.label}: ${names}. ${plan.notes}`, by: `${by}. ${PHOTO_RENDER_NOTE}` });
-      say(`Here it is in 3D: ${plan.label}. ${names}.`);
-      return true;
     }
     default:
       return false;
@@ -2729,6 +2744,16 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
  *  "convert 2D to 3D") go to Nano first; rules are the fallback. Null = not a
  *  copilot request. */
 async function handleCopilot(utterance: string): Promise<boolean | null> {
+  if (isSimplePlanQuestion(utterance)) {
+    const local = answerPlanQuestion(planDoc(), utterance);
+    if (local) {
+      lastUtteranceText = utterance;
+      lastUtteranceAt = Date.now();
+      lastUtteranceSource = 'rules';
+      recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+      return applyPlanAnswer(local, utterance, 'Plan data · on device');
+    }
+  }
   const intent = parseCopilot(utterance, { walking: viewport.walking?.() ?? false });
   if (intent && isInstantCopilot(intent) && intent.kind !== 'tool') {
     lastUtteranceText = utterance;
@@ -2816,12 +2841,13 @@ async function handleCopilotRules(intent: NonNullable<ReturnType<typeof parseCop
  *  (on device, works offline), numbers still come from the drawing; hard
  *  questions go to Gemini, or to the site checklist with no signal. */
 async function handleCopilotQuestion(utterance: string): Promise<boolean | null> {
-  const local = answerPlanQuestion(planDoc(), utterance);
-  if (local) {
-    setBadge('rules', 'private');
-    recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
-    lastUtteranceSource = 'rules';
-    return applyPlanAnswer(local, utterance, 'Plan data · this device');
+  if (isSimplePlanQuestion(utterance)) {
+    const local = answerPlanQuestion(planDoc(), utterance);
+    if (local) {
+      recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+      lastUtteranceSource = 'rules';
+      return applyPlanAnswer(local, utterance, 'Plan data · on device');
+    }
   }
   if (!isHardQuestion(utterance) && !isPlanQuestion(utterance)) return null;
   const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() && isHardQuestion(utterance) });

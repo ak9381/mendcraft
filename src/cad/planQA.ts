@@ -23,6 +23,17 @@ function uniq(nums: number[]): number[] {
   return [...new Set(nums.map((n) => Math.round(n)))].sort((a, b) => a - b);
 }
 
+/** A research or judgement question — not just a number from the drawing. */
+export function isPlanJudgementQuestion(utterance: string): boolean {
+  const t = utterance.trim().toLowerCase();
+  return /\b(enough|too (narrow|small|wide|big|thick)|wheelchair|wheel\s*chair|should we|can we (take|remove|knock|open)|typical|compliant|compliance|ada|wcag|accessible|barrier[- ]?free|recommend|research|look up|certified)\b/.test(t);
+}
+
+/** Simple plan-data questions (thickness, area, door width, room size) with no judgement. */
+export function isSimplePlanQuestion(utterance: string): boolean {
+  return isPlanQuestion(utterance) && !isPlanJudgementQuestion(utterance);
+}
+
 /** Is this a question about the drawing's own numbers? (cheap gate). */
 export function isPlanQuestion(utterance: string): boolean {
   const t = utterance.trim().toLowerCase();

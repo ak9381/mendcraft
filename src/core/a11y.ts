@@ -114,7 +114,13 @@ export const UI_CITATIONS = {
  *  BEFORE design-request routing ("make this house wheelchair friendly" would
  *  otherwise match the plan-generate path on "house"). */
 export function isAccessibilityRequest(utterance: string): boolean {
-  return /\b(accessib\w*|wheelchair|wheel\s*chair|barrier[- ]?free|ada|wcag)\b/i.test(utterance);
+  const t = utterance.trim().toLowerCase();
+  if (!/\b(accessib\w*|wheelchair|wheel\s*chair|barrier[- ]?free|ada|wcag)\b/i.test(t)) return false;
+  // A question ("does the door leave enough width for a wheelchair?") is for
+  // the copilot. "Check accessibility" / "make it wheelchair friendly" run the checker.
+  const asks = /\?$/.test(t) || /^(does|is|are|can|could|would|should|what|how|will)\b/.test(t);
+  if (asks && !/\b(check|audit|scan|run|test|make|fix)\b/.test(t)) return false;
+  return true;
 }
 
 // ─── Cloud explanation plumbing (schema + coercion, both pure) ─────────────

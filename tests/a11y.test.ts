@@ -188,7 +188,9 @@ describe('accessibility request detection', () => {
   it('matches the spec phrasings', () => {
     expect(isAccessibilityRequest('make this house wheelchair friendly')).toBe(true);
     expect(isAccessibilityRequest('check accessibility')).toBe(true);
-    expect(isAccessibilityRequest('is this ADA compliant?')).toBe(true);
+    expect(isAccessibilityRequest('run an accessibility audit')).toBe(true);
+    expect(isAccessibilityRequest('is this ADA compliant?')).toBe(false);
+    expect(isAccessibilityRequest('Does the bathroom door leave enough width for a wheelchair, and what is the wall thickness?')).toBe(false);
     expect(isAccessibilityRequest('add a door')).toBe(false);
     expect(isAccessibilityRequest('two bedroom plan')).toBe(false);
   });
