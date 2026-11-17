@@ -4409,6 +4409,12 @@ speculative = createSpeculativeEngine({
   pickNano: async (s) => {
     if (!routerEnv().deviceReady) return null;
     const picked = await pickCadTool(s, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS });
+window.addEventListener('mc-speculative', (ev) => {
+  const d = (ev as CustomEvent<{ kind?: string; text?: string }>).detail;
+  if (!d || typeof d.text !== 'string') return;
+  if (d.kind === 'interim') speculative.onInterim(d.text);
+});
+
     if (!picked) return null;
     const plan = picked.call.tool === 'measure' ? answerPlanQuestion(planDoc(), String(picked.call.args.question ?? s)) : null;
     return { call: picked.call, confidence: picked.confidence, answer: plan?.text };
