@@ -89,12 +89,13 @@ export function createPlanRenderer(
     fitSig = boundsSig();
     const b = planBounds(doc());
     const rect = svg.getBoundingClientRect();
-    const W = rect.width || 800;
-    const H = rect.height || 600;
+    const inset = overlayInsets();
+    const W = Math.max(120, (rect.width || 800) - inset.left - inset.right);
+    const H = Math.max(120, (rect.height || 600) - inset.top - inset.bottom);
     if (!b) {
       scale = 0.08;
-      originX = W / 2;
-      originY = H / 2;
+      originX = inset.left + W / 2;
+      originY = inset.top + H / 2;
       return;
     }
     // Fit the plan PLUS the drawn annotations: the overall outer dimensions sit
@@ -114,8 +115,51 @@ export function createPlanRenderer(
     scale = Math.min(W / w, H / h, 0.3);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    originX = W / 2 - cx * scale;
-    originY = H / 2 + cy * scale;
+    originX = inset.left + W / 2 - cx * scale;
+    originY = inset.top + H / 2 + cy * scale;
+  }
+
+  /** Keep the plan in the visible hole, not under the brand island or docks. */
+  function overlayInsets(): { left: number; top: number; right: number; bottom: number } {
+    const host = container.getBoundingClientRect();
+    const cover = (sel: string): DOMRect | null => {
+      const e = (container.querySelector(sel) || document.querySelector(sel)) as HTMLElement | null;
+      if (!e || e.hidden || e.classList.contains('is-collapsed')) return null;
+      const r = e.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return null;
+      if (r.right < host.left + 8 || r.left > host.right - 8 || r.bottom < host.top + 8 || r.top > host.bottom - 8) return null;
+      return r;
+    };
+    let left = 16, top = 16, right = 16, bottom = 16;
+    const bump = (r: DOMRect | null) => {
+      if (!r) return;
+      const toLeft = r.right - host.left;
+      const toRight = host.right - r.left;
+      const toTop = r.bottom - host.top;
+      const toBottom = host.bottom - r.top;
+      const xs = [toLeft, toRight], ys = [toTop, toBottom];
+      // Grow the nearest edge so the room sits in the remaining hole.
+      if (Math.min(...xs) <= Math.min(...ys)) {
+        if (toLeft <= toRight) left = Math.max(left, toLeft + 12);
+        else right = Math.max(right, toRight + 12);
+      } else {
+        if (toTop <= toBottom) top = Math.max(top, toTop + 12);
+        else bottom = Math.max(bottom, toBottom + 12);
+      }
+    };
+    bump(cover('#statusbar'));
+    bump(cover('#topbar'));
+    bump(cover('.mc-palette'));
+    bump(cover('#zoom-island'));
+    bump(cover('#btn-panel-chip'));
+    bump(cover('#panel'));
+    bump(cover('.mc-copilot'));
+    bump(cover('.mc-props.is-expanded'));
+    bump(cover('.mc-trash'));
+    // Floor so docks never leave a sliver even if query fails mid-layout.
+    top = Math.max(top, 72);
+    bottom = Math.max(bottom, 148);
+    return { left, top, right, bottom };
   }
 
   // ---- hit-testing (doors/windows, fixture slack, optional magnet radius) ----
@@ -165,6 +209,22 @@ export function createPlanRenderer(
   status.className = 'mc-status';
   status.setAttribute('role', 'status');
   container.appendChild(status);
+  let hintHide: ReturnType<typeof setTimeout> | undefined;
+  let hintFade: ReturnType<typeof setTimeout> | undefined;
+  function showHint(text: string, opts: { sticky?: boolean } = {}): void {
+    status.textContent = text;
+    status.classList.remove('is-fading');
+    if (hintHide) clearTimeout(hintHide);
+    if (hintFade) clearTimeout(hintFade);
+    if (!text || opts.sticky) return;
+    hintHide = setTimeout(() => {
+      status.classList.add('is-fading');
+      hintFade = setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('is-fading');
+      }, 500);
+    }, 2600);
+  }
 
   const trash = createTrash(container);
 
@@ -175,7 +235,7 @@ export function createPlanRenderer(
         onSelect(controller.selectedId());
         render();
       } else if (r.error) {
-        status.textContent = r.error;
+        showHint(r.error, { sticky: true });
       }
       return r;
     },
@@ -201,7 +261,7 @@ export function createPlanRenderer(
       render();
     },
     setStatus(text) {
-      status.textContent = text;
+      showHint(text);
     },
     overTrash: (x, y) => trash.isOver(x, y),
     setTrashHover: (on) => trash.setHover(on),
@@ -212,7 +272,7 @@ export function createPlanRenderer(
     defaultId: 'select',
     onToolChange(id) {
       palette.setActive(id);
-      status.textContent = tools.find((t) => t.id === id)?.hint ?? '';
+      showHint(tools.find((t) => t.id === id)?.hint ?? '');
     },
   });
   const palette = createPalette(container, paletteItems(tools), {
@@ -220,7 +280,7 @@ export function createPlanRenderer(
     onPlaceStart: (id, x, y) => toolCtl.beginPlace(id, { x, y, source: 'mouse' }),
   });
   const fsCtl = createFullscreenControl(container, container, (hint) => {
-    status.textContent = hint;
+    showHint(hint);
   });
   const propsPanel = createPropsPanel(container, {
     apply: (op) => ctx.apply(op),
@@ -228,7 +288,7 @@ export function createPlanRenderer(
     selectedId: () => controller.selectedId(),
   });
   palette.setActive('select');
-  status.textContent = tools[0].hint ?? '';
+  showHint(tools[0].hint ?? '');
 
   /** Overlay helpers for the active tool (client px → svg-local px). */
   function makeOverlay(g: SVGGElement): OverlayDraw {

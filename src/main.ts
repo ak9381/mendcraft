@@ -250,12 +250,13 @@ app.innerHTML = `
       </div>
       <div id="choice-bar" class="choice-bar" role="group" aria-label="Did you mean" hidden></div>
       <div id="chrome-confirm" class="recipe-confirm chrome-confirm" hidden></div>
+      <button type="button" id="btn-panel-chip" class="mc-panel-chip" aria-expanded="false" aria-controls="panel" title="Objects and command">Objects</button>
       <div id="empty-hint" class="empty-hint">
         <p>${mode.hint}</p>
         <div class="hint-buttons">${hintButtonsHtml}</div>
       </div>
     </div>
-    <aside id="panel" aria-label="Design details">
+    <aside id="panel" class="is-collapsed" aria-label="Design details" hidden>
       <div id="fail-states" role="alert"></div>
       <section id="queue-section" aria-label="Offline cloud job queue" hidden>
         <h2>Cloud queue <span id="queue-count" class="queue-count"></span></h2>
@@ -700,6 +701,30 @@ const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controlle
   renderAll();
 });
 
+const btnPanelChip = el<HTMLButtonElement>('btn-panel-chip');
+const panelEl = el<HTMLElement>('panel');
+function setPanelOpen(on: boolean): void {
+  panelEl.classList.toggle('is-collapsed', !on);
+  panelEl.hidden = !on;
+  btnPanelChip.setAttribute('aria-expanded', String(on));
+  btnPanelChip.classList.toggle('is-open', on);
+}
+btnPanelChip.addEventListener('click', () => setPanelOpen(panelEl.classList.contains('is-collapsed')));
+setPanelOpen(false);
+
+(function dockUndoRedo(): void {
+  const dock = viewportEl.querySelector('.mc-palette');
+  const island = document.getElementById('history-island');
+  if (!dock || !island) return;
+  const group = document.createElement('div');
+  group.className = 'mc-dock-edit';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', 'Undo and redo');
+  group.append(btnUndo, btnRedo);
+  dock.append(group);
+  island.remove();
+})();
+
 let hadContent = false;
 function renderAll(): void {
   viewport.render();
@@ -719,6 +744,8 @@ function renderAll(): void {
 
 function renderParts(): void {
   const items = controller.listItems();
+  const n = items.length;
+  btnPanelChip.textContent = n ? `Objects · ${n}` : 'Objects';
   partsList.innerHTML = '';
   for (const item of items) {
     const li = document.createElement('li');
@@ -1149,7 +1176,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #statusbar, #history-island, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');

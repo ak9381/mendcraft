@@ -60,6 +60,7 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
     return inp;
   }
 
+  let expanded = false;
   function update(): void {
     root.innerHTML = '';
     const d = io.snapshot();
@@ -67,10 +68,19 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
     const ids = d.selectedIds?.length ? d.selectedIds : id ? [id] : [];
     if (ids.length === 0) {
       root.hidden = true;
+      root.classList.remove('is-expanded');
       return;
     }
-    const title = document.createElement('div');
+    const title = document.createElement('button');
+    title.type = 'button';
     title.className = 'mc-props-title';
+    title.setAttribute('aria-expanded', String(expanded));
+    title.addEventListener('click', () => {
+      expanded = !expanded;
+      root.classList.toggle('is-expanded', expanded);
+      title.setAttribute('aria-expanded', String(expanded));
+    });
+    root.classList.toggle('is-expanded', expanded);
     root.appendChild(title);
 
     // Multi-selection: show the count and edit the props the items share.
