@@ -531,7 +531,32 @@ setBadge('rules');
 
 // ---- live caption bar (her words + the English translation) ----------------
 
-/** Show what was heard; the translation line fills in once fusion returns. */
+/** Show what was heard; the translation line fills in once fusion returns.
+ *  The bar is a compact caption (not a full-height column) and fades out. */
+const CAPTION_HOLD_MS = 4000;
+const CAPTION_FADE_MS = 600;
+let captionHideTimer: ReturnType<typeof setTimeout> | undefined;
+let captionFadeTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleCaptionHide(): void {
+  captionBar.classList.remove('is-fading');
+  if (captionHideTimer) clearTimeout(captionHideTimer);
+  if (captionFadeTimer) clearTimeout(captionFadeTimer);
+  const reduce = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  captionHideTimer = setTimeout(() => {
+    if (reduce) {
+      captionBar.hidden = true;
+      return;
+    }
+    captionBar.classList.add('is-fading');
+    captionFadeTimer = setTimeout(() => {
+      captionBar.hidden = true;
+      captionBar.classList.remove('is-fading');
+    }, CAPTION_FADE_MS);
+  }, CAPTION_HOLD_MS);
+}
+
 function showCaptionHeard(heard: string): void {
   const text = heard.trim();
   if (!text) return;
@@ -540,6 +565,7 @@ function showCaptionHeard(heard: string): void {
   captionTranslation.hidden = true;
   captionTranslation.textContent = '';
   captionBar.hidden = false;
+  scheduleCaptionHide();
   controlCaption = {
     heard: text, translation: null,
     langCode: currentLanguage.code, langLabel: currentLanguage.englishName,
@@ -553,6 +579,8 @@ function showCaptionTranslation(heard: string, translation?: string): void {
   captionTranslation.textContent = `→ ${cap.translation}`;
   captionTranslation.lang = 'en';
   captionTranslation.hidden = false;
+  captionBar.hidden = false;
+  scheduleCaptionHide();
   controlCaption = {
     heard: cap.heard, translation: cap.translation,
     langCode: currentLanguage.code, langLabel: currentLanguage.englishName,

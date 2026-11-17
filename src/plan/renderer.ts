@@ -905,6 +905,13 @@ export function createPlanRenderer(
     hiddenLayers: () => [...hidden],
     async setMaterials(plan) {
       pendingMaterials = plan as MaterialPlan;
+      // Apply immediately when 3D is already up — `await ensure3D()` would
+      // yield a microtask even if the view exists, and accept+renderAll
+      // could run before colours land on the meshes.
+      if (view3d) {
+        view3d.setMaterials(pendingMaterials);
+        return;
+      }
       const v = await ensure3D();
       v.setMaterials(pendingMaterials);
     },

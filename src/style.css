@@ -975,25 +975,39 @@ a.brand:hover { color: var(--accent); }
   font-family: 'Noto Sans Kannada', system-ui, 'Segoe UI', Roboto, sans-serif;
 }
 
-/* Live caption bar: her words beside the English translation. */
+/* Live caption bar: her words beside the English translation.
+   Keep it a compact pill — never stretch top and bottom at once, or it
+   becomes a full-height narrow column that wraps and clips the text. */
 .caption-bar {
   position: absolute;
   left: 50%;
   bottom: 2.4em;
+  top: auto;
   transform: translateX(-50%);
-  z-index: 5;
-  max-width: 90%;
+  z-index: 20;
+  width: max-content;
+  max-width: min(36rem, calc(100% - 48px));
+  height: auto;
   display: flex;
   gap: 0.6em;
   align-items: baseline;
   flex-wrap: wrap;
   justify-content: center;
-  padding: 0.5em 0.9em;
-  border-radius: 10px;
+  padding: 0.45em 0.9em;
+  border-radius: 999px;
   background: rgba(20, 22, 28, 0.86);
+  color: #f8fafc;
   pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.55s ease;
+  text-align: center;
+  line-height: 1.35;
 }
+.caption-bar.is-fading { opacity: 0; }
 .caption-bar[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .caption-bar { transition: none; }
+}
 .caption-heard { font-size: 1.1em; font-weight: 600; font-family: 'Noto Sans Kannada', system-ui, 'Segoe UI', Roboto, sans-serif; }
 .caption-translation { font-size: 0.95em; color: var(--text-dim, #9aa4b2); }
 .caption-translation[hidden] { display: none; }
@@ -3120,12 +3134,21 @@ button.mc-ref-open {
   top: auto;
 }
 
-/* Caption + choice bars stay centred over the canvas, clear of islands. */
+/* Caption sits as a compact chip above the bottom docks — never at the
+   top (that used to leave bottom: 2.4em set, stretching it into a column
+   over the 3D room). */
 #app:has(> #layout) .caption-bar {
   left: 50%;
+  top: auto;
+  bottom: calc(var(--island-margin) + var(--target, 60px) + 28px);
   transform: translateX(-50%);
-  top: 16px;
-  max-width: min(640px, calc(100vw - 480px));
+  width: max-content;
+  max-width: min(36rem, calc(100% - 48px));
+  height: auto;
+}
+#app:has(> #layout):has(.mc-copilot:not([hidden])) .caption-bar {
+  left: calc((100% - min(400px, 42vw)) / 2);
+  max-width: min(32rem, calc(100% - min(400px, 42vw) - 48px));
 }
 
 /* Empty-state card: centred, wide, calm. */
@@ -3163,8 +3186,15 @@ button.mc-ref-open {
   #app:has(> #layout) #topbar {
     max-width: calc(100vw - 32px);
   }
+  /* Do not let the brand island span the full width at ~1024px — that
+     overlaps the Room card and the Copilot panel. */
   #app:has(> #layout) #statusbar {
-    max-width: calc(100vw - 32px);
+    max-width: min(400px, calc(100vw - 32px));
+  }
+  #app:has(> #layout) .mc-copilot {
+    width: min(360px, calc(100vw - 32px));
+    top: var(--island-margin);
+    max-height: calc(100% - 24px);
   }
 }
 @media (max-width: 768px) {
@@ -3199,9 +3229,16 @@ button.mc-ref-open {
 body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 
 /* ── CAD copilot panel (Review · Site checklist · History) ───────────────── */
+#app:has(> #layout):has(.mc-copilot:not([hidden])) #statusbar {
+  max-width: min(380px, calc(100vw - 32px - min(400px, 42vw)));
+}
+#app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
+  right: calc(var(--island-margin) + min(400px, calc(100vw - 32px)) + var(--target-gap));
+  top: calc(var(--island-margin) + 8px);
+}
 .mc-copilot {
-  position: absolute; z-index: 42; top: 72px; right: 16px;
-  width: 460px; max-width: calc(100% - 32px); max-height: calc(100% - 96px);
+  position: absolute; z-index: 42; top: var(--island-margin, 16px); right: var(--island-margin, 16px);
+  width: min(400px, calc(100% - 32px)); max-width: calc(100% - 32px); max-height: calc(100% - 32px);
   display: flex; flex-direction: column;
   background: rgb(25 25 23 / 0.92); color: var(--text);
   backdrop-filter: blur(18px) saturate(1.2);
