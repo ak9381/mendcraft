@@ -391,6 +391,7 @@ export async function generateWithBudget(
   prompt: string,
   ms: number,
   label: string,
+  onChunk?: (text: string) => void,
 ): Promise<{ response: ModelResponse }> {
   if (typeof model.generateContentStream === 'function') {
     let latest = '';
@@ -401,7 +402,10 @@ export async function generateWithBudget(
         for await (const chunk of started.stream) {
           const safe = safeResponseText(chunk);
           if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
-          if (safe.text) latest = safe.text;
+          if (safe.text) {
+            latest = safe.text;
+            try { onChunk?.(latest); } catch { /* UI preview must not fail the call */ }
+          }
           if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
         }
       } catch (err) {
@@ -1414,10 +1418,11 @@ async function requestJson<T>(
   budgetMs: number,
   label: string,
   coerce: (raw: unknown) => T | null,
+  onChunk?: (text: string) => void,
 ): Promise<{ value: T; source: Source } | null> {
   const run = async (): Promise<{ value: T | null; kind: CloudFailKind | null; source: Source; detail: string }> => {
     try {
-      const { response } = await generateWithBudget(model, prompt, budgetMs, label);
+      const { response } = await generateWithBudget(model, prompt, budgetMs, label, onChunk);
       const text = response.text();
       if (!text || !text.trim()) return { value: null, kind: 'empty', source: sourceOf(response), detail: '' };
       const raw = extractJson(text);
@@ -1814,14 +1819,21 @@ export async function askCopilot(
   question: string,
   summary: string,
   region: string,
+  onChunk?: (text: string) => void,
 ): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.copilotAnswer) return null;
   try {
+    const peek = (text: string) => {
+      const raw = extractJson(text);
+      if (!raw || typeof raw !== 'object') return;
+      const a = (raw as Record<string, unknown>).answer;
+      if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
+    };
     const got = await requestJson(
       models.copilotAnswer,
-      withPreamble(copilotAnswerPrompt(question, summary.slice(0, 1500), region)),
+      withPreamble(copilotAnswerPrompt(question, summary, region)),
       cloudBudgetMs('long'),
       'copilot answer',
       (raw) => {
@@ -1833,6 +1845,7 @@ export async function askCopilot(
         const calls = Array.isArray(o.calls) ? o.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
         return { answer, calls, why: typeof o.why === 'string' ? o.why.slice(0, 300) : '' };
       },
+      onChunk ? peek : undefined,
     );
     if (!got) return null;
     recordInference('cloud', 'copilot-answer', Date.now() - t0);

@@ -9,7 +9,7 @@ import { checkGuidelines, guidelineSet, roomKind, GUIDELINE_LABEL, GUIDELINE_NOT
 import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/cad/stairs';
 import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
-import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from '../src/cad/copilot';
+import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick, copilotAnswerPrompt, compactPlanSummary } from '../src/cad/copilot';
 import { coerceMaterialPlan, coerceSetMaterialsOp, colorFromMaterialName, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, CONVERT_LOOK, sunVector } from '../src/cad/materials';
 import { filterLayers, layerFromWords } from '../src/cad/layers';
 import { fixtureSymbol } from '../src/plan/fixtures';
@@ -150,6 +150,31 @@ describe('plan questions (numbers from the drawing)', () => {
     expect(isPlanQuestion('how big is the kitchen')).toBe(true);
     expect(isPlanQuestion('make this wall 4 meters long')).toBe(false);
     expect(isPlanQuestion('play some music')).toBe(false);
+
+    expect(isPlanQuestion('wall thickness')).toBe(true);
+    expect(isPlanQuestion('door width of the bathroom')).toBe(true);
+    expect(answerPlanQuestion(docOf(house()), 'wall thickness')?.kind).toBe('wall-thickness');
+  });
+
+  it('compacts a plan summary and keeps the copilot prompt short', () => {
+    const walls = Array.from({ length: 8 }, (_, i) => ({ id: `w${i}`, lenMm: 4000, thick: 100 }));
+    const raw = JSON.stringify({
+      rev: 3,
+      selected: 'w0',
+      walls,
+      openings: [{ id: 'd1', kind: 'door', wall: 'w0', width: 900 }],
+      rooms: [{ id: 'r1', name: 'Bedroom', areaM2: 14 }],
+      dims: 2,
+    });
+    const compact = compactPlanSummary(raw);
+    expect(compact.length).toBeLessThan(raw.length + 1);
+    expect(compact).toMatch(/"thick":100/);
+    expect(compact).toMatch(/900/);
+    const prompt = copilotAnswerPrompt('Does the bathroom door leave enough width for a wheelchair?', raw, 'International');
+    expect(prompt.length).toBeLessThan(900);
+    expect(prompt).toMatch(/never certified compliance/i);
+    expect(prompt).toContain('wheelchair');
+
   });
 });
 

@@ -705,7 +705,7 @@ export class PlanEngine {
         lenMm: r1(wallLength(w)),
         thick: w.thickness,
       })),
-      openings: this.state.openings.map((o) => ({ id: o.id, kind: o.kind, wall: o.wallId })),
+      openings: this.state.openings.map((o) => ({ id: o.id, kind: o.kind, wall: o.wallId, width: o.width })),
       rooms: this.state.rooms.map((r) => ({
         id: r.id,
         name: r.name,
