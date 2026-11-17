@@ -110,6 +110,14 @@ export interface TextGenModel {
   generateContent(
     request: string,
   ): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
+  /** Optional streaming path. On a timeout we keep any JSON already received
+   *  instead of dropping the whole call. */
+  generateContentStream?(
+    request: string,
+  ): Promise<{
+    stream: AsyncIterable<{ text: () => string; inferenceSource?: string }>;
+    response: Promise<{ text: () => string; inferenceSource?: string }>;
+  }>;
   initializeDeviceModel?(onProgress?: (p: number) => void): Promise<void>;
 }
 
@@ -262,10 +270,11 @@ export const DEIXIS_CREATE_OPTIONS = {
 };
 
 const ON_DEVICE_TIMEOUT_MS = 15000;
-/** Cloud "generate a whole plan/template" budget. A hung cloud call must fall
- *  back to the deterministic template within a few seconds, never leave the UI
- *  spinning (the deployed path has to degrade to RULES honestly and promptly). */
-const CLOUD_GENERATE_TIMEOUT_MS = 6000;
+/** Cloud budget for a warm call. A hung cloud call must still fall back to
+ *  rules promptly — first calls after load or reconnect get a longer budget. */
+export const CLOUD_GENERATE_TIMEOUT_MS = 8000;
+/** Extra budget for the first cloud generate (App Check + model cold start). */
+export const CLOUD_FIRST_TIMEOUT_MS = 20000;
 
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON Schema
@@ -316,12 +325,27 @@ let deviceModelStatus: DeviceModelStatus = 'idle';
 let appCheckState: AppCheckStatus = 'skipped';
 let statusMessage: string | null = null;
 let lastError: string | null = null;
+/** True once a cloud generate has finished (or returned usable partial JSON). */
+let cloudSettled = false;
+let warmPromise: Promise<boolean> | null = null;
 
 function resetStatus(): void {
   deviceModelStatus = 'idle';
   appCheckState = 'skipped';
   statusMessage = null;
   lastError = null;
+  cloudSettled = false;
+  warmPromise = null;
+}
+
+/** Short = guideline explain and similar; long = materials, email, copilot. */
+export function cloudBudgetMs(kind: 'short' | 'long' = 'short'): number {
+  if (kind === 'long') return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS * 1.5 : CLOUD_FIRST_TIMEOUT_MS;
+  return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS : Math.max(CLOUD_GENERATE_TIMEOUT_MS, 12_000);
+}
+
+function markCloudSettled(): void {
+  cloudSettled = true;
 }
 
 function noteError(where: string, err: unknown): void {
@@ -338,6 +362,65 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
       (e) => { clearTimeout(t); reject(e); },
     );
   });
+}
+
+type ModelResponse = { text: () => string; inferenceSource?: string };
+
+/**
+ * Run a cloud generate with a hard timeout. If the model can stream, a timeout
+ * still counts when we already have parseable JSON (partial output). Otherwise
+ * the caller falls back to rules.
+ */
+export async function generateWithBudget(
+  model: TextGenModel,
+  prompt: string,
+  ms: number,
+  label: string,
+): Promise<{ response: ModelResponse }> {
+  if (typeof model.generateContentStream === 'function') {
+    let latest = '';
+    let inferenceSource: string | undefined;
+    const run = (async () => {
+      const started = await model.generateContentStream!(prompt);
+      try {
+        for await (const chunk of started.stream) {
+          try {
+            const piece = chunk.text();
+            if (piece) latest = piece;
+          } catch {
+            // incomplete chunk — keep what we have
+          }
+          if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
+        }
+      } catch (err) {
+        if (!latest) throw err;
+      }
+      if (started.response) {
+        try {
+          const final = await started.response;
+          return { text: () => final.text(), inferenceSource: final.inferenceSource ?? inferenceSource };
+        } catch (err) {
+          if (latest) return { text: () => latest, inferenceSource };
+          throw err;
+        }
+      }
+      return { text: () => latest, inferenceSource };
+    })();
+    try {
+      const response = await withTimeout(run, ms, label);
+      markCloudSettled();
+      return { response };
+    } catch (err) {
+      if (latest && extractJson(latest) != null) {
+        markCloudSettled();
+        return { response: { text: () => latest, inferenceSource } };
+      }
+      throw err;
+    }
+  }
+  const { response } = await withTimeout(model.generateContent(prompt), ms, label);
+  markCloudSettled();
+  return { response };
 }
 
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
@@ -363,7 +446,39 @@ export function getHybridStatus(): HybridStatus {
 
 export async function prepareHybrid(): Promise<HybridStatus> {
   await ensureModels();
+  if (!testOverrides && isEnabled() && appCheckState !== 'failed') {
+    void warmCloud();
+  }
   return getHybridStatus();
+}
+
+/** Cheap cloud ping after load or when the network comes back, so the first
+ *  real copilot call is not the cold-start one. No-ops in tests. */
+export async function warmCloud(): Promise<boolean> {
+  if (testOverrides) return false;
+  if (warmPromise) return warmPromise;
+  warmPromise = (async () => {
+    const models = await ensureModels();
+    const model = models?.a11yExplain ?? models?.copilotAnswer ?? models?.template ?? models?.intentCloud ?? models?.intent;
+    if (!model) return false;
+    try {
+      await generateWithBudget(model, 'Reply with JSON only: {"ok":true}', CLOUD_FIRST_TIMEOUT_MS, 'cloud warm-up');
+      return true;
+    } catch (err) {
+      noteError('cloud warm-up', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // A schema or model error still means App Check and the connection ran,
+      // so later user calls can use the warm budget. Only a timeout stays cold.
+      if (!/timed out/i.test(msg)) {
+        markCloudSettled();
+        return true;
+      }
+      return false;
+    } finally {
+      if (!cloudSettled) warmPromise = null;
+    }
+  })();
+  return warmPromise;
 }
 
 /**
@@ -837,8 +952,6 @@ function extractJson(text: string): unknown {
   }
 }
 
-type ModelResponse = { text: () => string; inferenceSource?: string };
-
 /**
  * Hybrid call. In PREFER_ON_DEVICE the SDK does not fall back to the cloud if
  * the on-device prompt itself throws (or hangs), so retry once on the
@@ -1268,9 +1381,10 @@ export async function explainAccessibility(
       const prompt = withPreamble(
         `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
       );
-      const { response } = await withTimeout(
-        models.a11yExplain.generateContent(prompt),
-        CLOUD_GENERATE_TIMEOUT_MS,
+      const { response } = await generateWithBudget(
+        models.a11yExplain,
+        prompt,
+        cloudBudgetMs('short'),
         'a11y explain',
       );
       const items = coerceA11yExplanations(
@@ -1591,9 +1705,10 @@ export async function askCopilot(
   const models = await ensureModels();
   if (!models?.copilotAnswer) return null;
   try {
-    const { response } = await withTimeout(
-      models.copilotAnswer.generateContent(withPreamble(copilotAnswerPrompt(question, summary.slice(0, 1500), region))),
-      CLOUD_GENERATE_TIMEOUT_MS * 2,
+    const { response } = await generateWithBudget(
+      models.copilotAnswer,
+      withPreamble(copilotAnswerPrompt(question, summary.slice(0, 1500), region)),
+      cloudBudgetMs('long'),
       'copilot answer',
     );
     const raw = extractJson(response.text()) as { answer?: unknown; calls?: unknown; why?: unknown } | null;
@@ -1618,9 +1733,10 @@ export async function draftClientEmail(
   const models = await ensureModels();
   if (!models?.copilotEmail || items.length === 0) return null;
   try {
-    const { response } = await withTimeout(
-      models.copilotEmail.generateContent(withPreamble(emailPrompt(items, summary))),
-      CLOUD_GENERATE_TIMEOUT_MS * 2,
+    const { response } = await generateWithBudget(
+      models.copilotEmail,
+      withPreamble(emailPrompt(items, summary)),
+      cloudBudgetMs('long'),
       'client email',
     );
     const draft = coerceEmailDraft(extractJson(response.text()));
@@ -1642,9 +1758,10 @@ export async function proposeMaterials(
   const models = await ensureModels();
   if (!models?.copilotMaterials) return null;
   try {
-    const { response } = await withTimeout(
-      models.copilotMaterials.generateContent(withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`)),
-      CLOUD_GENERATE_TIMEOUT_MS * 2,
+    const { response } = await generateWithBudget(
+      models.copilotMaterials,
+      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`),
+      cloudBudgetMs('long'),
       'materials',
     );
     const plan = coerceMaterialPlan(extractJson(response.text()));
@@ -1655,4 +1772,18 @@ export async function proposeMaterials(
     noteError('materials', err);
     return null;
   }
+}
+
+/** Dev-only hook so a local headless probe can call cloud Gemini directly.
+ *  Stripped from production builds by `import.meta.env.DEV`. */
+if (import.meta.env.DEV) {
+  (globalThis as unknown as { __mcCloudProbe?: unknown }).__mcCloudProbe = {
+    prepareHybrid,
+    getHybridStatus,
+    warmCloud,
+    askCopilot,
+    draftClientEmail,
+    proposeMaterials,
+    explainAccessibility,
+  };
 }

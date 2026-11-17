@@ -35,6 +35,7 @@ import {
   resolveDeixis,
   verifyOp,
   prepareHybrid,
+  warmCloud,
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
@@ -2061,6 +2062,7 @@ siteChecklist.subscribe(refreshCopilot);
 net.subscribe((online) => {
   refreshCopilot();
   if (online) {
+    void warmCloud();
     void syncSite();
     const open = siteChecklist.open().length;
     if (open) {
@@ -2726,6 +2728,7 @@ net.subscribe((online) => {
   renderNetState();
   renderQueue();
   if (online) {
+    void warmCloud();
     const n = jobQueue.count();
     if (n) say(`Back online — running ${n} queued cloud job${n === 1 ? '' : 's'}.`);
     void drainQueue();
