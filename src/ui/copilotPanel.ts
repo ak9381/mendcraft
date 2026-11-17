@@ -111,9 +111,14 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   };
   for (const b of Object.values(tabBtns)) { b.setAttribute('role', 'tab'); tabs.appendChild(b); }
 
-  const busy = h('p', 'mc-cp-busy');
+  const busy = h('div', 'mc-cp-busy');
   busy.hidden = true;
   busy.setAttribute('role', 'status');
+  const busyText = h('p', 'mc-cp-busy-text');
+  const skel = h('div', 'mc-skel');
+  skel.setAttribute('aria-hidden', 'true');
+  skel.append(h('span', ''), h('span', ''), h('span', ''));
+  busy.append(busyText, skel);
 
   const body = h('div', 'mc-cp-body');
   root.append(head, tabs, busy, body);
@@ -330,7 +335,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     setReport(issues, r, summary, route) { region = r; report = issues ? { issues, region: r, summary, ...(route ? { route } : {}) } : null; if (!root.hidden) render(); },
     setAnswer(a) { answer = a; if (!root.hidden) render(); },
     setDraft(d) { draft = d; if (!root.hidden) render(); },
-    setBusy(text) { busy.hidden = !text; busy.textContent = text ?? ''; },
+    setBusy(text) { busy.hidden = !text; busyText.textContent = text ?? ''; },
     setSpeculativeStats(s) { specStats = s; if (!root.hidden) render(); },
   };
 }
