@@ -124,6 +124,7 @@ async function main() {
     };
 
     const measureN = Number(process.env.MEASURE || 0);
+    const skipJobs = process.env.ONLY_SPECULATIVE === '1';
     const gapMs = Number(process.env.GAP_MS || 0);
     if (measureN > 0 && page.evaluate) {
       const warmed = await page.evaluate(async () => {
@@ -157,7 +158,7 @@ async function main() {
         fn: async () => page.evaluate(async (summary) => {
           const res = await globalThis.__mcCloudProbe.proposeMaterials('warm evening lighting', summary);
           if (!res) return null;
-          return { source: res.source, ms: res.ms, rooms: res.plan?.rooms ? Object.keys(res.plan.rooms).length : 0, hasSun: Boolean(res.plan?.sun) };
+          return { source: res.source, ms: res.ms, model: res.model ?? null, rooms: res.plan?.rooms ? Object.keys(res.plan.rooms).length : 0, hasSun: Boolean(res.plan?.sun) };
         }, PLAN_SUMMARY),
         check: (res) => ({
           name: 'materials plan has rooms or lighting data',
@@ -173,7 +174,7 @@ async function main() {
             summary,
           );
           if (!res) return null;
-          return { source: res.source, ms: res.ms, subject: res.draft?.subject ?? '', bodyLen: (res.draft?.body ?? '').length };
+          return { source: res.source, ms: res.ms, model: res.model ?? null, subject: res.draft?.subject ?? '', bodyLen: (res.draft?.body ?? '').length };
         }, PLAN_SUMMARY),
         check: (res) => ({
           name: 'email draft has a subject and body',
@@ -188,7 +189,7 @@ async function main() {
             [{ id: 'door-bath', rule: 'door-width', message: 'Bathroom door is 700 mm; guideline minimum is 800 mm.', citation: 'ISO 21542' }],
             summary,
           );
-          return { source: res.source, items: (res.items ?? []).map((i) => ({ id: i.id, explanation: String(i.explanation ?? '').slice(0, 180) })) };
+          return { source: res.source, model: res.model ?? null, items: (res.items ?? []).map((i) => ({ id: i.id, explanation: String(i.explanation ?? '').slice(0, 180) })) };
         }, PLAN_SUMMARY),
         check: (res) => ({
           name: 'guideline explanation came from the cloud',
@@ -198,7 +199,7 @@ async function main() {
       },
     ];
 
-    if (measureN === 0) for (const job of jobs) {
+    if (measureN === 0 && !skipJobs) for (const job of jobs) {
       const t0 = Date.now();
       let result = null;
       let error = null;
@@ -225,7 +226,7 @@ async function main() {
       else report.accuracy.push({ name: job.check(null).name, pass: false, detail: error || 'no result' });
     }
 
-    if (measureN > 0) {
+    if (measureN > 0 && !skipJobs) {
       const stats = {};
       for (const job of jobs) {
         const runs = [];
@@ -251,7 +252,8 @@ async function main() {
           const lastFailKind = st.lastFailKind || result?.failKind || null;
 
           const ok = Boolean(result) && !error && source === 'cloud';
-          runs.push({ ok, source, ms, error: error || lastError, kind: lastFailKind, preview: result ? redact(JSON.stringify(result)).slice(0, 200) : null });
+          const model = result?.model ?? null;
+          runs.push({ ok, source, ms, model, error: error || lastError, kind: lastFailKind, preview: result ? redact(JSON.stringify(result)).slice(0, 200) : null });
           if (gapMs > 0 && !(i === measureN - 1 && job === jobs[jobs.length - 1])) {
             await new Promise((r) => setTimeout(r, gapMs));
           }
@@ -273,15 +275,105 @@ async function main() {
           median,
           worst: times.length ? times[times.length - 1] : null,
           min: times.length ? times[0] : null,
+          models: runs.map((r) => r.model),
         };
       }
       report.measure = stats;
     }
 
+    const runSpec = process.env.SPECULATIVE !== '0' || skipJobs;
+    if (runSpec) {
+      const questions = [
+        {
+          interim: 'Should we take down the wall',
+          final: 'Should we take down the wall between the kitchen and the living room?',
+          nano: 'Check whether the wall is load-bearing before taking it down.',
+        },
+        {
+          interim: 'Is a 700 mm bathroom door',
+          final: 'Is a 700 mm bathroom door wide enough for a wheelchair?',
+          nano: '700 mm is usually too narrow; most guidelines want about 800 mm or more.',
+        },
+        {
+          interim: 'What typical ceiling height',
+          final: 'What typical ceiling height should we use in a living room?',
+          nano: 'A typical living-room ceiling is about 2.7 to 3 metres.',
+        },
+        {
+          interim: 'Should the staircase go up',
+          final: 'Should the staircase go up clockwise or anticlockwise?',
+          nano: 'Either direction is fine if going and headroom meet the guideline; pick the one that fits the landing.',
+        },
+        {
+          interim: 'Can we open the kitchen',
+          final: 'Can we open the kitchen to the hall without a structural check?',
+          nano: 'No. Opening that wall needs a structural check first.',
+        },
+      ];
+      const spec = await page.evaluate(async ({ questions, summary, gapMs }) => {
+        const p = globalThis.__mcCloudProbe;
+        const timings = [];
+        const engine = p.createSpeculativeEngine({
+          debounceMs: 40,
+          online: () => true,
+          isHard: () => true,
+          isJudgement: () => true,
+          pickNano: async (text) => {
+            const q = questions.find((item) => text.startsWith(item.interim) || item.final.startsWith(text) || text.startsWith(item.final.slice(0, 24)));
+            return {
+              call: { tool: 'ask_gemini', args: {} },
+              confidence: 0.85,
+              answer: q?.nano || 'A short on-device guess.',
+            };
+          },
+          askCloud: async (text) => {
+            const res = await p.askCopilot(text, summary, 'International');
+            return res ? { answer: res.answer, calls: res.calls || [], why: res.why, model: res.model } : null;
+          },
+        });
+        for (const q of questions) {
+          const t0 = Date.now();
+          engine.onInterim(q.interim);
+          await new Promise((r) => setTimeout(r, 200));
+          const before = engine.getDraft();
+          const draftMs = before && before.state === 'draft' ? Date.now() - t0 : (before ? Date.now() - t0 : null);
+          const final = await engine.onFinal(q.final);
+          const d = final.draft || engine.getDraft();
+          const stats = engine.stats();
+          timings.push({
+            utterance: q.final,
+            draftMs,
+            confirmMs: d && d.confirmedAt ? Date.now() - t0 : null,
+            totalMs: Date.now() - t0,
+            state: d?.state ?? null,
+            agreed: d?.state === 'confirmed',
+            compared: stats.compared,
+            agreedSoFar: stats.agreed,
+            secondsSaved: stats.secondsSaved,
+            model: d?.geminiModel ?? null,
+            gemini: (d?.geminiAnswer || d?.answer || '').slice(0, 180),
+          });
+          if (gapMs) await new Promise((r) => setTimeout(r, gapMs));
+        }
+        return { timings, stats: engine.stats() };
+      }, { questions, summary: PLAN_SUMMARY, gapMs });
+      report.speculative = {
+        questions: spec.timings.length,
+        agreed: spec.stats.agreed,
+        compared: spec.stats.compared,
+        agreementRate: `${spec.stats.agreed}/${spec.stats.compared || spec.timings.length}`,
+        secondsSaved: spec.stats.secondsSaved,
+        runs: spec.timings,
+      };
+    }
+
+
     report.ok = report.appCheck?.appCheck === 'ready'
-      && (measureN > 0
-        ? Object.values(report.measure ?? {}).some((s) => s.ok > 0)
-        : report.calls.some((c) => c.ok));
+      && (skipJobs
+        ? Boolean(report.speculative && report.speculative.compared > 0)
+        : measureN > 0
+          ? Object.values(report.measure ?? {}).some((s) => s.ok > 0)
+          : report.calls.some((c) => c.ok));
   } catch (err) {
     report.error = redact(err.message || err);
   } finally {
@@ -289,7 +381,12 @@ async function main() {
       try { await browser.close(); } catch { /* */ }
     }
     if (proc) {
-      proc.kill('SIGTERM');
+      try { proc.stdout?.destroy(); } catch { /* */ }
+      try { proc.stderr?.destroy(); } catch { /* */ }
+      try { proc.kill('SIGTERM'); } catch { /* */ }
+      const killer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* */ } }, 1500);
+      try { proc.unref(); } catch { /* */ }
+      killer.unref?.();
     }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
@@ -300,6 +397,8 @@ async function main() {
       debugTokenKind: report.appCheck?.debugTokenKind ?? null,
       calls: report.calls.map((c) => ({ name: c.name, ok: c.ok, source: c.source, ms: c.ms, error: c.error })),
       measure: report.measure ?? null,
+      speculative: report.speculative ?? null,
+      gapMs: Number(process.env.GAP_MS || 0),
       warmed: report.warmed ?? null,
       accuracy: report.accuracy,
       error: report.error,

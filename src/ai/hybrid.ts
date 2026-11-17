@@ -47,6 +47,7 @@ import {
   classifyCloudFailure,
   delay,
   extractJson,
+  hasCompleteJson,
   HIGH_DEMAND_BACKOFF_MS,
   mergeStreamText,
   RATE_LIMIT_BACKOFF_MS,
@@ -196,6 +197,7 @@ interface Models {
   langDetect?: TextGenModel | null;
   /** Accessibility explainer (ONLY_IN_CLOUD, a11y-explain schema). */
   a11yExplain?: TextGenModel | null;
+  a11yExplainHedge?: TextGenModel | null;
   /** On-device hand-profile picker (PREFER_ON_DEVICE, numbers-only; never cloud). */
   handAdapt?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
@@ -220,7 +222,9 @@ interface Models {
   /** Backup cloud model (gemini-3.1-flash-lite) for hedged copilot answers. */
   copilotAnswerHedge?: TextGenModel | null;
   copilotEmail?: TextGenModel | null;
+  copilotEmailHedge?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
+  copilotMaterialsHedge?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -236,6 +240,7 @@ export interface ModelOverrides {
   fusionLang?: TextGenModel | null;
   langDetect?: TextGenModel | null;
   a11yExplain?: TextGenModel | null;
+  a11yExplainHedge?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
@@ -250,7 +255,9 @@ export interface ModelOverrides {
   copilotAnswer?: TextGenModel | null;
   copilotAnswerHedge?: TextGenModel | null;
   copilotEmail?: TextGenModel | null;
+  copilotEmailHedge?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
+  copilotMaterialsHedge?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -412,6 +419,12 @@ export async function generateWithBudget(
           if (safe.text) {
             latest = mergeStreamText(latest, safe.text);
             try { onChunk?.(latest); } catch { /* UI preview must not fail the call */ }
+            // The SDK's final `response` sometimes hangs for seconds after the
+            // last useful chunk. Once we have a fully closed JSON value, stop.
+            if (hasCompleteJson(latest)) {
+              markCloudSettled();
+              return { text: () => latest, inferenceSource: chunk.inferenceSource ?? inferenceSource };
+            }
           }
           if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
         }
@@ -594,6 +607,7 @@ async function ensureModels(): Promise<Models | null> {
       fusionLang: testOverrides.fusionLang ?? null,
       langDetect: testOverrides.langDetect ?? null,
       a11yExplain: testOverrides.a11yExplain ?? null,
+      a11yExplainHedge: testOverrides.a11yExplainHedge ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
@@ -608,7 +622,9 @@ async function ensureModels(): Promise<Models | null> {
       copilotAnswer: testOverrides.copilotAnswer ?? null,
       copilotAnswerHedge: testOverrides.copilotAnswerHedge ?? null,
       copilotEmail: testOverrides.copilotEmail ?? null,
+      copilotEmailHedge: testOverrides.copilotEmailHedge ?? null,
       copilotMaterials: testOverrides.copilotMaterials ?? null,
+      copilotMaterialsHedge: testOverrides.copilotMaterialsHedge ?? null,
     };
   }
   if (!isEnabled()) {
@@ -662,7 +678,6 @@ async function initFirebase(): Promise<Models | null> {
     // truth (the mode's opConstraint) for both the Nano and cloud schemas.
     const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
     const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
-    const a11ySchema = toFirebaseSchema(buildA11yConstraint(modeAi.opConstraint), Schema);
 
     const intent = getGenerativeModel(ai, {
       mode: InferenceMode.PREFER_ON_DEVICE,
@@ -773,14 +788,6 @@ async function initFirebase(): Promise<Models | null> {
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
     });
-    const a11yExplain = getGenerativeModel(ai, {
-      mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: a11ySchema },
-      },
-    });
-
     // Hand-adaptive input: ONLY_ON_DEVICE, with NO inCloudParams at all. The raw
     // hand numbers must never leave the device, and ONLY_ON_DEVICE gives the SDK
     // no cloud transport to fall back to (it errors instead of going to cloud if
@@ -894,11 +901,16 @@ async function initFirebase(): Promise<Models | null> {
       ? null
       : cloudJson(COPILOT_ANSWER_CONSTRAINT, HEDGE_CLOUD_MODEL);
     const copilotEmail = cloudJson(EMAIL_CONSTRAINT);
+    const copilotEmailHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(EMAIL_CONSTRAINT, HEDGE_CLOUD_MODEL);
     const copilotMaterials = cloudJson(MATERIAL_CONSTRAINT);
+    const copilotMaterialsHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(MATERIAL_CONSTRAINT, HEDGE_CLOUD_MODEL);
+    const a11yConstraint = buildA11yConstraint(modeAi.opConstraint);
+    const a11yExplain = cloudJson(a11yConstraint);
+    const a11yExplainHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(a11yConstraint, HEDGE_CLOUD_MODEL);
 
     cached = {
-      cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotMaterials,
-      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
+      cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
@@ -1468,9 +1480,39 @@ async function requestJson<T>(
   return { value: result.value, source: result.source };
 }
 
+/** Structured JSON call with a 2 s hedge to gemini-3.1-flash-lite. */
+async function requestHedgedJson<T>(
+  primary: TextGenModel | null | undefined,
+  backup: TextGenModel | null | undefined,
+  prompt: string,
+  budgetMs: number,
+  label: string,
+  coerce: (raw: unknown) => T | null,
+  onChunk?: (text: string) => void,
+): Promise<{ value: T; source: Source; model: string; ms: number } | null> {
+  if (!primary) return null;
+  const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
+  const raced = await raceHedged({
+    primary: () => requestJson(primary, prompt, budgetMs, label, coerce, onChunk)
+      .then((got) => got ?? null),
+    backup: backup
+      ? () => requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce)
+        .then((got) => got ?? null)
+      : undefined,
+    hedgeAfterMs: HEDGE_AFTER_MS,
+    primaryModel,
+    backupModel: HEDGE_CLOUD_MODEL,
+  });
+  if (!raced) return null;
+  console.info(`[mendcraft] ${label} hedge: ${raced.model} won in ${raced.ms} ms`);
+  return { value: raced.value.value, source: raced.value.source, model: raced.model, ms: raced.ms };
+}
+
 export interface ExplainA11yResult {
   items: A11yExplanation[];
   source: Source;
+  model?: string;
+  ms?: number;
 }
 
 const A11Y_EXPLAIN_PROMPT = `You are an accessibility reviewer inside a design tool. The tool's own CODE already measured each issue below against the cited standard — do not re-measure or dispute the numbers. For EACH issue, write a short plain-language "explanation" (max 2 sentences: why it matters for the user, and what the fix does), keeping the cited standard's name. Optionally propose a "fix" as ONE op from the vocabulary below when a single op would resolve the issue. Reply JSON only: {"items":[{"id":"<issue id>","explanation":"...","fix":{...}?}]}.`;
@@ -1493,8 +1535,9 @@ export async function explainAccessibility(
       const prompt = withPreamble(
         `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
       );
-      const got = await requestJson(
+      const got = await requestHedgedJson(
         models.a11yExplain,
+        models.a11yExplainHedge,
         prompt,
         cloudBudgetMs('short'),
         'a11y explain',
@@ -1509,7 +1552,7 @@ export async function explainAccessibility(
       );
       if (got) {
         recordInference(got.source, 'a11y-explain', Date.now() - t0);
-        return { items: got.value, source: got.source };
+        return { items: got.value, source: got.source, model: got.model, ms: Date.now() - t0 };
       }
     } catch (err) {
       noteError('a11y explain model', err);
@@ -1856,25 +1899,18 @@ export async function askCopilot(
       if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
     };
     const prompt = withPreamble(copilotAnswerPrompt(question, summary, region));
-    const budget = cloudBudgetMs('long');
-    const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
-    const run = (model: NonNullable<Models['copilotAnswer']>, label: string) =>
-      requestJson(model, prompt, budget, label, coerceCopilotAnswer, onChunk ? peek : undefined)
-        .then((got) => got ? { ...got.value, source: got.source } : null);
-
-    const raced = await raceHedged({
-      primary: () => run(models.copilotAnswer!, 'copilot answer'),
-      backup: models.copilotAnswerHedge
-        ? () => run(models.copilotAnswerHedge!, 'copilot answer (3.1)')
-        : undefined,
-      hedgeAfterMs: HEDGE_AFTER_MS,
-      primaryModel,
-      backupModel: HEDGE_CLOUD_MODEL,
-    });
-    if (!raced) return null;
-    console.info(`[mendcraft] copilot hedge: ${raced.model} won in ${raced.ms} ms`);
+    const got = await requestHedgedJson(
+      models.copilotAnswer,
+      models.copilotAnswerHedge,
+      prompt,
+      cloudBudgetMs('long'),
+      'copilot answer',
+      coerceCopilotAnswer,
+      onChunk ? peek : undefined,
+    );
+    if (!got) return null;
     recordInference('cloud', 'copilot-answer', Date.now() - t0);
-    return { ...raced.value, source: raced.value.source, ms: Date.now() - t0, model: raced.model };
+    return { ...got.value, source: got.source, ms: Date.now() - t0, model: got.model };
   } catch (err) {
     noteError('copilot answer', err);
     return null;
@@ -1886,13 +1922,14 @@ export async function askCopilot(
 export async function draftClientEmail(
   items: { question: string; answer?: string }[],
   summary: string,
-): Promise<{ draft: EmailDraft; source: Source; ms: number } | null> {
+): Promise<{ draft: EmailDraft; source: Source; ms: number; model?: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.copilotEmail || items.length === 0) return null;
   try {
-    const got = await requestJson(
+    const got = await requestHedgedJson(
       models.copilotEmail,
+      models.copilotEmailHedge,
       withPreamble(emailPrompt(items, summary)),
       cloudBudgetMs('long'),
       'client email',
@@ -1900,7 +1937,7 @@ export async function draftClientEmail(
     );
     if (!got) return null;
     recordInference('cloud', 'client-email', Date.now() - t0);
-    return { draft: got.value, source: got.source, ms: Date.now() - t0 };
+    return { draft: got.value, source: got.source, ms: Date.now() - t0, model: got.model };
   } catch (err) {
     noteError('client email', err);
     return null;
@@ -1911,13 +1948,14 @@ export async function draftClientEmail(
 export async function proposeMaterials(
   request: string,
   summary: string,
-): Promise<{ plan: MaterialPlan; source: Source; ms: number } | null> {
+): Promise<{ plan: MaterialPlan; source: Source; ms: number; model?: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.copilotMaterials) return null;
   try {
-    const got = await requestJson(
+    const got = await requestHedgedJson(
       models.copilotMaterials,
+      models.copilotMaterialsHedge,
       withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`),
       cloudBudgetMs('long'),
       'materials',
@@ -1925,7 +1963,7 @@ export async function proposeMaterials(
     );
     if (!got) return null;
     recordInference('cloud', 'materials', Date.now() - t0);
-    return { plan: got.value, source: got.source, ms: Date.now() - t0 };
+    return { plan: got.value, source: got.source, ms: Date.now() - t0, model: got.model };
   } catch (err) {
     noteError('materials', err);
     return null;

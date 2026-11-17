@@ -83,6 +83,23 @@ describe('streaming timeout keeps partial JSON', () => {
     expect(res.items[0]?.explanation).toMatch(/700|narrow/i);
   });
 
+  it('returns as soon as the stream has complete JSON, without waiting for the final response', async () => {
+    const json = '{"items":[{"id":"door-bath","explanation":"Too narrow for a wheelchair."}]}';
+    const model = {
+      generateContent: () => new Promise<{ response: { text: () => string } }>(() => {}),
+      generateContentStream: async () => ({
+        stream: (async function* () {
+          yield { text: () => json, inferenceSource: 'in_cloud' };
+          await new Promise(() => {});
+        })(),
+        response: new Promise<{ text: () => string }>(() => {}),
+      }),
+    };
+    const { response } = await generateWithBudget(model, 'explain', 20_000, 'early-json');
+    expect(response.text()).toBe(json);
+    expect(response.inferenceSource).toBe('in_cloud');
+  });
+
   it('falls back to rules when a hung call has no usable JSON', async () => {
     vi.useFakeTimers();
     setModelsForTest({

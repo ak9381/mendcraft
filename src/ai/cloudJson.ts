@@ -71,6 +71,55 @@ export function extractJson(text: string): unknown {
   return null;
 }
 
+/**
+ * True only when the text already contains a fully closed JSON object or
+ * array. Truncated streams must not count — firstBalanced pads those so
+ * extractJson can salvage a timeout, but a mid-stream early return must wait
+ * for the real close.
+ */
+export function hasCompleteJson(text: string): boolean {
+  if (typeof text !== 'string' || !text.trim()) return false;
+  const stripped = text.replace(FENCE_RE, '').trim();
+  const startObj = stripped.indexOf('{');
+  const startArr = stripped.indexOf('[');
+  let start = -1;
+  let open = '{';
+  let close = '}';
+  if (startObj >= 0 && (startArr < 0 || startObj < startArr)) start = startObj;
+  else if (startArr >= 0) {
+    start = startArr;
+    open = '[';
+    close = ']';
+  }
+  if (start < 0) return false;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < stripped.length; i++) {
+    const c = stripped[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) {
+        const slice = stripped.slice(start, i + 1);
+        for (const variant of [slice, repairJson(slice)]) {
+          try {
+            JSON.parse(variant);
+            return true;
+          } catch { /* try the other variant */ }
+        }
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
 function blobOf(err: unknown, text = ''): string {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   const extra = err && typeof err === 'object' ? JSON.stringify(err).slice(0, 500) : '';
