@@ -64,6 +64,14 @@ export function looksReadyToGuess(text: string, minWords = SPECULATIVE_MIN_WORDS
   return /[?]$/.test(t) && words.length >= 3;
 }
 
+/** True when `next` is the same spoken utterance as `prev`, possibly longer or trimmed. */
+export function isSameUtterance(prev: string, next: string): boolean {
+  const a = prev.trim().toLowerCase().replace(/\s+/g, ' ');
+  const b = next.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!a || !b) return false;
+  return a === b || b.startsWith(a) || a.startsWith(b);
+}
+
 export function transcriptChangedMaterially(prev: string, next: string): boolean {
   const a = prev.trim().toLowerCase().replace(/\s+/g, ' ');
   const b = next.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -145,6 +153,13 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
   const startDraft = async (text: string, allowEarlyCloud: boolean): Promise<SpeculativeDraft | null> => {
     const id = `g${++seq}`;
     const visibleAt = now();
+    const gen = generation;
+    // Start Gemini immediately — do not wait for Nano.
+    if (allowEarlyCloud && deps.online() && deps.askCloud && !earlyCloudFor && (deps.isHard?.(text) || deps.isJudgement?.(text) || /[?]/.test(text))) {
+      earlyCloudFor = id;
+      earlyCloudText = text;
+      earlyCloudPromise = deps.askCloud(text);
+    }
     const plan = deps.answerPlan?.(text);
     let answer = plan?.text;
     let tool: string | undefined;
@@ -160,24 +175,28 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
         if (pick.answer) answer = pick.answer;
       }
     }
-    if (!answer && !tool) {
-      // Still allow an early cloud call with no Nano draft.
-    } else {
+    // A faster cloud result must not hide Nano's guess; only write a draft
+    // if Gemini has not already confirmed or corrected this utterance.
+    if ((answer || tool) && !(draft && draft.geminiAnswer && draft.state !== 'draft')) {
       draft = {
         id, utterance: text, state: 'draft', answer, tool, args, why, visibleAt,
       };
     }
-
-    if (allowEarlyCloud && deps.online() && deps.askCloud && !earlyCloudFor && (deps.isHard?.(text) || deps.isJudgement?.(text) || /[?]/.test(text))) {
-      earlyCloudFor = id;
-      earlyCloudText = text;
-      earlyCloudPromise = deps.askCloud(text);
-    }
     notify();
+    if (earlyCloudPromise) {
+      void earlyCloudPromise.then((cloud) => {
+        if (!cloud || gen !== generation) return;
+        if (draft && draft.geminiAnswer && draft.state !== 'draft') return;
+        applyCloud(cloud, text);
+      });
+    }
     return draft;
   };
 
   const applyCloud = (cloud: SpeculativeCloudAnswer, fromText: string): void => {
+    if (draft && draft.geminiAnswer && draft.state !== 'draft' && !transcriptChangedMaterially(draft.utterance, fromText)) {
+      return;
+    }
     if (!draft) {
       draft = {
         id: `g${++seq}`,
@@ -193,6 +212,7 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
         confirmedAt: now(),
       };
       draft.state = 'confirmed';
+      notify();
       return;
     }
     stats.compared += 1;
@@ -254,16 +274,42 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
     onInterim(text: string) {
       const t = text.trim();
       if (!t) return;
+      // A new utterance after a settled guess starts a fresh draft + early call.
+      // More words of the same question must not wipe a mid-speech confirmation.
+      if (draft && draft.state !== 'draft') {
+        if (isSameUtterance(draft.utterance, t)) return;
+        draft = null;
+        earlyCloudFor = null;
+        earlyCloudText = '';
+        earlyCloudPromise = null;
+        generation += 1;
+      }
       schedule(t);
     },
     async onFinal(text: string) {
       const t = text.trim();
       generation += 1;
+      const debounceOpen = !!timer;
       clearTimer();
       pending = null;
-      if (flushWait) await flushWait;
+      if (debounceOpen && flushResolve) {
+        flushResolve();
+        flushResolve = null;
+        flushWait = null;
+      } else if (flushWait) {
+        await flushWait;
+      }
 
       if (!t) return { handled: false, draft };
+
+      // A finalized draft from a previous, different question must not be reused.
+      // A longer final of the same utterance keeps the draft and may re-ask Gemini.
+      if (draft && draft.state !== 'draft' && !isSameUtterance(draft.utterance, t)) {
+        draft = null;
+        earlyCloudFor = null;
+        earlyCloudText = '';
+        earlyCloudPromise = null;
+      }
 
       // If no draft yet, start one from the final text (typed commands, or
       // a final that arrived before the debounce).
