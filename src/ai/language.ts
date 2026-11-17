@@ -210,6 +210,12 @@ export function languageBadgeLabel(
   lang: Language,
   translated: boolean,
 ): string {
+  if (reason === 'handed-off') {
+    if (translated && shouldTranslate(lang) && source !== 'rules') {
+      return `Nano → Gemini · ${lang.englishName}`;
+    }
+    return badgeLabel(source, reason);
+  }
   if (translated && shouldTranslate(lang) && source !== 'rules') {
     return `${SOURCE_TEXT[source]} · ${lang.englishName}`;
   }

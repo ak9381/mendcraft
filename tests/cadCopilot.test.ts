@@ -9,8 +9,8 @@ import { checkGuidelines, guidelineSet, roomKind, GUIDELINE_LABEL, GUIDELINE_NOT
 import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/cad/stairs';
 import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
-import { parseCopilot, regionFromWords } from '../src/cad/copilot';
-import { coerceMaterialPlan, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
+import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent } from '../src/cad/copilot';
+import { coerceMaterialPlan, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
 import { filterLayers, layerFromWords } from '../src/cad/layers';
 import { fixtureSymbol } from '../src/plan/fixtures';
 
@@ -237,5 +237,38 @@ describe('layers (view only)', () => {
     expect(filterLayers(d, new Set(['furniture'])).fixtures.length).toBe(0);
     expect(d.fixtures.length).toBe(1);
     expect(layerFromWords('the dimensions')).toBe('dims');
+  });
+});
+
+describe('Nano-first copilot routing', () => {
+  it('keeps accept / reject / walk-stop on rules even when Nano is ready', () => {
+    expect(isInstantCopilot(parseCopilot('accept'))).toBe(true);
+    expect(isInstantCopilot(parseCopilot('reject all'))).toBe(true);
+    expect(isInstantCopilot(parseCopilot('stop', { walking: true }))).toBe(true);
+    expect(isInstantCopilot(parseCopilot('convert 2D to 3D'))).toBe(false);
+    expect(isInstantCopilot(parseCopilot('check my plan'))).toBe(false);
+  });
+
+  it('offers recognised canvas tools to Nano when the on-device model is ready', () => {
+    const convert = parseCopilot('convert 2D to 3D');
+    expect(shouldNanoPickIntent(true, convert)).toBe(true);
+    expect(shouldNanoPickIntent(false, convert)).toBe(false);
+    expect(shouldNanoPickIntent(true, parseCopilot('accept'))).toBe(false);
+    expect(shouldNanoPickIntent(true, parseCopilot('hello there'))).toBe(false);
+    expect(cadToolPrompt('{}')).toMatch(/set_materials/);
+    expect(describeCall({ tool: 'set_materials', args: { style: 'convert 2D to 3D' } })).toMatch(/3D view/);
+  });
+});
+
+describe('set_materials change-log op', () => {
+  it('round-trips a materials proposal and drops junk', () => {
+    const plan = MATERIAL_PRESETS.warm;
+    const op = makeSetMaterialsOp(plan, MATERIAL_PRESETS.default, false);
+    expect(isSetMaterialsOp(op)).toBe(true);
+    const got = coerceSetMaterialsOp(op);
+    expect(got?.plan.label).toBe('Warm home');
+    expect(got?.previous3d).toBe(false);
+    expect(coerceSetMaterialsOp({ op: 'add_room' })).toBeNull();
+    expect(coerceSetMaterialsOp({ op: 'set_materials', plan: { walls: { color: 'nope' } } })).toBeNull();
   });
 });

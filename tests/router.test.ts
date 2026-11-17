@@ -165,6 +165,7 @@ describe('badgeLabel', () => {
     expect(badgeLabel('rules', 'exact')).toBe('Rules · exact command');
     expect(badgeLabel('rules', 'offline')).toBe('Rules · offline');
     expect(badgeLabel('rules', 'fallback')).toBe('Rules · fallback');
+    expect(badgeLabel('cloud', 'handed-off')).toBe('Nano → Gemini');
   });
 });
 
