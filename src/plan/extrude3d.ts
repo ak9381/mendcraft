@@ -167,6 +167,10 @@ export function createExtrudeView(
       m.color.set(look.color);
       m.roughness = look.roughness;
       m.metalness = 0;
+      // A little emissive lift so interior faces (no bounced light) still
+      // show the chosen colour — white paint stays white, oak stays warm.
+      m.emissive.set(look.color);
+      m.emissiveIntensity = 0.18;
       m.needsUpdate = true;
     };
     set(material, plan.walls);
@@ -180,13 +184,12 @@ export function createExtrudeView(
     const v = sunVector(l);
     sun.position.set(v.x, v.y, v.z);
     hemi.color.set(0xffffff);
-    hemi.intensity = Math.max(l.ambientIntensity, 0.9);
-    // Keep a readable interior fill; evening skies stay dimmer but not black.
+    hemi.intensity = Math.max(l.ambientIntensity, 1.15);
     const sky = new THREE.Color(l.skyColor);
     const skyLum = sky.r * 0.21 + sky.g * 0.72 + sky.b * 0.07;
     fill.intensity = skyLum < 0.25
-      ? Math.max(0.28, l.ambientIntensity * 0.35)
-      : Math.max(0.5, l.ambientIntensity * 0.35);
+      ? Math.max(0.35, l.ambientIntensity * 0.4)
+      : Math.max(0.75, l.ambientIntensity * 0.45);
     scene.background = sky;
   }
 

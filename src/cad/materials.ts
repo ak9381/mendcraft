@@ -147,19 +147,27 @@ function luminance(hexColor: string): number {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
 
+function isNearGrey(hexColor: string): boolean {
+  const n = parseInt(hexColor.slice(1), 16);
+  if (Number.isNaN(n)) return false;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return Math.max(r, g, b) - Math.min(r, g, b) < 28;
+}
+
 /** Hex first, then a colour word on the colour field, then a guess from the
- *  material name. If the name says white/oak but the hex is clearly too dark,
- *  prefer the named look so walls actually read white and floors read oak. */
+ *  material name. If the name says white/oak but the hex is grey, muddy, or
+ *  too dark, prefer the named look so walls actually read white and floors
+ *  read light oak — not the default grey card. */
 function resolveLookColor(color: unknown, name: string, fb: string): string {
   const fromHex = parseHexColor(color);
   const fromWord = typeof color === 'string' ? colorFromMaterialName(color) : null;
   const fromName = colorFromMaterialName(name);
   const resolved = fromHex ?? fromWord ?? fromName ?? fb;
   const label = `${typeof color === 'string' ? color : ''} ${name}`.toLowerCase();
-  if (fromName && /\b(white|ivory|cream)\b/.test(label) && luminance(resolved) < 0.65) {
+  if (fromName && /\b(white|ivory|cream)\b/.test(label) && (luminance(resolved) < 0.9 || isNearGrey(resolved))) {
     return fromName;
   }
-  if (fromName && /\b(oak|parquet)\b/.test(label) && luminance(resolved) < 0.35) {
+  if (fromName && /\b(oak|parquet)\b/.test(label) && (luminance(resolved) < 0.55 || isNearGrey(resolved))) {
     return fromName;
   }
   return resolved;

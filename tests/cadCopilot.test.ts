@@ -245,6 +245,13 @@ describe('3D materials (data, no image model)', () => {
     });
     expect(dark?.walls.color).toBe('#f7f6f2');
     expect(dark?.floor.color).toBe('#e4c9a0');
+    const grey = coerceMaterialPlan({
+      walls: { name: 'matte white paint', color: '#cbd5e1' },
+      floor: { name: 'light oak parquet', color: '#e5e7eb' },
+      lighting: { ambientIntensity: 1 },
+    });
+    expect(grey?.walls.color).toBe('#f7f6f2');
+    expect(grey?.floor.color).toBe('#e4c9a0');
   });
 });
 
