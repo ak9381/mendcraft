@@ -22,6 +22,8 @@ export interface SpeculativeDraft {
   /** Set when Gemini confirmed or replaced the guess. */
   geminiAnswer?: string;
   geminiModel?: string;
+  /** True only when Nano (or a local plan read) actually produced the guess. */
+  fromNano?: boolean;
 }
 
 export interface SpeculativeStats {
@@ -192,7 +194,7 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
     // if Gemini has not already confirmed or corrected this utterance.
     if ((answer || tool) && !(draft && draft.geminiAnswer && draft.state !== 'draft')) {
       draft = {
-        id, utterance: text, state: 'draft', answer, tool, args, why, visibleAt,
+        id, utterance: text, state: 'draft', answer, tool, args, why, visibleAt, fromNano: true,
       };
     }
     notify();
@@ -218,11 +220,12 @@ export function createSpeculativeEngine(deps: SpeculativeDeps): SpeculativeEngin
         answer: cloud.answer,
         tool: cloud.calls[0]?.tool,
         args: cloud.calls[0]?.args,
-        why: 'Gemini · cloud',
+        why: cloud.why || undefined,
         visibleAt: now(),
         geminiAnswer: cloud.answer,
         geminiModel: cloud.model,
         confirmedAt: now(),
+        fromNano: false,
       };
       draft.state = 'confirmed';
       notify();

@@ -9,6 +9,7 @@
 // DOM only; the state lives in cad/changeLog and cad/siteChecklist.
 
 import { ACTOR_LABEL, agoLabel, type ChangeEntry } from '../cad/changeLog';
+import { formatRouteLine, type RouteInfo } from '../cad/routeReason';
 import { GUIDELINE_LABEL, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineIssue, type RegionId } from '../cad/guidelines';
 import type { ChecklistItem, EmailDraft } from '../cad/siteChecklist';
 
@@ -22,6 +23,8 @@ export interface CopilotAnswerView {
   /** Speculative Copilot: this answer is a pending guess. */
   guess?: boolean;
   confirmed?: boolean;
+  /** Factual routing line, derived from the real decision — never invented. */
+  route?: RouteInfo;
 }
 
 export interface SpeculativeStatsView {
@@ -55,9 +58,9 @@ export interface CopilotPanel {
   tab(): CopilotTab;
   setChanges(entries: ChangeEntry[]): void;
   setChecklist(items: ChecklistItem[], online: boolean): void;
-  setReport(issues: GuidelineIssue[] | null, region: RegionId, summary: string): void;
+  setReport(issues: GuidelineIssue[] | null, region: RegionId, summary: string, route?: RouteInfo): void;
   setAnswer(a: CopilotAnswerView | null): void;
-  setDraft(d: { draft: EmailDraft; by: string } | null): void;
+  setDraft(d: { draft: EmailDraft; by: string; route?: RouteInfo } | null): void;
   setBusy(text: string | null): void;
   setSpeculativeStats(s: SpeculativeStatsView | null): void;
 }
@@ -74,6 +77,15 @@ function btn(label: string, cls: string, onClick: () => void, aria?: string): HT
   if (aria) b.setAttribute('aria-label', aria);
   b.addEventListener('click', onClick);
   return b;
+}
+
+function routeLine(route?: RouteInfo, fallback = ''): HTMLParagraphElement | null {
+  const text = route ? formatRouteLine(route) : fallback;
+  if (!text) return null;
+  const p = h('p', 'mc-cp-by mc-cp-route');
+  const sr = h('span', 'sr-only', 'Route reason: ');
+  p.append(sr, document.createTextNode(text));
+  return p;
 }
 
 const STATUS_LABEL: Record<ChangeEntry['status'], string> = {
@@ -110,10 +122,10 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   let changes: ChangeEntry[] = [];
   let items: ChecklistItem[] = [];
   let online = true;
-  let report: { issues: GuidelineIssue[]; region: RegionId; summary: string } | null = null;
+  let report: { issues: GuidelineIssue[]; region: RegionId; summary: string; route?: RouteInfo } | null = null;
   let region: RegionId = 'international';
   let answer: CopilotAnswerView | null = null;
-  let draft: { draft: EmailDraft; by: string } | null = null;
+  let draft: { draft: EmailDraft; by: string; route?: RouteInfo } | null = null;
   let specStats: SpeculativeStatsView | null = null;
 
   function changeCard(e: ChangeEntry, review: boolean): HTMLElement {
@@ -127,7 +139,15 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     top.append(h('span', `mc-cp-who who-${e.actor}${e.tag ? ' mc-cp-tag-' + e.tag : ''}`, who), h('span', 'mc-cp-when', agoLabel(e.decidedAt ?? e.at)));
     const what = h('p', 'mc-cp-what', e.title);
     card.append(top, what);
-    if (e.why) card.appendChild(h('p', 'mc-cp-why', `Why: ${e.why}`));
+    const routeEl = routeLine(e.route);
+    if (routeEl) card.appendChild(routeEl);
+    if (e.why) {
+      const why = e.why.trim();
+      const line = e.route ? formatRouteLine(e.route) : '';
+      if (!line || (why && why !== e.route?.reason && !line.includes(why))) {
+        card.appendChild(h('p', 'mc-cp-why', `Why: ${e.why}`));
+      }
+    }
     const ba = h('p', 'mc-cp-ba');
     ba.textContent = e.after ? `Before: ${e.before}  →  After: ${e.after}` : `Plan now: ${e.before}`;
     card.appendChild(ba);
@@ -158,7 +178,9 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
 
     if (answer) {
       const a = h('div', `mc-cp-sec mc-cp-answer${answer.guess ? ' mc-cp-guess' : ''}${answer.confirmed ? ' mc-cp-confirmed' : ''}`);
-      a.append(h('h3', '', answer.question), h('p', 'mc-cp-answer-text', answer.text), h('p', 'mc-cp-by', answer.by));
+      a.append(h('h3', '', answer.question), h('p', 'mc-cp-answer-text', answer.text));
+      const line = routeLine(answer.route, answer.by);
+      if (line) a.appendChild(line);
       body.appendChild(a);
     }
     if (specStats && specStats.compared > 0) {
@@ -188,6 +210,8 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     g.append(gh, h('p', 'mc-cp-note', GUIDELINE_NOTE));
     if (report) {
       g.appendChild(h('p', 'mc-cp-summary', report.summary));
+      const gRoute = routeLine(report.route);
+      if (gRoute) g.appendChild(gRoute);
       const ul = h('ul', 'mc-cp-issues');
       for (const i of report.issues) {
         const li = h('li', `mc-cp-issue sev-${i.severity}`);
@@ -239,7 +263,8 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     if (draft) {
       const d = h('div', 'mc-cp-sec mc-cp-draft');
       d.appendChild(h('h3', '', 'Email draft. Nothing is sent from here.'));
-      d.appendChild(h('p', 'mc-cp-by', draft.by));
+      const dLine = routeLine(draft.route, draft.by);
+      if (dLine) d.appendChild(dLine);
       const to = h('input', 'mc-cp-to');
       to.type = 'email';
       to.placeholder = 'Client email (optional)';
@@ -302,7 +327,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     tab: () => current,
     setChanges(e) { changes = e; if (!root.hidden) render(); },
     setChecklist(i, on) { items = i; online = on; if (!root.hidden) render(); },
-    setReport(issues, r, summary) { region = r; report = issues ? { issues, region: r, summary } : null; if (!root.hidden) render(); },
+    setReport(issues, r, summary, route) { region = r; report = issues ? { issues, region: r, summary, ...(route ? { route } : {}) } : null; if (!root.hidden) render(); },
     setAnswer(a) { answer = a; if (!root.hidden) render(); },
     setDraft(d) { draft = d; if (!root.hidden) render(); },
     setBusy(text) { busy.hidden = !text; busy.textContent = text ?? ''; },
