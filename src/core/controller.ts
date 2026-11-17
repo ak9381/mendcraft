@@ -122,6 +122,8 @@ export interface ViewportHandle {
   setMaterials?(plan: unknown): Promise<void>;
   /** The materials/lighting currently on the 3D view, if any. */
   currentMaterials?(): unknown;
+  /** Brief status hint on the canvas (auto-hides unless used for errors). */
+  showHint?(text: string, opts?: { sticky?: boolean }): void;
   /** 3D first-person walkthrough. Turns the 3D view on if needed. */
   walk?(on: boolean, room?: string): Promise<boolean>;
   walkStep?(step: string): void;

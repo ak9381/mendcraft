@@ -307,7 +307,7 @@ app.innerHTML = `
       <span id="conf-state" class="conf-state" hidden></span>
     </span>
     <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
-    <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
+    <span class="status-chip"><span class="status-k">Nano</span><span id="model-state" class="status-v">checking…</span></span>
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
@@ -346,16 +346,16 @@ app.innerHTML = `
       <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
       <div id="more-menu" class="more-menu" role="menu" hidden>
         <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
-        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
-        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
+        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gesture guide</button>
+        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">Pointer comfort</button>
         <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
         <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
         <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
         <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
-        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
+        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair an iPad or phone as a remote and a second camera (scan a QR)">Pair iPad or phone</button>
         <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
         <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
-        <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
+        <button id="btn-a11y" type="button" class="ghost" title="Guideline check: door widths, stairs, room sizes. Never certified code compliance. Also say “check the plan”.">Guideline check</button>
         <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
         <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
         <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
@@ -387,6 +387,10 @@ const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
 const trackingStateEl = el<HTMLSpanElement>('tracking-state');
+function setTracking(text: string): void {
+  trackingStateEl.textContent = text;
+  trackingStateEl.closest('.status-chip')?.classList.toggle('is-live', text !== 'camera off');
+}
 const listenChip = el<HTMLSpanElement>('listen-chip');
 const listenStateEl = el<HTMLSpanElement>('listen-state');
 const pinchMeterEl = el<HTMLSpanElement>('pinch-meter');
@@ -719,6 +723,28 @@ setPanelOpen(false);
   island.remove();
 })();
 
+(function dockAsk(): void {
+  const form = document.getElementById('command-box');
+  const topbar = document.getElementById('topbar');
+  if (!form || !topbar || !topbar.parentElement) return;
+  form.classList.add('mc-ask');
+  const input = document.getElementById('command-input');
+  if (input instanceof HTMLInputElement) {
+    input.placeholder = 'Say it, or type here';
+    input.setAttribute('aria-label', 'Say or type a command');
+  }
+  const cluster = document.createElement('div');
+  cluster.className = 'mc-session-cluster';
+  cluster.setAttribute('role', 'group');
+  cluster.setAttribute('aria-label', 'Session');
+  topbar.parentElement.insertBefore(cluster, topbar);
+  cluster.append(form, topbar);
+  for (const sel of ['#last-command', '#op-json', '#verifier-result']) {
+    const section = document.querySelector(sel)?.closest('section');
+    if (section instanceof HTMLElement) section.hidden = true;
+  }
+})();
+
 let hadContent = false;
 function renderAll(): void {
   viewport.render();
@@ -731,6 +757,12 @@ function renderAll(): void {
   if (!hadContent && count > 0) {
     hadContent = true;
     viewport.fit?.();
+    // Wait for the spoken-caption pill to fade so the next-step hint is not covered.
+    window.setTimeout(() => {
+      if (controller.listItems().length > 0) {
+        viewport.showHint?.('You can say: add a door, check the plan, or convert to 3D.');
+      }
+    }, 4500);
   } else if (count === 0) {
     hadContent = false;
   }
@@ -1218,7 +1250,7 @@ btnLedger.addEventListener('click', () => {
 });
 el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
   if (a11yPanel.isOpen()) a11yPanel.toggle();
-  else void runUtterance('check accessibility');
+  else void runUtterance('check the plan');
 });
 
 // ---- phone relay pairing (QR → /remote page → room over an injected transport)
@@ -3501,7 +3533,7 @@ let pendingChoices: PendingChoices | null = null;
 
 /** Show the confidence state next to the honest source badge. */
 function setConfidenceState(state: ConfidenceState | null): void {
-  if (!state) {
+  if (!state || state === 'sure') {
     confStateEl.hidden = true;
     confStateEl.textContent = '';
     return;
@@ -4426,11 +4458,11 @@ function onPresenceFrame(f: PresenceFrame): void {
   const fps = noteFps(performance.now());
   const handCount = f.hands.length;
   if (f.paused) {
-    trackingStateEl.textContent = 'paused · look at screen';
+    setTracking('paused · look at screen');
   } else {
     const quality = handCount > 0 && fps >= 12 ? 'good' : handCount > 0 ? 'poor' : 'searching';
     const plural = handCount === 1 ? 'hand' : 'hands';
-    trackingStateEl.textContent = `${handCount} ${plural} · ${fps} fps · ${quality}`;
+    setTracking(`${handCount} ${plural} · ${fps} fps · ${quality}`);
   }
   const primary = f.hands[0];
   updatePinchMeter(primary ? primary.pinchStrength : 0, primary?.pinching ?? false, !f.paused && !!primary);
@@ -4465,7 +4497,7 @@ function resetPresenceStatus(): void {
   fpsStamps = [];
   facingStateEl.textContent = '—';
   operatorStateEl.textContent = '—';
-  trackingStateEl.textContent = 'camera off';
+  setTracking('camera off');
   updatePinchMeter(0, false, false);
 }
 
@@ -4474,7 +4506,7 @@ function setCameraBusy(busy: boolean): void {
   if (busy) {
     btnCamera.textContent = 'Starting camera…';
     btnCamera.disabled = true;
-    trackingStateEl.textContent = 'starting camera…';
+    setTracking('starting camera…');
   } else {
     btnCamera.disabled = false;
   }
@@ -4624,8 +4656,9 @@ const DEVICE_STATE_TEXT: Record<DeviceModelStatus, string> = {
 function renderAiStatus(): void {
   const st = getHybridStatus();
   const cloud = st.appCheck === 'ready' ? 'Cloud AI on' : st.appCheck === 'failed' ? 'Cloud AI off' : 'Rules only';
-  modelStateEl.textContent = `${DEVICE_STATE_TEXT[st.deviceModel]} · ${cloud}`;
-  modelStateEl.title = st.lastError ?? '';
+  const nanoOn = st.deviceModel === 'ready';
+  modelStateEl.textContent = nanoOn ? 'Nano ready' : `${DEVICE_STATE_TEXT[st.deviceModel]}${cloud === 'Cloud AI on' ? '' : ` · ${cloud}`}`;
+  modelStateEl.title = st.lastError || `${DEVICE_STATE_TEXT[st.deviceModel]}. ${cloud}.`;
 }
 
 btnAi.addEventListener('click', async () => {
@@ -5138,14 +5171,14 @@ function createTour() {
     card.className = 'tour-card tour-centered';
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-modal', 'true');
-    card.setAttribute('aria-label', 'Judges welcome');
+    card.setAttribute('aria-label', 'Welcome to Mendcraft');
     const h = document.createElement('h2');
     h.tabIndex = -1;
-    h.textContent = 'Judges: take the 2-minute tour 👋';
+    h.textContent = 'Welcome to Mendcraft';
     const p = document.createElement('p');
     p.textContent =
-      'It spotlights the real controls in the running app — no camera or mic needed. ' +
-      'You can set up the camera instead, or open the judges’ page for the 30-second path.';
+      'This is your floor-plan studio. Take a short tour of the controls, set up the camera for pinch and voice, or start drawing. ' +
+      'Judges can also open the 30-second path.';
     const actions = document.createElement('div');
     actions.className = 'tour-actions';
     actions.append(

@@ -988,6 +988,7 @@ export function createPlanRenderer(
       view3d?.walkStep(step as WalkStep);
     },
     walking: () => !!view3d?.walking(),
+    showHint,
     dispose() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
