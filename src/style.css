@@ -2935,7 +2935,9 @@ button.mc-ref-open {
 #app:has(> #layout) #statusbar .status-chip:has(#operator-state),
 #app:has(> #layout) #pinch-chip,
 #app:has(> #layout) #statusbar .status-chip:has(#net-state),
-#app:has(> #layout) #chrome-ext-chip {
+#app:has(> #layout) #chrome-ext-chip,
+#app:has(> #layout) #listen-chip,
+#app:has(> #layout) #statusbar .status-chip:has(#tracking-state):not(.is-live) {
   display: none;
 }
 @media (min-width: 900px) {
@@ -3329,6 +3331,7 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 }
 #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-panel-chip {
   right: calc(var(--island-margin) + min(400px, 42vw) + var(--target-gap, 8px));
+  z-index: 43;
 }
 #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
   top: var(--island-margin);
@@ -3502,3 +3505,251 @@ body.mc-connect #history-island, body.mc-connect #parts-list, body.mc-connect #r
 .mc-ad-w-errors { margin: 0 0 6px; padding-left: 18px; font-size: 13px; color: var(--danger, #ff6b6b); }
 .mc-ad-w-json { margin: 0; max-height: 140px; overflow: auto; font-size: 11px; line-height: 1.35; white-space: pre-wrap; word-break: break-all; color: var(--text-dim); background: rgb(0 0 0 / 0.25); border-radius: 8px; padding: 6px 8px; }
 .mc-ad-w-sub { margin: 0 0 2px; font-size: 12px; color: var(--text-dim); }
+/* ---- Session cluster: ask island sits left of the compact dock ---- */
+#app:has(> #layout) .mc-session-cluster {
+  position: absolute;
+  right: var(--island-margin);
+  bottom: var(--island-margin);
+  z-index: 38;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 160px);
+}
+#app:has(> #layout) .mc-session-cluster #topbar {
+  position: static;
+  max-width: min(340px, calc(100vw - 220px));
+  flex: 0 1 auto;
+}
+#app:has(> #layout) #command-box.mc-ask {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  width: 220px;
+  max-width: 240px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px;
+  background: var(--island-bg);
+  border-radius: var(--island-radius);
+  box-shadow: var(--island-shadow);
+}
+#app:has(> #layout) #command-box.mc-ask input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--target);
+  padding: 0 14px;
+  border: 1px solid var(--island-line);
+  border-radius: 14px;
+  background: #f8fafc;
+  color: var(--island-ink);
+  font: inherit;
+  font-size: 13px;
+}
+#app:has(> #layout) #command-box.mc-ask input::placeholder {
+  color: var(--island-muted);
+}
+#app:has(> #layout) #command-box.mc-ask button {
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 12px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid #0f172a;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  #app:has(> #layout) .mc-session-cluster {
+    left: var(--island-margin);
+    right: var(--island-margin);
+    max-width: none;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  #app:has(> #layout) #command-box.mc-ask {
+    width: 100%;
+    max-width: none;
+    order: -1;
+  }
+  #app:has(> #layout) .mc-session-cluster #topbar {
+    max-width: 100%;
+  }
+}
+
+/* First-run setup and the welcome tour use the same light islands. */
+#app:has(> #layout) .mc-setup {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+  z-index: 60;
+}
+#app:has(> #layout) .mc-setup-head {
+  position: sticky;
+  top: -20px;
+  margin-top: -4px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  background: var(--island-bg);
+  z-index: 2;
+}
+#app:has(> #layout) .mc-setup-title { color: var(--island-ink); font-size: 26px; }
+#app:has(> #layout) .mc-setup-kicker,
+#app:has(> #layout) .mc-setup-kn,
+#app:has(> #layout) .mc-setup-note,
+#app:has(> #layout) .mc-setup-kn-line,
+#app:has(> #layout) .mc-setup-list { color: var(--island-muted); }
+#app:has(> #layout) .mc-setup-nav { border-top-color: var(--island-line); }
+#app:has(> #layout) .tour-card {
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+}
+#app:has(> #layout) .tour-card h2,
+#app:has(> #layout) .tour-card p { color: var(--island-ink); }
+#app:has(> #layout) .tour-btn {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .tour-btn.primary {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: transparent;
+}
+#app:has(> #layout) .tour-btn.ghost { background: transparent; }
+
+/* Copilot and walk controls use the same light islands as the rest of the studio. */
+#app:has(> #layout) .mc-copilot {
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+  backdrop-filter: none;
+}
+#app:has(> #layout) .mc-cp-head,
+#app:has(> #layout) .mc-cp-tabs {
+  border-bottom-color: var(--island-line);
+}
+#app:has(> #layout) .mc-cp-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--island-ink);
+}
+#app:has(> #layout) .mc-panel-x {
+  color: var(--island-ink);
+}
+#app:has(> #layout) .mc-cp-btn {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .mc-cp-btn.ghost {
+  background: transparent;
+  color: var(--island-muted);
+}
+#app:has(> #layout) .mc-cp-tab.active {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: transparent;
+}
+#app:has(> #layout) .mc-cp-busy { color: #0f172a; }
+#app:has(> #layout) .mc-cp-note,
+#app:has(> #layout) .mc-cp-empty,
+#app:has(> #layout) .mc-cp-by,
+#app:has(> #layout) .mc-cp-meta,
+#app:has(> #layout) .mc-cp-why,
+#app:has(> #layout) .mc-cp-ba,
+#app:has(> #layout) .mc-cp-when,
+#app:has(> #layout) .mc-cp-status {
+  color: var(--island-muted);
+}
+#app:has(> #layout) .mc-cp-card {
+  background: #f8fafc;
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .mc-cp-issue,
+#app:has(> #layout) .mc-cp-item {
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .mc-cp-accept,
+#app:has(> #layout) .mc-cp-email,
+#app:has(> #layout) .mc-cp-check {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: transparent;
+}
+#app:has(> #layout) .mc-cp-region {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .mc-cp-draft input,
+#app:has(> #layout) .mc-cp-draft textarea {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .who-nano { color: #0f766e; }
+#app:has(> #layout) .who-gemini { color: #1d4ed8; }
+#app:has(> #layout) .who-her { color: var(--island-ink); }
+#app:has(> #layout) .who-rules { color: #b45309; }
+#app:has(> #layout) .mc-walk {
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+  backdrop-filter: none;
+}
+#app:has(> #layout) .mc-walk-btn {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+}
+
+/* Connect-anything hub uses the same light islands as the studio. */
+#app:has(> #layout) .mc-hub {
+  background: var(--island-bg);
+  color: var(--island-ink);
+  border: 1px solid var(--island-line);
+  box-shadow: var(--island-shadow);
+  backdrop-filter: none;
+  top: calc(var(--island-margin) + 92px);
+  bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + 8px);
+}
+#app:has(> #layout) .mc-hub-head h2,
+#app:has(> #layout) .mc-hub-card { color: var(--island-ink); }
+#app:has(> #layout) .mc-hub-sub,
+#app:has(> #layout) .mc-hub-sec h3,
+#app:has(> #layout) .mc-hub-card p,
+#app:has(> #layout) .mc-hub-empty,
+#app:has(> #layout) .mc-ad-w-sub { color: var(--island-muted); }
+#app:has(> #layout) .mc-hub-add {
+  background: #0f172a;
+  color: #f8fafc;
+}
+#app:has(> #layout) .mc-hub-card,
+#app:has(> #layout) .mc-ad-writing {
+  background: #f8fafc;
+  border-color: var(--island-line);
+}
+#app:has(> #layout) .mc-hub-speaker input,
+#app:has(> #layout) .mc-ad-w-json {
+  background: #f8fafc;
+  color: var(--island-ink);
+  border-color: var(--island-line);
+}
+
