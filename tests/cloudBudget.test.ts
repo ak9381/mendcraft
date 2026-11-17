@@ -26,7 +26,7 @@ describe('cloud budgets', () => {
       'test',
     );
     expect(cloudBudgetMs('short')).toBe(CLOUD_GENERATE_TIMEOUT_MS);
-    expect(cloudBudgetMs('long')).toBe(CLOUD_GENERATE_TIMEOUT_MS * 1.5);
+    expect(cloudBudgetMs('long')).toBe(CLOUD_GENERATE_TIMEOUT_MS * 2);
   });
 
   it('warmCloud is a no-op under test overrides', async () => {
@@ -93,7 +93,7 @@ describe('streaming timeout keeps partial JSON', () => {
       [{ id: 'door-bath', rule: 'door-width', message: 'Bathroom door is 700 mm.', citation: 'ISO 21542' }],
       'two bedroom plan',
     );
-    await vi.advanceTimersByTimeAsync(CLOUD_FIRST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(CLOUD_FIRST_TIMEOUT_MS * 3);
     const res = await promise;
     expect(res.source).toBe('rules');
     expect(res.items).toEqual([]);

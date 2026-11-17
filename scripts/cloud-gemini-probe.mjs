@@ -243,11 +243,15 @@ async function main() {
           }
           const ms = Date.now() - t0;
           const source = result?.source ?? null;
-          const statusErr = await page.evaluate(() => globalThis.__mcCloudProbe.getHybridStatus().lastError);
-          const lastError = redact(result?.lastError || statusErr || '');
+          const st = await page.evaluate(() => {
+            const s = globalThis.__mcCloudProbe.getHybridStatus();
+            return { lastError: s.lastError, lastFailKind: s.lastFailKind ?? null };
+          });
+          const lastError = redact(result?.lastError || st.lastError || '');
+          const lastFailKind = st.lastFailKind || result?.failKind || null;
 
           const ok = Boolean(result) && !error && source === 'cloud';
-          runs.push({ ok, source, ms, error: error || lastError, preview: result ? redact(JSON.stringify(result)).slice(0, 200) : null });
+          runs.push({ ok, source, ms, error: error || lastError, kind: lastFailKind, preview: result ? redact(JSON.stringify(result)).slice(0, 200) : null });
           if (gapMs > 0 && !(i === measureN - 1 && job === jobs[jobs.length - 1])) {
             await new Promise((r) => setTimeout(r, gapMs));
           }
@@ -264,6 +268,8 @@ async function main() {
           times: runs.map((r) => r.ms),
           sources: runs.map((r) => r.source),
           errors: runs.map((r) => r.error),
+          kinds: runs.map((r) => r.kind),
+          validRate: `${runs.filter((r) => r.ok).length}/${measureN}`,
           median,
           worst: times.length ? times[times.length - 1] : null,
           min: times.length ? times[0] : null,

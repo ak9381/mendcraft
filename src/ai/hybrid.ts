@@ -43,6 +43,14 @@ import {
 import { coerceConnector, type Connector } from '../devices/connector';
 import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
+import {
+  classifyCloudFailure,
+  delay,
+  extractJson,
+  RATE_LIMIT_BACKOFF_MS,
+  safeResponseText,
+  type CloudFailKind,
+} from './cloudJson';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
 import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
 import type { GenerateKind, RefHit } from '../references/types';
@@ -98,6 +106,8 @@ export interface HybridStatus {
   message: string | null;
   /** Last AI error (cloud or on-device), for the UI and console. */
   lastError: string | null;
+  /** Why the last cloud JSON call failed, if it did. */
+  lastFailKind: CloudFailKind | null;
 }
 
 /** Minimal surface of Chrome's global LanguageModel (Prompt API). */
@@ -325,6 +335,7 @@ let deviceModelStatus: DeviceModelStatus = 'idle';
 let appCheckState: AppCheckStatus = 'skipped';
 let statusMessage: string | null = null;
 let lastError: string | null = null;
+let lastFailKind: CloudFailKind | null = null;
 /** True once a cloud generate has finished (or returned usable partial JSON). */
 let cloudSettled = false;
 let warmPromise: Promise<boolean> | null = null;
@@ -334,13 +345,14 @@ function resetStatus(): void {
   appCheckState = 'skipped';
   statusMessage = null;
   lastError = null;
+  lastFailKind = null;
   cloudSettled = false;
   warmPromise = null;
 }
 
 /** Short = guideline explain and similar; long = materials, email, copilot. */
 export function cloudBudgetMs(kind: 'short' | 'long' = 'short'): number {
-  if (kind === 'long') return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS * 1.5 : CLOUD_FIRST_TIMEOUT_MS;
+  if (kind === 'long') return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS * 2 : CLOUD_FIRST_TIMEOUT_MS;
   return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS : Math.max(CLOUD_GENERATE_TIMEOUT_MS, 12_000);
 }
 
@@ -384,12 +396,9 @@ export async function generateWithBudget(
       const started = await model.generateContentStream!(prompt);
       try {
         for await (const chunk of started.stream) {
-          try {
-            const piece = chunk.text();
-            if (piece) latest = piece;
-          } catch {
-            // incomplete chunk — keep what we have
-          }
+          const safe = safeResponseText(chunk);
+          if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
+          if (safe.text) latest = safe.text;
           if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
         }
       } catch (err) {
@@ -398,7 +407,9 @@ export async function generateWithBudget(
       if (started.response) {
         try {
           const final = await started.response;
-          return { text: () => final.text(), inferenceSource: final.inferenceSource ?? inferenceSource };
+          const safe = safeResponseText(final);
+          if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
+          return { text: () => safe.text || final.text(), inferenceSource: final.inferenceSource ?? inferenceSource };
         } catch (err) {
           if (latest) return { text: () => latest, inferenceSource };
           throw err;
@@ -420,6 +431,13 @@ export async function generateWithBudget(
   }
   const { response } = await withTimeout(model.generateContent(prompt), ms, label);
   markCloudSettled();
+  const safe = safeResponseText(response);
+  if (safe.failKind === 'safety') {
+    throw new Error(`${label} safety: ${safe.failKind}`);
+  }
+  if (safe.text) {
+    return { response: { text: () => safe.text, inferenceSource: (response as { inferenceSource?: string }).inferenceSource } };
+  }
   return { response };
 }
 
@@ -441,7 +459,7 @@ export function getDeviceModelStatus(): DeviceModelStatus {
 }
 
 export function getHybridStatus(): HybridStatus {
-  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError };
+  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError, lastFailKind };
 }
 
 export async function prepareHybrid(): Promise<HybridStatus> {
@@ -580,7 +598,7 @@ async function initFirebase(): Promise<Models | null> {
     await initTelemetry(app);
     const cloudModel = remoteSettings().cloudModel;
 
-    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema, ResponseModality } =
+    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema, ResponseModality, ThinkingLevel } =
       await import('firebase/ai');
     // useLimitedUseAppCheckTokens: each Firebase AI Logic request carries a
     // fresh single-use App Check token (for replay protection) instead of the
@@ -816,9 +834,14 @@ async function initFirebase(): Promise<Models | null> {
       inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(CAD_TOOL_CONSTRAINT, Schema) } },
       onDeviceParams: { createOptions: ON_DEVICE_CREATE_OPTIONS, promptOptions: { responseConstraint: CAD_TOOL_CONSTRAINT } },
     });
+    const jsonGen = (constraint: Record<string, unknown>) => ({
+      responseMimeType: 'application/json' as const,
+      responseSchema: toFirebaseSchema(constraint, Schema),
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+    });
     const cloudJson = (constraint: Record<string, unknown>) => getGenerativeModel(ai, {
       mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(constraint, Schema) } },
+      inCloudParams: { model: cloudModel, generationConfig: jsonGen(constraint) },
     });
     const cadToolCloud = cloudJson(CAD_TOOL_CONSTRAINT);
     const copilotAnswer = cloudJson(COPILOT_ANSWER_CONSTRAINT);
@@ -938,18 +961,6 @@ export async function initDeviceModel(onProgress?: (p: number) => void): Promise
 function sourceOf(resp: { inferenceSource?: string }): Source {
   if (resp.inferenceSource === 'on_device') return 'on-device';
   return 'cloud';
-}
-
-function extractJson(text: string): unknown {
-  const stripped = text.replace(/```(?:json)?/gi, '').trim();
-  const start = stripped.indexOf('{');
-  const end = stripped.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(stripped.slice(start, end + 1));
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -1356,6 +1367,56 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
 }
 
 /** Cloud explanations (and optional alternative fixes) for a11y issues. */
+function logCloudFail(label: string, kind: CloudFailKind, detail = ''): void {
+  lastFailKind = kind;
+  noteError(label, new Error(`${kind}${detail ? `: ${detail.slice(0, 240)}` : ''}`));
+}
+
+/**
+ * One structured JSON cloud call with tolerant parse, a single retry on empty
+ * or invalid output, and backoff on HTTP 429. Safety blocks are not retried.
+ */
+async function requestJson<T>(
+  model: TextGenModel,
+  prompt: string,
+  budgetMs: number,
+  label: string,
+  coerce: (raw: unknown) => T | null,
+): Promise<{ value: T; source: Source } | null> {
+  const run = async (): Promise<{ value: T | null; kind: CloudFailKind | null; source: Source; detail: string }> => {
+    try {
+      const { response } = await generateWithBudget(model, prompt, budgetMs, label);
+      const text = response.text();
+      if (!text || !text.trim()) return { value: null, kind: 'empty', source: sourceOf(response), detail: '' };
+      const raw = extractJson(text);
+      if (raw == null) return { value: null, kind: 'parse', source: sourceOf(response), detail: text };
+      const value = coerce(raw);
+      if (value == null) return { value: null, kind: 'parse', source: sourceOf(response), detail: text };
+      return { value, kind: null, source: sourceOf(response), detail: '' };
+    } catch (err) {
+      return { value: null, kind: classifyCloudFailure(err), source: 'cloud', detail: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
+  let result = await run();
+  if (!result.value && result.kind === '429') {
+    for (const wait of RATE_LIMIT_BACKOFF_MS) {
+      await delay(wait);
+      result = await run();
+      if (result.value || result.kind !== '429') break;
+    }
+  } else if (!result.value && (result.kind === 'parse' || result.kind === 'empty' || result.kind === 'timeout')) {
+    result = await run();
+  }
+  if (!result.value) {
+    logCloudFail(label, result.kind ?? 'other', result.detail);
+    return null;
+  }
+  lastFailKind = null;
+  lastError = null;
+  return { value: result.value, source: result.source };
+}
+
 export interface ExplainA11yResult {
   items: A11yExplanation[];
   source: Source;
@@ -1381,23 +1442,24 @@ export async function explainAccessibility(
       const prompt = withPreamble(
         `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
       );
-      const { response } = await generateWithBudget(
+      const got = await requestJson(
         models.a11yExplain,
         prompt,
         cloudBudgetMs('short'),
         'a11y explain',
+        (raw) => {
+          const items = coerceA11yExplanations(
+            raw,
+            issues.map((i) => i.id),
+            (fix) => mode.coerce(fix),
+          );
+          return items.length ? items : null;
+        },
       );
-      const items = coerceA11yExplanations(
-        extractJson(response.text()),
-        issues.map((i) => i.id),
-        (raw) => mode.coerce(raw),
-      );
-      if (items.length) {
-        const source = sourceOf(response);
-        recordInference(source, 'a11y-explain', Date.now() - t0);
-        return { items, source };
+      if (got) {
+        recordInference(got.source, 'a11y-explain', Date.now() - t0);
+        return { items: got.value, source: got.source };
       }
-      noteError('a11y explain', new Error('cloud explanations were empty or invalid'));
     } catch (err) {
       noteError('a11y explain model', err);
     }
@@ -1705,18 +1767,24 @@ export async function askCopilot(
   const models = await ensureModels();
   if (!models?.copilotAnswer) return null;
   try {
-    const { response } = await generateWithBudget(
+    const got = await requestJson(
       models.copilotAnswer,
       withPreamble(copilotAnswerPrompt(question, summary.slice(0, 1500), region)),
       cloudBudgetMs('long'),
       'copilot answer',
+      (raw) => {
+        if (!raw || typeof raw !== 'object') return null;
+        const o = raw as Record<string, unknown>;
+        const answer = typeof o.answer === 'string' ? o.answer.trim().slice(0, 1200)
+          : typeof o.Answer === 'string' ? o.Answer.trim().slice(0, 1200) : '';
+        if (!answer) return null;
+        const calls = Array.isArray(o.calls) ? o.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
+        return { answer, calls, why: typeof o.why === 'string' ? o.why.slice(0, 300) : '' };
+      },
     );
-    const raw = extractJson(response.text()) as { answer?: unknown; calls?: unknown; why?: unknown } | null;
-    const answer = raw && typeof raw.answer === 'string' ? raw.answer.trim().slice(0, 1200) : '';
-    if (!answer) return null;
-    const calls = Array.isArray(raw!.calls) ? raw!.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
+    if (!got) return null;
     recordInference('cloud', 'copilot-answer', Date.now() - t0);
-    return { answer, calls, why: typeof raw!.why === 'string' ? raw!.why.slice(0, 300) : '', source: 'cloud', ms: Date.now() - t0 };
+    return { ...got.value, source: got.source, ms: Date.now() - t0 };
   } catch (err) {
     noteError('copilot answer', err);
     return null;
@@ -1733,16 +1801,16 @@ export async function draftClientEmail(
   const models = await ensureModels();
   if (!models?.copilotEmail || items.length === 0) return null;
   try {
-    const { response } = await generateWithBudget(
+    const got = await requestJson(
       models.copilotEmail,
       withPreamble(emailPrompt(items, summary)),
       cloudBudgetMs('long'),
       'client email',
+      coerceEmailDraft,
     );
-    const draft = coerceEmailDraft(extractJson(response.text()));
-    if (!draft) return null;
+    if (!got) return null;
     recordInference('cloud', 'client-email', Date.now() - t0);
-    return { draft, source: 'cloud', ms: Date.now() - t0 };
+    return { draft: got.value, source: got.source, ms: Date.now() - t0 };
   } catch (err) {
     noteError('client email', err);
     return null;
@@ -1758,16 +1826,16 @@ export async function proposeMaterials(
   const models = await ensureModels();
   if (!models?.copilotMaterials) return null;
   try {
-    const { response } = await generateWithBudget(
+    const got = await requestJson(
       models.copilotMaterials,
       withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`),
       cloudBudgetMs('long'),
       'materials',
+      coerceMaterialPlan,
     );
-    const plan = coerceMaterialPlan(extractJson(response.text()));
-    if (!plan) return null;
+    if (!got) return null;
     recordInference('cloud', 'materials', Date.now() - t0);
-    return { plan, source: 'cloud', ms: Date.now() - t0 };
+    return { plan: got.value, source: got.source, ms: Date.now() - t0 };
   } catch (err) {
     noteError('materials', err);
     return null;

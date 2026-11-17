@@ -76,6 +76,7 @@ export const MATERIAL_PRESETS: Record<'default' | 'warm' | 'bright' | 'evening',
 const SURFACE_SCHEMA = {
   type: 'object',
   properties: { color: { type: 'string' }, roughness: { type: 'number' }, name: { type: 'string' } },
+  required: ['color'],
 };
 export const MATERIAL_CONSTRAINT: Record<string, unknown> = {
   type: 'object',
@@ -97,11 +98,30 @@ export const MATERIAL_CONSTRAINT: Record<string, unknown> = {
 
 export const MATERIAL_PROMPT = `You are an interior designer dressing a simple 3D model of a floor plan. Choose realistic materials and daylight that suit the request. Reply with ONE JSON object only: {"label":"<2-4 words>","walls":{"color":"#rrggbb","roughness":0..1,"name":"<material>"},"floor":{...},"structure":{...},"furniture":{...},"sanitary":{...},"lighting":{"sunIntensity":0.3..2.5,"sunAzimuth":0..360,"sunElevation":5..85,"sunColor":"#rrggbb","ambientIntensity":0.3..2,"skyColor":"#rrggbb"},"notes":"<one sentence>"}. Hex colours only.`;
 
-const HEX = /^#[0-9a-f]{6}$/i;
+const HEX6 = /^#?[0-9a-f]{6}$/i;
+const HEX3 = /^#?[0-9a-f]{3}$/i;
+const RGB = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i;
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const num = (v: unknown, fb: number, lo: number, hi: number) =>
   typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : fb;
-const hex = (v: unknown, fb: string) => (typeof v === 'string' && HEX.test(v.trim()) ? v.trim().toLowerCase() : fb);
+
+/** Accept #rgb, #rrggbb, rrggbb, or rgb(r,g,b). Named colours fall back. */
+export function parseHexColor(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (HEX6.test(s)) return `#${s.replace(/^#/, '').toLowerCase()}`;
+  if (HEX3.test(s)) {
+    const h = s.replace(/^#/, '').toLowerCase();
+    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+  }
+  const m = s.match(RGB);
+  if (m) {
+    const ch = (n: string) => clamp(Number(n), 0, 255).toString(16).padStart(2, '0');
+    return `#${ch(m[1])}${ch(m[2])}${ch(m[3])}`;
+  }
+  return null;
+}
+const hex = (v: unknown, fb: string) => parseHexColor(v) ?? fb;
 
 /** Untrusted model JSON → a safe MaterialPlan (missing parts fall back to the
  *  base preset), or null when nothing usable came back. */
@@ -114,7 +134,7 @@ export function coerceMaterialPlan(raw: unknown, base: MaterialPlan = MATERIAL_P
     const s = o[k];
     if (!s || typeof s !== 'object') continue;
     const r = s as Record<string, unknown>;
-    if (typeof r.color === 'string' && HEX.test(r.color.trim())) usable++;
+    if (parseHexColor(r.color)) usable++;
     out[k] = {
       color: hex(r.color, base[k].color),
       roughness: num(r.roughness, base[k].roughness, 0, 1),
@@ -130,7 +150,8 @@ export function coerceMaterialPlan(raw: unknown, base: MaterialPlan = MATERIAL_P
     ambientIntensity: num(l.ambientIntensity, base.lighting.ambientIntensity, 0.2, 2.5),
     skyColor: hex(l.skyColor, base.lighting.skyColor),
   };
-  if (usable === 0) return null;
+  const lit = o.lighting && typeof o.lighting === 'object' ? Object.keys(o.lighting as object).length > 0 : false;
+  if (usable === 0 && !lit) return null;
   out.label = typeof o.label === 'string' && o.label.trim() ? o.label.trim().slice(0, 40) : 'Gemini look';
   out.notes = typeof o.notes === 'string' ? o.notes.trim().slice(0, 200) : '';
   return out;
