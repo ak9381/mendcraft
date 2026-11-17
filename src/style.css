@@ -1132,7 +1132,7 @@ a.brand:hover { color: var(--accent); }
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
-  max-width: 70%;
+  max-width: min(28rem, calc(100% - 48px));
   padding: 4px 12px;
   background: rgba(15, 23, 42, 0.78);
   color: #f8fafc;
@@ -1140,7 +1140,13 @@ a.brand:hover { color: var(--accent); }
   border-radius: 999px;
   pointer-events: none;
   z-index: 30;
+  opacity: 1;
+  transition: opacity 0.45s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.mc-status.is-fading { opacity: 0; }
 .mc-status:empty { display: none; }
 .mc-props {
   position: absolute;
@@ -1157,7 +1163,15 @@ a.brand:hover { color: var(--accent); }
   color: #475569;
 }
 .mc-props[hidden] { display: none; }
-.mc-props-title { font-weight: 600; margin-bottom: 6px; color: #0f172a; }
+.mc-props-title {
+  font-weight: 600; margin: 0; color: #0f172a;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
+}
+.mc-props-title::after { content: '▸'; color: #94a3b8; font-size: 11px; }
+.mc-props.is-expanded .mc-props-title { margin-bottom: 6px; }
+.mc-props.is-expanded .mc-props-title::after { content: '▾'; }
+.mc-props:not(.is-expanded) .mc-props-row { display: none; }
 .mc-props-row {
   display: flex;
   align-items: center;
@@ -3051,34 +3065,107 @@ button.mc-ref-open {
   box-shadow: var(--island-shadow);
 }
 #app:has(> #layout) .mc-props {
-  top: calc(var(--island-margin) + 8px);
-  right: calc(var(--island-margin) + min(360px, 32vw) + var(--target-gap));
+  top: var(--island-margin);
+  right: calc(var(--island-margin) + 7.75rem + var(--target-gap, 8px));
+  left: auto;
+  width: auto;
+  min-width: 9rem;
+  max-width: min(240px, calc(100vw - 12rem));
   background: var(--island-bg);
   box-shadow: var(--island-shadow);
   border: none;
   border-radius: var(--island-radius);
   color: var(--island-muted);
+  z-index: 35;
 }
+#app:has(> #layout) .mc-props.is-expanded { width: 215px; max-width: min(240px, calc(100vw - 12rem)); }
+#app:has(> #layout) .mc-props-title { color: var(--island-ink); }
 #app:has(> #layout) .mc-status {
-  bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + var(--target) + 48px);
+  bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + 12px);
   background: rgb(15 23 42 / 0.78);
+  max-width: min(28rem, calc(100% - 48px));
 }
 
 /* ---- Top-right: style / details island (overlays canvas, never a sidebar) ---- */
 #app:has(> #layout) #panel {
   position: absolute;
-  top: var(--island-margin);
+  top: calc(var(--island-margin) + var(--target) + 8px);
   right: var(--island-margin);
   bottom: auto;
   left: auto;
-  z-index: 35;
-  width: min(360px, calc(100vw - 32px));
-  max-height: calc(100vh - 160px);
+  z-index: 39;
+  width: min(320px, calc(100vw - 32px));
+  max-height: min(60vh, calc(100% - 180px));
   overflow-y: auto;
   padding: 16px;
   gap: 1em;
   color: var(--island-ink);
   background: var(--island-bg);
+}
+#app:has(> #layout) #panel.is-collapsed,
+#app:has(> #layout) #panel[hidden] {
+  display: none;
+}
+#app:has(> #layout) .mc-panel-chip {
+  position: absolute;
+  top: var(--island-margin);
+  right: var(--island-margin);
+  z-index: 40;
+  min-height: 40px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--island-bg);
+  color: var(--island-ink);
+  box-shadow: var(--island-shadow);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#app:has(> #layout) .mc-panel-chip.is-open { background: #dbeafe; color: #1d4ed8; }
+#app:has(> #layout) .mc-dock-edit {
+  display: flex;
+  gap: var(--target-gap);
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--island-line);
+  align-items: stretch;
+  position: sticky;
+  right: 0;
+  background: var(--island-bg);
+  z-index: 1;
+}
+#app:has(> #layout) .mc-dock-edit button {
+  min-width: var(--target);
+  min-height: var(--target);
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--island-ink);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+#app:has(> #layout) .mc-dock-edit button:hover {
+  background: #f1f5f9;
+  border-color: rgb(15 23 42 / 0.08);
+}
+#app:has(> #layout) .mc-palette {
+  max-width: calc(100vw - 200px);
+  overflow-x: auto;
+  z-index: 36;
+}
+#app:has(> #layout) .mc-trash { z-index: 37; }
+@media (max-width: 1100px) {
+  #app:has(> #layout) .mc-palette-btn .mc-lbl { display: none; }
+  #app:has(> #layout) .mc-palette-btn { min-width: 48px; padding: 4px; }
+  #app:has(> #layout) .mc-dock-edit button {
+    min-width: 48px;
+    padding: 0 6px;
+    font-size: 12px;
+  }
 }
 #app:has(> #layout) #panel h2 {
   color: var(--island-muted);
@@ -3141,7 +3228,7 @@ button.mc-ref-open {
   left: 50%;
   top: auto;
   /* Above the session dock, tool palette, and undo/redo — not behind them. */
-  bottom: calc(var(--island-margin) + var(--target, 60px) + 20px + 80px + var(--target-gap, 8px) + var(--target, 60px) + 12px);
+  bottom: calc(var(--island-margin) + var(--target, 60px) + 20px + 80px + 12px);
   transform: translateX(-50%);
   width: max-content;
   max-width: min(36rem, calc(100% - 48px));
@@ -3195,9 +3282,9 @@ button.mc-ref-open {
     max-width: min(380px, calc(100vw - 32px));
   }
   #app:has(> #layout) .mc-props {
-    top: calc(var(--island-margin) + 208px);
-    left: var(--island-margin);
-    right: auto;
+    top: var(--island-margin);
+    left: auto;
+    right: calc(var(--island-margin) + 7.75rem + var(--target-gap, 8px));
   }
   #app:has(> #layout) .mc-copilot {
     width: min(360px, calc(100vw - 32px));
@@ -3240,17 +3327,61 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 #app:has(> #layout):has(.mc-copilot:not([hidden])) #statusbar {
   max-width: min(380px, calc(100vw - 32px - min(400px, 42vw)));
 }
+#app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-panel-chip {
+  right: calc(var(--island-margin) + min(400px, 42vw) + var(--target-gap, 8px));
+}
 #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
-  right: calc(var(--island-margin) + min(400px, calc(100vw - 32px)) + var(--target-gap));
-  top: calc(var(--island-margin) + 8px);
+  top: var(--island-margin);
+  left: auto;
+  right: calc(var(--island-margin) + min(400px, 42vw) + var(--target-gap, 8px) + 7.75rem);
+}
+#app:has(> #layout) .mc-copilot {
+  top: calc(var(--island-margin, 16px) + 4px);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 820px) {
+  :root { --target: 52px; }
+  #app:has(> #layout) #statusbar {
+    max-width: min(320px, calc(100vw - 120px));
+    padding: 6px 10px;
+  }
+  #app:has(> #layout) .mc-palette {
+    max-width: calc(100vw - 120px);
+  }
+}
+@media (max-width: 600px) {
+  :root { --target: 48px; }
+  #app:has(> #layout) #statusbar {
+    max-width: calc(100vw - 24px);
+  }
+  #app:has(> #layout) #panel {
+    top: auto;
+    bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + 8px);
+    left: var(--island-margin);
+    right: var(--island-margin);
+    width: auto;
+    max-height: 42vh;
+  }
+  #app:has(> #layout) .mc-copilot {
+    top: auto !important;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    max-width: 100%;
+    max-height: 48vh;
+    border-radius: 20px 20px 0 0;
+  }
   #app:has(> #layout) .mc-props,
   #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
-    top: calc(var(--island-margin) + 208px);
+    top: auto;
     left: var(--island-margin);
     right: auto;
+    bottom: calc(var(--island-margin) + var(--target) + 20px + 80px + 8px);
+  }
+  #app:has(> #layout) .mc-panel-chip {
+    min-height: 36px;
+    padding: 0 12px;
   }
 }
 .mc-copilot {
