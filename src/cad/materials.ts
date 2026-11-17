@@ -171,3 +171,30 @@ export function sunVector(l: MaterialPlan['lighting']): { x: number; y: number; 
   const el = (l.sunElevation * Math.PI) / 180;
   return { x: Math.sin(az) * Math.cos(el), y: Math.cos(az) * Math.cos(el), z: Math.sin(el) };
 }
+
+/** Change-log op for a 3D materials/lighting proposal (not a plan-document op). */
+export interface SetMaterialsOp {
+  op: 'set_materials';
+  plan: MaterialPlan;
+  previous: MaterialPlan | null;
+  previous3d: boolean;
+}
+
+export function makeSetMaterialsOp(plan: MaterialPlan, previous: MaterialPlan | null, previous3d: boolean): Record<string, unknown> {
+  return { op: 'set_materials', plan, previous, previous3d };
+}
+
+export function isSetMaterialsOp(op: Record<string, unknown> | null | undefined): boolean {
+  return !!op && op.op === 'set_materials';
+}
+
+/** Untrusted change-log / sync payload → a safe materials op, or null. */
+export function coerceSetMaterialsOp(raw: unknown): SetMaterialsOp | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if (o.op !== 'set_materials') return null;
+  const plan = coerceMaterialPlan(o.plan);
+  if (!plan) return null;
+  const previous = o.previous ? coerceMaterialPlan(o.previous) : null;
+  return { op: 'set_materials', plan, previous, previous3d: o.previous3d === true };
+}

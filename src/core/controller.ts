@@ -120,6 +120,8 @@ export interface ViewportHandle {
   hiddenLayers?(): string[];
   /** 3D: apply a material/lighting plan (cad/materials MaterialPlan). */
   setMaterials?(plan: unknown): Promise<void>;
+  /** The materials/lighting currently on the 3D view, if any. */
+  currentMaterials?(): unknown;
   /** 3D first-person walkthrough. Turns the 3D view on if needed. */
   walk?(on: boolean, room?: string): Promise<boolean>;
   walkStep?(step: string): void;

@@ -9,6 +9,7 @@ import {
   isDesignRequest,
   isEnabled,
   prepareHybrid,
+  warmOnDevice,
   setModelsForTest,
   verifyOp,
   generateReferenceOptions,
@@ -485,5 +486,12 @@ describe('generateReferenceOptions (SVG text model, no image billing)', () => {
     expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
     setModelsForTest({ enabled: true, refGenerate: model('{"options":[]}') });
     expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
+  });
+});
+
+describe('on-device warm-up', () => {
+  it('no-ops under test overrides (does not call a model)', async () => {
+    setModelsForTest({ enabled: true, appCheck: 'ready', cadTool: model('{"tool":"zoom","args":{"to":"fit"},"confidence":1}') });
+    expect(await warmOnDevice()).toBe(false);
   });
 });

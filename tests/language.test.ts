@@ -111,6 +111,8 @@ describe('languageBadgeLabel (honest source · language)', () => {
   it('a non-English command that fell to the rules floor is NOT labelled with the language', () => {
     // Translation never happened — the badge must stay honest, not claim Kannada.
     expect(languageBadgeLabel('rules', 'fallback', KN, true)).toBe('Rules · fallback');
+    expect(languageBadgeLabel('cloud', 'handed-off', EN, false)).toBe('Nano → Gemini');
+    expect(languageBadgeLabel('cloud', 'handed-off', KN, true)).toBe('Nano → Gemini · Kannada');
   });
 });
 

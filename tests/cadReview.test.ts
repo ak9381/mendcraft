@@ -191,3 +191,20 @@ describe('plan digest', () => {
     expect(planDigest(null)).toBe('');
   });
 });
+
+describe('3D materials proposals in the change log', () => {
+  it('stores a set_materials op as a pending reviewed change and keeps it through sanitize', () => {
+    const log = createChangeLog(memKV());
+    const op = { op: 'set_materials', plan: { label: 'Warm home', walls: { color: '#f3e9dc', roughness: 0.9, name: 'Warm white plaster' }, floor: { color: '#a47148', roughness: 0.7, name: 'Teak wood' }, lighting: { sunIntensity: 1, sunAzimuth: 120, sunElevation: 40, sunColor: '#fff1d6', ambientIntensity: 1, skyColor: '#f6efe6' }, notes: 'preview' }, previous: null, previous3d: false };
+    const e = log.propose({ actor: 'nano', tool: 'set_materials', title: '3D look: Warm home', why: 'You said: "convert 2D to 3D".', op, before: 'empty plan', source: 'cloud' });
+    expect(log.pending()).toHaveLength(1);
+    expect(e.actor).toBe('nano');
+    expect(e.op?.op).toBe('set_materials');
+    const applied: unknown[] = [];
+    const r = log.accept(e.id, { snapshot: () => ({}), apply: (o) => { applied.push(o); return { ok: true }; }, summary: () => '3D dressed' });
+    expect(r.ok).toBe(true);
+    expect(applied).toHaveLength(1);
+    expect(log.get(e.id)?.status).toBe('applied');
+    expect(sanitizeEntry(JSON.parse(JSON.stringify(e)))?.op?.op).toBe('set_materials');
+  });
+});

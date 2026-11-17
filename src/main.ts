@@ -36,6 +36,7 @@ import {
   verifyOp,
   prepareHybrid,
   warmCloud,
+  warmOnDevice,
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
@@ -98,10 +99,10 @@ import { withChangeRecording } from './cad/recording';
 import { checkGuidelines, summarizeReport, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
 import { answerPlanQuestion } from './cad/planQA';
-import { parseCopilot } from './cad/copilot';
+import { parseCopilot, isInstantCopilot, shouldNanoPickIntent } from './cad/copilot';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
-import { presetFor, PHOTO_RENDER_NOTE, type MaterialPlan } from './cad/materials';
+import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
 import { siteBookId, syncSiteBook } from './cad/sync';
 import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
 import { askCopilot, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
@@ -1993,9 +1994,11 @@ const net = createNetworkMonitor({ navigator, target: window });
 let draining = false;
 
 // ---- CAD copilot + reviewed changes + site checklist (src/cad) -----------
-// Her words → a typed CAD tool. Rules first; Nano on the device when rules
-// miss; cloud Gemini only for the hard parts. Every AI drawing change is a
-// PENDING proposal in the change log until she accepts it (pinch / click /
+// Her words → a typed CAD tool. When Nano is ready it picks the intent first
+// (including phrases the rules already know, like "convert 2D to 3D") and
+// hands heavy work (materials, guideline research) to Gemini. The rules
+// parser is the fallback when Nano is unavailable. Every AI canvas change is
+// a PENDING proposal in the change log until she accepts it (pinch / click /
 // "accept"); her own edits are logged as applied. Offline, hard questions
 // become the site checklist.
 
@@ -2016,6 +2019,31 @@ function isOnline(): boolean {
 }
 function sourceToActor(source: Source): Actor {
   return source === 'cloud' ? 'gemini' : source === 'on-device' ? 'nano' : 'rules';
+}
+
+function applyReviewedOp(op: Record<string, unknown>): { ok: boolean; error?: string } {
+  const mat = coerceSetMaterialsOp(op);
+  if (mat) {
+    void viewport.setMaterials?.(mat.plan);
+    btn3d.setAttribute('aria-pressed', 'true');
+    btn3d.classList.toggle('active', true);
+    btn3d.textContent = '2D view';
+    return { ok: true };
+  }
+  const step = rawController.applyOp(op);
+  return { ok: step.ok, error: step.error };
+}
+
+function restoreMaterialsOp(op: Record<string, unknown> | null | undefined): void {
+  const mat = coerceSetMaterialsOp(op);
+  if (!mat) return;
+  if (mat.previous) void viewport.setMaterials?.(mat.previous);
+  if (mat.previous3d === false) {
+    viewport.toggle3D?.(false);
+    btn3d.setAttribute('aria-pressed', 'false');
+    btn3d.classList.toggle('active', false);
+    btn3d.textContent = '3D view';
+  }
 }
 
 const copilotPanel = createCopilotPanel({
@@ -2106,10 +2134,7 @@ function acceptChange(id: string): void {
   try {
     res = changeLog.accept(id, {
       snapshot: () => rawController.snapshot(),
-      apply: (op) => {
-        const step = rawController.applyOp(op);
-        return { ok: step.ok, error: step.error };
-      },
+      apply: applyReviewedOp,
       summary: () => planDigest(rawController.snapshot()),
     });
   } finally {
@@ -2130,6 +2155,7 @@ function acceptChange(id: string): void {
 function rejectChange(id: string): void {
   const e = changeLog.get(id);
   if (!e || !changeLog.reject(id)) return;
+  restoreMaterialsOp(e.op);
   verifierEl.textContent = `Rejected: ${e.title}. Nothing changed.`;
   say('Rejected. Nothing changed.');
 }
@@ -2160,6 +2186,9 @@ function stageRevert(id: string): void {
       applyingReviewed = false;
     }
     if (!r.ok) { say(r.error ?? 'Could not revert.'); verifierEl.textContent = r.error ?? 'Could not revert.'; return; }
+    const chain = [e, ...later].sort((a, b) => a.at - b.at);
+    const firstMat = chain.map((x) => x.op).find((op) => isSetMaterialsOp(op));
+    if (firstMat) restoreMaterialsOp(firstMat);
     renderAll();
     verifierEl.textContent = `Reverted ${r.count} change${r.count === 1 ? '' : 's'}. You can undo the revert too.`;
     say(`Reverted ${r.count === 1 ? 'that change' : `${r.count} changes`}.`);
@@ -2422,6 +2451,7 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
       const style = String(a.style ?? why);
       let plan: MaterialPlan = presetFor(style);
       let by = 'a preset on this device';
+      let handedOff = false;
       if (isOnline() && cloudConfigured) {
         copilotPanel.setBusy('Gemini is choosing materials and light…');
         const res = await proposeMaterials(style, controller.summary());
@@ -2429,15 +2459,43 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
         if (res) {
           plan = res.plan;
           by = 'Gemini · cloud';
-          recordLedger('cloud', 'materials', '3D materials as data', `request: ${JSON.stringify(style)}\nrooms: ${controller.summary().slice(0, 300)}`, res.ms);
-          setBadge('cloud', 'big-job');
+          handedOff = source === 'on-device' || actor === 'nano';
+          recordLedger('cloud', 'materials', handedOff ? 'Nano → Gemini' : '3D materials as data', `request: ${JSON.stringify(style)}\nrooms: ${controller.summary().slice(0, 300)}`, res.ms);
+          setBadge('cloud', handedOff ? 'handed-off' : 'big-job', false, handedOff ? 'Nano picked the tool, Gemini chose materials' : null);
+          if (handedOff) {
+            routerPanel.add({
+              utterance: why || style, planned: 'on-device', source: 'cloud',
+              reason: 'handed-off', escalated: true, ms: res.ms,
+              note: 'Nano picked set_materials; Gemini chose materials and light',
+            });
+          }
         }
       } else {
-        setBadge('rules', isOnline() ? 'private' : 'offline');
+        setBadge(source === 'on-device' ? 'on-device' : 'rules', source === 'on-device' ? 'private' : (isOnline() ? 'private' : 'offline'));
+      }
+      const names = `walls ${plan.walls.name}, floor ${plan.floor.name}`;
+      const reviewable = actor !== 'her' || by === 'Gemini · cloud';
+      if (reviewable) {
+        const previous = (viewport.currentMaterials?.() as MaterialPlan | undefined) ?? null;
+        const previous3d = viewport.is3D?.() === true || btn3d.getAttribute('aria-pressed') === 'true';
+        await viewport.setMaterials?.(plan);
+        btn3d.setAttribute('aria-pressed', 'true');
+        btn3d.classList.toggle('active', true);
+        btn3d.textContent = '2D view';
+        const title = `3D look: ${plan.label} (${names})`;
+        copilotPanel.setAnswer({ question: 'Convert to 3D', text: `${plan.label}: ${names}. ${plan.notes}`, by: `${handedOff ? 'Nano → Gemini' : by}. ${PHOTO_RENDER_NOTE}` });
+        proposeChange({
+          actor: actor === 'her' ? 'gemini' : actor,
+          tool: 'set_materials',
+          title,
+          why: `${plan.notes}${why ? ` You said: "${why}".` : ''} ${PHOTO_RENDER_NOTE}`.trim(),
+          op: makeSetMaterialsOp(plan, previous, previous3d),
+          source: handedOff || by === 'Gemini · cloud' ? 'cloud' : (source === 'on-device' ? 'on-device' : 'rules'),
+        });
+        return true;
       }
       await viewport.setMaterials?.(plan);
       btn3d.setAttribute('aria-pressed', 'true');
-      const names = `walls ${plan.walls.name}, floor ${plan.floor.name}`;
       verifierEl.textContent = `3D: ${plan.label} (${names}) by ${by}. ${plan.notes} ${PHOTO_RENDER_NOTE}`;
       copilotPanel.setAnswer({ question: 'Convert to 3D', text: `${plan.label}: ${names}. ${plan.notes}`, by: `${by}. ${PHOTO_RENDER_NOTE}` });
       say(`Here it is in 3D: ${plan.label}. ${names}.`);
@@ -2448,13 +2506,50 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
   }
 }
 
-/** Copilot rules pass (early in the pipeline). Null = not a copilot request. */
+/** Copilot pass (early in the pipeline). Instant review/walk commands stay on
+ *  rules. When Nano is ready, recognised canvas tools (including
+ *  "convert 2D to 3D") go to Nano first; rules are the fallback. Null = not a
+ *  copilot request. */
 async function handleCopilot(utterance: string): Promise<boolean | null> {
   const intent = parseCopilot(utterance, { walking: viewport.walking?.() ?? false });
+  if (intent && isInstantCopilot(intent) && intent.kind !== 'tool') {
+    lastUtteranceText = utterance;
+    lastUtteranceAt = Date.now();
+    lastUtteranceSource = 'rules';
+    if (intent.kind === 'checklist-add') {
+      return handleCopilotRules(intent, utterance);
+    }
+    if (intent.kind === 'meta') {
+      return handleCopilotRules(intent, utterance);
+    }
+  }
+  if (shouldNanoPickIntent(routerEnv().deviceReady, intent)) {
+    const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: false });
+    if (picked && picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
+      recordLedger('on-device', 'cad-tool', REASON_TEXT.private, '', picked.ms);
+      lastUtteranceText = utterance;
+      lastUtteranceAt = Date.now();
+      lastUtteranceSource = 'on-device';
+      setBadge('on-device', 'private');
+      routerPanel.add({
+        utterance, planned: 'on-device', source: 'on-device', reason: 'private',
+        confidence: picked.confidence, escalated: false, ms: picked.ms,
+        note: `Nano picked ${picked.call.tool}`,
+      });
+      const tool = cadTool(picked.call.tool);
+      const actor: Actor = (tool?.kind === 'edit' || picked.call.tool === 'set_materials') ? 'nano' : 'her';
+      return runCadTool(picked.call, actor, utterance, 'on-device');
+    }
+    // Nano missed or was unsure — fall through to the rules parse.
+  }
   if (!intent) return null;
   lastUtteranceText = utterance;
   lastUtteranceAt = Date.now();
   lastUtteranceSource = 'rules';
+  return handleCopilotRules(intent, utterance);
+}
+
+async function handleCopilotRules(intent: NonNullable<ReturnType<typeof parseCopilot>>, utterance: string): Promise<boolean | null> {
   if (intent.kind === 'checklist-add') {
     siteChecklist.add(intent.question, controller.summary().slice(0, 300), !isOnline());
     copilotPanel.open('checklist');
@@ -2479,7 +2574,13 @@ async function handleCopilot(utterance: string): Promise<boolean | null> {
         rejectChange(p[p.length - 1].id);
         return true;
       }
-      case 'reject-all': for (const e of changeLog.pending()) changeLog.reject(e.id); say('Rejected everything waiting.'); return true;
+      case 'reject-all': {
+        const pending = changeLog.pending();
+        if (!pending.length) { say('Nothing is waiting.'); return true; }
+        for (const e of pending) rejectChange(e.id);
+        say('Rejected everything waiting.');
+        return true;
+      }
       case 'revert-last': {
         const last = [...changeLog.entries()].reverse().find((e) => e.status === 'applied');
         if (!last) { say('Nothing to revert.'); return true; }
@@ -2505,7 +2606,7 @@ async function handleCopilotQuestion(utterance: string): Promise<boolean | null>
       const tool = cadTool(picked.call.tool);
       // Nano/Gemini-picked EDITS become pending proposals; views, checks and
       // measurements run straight away (they don't change the drawing).
-      const actor: Actor = tool?.kind === 'edit' ? sourceToActor(picked.source) : 'her';
+      const actor: Actor = (tool?.kind === 'edit' || picked.call.tool === 'set_materials') ? sourceToActor(picked.source) : 'her';
       return runCadTool(picked.call, actor, utterance, picked.source);
     }
   }
@@ -4489,6 +4590,7 @@ void prepareHybrid().then(async (status) => {
   }
   renderDeviceButton(await checkDeviceAvailability());
   renderAiStatus();
+  if (getHybridStatus().deviceModel === 'ready') void warmOnDevice();
 });
 
 // ---- sim mode ----

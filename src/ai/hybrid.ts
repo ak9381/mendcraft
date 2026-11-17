@@ -339,6 +339,7 @@ let lastFailKind: CloudFailKind | null = null;
 /** True once a cloud generate has finished (or returned usable partial JSON). */
 let cloudSettled = false;
 let warmPromise: Promise<boolean> | null = null;
+let warmDevicePromise: Promise<boolean> | null = null;
 
 function resetStatus(): void {
   deviceModelStatus = 'idle';
@@ -348,6 +349,7 @@ function resetStatus(): void {
   lastFailKind = null;
   cloudSettled = false;
   warmPromise = null;
+  warmDevicePromise = null;
 }
 
 /** Short = guideline explain and similar; long = materials, email, copilot. */
@@ -497,6 +499,35 @@ export async function warmCloud(): Promise<boolean> {
     }
   })();
   return warmPromise;
+}
+
+
+/** Create and ping the on-device session so the first real Nano intent pick
+ *  is a short follow-up rather than a cold create. No-ops in tests, when Nano
+ *  is not ready, or when Firebase is unconfigured. */
+export async function warmOnDevice(): Promise<boolean> {
+  if (testOverrides) return false;
+  if (deviceModelStatus !== 'ready') return false;
+  if (warmDevicePromise) return warmDevicePromise;
+  warmDevicePromise = (async () => {
+    const models = await ensureModels();
+    const model = models?.cadTool ?? models?.intent;
+    if (!model) return false;
+    try {
+      if (model.initializeDeviceModel) await model.initializeDeviceModel();
+      await withTimeout(
+        model.generateContent('She said: "zoom to fit"\nReply JSON only: {"tool":"zoom","args":{"to":"fit"},"confidence":1}'),
+        ON_DEVICE_TIMEOUT_MS,
+        'on-device warm-up',
+      );
+      return true;
+    } catch (err) {
+      noteError('on-device warm-up', err);
+      warmDevicePromise = null;
+      return false;
+    }
+  })();
+  return warmDevicePromise;
 }
 
 /**

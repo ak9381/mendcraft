@@ -106,7 +106,7 @@ export function toolCatalogText(): string {
 }
 
 export function cadToolPrompt(summary: string): string {
-  return `You control a CAD floor-plan editor for a user who speaks short commands. Units are mm; x is right, y is up. Pick tools from this list:\n${toolCatalogText()}\nUse target "selected" when she says this/that/it. Current plan: ${summary}`;
+  return `You control a CAD floor-plan editor for a user who speaks short commands. Units are mm; x is right, y is up. Pick tools from this list:\n${toolCatalogText()}\n"convert/turn/make/show 2D to 3D", "render", "materials", "finishes" or "lighting" → set_materials (args.style = her exact words). Only "3D view" / "back to plan" with no materials request → view_3d.\nUse target "selected" when she says this/that/it. Current plan: ${summary}`;
 }
 
 export interface ToolCall { tool: string; args: Record<string, unknown> }
@@ -201,6 +201,7 @@ export function describeCall(call: ToolCall): string {
     case 'delete': return `Delete${tgt || ' the selection'}`;
     case 'add_stair': return 'Add a staircase';
     case 'fix_guideline': return 'Fix a guideline finding';
+    case 'set_materials': return a.style ? `Dress the 3D view (${String(a.style).slice(0, 80)})` : 'Dress the 3D view';
     default: return call.tool.replace(/_/g, ' ');
   }
 }

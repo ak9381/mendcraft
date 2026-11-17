@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { assertFirebaseBuildEnv } from './src/firebase/envGuard';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,6 +137,27 @@ function appCheckDebugLocalPlugin(): Plugin {
   };
 }
 
+
+/** Fail `vite build` if Firebase / reCAPTCHA env values are placeholders, so a
+ *  rules-only production bundle cannot ship silently again. Never logs the
+ *  key values. */
+function firebaseEnvGuardPlugin(): Plugin {
+  let command: 'build' | 'serve' = 'serve';
+  let mode = 'production';
+  return {
+    name: 'firebase-env-guard',
+    configResolved(config) {
+      command = config.command;
+      mode = config.mode;
+    },
+    buildStart() {
+      if (command !== 'build') return;
+      const env = loadEnv(mode, root, 'VITE_');
+      assertFirebaseBuildEnv(env);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [appCheckDebugLocalPlugin()],
+  plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin()],
 });

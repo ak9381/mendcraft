@@ -130,3 +130,21 @@ export function emailPrompt(items: { question: string; answer?: string }[], summ
   const list = items.map((it, i) => `${i + 1}. ${it.question}${it.answer ? ` (my note: ${it.answer})` : ''}`).join('\n');
   return `Write a short, warm, professional email from an architect to her client after a site visit, asking these open questions clearly as a numbered list. Plain text, no placeholders like [Name] except "Hello," as the greeting, sign off "Thank you." Keep it under 150 words. Plan context (mm): ${summary.slice(0, 400)}\nQuestions:\n${list}\nReply JSON only: {"subject":"...","body":"..."}`;
 }
+
+/** Accept / reject / walk-step commands stay on the rules path even when Nano
+ *  is ready — they must be instant and deterministic. */
+export function isInstantCopilot(intent: CopilotIntent | null): boolean {
+  if (!intent) return false;
+  if (intent.kind === 'meta' || intent.kind === 'checklist-add') return true;
+  if (intent.kind === 'tool') {
+    if (intent.call.tool === 'walk_step') return true;
+    if (intent.call.tool === 'walkthrough' && intent.call.args.on === false) return true;
+  }
+  return false;
+}
+
+/** When Nano is ready, a rules-recognised canvas tool (e.g. "convert 2D to 3D")
+ *  is offered to Nano first. Instant meta/walk commands stay on rules. */
+export function shouldNanoPickIntent(deviceReady: boolean, intent: CopilotIntent | null): boolean {
+  return deviceReady && !!intent && intent.kind === 'tool' && !isInstantCopilot(intent);
+}

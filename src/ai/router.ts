@@ -24,7 +24,8 @@ export type RouteReason =
   | 'no-device'      // cloud: no usable on-device model here
   | 'offline'        // rules: no AI available at all (Firebase missing / blocked)
   | 'fallback'       // rules: an AI path failed, the deterministic floor answered
-  | 'pointed';       // deixis: resolved from a camera crop + pointer (point and say)
+  | 'pointed'        // deixis: resolved from a camera crop + pointer (point and say)
+  | 'handed-off';    // Nano picked the tool; Gemini did the heavy work (materials, research)
 
 /** What the router knows about the world when it decides. */
 export interface RouterEnv {
@@ -136,10 +137,13 @@ export const REASON_TEXT: Record<RouteReason, string> = {
   offline: 'offline',
   fallback: 'fallback',
   pointed: 'point + say',
+  'handed-off': 'Nano → Gemini',
 };
 
-/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private", "Rules · exact command". */
+/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private", "Rules · exact command".
+ *  A Nano-then-Gemini hand-off is labelled plainly as "Nano → Gemini". */
 export function badgeLabel(source: Source, reason: RouteReason): string {
+  if (reason === 'handed-off') return 'Nano → Gemini';
   return `${SOURCE_TEXT[source]} · ${REASON_TEXT[reason]}`;
 }
 

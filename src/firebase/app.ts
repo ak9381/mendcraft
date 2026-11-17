@@ -4,6 +4,9 @@
 // FirebaseApp this returns.
 
 import type { FirebaseApp } from 'firebase/app';
+import { isUsableFirebaseApiKey } from './envGuard';
+
+export { PLACEHOLDER_RE } from './envGuard';
 
 export interface Env {
   [key: string]: string | boolean | undefined;
@@ -13,13 +16,9 @@ export function env(): Env {
   return ((import.meta as unknown as { env?: Env }).env ?? {}) as Env;
 }
 
-/** Values that look like an un-filled template placeholder, not a real key. */
-export const PLACEHOLDER_RE = /your|placeholder|changeme|replace|xxx|<|^\s*$/i;
-
 /** Firebase is usable only with a real API key (a placeholder means rules-only). */
 export function isFirebaseConfigured(): boolean {
-  const key = env().VITE_FIREBASE_API_KEY;
-  return typeof key === 'string' && !PLACEHOLDER_RE.test(key);
+  return isUsableFirebaseApiKey(env().VITE_FIREBASE_API_KEY);
 }
 
 /** Reuse the already-initialised app (HMR-safe) or create one from env. */

@@ -908,6 +908,7 @@ export function createPlanRenderer(
       const v = await ensure3D();
       v.setMaterials(pendingMaterials);
     },
+    currentMaterials: () => pendingMaterials,
     async walk(on, room) {
       if (!on) {
         if (view3d) view3d.walk(false);
