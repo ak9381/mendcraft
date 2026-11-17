@@ -104,14 +104,27 @@ export function guessesAgree(
     const a = normalizeWords(draft.answer);
     const b = normalizeWords(cloud.answer);
     if (!a.length || !b.length) return false;
-    const overlap = a.filter((w) => b.includes(w)).length;
-    return overlap / Math.min(a.length, b.length) >= 0.35;
+    const overlap = tokenOverlap(a, b);
+    if (overlap / Math.min(a.length, b.length) >= 0.35) return true;
+    // Shared measurements (both mention 700 mm and 800 mm) count even when
+    // the surrounding wording differs.
+    const numsA = a.filter((w) => /^\d+$/.test(w));
+    const numsB = b.filter((w) => /^\d+$/.test(w));
+    if (numsA.length && numsB.length) {
+      const shared = numsA.filter((n) => numsB.includes(n)).length;
+      if (shared / Math.min(numsA.length, numsB.length) >= 0.5) return true;
+    }
+    return false;
   }
   return false;
 }
 
 function normalizeWords(s: string): string[] {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2 || /^\d+$/.test(w));
+}
+
+function tokenOverlap(a: string[], b: string[]): number {
+  return a.filter((w) => b.some((x) => x === w || (w.length >= 5 && x.length >= 5 && (x.startsWith(w) || w.startsWith(x))))).length;
 }
 
 export interface SpeculativeEngine {

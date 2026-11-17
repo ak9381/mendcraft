@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyCloudFailure,
   extractJson,
+  hasCompleteJson,
   repairJson,
   safeResponseText,
 } from '../src/ai/cloudJson';
@@ -28,6 +29,13 @@ describe('extractJson', () => {
   it('returns null for empty or non-JSON', () => {
     expect(extractJson('')).toBeNull();
     expect(extractJson('no object here')).toBeNull();
+  });
+
+  it('hasCompleteJson is true only for a fully closed object', () => {
+    expect(hasCompleteJson('{"items":[{"id":"door-bath","explanation":"Too narrow."}]}')).toBe(true);
+    expect(hasCompleteJson('Sure. {"answer":"ok"} trailing')).toBe(true);
+    expect(hasCompleteJson('{"items":[{"id":"door-bath","explanation":"According to ISO 21542')).toBe(false);
+    expect(hasCompleteJson('')).toBe(false);
   });
 });
 

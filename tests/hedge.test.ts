@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { classifyCloudFailure, mergeStreamText, safeStreamChunk } from '../src/ai/cloudJson';
 import { HEDGE_AFTER_MS, HEDGE_CLOUD_MODEL, PRIMARY_CLOUD_MODEL, raceHedged } from '../src/ai/hedge';
+import { explainAccessibility, proposeMaterials, setModelsForTest } from '../src/ai/hybrid';
 
 describe('classifyCloudFailure high-demand', () => {
   it('detects 500, 503 and high-demand wording', () => {
@@ -82,5 +83,65 @@ describe('raceHedged', () => {
       hedgeAfterMs: 5,
     });
     expect(res).toBeNull();
+  });
+});
+
+
+afterEach(() => {
+  setModelsForTest(null);
+  vi.useRealTimers();
+});
+
+describe('hedged materials and guideline calls', () => {
+  it('proposeMaterials takes the 3.1 backup when the primary is late', async () => {
+    vi.useFakeTimers();
+    setModelsForTest({
+      enabled: true,
+      copilotMaterials: { generateContent: () => new Promise(() => {}) },
+      copilotMaterialsHedge: {
+        generateContent: async () => ({
+          response: {
+            text: () => JSON.stringify({
+              label: 'Warm home',
+              walls: { color: '#f3e9dc', roughness: 0.9, name: 'plaster' },
+              floor: { color: '#a47148', roughness: 0.7, name: 'teak' },
+              lighting: { sunIntensity: 1.5, sunAzimuth: 120, sunElevation: 40, sunColor: '#fff1d6', ambientIntensity: 1.1, skyColor: '#f6efe6' },
+            }),
+            inferenceSource: 'in_cloud',
+          },
+        }),
+      },
+    });
+    const promise = proposeMaterials('warm evening lighting', 'living room');
+    await vi.advanceTimersByTimeAsync(HEDGE_AFTER_MS + 20);
+    const res = await promise;
+    expect(res?.source).toBe('cloud');
+    expect(res?.model).toBe(HEDGE_CLOUD_MODEL);
+    expect(res?.plan.walls.color).toMatch(/^#/);
+  });
+
+  it('explainAccessibility takes the 3.1 backup when the primary is late', async () => {
+    vi.useFakeTimers();
+    setModelsForTest({
+      enabled: true,
+      a11yExplain: { generateContent: () => new Promise(() => {}) },
+      a11yExplainHedge: {
+        generateContent: async () => ({
+          response: {
+            text: () => '{"items":[{"id":"door-bath","explanation":"A 700 mm door is too narrow for a wheelchair."}]}',
+            inferenceSource: 'in_cloud',
+          },
+        }),
+      },
+    });
+    const promise = explainAccessibility(
+      [{ id: 'door-bath', rule: 'door-width', message: 'Bathroom door is 700 mm.', citation: 'ISO 21542' }],
+      'two bedroom plan',
+    );
+    await vi.advanceTimersByTimeAsync(HEDGE_AFTER_MS + 20);
+    const res = await promise;
+    expect(res.source).toBe('cloud');
+    expect(res.model).toBe(HEDGE_CLOUD_MODEL);
+    expect(res.items[0]?.explanation).toMatch(/700|narrow/i);
   });
 });

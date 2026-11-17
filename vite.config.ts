@@ -77,18 +77,22 @@ function appCheckDebugLocalPlugin(): Plugin {
       import {
         prepareHybrid,
         getHybridStatus,
+        warmCloud,
         askCopilot,
         draftClientEmail,
         proposeMaterials,
         explainAccessibility,
       } from '/src/ai/hybrid.ts';
+      import { createSpeculativeEngine } from '/src/cad/speculative.ts';
       globalThis.__mcCloudProbe = {
         prepareHybrid,
         getHybridStatus,
+        warmCloud,
         askCopilot,
         draftClientEmail,
         proposeMaterials,
         explainAccessibility,
+        createSpeculativeEngine,
       };
       document.body.dataset.ready = '1';
     </script>

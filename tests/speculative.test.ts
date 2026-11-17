@@ -35,6 +35,17 @@ describe('speculative helpers', () => {
     )).toBe(true);
     expect(guessesAgree({ tool: 'delete' }, { answer: 'Leave it.', calls: [] })).toBe(false);
   });
+
+  it('agrees when both answers share the same measurements, even if the wording differs', () => {
+    expect(guessesAgree(
+      { answer: '700 mm is usually too narrow; most guidelines want about 800 mm or more.' },
+      { answer: 'A 700 mm door width is generally considered insufficient for standard wheelchair access, which typically requires a minimum clear opening of 800 to 850 mm.', calls: [] },
+    )).toBe(true);
+    expect(guessesAgree(
+      { answer: 'No. Opening that wall needs a structural check first.' },
+      { answer: 'Kitchen openings typically require checking if the wall is load-bearing before proceeding. Always verify structural integrity locally.', calls: [] },
+    )).toBe(true);
+  });
 });
 
 describe('createSpeculativeEngine', () => {
