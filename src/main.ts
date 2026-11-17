@@ -98,7 +98,7 @@ import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type Ema
 import { withChangeRecording } from './cad/recording';
 import { checkGuidelines, summarizeReport, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
-import { answerPlanQuestion } from './cad/planQA';
+import { answerPlanQuestion, isPlanQuestion } from './cad/planQA';
 import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
@@ -2305,7 +2305,37 @@ function proposeIssueFix(issue: A11yIssue, by: 'rules' | 'cloud' | 'on-device'):
 }
 
 /** Answer a hard question: Gemini when online, else the site checklist. */
+function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string, by: string): true {
+  const ids = 'ids' in ans && Array.isArray(ans.ids) ? ans.ids : [];
+  if (ids.length) viewport.flash?.(ids);
+  copilotPanel.setAnswer({ question, text: ans.text, by });
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  verifierEl.textContent = ans.text;
+  say(ans.text);
+  return true;
+}
+
 async function handleHardQuestion(question: string): Promise<boolean> {
+  const local = answerPlanQuestion(planDoc(), question);
+  if (local) {
+    setBadge('rules', 'private');
+    recordLedger('rules', 'plan-qa', 'read from the drawing', question);
+    return applyPlanAnswer(local, question, 'Plan data · this device');
+  }
+  if (routerEnv().deviceReady) {
+    const picked = await pickCadTool(question, controller.summary(), { allowCloud: false });
+    if (picked && picked.call.tool === 'measure' && picked.confidence >= 0.5) {
+      const q = String(picked.call.args.question ?? question);
+      const ans = answerPlanQuestion(planDoc(), q);
+      if (ans) {
+        recordLedger('on-device', 'cad-tool', 'private', '', picked.ms);
+        lastUtteranceSource = 'on-device';
+        setBadge('on-device', 'private');
+        return applyPlanAnswer(ans, q, 'Nano · plan data');
+      }
+    }
+  }
   if (!isOnline() || !cloudConfigured) {
     siteChecklist.add(question, controller.summary().slice(0, 300), !isOnline());
     copilotPanel.open('checklist');
@@ -2317,7 +2347,9 @@ async function handleHardQuestion(question: string): Promise<boolean> {
     return true;
   }
   copilotPanel.setBusy('Asking Gemini…');
-  const res = await askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  const res = await askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
+    copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud' });
+  });
   copilotPanel.setBusy(null);
   if (!res) {
     siteChecklist.add(question, controller.summary().slice(0, 300), false);
@@ -2653,8 +2685,15 @@ async function handleCopilotRules(intent: NonNullable<ReturnType<typeof parseCop
  *  (on device, works offline), numbers still come from the drawing; hard
  *  questions go to Gemini, or to the site checklist with no signal. */
 async function handleCopilotQuestion(utterance: string): Promise<boolean | null> {
-  if (!isHardQuestion(utterance)) return null;
-  const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() });
+  const local = answerPlanQuestion(planDoc(), utterance);
+  if (local) {
+    setBadge('rules', 'private');
+    recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+    lastUtteranceSource = 'rules';
+    return applyPlanAnswer(local, utterance, 'Plan data · this device');
+  }
+  if (!isHardQuestion(utterance) && !isPlanQuestion(utterance)) return null;
+  const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: isOnline() && isHardQuestion(utterance) });
   if (picked) {
     recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : REASON_TEXT.private, picked.source === 'cloud' ? commandPayload(utterance) : '', picked.ms);
     lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';

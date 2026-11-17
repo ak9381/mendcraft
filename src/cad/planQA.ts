@@ -28,7 +28,9 @@ export function isPlanQuestion(utterance: string): boolean {
   const t = utterance.trim().toLowerCase();
   // Edits ("make this wall 4 metres long") are never questions.
   if (/^(please )?(make|set|move|add|change|resize|rotate|delete|remove|draw|put|place|extend|shorten|widen|narrow|undo|redo|select|rename|split|join|open|close)\b/.test(t)) return false;
-  const asks = /\?$/.test(t) || /^(what|what's|whats|how|which|is|are|tell me|do|does|can you tell|give me the|show me the)\b/.test(t);
+  const asks = /\?$/.test(t)
+    || /^(what|what's|whats|how|which|is|are|tell me|do|does|can you tell|give me the|show me the)\b/.test(t)
+    || /\b(wall thickness|door width|room (?:area|size)|how (?:big|wide|thick|large|tall))\b/.test(t);
   if (!asks) return false;
   return /\b(wall|walls|room|rooms|kitchen|bed ?room|bath ?room|toilet|living|hall|door|doors|window|windows|stair|stairs|staircase|plan|house|flat|area|ceiling|thick|thickness)\b/.test(t);
 }

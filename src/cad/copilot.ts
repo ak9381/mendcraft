@@ -105,16 +105,38 @@ export function parseCopilot(utterance: string, opts: { walking?: boolean } = {}
   return null;
 }
 
+/** Keep only the numbers Gemini needs, so the prompt stays small and cheap. */
+export function compactPlanSummary(summary: string, max = 480): string {
+  const raw = summary.trim();
+  if (!raw) return '';
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    const slim: Record<string, unknown> = {};
+    if (Array.isArray(o.walls)) slim.walls = (o.walls as { id?: string; lenMm?: number; thick?: number }[]).slice(0, 24).map((w) => ({
+      id: w.id, len: w.lenMm, thick: w.thick,
+    }));
+    if (Array.isArray(o.openings)) slim.openings = (o.openings as object[]).slice(0, 24);
+    if (Array.isArray(o.rooms)) slim.rooms = (o.rooms as object[]).slice(0, 16);
+    if (o.selected) slim.sel = o.selected;
+    const s = JSON.stringify(slim);
+    if (s.length <= max) return s;
+    return s.slice(0, max);
+  } catch {
+    return raw.length <= max ? raw : raw.slice(0, max);
+  }
+}
+
 /** Prompt for cloud Gemini on a hard question (with the plan summary). */
 export function copilotAnswerPrompt(question: string, summary: string, region: string): string {
-  return `You are a friendly architecture assistant inside a CAD floor-plan app. The user is an architect on a site visit. Answer her question in 2-4 short, plain sentences. If it depends on local rules, give typical values and say to confirm locally. Never claim certified code compliance. If a drawing change would help, you may suggest tool calls (they are reviewed before applying). Region: ${region}. Plan (mm): ${summary}\nQuestion: "${question}"\nReply JSON only: {"answer":"...","calls":[{"tool":"...","args":{...}}],"why":"..."}`;
+  const plan = compactPlanSummary(summary);
+  return `Site-visit CAD copilot. 2 short sentences. Typical values only; never certified compliance. Suggest tool calls only if a drawing change would help (they are reviewed first). Region: ${region}. Plan mm: ${plan}\nQ: ${question}\nJSON: {"answer":"...","calls":[],"why":"..."}`;
 }
 
 export const COPILOT_ANSWER_CONSTRAINT: Record<string, unknown> = {
   type: 'object',
   properties: {
     answer: { type: 'string' },
-    calls: { type: 'array', items: { type: 'object', properties: { tool: { type: 'string' }, args: { type: 'object', properties: {} } } } },
+    calls: { type: 'array', items: { type: 'object', properties: { tool: { type: 'string' }, args: { type: 'object' } }, required: ['tool'] } },
     why: { type: 'string' },
   },
   required: ['answer'],
