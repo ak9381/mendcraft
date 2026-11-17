@@ -56,7 +56,7 @@ import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GEN
 import type { GenerateKind, RefHit } from '../references/types';
 import { CAD_TOOL_CONSTRAINT, cadToolPrompt, coerceToolCall, type ToolCall } from '../cad/tools';
 import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
-import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, type MaterialPlan } from '../cad/materials';
+import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
@@ -1862,7 +1862,7 @@ export async function proposeMaterials(
       withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`),
       cloudBudgetMs('long'),
       'materials',
-      coerceMaterialPlan,
+      (raw) => coerceMaterialPlan(raw, presetFor(request)),
     );
     if (!got) return null;
     recordInference('cloud', 'materials', Date.now() - t0);
