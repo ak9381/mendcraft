@@ -10,7 +10,7 @@ import { planStair, parseFloorHeight, proposeStair, stairLegend } from '../src/c
 import { answerPlanQuestion, isPlanQuestion } from '../src/cad/planQA';
 import { CAD_TOOLS, coerceToolCall, toolToAction, describeCall, CAD_TOOL_CONSTRAINT, cadToolPrompt } from '../src/cad/tools';
 import { parseCopilot, regionFromWords, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from '../src/cad/copilot';
-import { coerceMaterialPlan, coerceSetMaterialsOp, colorFromMaterialName, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, sunVector } from '../src/cad/materials';
+import { coerceMaterialPlan, coerceSetMaterialsOp, colorFromMaterialName, isSetMaterialsOp, makeSetMaterialsOp, presetFor, MATERIAL_PRESETS, CONVERT_LOOK, sunVector } from '../src/cad/materials';
 import { filterLayers, layerFromWords } from '../src/cad/layers';
 import { fixtureSymbol } from '../src/plan/fixtures';
 
@@ -226,6 +226,9 @@ describe('3D materials (data, no image model)', () => {
   it('offline presets from her words; sun vector points up', () => {
     expect(presetFor('evening light').label).toBe('Evening');
     expect(sunVector(MATERIAL_PRESETS.warm.lighting).z).toBeGreaterThan(0);
+    expect(presetFor('convert 2D to 3D')).toEqual(CONVERT_LOOK);
+    expect(presetFor('convert 2D to 3D').walls.name).toBe('matte white paint');
+    expect(presetFor('convert 2D to 3D').floor.name).toBe('light oak parquet');
   });
   it('resolves paint and wood names when the model skips hex', () => {
     expect(colorFromMaterialName('matte white paint')).toBe('#f7f6f2');

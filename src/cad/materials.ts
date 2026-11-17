@@ -72,6 +72,19 @@ export const MATERIAL_PRESETS: Record<'default' | 'warm' | 'bright' | 'evening',
   },
 };
 
+/** Default dress for "convert 2D to 3D" when she hasn't named a style.
+ *  Also the coerce fallback so a thin Gemini payload doesn't leave grey-card walls. */
+export const CONVERT_LOOK: MaterialPlan = {
+  label: 'Convert 2D to 3D',
+  walls: { color: '#f7f6f2', roughness: 0.85, name: 'matte white paint' },
+  floor: { color: '#e4c9a0', roughness: 0.7, name: 'light oak parquet' },
+  structure: { color: '#a8a29e', roughness: 0.7, name: 'Light concrete' },
+  furniture: { color: '#c8b6a6', roughness: 0.8, name: 'Oak' },
+  sanitary: { color: '#ffffff', roughness: 0.3, name: 'White ceramic' },
+  lighting: { sunIntensity: 1.6, sunAzimuth: 135, sunElevation: 55, sunColor: '#fffaf0', ambientIntensity: 1.5, skyColor: '#eef2f7' },
+  notes: 'Walls matte white paint, floor light oak parquet.',
+};
+
 /** Plain-JSON schema for the cloud response (converted to a Firebase Schema). */
 const SURFACE_SCHEMA = {
   type: 'object',
@@ -96,7 +109,7 @@ export const MATERIAL_CONSTRAINT: Record<string, unknown> = {
   required: ['walls', 'floor', 'lighting'],
 };
 
-export const MATERIAL_PROMPT = `You are an interior designer dressing a simple 3D model of a floor plan. Choose realistic materials and daylight that suit the request. Reply with ONE JSON object only: {"label":"<2-4 words>","walls":{"color":"#rrggbb","roughness":0..1,"name":"<material>"},"floor":{...},"structure":{...},"furniture":{...},"sanitary":{...},"lighting":{"sunIntensity":0.3..2.5,"sunAzimuth":0..360,"sunElevation":5..85,"sunColor":"#rrggbb","ambientIntensity":0.3..2,"skyColor":"#rrggbb"},"notes":"<one sentence>"}. Hex colours only.`;
+export const MATERIAL_PROMPT = `You are an interior designer dressing a simple 3D model of a floor plan. Choose realistic materials and daylight that suit the request. If she just asks to convert 2D to 3D with no style, use matte white paint walls (#f7f6f2) and light oak parquet floors (#e4c9a0) with bright, even daylight so the walls read white and the floor reads light oak. Reply with ONE JSON object only: {"label":"<2-4 words>","walls":{"color":"#rrggbb","roughness":0..1,"name":"<material>"},"floor":{...},"structure":{...},"furniture":{...},"sanitary":{...},"lighting":{"sunIntensity":0.3..2.5,"sunAzimuth":0..360,"sunElevation":5..85,"sunColor":"#rrggbb","ambientIntensity":0.3..2,"skyColor":"#rrggbb"},"notes":"<one sentence>"}. Hex colours only.`;
 
 const HEX6 = /^#?[0-9a-f]{6}$/i;
 const HEX3 = /^#?[0-9a-f]{3}$/i;
@@ -219,6 +232,7 @@ export function presetFor(utterance: string): MaterialPlan {
   const t = utterance.toLowerCase();
   if (/\b(evening|night|sunset|dusk)\b/.test(t)) return MATERIAL_PRESETS.evening;
   if (/\b(bright|airy|white|modern|marble)\b/.test(t)) return MATERIAL_PRESETS.bright;
+  if (/\b(convert|2d\s*to\s*3d|two-?d to three-?d|dress the model|make it 3d)\b/.test(t)) return CONVERT_LOOK;
   return MATERIAL_PRESETS.warm;
 }
 

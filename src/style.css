@@ -3195,7 +3195,7 @@ button.mc-ref-open {
     max-width: min(380px, calc(100vw - 32px));
   }
   #app:has(> #layout) .mc-props {
-    top: calc(var(--island-margin) + 168px);
+    top: calc(var(--island-margin) + 208px);
     left: var(--island-margin);
     right: auto;
   }
@@ -3243,6 +3243,15 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
   right: calc(var(--island-margin) + min(400px, calc(100vw - 32px)) + var(--target-gap));
   top: calc(var(--island-margin) + 8px);
+}
+
+@media (max-width: 1024px) {
+  #app:has(> #layout) .mc-props,
+  #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-props {
+    top: calc(var(--island-margin) + 208px);
+    left: var(--island-margin);
+    right: auto;
+  }
 }
 .mc-copilot {
   position: absolute; z-index: 42; top: var(--island-margin, 16px); right: var(--island-margin, 16px);
