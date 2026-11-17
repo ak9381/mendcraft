@@ -2307,7 +2307,11 @@ function proposeIssueFix(issue: A11yIssue, by: 'rules' | 'cloud' | 'on-device'):
 /** Answer a hard question: Gemini when online, else the site checklist. */
 function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string, by: string): true {
   const ids = 'ids' in ans && Array.isArray(ans.ids) ? ans.ids : [];
-  if (ids.length) viewport.flash?.(ids);
+  if (ids.length) {
+    const sel = rawController.applyOp({ op: 'select_set', ids });
+    if (!sel.ok) rawController.selectId(ids[0]);
+    renderAll();
+  }
   copilotPanel.setAnswer({ question, text: ans.text, by });
   copilotPanel.open('review');
   toggleButton(btnCopilot, true);
