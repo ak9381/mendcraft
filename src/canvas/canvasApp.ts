@@ -92,6 +92,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.innerHTML = `
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div></div>
     <header class="mc-bar">
+      <div class="mc-bar-tools">
       <button data-cmd="everything" class="mc-btn" data-i18n="showEverything">Show everything</button>
       <button data-cmd="new" class="mc-btn" data-i18n="newBoard">New board</button>
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
@@ -103,6 +104,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
+      </div>
       <p class="mc-canvas-status" role="status" aria-live="polite"></p>
     </header>
     <aside class="mc-dock" aria-label="Pinned board" hidden>

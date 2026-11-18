@@ -59,14 +59,15 @@
 .mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
-.mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+.mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
   padding: 10px; border-radius: 18px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
+.mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
 .mc-btn.primary { background: var(--text); color: #0d0d0c; border-color: var(--text); }
 .mc-say { display: flex; gap: 8px; flex: 1; min-width: 320px; }
 .mc-say input { flex: 1; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--bg); color: var(--text); font-size: 18px; }
-.mc-canvas-status { flex-basis: 100%; margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
+.mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
 
@@ -191,8 +192,23 @@
 
 /* Phone and short laptop: full-width AI panel so the Keep line isn't clipped. */
 @media (max-width: 600px) {
+  .mc-bar { left: 8px; right: 8px; top: 8px; padding: 8px; }
+  .mc-bar-tools { flex-wrap: nowrap; overflow-x: auto; }
+  .mc-btn { min-height: 44px; font-size: 16px; }
+  .mc-say { min-width: 180px; }
+  .mc-say input { min-height: 44px; font-size: 16px; }
+  .mc-canvas-status { font-size: 15px; }
   .mc-ai { left: 8px; right: 8px; width: auto; bottom: 8px; }
   .mc-ai pre { max-height: 120px; }
+  /* Compact the in-panel proposal so Keep/Drop stay on screen. */
+  .mc-ai-pending .mc-proposal { padding: 10px 12px; }
+  .mc-ai-pending .mc-proposal-title { font-size: 22px; }
+  .mc-ai-pending .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
+  .mc-ai-pending .mc-proposal-route,
+  .mc-ai-pending .mc-proposal-sent { display: none; }
+  .mc-ai-pending .mc-proposal-actions { margin-top: 8px; }
+  .mc-ai-pending .mc-proposal-keep,
+  .mc-ai-pending .mc-proposal-drop { min-height: 52px; font-size: 18px; }
 }
 @media (max-width: 420px) {
   .mc-ai { padding: 10px 12px; }
