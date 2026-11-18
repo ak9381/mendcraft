@@ -257,7 +257,7 @@ export function createMotionRecognizer(opts: MotionOptions = {}) {
       return out;
     }
 
-    // ---- held static poses: V, three fingers (400 ms), open palm (1 s) ----
+    // ---- held static poses: V, three fingers (400 ms), open palm (0.8 s) ----
     if (pose !== heldPose) {
       heldPose = pose; heldSince = now; heldFired = false; heldAnchor = sample.palm;
     } else if (heldAnchor && Math.hypot(sample.palm.x - heldAnchor.x, sample.palm.y - heldAnchor.y) > W(0.05)) {
@@ -266,7 +266,7 @@ export function createMotionRecognizer(opts: MotionOptions = {}) {
     if (!heldFired) {
       if ((pose === 'v-sign' || pose === 'three-fingers') && now - heldSince >= holdMs) {
         heldFired = true; fire(out, { id: pose }, now);
-      } else if (pose === 'open-palm' && now - heldSince >= 1000) {
+      } else if (pose === 'open-palm' && now - heldSince >= 800) {
         heldFired = true; fire(out, { id: 'palm-hold' }, now);
       }
     }

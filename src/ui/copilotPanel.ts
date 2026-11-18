@@ -1,17 +1,20 @@
 // Copilot panel: three tabs with big pinchable targets.
 //  • Review   — AI changes waiting for her OK (accept / reject each, or all),
 //               the latest answer, and guideline-check findings.
-//  • Checklist — site questions saved offline; per item "Ask Gemini" or
+//  • Checklist — site questions saved offline; per item "Ask Deep" or
 //               include in "Email the client" (draft shown; opening her mail
 //               app needs her confirm; nothing is ever sent from here).
 //  • History  — every change: who (you / Nano / Gemini / rules), what, when,
 //               why, before → after; revert any applied entry.
 // DOM only; the state lives in cad/changeLog and cad/siteChecklist.
 
-import { ACTOR_LABEL, agoLabel, type ChangeEntry } from '../cad/changeLog';
+import { agoLabel, type ChangeEntry } from '../cad/changeLog';
 import { formatRouteLine, type RouteInfo } from '../cad/routeReason';
 import { GUIDELINE_LABEL, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineIssue, type RegionId } from '../cad/guidelines';
 import type { ChecklistItem, EmailDraft } from '../cad/siteChecklist';
+import { actorByLine } from '../ux/wording';
+import { catalogRoute, formatWhatWasSent } from '../ux/routeCatalog';
+import { applyHistoryFilter, filterLabel, type HistoryFilter, undoProposalTitle } from '../ux/historyFilters';
 
 export type CopilotTab = 'review' | 'checklist' | 'history';
 
@@ -80,11 +83,18 @@ function btn(label: string, cls: string, onClick: () => void, aria?: string): HT
 }
 
 function routeLine(route?: RouteInfo, fallback = ''): HTMLParagraphElement | null {
-  const text = route ? formatRouteLine(route) : fallback;
-  if (!text) return null;
+  if (!route && !fallback) return null;
+  const cat = route ? catalogRoute({ route }) : null;
+  const text = cat ? `${cat.whyLabel}: ${cat.routeLine}` : fallback;
   const p = h('p', 'mc-cp-by mc-cp-route');
   const sr = h('span', 'sr-only', 'Route reason: ');
   p.append(sr, document.createTextNode(text));
+  const sent = cat ? formatWhatWasSent(cat) : null;
+  if (sent) {
+    const det = h('details', 'mc-cp-sent');
+    det.append(h('summary', '', 'What was sent'), h('p', '', sent));
+    p.append(det);
+  }
   return p;
 }
 
@@ -95,11 +105,11 @@ const STATUS_LABEL: Record<ChangeEntry['status'], string> = {
 export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   const root = h('section', 'mc-copilot');
   root.hidden = true;
-  root.setAttribute('aria-label', 'Copilot');
+  root.setAttribute('aria-label', 'Review and History');
 
   const head = h('div', 'mc-cp-head');
-  const title = h('span', 'mc-cp-title', 'Copilot');
-  const x = btn('✕', 'mc-panel-x', () => close(), 'Close copilot');
+  const title = h('span', 'mc-cp-title', 'Review & History');
+  const x = btn('✕', 'mc-panel-x', () => close(), 'Close Review and History');
   head.append(title, x);
 
   const tabs = h('div', 'mc-cp-tabs');
@@ -136,11 +146,11 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   function changeCard(e: ChangeEntry, review: boolean): HTMLElement {
     const card = h('article', `mc-cp-card mc-cp-${e.status} mc-cp-by-${e.actor}`);
     const top = h('div', 'mc-cp-card-top');
-    const who = e.tag === 'nano-guess' ? "Nano's guess"
-      : e.tag === 'confirmed' ? 'Gemini confirmed Nano\'s guess'
-      : e.tag === 'corrected' ? 'Gemini corrected a guess'
-      : e.tag === 'withdrawn' ? "Nano's guess withdrawn"
-      : ACTOR_LABEL[e.actor];
+    const who = e.tag === 'nano-guess' ? 'Guess · Quick'
+      : e.tag === 'confirmed' ? "Deep confirmed Quick's guess"
+      : e.tag === 'corrected' ? "Deep changed Quick's guess"
+      : e.tag === 'withdrawn' ? "Quick's guess withdrawn"
+      : actorByLine(e.actor);
     top.append(h('span', `mc-cp-who who-${e.actor}${e.tag ? ' mc-cp-tag-' + e.tag : ''}`, who), h('span', 'mc-cp-when', agoLabel(e.decidedAt ?? e.at)));
     const what = h('p', 'mc-cp-what', e.title);
     card.append(top, what);
@@ -164,7 +174,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
         btn('Reject', 'mc-cp-reject ghost', () => deps.onReject(e.id), `Reject: ${e.title}`),
       );
     } else if (e.status === 'applied') {
-      foot.appendChild(btn('Revert', 'mc-cp-revert ghost', () => deps.onRevert(e.id), `Revert: ${e.title}`));
+      foot.appendChild(btn('Undo', 'mc-cp-revert ghost', () => deps.onRevert(e.id), undoProposalTitle(e)));
     }
     card.appendChild(foot);
     return card;
@@ -177,7 +187,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     hd.appendChild(h('h3', '', pend.length ? `${pend.length} change${pend.length === 1 ? '' : 's'} waiting for you` : 'Nothing waiting'));
     if (pend.length > 1) hd.appendChild(btn('Accept all', 'mc-cp-accept', () => deps.onAcceptAll()));
     sec.appendChild(hd);
-    if (!pend.length) sec.appendChild(h('p', 'mc-cp-empty', 'When Nano or Gemini suggests a change, it waits here until you accept it. Pinch Accept, or say "accept".'));
+    if (!pend.length) sec.appendChild(h('p', 'mc-cp-empty', 'When Quick or Deep suggests a change, it waits here until you keep it. Pinch to keep, or say "yes".'));
     for (const e of pend) sec.appendChild(changeCard(e, true));
     body.appendChild(sec);
 
@@ -192,8 +202,8 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
       const s = h('div', 'mc-cp-spec');
       s.setAttribute('data-speculative-stats', '1');
       s.append(
-        h('h3', '', 'Speculative Copilot'),
-        h('p', 'mc-cp-spec-line', `Nano and Gemini agreed ${specStats.agreed} of ${specStats.compared} time${specStats.compared === 1 ? '' : 's'} · ${specStats.secondsSaved.toFixed(1)} s saved.`),
+        h('h3', '', 'Guesses'),
+        h('p', 'mc-cp-spec-line', `Quick and Deep agreed ${specStats.agreed} of ${specStats.compared} time${specStats.compared === 1 ? '' : 's'} · ${specStats.secondsSaved.toFixed(1)} s saved.`),
       );
       body.appendChild(s);
     }
@@ -237,19 +247,19 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     const open = items.filter((i) => i.status !== 'done');
     sec.appendChild(h('h3', '', open.length ? `${open.length} question${open.length === 1 ? '' : 's'} from the site` : 'No site questions yet'));
     sec.appendChild(h('p', 'mc-cp-note', online
-      ? 'You are online. Ask Gemini about any item, or email the client the list.'
+      ? 'You are online. Ask Deep about any item, or email the client the list.'
       : 'No signal. Questions you ask are saved here and wait for the network.'));
-    if (!items.length) sec.appendChild(h('p', 'mc-cp-empty', 'At the site with no signal, ask anything. Nano answers what the drawing can answer; the rest is saved here.'));
+    if (!items.length) sec.appendChild(h('p', 'mc-cp-empty', 'At the site with no signal, ask anything. Quick answers what the drawing can answer; the rest is saved here.'));
     const ul = h('ul', 'mc-cp-items');
     for (const it of items) {
       const li = h('li', `mc-cp-item it-${it.status}`);
       li.appendChild(h('p', 'mc-cp-q', it.question));
       const meta = h('p', 'mc-cp-meta', `${agoLabel(it.askedAt)}${it.askedOffline ? ' · asked offline' : ''} · ${it.status === 'open' ? 'open' : it.status}`);
       li.appendChild(meta);
-      if (it.answer) li.appendChild(h('p', 'mc-cp-a', `${it.answeredBy === 'gemini' ? 'Gemini' : 'Note'}: ${it.answer}`));
+      if (it.answer) li.appendChild(h('p', 'mc-cp-a', `${it.answeredBy === 'gemini' ? 'Deep' : 'Note'}: ${it.answer}`));
       const row = h('div', 'mc-cp-issue-btns');
       if (it.status === 'open' || it.status === 'answered') {
-        const ask = btn(it.answer ? 'Ask again' : 'Ask Gemini', 'mc-cp-ask', () => deps.onAskGemini(it.id), `Ask Gemini: ${it.question}`);
+        const ask = btn(it.answer ? 'Ask again' : 'Ask Deep', 'mc-cp-ask', () => deps.onAskGemini(it.id), `Ask Deep: ${it.question}`);
         ask.disabled = !online;
         row.appendChild(ask);
       }
@@ -291,11 +301,27 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     }
   }
 
+  let histFilter: HistoryFilter = { kind: 'all' };
   function renderHistory(): void {
     const sec = h('div', 'mc-cp-sec');
     sec.appendChild(h('h3', '', changes.length ? 'Every change, newest first' : 'No changes yet'));
-    sec.appendChild(h('p', 'mc-cp-note', 'Who made it, what changed, when and why. Revert any applied change.'));
-    for (const e of [...changes].reverse()) sec.appendChild(changeCard(e, true));
+    sec.appendChild(h('p', 'mc-cp-note', 'Who made it, what changed, when and why. Undo is a card you pinch.'));
+    const filters = h('div', 'mc-cp-filters');
+    filters.setAttribute('role', 'toolbar');
+    filters.setAttribute('aria-label', 'History filters. Say show mine, show Quick, show Deep, or show dropped.');
+    const specs: HistoryFilter[] = [
+      { kind: 'all' }, { kind: 'waiting' },
+      { kind: 'actor', actor: 'you' }, { kind: 'actor', actor: 'quick' }, { kind: 'actor', actor: 'deep' },
+      { kind: 'status', status: 'rejected' },
+    ];
+    for (const f of specs) {
+      const b = btn(filterLabel(f), 'mc-cp-filter' + (JSON.stringify(f) === JSON.stringify(histFilter) ? ' active' : ''), () => { histFilter = f; render(); });
+      filters.appendChild(b);
+    }
+    sec.appendChild(filters);
+    const shown = applyHistoryFilter([...changes].reverse(), histFilter);
+    if (!shown.length) sec.appendChild(h('p', 'mc-cp-empty', 'Changes you keep or drop appear here, with who made them and why.'));
+    for (const e of shown) sec.appendChild(changeCard(e, true));
     body.appendChild(sec);
   }
 

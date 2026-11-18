@@ -35,7 +35,7 @@ export const GESTURE_CATALOG: readonly CatalogGesture[] = [
   { id: 'pinch', label: 'Soft pinch', kn: 'ಮೆತ್ತಗೆ ಚಿವುಟು', scope: 'core', does: 'Select an object or click a button', glyph: '🤏', kind: 'pointer', wired: true },
   { id: 'pinch-drag', label: 'Pinch and hold, move', kn: 'ಚಿವುಟಿ ಎಳೆ', scope: 'core', does: 'Hold the pinch and move to drag the object', glyph: '🤏↔', kind: 'pointer', wired: true },
   { id: 'double-pinch', label: 'Double pinch', kn: 'ಎರಡು ಬಾರಿ ಚಿವುಟು', scope: 'core', does: 'Open the palette (or confirm; set in Gestures)', glyph: '🤏🤏', kind: 'discrete', wired: true },
-  { id: 'palm-hold', label: 'Open palm, hold 1 s', kn: 'ಅಂಗೈ ತೋರಿಸಿ ಹಿಡಿ', scope: 'core', does: 'Stop or cancel', target: 'cancel', glyph: '✋', kind: 'discrete', wired: true },
+  { id: 'palm-hold', label: 'Open palm, hold 0.8 s', kn: 'ಅಂಗೈ ತೋರಿಸಿ ಹಿಡಿ', scope: 'core', does: 'Palm menu and Here card', target: 'cancel', glyph: '✋', kind: 'discrete', wired: true },
   { id: 'pinch-hold-still', label: 'Hold a pinch still', kn: 'ಚಿವುಟಿ ಹಿಡಿ', scope: 'core', does: 'Talk (voice on/off)', target: 'btn-mic', glyph: '🤏🎙', kind: 'discrete', wired: true },
   { id: 'thumbs-up', label: 'Thumbs up', kn: 'ಹೆಬ್ಬೆರಳು ಮೇಲೆ', scope: 'core', does: 'Confirm a send', glyph: '👍', kind: 'discrete', wired: true },
   { id: 'palm-swipe-left', label: 'Palm swipe left', kn: 'ಅಂಗೈ ಎಡಕ್ಕೆ', scope: 'core', does: 'Back (close the top panel)', target: 'nav-back', glyph: '✋←', kind: 'discrete', wired: true },

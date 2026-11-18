@@ -121,6 +121,17 @@ import { LAYER_LABEL, type LayerId } from './cad/layers';
 import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
 import { siteBookId, syncSiteBook } from './cad/sync';
 import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
+import { mountStudioChrome, proposalFromChange } from './ux/mountStudio';
+import { catalogRoute } from './ux/routeCatalog';
+import { GETTING_QUICK_READY, LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY, QUICK_READY } from './ux/wording';
+import { deepWorkingLabel, playDeepChime, playDeepTick } from './ux/deepWait';
+import { sharmaHouseOps, WARMUP_PROMPT } from './ux/demoKit';
+import {
+  IDLE_LEAVE, LEAVE_UNDO_MS, PINCH_HOLD_MS as LEAVE_HOLD_MS, armLeave, canUndoLeave,
+  completeHold, leaveCardCopy, releaseHold, startHold, undoLeave, type LeaveState,
+} from './ux/leaveApp';
+import type { Focusable } from './ux/focusModel';
+import { discoveryLevel } from './ux/suggestions';
 import { askCopilot, condenseUtterance, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
 import { shouldCondense } from './ai/condense';
 import { redactForCloud } from './ai/redact';
@@ -270,8 +281,8 @@ app.innerHTML = `
     </div>
     <aside id="panel" class="is-collapsed" aria-label="Design details" hidden>
       <div id="fail-states" role="alert"></div>
-      <section id="queue-section" aria-label="Offline cloud job queue" hidden>
-        <h2>Cloud queue <span id="queue-count" class="queue-count"></span></h2>
+      <section id="queue-section" aria-label="Later list" hidden>
+        <h2>Later list <span id="queue-count" class="queue-count"></span></h2>
         <p id="queue-note" class="queue-note"></p>
         <ul id="queue-list" class="queue-list"></ul>
       </section>
@@ -325,10 +336,10 @@ app.innerHTML = `
       <span id="conf-state" class="conf-state" hidden></span>
     </span>
     <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
-    <span class="status-chip"><span class="status-k">Nano</span><span id="model-state" class="status-v">checking…</span></span>
+    <span class="status-chip"><span class="status-k">Quick</span><span id="model-state" class="status-v">checking…</span></span>
     <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
     <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
-    <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
+    <span class="status-chip"><span class="status-k">Hand</span><span id="tracking-state" class="status-v">Hand not seen</span></span>
     <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard. You can also speak the command.">
       <span class="status-k">Pinch</span>
       <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
@@ -356,7 +367,7 @@ app.innerHTML = `
     <button id="btn-reregister" type="button" hidden>Re-register</button>
     <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
     <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
-    <button id="btn-copilot" type="button" aria-pressed="false" title="Copilot: review AI changes, guideline check, site checklist, history">Copilot</button>
+    <button id="btn-copilot" type="button" aria-pressed="false" title="Review and History">Review &amp; History</button>
     <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
     <button id="btn-export" type="button">${mode.exportLabel}</button>
     ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
@@ -379,7 +390,7 @@ app.innerHTML = `
         <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
         <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
         <div id="progress-wrap" hidden>
-          <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+          <div id="progress-bar" role="progressbar" aria-label="Getting Quick ready" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
           <span id="progress-label">0%</span>
         </div>
       </div>
@@ -406,9 +417,47 @@ const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
 const trackingStateEl = el<HTMLSpanElement>('tracking-state');
+let lastHandState: 'seen' | 'paused' | 'off' = 'off';
+let quickDownloadPercent: number | undefined;
+let studioChrome: ReturnType<typeof mountStudioChrome> | null = null;
+let leaveState: LeaveState = IDLE_LEAVE;
+let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+let deepAudio: AudioContext | undefined;
+function deepSound(): AudioContext | undefined {
+  try { return deepAudio ??= new AudioContext(); } catch { return undefined; }
+}
+function beginDeepWait(kind: 'copilot' | 'lighting' | 'email' | 'connector' | 'plan' | 'other'): void {
+  playDeepTick(deepSound());
+  copilotPanel.setBusy(deepWorkingLabel(kind));
+}
+function endDeepWait(): void {
+  copilotPanel.setBusy(null);
+  playDeepChime(deepSound());
+}
+function refreshStudioStatus(): void {
+  if (!studioChrome) return;
+  const st = getHybridStatus();
+  const quick = st.deviceModel === 'ready' ? 'ready'
+    : st.deviceModel === 'downloading' ? 'getting-ready'
+    : st.deviceModel === 'idle' ? 'checking'
+    : 'unavailable';
+  studioChrome.setStatus({
+    online: typeof net !== 'undefined' ? net.online() : true,
+    quick,
+    quickPercent: typeof quickDownloadPercent === 'undefined' ? undefined : quickDownloadPercent,
+    mic: voiceListening ? 'listening' : 'sleep',
+    hand: lastHandState,
+  });
+}
 function setTracking(text: string): void {
-  trackingStateEl.textContent = text;
-  trackingStateEl.closest('.status-chip')?.classList.toggle('is-live', text !== 'camera off');
+  const paused = /paused/i.test(text);
+  const off = text === 'camera off' || /starting camera|camera off/i.test(text);
+  const seen = !off && !paused && /(?:^|[^\d])([1-9]\d*)\s/.test(text);
+  lastHandState = paused ? 'paused' : seen ? 'seen' : 'off';
+  trackingStateEl.textContent = lastHandState === 'seen' ? 'Hand seen' : lastHandState === 'paused' ? 'Hands paused' : 'Hand not seen';
+  trackingStateEl.title = text;
+  trackingStateEl.closest('.status-chip')?.classList.toggle('is-live', lastHandState === 'seen');
+  refreshStudioStatus();
 }
 const listenChip = el<HTMLSpanElement>('listen-chip');
 const listenStateEl = el<HTMLSpanElement>('listen-state');
@@ -1145,9 +1194,10 @@ function setListening(on: boolean): void {
   }
   voiceListening = on;
   listenChip.dataset.state = on ? 'listening' : 'sleep';
-  listenStateEl.textContent = on ? 'Listening' : 'Sleeping';
+  listenStateEl.textContent = on ? 'Mic on' : 'Mic sleeping';
   document.body.classList.toggle('mc-voice-sleep', !on);
   say(on ? 'Listening. Commands are on.' : 'Sleeping. Say Mendcraft wake when you want me to listen.');
+  refreshStudioStatus();
 }
 
 /** Panels a palm swipe "back" can close, newest first. */
@@ -1224,7 +1274,11 @@ function runTarget(target: string, value?: number): boolean {
       if (!chromeConfirmEl.hidden) { clearChromeConfirm(); return true; }
       if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
-      return closeTopPanel();
+      if (somethingPending()) return closeTopPanel();
+      if (studioChrome?.palmOpen()) { studioChrome.closePalm(); return true; }
+      studioChrome?.openPalm({ x: viewportEl.clientWidth / 2, y: viewportEl.clientHeight / 2 });
+      say('Palm menu. Glide toward a slice and pinch, or say its name.');
+      return true;
     case 'nav-back':
       return closeTopPanel();
     case 'nav-forward':
@@ -1828,6 +1882,22 @@ async function runUtterance(utterance: string): Promise<void> {
     return;
   }
   lastCommandEl.textContent = `"${utterance}"`;
+  if (leaveState.phase === 'sent' && /^undo$/i.test(utterance.trim())) {
+    const next = undoLeave(leaveState, Date.now());
+    if (next.phase === 'undone') {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      say('Undone. Nothing was sent from Mendcraft.');
+      return;
+    }
+  }
+  if (studioChrome) {
+    const handled = studioChrome.handleUtterance(utterance);
+    if (handled) {
+      studioChrome.refresh();
+      return;
+    }
+  }
   let ok = false;
   try {
     ok = await runUtteranceInner(utterance);
@@ -2269,8 +2339,19 @@ function refreshCopilot(): void {
     cpRenderQueued = false;
     copilotPanel.setChanges(changeLog.entries());
     copilotPanel.setChecklist(siteChecklist.items(), isOnline());
-    const pend = changeLog.pending().length;
-    btnCopilot.textContent = pend ? `Copilot (${pend})` : 'Copilot';
+    const pendN = changeLog.pending().length;
+    btnCopilot.textContent = pendN ? `Review · ${pendN} waiting` : 'Review & History';
+    btnCopilot.setAttribute('aria-label', btnCopilot.textContent);
+    studioChrome?.refresh();
+    const waiting = changeLog.pending()[0];
+    if (waiting && leaveState.phase === 'idle') {
+      studioChrome?.setProposal(proposalFromChange(waiting), {
+        onKeep: () => acceptChange(waiting.id),
+        onDrop: () => rejectChange(waiting.id),
+      });
+    } else if (leaveState.phase === 'idle' && new URLSearchParams(location.search).get('ux') !== 'proposal' && new URLSearchParams(location.search).get('ux') !== 'demo') {
+      studioChrome?.setProposal(null);
+    }
     publishControlSnapshot();
   });
 }
@@ -2293,6 +2374,101 @@ btnCopilot.addEventListener('click', () => {
   else copilotPanel.open(changeLog.pending().length ? 'review' : copilotPanel.tab());
   toggleButton(btnCopilot, copilotPanel.isOpen());
 });
+
+function focusablesFromPlan(): Focusable[] {
+  const items = controller.listItems();
+  return items.map((it, i) => {
+    const label = it.label.toLowerCase();
+    const kind: Focusable['kind'] =
+      /stair/.test(label) ? 'stair'
+      : /door/.test(label) || it.id.startsWith('d') ? 'door'
+      : /window/.test(label) ? 'window'
+      : /room|kitchen|bedroom|bath|living/.test(label) || it.id.startsWith('r') ? 'room'
+      : /wall/.test(label) || it.id.startsWith('w') ? 'wall'
+      : 'plan';
+    return { id: it.id, kind, name: it.label, x: i * 80, y: 0 };
+  });
+}
+function currentFocus(): Focusable | null {
+  const id = controller.selectedId();
+  const all = focusablesFromPlan();
+  return all.find((f) => f.id === id) ?? (all.length ? { id: 'plan', kind: 'plan', name: 'the plan', x: 0, y: 0 } : null);
+}
+function loadSampleHouse(): void {
+  const step = controller.applyGenerated?.({ ops: sharmaHouseOps() });
+  if (step?.ok) {
+    renderAll();
+    say('Sharma House is ready. The site and levels are set. No rooms yet.');
+  } else {
+    say(step?.error ?? 'Could not load the sample house.');
+  }
+}
+async function warmupQuick(): Promise<void> {
+  try {
+    if (getHybridStatus().deviceModel !== 'ready') return;
+    if (sessionStorage.getItem('mendcraft:warmed') === '1') return;
+    sessionStorage.setItem('mendcraft:warmed', '1');
+    const { compileCommand } = await import('./ai/hybrid');
+    await compileCommand(WARMUP_PROMPT, controller.summary(), controller.selectedId());
+  } catch {
+    // Warm-up is best-effort and must never block the studio.
+  }
+}
+
+const layoutEl = document.getElementById('layout') ?? viewportEl;
+studioChrome = mountStudioChrome(layoutEl, {
+  getFocus: currentFocus,
+  getFocusables: focusablesFromPlan,
+  getChanges: () => changeLog.entries(),
+  getSuggestionSituation: () => {
+    const items = controller.listItems();
+    const rooms = items.filter((it) => /room|kitchen|bedroom|bath|living/i.test(it.label)).length;
+    return {
+      level: discoveryLevel({ hasClosedRoom: rooms > 0, roomCount: rooms, offline: !isOnline() }),
+      hasClosedRoom: rooms > 0,
+      emptyCanvas: items.length === 0,
+      keptChanges: changeLog.entries().filter((e) => e.status === 'applied').length,
+      offline: !isOnline(),
+      trigger: items.length === 0 ? 'empty-plan' : 'kept-change',
+    };
+  },
+  onPalmSlice(id) {
+    if (id === 'review') {
+      copilotPanel.open(changeLog.pending().length ? 'review' : 'history');
+      toggleButton(btnCopilot, true);
+    } else if (id === 'view') {
+      void runUtterance('walk in');
+    } else if (id === 'devices') {
+      void openAddDevice();
+    } else if (id === 'site') {
+      copilotPanel.open('checklist');
+      toggleButton(btnCopilot, true);
+    } else if (id === 'settings') {
+      document.getElementById('btn-setup')?.click();
+    } else if (id === 'studio') {
+      studioChrome?.closeHere();
+    }
+  },
+  onHereAction(phrase) { void runUtterance(phrase); },
+  onSuggestionAccept(s) { void runUtterance(s.say); },
+  onFirstRunSpeak(text) { say(text); },
+  onLoadSampleHouse: loadSampleHouse,
+});
+studioChrome.setReviewButton(btnCopilot);
+studioChrome.refresh();
+refreshStudioStatus();
+const uxShot = new URLSearchParams(location.search).get('ux');
+if (uxShot === 'here' || uxShot === 'demo') studioChrome.openHere();
+if (uxShot === 'proposal' || uxShot === 'demo') {
+  studioChrome.setProposal({
+    id: 'demo-proposal',
+    title: 'Door D2: 750 → 900 mm',
+    youAsked: 'make this door wheelchair friendly',
+    why: 'our wheelchair guideline uses 900 mm clear',
+    catalog: catalogRoute({ route: routeGemini({ nano: 'unsure' }), kind: 'escalation', sent: 'make this door wheelchair friendly' }),
+    status: 'waiting',
+  });
+}
 
 const siteBook = (() => {
   try { return siteBookId(localStorage); } catch { return null; }
@@ -2430,9 +2606,9 @@ async function runGuidelineCheck(region: RegionId, speak = true, quiet = false):
     return true;
   }
   const sent = report.issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
-  copilotPanel.setBusy('Gemini is explaining the findings…');
+  beginDeepWait('copilot');
   const res = await explainAccessibility(sent, controller.summary());
-  copilotPanel.setBusy(null);
+  endDeepWait();
   recordLedger(res.source, 'guideline-explain', res.source === 'cloud' ? 'explain findings' : REASON_TEXT.private, `issues: ${JSON.stringify(sent)}`);
   if (res.items.length) {
     const byId = new Map(res.items.map((x) => [x.id, x]));
@@ -2499,7 +2675,7 @@ async function handleHardQuestion(
   const judgement = isPlanJudgementQuestion(question);
   const hard = judgement || isHardQuestion(question);
   const online = isOnline() && cloudConfigured;
-  if (online && hard) copilotPanel.setBusy('Asking Gemini…');
+  if (online && hard) beginDeepWait('copilot');
   // Apply the early Gemini result (or fire once more if the final transcript
   // changed). This is what marks Nano's guess confirmed / corrected / withdrawn.
   if (speculative && (hard || isPlanQuestion(question))) {
@@ -2512,7 +2688,7 @@ async function handleHardQuestion(
   const existing = speculative?.getDraft();
   const same = existing && existing.utterance.trim().toLowerCase() === question.trim().toLowerCase();
   if (same && existing && (existing.state === 'confirmed' || existing.state === 'corrected' || existing.state === 'withdrawn' || existing.geminiAnswer)) {
-    copilotPanel.setBusy(null);
+    endDeepWait();
     if (existing.geminiAnswer || existing.state !== 'draft') setBadge('cloud', 'big-job');
     showSpeculativeDraft(existing, speculative.stats(), { speak: true });
     return true;
@@ -2530,7 +2706,7 @@ async function handleHardQuestion(
       copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud', route: streamRoute });
     }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
   });
-  copilotPanel.setBusy(null);
+  endDeepWait();
   if (raced.kind === 'nano-tool') {
     const picked = raced.pick;
     if (picked.call.tool === 'measure') {
@@ -2606,9 +2782,9 @@ async function askChecklistItem(id: string): Promise<void> {
   const it = siteChecklist.get(id);
   if (!it) return;
   if (!isOnline() || !cloudConfigured) { say('Still no signal. I will keep it on the list.'); return; }
-  copilotPanel.setBusy('Asking Gemini…');
+  beginDeepWait('copilot');
   const res = await askCopilot(it.question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
-  copilotPanel.setBusy(null);
+  endDeepWait();
   if (!res) { say("Gemini couldn't answer that right now."); return; }
   const route = routeGemini({ kind: 'hard', model: res.model, why: res.why });
   publishRoute(route);
@@ -2631,9 +2807,9 @@ async function emailClient(): Promise<boolean> {
   let by = 'Drafted on this device (no signal). Gemini can polish it when you are online.';
   let route: RouteInfo = routeOffline();
   if (isOnline() && cloudConfigured) {
-    copilotPanel.setBusy('Gemini is drafting the email…');
+    beginDeepWait('email');
     const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary());
-    copilotPanel.setBusy(null);
+    endDeepWait();
     if (res) {
       draft = res.draft;
       by = 'Drafted by Gemini · cloud. Read it first.';
@@ -2650,13 +2826,83 @@ async function emailClient(): Promise<boolean> {
 
 /** Her confirm (pinch) → open her own mail app with the draft. Never sends. */
 function confirmOpenDraft(d: EmailDraft): void {
-  presentChoices('Open this email in your mail app? (You press send there.)', [{ label: 'Open in mail app', result: { mailto: true }, source: 'rules' }], () => {
+  leaveState = armLeave({ kind: 'email', title: d.subject || 'Client email', detail: 'Opens your mail app. You press send there.' });
+  renderLeaveCard(d);
+  say('Pinch and hold to open this email in your mail app. You can undo for 10 seconds. Nothing is sent from Mendcraft.');
+}
+
+function renderLeaveCard(d?: EmailDraft): void {
+  if (!studioChrome) return;
+  const now = Date.now();
+  const copy = leaveCardCopy(leaveState, now);
+  const req = leaveState.request;
+  const catalog = catalogRoute({
+    route: { tier: 'gemini', engine: 'gemini', reason: 'needs writing (client email)' },
+    kind: req?.kind === 'connector' ? 'connector' : 'email',
+    sent: 'the draft and your words',
+  });
+  const sent = leaveState.phase === 'sent' || leaveState.phase === 'undone';
+  studioChrome.setProposal({
+    id: 'leave-app',
+    title: req ? (req.kind === 'connector' ? req.title : `Email: ${req.title}`) : 'Send',
+    why: req?.detail,
+    catalog,
+    status: sent ? 'leave-sent' : 'leave',
+    leaveAction: copy.action,
+    undoLabel: copy.undo,
+  }, {
+    onHoldStart: () => {
+      leaveState = startHold(leaveState, Date.now());
+      renderLeaveCard(d);
+      const started = leaveState.holdStartedAt ?? Date.now();
+      window.setTimeout(() => {
+        if (leaveState.phase !== 'holding') return;
+        finishLeave(d);
+      }, LEAVE_HOLD_MS + 30);
+      void started;
+    },
+    onHoldEnd: () => {
+      if (leaveState.phase === 'holding') {
+        leaveState = releaseHold(leaveState);
+        renderLeaveCard(d);
+      }
+    },
+    onDrop: () => {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      say('Dropped. Nothing left the app.');
+    },
+    onUndo: () => {
+      const next = undoLeave(leaveState, Date.now());
+      if (next.phase !== 'undone') return;
+      leaveState = next;
+      if (leaveTimer) clearTimeout(leaveTimer);
+      studioChrome?.setProposal(null);
+      leaveState = IDLE_LEAVE;
+      say('Undone. If your mail app opened, delete the draft there if you did not mean to send it. Nothing was sent from Mendcraft.');
+    },
+  });
+}
+
+function finishLeave(d?: EmailDraft): void {
+  leaveState = completeHold(leaveState, Date.now());
+  if (leaveState.phase !== 'sent') return;
+  if (leaveState.request?.kind === 'email' && d) {
     window.open(mailtoUrl(d), '_blank');
     for (const it of siteChecklist.items()) if (it.status === 'open' || it.status === 'answered') siteChecklist.mark(it.id, 'emailed');
     copilotPanel.setDraft(null);
-    verifierEl.textContent = 'Opened in your mail app. Nothing was sent from Mendcraft.';
-    say('Opened in your mail app.');
-  }, () => { verifierEl.textContent = 'Not opened. The draft is still here.'; });
+    verifierEl.textContent = 'Opened in your mail app. Nothing was sent from Mendcraft. You have 10 seconds to undo.';
+    say('Opened in your mail app. Brush or say undo within 10 seconds if you did not mean to.');
+  }
+  renderLeaveCard(d);
+  if (leaveTimer) clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    if (leaveState.phase === 'sent' && !canUndoLeave(leaveState, Date.now())) {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      studioChrome?.refresh();
+    }
+  }, LEAVE_UNDO_MS + 50);
 }
 
 /** Run one typed CAD tool call. `actor` = who asked (her) or proposed (AI). */
@@ -2780,10 +3026,10 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
       if (isOnline() && cloudConfigured) {
         copilotPanel.open('review');
         toggleButton(btnCopilot, true);
-        copilotPanel.setBusy('Gemini is choosing materials and light…');
-        verifierEl.textContent = 'Gemini is choosing materials and light…';
+        beginDeepWait('lighting');
+        verifierEl.textContent = deepWorkingLabel('lighting');
         const res = await proposeMaterials(style, controller.summary());
-        copilotPanel.setBusy(null);
+        endDeepWait();
         if (res) {
           plan = res.plan;
           by = 'Gemini · cloud';
@@ -3011,12 +3257,11 @@ function renderNetState(): void {
   const n = jobQueue.count();
   netStateEl.classList.toggle('net-online', online);
   netStateEl.classList.toggle('net-offline', !online);
-  netStateEl.textContent = online
-    ? n ? `Online · ${n} in queue` : 'Online'
-    : n ? `Offline · ${n} queued` : 'Offline';
+  netStateEl.textContent = online ? 'Online' : OFFLINE_QUICK_ONLY;
   netStateEl.title = online
-    ? 'Connected. Queued cloud jobs run automatically.'
-    : 'Offline. Edits keep working on-device; big cloud jobs are queued until you reconnect.';
+    ? (n ? `Online. ${n} in the Later list.` : 'Online.')
+    : (n ? `${OFFLINE_QUICK_ONLY}. ${n} in the Later list.` : OFFLINE_QUICK_ONLY);
+  refreshStudioStatus();
 }
 
 function renderQueue(jobs: QueuedJob[] = jobQueue.jobs()): void {
@@ -3024,8 +3269,8 @@ function renderQueue(jobs: QueuedJob[] = jobQueue.jobs()): void {
   queueCountEl.textContent = jobs.length ? String(jobs.length) : '';
   queueNoteEl.textContent = jobs.length
     ? net.online()
-      ? 'Back online — running queued jobs on the cloud…'
-      : 'Queued — these run automatically when you reconnect.'
+      ? 'Back online — running the Later list…'
+      : LATER_LIST_PROMISE
     : '';
   queueListEl.replaceChildren(...jobs.map(renderJobRow));
   renderNetState();
@@ -5066,15 +5311,20 @@ const DEVICE_STATE_TEXT: Record<DeviceModelStatus, string> = {
 
 function renderAiStatus(): void {
   const st = getHybridStatus();
-  const cloud = st.appCheck === 'ready' ? 'Cloud AI on' : st.appCheck === 'failed' ? 'Cloud AI off' : 'Rules only';
+  const cloud = st.appCheck === 'ready' ? 'Deep available' : st.appCheck === 'failed' ? 'Deep off' : 'Quick only';
   const nanoOn = st.deviceModel === 'ready';
-  modelStateEl.textContent = nanoOn ? 'Nano ready' : `${DEVICE_STATE_TEXT[st.deviceModel]}${cloud === 'Cloud AI on' ? '' : ` · ${cloud}`}`;
+  modelStateEl.textContent = nanoOn
+    ? QUICK_READY
+    : st.deviceModel === 'downloading'
+      ? (quickDownloadPercent != null ? `${GETTING_QUICK_READY} ${quickDownloadPercent}%` : GETTING_QUICK_READY)
+      : `${DEVICE_STATE_TEXT[st.deviceModel]}${cloud === 'Deep available' ? '' : ` · ${cloud}`}`;
   modelStateEl.title = st.lastError || `${DEVICE_STATE_TEXT[st.deviceModel]}. ${cloud}.`;
+  refreshStudioStatus();
 }
 
 btnAi.addEventListener('click', async () => {
   btnAi.disabled = true;
-  btnAi.textContent = 'Downloading on-device AI…';
+  btnAi.textContent = GETTING_QUICK_READY + '…';
   progressWrap.hidden = false;
   progressFill.style.width = '0%';
   progressBar.setAttribute('aria-valuenow', '0');
@@ -5084,17 +5334,20 @@ btnAi.addEventListener('click', async () => {
   const ok = await initDeviceModel((p) => {
     sawProgress = true;
     const pct = Math.round(p * 100);
+    quickDownloadPercent = pct;
     progressFill.style.width = `${pct}%`;
     progressBar.setAttribute('aria-valuenow', String(pct));
     progressLabel.textContent = `${pct}%`;
+    renderAiStatus();
   });
   progressWrap.hidden = true;
   const status = getHybridStatus();
   renderDeviceButton(status.deviceModel);
   renderAiStatus();
   if (ok) {
-    announceStatus('On-device AI ready.');
-    say(sawProgress ? 'On-device AI downloaded and ready.' : 'On-device AI is ready.');
+    announceStatus(QUICK_READY + '.');
+    say(sawProgress ? 'Quick is ready on this device.' : 'Quick is ready.');
+    void warmupQuick();
   } else {
     const why =
       status.deviceModel === 'unavailable' || status.deviceModel === 'unsupported'
@@ -5750,11 +6003,13 @@ try {
 } catch {
   onboardedAlready = false;
 }
-// First load no longer forces the camera onboarding on a judge. Instead it
-// offers the 2-minute guided tour (camera setup stays one click away inside it).
-// A judge who has dismissed it before is left alone.
-if (!SIM_ACTIVE && !tourDismissed(localStorage) && !onboardedAlready) {
-  tour.openWelcome();
+// First run v1 (7 minutes, skippable, resumable) is the default welcome.
+// The older tour stays one click away from Help. Simulation / judges walks
+// are left alone so they can start on the canvas.
+if (!SIM_ACTIVE) {
+  studioChrome?.openFirstRun();
+} else if (!tourDismissed(localStorage) && !onboardedAlready) {
+  // sim: do not auto-block the canvas
 }
 
 if (!navigator.mediaDevices?.getUserMedia) {
