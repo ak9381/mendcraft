@@ -1,10 +1,15 @@
 // Frames (boards) on the infinite canvas and the persisted canvas document.
 import { MAX_Z, MIN_Z, type Camera, type Rect } from './camera';
 import { coerceSurfacePlan, type SurfacePlan } from './surfacePlan';
+import { coerceLanguagePack, type LanguagePack } from './languagePack';
 
 export type FrameKind = 'room' | 'plan' | 'note';
 export interface Frame { id: string; kind: FrameKind; title: string; rect: Rect; pinned: boolean }
-export interface CanvasDoc { version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan> }
+export interface CanvasDoc {
+  version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan>;
+  /** Active non-English UI pack (validated), persisted so it works offline. */
+  lang?: string; pack?: LanguagePack;
+}
 
 export const CANVAS_DOC_VERSION = 1;
 export const FRAME_SIZE = { w: 1000, h: 680 } as const;
@@ -75,5 +80,13 @@ export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
       surfaces[id] = p.value;
     }
   }
-  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces };
+  // A persisted language pack is validated the same way as a fresh AI reply. An
+  // invalid pack is dropped (back to English) but never discards her boards.
+  let lang: string | undefined;
+  let pack: LanguagePack | undefined;
+  if (d.pack !== undefined) {
+    const p = coerceLanguagePack(d.pack);
+    if (p.ok) { pack = p.value; lang = p.value.lang; }
+  }
+  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack };
 }

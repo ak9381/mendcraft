@@ -3,6 +3,7 @@
 // forming, then a Proposal. Nothing applies without her keep; every kept
 // change goes on a history she can undo.
 import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
+import type { LanguagePack } from './languagePack';
 
 export type EngineId = 'nano' | 'gemini';
 
@@ -10,6 +11,9 @@ export interface SurfaceEngine {
   id: EngineId;
   /** Scripted stand-in (no model on this device). Shown as SIM, never hidden. */
   sim: boolean;
+  /** Honest route-line override (e.g. a phone with no Nano: "Gemini · cloud —
+   *  Nano isn't on this phone, so Deep drafted it"). Replaces the default line. */
+  routeLine?: string;
   /** Stream text; call onText with the full text so far. Resolve with the final text. */
   stream(prompt: string, onText: (full: string) => void): Promise<string>;
 }
@@ -87,6 +91,7 @@ export interface TurnUi {
 /** Run one engine over one request. Returns a validated plan or null. */
 export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}): Promise<SurfacePlan | null> {
   const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim });
+  if (engine.routeLine) sent.routeLine = engine.routeLine;
   ui.onSent?.(sent);
   let ghostCount = -1;
   let final: string;
@@ -125,7 +130,19 @@ export function scriptedEngine(id: EngineId, json: string, o: { chunk?: number; 
   };
 }
 
-export interface HistoryEntry { frameId: string; before: SurfacePlan | null; after: SurfacePlan; by: EngineId | 'her'; summary: string; at: number; undone: boolean }
+export interface HistoryEntry {
+  frameId: string;
+  before: SurfacePlan | null;
+  after: SurfacePlan | null;
+  by: EngineId | 'her';
+  summary: string;
+  at: number;
+  undone: boolean;
+  /** 'surface' (default) edits a board; 'lang' swaps the UI language pack. */
+  kind?: 'surface' | 'lang';
+  packBefore?: LanguagePack | null;
+  packAfter?: LanguagePack | null;
+}
 
 export function createCanvasHistory() {
   const entries: HistoryEntry[] = [];

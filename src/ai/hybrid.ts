@@ -476,6 +476,20 @@ export async function generateWithBudget(
   return { response };
 }
 
+/**
+ * Smart-canvas seam: stream a surface-plan prompt through the cloud (Firebase AI
+ * Logic) and resolve the full text. Returns null when no cloud model is reachable
+ * (the canvas then falls back to a scripted SIM engine). Re-validation of the
+ * returned JSON happens in the canvas layer (coerceSurfacePlan / gate).
+ */
+export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void): Promise<string | null> {
+  const models = await ensureModels();
+  const model = models?.template ?? models?.intentCloud ?? models?.intent ?? null;
+  if (!model) return null;
+  const { response } = await generateWithBudget(model, prompt, cloudBudgetMs('long'), 'canvas plan', onChunk);
+  return response.text();
+}
+
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
 export function setModelsForTest(overrides: ModelOverrides | null): void {
   testOverrides = overrides;

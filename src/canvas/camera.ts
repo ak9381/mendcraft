@@ -72,3 +72,12 @@ export function focusOnInset(r: Rect, vp: Viewport, insetTop: number): Camera {
   const avail = Math.max(1, vp.h - insetTop);
   return { x: Math.round(r.x + r.w / 2 - vp.w / 2), y: Math.round(r.y + r.h / 2 - (insetTop + avail / 2)), z: 1 };
 }
+
+/** Focus at 1:1 centred in the space left after a top bar and a left/right dock,
+ *  so a pinned-board dock never covers the focused board. */
+export function focusOnInsets(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number }): Camera {
+  const top = insets.top ?? 0, left = insets.left ?? 0, right = insets.right ?? 0;
+  const availW = Math.max(1, vp.w - left - right);
+  const availH = Math.max(1, vp.h - top);
+  return { x: Math.round(r.x + r.w / 2 - (left + availW / 2)), y: Math.round(r.y + r.h / 2 - (top + availH / 2)), z: 1 };
+}

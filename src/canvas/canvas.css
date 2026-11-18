@@ -63,3 +63,15 @@
 .mc-status { flex-basis: 100%; margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
+
+/* Pinned-board dock (left, under the bar): a second A2UI surface showing the
+   pinned room's lamp tiles so it stays controllable while editing another board. */
+.mc-dock { position: absolute; z-index: 8; left: 16px; top: 132px; width: 300px; max-height: calc(100% - 148px);
+  overflow: auto; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 14px; }
+.mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
+.mc-dock-surface { display: grid; gap: 12px; }
+.mc-ai-lang { margin: 12px 0; }
+.mc-btn[aria-pressed=true] { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
+.mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
+.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
