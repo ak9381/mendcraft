@@ -1,0 +1,65 @@
+/* Smart canvas shell. Uses the app's dark tokens from style.css and maps
+   them onto A2UI's theme variables so basic-catalog text is not faint. */
+.mc-canvas, #spike {
+  --a2ui-color-on-background: var(--text);
+  --a2ui-color-background: transparent;
+  --a2ui-color-primary: var(--accent);
+  --a2ui-color-border: var(--border);
+  --a2ui-text-caption-color: var(--text-dim);
+  --a2ui-font-size-2xl: 32px; --a2ui-font-size-xl: 28px; --a2ui-font-size-l: 24px; --a2ui-font-size-m: 20px;
+  color: var(--text);
+}
+.mc-canvas { position: fixed; inset: 0; overflow: hidden; background: var(--bg); }
+.mc-viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
+  background-image: radial-gradient(circle, rgb(242 240 234 / 0.12) 1px, transparent 1.4px); }
+.mc-canvas[data-mode=focus] .mc-viewport { cursor: default; }
+.mc-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.mc-frame { position: absolute; display: flex; flex-direction: column; border-radius: 20px; background: var(--panel);
+  border: 2px solid var(--border); box-shadow: 0 10px 40px rgb(0 0 0 / 0.35); transition: opacity 0.2s ease, border-color 0.2s ease; }
+.mc-frame.focused { border-color: var(--accent); }
+.mc-frame.dim { opacity: 0.35; }
+.mc-canvas[data-mode=overview] .mc-frame { cursor: zoom-in; }
+.mc-canvas[data-mode=overview] .mc-frame:hover { border-color: var(--accent); }
+.mc-frame-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.mc-frame-title { all: unset; font-size: 26px; font-weight: 650; color: var(--text); cursor: pointer; }
+.mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
+.mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+.mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+.mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
+.mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
+.mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; }
+.mc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.mc-prop-host { position: absolute; z-index: 5; right: 20px; bottom: 20px; width: min(460px, calc(100% - 40px)); }
+.mc-prop-host .mc-proposal { position: static; margin: 0; }
+.mc-ghost { position: absolute; inset: 0; padding: 20px; background: var(--panel); border-radius: 0 0 18px 18px; z-index: 4; display: grid; align-content: start; gap: 12px; pointer-events: none; }
+.mc-ghost-title { margin: 0; font-size: 28px; font-weight: 650; color: var(--accent); opacity: 0.85; }
+.mc-ghost-tile { border: 2px dashed var(--accent); border-radius: 16px; min-height: 120px; padding: 18px; font-size: 22px;
+  color: var(--text); background: rgb(142 157 255 / 0.08); animation: mc-ghost-in 0.25s ease both; }
+.mc-ghost-tile.plan { min-height: 220px; }
+.mc-ghost-tile.next { min-height: 60px; opacity: 0.4; animation: mc-ghost-pulse 1s ease-in-out infinite alternate; }
+@keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes mc-ghost-pulse { to { opacity: 0.15; } }
+.mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: 132px; bottom: 16px; width: 380px; overflow: auto; padding: 16px 18px;
+  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px; }
+.mc-ai[data-engine=gemini] { border-color: var(--accent); }
+.mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
+.mc-ai-said { font-size: 18px; color: var(--text); margin: 0 0 6px; }
+.mc-ai-route, .mc-ai-sent, .mc-ai-empty, .mc-ai-state { color: var(--text-dim); margin: 6px 0; }
+.mc-ai-state { color: var(--accent-2); }
+.mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 32px; }
+.mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
+  border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; line-height: 1.45; color: var(--text); }
+.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
+.mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
+.mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  padding: 10px; border-radius: 18px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
+.mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
+.mc-btn.primary { background: var(--text); color: #0d0d0c; border-color: var(--text); }
+.mc-say { display: flex; gap: 8px; flex: 1; min-width: 320px; }
+.mc-say input { flex: 1; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 18px; }
+.mc-status { flex-basis: 100%; margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
+.mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }

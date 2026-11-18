@@ -14,16 +14,17 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
   protected override readonly api = LampTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid #d9d4c7; border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: #fffdf7; font: 500 20px/1.3 system-ui, sans-serif; color: #1d1b16; }
-    .tile.on { border-color: #c98a1a; background: #fff4dc; }
+    .tile { border: 2px solid #d9d4c7; border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); border-color: var(--border, #3a3934); }
+    .tile.on { border-color: #f5a623; background: #2a2214; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }
     .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid #1d1b16; background: #fff; color: #1d1b16; cursor: pointer; }
-    button.primary { background: #1d1b16; color: #fff; }
-    .meter { height: 14px; border-radius: 7px; background: #ece6d6; overflow: hidden; }
-    .meter > i { display: block; height: 100%; background: #c98a1a; }
-    .pending { color: #6b6457; } .error { color: #a02818; }
+    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: transparent; color: var(--text, #f2f0ea); cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
+    button.primary { background: var(--text, #f2f0ea); color: #0d0d0c; }
+    .meter { height: 14px; border-radius: 7px; background: rgb(242 240 234 / 0.14); overflow: hidden; }
+    .meter > i { display: block; height: 100%; background: #f5a623; }
+    .pending { color: var(--text-dim, #bdb9b0); } .error { color: #ff8a7a; }
   `;
   override render() {
     const p = this.controller?.props;

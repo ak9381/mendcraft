@@ -18,13 +18,13 @@ const SURFACE = 'room-1';
 const root = document.getElementById('spike')!;
 root.innerHTML = `
   <h1 style="font-size:28px;margin:0 0 4px">Smart canvas · A2UI spike</h1>
-  <p id="log" role="status" style="margin:0 0 16px;color:#6b6457">Empty canvas. Nothing rendered yet.</p>
+  <p id="log" role="status" style="margin:0 0 16px;color:var(--text-dim)">Empty canvas. Nothing rendered yet.</p>
   <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">
     <button id="b-draft" class="primary">1 · Nano draft</button>
     <button id="b-upgrade">2 · Gemini upgrade</button>
     <button id="b-evil">3 · Forged widget</button>
   </div>
-  <section id="proposal" hidden style="border:2px solid #1d1b16;border-radius:16px;padding:16px;margin-bottom:16px;background:#fff"></section>
+  <section id="proposal" hidden style="border:2px solid var(--accent);border-radius:16px;padding:16px;margin-bottom:16px;background:#101a33"></section>
   <section id="surface-host"></section>`;
 const log = (t: string) => { root.querySelector('#log')!.textContent = t; };
 
@@ -81,7 +81,7 @@ function showProposal(by: SurfaceProposal['by'], summary: string, msgs: unknown)
   });
   const where = by === 'gemini' ? 'Gemini · cloud' : 'Nano · on device';
   card.hidden = false;
-  card.innerHTML = `<div style="font-size:14px;color:#6b6457">WAITING FOR YOU · ${where}</div>
+  card.innerHTML = `<div style="font-size:14px;color:var(--text-dim)">WAITING FOR YOU · ${where}</div>
     <div style="font-size:22px;font-weight:600;margin:4px 0 12px">${summary}</div>
     <div style="display:flex;gap:10px"><button id="p-keep" class="primary">Keep (pinch)</button><button id="p-drop">Drop (brush)</button></div>`;
   card.querySelector('#p-keep')!.addEventListener('click', () => { prop.accept(); card.hidden = true; log(`Kept: ${summary} (${where})`); });

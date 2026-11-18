@@ -166,4 +166,14 @@ function firebaseEnvGuardPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin()],
+  build: {
+    rollupOptions: {
+      // sim-main: the smart canvas and the A2UI spike ship as extra pages.
+      input: {
+        main: path.join(root, 'index.html'),
+        canvas: path.join(root, 'canvas.html'),
+        spike: path.join(root, 'spike.html'),
+      },
+    },
+  },
 });

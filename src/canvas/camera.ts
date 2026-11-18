@@ -1,0 +1,74 @@
+// Infinite-canvas camera. World units equal CSS pixels at z = 1, which is the
+// only scale where boards are editable (Focus). Overview zooms out to view and
+// fly; board contents are inert there because the plan engine hit-tests in
+// unscaled screen pixels.
+export interface Camera { x: number; y: number; z: number }
+export interface Pt { x: number; y: number }
+export interface Rect { x: number; y: number; w: number; h: number }
+export interface Viewport { w: number; h: number }
+
+export const MIN_Z = 0.08;
+export const MAX_Z = 1;
+
+const clampZ = (z: number) => Math.min(MAX_Z, Math.max(MIN_Z, z));
+
+export function worldToScreen(c: Camera, p: Pt): Pt {
+  return { x: (p.x - c.x) * c.z, y: (p.y - c.y) * c.z };
+}
+
+export function screenToWorld(c: Camera, s: Pt): Pt {
+  return { x: s.x / c.z + c.x, y: s.y / c.z + c.y };
+}
+
+/** Zoom by `factor` keeping the world point under screen point `s` fixed. */
+export function zoomAbout(c: Camera, s: Pt, factor: number): Camera {
+  const z = clampZ(c.z * factor);
+  const w = screenToWorld(c, s);
+  return { x: w.x - s.x / z, y: w.y - s.y / z, z };
+}
+
+/** Drag by a screen delta: the world follows the pointer. */
+export function panBy(c: Camera, dx: number, dy: number): Camera {
+  return { x: c.x - dx / c.z, y: c.y - dy / c.z, z: c.z };
+}
+
+/** Centre a board at exactly 1:1 on whole pixels (editing scale). */
+export function focusOn(r: Rect, vp: Viewport): Camera {
+  return { x: Math.round(r.x + r.w / 2 - vp.w / 2), y: Math.round(r.y + r.h / 2 - vp.h / 2), z: 1 };
+}
+
+/** Camera that shows every rect with `pad` screen pixels of margin, never above 1:1. */
+export function fitRects(rects: readonly Rect[], vp: Viewport, pad = 48): Camera {
+  if (!rects.length) return { x: -vp.w / 2, y: -vp.h / 2, z: 1 };
+  const x0 = Math.min(...rects.map((r) => r.x));
+  const y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.w));
+  const y1 = Math.max(...rects.map((r) => r.y + r.h));
+  const bw = x1 - x0, bh = y1 - y0;
+  const z = clampZ(Math.min(1, (vp.w - 2 * pad) / bw, (vp.h - 2 * pad) / bh));
+  return { x: x0 + bw / 2 - vp.w / (2 * z), y: y0 + bh / 2 - vp.h / (2 * z), z };
+}
+
+export function cameraTransform(c: Camera): string {
+  const n = (v: number) => String(Object.is(v, -0) ? 0 : +v.toFixed(3));
+  return `translate(${n(-c.x * c.z)}px, ${n(-c.y * c.z)}px) scale(${n(c.z)})`;
+}
+
+/** Ease between cameras (t in 0..1). Zoom moves in log space and the view
+ *  centre moves linearly, so a flight does not swing off to one side. */
+export function lerpCamera(a: Camera, b: Camera, t: number, vp: Viewport): Camera {
+  if (t <= 0) return { ...a };
+  if (t >= 1) return { ...b };
+  const e = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+  const z = Math.exp(Math.log(a.z) + (Math.log(b.z) - Math.log(a.z)) * e);
+  const ca = { x: a.x + vp.w / (2 * a.z), y: a.y + vp.h / (2 * a.z) };
+  const cb = { x: b.x + vp.w / (2 * b.z), y: b.y + vp.h / (2 * b.z) };
+  const cx = ca.x + (cb.x - ca.x) * e, cy = ca.y + (cb.y - ca.y) * e;
+  return { x: cx - vp.w / (2 * z), y: cy - vp.h / (2 * z), z };
+}
+
+/** Focus at 1:1 centred in the space below a top bar of `insetTop` px. */
+export function focusOnInset(r: Rect, vp: Viewport, insetTop: number): Camera {
+  const avail = Math.max(1, vp.h - insetTop);
+  return { x: Math.round(r.x + r.w / 2 - vp.w / 2), y: Math.round(r.y + r.h / 2 - (insetTop + avail / 2)), z: 1 };
+}
