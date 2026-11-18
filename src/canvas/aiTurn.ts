@@ -95,13 +95,28 @@ export interface TurnUi {
 
 /** Parse a model reply that may be fenced, have leading prose, or use smart quotes.
  *  Then validate it as a surface plan. Unknown widgets fail validation. */
+/** Unwrap common model envelopes and default a missing kind when tiles are present. */
+export function normalizePlanRaw(raw: unknown, depth = 0): unknown {
+  if (!raw || typeof raw !== 'object' || depth > 3) return raw;
+  const r = raw as Record<string, unknown>;
+  for (const key of ['plan', 'board', 'surface', 'value', 'data']) {
+    if (r[key] && typeof r[key] === 'object') return normalizePlanRaw(r[key], depth + 1);
+  }
+  if (r.kind !== 'room' && r.kind !== 'plan' && Array.isArray(r.tiles)) {
+    const kind = r.tiles.some((t) => t && typeof t === 'object' && (t as { type?: string }).type === 'plan') ? 'plan' : 'room';
+    return { ...r, kind, title: typeof r.title === 'string' ? r.title : (kind === 'room' ? 'This room' : 'Floor plan') };
+  }
+  return raw;
+}
+
 export function parseModelPlan(text: string): { ok: true; value: SurfacePlan } | { ok: false; error: string } {
   const raw = extractJson(text);
   if (raw == null) return { ok: false, error: 'The reply was not a board plan.' };
-  const filled = fillVisible(JSON.stringify(raw));
-  let parsed: unknown = raw;
+  const normalized = normalizePlanRaw(raw);
+  const filled = fillVisible(JSON.stringify(normalized));
+  let parsed: unknown = normalized;
   if (filled.filled) {
-    try { parsed = JSON.parse(filled.text); } catch { parsed = raw; }
+    try { parsed = JSON.parse(filled.text); } catch { parsed = normalized; }
   }
   const plan = coerceSurfacePlan(parsed);
   if (!plan.ok) return { ok: false, error: plan.error };

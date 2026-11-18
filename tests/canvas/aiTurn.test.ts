@@ -122,6 +122,18 @@ describe('parseModelPlan (real-shaped model output)', () => {
     if (!r.ok) expect(r.error).toMatch(/not a board plan/i);
   });
 
+  it('defaults a missing kind when tiles are present, and unwraps a {plan: ...} envelope', () => {
+    const loose = parseModelPlan('Sure. {"title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"}]}');
+    expect(loose.ok).toBe(true);
+    if (loose.ok) {
+      expect(loose.value.kind).toBe('room');
+      expect(loose.value.title).toBe('Living room');
+    }
+    const wrapped = parseModelPlan('{"plan":{"kind":"room","title":"Wrapped","tiles":[{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"}]}}');
+    expect(wrapped.ok).toBe(true);
+    if (wrapped.ok) expect(wrapped.value.title).toBe('Wrapped');
+  });
+
   it('refuses unknown widgets even when the JSON is well-formed', () => {
     const r = parseModelPlan('```json\n{"kind":"room","title":"Living","tiles":[{"type":"script","src":"alert(1)"},{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"}]}\n```');
     expect(r.ok).toBe(false);
