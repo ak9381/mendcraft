@@ -3,11 +3,15 @@ import '../style.css';
 import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
-import { isEnabled, streamCanvasPlan } from '../ai/hybrid';
+import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
+import { bindDirectory, createDirectory, createIndexedDbDirectoryStore } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 
 const params = new URLSearchParams(location.search);
 if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
+
+// People directory: tokens in cloud prompts, real names filled back on device.
+bindDirectory(createDirectory(createIndexedDbDirectoryStore()));
 
 // Honest engine selection: real Nano needs Chrome's Prompt API (and not a phone);
 // real Gemini needs Firebase AI Logic. ?sim=1 forces the scripted box engines.
@@ -28,3 +32,6 @@ let handle: ReturnType<typeof mountCanvas> | null = null;
 const voice = createVoiceController((t) => handle?.run(t));
 handle = mountCanvas(root, { voice, engines, seed: params.has('seed') });
 (window as unknown as { __canvas: unknown }).__canvas = handle;
+
+// Warm App Check + cloud models in the background so the first keep isn't a cold start.
+void prepareHybrid();

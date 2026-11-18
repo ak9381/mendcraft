@@ -38,6 +38,7 @@ const SCREENS = [
   { name: 'studio-voice', path: '/studio?sim=1', skipTour: true, click: '#btn-voice' },
   { name: 'control', path: '/control' },
   { name: 'judges', path: '/judges' },
+  { name: 'canvas', path: '/canvas.html?fresh=1&sim=1' },
   { name: 'tour-open', path: '/studio?sim=1', clickTourHelp: true },
 ];
 

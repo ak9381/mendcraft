@@ -6,6 +6,7 @@
 import { scriptedEngine, type EngineId, type SurfaceEngine } from './aiTurn';
 
 export const PHONE_NANO_NOTE = "Gemini · cloud — Nano isn't on this phone, so Deep drafted it";
+export const NO_NANO_NOTE = "Gemini · cloud — Nano isn't available here, so Deep drafted it";
 
 export interface EngineEnv {
   /** Chrome's Prompt API (globalThis.LanguageModel) is present. */
@@ -33,7 +34,7 @@ export function planEngines(env: EngineEnv): { nano: EngineChoice; gemini: Engin
   const nanoOnDevice = env.hasLanguageModel && !env.isPhone;
   const nano: EngineChoice = nanoOnDevice
     ? { engine: 'nano', sim: false }
-    : { engine: 'gemini', sim: !env.hasCloud, routeNote: PHONE_NANO_NOTE };
+    : { engine: 'gemini', sim: !env.hasCloud, routeNote: env.isPhone ? PHONE_NANO_NOTE : NO_NANO_NOTE };
   return { nano, gemini };
 }
 
@@ -83,11 +84,14 @@ function cloudEngine(id: EngineId, cloud: CloudStream, routeNote?: string): Surf
 }
 
 function engineFromChoice(choice: EngineChoice, json: string, rt: EnginesRuntime): SurfaceEngine {
-  if (choice.sim) return { ...scriptedEngine(choice.engine, json), routeLine: choice.routeNote };
-  if (choice.engine === 'nano' && rt.languageModel) return realNanoEngine(rt.languageModel, choice.routeNote);
-  if (rt.cloud) return cloudEngine('gemini', rt.cloud, choice.routeNote);
+  const scripted = { ...scriptedEngine(choice.engine, json), routeLine: choice.routeNote };
+  if (choice.sim) return scripted;
+  if (choice.engine === 'nano' && rt.languageModel) {
+    return { ...realNanoEngine(rt.languageModel, choice.routeNote), fallback: scripted };
+  }
+  if (rt.cloud) return { ...cloudEngine('gemini', rt.cloud, choice.routeNote), fallback: scripted };
   // Promised real but the transport vanished (e.g. cloud dropped): scripted, honest SIM.
-  return { ...scriptedEngine(choice.engine, json), routeLine: choice.routeNote };
+  return scripted;
 }
 
 /** Engine factories keyed by step id, for mountCanvas({ engines }). */

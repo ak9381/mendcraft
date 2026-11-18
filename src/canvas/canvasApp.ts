@@ -7,11 +7,11 @@ import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, panBy, zoomAbout, type Camera, type Viewport } from './camera';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame } from './canvasCommands';
-import { coerceSurfacePlan, expandPlan, type A2uiMessage, type DeviceState, type SurfacePlan } from './surfacePlan';
+import { expandPlan, type A2uiMessage, type DeviceState, type SurfacePlan } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
-import { createCanvasHistory, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -29,6 +29,7 @@ import { mountCanvasHands } from './canvasHands';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
+import { protectText } from '../privacy/directory';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -416,7 +417,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiPanel.querySelector('.mc-ai-prompt pre')!.textContent = s.prompt;
     aiPanel.querySelector('.mc-ai-sent')!.textContent = s.sent ? `What was sent: ${s.sent}` : 'What was sent: nothing. Stays on this device.';
     // Byte ledger: every AI turn records what actually left the device.
-    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? s.prompt : '' });
+    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? protectText(s.prompt).text : '' });
     aiPanel.querySelector('.mc-ai-ledger')!.textContent = formatLedgerLine({ bytes: entry.bytes, engine: s.engine });
     ledgerTotalRender();
     aiPanel.querySelector('.mc-ai-reply pre')!.textContent = '';
@@ -536,22 +537,36 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
   async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean } = {}): Promise<boolean> {
     const f = reg.get(frameId); if (!f) return false;
+    const engine = engineFor(turn.sent.engine, turn.json);
+    if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
+    turn.sent.sim = engine.sim;
     aiSent(utterance, turn.sent);
     if (o.photoNote) aiPanel.querySelector('.mc-ai-sent')!.textContent += ' — no camera or gimbal here, so the photo is simulated.';
+    const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
+      aiPanel.querySelector('.mc-ai-reply pre')!.textContent = chunk;
+      ghost(frameId, parsePartialPlan(chunk));
+    });
     let full = '';
     try {
-      full = await turn.engine.stream(turn.sent.prompt, (t) => {
-        aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t;
-        ghost(frameId, parsePartialPlan(t));
-      });
+      full = await streamOne(engine);
     } catch (e) {
-      const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
-      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+      if (!engine.fallback) {
+        const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+      }
+      turn.sent.sim = true;
+      turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
+      aiSent(utterance, turn.sent);
+      try {
+        full = await streamOne(engine.fallback);
+      } catch (e2) {
+        const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+      }
     }
-    let raw: unknown;
-    try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { ghost(frameId, null); say('The reply was not a board plan.'); return false; }
-    const plan = coerceSurfacePlan(raw);
-    if (!plan.ok) { ghost(frameId, null); say(`Refused the plan: ${plan.error}`); return false; }
+    const parsed = parseModelPlan(full);
+    if (!parsed.ok) { ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+    const plan = parsed;
     const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
     const merged = mergeTiles(before, plan.value.tiles);
     if (merged.tiles.length === before.tiles.length) {
@@ -691,7 +706,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim });
     let full = '';
     try { full = await engine.stream(prompt, (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; }); }
-    catch (e) { const why = `Kannada draft didn’t arrive: ${e instanceof Error ? e.message : String(e)}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
+    catch (e) {
+      if (!engine.fallback) {
+        const why = `Kannada draft didn’t arrive: ${e instanceof Error ? e.message : String(e)}`;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+      }
+      aiPanel.querySelector('.mc-ai-route')!.textContent = 'SIM · the model didn’t answer, so a prepared Kannada pack is waiting';
+      try { full = await engine.fallback.stream(prompt, (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; }); }
+      catch (e2) {
+        const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+      }
+    }
     let raw: unknown = null;
     try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
     const coerced = coerceLanguagePack(raw);
