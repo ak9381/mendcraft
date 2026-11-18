@@ -12,6 +12,7 @@ import {
   WHY_ONLINE,
   type HelperName,
   byLineFor,
+  FILLED_ON_DEVICE_SUFFIX,
 } from './wording';
 
 export const ROUTE_LINES = {
@@ -53,6 +54,8 @@ export interface CatalogInput {
   /** Already-redacted receipt, when anything left the device. */
   sent?: string | null;
   browserTarget?: string;
+  /** Tokens were filled back in on this device before she saw the answer. */
+  filledOnDevice?: boolean;
 }
 
 export interface CatalogResult {
@@ -125,6 +128,11 @@ export function catalogRoute(input: CatalogInput): CatalogResult {
     ? whatWasSentFor(id, input.sent, input.browserTarget)
     : null;
 
+  const filled = input.filledOnDevice === true || route.filledOnDevice === true;
+  if (filled && !routeLine.includes(FILLED_ON_DEVICE_SUFFIX)) {
+    routeLine = `${routeLine} ${FILLED_ON_DEVICE_SUFFIX}`;
+  }
+
   return {
     helper,
     byLine: byLineFor(helper),
@@ -132,7 +140,7 @@ export function catalogRoute(input: CatalogInput): CatalogResult {
     lineId: id,
     whyLabel: helper === 'Deep' ? WHY_ONLINE : WHY_HERE,
     whatWasSent,
-    technicalLine: formatRouteLine(route),
+    technicalLine: formatRouteLine(route.filledOnDevice || filled ? { ...route, filledOnDevice: true } : route),
   };
 }
 

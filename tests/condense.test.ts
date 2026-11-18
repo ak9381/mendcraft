@@ -14,7 +14,8 @@ const model = (text: string, inferenceSource?: string): TextGenModel => ({
 
 const RAMBLE =
   'I was thinking you know the kitchen feels so cramped when I am rolling out chapatis and my ' +
-  'wrists start hurting maybe if the counter near the window were a little wider it would help';
+  'wrists start hurting maybe if the counter near the window were a little wider it would help, ' +
+  'and also the door into the kitchen is tight when I turn with a tray so could we make that wider too';
 
 afterEach(() => setModelsForTest(null));
 
@@ -24,10 +25,13 @@ describe('shouldCondense', () => {
     expect(shouldCondense(RAMBLE)).toBe(true);
     expect(shouldCondense('add a door on the south wall')).toBe(false);
     expect(shouldCondense('seventeen words ' + 'w '.repeat(15))).toBe(false);
+    // Mid-length rambles (under 40 words) stay raw — the condenser did not
+    // save end-to-end time on the 18-word gate (see scripts/measure-condense.mjs).
+    expect(shouldCondense(RAMBLE.split(' ').slice(0, 30).join(' '))).toBe(false);
   });
 
   it('never condenses a command the rule parser already handles', () => {
-    const longButExact = 'please ' + 'kindly '.repeat(17) + 'undo';
+    const longButExact = 'please ' + 'kindly '.repeat(39) + 'undo';
     expect(wordCount(longButExact)).toBeGreaterThanOrEqual(CONDENSE_MIN_WORDS);
     expect(shouldCondense(longButExact, () => true)).toBe(false);
     expect(shouldCondense(longButExact, () => false)).toBe(true);

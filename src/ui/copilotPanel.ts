@@ -12,6 +12,7 @@ import { agoLabel, type ChangeEntry } from '../cad/changeLog';
 import { formatRouteLine, type RouteInfo } from '../cad/routeReason';
 import { GUIDELINE_LABEL, GUIDELINE_NOTE, GUIDELINE_SETS, REGION_IDS, type GuidelineIssue, type RegionId } from '../cad/guidelines';
 import type { ChecklistItem, EmailDraft } from '../cad/siteChecklist';
+import { reviewStatusLabel, unresolvedReview, waitingCountLine, type GeminiReviewItem } from '../cad/geminiReview';
 import { actorByLine } from '../ux/wording';
 import { catalogRoute, formatWhatWasSent } from '../ux/routeCatalog';
 import { applyHistoryFilter, filterLabel, type HistoryFilter, undoProposalTitle } from '../ux/historyFilters';
@@ -51,7 +52,11 @@ export interface CopilotPanelDeps {
   /** Her confirm: open the draft in her own mail app (never sends). */
   onOpenDraft(draft: EmailDraft): void;
   onCancelDraft(): void;
+  onReviewAccept?(id: string): void;
+  onReviewDrop?(id: string): void;
+  onReviewRemove?(id: string): void;
 }
+
 
 export interface CopilotPanel {
   readonly element: HTMLElement;
@@ -66,6 +71,7 @@ export interface CopilotPanel {
   setDraft(d: { draft: EmailDraft; by: string; route?: RouteInfo } | null): void;
   setBusy(text: string | null): void;
   setSpeculativeStats(s: SpeculativeStatsView | null): void;
+  setGeminiReview(items: GeminiReviewItem[]): void;
 }
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -142,6 +148,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
   let answer: CopilotAnswerView | null = null;
   let draft: { draft: EmailDraft; by: string; route?: RouteInfo } | null = null;
   let specStats: SpeculativeStatsView | null = null;
+  let reviewItems: GeminiReviewItem[] = [];
 
   function changeCard(e: ChangeEntry, review: boolean): HTMLElement {
     const card = h('article', `mc-cp-card mc-cp-${e.status} mc-cp-by-${e.actor}`);
@@ -180,7 +187,39 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     return card;
   }
 
+  function renderToCheck(): void {
+    const sec = h('div', 'mc-cp-sec mc-cp-tocheck');
+    sec.appendChild(h('h3', '', waitingCountLine(reviewItems)));
+    sec.appendChild(h('p', 'mc-cp-note', 'Answers given while you were offline wait here. When you are back online, Gemini works through the list. Each result is a Proposal you pinch to keep.'));
+    if (!reviewItems.length) {
+      sec.appendChild(h('p', 'mc-cp-empty', 'No offline answers in the Gemini review list yet.'));
+      body.appendChild(sec);
+      return;
+    }
+    const ul = h('ul', 'mc-cp-items');
+    for (const it of reviewItems) {
+      const li = h('li', `mc-cp-item it-review it-${it.status}${it.awaitingPinch ? ' it-pinch' : ''}`);
+      li.appendChild(h('p', 'mc-cp-q', it.question));
+      li.appendChild(h('p', 'mc-cp-a', `Offline answer: ${it.offlineAnswer}`));
+      if (it.geminiAnswer && (it.awaitingPinch || it.status !== 'waiting')) {
+        li.appendChild(h('p', 'mc-cp-a', `Gemini: ${it.geminiAnswer}`));
+      }
+      li.appendChild(h('p', 'mc-cp-meta', reviewStatusLabel(it)));
+      const row = h('div', 'mc-cp-issue-btns');
+      if (it.awaitingPinch) {
+        if (deps.onReviewAccept) row.appendChild(btn('Keep', 'mc-cp-accept', () => deps.onReviewAccept!(it.id), `Keep Gemini review: ${it.question}`));
+        if (deps.onReviewDrop) row.appendChild(btn('Drop', 'mc-cp-reject ghost', () => deps.onReviewDrop!(it.id), `Keep the offline answer: ${it.question}`));
+      }
+      if (deps.onReviewRemove) row.appendChild(btn('Remove', 'ghost', () => deps.onReviewRemove!(it.id), `Remove from To check: ${it.question}`));
+      if (row.childElementCount) li.appendChild(row);
+      ul.appendChild(li);
+    }
+    sec.appendChild(ul);
+    body.appendChild(sec);
+  }
+
   function renderReview(): void {
+    renderToCheck();
     const pend = changes.filter((c) => c.status === 'pending');
     const sec = h('div', 'mc-cp-sec');
     const hd = h('div', 'mc-cp-sec-head');
@@ -332,7 +371,8 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
       b.classList.toggle('active', k === current);
     }
     const pend = changes.filter((c) => c.status === 'pending').length;
-    tabBtns.review.textContent = pend ? `Review (${pend})` : 'Review';
+    const toCheck = unresolvedReview(reviewItems).length;
+    tabBtns.review.textContent = toCheck ? `Review (${toCheck} to check)` : pend ? `Review (${pend})` : 'Review';
     const openItems = items.filter((i) => i.status === 'open').length;
     tabBtns.checklist.textContent = openItems ? `Site checklist (${openItems})` : 'Site checklist';
     if (current === 'review') renderReview();
@@ -362,6 +402,7 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
     setDraft(d) { draft = d; if (!root.hidden) render(); },
     setBusy(text) { busy.hidden = !text; busyText.textContent = text ?? ''; },
     setSpeculativeStats(s) { specStats = s; if (!root.hidden) render(); },
+    setGeminiReview(items) { reviewItems = items; if (!root.hidden) render(); },
   };
 }
 

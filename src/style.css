@@ -1527,6 +1527,7 @@ a.brand:hover { color: var(--accent); }
 .mc-gestures-panel,
 .mc-hands-panel,
 .mc-voice-panel,
+.mc-dir-panel,
 .mc-ref-panel {
   position: absolute;
   z-index: 40;
@@ -1539,6 +1540,7 @@ a.brand:hover { color: var(--accent); }
 .mc-gestures-panel[hidden],
 .mc-hands-panel[hidden],
 .mc-voice-panel[hidden],
+.mc-dir-panel[hidden],
 .mc-ref-panel[hidden],
 .mc-keyboard[hidden] { display: none; }
 
@@ -4151,3 +4153,44 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 @media (prefers-reduced-motion: reduce) {
   .mc-proposal, .mc-here-card, .mc-palm-slice { transition: none; }
 }
+
+/* On-device people directory (More → Directory). Never synced. */
+.mc-dir-panel {
+  top: 72px;
+  right: 16px;
+  width: 380px;
+  max-width: calc(100% - 32px);
+  padding: 0 0 var(--space-3);
+  max-height: min(70vh, 640px);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.mc-dir-list { list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1; min-height: 80px; }
+.mc-dir-person { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel-2); }
+.mc-dir-person-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.mc-dir-person-top code { font-size: 12px; color: var(--accent); }
+.mc-dir-quote { margin: 4px 0 0; font-size: 13px; color: var(--text-dim); }
+.mc-dir-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 0; }
+.mc-dir-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-dim); }
+.mc-dir-field input, .mc-dir-field select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 14px;
+}
+.mc-dir-clear { margin: 8px 12px 0; }
+.mc-cp-tocheck .it-pinch { border-color: var(--accent); }
+.mc-cp-tocheck .it-review { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+
+#app:has(> #layout) .mc-dir-panel {
+  background: #fff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+}
+#app:has(> #layout) .mc-dir-person { background: #f8fafc; }
+#app:has(> #layout) .mc-dir-field input,
+#app:has(> #layout) .mc-dir-field select { background: #fff; color: #0f172a; border-color: #cbd5e1; }

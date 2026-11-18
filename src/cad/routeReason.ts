@@ -21,6 +21,8 @@ export interface RouteInfo {
   reason: string;
   wonBy?: RouteWonBy;
   model?: string;
+  /** Names were put back on this device after a tokenized cloud reply. */
+  filledOnDevice?: boolean;
 }
 
 export const ROUTE_REASON_MAX = 140;
@@ -49,6 +51,7 @@ export function sanitizeRoute(raw: unknown): RouteInfo | undefined {
   };
   if (winners.includes(o.wonBy as RouteWonBy)) route.wonBy = o.wonBy as RouteWonBy;
   if (typeof o.model === 'string' && o.model.trim()) route.model = o.model.trim().slice(0, 80);
+  if (o.filledOnDevice === true) route.filledOnDevice = true;
   return route;
 }
 
@@ -193,10 +196,15 @@ export function routeSpeculative(opts: {
 /** One muted demo line: badge, then an em dash, then the reason. */
 export function formatRouteLine(route: RouteInfo): string {
   const reason = capRouteReason(route.reason);
-  if (route.tier === 'plan-data') return `Plan data · on device — ${reason}`;
-  if (route.tier === 'nano') return `Nano · on device — ${reason}`;
-  if (route.tier === 'offline') return `Offline — ${reason}`;
-  if (route.tier === 'speculative') return `Nano's guess — ${reason}`;
-  if (reason.startsWith('Gemini won') || reason.startsWith('Nano unsure')) return reason;
-  return `Gemini · cloud — ${reason}`;
+  let line: string;
+  if (route.tier === 'plan-data') line = `Plan data · on device — ${reason}`;
+  else if (route.tier === 'nano') line = `Nano · on device — ${reason}`;
+  else if (route.tier === 'offline') line = `Offline — ${reason}`;
+  else if (route.tier === 'speculative') line = `Nano's guess — ${reason}`;
+  else if (reason.startsWith('Gemini won') || reason.startsWith('Nano unsure')) line = reason;
+  else line = `Gemini · cloud — ${reason}`;
+  if (route.filledOnDevice && !line.includes('names filled in on device')) {
+    line = `${line} · names filled in on device`;
+  }
+  return line;
 }

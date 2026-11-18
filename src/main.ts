@@ -100,6 +100,7 @@ import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
 import { createChangeLog, planDigest, ACTOR_LABEL, type Actor, type ChangeEntry } from './cad/changeLog';
 import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type EmailDraft } from './cad/siteChecklist';
+import { createGeminiReview, proposalForReview, unresolvedReview, waitingForGemini, type GeminiReviewItem } from './cad/geminiReview';
 import { withChangeRecording } from './cad/recording';
 import { checkGuidelines, summarizeReport, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
 import { proposeStair } from './cad/stairs';
@@ -121,6 +122,7 @@ import { LAYER_LABEL, type LayerId } from './cad/layers';
 import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
 import { siteBookId, syncSiteBook } from './cad/sync';
 import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
+import { createDirectoryPanel } from './ui/directoryPanel';
 import { mountStudioChrome, proposalFromChange } from './ux/mountStudio';
 import { catalogRoute } from './ux/routeCatalog';
 import { GETTING_QUICK_READY, LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY, QUICK_READY } from './ux/wording';
@@ -134,7 +136,9 @@ import type { Focusable } from './ux/focusModel';
 import { discoveryLevel } from './ux/suggestions';
 import { askCopilot, condenseUtterance, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
 import { shouldCondense } from './ai/condense';
-import { redactForCloud } from './ai/redact';
+import {
+  bindDirectory, createDirectory, createIndexedDbDirectoryStore, fillVisible, protectText,
+} from './privacy/directory';
 import type { PlanDoc } from './plan/doc';
 import { generatePlan } from './ai/hybrid';
 import { isFirebaseConfigured } from './firebase/app';
@@ -378,6 +382,7 @@ app.innerHTML = `
         <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gesture guide</button>
         <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">Pointer comfort</button>
         <button id="btn-voice" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pick the voice that speaks replies (voices already on this device)">Spoken voice</button>
+        <button id="btn-directory" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="People directory: names stay on this device and are replaced with tokens before anything goes to Gemini">Directory</button>
         <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
         <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
         <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
@@ -766,6 +771,9 @@ function applyLanguage(pick: string, announce: boolean): void {
 // as applied; accepted AI proposals and reverts are recorded by the log itself.
 const changeLog = createChangeLog(typeof localStorage !== 'undefined' ? localStorage : null);
 const siteChecklist = createSiteChecklist(typeof localStorage !== 'undefined' ? localStorage : null);
+const geminiReview = createGeminiReview(typeof localStorage !== 'undefined' ? localStorage : null);
+const peopleDirectory = createDirectory(createIndexedDbDirectoryStore());
+bindDirectory(peopleDirectory);
 window.addEventListener('pagehide', () => changeLog.flush());
 const rawController: ModeController = await mode.createController();
 const controller: ModeController = withChangeRecording(rawController, {
@@ -1022,6 +1030,7 @@ function toggleButton(btn: HTMLButtonElement, on: boolean): void {
 // Free, on-device: replies speak with a voice the browser already has, and the
 // choice stays in this browser's localStorage. No paid TTS, ever.
 const btnVoice = el<HTMLButtonElement>('btn-voice');
+const btnDirectory = el<HTMLButtonElement>('btn-directory');
 
 function listSynthVoices(): SynthVoice[] {
   if (!('speechSynthesis' in window)) return [];
@@ -1062,6 +1071,17 @@ btnVoice.addEventListener('click', () => {
   overflowMenu.close();
   voicePanel.toggle();
   toggleButton(btnVoice, voicePanel.isOpen());
+});
+const directoryPanel = createDirectoryPanel(peopleDirectory);
+viewportEl.appendChild(directoryPanel.element);
+btnDirectory.addEventListener('click', () => {
+  overflowMenu.close();
+  directoryPanel.toggle();
+  toggleButton(btnDirectory, directoryPanel.isOpen());
+});
+peopleDirectory.subscribe(() => {
+  if (directoryPanel.isOpen()) directoryPanel.refresh();
+  toggleButton(btnDirectory, directoryPanel.isOpen());
 });
 if ('speechSynthesis' in window && typeof window.speechSynthesis.addEventListener === 'function') {
   // Chrome fills getVoices() late; repaint the open panel when the list lands.
@@ -2323,6 +2343,9 @@ const copilotPanel = createCopilotPanel({
   onEmailClient: () => void emailClient(),
   onOpenDraft: (d) => confirmOpenDraft(d),
   onCancelDraft: () => { copilotPanel.setDraft(null); say('Email draft closed. Nothing was sent.'); },
+  onReviewAccept: (id) => acceptGeminiReview(id),
+  onReviewDrop: (id) => dropGeminiReview(id),
+  onReviewRemove: (id) => { geminiReview.remove(id); },
 });
 viewportEl.appendChild(copilotPanel.element);
 const walkControls = createWalkControls(
@@ -2339,17 +2362,27 @@ function refreshCopilot(): void {
     cpRenderQueued = false;
     copilotPanel.setChanges(changeLog.entries());
     copilotPanel.setChecklist(siteChecklist.items(), isOnline());
+    copilotPanel.setGeminiReview(geminiReview.items());
     const pendN = changeLog.pending().length;
-    btnCopilot.textContent = pendN ? `Review · ${pendN} waiting` : 'Review & History';
+    const toCheck = unresolvedReview(geminiReview.items()).length;
+    btnCopilot.textContent = toCheck ? `Review · ${toCheck} to check`
+      : pendN ? `Review · ${pendN} waiting`
+      : 'Review & History';
     btnCopilot.setAttribute('aria-label', btnCopilot.textContent);
     studioChrome?.refresh();
     const waiting = changeLog.pending()[0];
+    const reviewWait = geminiReview.items().find((i) => i.awaitingPinch);
     if (waiting && leaveState.phase === 'idle') {
       studioChrome?.setProposal(proposalFromChange(waiting), {
         onKeep: () => acceptChange(waiting.id),
         onDrop: () => rejectChange(waiting.id),
       });
-    } else if (leaveState.phase === 'idle' && new URLSearchParams(location.search).get('ux') !== 'proposal' && new URLSearchParams(location.search).get('ux') !== 'demo') {
+    } else if (reviewWait && leaveState.phase === 'idle') {
+      studioChrome?.setProposal(proposalFromReviewItem(reviewWait), {
+        onKeep: () => acceptGeminiReview(reviewWait.id),
+        onDrop: () => dropGeminiReview(reviewWait.id),
+      });
+    } else if (leaveState.phase === 'idle' && new URLSearchParams(location.search).get('ux') !== 'proposal' && new URLSearchParams(location.search).get('ux') !== 'demo' && new URLSearchParams(location.search).get('ux') !== 'tocheck') {
       studioChrome?.setProposal(null);
     }
     publishControlSnapshot();
@@ -2357,12 +2390,18 @@ function refreshCopilot(): void {
 }
 changeLog.subscribe(refreshCopilot);
 siteChecklist.subscribe(refreshCopilot);
+geminiReview.subscribe(refreshCopilot);
 net.subscribe((online) => {
   refreshCopilot();
   if (online) {
     void warmCloud();
     void syncSite();
     const open = siteChecklist.open().length;
+    const reviewN = waitingForGemini(geminiReview.items()).length;
+    if (reviewN) {
+      showToast(`Back online. ${geminiReview.waitingCountLine()}.`);
+      say(`Back online. ${geminiReview.waitingCountLine()}.`);
+    }
     if (open) {
       showToast(`Back online. ${open} site question${open === 1 ? '' : 's'} waiting in your checklist.`);
       say(`Back online. You have ${open} site question${open === 1 ? '' : 's'}. Ask Gemini, or email the client.`);
@@ -2468,6 +2507,36 @@ if (uxShot === 'proposal' || uxShot === 'demo') {
     catalog: catalogRoute({ route: routeGemini({ nano: 'unsure' }), kind: 'escalation', sent: 'make this door wheelchair friendly' }),
     status: 'waiting',
   });
+}
+if (uxShot === 'tocheck' || uxShot === 'demo') {
+  if (!geminiReview.items().length) {
+    const seeds = [
+      { question: 'Is the kitchen wide enough for a wheelchair turn?', offlineAnswer: 'Yes — 1600 mm clear.' },
+      { question: 'Door D2 clear width?', offlineAnswer: '750 mm' },
+      { question: 'What is the ramp slope to the porch?', offlineAnswer: '1:12' },
+    ];
+    for (const s of seeds) geminiReview.recordOffline(s);
+    const door = geminiReview.findByQuestion('Door D2 clear width?');
+    if (door) geminiReview.recordGeminiResult(door.id, { geminiAnswer: '800 mm on the plan', agreed: false, because: 'the plan door is 800 mm, not 750 mm' });
+  }
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  const waiting = geminiReview.items().find((i) => i.awaitingPinch);
+  if (waiting) {
+    studioChrome.setProposal(proposalFromReviewItem(waiting), {
+      onKeep: () => acceptGeminiReview(waiting.id),
+      onDrop: () => dropGeminiReview(waiting.id),
+    });
+  }
+}
+if (uxShot === 'directory') {
+  if (!peopleDirectory.people().length) {
+    peopleDirectory.add({ name: 'Priya Sharma', role: 'client', phone: '+91 98765 43210', email: 'priya@example.com', note: 'Wants a wider front door' });
+    peopleDirectory.add({ name: 'Lakshmi', role: 'mother', note: 'Uses a walker' });
+    peopleDirectory.add({ name: 'Ravi', role: 'contractor' });
+  }
+  directoryPanel.open();
+  toggleButton(btnDirectory, true);
 }
 
 const siteBook = (() => {
@@ -2670,7 +2739,7 @@ async function handleHardQuestion(
   }
   // Rules-first redaction (ai/redact): only the SENT text swaps her names for
   // neutral tokens; the question shown on the card keeps her real words.
-  const sent = redactForCloud(question, planLabelNames());
+  const sent = protectText(question, planLabelNames());
   const redacted = { names: sent.names, details: sent.details };
   const judgement = isPlanJudgementQuestion(question);
   const hard = judgement || isHardQuestion(question);
@@ -2703,7 +2772,7 @@ async function handleHardQuestion(
     askCloud: () => askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
       const streamRoute = routeGemini({ kind: judgement ? 'judgment' : 'hard', condensed: opts?.condensed, redacted });
       publishRoute(streamRoute);
-      copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud', route: streamRoute });
+      copilotPanel.setAnswer({ question, text: revealAnswer(partial, streamRoute).text, by: 'Gemini · cloud', route: revealAnswer(partial, streamRoute).route ?? streamRoute });
     }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
   });
   endDeepWait();
@@ -2755,14 +2824,16 @@ async function handleHardQuestion(
       condensed: opts?.condensed,
       redacted,
     });
-    publishRoute(route);
+    const shown = revealAnswer(res.answer, route);
+    const shownRoute = shown.route ?? route;
+    publishRoute(shownRoute);
     setBadge('cloud', 'big-job');
     recordLedger('cloud', 'copilot-answer', res.model ? `hard question · ${res.model}` : 'hard question', `question: ${JSON.stringify(sent.text)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
-    copilotPanel.setAnswer({ question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
+    copilotPanel.setAnswer({ question, text: shown.text, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route: shownRoute });
     copilotPanel.open('review');
     toggleButton(btnCopilot, true);
-    verifierEl.textContent = res.answer;
-    say(res.answer);
+    verifierEl.textContent = shown.text;
+    say(shown.text);
     for (const call of res.calls) {
       const act = toolToAction(call);
       if (act.kind === 'op') {
@@ -2783,15 +2854,17 @@ async function askChecklistItem(id: string): Promise<void> {
   if (!it) return;
   if (!isOnline() || !cloudConfigured) { say('Still no signal. I will keep it on the list.'); return; }
   beginDeepWait('copilot');
-  const res = await askCopilot(it.question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  const sent = protectText(it.question, planLabelNames());
+  const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
   endDeepWait();
   if (!res) { say("Gemini couldn't answer that right now."); return; }
-  const route = routeGemini({ kind: 'hard', model: res.model, why: res.why });
+  const shown = revealAnswer(res.answer, routeGemini({ kind: 'hard', model: res.model, why: res.why }));
+  const route = shown.route ?? routeGemini({ kind: 'hard', model: res.model, why: res.why });
   publishRoute(route);
-  recordLedger('cloud', 'copilot-answer', 'site checklist item', `question: ${JSON.stringify(it.question)}`, res.ms);
-  siteChecklist.answer(id, res.answer, 'gemini');
-  copilotPanel.setAnswer({ question: it.question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
-  say(res.answer);
+  recordLedger('cloud', 'copilot-answer', 'site checklist item', `question: ${JSON.stringify(sent.text)}`, res.ms);
+  siteChecklist.answer(id, shown.text, 'gemini');
+  copilotPanel.setAnswer({ question: it.question, text: shown.text, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
+  say(shown.text);
   for (const call of res.calls) {
     const act = toolToAction(call);
     if (act.kind === 'op') proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || it.question, op: act.op, source: 'cloud', route });
@@ -2811,9 +2884,14 @@ async function emailClient(): Promise<boolean> {
     const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary());
     endDeepWait();
     if (res) {
-      draft = res.draft;
+      const subj = fillVisible(res.draft.subject);
+      const body = fillVisible(res.draft.body);
+      const to = fillVisible(res.draft.to);
+      draft = { ...res.draft, subject: subj.text, body: body.text, to: to.text };
+      const filled = subj.filled + body.filled + to.filled;
       by = 'Drafted by Gemini · cloud. Read it first.';
       route = routeGemini({ kind: 'email', model: res.model });
+      if (filled) route = { ...route, filledOnDevice: true };
       recordLedger('cloud', 'client-email', 'draft from site checklist', `questions: ${items.length}`, res.ms);
     }
   }
@@ -3209,16 +3287,77 @@ async function handleCopilotQuestion(
   return null;
 }
 
+/** Put directory names back into a cloud reply before she sees it. */
+function revealAnswer(text: string, route?: RouteInfo): { text: string; route?: RouteInfo; filled: number } {
+  const { text: filledText, filled } = fillVisible(text);
+  if (!filled) return { text, route, filled: 0 };
+  return { text: filledText, route: route ? { ...route, filledOnDevice: true } : undefined, filled };
+}
+
+function proposalFromReviewItem(item: GeminiReviewItem) {
+  const p = proposalForReview(item);
+  const sent = protectText(item.question, planLabelNames()).text;
+  const filled = item.geminiAnswer ? fillVisible(item.geminiAnswer).filled : 0;
+  return {
+    id: `review-${item.id}`,
+    title: p.title,
+    youAsked: item.question,
+    why: p.why,
+    catalog: catalogRoute({
+      route: {
+        tier: 'gemini' as const,
+        engine: 'gemini' as const,
+        reason: item.because ?? 'checked the offline answer',
+        filledOnDevice: filled > 0,
+      },
+      kind: 'hard' as const,
+      sent,
+      filledOnDevice: filled > 0,
+    }),
+    status: 'waiting' as const,
+  };
+}
+
+function acceptGeminiReview(id: string): void {
+  const kept = geminiReview.accept(id);
+  if (!kept) return;
+  const raw = kept.geminiAnswer ?? kept.offlineAnswer;
+  const shown = revealAnswer(raw, {
+    tier: 'gemini', engine: 'gemini',
+    reason: kept.because ?? 'checked the offline answer',
+    filledOnDevice: fillVisible(raw).filled > 0,
+  });
+  copilotPanel.setAnswer({
+    question: kept.question,
+    text: shown.text,
+    by: kept.status === 'corrected' ? 'Gemini corrected an offline answer' : 'Gemini confirmed the offline answer',
+    route: shown.route,
+  });
+  if (shown.route) publishRoute(shown.route);
+  verifierEl.textContent = shown.text;
+  say(kept.status === 'corrected' ? 'Kept Gemini’s correction.' : 'Kept Gemini’s check.');
+  refreshCopilot();
+}
+
+function dropGeminiReview(id: string): void {
+  const kept = geminiReview.drop(id);
+  if (!kept) return;
+  say('Kept the offline answer.');
+  refreshCopilot();
+}
+
 /** Offline, a plan-data answer still earns Gemini's second opinion: queue a
- *  'question' job (drained on reconnect) and say so on the route line. */
+ *  'question' job (drained on reconnect) and say so on the route line. Also
+ *  adds a visible item to the Gemini review checklist. */
 async function maybeQueueOfflineCheck(question: string, offlineAnswer: string): Promise<RouteInfo | null> {
   if (isOnline() || !cloudConfigured) return null;
-  await jobQueue.enqueue({
+  const job = await jobQueue.enqueue({
     kind: 'question',
     mode: mode.id,
     label: question,
     payload: { prompt: question, offlineAnswer },
   });
+  geminiReview.recordOffline({ question, offlineAnswer, jobId: job.id });
   return routeOffline({ refineQueued: true });
 }
 
@@ -3393,7 +3532,7 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
     // so confirmed/corrected is earned, never invented; with nothing to
     // compare it only claims "checked".
     const question = job.payload.prompt ?? '';
-    const sent = redactForCloud(question, planLabelNames());
+    const sent = protectText(question, planLabelNames());
     const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
     if (!res) {
       await jobQueue.setStatus(job.id, 'error', 'Gemini could not check this yet');
@@ -3407,12 +3546,18 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
       : agreed
         ? 'confirmed the offline answer after reconnect'
         : 'corrected the offline answer after reconnect';
+    const item = geminiReview.items().find((i) => i.jobId === job.id)
+      ?? geminiReview.findByQuestion(question)
+      ?? (offline ? geminiReview.recordOffline({ question, offlineAnswer: offline, jobId: job.id }) : null);
+    if (item) geminiReview.recordGeminiResult(item.id, { geminiAnswer: res.answer, agreed, because: why });
     const route = routeGemini({ model: res.model, why, redacted: { names: sent.names, details: sent.details } });
     publishRoute(route);
-    copilotPanel.setAnswer({ question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
     copilotPanel.open('review');
-    verifierEl.textContent = res.answer;
+    toggleButton(btnCopilot, true);
+    verifierEl.textContent = geminiReview.waitingCountLine();
+    say('Gemini has a review waiting for you.');
     await jobQueue.remove(job.id);
+    refreshCopilot();
     return;
   }
   if (job.kind === 'a11y') {
@@ -3960,7 +4105,7 @@ renderTeachState();
 void syncRecipes(); // best-effort cloud merge at boot (fails soft offline)
 
 /** The plan's text labels, for the rules-first redactor (person-like filtering
- *  happens inside redactForCloud; room-like labels pass through untouched). */
+ *  happens inside protectText; room-like labels pass through untouched). */
 function planLabelNames(): string[] {
   if (mode.id !== 'plan') return [];
   try {
@@ -3973,7 +4118,7 @@ function planLabelNames(): string[] {
 function commandPayload(utterance: string, ctx?: FusionContext): string {
   // Rules-first redaction (ai/redact): the payload recorded as sent — and
   // shown in the ledger — carries neutral tokens, never her family's names.
-  const base = `command: ${JSON.stringify(redactForCloud(utterance, planLabelNames()).text)}`;
+  const base = `command: ${JSON.stringify(protectText(utterance, planLabelNames()).text)}`;
   if (!ctx) return base;
   return `${base}\ncontext: ${JSON.stringify({ space: ctx.space, unit: ctx.unit, selected: ctx.selectedIds })}`;
 }
@@ -4747,17 +4892,19 @@ function showSpeculativeDraft(d: SpeculativeDraft, stats: SpeculativeStats, opts
           because: d.why,
         })
       : routeGemini({ kind: isPlanJudgementQuestion(d.utterance) ? 'judgment' : 'hard', model: d.geminiModel, why: d.why });
-    publishRoute(route);
+    const shown = revealAnswer(d.answer, route);
+    const shownRoute = shown.route ?? route;
+    publishRoute(shownRoute);
     copilotPanel.setAnswer({
       question: d.utterance,
-      text: d.answer,
+      text: shown.text,
       by: d.fromNano ? by : (d.geminiModel ? `Gemini · ${d.geminiModel}` : 'Gemini · cloud'),
       guess: Boolean(d.fromNano && d.state === 'draft'),
       confirmed: Boolean(d.fromNano && d.state === 'confirmed'),
-      route,
+      route: shownRoute,
     });
-    verifierEl.textContent = d.state === 'draft' ? `Nano's guess: ${d.answer}` : d.answer;
-    if (opts?.speak && d.state !== 'draft') say(d.answer);
+    verifierEl.textContent = d.state === 'draft' ? `Nano's guess: ${shown.text}` : shown.text;
+    if (opts?.speak && d.state !== 'draft') say(shown.text);
   }
   if (d.tool && d.state !== 'withdrawn') {
     const call: ToolCall = { tool: d.tool, args: d.args ?? {} };
@@ -4822,7 +4969,7 @@ speculative = createSpeculativeEngine({
   askCloud: async (s) => {
     // Same rules-first redaction as the hard-question race: the SENT text
     // swaps her names for neutral tokens; the draft card keeps her words.
-    const res = await askCopilot(redactForCloud(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    const res = await askCopilot(protectText(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
     return res ? { answer: res.answer, calls: res.calls, why: res.why, model: res.model } : null;
   },
   onUpdate: (d, stats) => {

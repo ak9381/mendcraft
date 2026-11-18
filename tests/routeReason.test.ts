@@ -173,3 +173,12 @@ describe('hard-race notes that feed the reason', () => {
     if (cloud.kind === 'cloud') expect(cloud.nano).toBe('ignored-judgement');
   });
 });
+
+describe('filled-on-device suffix', () => {
+  it('appends the names-filled suffix only when the flag is set', () => {
+    const base = routeGemini({ kind: 'email' });
+    expect(formatRouteLine(base)).not.toContain('names filled in on device');
+    expect(formatRouteLine({ ...base, filledOnDevice: true })).toMatch(/· names filled in on device$/);
+    expect(sanitizeRoute({ ...base, filledOnDevice: true })?.filledOnDevice).toBe(true);
+  });
+});

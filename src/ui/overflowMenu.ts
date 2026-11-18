@@ -8,6 +8,7 @@ export const ALWAYS_OVERFLOW_IDS = [
   'btn-gestures',
   'btn-hands',
   'btn-voice',
+  'btn-directory',
   'btn-keyboard',
   'btn-reference',
   'btn-routing',

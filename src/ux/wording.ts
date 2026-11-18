@@ -21,6 +21,7 @@ export const ESCALATION_LINE = "Quick wasn't sure, so Deep checked";
 export const ESCALATION_ROUTE = "Quick wasn't sure, so Deep double-checked.";
 export const KEEP_WORKING = 'keep working';
 export const WHAT_WAS_SENT = 'What was sent';
+export const FILLED_ON_DEVICE_SUFFIX = '· names filled in on device';
 export const WHY_HERE = 'Why here';
 export const WHY_ONLINE = 'Why online';
 

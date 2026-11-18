@@ -67,7 +67,7 @@ import {
 import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
 import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
-import { redactForCloud } from './redact';
+import { protectText } from '../privacy/directory';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -1075,7 +1075,7 @@ function redactCtxForCloud(ctx: FusionContext, planNames: string[]): FusionConte
   if (!ctx.nearby.some((n) => n.label)) return ctx;
   return {
     ...ctx,
-    nearby: ctx.nearby.map((n) => (n.label ? { ...n, label: redactForCloud(n.label, planNames).text } : n)),
+    nearby: ctx.nearby.map((n) => (n.label ? { ...n, label: protectText(n.label, planNames).text } : n)),
   };
 }
 
@@ -1145,7 +1145,7 @@ export async function compileCommand(
       const buildPrompt = (u: string) =>
         `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${u}"`;
       const prompt = buildPrompt(utterance);
-      const cloudPrompt = buildPrompt(redactForCloud(utterance, opts?.planNames ?? []).text);
+      const cloudPrompt = buildPrompt(protectText(utterance, opts?.planNames ?? []).text);
       const response = await callWithCloudRetry(
         models.intent, models.intentCloud ?? null, prompt, 'intent', ON_DEVICE_TIMEOUT_MS, cloudPrompt,
       );
@@ -1230,7 +1230,7 @@ export async function fuseIntent(
       // ledger records. Only the on-device Nano prompt keeps her raw words.
       const planNames = opts?.planNames ?? [];
       const cloudPrompt = buildFusionPrompt(
-        mode.ai.intentPrompt, redactForCloud(utterance, planNames).text,
+        mode.ai.intentPrompt, protectText(utterance, planNames).text,
         redactCtxForCloud(ctx, planNames), opts?.lang, fewShot,
       );
       const prompt = opts?.forceCloud
@@ -1280,7 +1280,7 @@ export async function detectLanguageCloud(
     // ONLY_IN_CLOUD: the transcript is redacted (ai/redact) before it leaves,
     // matching the ledger's recorded payload. Detection only needs the script
     // and common words, never her family's names.
-    const sent = redactForCloud(text, opts?.planNames ?? []).text;
+    const sent = protectText(text, opts?.planNames ?? []).text;
     const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(sent)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
     const detection = parseCloudDetection(extractJson(response.text()));
     if (!detection) return null;
@@ -1319,7 +1319,7 @@ export async function pickRecipeHybrid(
     // Cloud legs (forceCloud or the retry) get the redacted utterance — the
     // same text the ledger records; the on-device prompt keeps her raw words.
     const cloudPrompt = buildRecipePickPrompt(
-      redactForCloud(utterance, opts?.planNames ?? []).text, candidates, opts?.lang?.englishName,
+      protectText(utterance, opts?.planNames ?? []).text, candidates, opts?.lang?.englishName,
     );
     const prompt = opts?.forceCloud ? cloudPrompt : buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
     const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
@@ -1380,9 +1380,9 @@ export async function resolveDeixis(
     ? [prompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
     : [prompt];
   const planNames = opts.planNames ?? [];
-  const cloudUtterance = redactForCloud(utterance, planNames).text;
+  const cloudUtterance = protectText(utterance, planNames).text;
   const cloudCandidates = opts.candidates.map((c) => (
-    c.label ? { ...c, label: redactForCloud(c.label, planNames).text } : c
+    c.label ? { ...c, label: protectText(c.label, planNames).text } : c
   ));
   const cloudPrompt = buildDeixisPrompt(cloudUtterance, {
     hasImage: image !== null,
@@ -1466,7 +1466,7 @@ export async function generatePlan(prompt: string, opts?: { planNames?: string[]
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const sent = redactForCloud(prompt, opts?.planNames ?? []).text;
+      const sent = protectText(prompt, opts?.planNames ?? []).text;
       const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${sent}"`);
       const response = await runBigCloudJob(
         models, jobPrompt, sent, remoteSettings().templateIds.plan, 'plan generate',
@@ -1954,7 +1954,7 @@ export async function pickCadTool(
     const build = (u: string) =>
       `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${u}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
     const prompt = build(utterance);
-    const cloudPrompt = build(redactForCloud(utterance, opts.planNames ?? []).text);
+    const cloudPrompt = build(protectText(utterance, opts.planNames ?? []).text);
     const response = await callWithCloudRetry(
       models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool', opts.timeoutMs, cloudPrompt,
     );
@@ -2001,7 +2001,7 @@ export async function askCopilot(
       const a = (raw as Record<string, unknown>).answer;
       if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
     };
-    const sent = redactForCloud(question).text;
+    const sent = protectText(question).text;
     const prompt = withPreamble(copilotAnswerPrompt(sent, summary, region));
     const got = await requestHedgedJson(
       models.copilotAnswer,
@@ -2032,8 +2032,8 @@ export async function draftClientEmail(
   if (!models?.copilotEmail || items.length === 0) return null;
   try {
     const safeItems = items.map((i) => ({
-      question: redactForCloud(i.question).text,
-      answer: i.answer ? redactForCloud(i.answer).text : i.answer,
+      question: protectText(i.question).text,
+      answer: i.answer ? protectText(i.answer).text : i.answer,
     }));
     const got = await requestHedgedJson(
       models.copilotEmail,
@@ -2086,6 +2086,7 @@ if (import.meta.env.DEV) {
     getHybridStatus,
     warmCloud,
     askCopilot,
+    condenseUtterance,
     draftClientEmail,
     proposeMaterials,
     explainAccessibility,
