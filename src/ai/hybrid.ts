@@ -232,6 +232,9 @@ interface Models {
   copilotEmailHedge?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
   copilotMaterialsHedge?: TextGenModel | null;
+  /** Unconstrained JSON cloud model for the smart canvas (plans + language packs). */
+  canvasCloud?: TextGenModel | null;
+  canvasCloudHedge?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -266,6 +269,8 @@ export interface ModelOverrides {
   copilotEmailHedge?: TextGenModel | null;
   copilotMaterials?: TextGenModel | null;
   copilotMaterialsHedge?: TextGenModel | null;
+  canvasCloud?: TextGenModel | null;
+  canvasCloudHedge?: TextGenModel | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -484,8 +489,10 @@ export async function generateWithBudget(
  */
 export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void): Promise<string | null> {
   const models = await ensureModels();
-  const primary = models?.copilotAnswer ?? models?.template ?? models?.intentCloud ?? models?.intent ?? null;
-  const backup = models?.copilotAnswerHedge ?? models?.a11yExplainHedge ?? null;
+  // Never use the copilot/template/intent models: those have their own response
+  // schemas and will ignore a surface-plan prompt. The canvas model is JSON-only.
+  const primary = models?.canvasCloud ?? null;
+  const backup = models?.canvasCloudHedge ?? null;
   if (!primary) return null;
   // Same privacy path as the rest of hybrid: directory tokens, then rules-first
   // redaction. The canvas ledger should record this redacted payload.
@@ -667,6 +674,8 @@ async function ensureModels(): Promise<Models | null> {
       copilotEmailHedge: testOverrides.copilotEmailHedge ?? null,
       copilotMaterials: testOverrides.copilotMaterials ?? null,
       copilotMaterialsHedge: testOverrides.copilotMaterialsHedge ?? null,
+      canvasCloud: testOverrides.canvasCloud ?? null,
+      canvasCloudHedge: testOverrides.canvasCloudHedge ?? null,
     };
   }
   if (!isEnabled()) {
@@ -953,6 +962,22 @@ async function initFirebase(): Promise<Models | null> {
     const copilotAnswerHedge = cloudModel === HEDGE_CLOUD_MODEL
       ? null
       : cloudJson(COPILOT_ANSWER_CONSTRAINT, HEDGE_CLOUD_MODEL);
+    // Smart canvas: JSON in, JSON out, no copilot/template schema so a board
+    // plan or a language pack can both come back as the prompt describes.
+    const canvasJsonGen = {
+      responseMimeType: 'application/json' as const,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+    };
+    const canvasCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model: cloudModel, generationConfig: canvasJsonGen },
+    });
+    const canvasCloudHedge = cloudModel === HEDGE_CLOUD_MODEL
+      ? null
+      : getGenerativeModel(ai, {
+          mode: InferenceMode.ONLY_IN_CLOUD,
+          inCloudParams: { model: HEDGE_CLOUD_MODEL, generationConfig: canvasJsonGen },
+        });
     const copilotEmail = cloudJson(EMAIL_CONSTRAINT);
     const copilotEmailHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(EMAIL_CONSTRAINT, HEDGE_CLOUD_MODEL);
     const copilotMaterials = cloudJson(MATERIAL_CONSTRAINT);
@@ -963,6 +988,7 @@ async function initFirebase(): Promise<Models | null> {
 
     cached = {
       cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
+      canvasCloud, canvasCloudHedge,
       intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };

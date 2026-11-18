@@ -18,7 +18,7 @@ describe('streamCanvasPlan', () => {
         return { response: { text: () => PLAN } };
       },
     };
-    setModelsForTest({ enabled: true, appCheck: 'ready', copilotAnswer: cloud });
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: cloud });
     const text = await streamCanvasPlan(
       'Connect the lamp for my mother Lakshmi, call her at 9876543210',
     );
@@ -38,7 +38,7 @@ describe('streamCanvasPlan', () => {
   });
 
   it('returns null when the model reply is not JSON', async () => {
-    setModelsForTest({ enabled: true, appCheck: 'ready', copilotAnswer: model('sorry, I cannot') });
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: model('sorry, I cannot') });
     expect(await streamCanvasPlan('connect everything in this room')).toBeNull();
   });
 });
