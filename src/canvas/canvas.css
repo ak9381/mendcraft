@@ -40,7 +40,7 @@
 @keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
 @keyframes mc-ghost-pulse { to { opacity: 0.15; } }
 .mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: 132px; bottom: 16px; width: 380px; overflow: auto; padding: 16px 18px;
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: 380px; overflow: auto; padding: 16px 18px;
   border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px; }
 .mc-ai[data-engine=gemini] { border-color: var(--accent); }
 .mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
@@ -49,7 +49,7 @@
 .mc-ai-state { color: var(--accent-2); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
-  border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; line-height: 1.45; color: var(--text); }
+  border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
 .mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
@@ -60,13 +60,13 @@
 .mc-say { display: flex; gap: 8px; flex: 1; min-width: 320px; }
 .mc-say input { flex: 1; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--bg); color: var(--text); font-size: 18px; }
-.mc-status { flex-basis: 100%; margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
+.mc-canvas-status { flex-basis: 100%; margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
 
 /* Pinned-board dock (left, under the bar): a second A2UI surface showing the
    pinned room's lamp tiles so it stays controllable while editing another board. */
-.mc-dock { position: absolute; z-index: 8; left: 16px; top: 132px; width: 300px; max-height: calc(100% - 148px);
+.mc-dock { position: absolute; z-index: 8; left: 16px; top: var(--mc-bar-h, 132px); width: 260px; max-height: calc(100% - var(--mc-bar-h, 132px) - 16px);
   overflow: auto; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 14px; }
 .mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
@@ -75,3 +75,8 @@
 .mc-btn[aria-pressed=true] { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
 .mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
 .mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
+
+/* Author display rules must never beat the hidden attribute. */
+.mc-canvas [hidden] { display: none !important; }
+.mc-btn { white-space: nowrap; }
+.mc-say { min-width: 260px; }

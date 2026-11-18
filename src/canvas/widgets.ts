@@ -14,7 +14,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
   protected override readonly api = LampTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid #d9d4c7; border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); border-color: var(--border, #3a3934); }
+    .tile { border: 2px solid #d9d4c7; border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 var(--font-sans, system-ui), 'Noto Sans Kannada', sans-serif; color: var(--text, #f2f0ea); border-color: var(--border, #3a3934); }
     .tile.on { border-color: #f5a623; background: #2a2214; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }

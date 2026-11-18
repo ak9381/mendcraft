@@ -261,6 +261,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
 
   function applyCamera(): void {
+    root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
     const g = 40 * camera.z;
     viewport.style.backgroundSize = `${g}px ${g}px`;
@@ -337,11 +338,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   };
   const engineFor = (id: EngineId, json: string): SurfaceEngine => opts.engines?.[id]?.(json) ?? scriptedEngine(id, json);
   const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light' };
-  const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: DEVICE_LABELS[id] ?? id, kind: 'lamp' }));
-  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: DEVICE_LABELS[id] ?? id, on: s.on, brightness: s.brightness }));
+  // The name she sees on a tile wins (a kept Gemini layout may rename "Desk lamp" to "Reading lamp").
+  const labelOf = (id: string): string => {
+    const order = [focusId, ...reg.list().filter((f) => f.pinned).map((f) => f.id), ...Object.keys(surfaces)];
+    for (const fid of order) {
+      const t = fid ? surfaces[fid]?.tiles.find((x) => x.type === 'lamp' && x.deviceId === id) : undefined;
+      if (t && t.type === 'lamp') return t.label;
+    }
+    return DEVICE_LABELS[id] ?? id;
+  };
+  const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: 'lamp' }));
+  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), on: s.on, brightness: s.brightness }));
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
 
+  // The panel opens for each AI turn and tucks itself away ~2 s after the
+  // last keep / drop, so the board gets its full width back (unless she opened it).
+  let aiManual = false; let aiHideTimer = 0;
+  const autoHideAi = () => { clearTimeout(aiHideTimer); aiHideTimer = window.setTimeout(() => { if (!aiManual && !pending && !aiPanel.querySelector('.mc-ai-lang .mc-proposal')) showAi(false); }, 2000); };
   function showAi(on = true): void {
+    clearTimeout(aiHideTimer);
     const changed = aiPanel.hidden === on;
     aiPanel.hidden = !on;
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
@@ -415,6 +430,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const finish = (kept: boolean) => {
         host.hidden = true; host.innerHTML = ''; ghost(frameId, null); pending = null;
         aiPanel.querySelector('.mc-ai-state')!.textContent = kept ? `Kept. Say “undo” to put it back.` : 'Dropped. Nothing changed.';
+        autoHideAi();
         say(kept ? `Kept: ${summary}. Say “undo” to put it back.` : 'Dropped. Nothing changed.');
         done(kept);
       };
@@ -446,8 +462,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
     void aiTurn(frameId, 'nano', 'start a floor plan', SCRIPTS.nanoPlan, 'Floor plan: two bedrooms', 'waiting');
   }
-  function keep(): void { if (pending) (pending.card.querySelector('.mc-proposal-keep') as HTMLButtonElement)?.click(); else say('Nothing is waiting.'); }
-  function drop(): void { if (pending) (pending.card.querySelector('.mc-proposal-drop') as HTMLButtonElement)?.click(); else say('Nothing is waiting.'); }
+  // Keep / drop act on the waiting board Proposal, else the waiting language Proposal.
+  const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? aiPanel.querySelector(`.mc-ai-lang ${cls}`)) as HTMLButtonElement | null;
+  function keep(): void { const b = waitingBtn('.mc-proposal-keep'); if (b) b.click(); else say('Nothing is waiting.'); }
+  function drop(): void { const b = waitingBtn('.mc-proposal-drop'); if (b) b.click(); else say('Nothing is waiting.'); }
   function undo(): void {
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
@@ -504,8 +522,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
       catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
     }, {
-      onKeep: () => { host.innerHTML = ''; applyPack(next, { record: true }); historyRender(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
-      onDrop: () => { host.innerHTML = ''; say('Kept English.'); },
+      onKeep: () => { host.innerHTML = ''; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
+      onDrop: () => { host.innerHTML = ''; say('Kept English.'); autoHideAi(); },
     });
     host.innerHTML = ''; host.append(card);
   }
@@ -591,7 +609,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- input ----
   root.querySelector('.mc-bar')!.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true) } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true) } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
