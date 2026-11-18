@@ -91,10 +91,17 @@ async function main() {
       ],
     });
 
+    const BREAKPOINTS = [
+      { name: 'phone', width: 375, height: 812 },
+      { name: 'tablet', width: 768, height: 1024 },
+      { name: 'desktop', width: 1280, height: 900 },
+    ];
+
     const totals = [];
+    for (const bp of BREAKPOINTS) {
     for (const screen of SCREENS) {
       const page = await browser.newPage();
-      await page.setViewport({ width: 1280, height: 900 });
+      await page.setViewport({ width: bp.width, height: bp.height });
       try {
         await page.goto(base + screen.path, { waitUntil: 'domcontentloaded', timeout: 25000 });
       } catch {
@@ -137,8 +144,9 @@ async function main() {
 
       const serious = result.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
       if (serious.some((v) => v.impact === 'critical')) anyCritical = true;
-      totals.push({ name: screen.name, serious });
+      totals.push({ name: `${screen.name}@${bp.name}`, serious });
       await page.close();
+    }
     }
 
     console.log('\n================ axe-core report (serious/critical) ================\n');
@@ -157,7 +165,7 @@ async function main() {
       }
     }
     const grand = totals.reduce((a, t) => a + t.serious.length, 0);
-    console.log(`\nTotal screens: ${totals.length}. Serious/critical rules across all: ${grand}.\n`);
+    console.log(`\nTotal screen×breakpoint runs: ${totals.length}. Serious/critical rules across all: ${grand}.\n`);
   } finally {
     if (browser) await browser.close().catch(() => {});
     // Kill the whole preview process group (vite + any children), ignoring the

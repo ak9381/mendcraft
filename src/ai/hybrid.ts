@@ -67,6 +67,7 @@ import {
 import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
 import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
+import { redactForCloud } from './redact';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -1044,7 +1045,9 @@ function sourceOf(resp: { inferenceSource?: string }): Source {
 /**
  * Hybrid call. In PREFER_ON_DEVICE the SDK does not fall back to the cloud if
  * the on-device prompt itself throws (or hangs), so retry once on the
- * cloud-only twin before giving up to the rule parser.
+ * cloud-only twin before giving up to the rule parser. The retry sends
+ * `cloudPrompt` (the caller's REDACTED rebuild — see ai/redact), never the raw
+ * on-device prompt, so her words don't ride a failure path to the cloud.
  */
 async function callWithCloudRetry(
   hybrid: TextGenModel,
@@ -1052,6 +1055,7 @@ async function callWithCloudRetry(
   prompt: string,
   label: string,
   timeoutMs: number = ON_DEVICE_TIMEOUT_MS,
+  cloudPrompt: string = prompt,
 ): Promise<ModelResponse | null> {
   try {
     const { response } = await withTimeout(hybrid.generateContent(prompt), timeoutMs, label);
@@ -1059,9 +1063,20 @@ async function callWithCloudRetry(
   } catch (err) {
     noteError(`${label} (hybrid)`, err);
     if (!cloud) throw err;
-    const { response } = await cloud.generateContent(prompt);
+    const { response } = await cloud.generateContent(cloudPrompt);
     return { text: () => response.text(), inferenceSource: 'in_cloud' };
   }
+}
+
+/** Fusion context bound for the cloud: nearby-element labels are plan text that
+ *  can carry a person's name, so they get the same rules-first redaction as the
+ *  utterance. Ids/kinds (what the model actually answers with) are untouched. */
+function redactCtxForCloud(ctx: FusionContext, planNames: string[]): FusionContext {
+  if (!ctx.nearby.some((n) => n.label)) return ctx;
+  return {
+    ...ctx,
+    nearby: ctx.nearby.map((n) => (n.label ? { ...n, label: redactForCloud(n.label, planNames).text } : n)),
+  };
 }
 
 /** Prepend the Remote Config prompt preamble (if any) to a big-job prompt. */
@@ -1121,13 +1136,19 @@ export async function compileCommand(
   utterance: string,
   sceneSummary: string,
   selectedId: string | null,
+  opts?: { planNames?: string[] },
 ): Promise<CompileResult> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (models?.intent) {
     try {
-      const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
-      const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
+      const buildPrompt = (u: string) =>
+        `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${u}"`;
+      const prompt = buildPrompt(utterance);
+      const cloudPrompt = buildPrompt(redactForCloud(utterance, opts?.planNames ?? []).text);
+      const response = await callWithCloudRetry(
+        models.intent, models.intentCloud ?? null, prompt, 'intent', ON_DEVICE_TIMEOUT_MS, cloudPrompt,
+      );
       // The active mode coerces untrusted JSON into a validated result (or null).
       const result = response ? getActiveMode().coerce(extractJson(response.text()), utterance) : null;
       if (result) {
@@ -1185,6 +1206,9 @@ export async function fuseIntent(
     fewShot?: string;
     /** The router already escalated THIS command, so the few-shot may go cloud. */
     examplesCloudOk?: boolean;
+    /** Plan text labels (main.planLabelNames) so a cloud leg redacts the same
+     *  person-like labels the ledger's commandPayload does. */
+    planNames?: string[];
   },
 ): Promise<FusionOutcome> {
   const t0 = Date.now();
@@ -1201,13 +1225,25 @@ export async function fuseIntent(
       // Privacy gate: the phrasebook may ride a cloud call only on the sanctioned
       // escalation; otherwise it is on-device only.
       const fewShot = opts?.fewShot && (!opts.forceCloud || opts.examplesCloudOk) ? opts.fewShot : undefined;
-      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang, fewShot);
+      // Rules-first redaction (ai/redact): any prompt bound for the cloud —
+      // forceCloud or the retry below — carries the SAME redacted utterance the
+      // ledger records. Only the on-device Nano prompt keeps her raw words.
+      const planNames = opts?.planNames ?? [];
+      const cloudPrompt = buildFusionPrompt(
+        mode.ai.intentPrompt, redactForCloud(utterance, planNames).text,
+        redactCtxForCloud(ctx, planNames), opts?.lang, fewShot,
+      );
+      const prompt = opts?.forceCloud
+        ? cloudPrompt
+        : buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang, fewShot);
       // An on-device call carrying the private phrasebook must NOT silently fall
       // back to the cloud twin (that would leak it without an escalation); it
       // drops to the rules floor instead. Only an explicit forceCloud escalation
       // sends examples to the cloud.
       const retry = opts?.forceCloud || fewShot ? null : models.fusionCloud ?? null;
-      const response = await callWithCloudRetry(primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse');
+      const response = await callWithCloudRetry(
+        primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse', ON_DEVICE_TIMEOUT_MS, cloudPrompt,
+      );
       const parsed = response
         ? parseFusionResult(extractJson(response.text()), mode.coerce.bind(mode), utterance)
         : null;
@@ -1232,13 +1268,20 @@ export async function fuseIntent(
  *  Detector is missing and the on-device script/word checks were ambiguous.
  *  Sends the transcript text only; the caller records it in the ledger as
  *  'lang-detect'. Returns null with no cloud model or on any failure. */
-export async function detectLanguageCloud(text: string): Promise<{ detection: Detection; ms: number } | null> {
+export async function detectLanguageCloud(
+  text: string,
+  opts?: { planNames?: string[] },
+): Promise<{ detection: Detection; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   const model = models?.langDetect;
   if (!model) return null;
   try {
-    const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(text)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
+    // ONLY_IN_CLOUD: the transcript is redacted (ai/redact) before it leaves,
+    // matching the ledger's recorded payload. Detection only needs the script
+    // and common words, never her family's names.
+    const sent = redactForCloud(text, opts?.planNames ?? []).text;
+    const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(sent)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
     const detection = parseCloudDetection(extractJson(response.text()));
     if (!detection) return null;
     recordInference('cloud', 'lang-detect', Date.now() - t0);
@@ -1265,7 +1308,7 @@ export interface RecipePickOutcome {
 export async function pickRecipeHybrid(
   utterance: string,
   candidates: readonly RecipeRef[],
-  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string } },
+  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string }; planNames?: string[] },
 ): Promise<RecipePickOutcome | null> {
   if (candidates.length === 0) return null;
   const t0 = Date.now();
@@ -1273,9 +1316,14 @@ export async function pickRecipeHybrid(
   const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
   if (!models || !primary) return null;
   try {
-    const prompt = buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
+    // Cloud legs (forceCloud or the retry) get the redacted utterance — the
+    // same text the ledger records; the on-device prompt keeps her raw words.
+    const cloudPrompt = buildRecipePickPrompt(
+      redactForCloud(utterance, opts?.planNames ?? []).text, candidates, opts?.lang?.englishName,
+    );
+    const prompt = opts?.forceCloud ? cloudPrompt : buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
     const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
-    const response = await callWithCloudRetry(primary, retry, prompt, 'recipe-pick');
+    const response = await callWithCloudRetry(primary, retry, prompt, 'recipe-pick', ON_DEVICE_TIMEOUT_MS, cloudPrompt);
     if (!response) return null;
     const pick = parseRecipePick(extractJson(response.text()), candidates.map((c) => c.id));
     const source = sourceOf(response);
@@ -1316,6 +1364,7 @@ export async function resolveDeixis(
     pointer: { x: number; y: number } | null;
     candidates: readonly DeixisCandidate[];
     space: 'plan';
+    planNames?: string[];
   },
 ): Promise<DeixisOutcome | null> {
   const t0 = Date.now();
@@ -1330,6 +1379,20 @@ export async function resolveDeixis(
   const parts: Array<string | ImagePart> = image
     ? [prompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
     : [prompt];
+  const planNames = opts.planNames ?? [];
+  const cloudUtterance = redactForCloud(utterance, planNames).text;
+  const cloudCandidates = opts.candidates.map((c) => (
+    c.label ? { ...c, label: redactForCloud(c.label, planNames).text } : c
+  ));
+  const cloudPrompt = buildDeixisPrompt(cloudUtterance, {
+    hasImage: image !== null,
+    pointer: opts.pointer,
+    candidates: cloudCandidates,
+    space: opts.space,
+  });
+  const cloudParts: Array<string | ImagePart> = image
+    ? [cloudPrompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
+    : [cloudPrompt];
   let response: ModelResponse | null = null;
   try {
     ({ response } = await withTimeout(models.deixis.generateContent(parts), ON_DEVICE_TIMEOUT_MS, 'deixis'));
@@ -1337,7 +1400,7 @@ export async function resolveDeixis(
     noteError('deixis (hybrid)', err);
     if (!models.deixisCloud) return null;
     try {
-      const r = await models.deixisCloud.generateContent(parts);
+      const r = await models.deixisCloud.generateContent(cloudParts);
       response = { text: () => r.response.text(), inferenceSource: 'in_cloud' };
     } catch (err2) {
       noteError('deixis (cloud)', err2);
@@ -1399,13 +1462,14 @@ Printability warnings: ${JSON.stringify(warnings)}`;
  * and caps them. Falls back to the deterministic rule parser + a plan template
  * when the cloud is unavailable, so "two bedroom plan" works with no AI.
  */
-export async function generatePlan(prompt: string): Promise<GeneratePlanResult> {
+export async function generatePlan(prompt: string, opts?: { planNames?: string[] }): Promise<GeneratePlanResult> {
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
+      const sent = redactForCloud(prompt, opts?.planNames ?? []).text;
+      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${sent}"`);
       const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.plan, 'plan generate',
+        models, jobPrompt, sent, remoteSettings().templateIds.plan, 'plan generate',
       );
       const coerced = response ? coercePlanGenerate(extractJson(response.text())) : null;
       if (coerced && 'ops' in coerced && coerced.ops.length) {
@@ -1881,14 +1945,19 @@ export async function generateReferenceOptions(
 export async function pickCadTool(
   utterance: string,
   summary: string,
-  opts: { allowCloud: boolean; timeoutMs?: number },
+  opts: { allowCloud: boolean; timeoutMs?: number; planNames?: string[] },
 ): Promise<{ call: ToolCall; confidence: number; source: Source; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models?.cadTool) return null;
   try {
-    const prompt = `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${utterance}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
-    const response = await callWithCloudRetry(models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool', opts.timeoutMs);
+    const build = (u: string) =>
+      `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${u}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
+    const prompt = build(utterance);
+    const cloudPrompt = build(redactForCloud(utterance, opts.planNames ?? []).text);
+    const response = await callWithCloudRetry(
+      models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool', opts.timeoutMs, cloudPrompt,
+    );
     if (!response) return null;
     const raw = extractJson(response.text());
     const call = coerceToolCall(raw);
@@ -1932,7 +2001,8 @@ export async function askCopilot(
       const a = (raw as Record<string, unknown>).answer;
       if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
     };
-    const prompt = withPreamble(copilotAnswerPrompt(question, summary, region));
+    const sent = redactForCloud(question).text;
+    const prompt = withPreamble(copilotAnswerPrompt(sent, summary, region));
     const got = await requestHedgedJson(
       models.copilotAnswer,
       models.copilotAnswerHedge,
@@ -1961,10 +2031,14 @@ export async function draftClientEmail(
   const models = await ensureModels();
   if (!models?.copilotEmail || items.length === 0) return null;
   try {
+    const safeItems = items.map((i) => ({
+      question: redactForCloud(i.question).text,
+      answer: i.answer ? redactForCloud(i.answer).text : i.answer,
+    }));
     const got = await requestHedgedJson(
       models.copilotEmail,
       models.copilotEmailHedge,
-      withPreamble(emailPrompt(items, summary)),
+      withPreamble(emailPrompt(safeItems, summary)),
       cloudBudgetMs('long'),
       'client email',
       coerceEmailDraft,

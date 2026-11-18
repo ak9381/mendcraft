@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  askCopilot,
   compileCommand,
+  detectLanguageCloud,
+  fuseIntent,
   generatePlan,
   getDeviceModelStatus,
   getHybridStatus,
@@ -8,11 +11,15 @@ import {
   checkDeviceAvailability,
   isDesignRequest,
   isEnabled,
+  pickCadTool,
+  pickRecipeHybrid,
   prepareHybrid,
+  resolveDeixis,
   warmOnDevice,
   setModelsForTest,
   verifyOp,
   generateReferenceOptions,
+  type FusionContext,
   type TextGenModel,
 } from '../src/ai/hybrid';
 import { setActiveMode } from '../src/core/modes';
@@ -486,6 +493,200 @@ describe('generateReferenceOptions (SVG text model, no image billing)', () => {
     expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
     setModelsForTest({ enabled: true, refGenerate: model('{"options":[]}') });
     expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Privacy: every cloud request that carries the user's words must send the SAME
+// redacted text the ledger records (ai/redact.redactForCloud). On-device Nano
+// prompts and the rules floor keep her raw words.
+
+describe('cloud redaction (the request matches the ledger receipt)', () => {
+  const MOTHER = 'Does this bedroom work for my mother Lakshmi?';
+
+  /** A model that records every prompt it is asked and replies `text`. */
+  const spy = (text: string, inferenceSource?: string) => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => {
+        prompts.push(p);
+        return { response: { text: () => text, inferenceSource } };
+      },
+    };
+    return { m, prompts };
+  };
+  /** An on-device model that records its prompt, then throws (→ cloud retry). */
+  const throwing = () => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => { prompts.push(p); throw new Error('nano down'); },
+    };
+    return { m, prompts };
+  };
+
+  const ctx: FusionContext = {
+    space: 'plan', unit: 'mm', cursor: { x: 100, y: 200 }, hoverId: null, selectedIds: [], nearby: [],
+  };
+
+  beforeEach(() => setActiveMode('plan'));
+
+  it('fuseIntent forceCloud sends [name] to the cloud, never Lakshmi', async () => {
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await fuseIntent(MOTHER, ctx, { forceCloud: true });
+    expect(r.source).toBe('cloud');
+    expect(cloud.prompts).toHaveLength(1);
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('on-device fuseIntent keeps her raw words in the Nano prompt', async () => {
+    const nano = spy('{"op":"undo","confidence":0.9}', 'on_device');
+    setModelsForTest({ enabled: true, fusion: nano.m });
+    const r = await fuseIntent(MOTHER, ctx);
+    expect(r.source).toBe('on-device');
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(nano.prompts[0]).not.toContain('[name]');
+  });
+
+  it('a failed on-device fusion retries on the cloud with a REDACTED prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusion: nano.m, fusionCloud: cloud.m });
+    const r = await fuseIntent(MOTHER, ctx);
+    expect(r.source).toBe('cloud');
+    // The raw on-device prompt was never re-sent to the cloud.
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('fuseIntent redacts person-like plan labels on the cloud leg (planNames)', async () => {
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    await fuseIntent('put a bed in Lakshmi', ctx, { forceCloud: true, planNames: ['Lakshmi', 'Kitchen'] });
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('Kannada cloud fusion still works through redaction (pass-through text)', async () => {
+    const cloud = spy('{"op":"add_door","target":"w2","translation":"put a door here","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await fuseIntent('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು', ctx, {
+      forceCloud: true, lang: { code: 'kn', englishName: 'Kannada' },
+    });
+    expect(r.source).toBe('cloud');
+    expect(r.result).toMatchObject({ op: 'add_door', target: 'w2' });
+    expect(r.translation).toBe('put a door here');
+    expect(cloud.prompts[0]).toContain('ಬಾಗಿಲು');
+  });
+
+  const PLAN_DOC =
+    '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
+
+  it('generatePlan redacts the cloud prompt and stays idempotent', async () => {
+    const cloud = spy(PLAN_DOC, 'in_cloud');
+    setModelsForTest({ enabled: true, template: cloud.m });
+    await generatePlan('a bedroom plan for my mother Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+    // A caller that already redacted sends the identical prompt (idempotent).
+    await generatePlan('a bedroom plan for my mother [name]');
+    expect(cloud.prompts[1]).toBe(cloud.prompts[0]);
+  });
+
+  it('generatePlan sends the redacted request to the server prompt template', async () => {
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate' } });
+    try {
+      const calls: { templateId: string; templateVariables: Record<string, unknown> }[] = [];
+      setModelsForTest({
+        enabled: true,
+        template: { generateContent: async () => { throw new Error('inline must not run'); } },
+        promptTemplate: {
+          generateContent: async (req) => {
+            calls.push(req);
+            return { response: { text: () => PLAN_DOC, inferenceSource: 'in_cloud' } };
+          },
+        },
+      });
+      await generatePlan('a bedroom plan for my mother Lakshmi');
+      expect(calls[0].templateVariables.request).toContain('[name]');
+      expect(String(calls[0].templateVariables.request)).not.toContain('Lakshmi');
+    } finally {
+      resetRemoteConfig();
+    }
+  });
+
+  it('askCopilot redacts a phone number and stays idempotent', async () => {
+    const cloud = spy('{"answer":"Yes, it fits.","calls":[],"why":""}');
+    setModelsForTest({ enabled: true, copilotAnswer: cloud.m });
+    const r = await askCopilot('Call me on +91 98765 43210 about the bedroom', 'plan {}', 'India');
+    expect(r?.answer).toBe('Yes, it fits.');
+    expect(cloud.prompts[0]).toContain('[phone]');
+    expect(cloud.prompts[0]).not.toContain('98765');
+    await askCopilot('Call me on [phone] about the bedroom', 'plan {}', 'India');
+    expect(cloud.prompts[1]).toBe(cloud.prompts[0]);
+  });
+
+  it('detectLanguageCloud sends the redacted transcript', async () => {
+    const cloud = spy('{"lang":"en","confidence":0.9}');
+    setModelsForTest({ enabled: true, langDetect: cloud.m });
+    await detectLanguageCloud(MOTHER);
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('pickRecipeHybrid redacts the utterance on the cloud leg', async () => {
+    const cloud = spy('{"recipeId":"r1","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await pickRecipeHybrid(`morning light for my mother Lakshmi`, [
+      { id: 'r1', name: 'morning light', aliases: [] },
+    ], { forceCloud: true });
+    expect(r?.id).toBe('r1');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('compileCommand retries a failed on-device call with a REDACTED cloud prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"op":"undo"}', 'in_cloud');
+    setModelsForTest({ enabled: true, intent: nano.m, intentCloud: cloud.m });
+    await compileCommand(MOTHER, '{}', null);
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('deixis cloud retry redacts the utterance (and person-like candidate labels)', async () => {
+    const prompts: string[] = [];
+    setModelsForTest({
+      enabled: true,
+      deixis: { generateContent: async () => { throw new Error('nano down'); } },
+      deixisCloud: {
+        generateContent: async (parts) => {
+          prompts.push(String(parts[0]));
+          return { response: { text: () => '{"target":"none","confidence":0}' } };
+        },
+      },
+    });
+    await resolveDeixis("make Lakshmi's room brighter", null, {
+      pointer: null,
+      candidates: [{ id: 'room-1', kind: 'room', label: 'Lakshmi' }],
+      space: 'plan',
+      planNames: ['Lakshmi'],
+    });
+    expect(prompts[0]).toContain('[name]');
+    expect(prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('pickCadTool cloud retry prompt is redacted', async () => {
+    const nano = throwing();
+    const cloud = spy('{"tool":"zoom","args":{"to":"fit"},"confidence":1}', 'in_cloud');
+    setModelsForTest({ enabled: true, cadTool: nano.m, cadToolCloud: cloud.m });
+    await pickCadTool(MOTHER, 'plan {}', { allowCloud: true });
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
   });
 });
 

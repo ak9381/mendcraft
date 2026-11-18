@@ -677,7 +677,7 @@ async function detectCommandLanguage(text: string): Promise<Detection> {
     recordLedger('cloud', 'lang-detect (simulated)', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, 0);
   } else {
     const t0 = performance.now();
-    const r = await detectLanguageCloud(text);
+    const r = await detectLanguageCloud(text, { planNames: planLabelNames() });
     // The transcript left the device whether or not an answer came back.
     recordLedger('cloud', 'lang-detect', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, r?.ms ?? performance.now() - t0);
     detection = r?.detection ?? plan.fallback;
@@ -1884,6 +1884,7 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
   }
   const outcome = await resolveDeixis(utterance, image, {
     pointer: pointerPx, candidates, space: 'plan',
+    planNames: planLabelNames(),
   });
   if (!outcome) return null;
   const res = outcome.resolution;
@@ -3673,6 +3674,7 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
   const pick = await pickRecipeHybrid(utterance, candidates, {
     forceCloud: toCloud,
     lang: translated ? currentLanguage : undefined,
+    planNames: planLabelNames(),
   });
   if (!pick) return null;
   const reason: RouteReason = pick.source === 'on-device' ? 'private' : 'no-device';
@@ -4297,6 +4299,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     let outcome = simOutcome ?? await fuseIntent(command, ctx, {
       forceCloud: toCloud, lang: langOpt,
       fewShot: toCloud ? undefined : fewShot,
+      planNames: planLabelNames(),
     });
     // Primary inference: a cloud answer stores its payload; on-device/rules are
     // private. The reason follows the planned route (on-device → private).
@@ -4314,6 +4317,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       // relevant phrasebook examples may ride along (and only those).
       const retry = await fuseIntent(command, ctx, {
         forceCloud: true, lang: langOpt, fewShot, examplesCloudOk: true,
+        planNames: planLabelNames(),
       });
       const escalatedPayload = fewShot
         ? `${commandPayload(command, ctx)}\nphrasebook examples: ${phrasebook.select(command, mode.id).length}`

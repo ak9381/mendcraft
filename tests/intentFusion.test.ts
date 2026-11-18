@@ -54,6 +54,11 @@ describe('normalizeTranscript (disfluent speech)', () => {
   it('collapses stutters case-insensitively', () => {
     expect(normalizeTranscript('Move move it left')).toBe('Move it left');
   });
+
+  it('keeps Kannada (and other non-Latin) words instead of stripping them as punctuation', () => {
+    expect(normalizeTranscript('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು')).toBe('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು');
+    expect(normalizeTranscript('uh ಬಾಗಿಲು')).toBe('ಬಾಗಿಲು');
+  });
 });
 
 describe('serializeFusionContext', () => {

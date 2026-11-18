@@ -3536,6 +3536,17 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
     min-height: 36px;
     padding: 0 12px;
   }
+  /* Copilot is a bottom sheet here, so don't shove top islands left as if
+     the panel were still a right sidebar (that overlap fails target-size). */
+  #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-fsctl {
+    right: calc(var(--island-margin) + 7.5rem + var(--target-gap, 8px));
+  }
+  #app:has(> #layout):has(.mc-copilot:not([hidden])) .mc-panel-chip {
+    right: var(--island-margin);
+  }
+  #app:has(> #layout):has(.mc-copilot:not([hidden])) #statusbar {
+    max-width: calc(100vw - 24px);
+  }
 }
 .mc-copilot {
   position: absolute; z-index: 42; top: var(--island-margin, 16px); right: var(--island-margin, 16px);
