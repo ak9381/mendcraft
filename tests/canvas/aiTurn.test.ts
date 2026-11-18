@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSurfacePrompt, createCanvasHistory, parsePartialPlan, runSurfaceTurn, scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
+import { buildSurfacePrompt, createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
 import { focusOnInset } from '../../src/canvas/camera';
 import { parseCanvasCommand } from '../../src/canvas/canvasCommands';
 
@@ -102,5 +102,45 @@ describe('focus below the command bar', () => {
     const c = focusOnInset({ x: 0, y: 0, w: 1200, h: 700 }, { w: 1440, h: 900 }, 120);
     expect(c.z).toBe(1);
     expect(-c.y).toBe(120 + Math.round((900 - 120 - 700) / 2));
+  });
+});
+
+describe('parseModelPlan (real-shaped model output)', () => {
+  it('accepts fenced JSON with leading prose', () => {
+    const r = parseModelPlan('Sure, here is the board:\n```json\n' + PLAN + '\n```');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.kind).toBe('room');
+      expect(r.value.tiles).toHaveLength(2);
+      expect(r.value.tiles[0].type).toBe('lamp');
+    }
+  });
+
+  it('refuses malformed JSON', () => {
+    const r = parseModelPlan('{"kind":"room","title":"Living","tiles":[');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/not a board plan/i);
+  });
+
+  it('refuses unknown widgets even when the JSON is well-formed', () => {
+    const r = parseModelPlan('```json\n{"kind":"room","title":"Living","tiles":[{"type":"script","src":"alert(1)"},{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"}]}\n```');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/tile|type|widget|unknown/i);
+  });
+});
+
+describe('runSurfaceTurn SIM fallback', () => {
+  it('streams the prepared draft and relabels SIM when the real engine fails', async () => {
+    const lines: string[] = [];
+    const boom: SurfaceEngine = {
+      id: 'gemini',
+      sim: false,
+      stream: async () => { throw new Error('timed out'); },
+      fallback: scriptedEngine('gemini', PLAN, { delayMs: 0 }),
+    };
+    const plan = await runSurfaceTurn(req, boom, { onSent: (s) => lines.push(s.routeLine) });
+    expect(plan?.tiles).toHaveLength(2);
+    expect(lines.at(-1)).toMatch(/^SIM · /);
+    expect(lines.at(-1)).toMatch(/didn’t answer|prepared draft/i);
   });
 });

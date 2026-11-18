@@ -2,6 +2,8 @@
 // left the device, the model's text streaming back, a ghost of the board
 // forming, then a Proposal. Nothing applies without her keep; every kept
 // change goes on a history she can undo.
+import { extractJson } from '../ai/cloudJson';
+import { fillVisible } from '../privacy/directory';
 import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
 
@@ -16,6 +18,8 @@ export interface SurfaceEngine {
   routeLine?: string;
   /** Stream text; call onText with the full text so far. Resolve with the final text. */
   stream(prompt: string, onText: (full: string) => void): Promise<string>;
+  /** Scripted stand-in used when this engine fails or times out. Always labelled SIM. */
+  fallback?: SurfaceEngine;
 }
 
 export interface DeviceHint { id: string; label: string; kind: string; host?: string }
@@ -88,6 +92,22 @@ export interface TurnUi {
   onError?(why: string): void;
 }
 
+
+/** Parse a model reply that may be fenced, have leading prose, or use smart quotes.
+ *  Then validate it as a surface plan. Unknown widgets fail validation. */
+export function parseModelPlan(text: string): { ok: true; value: SurfacePlan } | { ok: false; error: string } {
+  const raw = extractJson(text);
+  if (raw == null) return { ok: false, error: 'The reply was not a board plan.' };
+  const filled = fillVisible(JSON.stringify(raw));
+  let parsed: unknown = raw;
+  if (filled.filled) {
+    try { parsed = JSON.parse(filled.text); } catch { parsed = raw; }
+  }
+  const plan = coerceSurfacePlan(parsed);
+  if (!plan.ok) return { ok: false, error: plan.error };
+  return plan;
+}
+
 /** Run one engine over one request. Returns a validated plan or null. */
 export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}): Promise<SurfacePlan | null> {
   const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim });
@@ -95,22 +115,32 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   ui.onSent?.(sent);
   let ghostCount = -1;
   let final: string;
+  const streamOne = async (eng: SurfaceEngine) => eng.stream(sent.prompt, (full) => {
+    ui.onText?.(full);
+    const g = parsePartialPlan(full);
+    if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
+  });
   try {
-    final = await engine.stream(sent.prompt, (full) => {
-      ui.onText?.(full);
-      const g = parsePartialPlan(full);
-      if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
-    });
+    final = await streamOne(engine);
   } catch (e) {
-    ui.onError?.(`${engine.id === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
+    if (!engine.fallback) {
+      ui.onError?.(`${engine.id === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+    sent.sim = true;
+    sent.routeLine = `SIM · ${sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
+    ui.onSent?.(sent);
+    try {
+      final = await streamOne(engine.fallback);
+    } catch (e2) {
+      ui.onError?.(`${engine.id === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`);
+      return null;
+    }
   }
   const g = parsePartialPlan(final);
   if (g.tiles.length !== ghostCount) ui.onGhost?.(g);
-  let raw: unknown;
-  try { raw = JSON.parse(final.slice(final.indexOf('{'), final.lastIndexOf('}') + 1)); } catch { ui.onError?.('The reply was not a board plan.'); return null; }
-  const plan = coerceSurfacePlan(raw);
-  if (!plan.ok) { ui.onError?.(`Refused the plan: ${plan.error}`); return null; }
+  const plan = parseModelPlan(final);
+  if (!plan.ok) { ui.onError?.(plan.error.startsWith('The reply') ? plan.error : `Refused the plan: ${plan.error}`); return null; }
   return plan.value;
 }
 
