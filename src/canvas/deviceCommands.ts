@@ -1,11 +1,22 @@
-// English device speech → lamp intents, parsed against the live device list.
-// Pure: it knows only ids, labels and the current on/brightness so it can turn a
-// relative "dim" or "warmer" into an absolute brightness. Returns null when
-// nothing device-like is recognised (canvas and CAD parsers get their turn).
-import type { LampIntent } from './deviceActions';
+// English device speech → device intents, parsed against the live device list.
+// Pure: it knows only ids, labels, kinds and the current on/brightness/volume so
+// it can turn a relative "dim", "warmer" or "louder" into an absolute value.
+// Returns null when nothing device-like is recognised (canvas and CAD parsers
+// get their turn).
+import type { DeviceIntent } from './deviceActions';
+import type { StatusKey } from './languagePack';
 
-export interface DeviceRef { id: string; label: string; on?: boolean; brightness?: number }
-export interface DeviceCommandResult { intents: LampIntent[]; say: string }
+export type DeviceKind = 'lamp' | 'music' | 'switch';
+export interface DeviceRef {
+  id: string;
+  label: string;
+  kind?: DeviceKind;
+  on?: boolean;
+  brightness?: number;
+  playing?: boolean;
+  volume?: number;
+}
+export interface DeviceCommandResult { intents: DeviceIntent[]; say: string; statusKey?: StatusKey }
 
 export const BRIGHTNESS_STEP = 20;
 
@@ -33,13 +44,35 @@ function matchDevices(t: string, devices: readonly DeviceRef[]): DeviceRef[] {
 }
 
 const curBright = (d: DeviceRef) => (typeof d.brightness === 'number' ? d.brightness : 50);
+const curVol = (d: DeviceRef) => (typeof d.volume === 'number' ? d.volume : 50);
 const labelList = (ds: readonly DeviceRef[], all: boolean) => (all ? 'everything' : ds.map((d) => d.label).join(' and '));
 
 export function parseDeviceCommands(text: string, devices: readonly DeviceRef[]): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
 
-  const matched = matchDevices(t, devices);
+  // Music is a separate vocabulary (play / pause / next / louder / softer) and
+  // targets the music devices; lamp verbs never touch a speaker.
+  const musics = devices.filter((d) => d.kind === 'music');
+  const lamps = devices.filter((d) => d.kind !== 'music');
+  if (musics.length) {
+    const play = /\bplay\b/.test(t);
+    const pause = /\bpause\b/.test(t);
+    const next = /\bnext\b/.test(t);
+    const louder = /\blouder\b/.test(t);
+    const softer = /\bsofter\b/.test(t);
+    if (play || pause || next || louder || softer) {
+      if (next) return { intents: musics.map((d) => ({ deviceId: d.id, next: true })), say: 'Next song.', statusKey: 'nextSong' };
+      if (louder || softer) {
+        const delta = louder ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP;
+        return { intents: musics.map((d) => ({ deviceId: d.id, volume: clamp(curVol(d) + delta) })), say: louder ? 'Louder.' : 'Softer.', statusKey: louder ? 'louder' : 'softer' };
+      }
+      const playing = play; // play wins over pause if both somehow present
+      return { intents: musics.map((d) => ({ deviceId: d.id, playing })), say: playing ? 'Playing.' : 'Paused.', statusKey: playing ? 'playing' : 'paused' };
+    }
+  }
+
+  const matched = matchDevices(t, lamps);
   const hasAllWord = /\b(lights?|lamps?|everything|all|room)\b/.test(t);
 
   // Percent is read from the raw text — norm() strips the "%" sign.
@@ -59,8 +92,8 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
   let all = false;
   if (matched.length) {
     targets = matched;
-  } else if (percent || relative || hasAllWord) {
-    targets = devices.slice();
+  } else if ((percent || relative || hasAllWord) && lamps.length) {
+    targets = lamps.slice();
     all = true;
   } else {
     return null;
@@ -80,7 +113,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
       return cooler ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const word = warmer ? 'Warmer' : 'Cooler';
-    return { intents, say: `${word} — ${verb} ${labelList(targets, all)} by ${BRIGHTNESS_STEP}%.` };
+    return { intents, say: `${word} — ${verb} ${labelList(targets, all)} by ${BRIGHTNESS_STEP}%.`, statusKey: warmer ? 'dimmer' : 'brighter' };
   }
 
   if (dimmer || brighter) {
@@ -90,14 +123,14 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
       return brighter ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const verb = brighter ? 'Brightened' : 'Dimmed';
-    return { intents, say: `${verb} ${labelList(targets, all)}.` };
+    return { intents, say: `${verb} ${labelList(targets, all)}.`, statusKey: brighter ? 'brighter' : 'dimmer' };
   }
 
   if (onWord || offWord) {
     const on = onWord;
     const intents = targets.map((d) => ({ deviceId: d.id, on }));
     const say = all ? (on ? 'Lights on.' : 'Lights off.') : `Turned ${on ? 'on' : 'off'} ${labelList(targets, all)}.`;
-    return { intents, say };
+    return { intents, say, statusKey: on ? 'lightsOn' : 'lightsOff' };
   }
 
   return null;

@@ -11,6 +11,7 @@ export const LANG_STRING_KEYS = [
   'showEverything', 'newBoard', 'save', 'undo', 'ai',
   'sayPlaceholder', 'emptyLead', 'emptyConnect', 'emptyFloorplan',
   'keep', 'drop',
+  'go', 'holdToTalk', 'hands', 'simulateOffline', 'offlineOn',
 ] as const;
 export type LangStringKey = (typeof LANG_STRING_KEYS)[number];
 
@@ -40,6 +41,8 @@ export const EN_PACK: LanguagePack = {
     sayPlaceholder: 'Say: new board · show everything · go to floor plan',
     emptyLead: 'Empty board.', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
     keep: 'PINCH  keep', drop: 'BRUSH  drop',
+    go: 'Go', holdToTalk: 'Hold to talk', hands: 'Hands',
+    simulateOffline: 'Simulate offline', offlineOn: 'Offline (simulated)',
   },
   phrases: {},
 };
@@ -59,6 +62,11 @@ export const SCRIPTED_KN_PACK: LanguagePack = {
     emptyFloorplan: 'ನೆಲ ನಕ್ಷೆ',
     keep: 'ಇಟ್ಟುಕೋ',
     drop: 'ಬೇಡ',
+    go: 'ಹೋಗು',
+    holdToTalk: 'ಮಾತನಾಡಲು ಒತ್ತಿ ಹಿಡಿಯಿರಿ',
+    hands: 'ಕೈ ಸನ್ನೆ',
+    simulateOffline: 'ಆಫ್‌ಲೈನ್ ಅನುಕರಿಸು',
+    offlineOn: 'ಆಫ್‌ಲೈನ್ (ಅನುಕರಣೆ)',
   },
   phrases: {
     lampOn: ['ದೀಪ ಆನ್ ಮಾಡು'],
@@ -104,6 +112,33 @@ export function coerceLanguagePack(raw: unknown): Coerced<LanguagePack> {
     }
   }
   return { ok: true, value: { lang, strings, phrases } };
+}
+
+/** Status lines a device command can end with. English is the baseline; a
+ *  Kannada pack localizes them so "ದೀಪ ಆಫ್ ಮಾಡು" is confirmed in Kannada. */
+export const STATUS_KEYS = [
+  'lightsOn', 'lightsOff', 'brighter', 'dimmer',
+  'playing', 'paused', 'nextSong', 'louder', 'softer', 'done',
+] as const;
+export type StatusKey = (typeof STATUS_KEYS)[number];
+
+const EN_STATUS: Record<StatusKey, string> = {
+  lightsOn: 'Lights on.', lightsOff: 'Lights off.',
+  brighter: 'Brighter.', dimmer: 'Dimmer.',
+  playing: 'Playing.', paused: 'Paused.', nextSong: 'Next song.',
+  louder: 'Louder.', softer: 'Softer.', done: 'Done.',
+};
+const KN_STATUS: Record<StatusKey, string> = {
+  lightsOn: 'ದೀಪ ಆನ್ ಆಯಿತು.', lightsOff: 'ದೀಪ ಆಫ್ ಆಯಿತು.',
+  brighter: 'ಬೆಳಕು ಹೆಚ್ಚಾಯಿತು.', dimmer: 'ಬೆಳಕು ಕಡಿಮೆಯಾಯಿತು.',
+  playing: 'ಹಾಡು ಶುರುವಾಯಿತು.', paused: 'ಹಾಡು ನಿಂತಿದೆ.', nextSong: 'ಮುಂದಿನ ಹಾಡು.',
+  louder: 'ಧ್ವನಿ ಹೆಚ್ಚಾಯಿತು.', softer: 'ಧ್ವನಿ ಕಡಿಮೆಯಾಯಿತು.', done: 'ಆಯಿತು.',
+};
+
+/** A device-command status line in the active pack's language (Kannada when a
+ *  kn pack is on; English otherwise). */
+export function statusText(k: StatusKey, pack: LanguagePack | null): string {
+  return pack?.lang === 'kn' ? KN_STATUS[k] : EN_STATUS[k];
 }
 
 /** Script-aware normalize: keep letters/digits of any script, drop punctuation. */

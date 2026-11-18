@@ -14,11 +14,13 @@ import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
-import { LampTileElement, PlanBoardElement, smartCanvasCatalog } from './widgets';
-import { parseDeviceCommands, type DeviceRef } from './deviceCommands';
+import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
+import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
-import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, type IntentKey, type LangStringKey, type LanguagePack } from './languagePack';
+import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
+import { createCanvasLedger, formatLedgerLine } from './ledger';
+import { mountCanvasHands, type CanvasHandsStop } from './canvasHands';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
@@ -38,7 +40,12 @@ export interface CanvasOptions {
   online?: boolean;
 }
 
-const STUB_DEVICES: Record<string, DeviceState> = { 'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 } };
+const STUB_DEVICES: Record<string, DeviceState> = {
+  'wiz-desk': { on: false, brightness: 40 },
+  'wiz-ceiling': { on: true, brightness: 70 },
+  'speaker-1': { on: false, brightness: 0, playing: false, trackTitle: 'Morning light', volume: 40 },
+};
+const TRACKS = ['Morning light', 'Monsoon raga', 'Evening calm'];
 
 export function seedDoc(): CanvasDoc {
   const r = createFrameRegistry();
@@ -59,7 +66,7 @@ export function seedDoc(): CanvasDoc {
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
-  for (const El of [LampTileElement, PlanBoardElement]) {
+  for (const El of [LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement]) {
     if (!customElements.get(El.tagName)) customElements.define(El.tagName, El as unknown as CustomElementConstructor);
   }
   const storage = opts.storage ?? localStorage;
@@ -85,11 +92,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
       <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
         <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
-        <button class="mc-btn primary" type="submit">Go</button>
-        <button class="mc-btn mc-mic" type="button" aria-pressed="false" hidden>Hold to talk</button></form>
+        <button class="mc-btn primary" type="submit" data-i18n="go">Go</button>
+        <button class="mc-btn mc-mic" type="button" aria-pressed="false" data-i18n="holdToTalk" hidden>Hold to talk</button></form>
       <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
+      <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
-      <button data-cmd="offline" class="mc-btn" aria-pressed="false">Simulate offline</button>
+      <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
       <p class="mc-canvas-status" role="status" aria-live="polite"></p>
     </header>
     <aside class="mc-dock" aria-label="Pinned board" hidden>
@@ -105,11 +113,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <p class="mc-ai-route"></p>
         <details class="mc-ai-prompt" open><summary>Prompt going in</summary><pre></pre></details>
         <p class="mc-ai-sent"></p>
+        <p class="mc-ai-ledger"></p>
         <details class="mc-ai-reply" open><summary>Reply, streaming</summary><pre aria-live="off"></pre></details>
         <p class="mc-ai-state" aria-live="polite"></p>
       </div>
       <div class="mc-ai-lang"></div>
-      <h3 class="mc-ai-h3">History</h3><ol class="mc-ai-history" tabindex="-1"></ol>
+      <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
     </aside>`;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
@@ -118,6 +127,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
   const history = createCanvasHistory();
+  const ledger = createCanvasLedger();
   const say = (t: string) => { statusEl.textContent = t; };
 
   // ---- language pack: UI strings via data-i18n, English when no pack ----
@@ -139,7 +149,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const processor = new MessageProcessor([smartCanvasCatalog]);
   const live = new Set<string>();
   const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? {
-    run: (i) => new Promise((res) => setTimeout(() => res({ on: i.on ?? store.get(i.deviceId).on, brightness: i.brightness ?? store.get(i.deviceId).brightness }), 300)),
+    run: (i) => new Promise((res) => setTimeout(() => {
+      const cur = store.get(i.deviceId);
+      const ack: Partial<DeviceState> = { on: i.on ?? cur.on, brightness: i.brightness ?? cur.brightness };
+      if (i.playing !== undefined) ack.playing = i.playing;
+      if (i.volume !== undefined) ack.volume = i.volume;
+      if (i.next) { ack.trackTitle = TRACKS[(TRACKS.indexOf(cur.trackTitle ?? '') + 1 + TRACKS.length) % TRACKS.length]; ack.playing = true; }
+      res(ack);
+    }, 300)),
   }, (m) => {
     const u = (m as unknown as { updateDataModel: Record<string, unknown> }).updateDataModel;
     for (const sid of live) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
@@ -157,11 +174,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     host.append(el);
     live.add(sid);
     (s as { onAction: { subscribe(f: (a: { name: string; context: { deviceId: string } }) => void): void } }).onAction.subscribe((a) => {
+      if (a.name === 'connect.start') { say('Say “connect a WiZ bulb” (or point at a device and name it).'); return; }
       const id = a.context?.deviceId; const cur = id ? store.get(id) : undefined;
       if (!cur) return;
-      if (a.name === 'lamp.toggle') void store.act({ deviceId: id, on: !cur.on });
+      if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
       if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
       if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
+      if (a.name === 'music.playPause') void store.act({ deviceId: id, playing: !cur.playing });
+      if (a.name === 'music.next') void store.act({ deviceId: id, next: true });
+      if (a.name === 'music.louder') void store.act({ deviceId: id, volume: Math.min(100, (cur.volume ?? 50) + 10) });
+      if (a.name === 'music.softer') void store.act({ deviceId: id, volume: Math.max(0, (cur.volume ?? 50) - 10) });
     });
   });
 
@@ -180,6 +202,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- pinned-board dock: a second A2UI surface fed by the same device store ----
+  // Control tiles only (lamp / music / switch / scene) — never plan or connect.
+  const isDockTile = (t: SurfacePlan['tiles'][number]) =>
+    t.type === 'lamp' || t.type === 'music' || t.type === 'switch' || t.type === 'scene';
   const DOCK_GAP = 24;
   const dockInset = () => (dockEl.hidden ? 0 : (dockEl.offsetWidth || 300) + DOCK_GAP);
   const insets = () => ({ top: barH(), left: dockInset(), right: 0 });
@@ -193,7 +218,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const plan = surfaces[frameId];
     if (!plan) return;
     const sid = `${frameId}-dock`;
-    const tiles = plan.tiles.filter((t) => t.type === 'lamp').slice(0, 4); // plan tiles excluded, at most 4
+    const tiles = plan.tiles.filter(isDockTile).slice(0, 4); // plan + connect tiles excluded, at most 4
     const dockPlan: SurfacePlan = { kind: 'room', title: plan.title, tiles };
     const msgs: A2uiMessage[] = [
       ...(live.has(sid) ? [{ version: 'v0.9', deleteSurface: { surfaceId: sid } } as A2uiMessage] : []),
@@ -209,7 +234,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const pinned = focusId
       ? reg.list().find((f) => f.id !== focusId && f.pinned && surfaces[f.id]?.kind === 'room')
       : undefined;
-    if (!pinned || !surfaces[pinned.id]?.tiles.some((t) => t.type === 'lamp')) { clearDock(); return; }
+    if (!pinned || !surfaces[pinned.id]?.tiles.some(isDockTile)) { clearDock(); return; }
     dockEl.hidden = false;
     dockEl.dataset.frame = pinned.id;
     dockEl.querySelector('.mc-dock-title')!.textContent = pinned.title;
@@ -333,22 +358,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- AI turns: visible prompt, ghost preview, human in the loop ----
   const SCRIPTS: Record<string, string> = {
     nanoRoom: '{"kind":"room","title":"This room","tiles":[{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"},{"type":"lamp","deviceId":"wiz-ceiling","label":"Ceiling light"}]}',
-    geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"plan","boardId":"room-plan","template":"oneRoom"}]}',
+    geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}',
     nanoPlan: '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}',
   };
   const engineFor = (id: EngineId, json: string): SurfaceEngine => opts.engines?.[id]?.(json) ?? scriptedEngine(id, json);
-  const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light' };
+  const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light', 'speaker-1': 'Speaker' };
+  const DEVICE_KINDS: Record<string, DeviceKind> = { 'speaker-1': 'music' };
+  const isDeviceTile = (t: SurfacePlan['tiles'][number]): t is Extract<SurfacePlan['tiles'][number], { deviceId: string }> =>
+    t.type === 'lamp' || t.type === 'music' || t.type === 'switch';
   // The name she sees on a tile wins (a kept Gemini layout may rename "Desk lamp" to "Reading lamp").
-  const labelOf = (id: string): string => {
+  const deviceTileFor = (id: string) => {
     const order = [focusId, ...reg.list().filter((f) => f.pinned).map((f) => f.id), ...Object.keys(surfaces)];
     for (const fid of order) {
-      const t = fid ? surfaces[fid]?.tiles.find((x) => x.type === 'lamp' && x.deviceId === id) : undefined;
-      if (t && t.type === 'lamp') return t.label;
+      const t = fid ? surfaces[fid]?.tiles.find((x) => isDeviceTile(x) && x.deviceId === id) : undefined;
+      if (t && isDeviceTile(t)) return t;
     }
-    return DEVICE_LABELS[id] ?? id;
+    return undefined;
   };
-  const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: 'lamp' }));
-  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), on: s.on, brightness: s.brightness }));
+  const labelOf = (id: string): string => deviceTileFor(id)?.label ?? DEVICE_LABELS[id] ?? id;
+  const kindOf = (id: string): DeviceKind => {
+    const t = deviceTileFor(id);
+    return t && t.type !== 'lamp' ? t.type : DEVICE_KINDS[id] ?? 'lamp';
+  };
+  const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: kindOf(id) }));
+  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume }));
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
 
   // The panel opens for each AI turn and tucks itself away ~2 s after the
@@ -371,6 +404,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiPanel.querySelector('.mc-ai-route')!.textContent = s.routeLine;
     aiPanel.querySelector('.mc-ai-prompt pre')!.textContent = s.prompt;
     aiPanel.querySelector('.mc-ai-sent')!.textContent = s.sent ? `What was sent: ${s.sent}` : 'What was sent: nothing. Stays on this device.';
+    // Byte ledger: every AI turn records what actually left the device.
+    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? s.prompt : '' });
+    aiPanel.querySelector('.mc-ai-ledger')!.textContent = formatLedgerLine({ bytes: entry.bytes, engine: s.engine });
+    ledgerTotalRender();
     aiPanel.querySelector('.mc-ai-reply pre')!.textContent = '';
     aiPanel.querySelector('.mc-ai-state')!.textContent = s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…';
   }
@@ -379,10 +416,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!el) return;
     if (!g) { el.hidden = true; el.innerHTML = ''; return; }
     el.hidden = false;
+    const ghostLabel = (t: PartialPlan['tiles'][number]): string =>
+      t.type === 'lamp' ? `Lamp · ${esc(t.label)}`
+      : t.type === 'music' ? `Music · ${esc(t.label)}`
+      : t.type === 'switch' ? `Switch · ${esc(t.label)}`
+      : t.type === 'scene' ? `Scene · ${esc(t.label)}`
+      : t.type === 'connect' ? 'Connect a device'
+      : 'Floor plan';
     el.innerHTML = `<p class="mc-ghost-title">${esc(g.title ?? '…')}</p>` + g.tiles.map((t) =>
-      `<div class="mc-ghost-tile ${t.type}">${t.type === 'lamp' ? `Lamp · ${esc(t.label)}` : 'Floor plan'}</div>`).join('') + '<div class="mc-ghost-tile next">…</div>';
+      `<div class="mc-ghost-tile ${t.type}">${ghostLabel(t)}</div>`).join('') + '<div class="mc-ghost-tile next">…</div>';
+  }
+  function ledgerTotalRender(): void {
+    const t = ledger.totals();
+    aiPanel.querySelector('.mc-ai-ledger-total')!.textContent =
+      `This session: ${t.count} AI turn${t.count === 1 ? '' : 's'} · ${ledger.formatLine()}`;
   }
   function historyRender(): void {
+    ledgerTotalRender();
     const entries = history.list();
     let lastActive = -1;
     for (let i = entries.length - 1; i >= 0; i--) if (!entries[i].undone) { lastActive = i; break; }
@@ -537,7 +587,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'drop': drop(); return true;
       case 'undo': undo(); return true;
       default: {
-        const refs = deviceRefs();
+        const refs = deviceRefs().filter((d) => d.kind !== 'music'); // lamp phrases never touch the speaker
         if (!refs.length) { say('No devices here yet.'); return true; }
         for (const d of refs) {
           const cur = d.brightness ?? 50;
@@ -546,10 +596,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: Math.min(100, cur + 20) });
           else void store.act({ deviceId: d.id, brightness: Math.max(0, cur - 20) });
         }
-        say('Done.');
+        const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
+        say(statusText(sk, pack));
         return true;
       }
     }
+  }
+
+  // ---- hands: camera gestures drive keep / drop on the waiting proposal ----
+  let handsStop: CanvasHandsStop | null = null; let handsBusy = false;
+  async function toggleHands(): Promise<void> {
+    const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
+    if (handsStop) { handsStop(); handsStop = null; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsBusy) return;
+    handsBusy = true;
+    const stop = await mountCanvasHands(root, (ev) => {
+      if (ev.type === 'keep') keep();
+      else if (ev.type === 'drop') drop();
+    });
+    handsBusy = false;
+    if (!stop) { say('No camera here — hands stay off.'); return; }
+    handsStop = stop;
+    btn.setAttribute('aria-pressed', 'true');
+    say('Hands on: pinch to keep, brush to drop.');
   }
 
   // ---- offline (simulate + real) ----
@@ -557,7 +626,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     net.setOnline(on);
     const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
     btn.setAttribute('aria-pressed', String(!on));
-    btn.textContent = on ? 'Simulate offline' : 'Offline (simulated)';
+    btn.dataset.i18n = on ? 'simulateOffline' : 'offlineOn'; // survives applyStrings
+    btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
     if (on) {
       const later = net.drainLater();
       if (later.length) { say(`Back online. Running ${later.length} saved request${later.length > 1 ? 's' : ''}.`); later.forEach((u) => { if (/kannada|ಕನ್ನಡ/i.test(u)) void languageTurn(u); }); }
@@ -596,7 +666,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
     // Device speech (works in any board — controls the docked dashboard mid-build).
     const dc = parseDeviceCommands(text, deviceRefs());
-    if (dc) { for (const i of dc.intents) void store.act(i); say(dc.say); return true; }
+    if (dc) {
+      for (const i of dc.intents) void store.act(i);
+      // With a Kannada pack on, the device-command status line is Kannada too.
+      say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
+      return true;
+    }
 
     if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) {
       const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
@@ -609,7 +684,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- input ----
   root.querySelector('.mc-bar')!.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true) } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
@@ -672,7 +747,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();
   if (pack) opts.voice?.setLang?.(resolveLanguage(pack.lang).speechLang);
-  if (!net.isOnline()) { const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!; btn.setAttribute('aria-pressed', 'true'); btn.textContent = 'Offline (simulated)'; }
+  if (!net.isOnline()) { const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!; btn.setAttribute('aria-pressed', 'true'); btn.dataset.i18n = 'offlineOn'; btn.textContent = str('offlineOn'); }
 
   sync();
   updateDock();

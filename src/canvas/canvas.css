@@ -45,7 +45,8 @@
 .mc-ai[data-engine=gemini] { border-color: var(--accent); }
 .mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
 .mc-ai-said { font-size: 18px; color: var(--text); margin: 0 0 6px; }
-.mc-ai-route, .mc-ai-sent, .mc-ai-empty, .mc-ai-state { color: var(--text-dim); margin: 6px 0; }
+.mc-ai-route, .mc-ai-sent, .mc-ai-empty, .mc-ai-state, .mc-ai-ledger, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
+.mc-ai-ledger, .mc-ai-ledger-total { font-size: 13px; }
 .mc-ai-state { color: var(--accent-2); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
