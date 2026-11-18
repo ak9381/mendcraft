@@ -80,14 +80,14 @@ export function mountConnectSheet(
       <p class="mc-connect-status" role="status" aria-live="polite"></p>
       <div class="mc-connect-grid mc-row">
         <div class="mc-connect-card">
-          <button type="button" class="mc-btn primary mc-connect-opt mc-connect-point" aria-label="Point at it">
+          <button type="button" class="mc-btn primary mc-connect-opt mc-connect-point" data-connect="point" aria-label="Point at it">
             Point at it
           </button>
           <span class="mc-chip">Gimbal or camera</span>
         </div>
         <div class="mc-connect-card">
           <div class="mc-connect-name-wrap">
-            <form class="mc-say mc-connect-name-form" role="search">
+            <form class="mc-say mc-connect-name-form" data-connect="name" role="search">
               <label class="mc-sr" for="mc-connect-name-in">Say its name</label>
               <input
                 id="mc-connect-name-in"
@@ -102,7 +102,7 @@ export function mountConnectSheet(
           <span class="mc-chip">On-device Nano</span>
         </div>
         <div class="mc-connect-card">
-          <button type="button" class="mc-btn primary mc-connect-opt mc-connect-phone" aria-label="Join a phone">
+          <button type="button" class="mc-btn primary mc-connect-opt mc-connect-phone" data-connect="phone" aria-label="Join a phone">
             Join a phone
           </button>
           <span class="mc-chip">Relay room & QR</span>

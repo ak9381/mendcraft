@@ -7,11 +7,16 @@ import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, panBy, zoomAbout, type Camera, type Viewport } from './camera';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame } from './canvasCommands';
-import { expandPlan, type A2uiMessage, type DeviceState, type SurfacePlan } from './surfacePlan';
+import { coerceSurfacePlan, expandPlan, type A2uiMessage, type DeviceState, type SurfacePlan } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
-import { createCanvasHistory, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { createCanvasHistory, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { byName, connectAsk, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
+import { startPhoneJoin } from './phoneJoin';
+import { createCanvasInputs } from './canvasInputs';
+import { parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
@@ -20,7 +25,7 @@ import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatLedgerLine } from './ledger';
-import { mountCanvasHands, type CanvasHandsStop } from './canvasHands';
+import { mountCanvasHands } from './canvasHands';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
@@ -174,7 +179,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     host.append(el);
     live.add(sid);
     (s as { onAction: { subscribe(f: (a: { name: string; context: { deviceId: string } }) => void): void } }).onAction.subscribe((a) => {
-      if (a.name === 'connect.start') { say('Say “connect a WiZ bulb” (or point at a device and name it).'); return; }
+      if (a.name === 'connect.start') { openConnectSheet(sid); return; }
       const id = a.context?.deviceId; const cur = id ? store.get(id) : undefined;
       if (!cur) return;
       if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
@@ -249,7 +254,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.className = 'mc-frame';
       el.dataset.frame = f.id;
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
-        <div class="mc-frame-body"><div class="mc-prop-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
+        <div class="mc-frame-body"><div class="mc-prop-host" hidden></div><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
       if (surfaces[f.id]) queueMicrotask(() => renderSurface(f.id));
     }
@@ -463,9 +468,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onError: (why) => { aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
     });
     if (!plan || !sentInfo) { ghost(frameId, null); return false; }
+    return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
+  }
+
+  /** Gate a plan, show the Proposal card, and apply only on keep (shared by
+   *  the room/floor-plan turns and the connect turns). */
+  function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
-    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return false; }
-    const si = sentInfo as SentInfo;
+    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
     // Where it actually ran (a phone's "Nano" step is really Deep in the cloud).
     const ranId: EngineId = si.engine;
@@ -511,6 +521,116 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function floorPlan(frameId: string): void {
     if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
     void aiTurn(frameId, 'nano', 'start a floor plan', SCRIPTS.nanoPlan, 'Floor plan: two bedrooms', 'waiting');
+  }
+
+  // ---- connect a device: sheet (point / name / phone) + merge-on-keep turns ----
+  const simEnv = () => engineFor('gemini', '{}').sim;
+
+  /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
+   *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
+  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean } = {}): Promise<boolean> {
+    const f = reg.get(frameId); if (!f) return false;
+    aiSent(utterance, turn.sent);
+    if (o.photoNote) aiPanel.querySelector('.mc-ai-sent')!.textContent += ' — no camera or gimbal here, so the photo is simulated.';
+    let full = '';
+    try {
+      full = await turn.engine.stream(turn.sent.prompt, (t) => {
+        aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t;
+        ghost(frameId, parsePartialPlan(t));
+      });
+    } catch (e) {
+      const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+    }
+    let raw: unknown;
+    try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { ghost(frameId, null); say('The reply was not a board plan.'); return false; }
+    const plan = coerceSurfacePlan(raw);
+    if (!plan.ok) { ghost(frameId, null); say(`Refused the plan: ${plan.error}`); return false; }
+    const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
+    const merged = mergeTiles(before, plan.value.tiles);
+    if (merged.tiles.length === before.tiles.length) {
+      ghost(frameId, null);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = 'Already on this board — nothing new to add.';
+      say('That device is already on this board.');
+      return false;
+    }
+    return proposePlan(frameId, utterance, merged, turn.sent, summary, status);
+  }
+
+  async function pointTurn(frameId: string): Promise<void> {
+    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const f = reg.get(frameId); if (!f) return;
+    const turn = pointConnect('speaker', { frameTitle: f.title, sim: simEnv() });
+    await connectTurn(frameId, 'connect what I am pointing at', turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess', { photoNote: true });
+  }
+  async function nameTurn(frameId: string, name: string): Promise<void> {
+    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const f = reg.get(frameId); if (!f) return;
+    const turn = byName(name, { frameTitle: f.title, sim: simEnv(), devices: deviceHints() });
+    if (!turn) { say(`Didn’t catch a device in “${name}” — try “lamp”, “speaker” or “fan”.`); return; }
+    await connectTurn(frameId, name, turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess');
+  }
+  async function scanRoom(utterance: string): Promise<void> {
+    const r = await inputs.gimbal.scan().catch(() => ({ ok: false as const }));
+    if (r.ok) return; // iPhone: the real gimbal pans; scanFrame narrates the 5 photos
+    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const id = focusId ?? lastFocus;
+    if (!id || !reg.get(id)) { say('Open a room board first, then scan.'); return; }
+    const f = reg.get(id)!;
+    const turn = roomScan(deviceHints(), { frameTitle: f.title, sim: simEnv() });
+    const n = turn.plan.tiles.length;
+    await connectTurn(id, utterance, turn, `Scan: ${n} device${n === 1 ? '' : 's'} seen`, 'guess', { photoNote: true });
+  }
+
+  let sheetOpen: { frameId: string; host: HTMLElement; sheet: ConnectSheet } | null = null;
+  let pairingStop: (() => Promise<void>) | null = null;
+  function closeConnectSheet(): void {
+    if (pairingStop) { void pairingStop(); pairingStop = null; }
+    if (!sheetOpen) return;
+    sheetOpen.sheet.unmount();
+    sheetOpen.host.hidden = true;
+    sheetOpen = null;
+  }
+  function openConnectSheet(frameId?: string): void {
+    const id = frameId ?? focusId ?? lastFocus;
+    if (!id || !reg.get(id)) { say('Open a board first, then connect a device.'); return; }
+    closeConnectSheet();
+    if (focusId !== id) void focus(id);
+    const host = world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-connect-host`);
+    if (!host) return;
+    host.hidden = false;
+    const sheet = mountConnectSheet(host, {
+      onPoint: () => { closeConnectSheet(); void pointTurn(id); },
+      onName: (name) => { closeConnectSheet(); void nameTurn(id, name); },
+      onJoinPhone: () => { void joinPhone(id); },
+      onClose: () => { host.hidden = true; sheetOpen = null; },
+    });
+    sheetOpen = { frameId: id, host, sheet };
+    say('Connect a device: point at it, say its name, or join a phone.');
+  }
+  async function joinPhone(frameId: string): Promise<void> {
+    const open = sheetOpen; if (!open || open.frameId !== frameId) return;
+    if (simEnv() || !net.isOnline()) {
+      open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
+      return;
+    }
+    open.sheet.setStatus('Opening a Relay room…');
+    let pairing: PairingView | null = null;
+    const res = await startPhoneJoin({
+      onState: (st) => { if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); },
+    });
+    if ('error' in res) {
+      if (sheetOpen === open) open.sheet.setStatus('Needs network: the Relay room is not reachable right now.');
+      return;
+    }
+    if (sheetOpen !== open) { void res.stop(); return; } // she closed it while we connected
+    pairingStop = res.stop;
+    sheetOpen = null; // the pairing card replaces the sheet in the same host
+    pairing = showPairing(open.host, {
+      code: res.code,
+      note: 'A phone with this code joins this canvas. Its changes still arrive here as proposals you keep or drop.',
+      onClose: () => { if (pairingStop) { void pairingStop(); pairingStop = null; } open.host.hidden = true; },
+    });
   }
   // Keep / drop act on the waiting board Proposal, else the waiting language Proposal.
   const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? aiPanel.querySelector(`.mc-ai-lang ${cls}`)) as HTMLButtonElement | null;
@@ -603,20 +723,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
   }
 
-  // ---- hands: camera gestures drive keep / drop on the waiting proposal ----
-  let handsStop: CanvasHandsStop | null = null; let handsBusy = false;
+  // ---- inputs: hands (pinch keep / brush drop) + gimbal modes in one composer.
+  // The existing Hands button starts/stops it; gimbal voice goes via handleSpeech.
+  let handsMountOk = false; let handsOn = false; let handsBusy = false;
+  const inputs = createCanvasInputs({
+    root,
+    hands: async (r, onEvent) => { const s = await mountCanvasHands(r, onEvent); handsMountOk = !!s; return s; },
+    on: {
+      keep, drop,
+      pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
+      scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
+      status: say,
+    },
+  });
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsStop) { handsStop(); handsStop = null; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handsOn = false; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
-    handsBusy = true;
-    const stop = await mountCanvasHands(root, (ev) => {
-      if (ev.type === 'keep') keep();
-      else if (ev.type === 'drop') drop();
-    });
+    handsBusy = true; handsMountOk = false;
+    await inputs.start(root);
     handsBusy = false;
-    if (!stop) { say('No camera here — hands stay off.'); return; }
-    handsStop = stop;
+    if (!handsMountOk) { say('No camera here — hands stay off.'); return; }
+    handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
     say('Hands on: pinch to keep, brush to drop.');
   }
@@ -639,6 +767,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function run(text: string): boolean {
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
+    // Gimbal phrases next: follow my hands / hold still / point / scan the room.
+    // On the web there is no gimbal — handleSpeech answers with the honest why.
+    const gimbalCmd = parseGimbalSpeech(text);
+    if (gimbalCmd === 'scan') { void scanRoom(text); return true; }
+    if (gimbalCmd) return inputs.handleSpeech(text);
     if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) { addKannada(); return true; }
     if (/^\s*(show\s+)?history\s*$/i.test(text)) { openHistory(); return true; }
 
@@ -677,6 +810,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
       if (!focusId) { sync(); void focus(target); }
       void connectRoom(target, text); return true;
+    }
+
+    // "connect a device" / "add device" opens the sheet; a named device
+    // ("connect the speaker") becomes a Nano-only by-name turn.
+    const ask = connectAsk(text);
+    if (ask === 'sheet') { openConnectSheet(); return true; }
+    if (ask === 'byName') {
+      const id = focusId ?? lastFocus;
+      if (!id) { say('Open a board first, then connect a device.'); return true; }
+      void nameTurn(id, text);
+      return true;
     }
     say(`“${text}” isn’t a canvas command yet.`); return false;
   }

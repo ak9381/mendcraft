@@ -4,6 +4,7 @@ import {
   roomScan,
   byName,
   mergeTiles,
+  connectAsk,
 } from '../../src/canvas/connectTurns';
 import { coerceSurfacePlan, MAX_TILES, type SurfacePlan, type TileSpec } from '../../src/canvas/surfacePlan';
 
@@ -178,6 +179,45 @@ describe('connectTurns', () => {
       expect(basePlan.tiles).toHaveLength(1);
       expect(merged.tiles).toHaveLength(2);
       expect(merged).not.toBe(basePlan);
+    });
+  });
+
+  describe('byName with known devices', () => {
+    it('reuses a known device whose label is named, instead of minting a new id', () => {
+      const turn = byName('connect the speaker', {
+        devices: [{ id: 'speaker-1', label: 'Speaker', kind: 'music' }],
+      });
+      expect(turn).not.toBeNull();
+      expect(turn!.plan.tiles[0]).toEqual({ type: 'music', deviceId: 'speaker-1', label: 'Speaker' });
+    });
+
+    it('still mints a fresh tile when no known device matches', () => {
+      const turn = byName('connect the fan', {
+        devices: [{ id: 'speaker-1', label: 'Speaker', kind: 'music' }],
+      });
+      expect(turn).not.toBeNull();
+      expect(turn!.plan.tiles[0].type).toBe('switch');
+    });
+  });
+
+  describe('connectAsk', () => {
+    it('a generic device ask opens the sheet', () => {
+      expect(connectAsk('connect a device')).toBe('sheet');
+      expect(connectAsk('add device')).toBe('sheet');
+      expect(connectAsk('add a device')).toBe('sheet');
+    });
+
+    it('a named device goes to the by-name Nano turn', () => {
+      expect(connectAsk('connect the speaker')).toBe('byName');
+      expect(connectAsk('connect the fan')).toBe('byName');
+      expect(connectAsk('add the lamp')).toBe('byName');
+    });
+
+    it('leaves room-connect and device commands alone', () => {
+      expect(connectAsk('connect everything in this room')).toBeNull();
+      expect(connectAsk('turn off the main light')).toBeNull();
+      expect(connectAsk('show everything')).toBeNull();
+      expect(connectAsk('')).toBeNull();
     });
   });
 });

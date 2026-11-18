@@ -140,5 +140,13 @@ describe('connectSheet', () => {
       expect(host.innerHTML).toContain('data:image/png;base64,mockqr');
       expect(host.innerHTML).toContain('Relay active');
     });
+
+    it('marks point, name (form with input + Go) and phone with stable data-connect selectors', () => {
+      const host = createMockElement('div');
+      mountConnectSheet(host, {});
+      expect(host.innerHTML).toContain('data-connect="point"');
+      expect(host.innerHTML).toContain('data-connect="name"');
+      expect(host.innerHTML).toContain('data-connect="phone"');
+    });
   });
 });

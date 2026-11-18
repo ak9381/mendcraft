@@ -17,7 +17,7 @@ import {
   type SurfaceEngine,
   type SurfaceRequest,
 } from './aiTurn';
-import { deviceNameIn, identityFromWords } from '../devices/identify';
+import { deviceNameIn, identityFromWords, isAddDevicePhrase } from '../devices/identify';
 import type { FoundDevice } from '../devices/addDeviceFlow';
 
 export type DeviceGuess =
@@ -217,7 +217,7 @@ export function roomScan(
 
 export function byName(
   utterance: string,
-  opts: { frameTitle?: string; sim?: boolean } = {},
+  opts: { frameTitle?: string; sim?: boolean; devices?: DeviceHint[] } = {},
 ): ConnectTurnResult | null {
   const idFromWords = identityFromWords(utterance);
   const nameInWords = deviceNameIn(utterance);
@@ -229,7 +229,11 @@ export function byName(
   const kind = idFromWords?.kind ?? nameInWords!.kind;
   const label = idFromWords?.label ?? (nameInWords!.name.charAt(0).toUpperCase() + nameInWords!.name.slice(1));
 
-  const tile = mapKindToTile(kind, label);
+  // A known device whose label she named wins over minting a new id, so
+  // "connect the speaker" lands on the real speaker-1 instead of a dead tile.
+  const said = utterance.toLowerCase();
+  const known = opts.devices?.find((d) => d.label && said.includes(d.label.toLowerCase()));
+  const tile = known ? mapKindToTile(known.kind, known.label, known.id) : mapKindToTile(kind, label);
   const title = opts.frameTitle ?? 'This room';
   const plan: SurfacePlan = {
     kind: 'room',
@@ -264,6 +268,14 @@ export function byName(
     request,
     engine: scriptedEngine('nano', json),
   };
+}
+
+/** Route a spoken connect ask: a generic "connect a device" opens the sheet,
+ *  a named "connect the speaker" becomes a by-name Nano turn, anything else
+ *  (room-connect, device commands) is not ours. */
+export function connectAsk(text: string): 'sheet' | 'byName' | null {
+  if (!isAddDevicePhrase(text)) return null;
+  return deviceNameIn(text) ? 'byName' : 'sheet';
 }
 
 export function mergeTiles(plan: SurfacePlan, newTiles: TileSpec[]): SurfacePlan {
