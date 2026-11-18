@@ -189,12 +189,11 @@ export function createCopilotPanel(deps: CopilotPanelDeps): CopilotPanel {
       body.appendChild(a);
     }
     if (specStats && specStats.compared > 0) {
-      const rate = Math.round((specStats.agreed / specStats.compared) * 100);
       const s = h('div', 'mc-cp-spec');
       s.setAttribute('data-speculative-stats', '1');
       s.append(
         h('h3', '', 'Speculative Copilot'),
-        h('p', 'mc-cp-spec-line', `Agreement ${specStats.agreed}/${specStats.compared} (${rate}%). ${specStats.secondsSaved.toFixed(1)} s saved.`),
+        h('p', 'mc-cp-spec-line', `Nano and Gemini agreed ${specStats.agreed} of ${specStats.compared} time${specStats.compared === 1 ? '' : 's'} · ${specStats.secondsSaved.toFixed(1)} s saved.`),
       );
       body.appendChild(s);
     }

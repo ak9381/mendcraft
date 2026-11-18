@@ -116,6 +116,30 @@ function unitOf(tokens: string[], fallback: 'mm' | 'cm' | 'm'): 'mm' | 'cm' | 'm
 
 const clarify = (msg: string): Clarify => ({ clarify: msg });
 
+const SIDE_WORDS = ['north', 'south', 'east', 'west', 'top', 'bottom', 'left', 'right'];
+
+/** Where a spoken door/window goes: "<side> wall [of <room>]", a bare room
+ *  name ("in the bedroom"), or 'selected' when nothing is named. */
+function openingTarget(tokens: string[]): string {
+  let side: string | undefined;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (SIDE_WORDS.includes(tokens[i]) && tokens[i + 1] === 'wall') { side = tokens[i]; break; }
+  }
+  const idx = Math.max(
+    tokens.lastIndexOf('of'), tokens.lastIndexOf('in'),
+    tokens.lastIndexOf('to'), tokens.lastIndexOf('into'),
+  );
+  const room = idx >= 0
+    ? tokens.slice(idx + 1)
+      .filter((t) => !isNum(t) && !SIDE_WORDS.includes(t)
+        && !['the', 'a', 'an', 'my', 'wall', 'door', 'window', 'meters', 'm', 'cm', 'mm', 'here'].includes(t))
+      .join(' ')
+    : '';
+  if (side && room) return `${side} wall of ${room}`;
+  if (side) return `${side} wall`;
+  return room || 'selected';
+}
+
 /** Parse one short spoken plan command. Deterministic; never throws. */
 export function parsePlanCommand(utterance: string): PlanParse {
   const tokens = normalize(utterance);
@@ -127,8 +151,13 @@ export function parsePlanCommand(utterance: string): PlanParse {
   if (has('undo') || s.includes('go back')) return { op: 'undo' };
   if (has('redo')) return { op: 'redo' };
 
+  // A door/window word means an opening command, never an add_room or a
+  // whole-plan template ("add a door on the south wall of the living room"
+  // once parsed as add_room named "door on south wall of living").
+  const hasOpening = has('door') || has('window');
+
   // Whole-plan templates (also the no-AI fallback for "two bedroom plan").
-  if (has('bedroom')) {
+  if (has('bedroom') && !hasOpening) {
     // "bedroom 4 by 3" / "add a bedroom 4 by 3 meters" has explicit room
     // dimensions — it is a single named room, not a whole-plan template.
     if (has('by') && nums.length >= 2) {
@@ -142,7 +171,7 @@ export function parsePlanCommand(utterance: string): PlanParse {
     if (nums[0] === 1 || has('single')) return { generate: 'oneRoom' };
     return { generate: 'twoBedroom' };
   }
-  if (has('studio') || s.includes('one room') || s.includes('single room')) {
+  if ((has('studio') || s.includes('one room') || s.includes('single room')) && !hasOpening) {
     return { generate: has('studio') ? 'studio' : 'oneRoom' };
   }
 
@@ -196,7 +225,7 @@ export function parsePlanCommand(utterance: string): PlanParse {
 
   // Add a room: "room 4 by 3", "add a bedroom 4 by 3 meters". Bare numbers in a
   // room command are metres (the natural spoken unit for rooms).
-  if (has('room')) {
+  if (has('room') && !hasOpening) {
     const dims = nums.length >= 2 ? [nums[0], nums[1]] : [nums[0] ?? 4, nums[0] ?? 4];
     const nameTokens = tokens.filter((t) => !isNum(t) && !['room', 'add', 'a', 'an', 'the', 'by', 'x', 'meters', 'm', 'new', 'make'].includes(t));
     const env: Record<string, unknown> = {
@@ -208,18 +237,17 @@ export function parsePlanCommand(utterance: string): PlanParse {
     return env;
   }
 
-  // Doors / windows on the selected wall.
-  if (has('door')) {
-    const env: Record<string, unknown> = { op: 'add_door', target: 'selected' };
+  // Doors / windows. A named wall or room ("on the south wall of the living
+  // room", "in the bedroom") becomes the target; otherwise the selected wall.
+  // The engine resolves "<side> wall [of <room>]" and bare room names.
+  if (hasOpening) {
+    const env: Record<string, unknown> = {
+      op: has('door') ? 'add_door' : 'add_window',
+      target: openingTarget(tokens),
+    };
     if (nums.length) env.nums = { width: nums[0] };
     if (nums.length) env.unit = unitOf(tokens, 'm');
-    if (has('right')) env.swing = 'right';
-    return env;
-  }
-  if (has('window')) {
-    const env: Record<string, unknown> = { op: 'add_window', target: 'selected' };
-    if (nums.length) env.nums = { width: nums[0] };
-    if (nums.length) env.unit = unitOf(tokens, 'm');
+    if (has('door') && has('right')) env.swing = 'right';
     return env;
   }
 

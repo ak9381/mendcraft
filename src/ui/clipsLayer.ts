@@ -14,6 +14,7 @@ export function createClipsLayer(initial: ClipsState = { clips: [] }): ClipsLaye
   let onChangeFn: ((s: ClipsState) => void) | null = null;
   const root = document.createElement('div');
   root.className = 'mc-clips';
+  root.setAttribute('role', 'region');
   root.setAttribute('aria-label', 'Canvas clips');
 
   function render(next: ClipsState): void {

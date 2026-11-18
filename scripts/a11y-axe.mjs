@@ -32,12 +32,13 @@ function findChrome() {
 // Screens to audit. `?view=` + `?sim=1` forms always hit index.html (no camera/
 // mic/Nano needed) so the audit is deterministic and headless-safe.
 const SCREENS = [
-  { name: 'plan', path: '/?sim=1' },
-  { name: 'ui', path: '/?sim=1&mode=ui' },
-  { name: 'part', path: '/?sim=1&mode=part' },
-  { name: 'control', path: '/?view=control' },
-  { name: 'judges', path: '/?view=judges' },
-  { name: 'tour-open', path: '/?sim=1', clickTourHelp: true },
+  { name: 'landing', path: '/' },
+  { name: 'studio', path: '/studio?sim=1', skipTour: true },
+  { name: 'studio-copilot', path: '/studio?sim=1', skipTour: true, click: '#btn-copilot' },
+  { name: 'studio-voice', path: '/studio?sim=1', skipTour: true, click: '#btn-voice' },
+  { name: 'control', path: '/control' },
+  { name: 'judges', path: '/judges' },
+  { name: 'tour-open', path: '/studio?sim=1', clickTourHelp: true },
 ];
 
 async function main() {
@@ -95,11 +96,18 @@ async function main() {
       const page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 900 });
       try {
-        await page.goto(base + screen.path, { waitUntil: 'networkidle2', timeout: 25000 });
+        await page.goto(base + screen.path, { waitUntil: 'domcontentloaded', timeout: 25000 });
       } catch {
-        // networkidle can hang on sim animations; proceed with whatever rendered.
+        // proceed with whatever rendered.
       }
       await sleep(1200);
+      // Dismiss the first-load tour so it does not hide the screen under test.
+      if (screen.skipTour) {
+        await page.evaluate(() => {
+          document.querySelector('.skip-tour')?.click();
+        });
+        await sleep(400);
+      }
 
       if (screen.clickTourHelp) {
         const clicked = await page.evaluate(() => {
@@ -109,13 +117,21 @@ async function main() {
         });
         if (clicked) await sleep(900);
       }
+      if (screen.click) {
+        const clicked = await page.evaluate((sel) => {
+          const b = document.querySelector(sel);
+          if (b) { b.click(); return true; }
+          return false;
+        }, screen.click);
+        if (clicked) await sleep(700);
+      }
 
       await page.evaluate(axeSource);
       const result = await page.evaluate(async () => {
-        // WCAG 2.0/2.1 A + AA.
+        // WCAG 2.0/2.1/2.2 A + AA. Unknown tags are ignored by axe-core.
         // eslint-disable-next-line no-undef
         return await axe.run(document, {
-          runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] },
+          runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa'] },
         });
       });
 

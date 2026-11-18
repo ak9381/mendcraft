@@ -60,6 +60,10 @@ import { initTelemetry, recordInference } from '../firebase/telemetry';
 import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
 import type { GenerateKind, RefHit } from '../references/types';
 import { CAD_TOOL_CONSTRAINT, cadToolPrompt, coerceToolCall, type ToolCall } from '../cad/tools';
+import {
+  CONDENSE_CONSTRAINT, CONDENSE_TIMEOUT_MS, coerceCondensed, condensePrompt, wordCount,
+  type CondenseOutcome,
+} from './condense';
 import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
 import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
@@ -200,6 +204,8 @@ interface Models {
   a11yExplainHedge?: TextGenModel | null;
   /** On-device hand-profile picker (PREFER_ON_DEVICE, numbers-only; never cloud). */
   handAdapt?: TextGenModel | null;
+  /** Ramble condenser (ONLY_ON_DEVICE; the raw ramble never rides to the cloud). */
+  condense?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
   /** Cloud TTS model (spoken replies in her language); null if unsupported. */
@@ -242,6 +248,7 @@ export interface ModelOverrides {
   a11yExplain?: TextGenModel | null;
   a11yExplainHedge?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
+  condense?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
   deviceSee?: MultimodalGenModel | null;
@@ -609,6 +616,7 @@ async function ensureModels(): Promise<Models | null> {
       a11yExplain: testOverrides.a11yExplain ?? null,
       a11yExplainHedge: testOverrides.a11yExplainHedge ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
+      condense: testOverrides.condense ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
       deviceSee: testOverrides.deviceSee ?? null,
@@ -803,6 +811,17 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // Ramble condenser (ai/condense): ONLY_ON_DEVICE like handAdapt — the long
+    // natural ramble must never ride this call to the cloud. A miss keeps her
+    // raw words everywhere and the route line unchanged.
+    const condense = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: CONDENSE_CONSTRAINT },
+      },
+    });
+
     // Server prompt-template model (@beta on the web SDK). Only used when a
     // template ID is set in Remote Config; otherwise the big jobs use the inline
     // prompt above. Guarded so an SDK without it never breaks init.
@@ -910,7 +929,7 @@ async function initFirebase(): Promise<Models | null> {
 
     cached = {
       cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
-      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, promptTemplate, tts,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
@@ -1659,6 +1678,42 @@ export async function adaptHandProfile(metrics: HandMetrics): Promise<AdaptHandR
   const rules = coerceProfileAdaptation(null, metrics);
   recordInference('rules', 'hand-adapt', Date.now() - t0);
   return { ...rules, ms: Date.now() - t0 };
+}
+
+/**
+ * NANO RAMBLE CONDENSER (on-device only). Turn a long natural ramble into one
+ * short command before the copilot/fusion paths (and the cloud payload) see
+ * it. Same privacy posture as adaptHandProfile: an ONLY_ON_DEVICE model with
+ * no cloud transport, gated on Nano being ready, source re-checked
+ * belt-and-suspenders. Null on any miss — the caller keeps her raw words and
+ * the route line is unchanged. Never cloud; the deterministic gates live in
+ * ai/condense.ts (shouldCondense / coerceCondensed).
+ */
+export async function condenseUtterance(
+  utterance: string,
+  opts?: { timeoutMs?: number },
+): Promise<CondenseOutcome | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.condense || deviceModelStatus !== 'ready') return null;
+  try {
+    const { response } = await withTimeout(
+      models.condense.generateContent(condensePrompt(utterance)),
+      opts?.timeoutMs ?? CONDENSE_TIMEOUT_MS,
+      'condense',
+    );
+    if (sourceOf(response) !== 'on-device') {
+      noteError('condense', new Error('resolved off-device; keeping her raw words'));
+      return null;
+    }
+    const text = coerceCondensed(extractJson(response.text()), utterance);
+    if (!text) return null;
+    recordInference('on-device', 'condense', Date.now() - t0);
+    return { text, fromWords: wordCount(utterance), toWords: wordCount(text), ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('condense', err);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,11 @@ import {
   type InteractionProfile, type ProfileAdaptation,
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
+import {
+  clearSavedVoice, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase,
+  resolveChangeVoice, saveVoice, toSynthVoice, type ChangeVoiceIntent, type SynthVoice,
+} from './ai/speechVoices';
+import { createVoicePanel } from './ui/voicePanel';
 import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
@@ -110,13 +115,15 @@ import {
   routeSpeculative,
   type RouteInfo,
 } from './cad/routeReason';
-import { createSpeculativeEngine, type SpeculativeDraft, type SpeculativeStats } from './cad/speculative';
+import { createSpeculativeEngine, guessesAgree, type SpeculativeDraft, type SpeculativeStats } from './cad/speculative';
 import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
 import { LAYER_LABEL, type LayerId } from './cad/layers';
 import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
 import { siteBookId, syncSiteBook } from './cad/sync';
 import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
-import { askCopilot, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
+import { askCopilot, condenseUtterance, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
+import { shouldCondense } from './ai/condense';
+import { redactForCloud } from './ai/redact';
 import type { PlanDoc } from './plan/doc';
 import { generatePlan } from './ai/hybrid';
 import { isFirebaseConfigured } from './firebase/app';
@@ -365,6 +372,7 @@ app.innerHTML = `
         <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
         <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gesture guide</button>
         <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">Pointer comfort</button>
+        <button id="btn-voice" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pick the voice that speaks replies (voices already on this device)">Spoken voice</button>
         <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
         <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
         <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
@@ -469,12 +477,14 @@ function say(message: string): void {
  *  pickReply already fell back to English otherwise). */
 function speakSynth(message: string, lang: Language = DEFAULT_LANGUAGE): void {
   if (!('speechSynthesis' in window)) return;
-  const voice = pickVoice(window.speechSynthesis.getVoices(), lang);
+  const raw = window.speechSynthesis.getVoices();
+  const picked = pickSpokenVoice(raw.map(toSynthVoice), { lang: lang.speechLang, saved: loadSavedVoice() });
+  const voice = picked ? raw.find((v) => v.voiceURI === picked.voiceURI) ?? null : null;
   if (!voice && !isEnglish(lang)) return;
   const utter = new SpeechSynthesisUtterance(message);
   utter.rate = 1.1;
   utter.lang = lang.speechLang;
-  if (voice) utter.voice = voice as SpeechSynthesisVoice;
+  if (voice) utter.voice = voice;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utter);
 }
@@ -963,6 +973,74 @@ async function runAdaptation(force = false, injected?: HandMetrics): Promise<voi
 function toggleButton(btn: HTMLButtonElement, on: boolean): void {
   btn.setAttribute('aria-pressed', String(on));
   btn.classList.toggle('active', on);
+}
+
+// ---- spoken voice picker (ai/speechVoices + ui/voicePanel) ----
+// Free, on-device: replies speak with a voice the browser already has, and the
+// choice stays in this browser's localStorage. No paid TTS, ever.
+const btnVoice = el<HTMLButtonElement>('btn-voice');
+
+function listSynthVoices(): SynthVoice[] {
+  if (!('speechSynthesis' in window)) return [];
+  return window.speechSynthesis.getVoices().map(toSynthVoice);
+}
+
+/** Speak with one specific voice, even when mute or a terse profile would
+ *  silence ordinary replies — she asked to hear this voice. */
+function speakWithVoice(text: string, voice: SynthVoice | null): void {
+  if (!('speechSynthesis' in window)) {
+    srLive.textContent = 'This browser cannot speak. Replies stay as text.';
+    return;
+  }
+  srLive.textContent = text;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.1;
+  if (voice) {
+    utter.lang = voice.lang;
+    const raw = window.speechSynthesis.getVoices().find((x) => x.voiceURI === voice.voiceURI);
+    if (raw) utter.voice = raw;
+  }
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+const voicePanel = createVoicePanel({
+  getVoices: listSynthVoices,
+  onChange: (saved) => {
+    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved });
+    const text = saved ? `Voice set to ${saved.name ?? 'your pick'}.` : 'Back to the usual voice.';
+    if (muted) { srLive.textContent = text; return; } // mute still wins for the confirm
+    speakWithVoice(text, voice);
+  },
+  onPreview: (voice) => speakWithVoice(previewPhrase(voice.lang), voice),
+});
+viewportEl.appendChild(voicePanel.element);
+btnVoice.addEventListener('click', () => {
+  overflowMenu.close();
+  voicePanel.toggle();
+  toggleButton(btnVoice, voicePanel.isOpen());
+});
+if ('speechSynthesis' in window && typeof window.speechSynthesis.addEventListener === 'function') {
+  // Chrome fills getVoices() late; repaint the open panel when the list lands.
+  window.speechSynthesis.addEventListener('voiceschanged', () => voicePanel.refresh());
+}
+
+/** "Change voice" / "use the Soumya voice" / "preview the voice": resolved by
+ *  pure resolveChangeVoice; this applies the storage + panel side effects. */
+function runChangeVoice(intent: ChangeVoiceIntent, utterance: string): boolean {
+  const out = resolveChangeVoice(intent, listSynthVoices(), loadSavedVoice(), currentLanguage.speechLang);
+  if (out.action === 'reset') clearSavedVoice();
+  if (out.action === 'set' && out.voice) saveVoice(out.voice);
+  if (out.action === 'open' || out.action === 'not-found') {
+    voicePanel.open();
+    toggleButton(btnVoice, true);
+  }
+  voicePanel.refresh();
+  speakWithVoice(out.say, out.voice);
+  setBadge('rules', 'exact');
+  recordLedger('rules', 'command', 'voice picker', utterance);
+  verifierEl.textContent = out.say;
+  return true;
 }
 
 
@@ -2496,14 +2574,22 @@ function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string,
   return true;
 }
 
-async function handleHardQuestion(question: string): Promise<boolean> {
+async function handleHardQuestion(
+  question: string,
+  opts?: { condensed?: { from: number; to: number } },
+): Promise<boolean> {
   if (isSimplePlanQuestion(question)) {
     const local = answerPlanQuestion(planDoc(), question);
     if (local) {
       recordLedger('rules', 'plan-qa', 'read from the drawing', question);
-      return applyPlanAnswer(local, question, 'Plan data · on device');
+      const refine = await maybeQueueOfflineCheck(question, local.text);
+      return applyPlanAnswer(local, question, 'Plan data · on device', undefined, refine ?? undefined);
     }
   }
+  // Rules-first redaction (ai/redact): only the SENT text swaps her names for
+  // neutral tokens; the question shown on the card keeps her real words.
+  const sent = redactForCloud(question, planLabelNames());
+  const redacted = { names: sent.names, details: sent.details };
   const judgement = isPlanJudgementQuestion(question);
   const hard = judgement || isHardQuestion(question);
   const online = isOnline() && cloudConfigured;
@@ -2532,8 +2618,8 @@ async function handleHardQuestion(question: string): Promise<boolean> {
     deviceReady: routerEnv().deviceReady,
     nanoTimeoutMs: NANO_ROUTE_TIMEOUT_MS,
     pickNano: () => pickCadTool(question, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS }),
-    askCloud: () => askCopilot(question, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
-      const streamRoute = routeGemini({ kind: judgement ? 'judgment' : 'hard' });
+    askCloud: () => askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
+      const streamRoute = routeGemini({ kind: judgement ? 'judgment' : 'hard', condensed: opts?.condensed, redacted });
       publishRoute(streamRoute);
       copilotPanel.setAnswer({ question, text: partial, by: 'Gemini · cloud', route: streamRoute });
     }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
@@ -2584,10 +2670,12 @@ async function handleHardQuestion(question: string): Promise<boolean> {
       nanoTimeoutMs: NANO_ROUTE_TIMEOUT_MS,
       model: res.model,
       why: res.why,
+      condensed: opts?.condensed,
+      redacted,
     });
     publishRoute(route);
     setBadge('cloud', 'big-job');
-    recordLedger('cloud', 'copilot-answer', res.model ? `hard question · ${res.model}` : 'hard question', `question: ${JSON.stringify(question)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
+    recordLedger('cloud', 'copilot-answer', res.model ? `hard question · ${res.model}` : 'hard question', `question: ${JSON.stringify(sent.text)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
     copilotPanel.setAnswer({ question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
     copilotPanel.open('review');
     toggleButton(btnCopilot, true);
@@ -2950,19 +3038,36 @@ async function handleCopilotRules(intent: NonNullable<ReturnType<typeof parseCop
 /** Copilot fallback for questions the rules didn't catch: Nano understands
  *  (on device, works offline), numbers still come from the drawing; hard
  *  questions go to Gemini, or to the site checklist with no signal. */
-async function handleCopilotQuestion(utterance: string): Promise<boolean | null> {
+async function handleCopilotQuestion(
+  utterance: string,
+  opts?: { condensed?: { from: number; to: number } },
+): Promise<boolean | null> {
   if (isSimplePlanQuestion(utterance)) {
     const local = answerPlanQuestion(planDoc(), utterance);
     if (local) {
       recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
       lastUtteranceSource = 'rules';
-      return applyPlanAnswer(local, utterance, 'Plan data · on device');
+      const refine = await maybeQueueOfflineCheck(utterance, local.text);
+      return applyPlanAnswer(local, utterance, 'Plan data · on device', undefined, refine ?? undefined);
     }
   }
   if (isPlanJudgementQuestion(utterance) || isHardQuestion(utterance) || isPlanQuestion(utterance)) {
-    return handleHardQuestion(utterance);
+    return handleHardQuestion(utterance, opts);
   }
   return null;
+}
+
+/** Offline, a plan-data answer still earns Gemini's second opinion: queue a
+ *  'question' job (drained on reconnect) and say so on the route line. */
+async function maybeQueueOfflineCheck(question: string, offlineAnswer: string): Promise<RouteInfo | null> {
+  if (isOnline() || !cloudConfigured) return null;
+  await jobQueue.enqueue({
+    kind: 'question',
+    mode: mode.id,
+    label: question,
+    payload: { prompt: question, offlineAnswer },
+  });
+  return routeOffline({ refineQueued: true });
 }
 
 function controlChanges() {
@@ -2984,7 +3089,7 @@ const staged = new Map<string, StagedResult>();
  *  re-entering acceptJob before the async remove settles (double-apply). */
 const settling = new Set<string>();
 
-const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', a11y: 'A11y audit' };
+const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', a11y: 'A11y audit', question: 'Question' };
 
 /** Plan generation jobs queue when offline. */
 function bigJobKind(): JobKind | null {
@@ -3131,6 +3236,34 @@ async function enqueueA11yJob(issues: A11yIssue[], summary: string): Promise<voi
 
 /** Run one queued job on the cloud and stage its result (or mark it failed). */
 async function runJobOnCloud(job: QueuedJob): Promise<void> {
+  if (job.kind === 'question') {
+    // Offline she already got an answer from the drawing; on reconnect Gemini
+    // checks it. The agreement compare is the speculative engine's (exported),
+    // so confirmed/corrected is earned, never invented; with nothing to
+    // compare it only claims "checked".
+    const question = job.payload.prompt ?? '';
+    const sent = redactForCloud(question, planLabelNames());
+    const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    if (!res) {
+      await jobQueue.setStatus(job.id, 'error', 'Gemini could not check this yet');
+      return;
+    }
+    recordLedger('cloud', 'copilot-answer (queued)', 'drained on reconnect', `question: ${JSON.stringify(sent.text)}`, res.ms);
+    const offline = job.payload.offlineAnswer;
+    const agreed = offline ? guessesAgree({ answer: offline }, { answer: res.answer, calls: res.calls }) : null;
+    const why = agreed === null
+      ? 'checked the offline answer after reconnect'
+      : agreed
+        ? 'confirmed the offline answer after reconnect'
+        : 'corrected the offline answer after reconnect';
+    const route = routeGemini({ model: res.model, why, redacted: { names: sent.names, details: sent.details } });
+    publishRoute(route);
+    copilotPanel.setAnswer({ question, text: res.answer, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
+    copilotPanel.open('review');
+    verifierEl.textContent = res.answer;
+    await jobQueue.remove(job.id);
+    return;
+  }
   if (job.kind === 'a11y') {
     const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '');
     recordLedger(res.source, 'a11y-explain (queued)',
@@ -3674,8 +3807,21 @@ renderRecipes();
 renderTeachState();
 void syncRecipes(); // best-effort cloud merge at boot (fails soft offline)
 
+/** The plan's text labels, for the rules-first redactor (person-like filtering
+ *  happens inside redactForCloud; room-like labels pass through untouched). */
+function planLabelNames(): string[] {
+  if (mode.id !== 'plan') return [];
+  try {
+    return planDoc().texts.map((t) => t.text);
+  } catch {
+    return [];
+  }
+}
+
 function commandPayload(utterance: string, ctx?: FusionContext): string {
-  const base = `command: ${JSON.stringify(utterance)}`;
+  // Rules-first redaction (ai/redact): the payload recorded as sent — and
+  // shown in the ledger — carries neutral tokens, never her family's names.
+  const base = `command: ${JSON.stringify(redactForCloud(utterance, planLabelNames()).text)}`;
   if (!ctx) return base;
   return `${base}\ncontext: ${JSON.stringify({ space: ctx.space, unit: ctx.unit, selected: ctx.selectedIds })}`;
 }
@@ -4061,6 +4207,10 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   if (isSetupPhrase(utterance)) { setupPanel.open(); toggleButton(btnSetup, true); return true; }
   const rp = restPhrase(utterance);
   if (rp) { setResting(rp === 'rest'); return true; }
+  // SPOKEN VOICE: "change voice" / "use the Soumya voice" / "preview the
+  // voice" run locally — the picker, not the plan parser, owns these.
+  const voiceIntent = parseChangeVoice(utterance);
+  if (voiceIntent) return runChangeVoice(voiceIntent, utterance);
   setConfidenceState(null); // each command earns its own state
 
   // Accessibility requests short-circuit BEFORE routing: "make this house
@@ -4125,10 +4275,28 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     return refHandled.ok;
   }
 
+  // NANO RAMBLE CONDENSER (ai/condense): a long natural ramble is condensed to
+  // one short command ON DEVICE (ONLY_ON_DEVICE, ~1.5 s cap) before the
+  // copilot and fusion paths — and the cloud payload — see it. The caption and
+  // history keep her real words; a miss keeps them everywhere and the route
+  // line is unchanged.
+  let command = utterance;
+  let condensedWords: { from: number; to: number } | undefined;
+  if (isEnglish(currentLanguage)
+    && shouldCondense(utterance, (u) => !('clarify' in (mode.parse(u) as Record<string, unknown>)))) {
+    const c = await condenseUtterance(utterance);
+    if (c) {
+      command = c.text;
+      condensedWords = { from: c.fromWords, to: c.toWords };
+      recordLedger('on-device', 'condense', REASON_TEXT.private, '', c.ms);
+      showCaptionTranslation(utterance, c.text); // her words + the short command
+    }
+  }
+
   // Questions the copilot rules missed: Nano understands on the device; hard
   // ones go to Gemini, or to the site checklist with no signal.
-  if (!decisionIsExactEdit(utterance)) {
-    const q = await handleCopilotQuestion(utterance);
+  if (!decisionIsExactEdit(command)) {
+    const q = await handleCopilotQuestion(command, { condensed: condensedWords });
     if (q !== null) return q;
   }
 
@@ -4140,8 +4308,8 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // SIM: a fake any-language transcript runs as if Nano + cloud were both here,
   // so the judge sees the router pick on-device (es/ja) vs cloud (kn/hi).
   const env = SIM_ACTIVE && simSpeechFor(utterance) ? { deviceReady: true, cloudReady: true } : routerEnv();
-  const isBig = controller.isDesignRequest(utterance);
-  const decision = planRoute(utterance, (u) => mode.parse(u), isBig, env);
+  const isBig = controller.isDesignRequest(command);
+  const decision = planRoute(command, (u) => mode.parse(u), isBig, env);
 
   // Whole-design requests go to the cloud "generate" path (rules fallback
   // inside the controller), everything else through the single-op fusion path.
@@ -4149,17 +4317,17 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // Offline + a queueable mode → persist a cloud job for reconnect, then still
     // apply the on-device/rules result now so the edit keeps working.
     const route = bigJobKind() ? routeBigJob(netEnv()) : 'run-now';
-    if (route === 'enqueue') await enqueueBigJob(utterance);
-    const { source, step, clarify } = await controller.generate(utterance);
+    if (route === 'enqueue') await enqueueBigJob(command);
+    const { source, step, clarify } = await controller.generate(command);
     const reason = finalReason(decision, source, false);
     // NOT translated: the whole-design generate path has no translate guide and
     // returns no translation, so the badge must stay generic ("Cloud · big job")
     // and never claim "· Kannada" for a call that didn't translate.
     setBadge(source, reason);
     routerPanel.add({ utterance, planned: decision.path, source, reason, escalated: false, ms: performance.now() - t0 });
-    recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(utterance), performance.now() - t0);
+    recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(command), performance.now() - t0);
     // Keep the op/JSON panel fresh — reflect this command, not the previous op.
-    opJsonEl.textContent = JSON.stringify({ generate: utterance, source }, null, 2);
+    opJsonEl.textContent = JSON.stringify({ generate: command, source }, null, 2);
     if (clarify) {
       opJsonEl.textContent = '';
       verifierEl.textContent = clarify;
@@ -4219,11 +4387,11 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // Attached to the on-device Nano call only (it stays on the device). It is
     // withheld from a first cloud call (no-device / translate) and only sent to
     // the cloud on the escalation below, where the router already went cloud.
-    const fewShot = phrasebook.fewShotFor(utterance, mode.id);
+    const fewShot = phrasebook.fewShotFor(command, mode.id);
     // SIM: a fake any-language transcript gets a faked model answer (labelled
     // SIM); everything around it — detection, routing, badge, ledger — is real.
     const simOutcome = SIM_ACTIVE ? simFuse(utterance, toCloud) : null;
-    let outcome = simOutcome ?? await fuseIntent(utterance, ctx, {
+    let outcome = simOutcome ?? await fuseIntent(command, ctx, {
       forceCloud: toCloud, lang: langOpt,
       fewShot: toCloud ? undefined : fewShot,
     });
@@ -4233,7 +4401,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     recordLedger(
       outcome.source, simOutcome ? 'intent (simulated)' : 'intent',
       outcome.source === 'cloud' ? (langNoteNow ?? REASON_TEXT[decision.reason]) : REASON_TEXT.private,
-      commandPayload(utterance, ctx), outcome.ms,
+      commandPayload(command, ctx), outcome.ms,
     );
     if (!simOutcome && shouldEscalate(outcome.source, outcome.confidence, env)) {
       // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
@@ -4241,12 +4409,12 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       // on-device answer is ultimately kept.
       // Sanctioned escalation: the router already went to the cloud, so the few
       // relevant phrasebook examples may ride along (and only those).
-      const retry = await fuseIntent(utterance, ctx, {
+      const retry = await fuseIntent(command, ctx, {
         forceCloud: true, lang: langOpt, fewShot, examplesCloudOk: true,
       });
       const escalatedPayload = fewShot
-        ? `${commandPayload(utterance, ctx)}\nphrasebook examples: ${phrasebook.select(utterance, mode.id).length}`
-        : commandPayload(utterance, ctx);
+        ? `${commandPayload(command, ctx)}\nphrasebook examples: ${phrasebook.select(command, mode.id).length}`
+        : commandPayload(command, ctx);
       recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], escalatedPayload, retry.ms);
       ({ outcome, escalated } = pickEscalated(outcome, retry));
     }
@@ -4257,8 +4425,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     if (translated) pendingReply = outcome.reply ?? null;
     simulated = !!simOutcome;
   }
-  // Pair her words with the English translation the model returned.
-  showCaptionTranslation(utterance, translation);
+  // Pair her words with the English translation the model returned (or the
+  // condensed command when the on-device condenser produced one).
+  showCaptionTranslation(utterance, translation ?? (condensedWords ? command : undefined));
   const reason = finalReason(decision, source, escalated);
   const langNote = langRouteNote(currentLanguage, { ...env, deviceLangReady }, source, escalated);
   const note = langNote && simulated ? `SIM · ${langNote}` : langNote;
@@ -4274,7 +4443,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // itself and suggests commands. The exact-rule path is deterministic → sure.
   // ruleAgrees = does an independent deterministic parse produce the same op?
   const isClarifyResult = 'clarify' in result;
-  const altRule = decision.ruleResult ? null : exactRuleParse((u) => mode.parse(u), utterance);
+  const altRule = decision.ruleResult ? null : exactRuleParse((u) => mode.parse(u), command);
   const ruleAgrees = altRule ? JSON.stringify(altRule) === JSON.stringify(result) : null;
   const state = classifyConfidence({
     valid: !isClarifyResult, clarify: isClarifyResult, source, confidence, ruleAgrees, deixisAmbiguous,
@@ -4499,7 +4668,9 @@ speculative = createSpeculativeEngine({
     return { call: picked.call, confidence: picked.confidence, answer: plan?.text };
   },
   askCloud: async (s) => {
-    const res = await askCopilot(s, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    // Same rules-first redaction as the hard-question race: the SENT text
+    // swaps her names for neutral tokens; the draft card keeps her words.
+    const res = await askCopilot(redactForCloud(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
     return res ? { answer: res.answer, calls: res.calls, why: res.why, model: res.model } : null;
   },
   onUpdate: (d, stats) => {

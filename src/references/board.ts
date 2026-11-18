@@ -96,6 +96,7 @@ let placedSeq = 1;
 export function createReferenceBoard(opts: ReferenceBoardOpts = {}): ReferenceBoard {
   const root = document.createElement('div');
   root.className = 'mc-ref-layer';
+  root.setAttribute('role', 'region');
   root.setAttribute('aria-label', 'Reference pictures');
 
   const grid = document.createElement('section');

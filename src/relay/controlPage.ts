@@ -103,12 +103,12 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
             </div>
           </div>
           <p id="c-ledger-counts" class="c-counts"></p>
-          <ul id="c-ledger" class="c-feed"><li class="card-empty">Nothing has left this device.</li></ul>
+          <ul id="c-ledger" class="c-feed" tabindex="0" aria-label="What left this device"><li class="card-empty">Nothing has left this device.</li></ul>
         </section>
 
         <section class="card card-ai" aria-label="AI request feed">
           <h2>AI requests</h2>
-          <ul id="c-ai" class="c-feed"><li class="card-empty">No requests yet.</li></ul>
+          <ul id="c-ai" class="c-feed" tabindex="0" aria-label="AI requests"><li class="card-empty">No requests yet.</li></ul>
         </section>
 
         <section class="card card-recipes" aria-label="Shared recipes">
@@ -119,17 +119,17 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
 
         <section class="card card-changes" aria-label="Change review">
           <h2>Changes to review</h2>
-          <ul id="c-changes" class="c-feed"><li class="card-empty">No changes yet.</li></ul>
+          <ul id="c-changes" class="c-feed" tabindex="0" aria-label="Plan changes"><li class="card-empty">No changes yet.</li></ul>
         </section>
 
         <section class="card card-checklist" aria-label="Site checklist">
           <h2>Site checklist</h2>
-          <ul id="c-checklist" class="c-feed"><li class="card-empty">No site questions yet.</li></ul>
+          <ul id="c-checklist" class="c-feed" tabindex="0" aria-label="Site checklist"><li class="card-empty">No site questions yet.</li></ul>
         </section>
 
         <section class="card card-queue" aria-label="Offline job queue">
           <h2>Cloud queue</h2>
-          <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
+          <ul id="c-queue" class="c-feed" tabindex="0" aria-label="Offline queue"><li class="card-empty">Queue empty.</li></ul>
         </section>
 
         <section class="card card-caption" aria-label="Live captions">

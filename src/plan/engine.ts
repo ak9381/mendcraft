@@ -33,6 +33,15 @@ import { DEFAULTS, PLAN_LIMITS } from './ops';
 
 const COINCIDENT_MM = 1;
 
+/** Spoken side → index into room.wallIds (built in S,E,N,W corner order; the
+ *  same mapping as SIDE_INDEX in ai.ts). Screen-space words included. */
+const SIDE_WALL_INDEX: Record<string, number> = {
+  south: 0, bottom: 0,
+  east: 1, right: 1,
+  north: 2, top: 2,
+  west: 3, left: 3,
+};
+
 export interface PlanApplyResult {
   ok: boolean;
   error?: string;
@@ -102,9 +111,9 @@ export class PlanEngine {
     return `${prefix}${this.idCounter}`;
   }
 
-  /** Resolve 'selected' / an explicit id / a room name to a concrete object id,
-   *  against the document currently being reduced (not necessarily this.state —
-   *  applyGenerated reduces a separate working doc). */
+  /** Resolve 'selected' / an explicit id / a spoken wall or room ref to a
+   *  concrete object id, against the document currently being reduced (not
+   *  necessarily this.state — applyGenerated reduces a separate working doc). */
   private resolveId(doc: PlanDoc, ref: string, kind?: 'wall'): string | undefined {
     if (ref === 'selected') {
       const id = doc.selectedId ?? undefined;
@@ -113,12 +122,47 @@ export class PlanEngine {
       return id;
     }
     const found = findObject(doc, ref);
-    if (found) return found.obj.id;
-    // Rooms are often addressed by name in speech.
+    if (found) {
+      // A wall op must never act on a non-wall id (it used to crash the reducer).
+      if (kind === 'wall' && found.kind !== 'wall') return undefined;
+      return found.obj.id;
+    }
     const want = ref.trim().toLowerCase();
-    const room = doc.rooms.find((rm) => rm.name.toLowerCase() === want);
-    if (room) return room.id;
+    // Spoken wall refs: "<side> wall [of] [the] <room>" — room.wallIds are
+    // built in S,E,N,W corner order (see add_room and ai.ts SIDE_INDEX).
+    const side = want.match(/^(north|south|east|west|top|bottom|left|right)\s+wall(?:\s+of)?(?:\s+the)?\s*(.*)$/);
+    if (side) {
+      const room = side[2]
+        ? this.roomByName(doc, side[2])
+        : doc.rooms.length === 1 ? doc.rooms[0] : undefined;
+      const id = room?.wallIds[SIDE_WALL_INDEX[side[1]]];
+      return id && doc.walls.some((w) => w.id === id) ? id : undefined;
+    }
+    // Rooms are often addressed by name in speech. A wall op on a bare room
+    // name lands deterministically on the room's south wall.
+    const room = this.roomByName(doc, want);
+    if (room) {
+      if (kind === 'wall') {
+        const id = room.wallIds[0];
+        return id && doc.walls.some((w) => w.id === id) ? id : undefined;
+      }
+      return room.id;
+    }
     return undefined;
+  }
+
+  /** Match a spoken room name forgivingly: exact, then with a trailing " room"
+   *  stripped from either side ("living" ↔ "Living Room"), then prefix. */
+  private roomByName(doc: PlanDoc, ref: string): Room | undefined {
+    const strip = (s: string) => s.trim().toLowerCase().replace(/\s+room$/, '').trim();
+    const exact = ref.trim().toLowerCase();
+    const want = strip(ref);
+    if (!want) return undefined;
+    return (
+      doc.rooms.find((rm) => rm.name.toLowerCase() === exact)
+      ?? doc.rooms.find((rm) => strip(rm.name) === want)
+      ?? doc.rooms.find((rm) => strip(rm.name).startsWith(want))
+    );
   }
 
   apply(op: PlanOp): PlanApplyResult {
