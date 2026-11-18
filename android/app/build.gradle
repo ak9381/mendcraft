@@ -17,6 +17,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // sim-main build installs beside the Relay app instead of replacing it.
+            applicationIdSuffix ".sim"
+            versionNameSuffix "-sim"
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
