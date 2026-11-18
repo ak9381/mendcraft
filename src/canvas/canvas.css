@@ -40,8 +40,13 @@
 @keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
 @keyframes mc-ghost-pulse { to { opacity: 0.15; } }
 .mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: 380px; overflow: auto; padding: 16px 18px;
-  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px; }
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: 380px; overflow: hidden; padding: 16px 18px;
+  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
+  display: flex; flex-direction: column; min-height: 0; }
+.mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* Keep line + proposal stay on screen; the prompt/reply/history scroll above. */
+.mc-ai-pending { flex: 0 0 auto; background: var(--panel); border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.mc-ai-pending:not(:has(.mc-proposal)):has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
 .mc-ai[data-engine=gemini] { border-color: var(--accent); }
 .mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
 .mc-ai-said { font-size: 18px; color: var(--text); margin: 0 0 6px; }
@@ -182,4 +187,14 @@
   color: var(--text-dim);
   text-align: center;
   margin: 8px 0 0;
+}
+
+/* Phone and short laptop: full-width AI panel so the Keep line isn't clipped. */
+@media (max-width: 600px) {
+  .mc-ai { left: 8px; right: 8px; width: auto; bottom: 8px; }
+  .mc-ai pre { max-height: 120px; }
+}
+@media (max-width: 420px) {
+  .mc-ai { padding: 10px 12px; }
+  .mc-dock { width: 200px; }
 }

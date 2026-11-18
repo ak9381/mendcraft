@@ -111,19 +111,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <div class="mc-dock-surface"></div>
     </aside>
     <aside class="mc-ai" aria-label="AI activity" hidden>
-      <h2 class="mc-ai-h">AI activity</h2>
-      <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams.</p>
-      <div class="mc-ai-turn" hidden>
-        <p class="mc-ai-said"></p>
-        <p class="mc-ai-route"></p>
-        <details class="mc-ai-prompt" open><summary>Prompt going in</summary><pre></pre></details>
-        <p class="mc-ai-sent"></p>
-        <p class="mc-ai-ledger"></p>
-        <details class="mc-ai-reply" open><summary>Reply, streaming</summary><pre aria-live="off"></pre></details>
-        <p class="mc-ai-state" aria-live="polite"></p>
+      <div class="mc-ai-body">
+        <h2 class="mc-ai-h">AI activity</h2>
+        <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams.</p>
+        <div class="mc-ai-turn" hidden>
+          <p class="mc-ai-said"></p>
+          <p class="mc-ai-route"></p>
+          <details class="mc-ai-prompt" open><summary>Prompt going in</summary><pre></pre></details>
+          <p class="mc-ai-sent"></p>
+          <p class="mc-ai-ledger"></p>
+          <details class="mc-ai-reply" open><summary>Reply, streaming</summary><pre aria-live="off"></pre></details>
+        </div>
+        <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
-      <div class="mc-ai-lang"></div>
-      <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
+      <div class="mc-ai-pending">
+        <p class="mc-ai-state" aria-live="polite"></p>
+        <div class="mc-ai-lang"></div>
+      </div>
     </aside>`;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
@@ -692,6 +696,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!coerced.ok) { const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
     const next = coerced.value;
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
+    aiPanel.querySelectorAll('.mc-ai-prompt, .mc-ai-reply').forEach((d) => d.removeAttribute('open'));
     const host = aiPanel.querySelector<HTMLElement>('.mc-ai-lang')!;
     const card = renderProposalCard(document, {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
