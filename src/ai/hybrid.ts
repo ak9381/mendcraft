@@ -67,7 +67,7 @@ import {
 import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
 import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
-import { protectText } from '../privacy/directory';
+import { fillVisible, protectText } from '../privacy/directory';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -484,10 +484,30 @@ export async function generateWithBudget(
  */
 export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void): Promise<string | null> {
   const models = await ensureModels();
-  const model = models?.template ?? models?.intentCloud ?? models?.intent ?? null;
-  if (!model) return null;
-  const { response } = await generateWithBudget(model, prompt, cloudBudgetMs('long'), 'canvas plan', onChunk);
-  return response.text();
+  const primary = models?.copilotAnswer ?? models?.template ?? models?.intentCloud ?? models?.intent ?? null;
+  const backup = models?.copilotAnswerHedge ?? models?.a11yExplainHedge ?? null;
+  if (!primary) return null;
+  // Same privacy path as the rest of hybrid: directory tokens, then rules-first
+  // redaction. The canvas ledger should record this redacted payload.
+  const sent = protectText(prompt);
+  try {
+    const got = await requestHedgedJson(
+      primary,
+      backup,
+      sent.text,
+      cloudBudgetMs('long'),
+      'canvas plan',
+      (raw) => (raw && typeof raw === 'object' ? raw : null),
+      onChunk,
+    );
+    if (!got) return null;
+    const visible = fillVisible(JSON.stringify(got.value));
+    try { onChunk?.(visible.text); } catch { /* UI preview must not fail the call */ }
+    return visible.text;
+  } catch (err) {
+    noteError('canvas plan', err);
+    return null;
+  }
 }
 
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
