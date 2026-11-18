@@ -5,6 +5,8 @@ import {
   byName,
   mergeTiles,
   connectAsk,
+  foundAfterScan,
+  SIM_SCAN_DEVICES,
 } from '../../src/canvas/connectTurns';
 import { coerceSurfacePlan, MAX_TILES, type SurfacePlan, type TileSpec } from '../../src/canvas/surfacePlan';
 
@@ -69,6 +71,26 @@ describe('connectTurns', () => {
         expect(coerced.value.tiles[1].type).toBe('music');
         expect(coerced.value.tiles[2].type).toBe('switch');
       }
+    });
+
+    it('with no found devices, SIM proposes a lamp and a speaker', () => {
+      const turn = roomScan([], { sim: true, frameTitle: 'Living room' });
+      expect(turn.sent.engine).toBe('gemini');
+      expect(turn.sent.sent).toBe('5 photos of the room');
+      expect(turn.plan.title).toBe('Living room');
+      expect(turn.plan.tiles).toEqual([
+        { type: 'lamp', deviceId: 'lamp-1', label: 'Lamp' },
+        { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+      ]);
+      const coerced = coerceSurfacePlan(JSON.parse(turn.json));
+      expect(coerced.ok).toBe(true);
+    });
+
+    it('foundAfterScan prefers photo IDs, otherwise the scripted lamp + speaker', () => {
+      expect(foundAfterScan(undefined, { sim: true })).toEqual(SIM_SCAN_DEVICES);
+      expect(foundAfterScan([], { sim: true })).toEqual(SIM_SCAN_DEVICES);
+      const photos = [{ id: 'wiz-1', label: 'Ceiling', kind: 'lamp' }];
+      expect(foundAfterScan(photos, { sim: false })).toEqual(photos);
     });
 
     it('caps proposed tiles to MAX_TILES (6)', () => {

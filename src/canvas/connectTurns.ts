@@ -139,6 +139,23 @@ export function pointConnect(
   };
 }
 
+/** Scripted 5-photo scan result: a lamp and a speaker. Used in SIM, and as the
+ *  fallback when no photo identifications have come back yet. */
+export const SIM_SCAN_DEVICES: FoundDeviceItem[] = [
+  { id: 'lamp-1', label: 'Lamp', kind: 'lamp' },
+  { id: 'speaker-1', label: 'Speaker', kind: 'speaker' },
+];
+
+/** Devices to propose after a room scan. Live passes Gemini/Nano photo IDs in
+ *  `found`. SIM (or an empty found list) returns a lamp and a speaker. */
+export function foundAfterScan(
+  found: FoundDeviceItem[] | undefined,
+  _opts: { sim?: boolean } = {},
+): FoundDeviceItem[] {
+  if (found && found.length) return found;
+  return SIM_SCAN_DEVICES;
+}
+
 export function roomScan(
   found: FoundDeviceItem[] = [],
   opts: { frameTitle?: string; sim?: boolean } = {},
@@ -147,7 +164,7 @@ export function roomScan(
   const tiles: DeviceTileSpec[] = [];
   const seenIds = new Set<string>();
 
-  const items = found.length > 0 ? found : [{ id: 'room-light', label: 'Room light', kind: 'smart-bulb' }];
+  const items = foundAfterScan(found, opts);
 
   for (let i = 0; i < items.length && tiles.length < MAX_TILES; i++) {
     const item = items[i];

@@ -12,7 +12,7 @@ import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
-import { byName, connectAsk, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { createCanvasInputs } from './canvasInputs';
@@ -571,15 +571,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     await connectTurn(frameId, name, turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess');
   }
   async function scanRoom(utterance: string): Promise<void> {
-    const r = await inputs.gimbal.scan().catch(() => ({ ok: false as const }));
-    if (r.ok) return; // iPhone: the real gimbal pans; scanFrame narrates the 5 photos
     if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const id = focusId ?? lastFocus;
     if (!id || !reg.get(id)) { say('Open a room board first, then scan.'); return; }
     const f = reg.get(id)!;
-    const turn = roomScan(deviceHints(), { frameTitle: f.title, sim: simEnv() });
+    // Pan first when a gimbal is present (iPhone). On the web this fails fast
+    // with the honest why. Either way, we then propose tiles and wait for keep.
+    const r = await inputs.gimbal.scan().catch(() => ({ ok: false as const }));
+    const sim = simEnv();
+    // SIM: lamp + speaker. Live: Gemini/Nano photo IDs when the scan produced
+    // any; otherwise the devices already known on this canvas.
+    const found = foundAfterScan(sim ? undefined : deviceHints(), { sim });
+    const turn = roomScan(found, { frameTitle: f.title, sim });
     const n = turn.plan.tiles.length;
-    await connectTurn(id, utterance, turn, `Scan: ${n} device${n === 1 ? '' : 's'} seen`, 'guess', { photoNote: true });
+    await connectTurn(id, utterance, turn, `Scan: ${n} device${n === 1 ? '' : 's'} seen`, 'guess', { photoNote: !r.ok });
   }
 
   let sheetOpen: { frameId: string; host: HTMLElement; sheet: ConnectSheet } | null = null;
