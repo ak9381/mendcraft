@@ -27,6 +27,26 @@ describe('offline job queue', () => {
     expect(q.jobs().map((j) => j.seq)).toEqual([1, 2, 3]);
   });
 
+  it('queues an offline question with its on-device answer for a later Gemini check', async () => {
+    const store = createMemoryStore();
+    const q1 = createJobQueue(store, { now: fixedClock, genId: (s) => `j${s}` });
+    await q1.init();
+    await q1.enqueue({
+      kind: 'question',
+      mode: 'plan',
+      label: 'Is this bedroom door wide enough for a wheelchair?',
+      payload: {
+        prompt: 'Is this bedroom door wide enough for a wheelchair?',
+        offlineAnswer: 'The bedroom door is 900 mm wide.',
+      },
+    });
+    const q2 = createJobQueue(store, { now: fixedClock });
+    await q2.init();
+    const job = q2.nextRunnable();
+    expect(job?.kind).toBe('question');
+    expect(job?.payload.offlineAnswer).toBe('The bedroom door is 900 mm wide.');
+  });
+
   it('persists across a store reload with order intact', async () => {
     const store = createMemoryStore();
     const q1 = createJobQueue(store, { now: fixedClock, genId: (s) => `j${s}` });

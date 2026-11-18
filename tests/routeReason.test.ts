@@ -71,6 +71,53 @@ describe('formatRouteLine for each tier', () => {
     );
   });
 
+  // Real-Nano remeasure bug (18 Nov): the engine concatenates the draft why and
+  // the canned confirm sentence, so the on-screen line read "Gemini confirmed
+  // because Nano's guess while you were still speaking. Gemini confirmed this
+  // guess." The canned sentences must be stripped wherever they appear.
+  it('drops canned speculative sentences even when they are concatenated', () => {
+    const canned = "Nano's guess while you were still speaking. Gemini confirmed this guess.";
+    expect(becauseFromSpecWhy(canned)).toBeUndefined();
+    expect(formatRouteLine(routeSpeculative({ state: 'confirmed', because: canned }))).toBe(
+      "Nano's guess — Gemini confirmed this guess",
+    );
+    expect(becauseFromSpecWhy(
+      'The user is asking about the hallway. Gemini confirmed this guess. both answers give 900 mm',
+    )).toBe('both answers give 900 mm');
+    expect(formatRouteLine(routeSpeculative({
+      state: 'withdrawn',
+      because: "Withdrawn: Gemini disagreed with Nano's guess. The door is on a load-bearing wall.",
+    }))).toBe("Nano's guess — Gemini withdrew this guess because The door is on a load-bearing wall.");
+    expect(becauseFromSpecWhy('Gemini updated the answer. ')).toBeUndefined();
+  });
+
+  it('appends the condensed-words suffix only when Nano condensed on device', () => {
+    expect(formatRouteLine(routeGemini({ kind: 'judgment', condensed: { from: 41, to: 8 } }))).toBe(
+      'Gemini · cloud — needs structural judgment · Nano condensed 41 → 8 words on device',
+    );
+    expect(formatRouteLine(routeGemini({ kind: 'judgment' }))).toBe(
+      'Gemini · cloud — needs structural judgment',
+    );
+    const capped = routeGemini({ why: 'y'.repeat(200), condensed: { from: 41, to: 8 } });
+    expect(capped.reason.length).toBeLessThanOrEqual(140);
+  });
+
+  it('appends the kept-on-device suffix only when something was redacted', () => {
+    expect(formatRouteLine(routeGemini({ kind: 'judgment', redacted: { names: 1, details: 0 } }))).toBe(
+      'Gemini · cloud — needs structural judgment · 1 name kept on device',
+    );
+    expect(routeGemini({ kind: 'hard', redacted: { names: 2, details: 0 } }).reason).toContain('2 names kept on device');
+    expect(routeGemini({ kind: 'hard', redacted: { names: 0, details: 1 } }).reason).toContain('1 private detail kept on device');
+    expect(routeGemini({ kind: 'judgment', redacted: { names: 0, details: 0 } }).reason).toBe('needs structural judgment');
+  });
+
+  it('marks an offline answer that queued a Gemini check', () => {
+    expect(formatRouteLine(routeOffline({ refineQueued: true }))).toBe(
+      "Offline — answered from the drawing; Gemini will check when you're back online",
+    );
+    expect(formatRouteLine(routeOffline())).toBe('Offline — kept on device');
+  });
+
   it('uses Gemini\'s own short why on the hard tier when the race has no Nano note', () => {
     const line = formatRouteLine(routeGemini({ kind: 'hard', why: '  Check if the wall is load-bearing before taking it down.  ' }));
     expect(line).toBe('Gemini · cloud — Check if the wall is load-bearing before taking it down.');

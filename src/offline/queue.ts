@@ -13,7 +13,7 @@
 // monotonic `seq` that breaks ties when two jobs are created in the same tick,
 // so persistence round-trips preserve the exact run order.
 
-export type JobKind = 'plan' | 'a11y';
+export type JobKind = 'plan' | 'a11y' | 'question';
 
 /** queued → running (draining) → ready (cloud answered, awaiting accept/reject)
  *  or error (cloud failed; stays queued for the next reconnect). */
@@ -30,11 +30,15 @@ export interface A11yJobIssue {
 /** Everything needed to re-run a job later, kept small + JSON-serialisable so it
  *  persists cleanly in IndexedDB. plan/ui carry the prompt; a11y carries the
  *  already-measured issues + a scene summary (the numbers were computed in code
- *  offline — the cloud only adds prose). */
+ *  offline — the cloud only adds prose); question carries the question (prompt)
+ *  plus the answer she already got on device. */
 export interface JobPayload {
   prompt?: string;
   issues?: A11yJobIssue[];
   summary?: string;
+  /** 'question' jobs: the on-device answer, so the reconnect check can honestly
+   *  say confirmed / corrected (or just "checked" when absent). */
+  offlineAnswer?: string;
 }
 
 export interface QueuedJob {

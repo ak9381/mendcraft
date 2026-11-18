@@ -82,11 +82,13 @@ export function routeNanoCanvas(): RouteInfo {
   };
 }
 
-export function routeOffline(): RouteInfo {
+export function routeOffline(opts?: { refineQueued?: boolean }): RouteInfo {
   return {
     tier: 'offline',
     engine: 'rules',
-    reason: 'kept on device',
+    reason: opts?.refineQueued
+      ? "answered from the drawing; Gemini will check when you're back online"
+      : 'kept on device',
     wonBy: 'rules',
   };
 }
@@ -97,6 +99,10 @@ export function routeGemini(opts: {
   nanoTimeoutMs?: number;
   model?: string;
   why?: string;
+  /** Word counts when the on-device condenser shortened her ramble first. */
+  condensed?: { from: number; to: number };
+  /** Redaction counts when the sent payload swapped names for neutral tokens. */
+  redacted?: { names: number; details: number };
 }): RouteInfo {
   const wonBy = wonByFromModel(opts.model) ?? 'gemini';
   const timeoutS = Math.max(1, Math.round((opts.nanoTimeoutMs ?? 2000) / 1000));
@@ -116,6 +122,17 @@ export function routeGemini(opts: {
   } else {
     reason = 'needs a cloud answer';
   }
+  // On-device pre-processing receipts ride the same line as short suffixes.
+  const extras: string[] = [];
+  if (opts.condensed && opts.condensed.to < opts.condensed.from) {
+    extras.push(`Nano condensed ${opts.condensed.from} → ${opts.condensed.to} words on device`);
+  }
+  if (opts.redacted) {
+    const { names, details } = opts.redacted;
+    if (names > 0) extras.push(`${names} name${names === 1 ? '' : 's'} kept on device`);
+    else if (details > 0) extras.push(`${details} private detail${details === 1 ? '' : 's'} kept on device`);
+  }
+  if (extras.length) reason = capRouteReason([reason, ...extras].join(' · '));
   return {
     tier: 'gemini',
     engine: 'gemini',
@@ -125,16 +142,26 @@ export function routeGemini(opts: {
   };
 }
 
-/** Keep "because …" factual; drop source badges and canned placeholders. */
+/** Keep "because …" factual; drop source badges and canned placeholders. The
+ *  engine CONCATENATES canned state sentences onto the draft's why ("Nano's
+ *  guess while you were still speaking. Gemini confirmed this guess."), so
+ *  they are stripped wherever they appear, not only as the whole string. */
 export function becauseFromSpecWhy(why?: string): string | undefined {
   if (!why) return undefined;
-  const t = why.trim().replace(/\s+/g, ' ');
+  let t = why.trim().replace(/\s+/g, ' ');
   if (!t) return undefined;
   if (/^Gemini · /i.test(t)) return undefined;
-  if (/^Nano's guess while you were still speaking\.?$/i.test(t)) return undefined;
-  if (/^Gemini confirmed this guess\.?$/i.test(t)) return undefined;
-  const m = t.match(/^(?:Gemini confirmed this guess\.?\s+)?(?:Gemini corrected Nano's guess:\s*|Withdrawn:\s*|Gemini updated the answer\.\s*)(.+)/i);
-  if (m) return capRouteReason(m[1]);
+  t = t
+    .replace(/The user is asking[^.?!]*[.?!]/gi, ' ')
+    .replace(/Nano's guess while you were still speaking\.?/gi, ' ')
+    .replace(/Gemini (?:confirmed|corrected|withdrew) this guess\.?/gi, ' ')
+    .replace(/Gemini disagreed with Nano's guess\.?/gi, ' ')
+    .replace(/Gemini updated the answer\.?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(?:Gemini corrected Nano's guess:|Withdrawn:)\s*/i, '')
+    .trim();
+  if (!t) return undefined;
   const because = t.match(/\bbecause\s+(.+)/i);
   if (because) return capRouteReason(because[1]);
   return capRouteReason(t);
