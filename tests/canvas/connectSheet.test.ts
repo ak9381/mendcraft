@@ -141,6 +141,16 @@ describe('connectSheet', () => {
       expect(host.innerHTML).toContain('Relay active');
     });
 
+    it('escapes an untrusted note instead of injecting it as HTML', () => {
+      const host = createMockElement('div');
+      showPairing(host, {
+        code: 'WXYZ-5678',
+        note: '<img src=x onerror=alert(1)>',
+      });
+      expect(host.innerHTML).not.toContain('<img');
+      expect(host.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    });
+
     it('marks point, name (form with input + Go) and phone with stable data-connect selectors', () => {
       const host = createMockElement('div');
       mountConnectSheet(host, {});

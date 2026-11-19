@@ -3,6 +3,7 @@
 // honest source badge, pinch to confirm, and get a green tick only when the
 // camera shows the effect. The gimbal is an optional extra line, never needed.
 
+import { esc } from '../core/esc';
 import {
   MODE_LABELS, STEP_ORDER, defaultMode, detectModes, runAddDevice, sourceLabel,
   type AddMode, type FlowDeps, type FlowFrame, type FlowOutcome, type ModeOption, type StepEvent, type StepId,
@@ -251,6 +252,3 @@ export function createAddDevicePanel(svc: AddDeviceServices): AddDevicePanel {
   return api;
 }
 
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}

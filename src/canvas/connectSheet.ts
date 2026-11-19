@@ -2,6 +2,7 @@
 // Presents three big options: "Point at it", "Say its name" (input + Go), "Join a phone".
 // Also provides showPairing for the phone join flow and pure helper functions.
 
+import { esc } from '../core/esc';
 import { groupCode, normalizeCode } from '../relay/protocol';
 
 export interface ConnectSheetCallbacks {
@@ -159,7 +160,7 @@ export function showPairing(
   const qrHtml = opts.qrDataUrl
     ? `<div class="mc-pair-qr-wrap"><img class="mc-pair-qr" src="${opts.qrDataUrl}" alt="QR code to pair a phone" width="220" height="220" /></div>`
     : '';
-  const noteHtml = opts.note ? `<p class="mc-pair-note">${opts.note}</p>` : '<p class="mc-pair-note"></p>';
+  const noteHtml = opts.note ? `<p class="mc-pair-note">${esc(opts.note)}</p>` : '<p class="mc-pair-note"></p>';
 
   const html = `
     <section class="mc-pairing-card" role="region" aria-label="Pair phone to canvas">

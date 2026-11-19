@@ -19,6 +19,7 @@ import { createCanvasInputs } from './canvasInputs';
 import { parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
+import { esc } from '../core/esc';
 import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
 import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
@@ -71,8 +72,6 @@ export function seedDoc(): CanvasDoc {
     },
   };
 }
-
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   for (const El of [LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement]) {

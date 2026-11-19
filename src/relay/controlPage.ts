@@ -10,6 +10,7 @@
 // (sim.playControlDemo) and says so honestly — it never fakes a live connection.
 
 import '../style.css';
+import { esc } from '../core/esc';
 import { groupCode, parseJoinInput } from './protocol';
 import { createFakeTransport, type RelayTransport } from './transport';
 import { probeFirestore } from './firestoreTransport';
@@ -506,6 +507,3 @@ function renderScene(snap: ControlSnapshot): string {
   return `<svg class="c-wire" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Scene preview">${body}</svg>`;
 }
 
-function esc(s: string): string {
-  return s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!));
-}
