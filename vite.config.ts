@@ -91,8 +91,10 @@ function appCheckDebugLocalPlugin(): Plugin {
       import { createFaceOverlay } from '/src/ui/faceOverlay.ts';
       import { buildScene } from '/src/dev/trackingSim.ts';
       const viewport = document.getElementById('viewport');
-      const handOverlay = createHandOverlay(viewport);
-      const faceOverlay = createFaceOverlay(viewport);
+      // reducedMotion: true — a single draw() call should render the settled
+      // (fully faded-in) look, not one tick of an opacity ramp.
+      const handOverlay = createHandOverlay(viewport, { reducedMotion: true });
+      const faceOverlay = createFaceOverlay(viewport, { reducedMotion: true });
       const scene = buildScene(${JSON.stringify(pose)}, ${JSON.stringify(variant)});
       handOverlay.draw(scene.hands);
       faceOverlay.draw(scene.faces, scene.rejectedHands);
