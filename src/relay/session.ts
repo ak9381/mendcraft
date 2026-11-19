@@ -249,7 +249,11 @@ export async function createGuestSession(
 ): Promise<GuestSession> {
   const core = makeCore('phone', transport, roomId);
 
-  const pending = new Map<string, { resolve: (r: PrivacyReply) => void; timer: ReturnType<typeof setTimeout> }>();
+  const pending = new Map<string, {
+    resolve: (r: PrivacyReply) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   core.listen((msg) => {
     if (msg.type === 'hello') core.setState(advancePair(core.state, 'peer-hello'));
     else if (msg.type === 'bye') core.setState(advancePair(core.state, 'peer-bye'));
@@ -281,14 +285,24 @@ export async function createGuestSession(
           pending.delete(ask.jobId);
           reject(new Error('hub did not reply'));
         }, timeoutMs);
-        pending.set(ask.jobId, { resolve, timer });
+        pending.set(ask.jobId, { resolve, reject, timer });
         void transport.publish(roomId, { v: 1, from: 'phone', type: 'privacyAsk', ask }).catch((err) => {
           clearTimeout(timer);
           pending.delete(ask.jobId);
           reject(err);
         });
       }),
-    close: () => core.close(),
+    close: async () => {
+      // Reject outstanding privacyAsk waiters now — otherwise a mid-request
+      // close() (e.g. remotePage's pagehide handler) leaves the caller
+      // hanging for the full timeout instead of failing fast.
+      for (const [jobId, wait] of pending) {
+        clearTimeout(wait.timer);
+        pending.delete(jobId);
+        wait.reject(new Error('relay: session closed before the hub replied'));
+      }
+      await core.close();
+    },
   };
 }
 

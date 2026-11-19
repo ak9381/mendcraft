@@ -13,6 +13,10 @@ export const ROUTE_PHONE_NANO = 'cleaned on this phone: Nano + rules, then Gemin
 export const ROUTE_DIRECT_UNCLEANED = 'Gemini (not cleaned) — no hub reachable';
 export const ROUTE_ASK_FIRST = 'ask first — this looks like it has names or numbers, and no hub is here to clean them';
 export const ROUTE_PHONE_NO_NANO = 'Gemini (no Nano on this phone)';
+/** Distinct from ROUTE_VIA_HUB: nothing was sent to Gemini at all, so a caller
+ *  that displays routeLine without checking `cleaned`/`error` cannot mistake
+ *  this refusal for a normal cleaned-and-sent reply. */
+export const ROUTE_HUB_REFUSED = 'blocked on Mac: a name survived cleaning, nothing sent to Gemini';
 
 export type PrivacyAction = 'hub' | 'local' | 'direct-uncleaned' | 'ask';
 
@@ -156,7 +160,7 @@ export async function runHubPrivacyJob(
     return {
       jobId: ask.jobId,
       text: '',
-      routeLine: ROUTE_VIA_HUB,
+      routeLine: ROUTE_HUB_REFUSED,
       sentBytes: 0,
       cleaned: false,
       error: 'refused: a name was still in the prompt',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ROUTE_ASK_FIRST,
   ROUTE_DIRECT_UNCLEANED,
+  ROUTE_HUB_REFUSED,
   ROUTE_LOCAL_CLEAN,
   ROUTE_PHONE_NO_NANO,
   ROUTE_PHONE_NANO,

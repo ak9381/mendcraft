@@ -335,8 +335,10 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           return;
         }
         const runId = `run-${++runSeq}-${r.id.slice(0, 8)}`;
-        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => undefined);
         setRunStatus(`Asked the laptop to run “${r.name}”…`);
+        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => {
+          setRunStatus(`Couldn't reach the laptop to run “${r.name}” — check the connection.`);
+        });
       });
       li.append(info, runBtn);
       recipesEl.appendChild(li);

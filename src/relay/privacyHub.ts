@@ -27,6 +27,10 @@ export function attachPrivacyHub(
           cleaned: false,
           error: err instanceof Error ? err.message.slice(0, 200) : 'hub failed',
         }),
-      );
+      )
+      // The transport that failed the job is often the same one that would
+      // carry this reply — if it rejects too, log instead of an unhandled
+      // rejection, so the phone at least has a chance to time out visibly.
+      .catch((err) => console.error('[mendcraft] privacy hub: could not send reply', err));
   });
 }

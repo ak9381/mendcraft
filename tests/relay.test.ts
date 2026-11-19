@@ -414,4 +414,17 @@ describe('privacyAsk / privacyReply on the wire', () => {
     expect(reply.cleaned).toBe(true);
     expect(reply.sentBytes).toBe(24);
   });
+
+  it('rejects an in-flight privacyAsk immediately on close(), instead of hanging for the full timeout', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    // The host never replies — without the fix this would hang for timeoutMs.
+    const pending = guest.sendPrivacyAsk({ jobId: 'pv-10', text: 'email Priya Rao' }, 20000);
+    await flush();
+    await guest.close();
+    await expect(pending).rejects.toThrow(/closed/);
+    await host.close();
+  });
 });
