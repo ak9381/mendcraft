@@ -309,6 +309,7 @@ export function createPresenceTracker(
     }
     stream = null;
     video.srcObject = null;
+    video.remove(); // idempotent: no-op if already detached
     handLm?.close();
     faceLm?.close();
     handLm = null;
