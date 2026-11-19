@@ -55,6 +55,60 @@ function appCheckDebugLocalPlugin(): Plugin {
       },
     },
     configureServer(server) {
+      // Dev-only page that draws synthetic hand/face landmarks straight onto
+      // handOverlay.ts/faceOverlay.ts (no camera, no MediaPipe) so the
+      // tracking visuals are reproducible for screenshots and manual review.
+      // ?pose=open|point|pinch|thumbs-up|fist, ?variant=solo|crowd.
+      server.middlewares.use((req, res, next) => {
+        try {
+          const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+          if (url.pathname !== '/__tracking-sim') return next();
+          if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+          if (!isLocalHost(typeof req.headers.host === 'string' ? req.headers.host : undefined)) {
+            res.statusCode = 404;
+            res.end('not found');
+            return;
+          }
+          const pose = /^[a-z-]{1,20}$/.test(url.searchParams.get('pose') ?? '') ? url.searchParams.get('pose') : 'open';
+          const variant = url.searchParams.get('variant') === 'crowd' ? 'crowd' : 'solo';
+          const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mendcraft tracking sim</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #1a1c22; }
+      #viewport { position: relative; width: 100%; height: 100%; overflow: hidden; background: #1a1c22; }
+      .hand-overlay, .face-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .hand-overlay { z-index: 3; }
+      .face-overlay { z-index: 2; }
+    </style>
+  </head>
+  <body>
+    <div id="viewport"></div>
+    <script type="module">
+      import { createHandOverlay } from '/src/ui/handOverlay.ts';
+      import { createFaceOverlay } from '/src/ui/faceOverlay.ts';
+      import { buildScene } from '/src/dev/trackingSim.ts';
+      const viewport = document.getElementById('viewport');
+      const handOverlay = createHandOverlay(viewport);
+      const faceOverlay = createFaceOverlay(viewport);
+      const scene = buildScene(${JSON.stringify(pose)}, ${JSON.stringify(variant)});
+      handOverlay.draw(scene.hands);
+      faceOverlay.draw(scene.faces, scene.rejectedHands);
+      document.body.dataset.ready = '1';
+    </script>
+  </body>
+</html>`;
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          if (req.method === 'HEAD') { res.end(); return; }
+          res.end(html);
+        } catch {
+          next();
+        }
+      });
       // Dev-only lightweight page that loads hybrid.ts without the studio shell.
       server.middlewares.use((req, res, next) => {
         try {
