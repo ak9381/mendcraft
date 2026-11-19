@@ -105,19 +105,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div></div>
     <header class="mc-bar">
       <div class="mc-bar-tools">
+      <div class="mc-bar-btns">
       <button data-cmd="everything" class="mc-btn" data-i18n="showEverything">Show everything</button>
       <button data-cmd="new" class="mc-btn" data-i18n="newBoard">New board</button>
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
-      <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
-        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
-        <button class="mc-btn primary" type="submit" data-i18n="go">Go</button>
-        <button class="mc-btn mc-mic" type="button" aria-pressed="false" data-i18n="holdToTalk" hidden>Hold to talk</button></form>
       <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
+      </div>
+      <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
+        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
+        <button class="mc-btn primary" type="submit" data-i18n="go">Go</button>
+        <button class="mc-btn mc-mic" type="button" aria-pressed="false" data-i18n="holdToTalk" hidden>Hold to talk</button></form>
       </div>
       <p class="mc-canvas-status" role="status" aria-live="polite"></p>
     </header>
