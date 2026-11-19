@@ -825,6 +825,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
+      frame: (hands, now) => teachPanel.matchFrame(hands, now),
     },
   });
   async function toggleHands(): Promise<void> {

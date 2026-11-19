@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildHandPose } from '../src/dev/trackingSim';
 import {
+  autoFireGesture,
   builtinConflict,
   coerceCustomGesture,
+  createGestureAutoFireState,
   createGestureRecorder,
   createMemoryGestureStore,
+  GESTURE_COOLDOWN_MS,
   matchCustomGestures,
   type CustomGesture,
 } from '../src/input/customGestures';
@@ -120,6 +123,51 @@ describe('matchCustomGestures — threshold, margin and runtime precedence', () 
     const a = makeTaught('a', 'thumbs-up', 'thumbs-up');
     const b = makeTaught('b', 'thumbs-up', 'thumbs-up');
     expect(matchCustomGestures(heldSample('thumbs-up'), [a, b])).toBeNull();
+  });
+});
+
+describe('autoFireGesture — always-on tracking loop, cooldown-gated', () => {
+  function taught(name: string, pose: Parameters<typeof buildHandPose>[0]): CustomGesture {
+    const rec = createGestureRecorder();
+    rec.addSample(heldSample(pose));
+    rec.addSample(heldSample(pose));
+    const done = rec.finishEarly();
+    if (done?.status !== 'done' || !done.pose) throw new Error('setup failed');
+    return {
+      id: name, name, kind: 'pose', pose: { ...done.pose, id: name, label: name },
+      action: { type: 'save' }, actionSummary: 'Save the canvas', conflictsWith: pose, createdAt: 0,
+    };
+  }
+
+  it('fires the matching gesture and records the time it fired', () => {
+    const g = taught('save-gesture', 'thumbs-up');
+    const state = createGestureAutoFireState();
+    const fired = autoFireGesture(heldSample('thumbs-up'), [g], state, 1000);
+    expect(fired?.id).toBe('save-gesture');
+    expect(state.lastFiredAt).toBe(1000);
+  });
+
+  it('returns null and does not fire again inside the cooldown window', () => {
+    const g = taught('save-gesture', 'thumbs-up');
+    const state = createGestureAutoFireState();
+    autoFireGesture(heldSample('thumbs-up'), [g], state, 1000);
+    const secondTry = autoFireGesture(heldSample('thumbs-up'), [g], state, 1000 + GESTURE_COOLDOWN_MS - 1);
+    expect(secondTry).toBeNull();
+  });
+
+  it('fires again once the cooldown has elapsed', () => {
+    const g = taught('save-gesture', 'thumbs-up');
+    const state = createGestureAutoFireState();
+    autoFireGesture(heldSample('thumbs-up'), [g], state, 1000);
+    const thirdTry = autoFireGesture(heldSample('thumbs-up'), [g], state, 1000 + GESTURE_COOLDOWN_MS);
+    expect(thirdTry?.id).toBe('save-gesture');
+  });
+
+  it('returns null without consuming the cooldown when nothing matches', () => {
+    const g = taught('save-gesture', 'thumbs-up');
+    const state = createGestureAutoFireState();
+    expect(autoFireGesture(heldSample('open'), [g], state, 1000)).toBeNull();
+    expect(state.lastFiredAt).toBe(-Infinity);
   });
 });
 

@@ -218,6 +218,39 @@ export function matchCustomGestures(
   return { gesture: best.g, distance: best.d };
 }
 
+/** Minimum time between two auto-fires, so holding a taught pose fires it
+ *  once instead of every tracking frame while it's held. */
+export const GESTURE_COOLDOWN_MS = 1500;
+
+export interface GestureAutoFireState {
+  lastFiredAt: number;
+}
+
+export function createGestureAutoFireState(): GestureAutoFireState {
+  return { lastFiredAt: -Infinity };
+}
+
+/**
+ * The always-on tracking loop's per-frame check: match the live frame
+ * against every saved gesture (threshold, margin and built-in conflict
+ * rules all come from matchCustomGestures) and, if it fires, record `now`
+ * so the same held pose doesn't retrigger before the cooldown elapses.
+ * A non-match never consumes the cooldown.
+ */
+export function autoFireGesture(
+  liveFrames: readonly (readonly Pt[])[],
+  gestures: readonly CustomGesture[],
+  state: GestureAutoFireState,
+  now: number,
+  cooldownMs = GESTURE_COOLDOWN_MS,
+): CustomGesture | null {
+  if (now - state.lastFiredAt < cooldownMs) return null;
+  const match = matchCustomGestures(liveFrames, gestures);
+  if (!match) return null;
+  state.lastFiredAt = now;
+  return match.gesture;
+}
+
 // ---------------------------------------------------------------------------
 // Storage (mirrors ai/phrasebook.ts's IndexedDB-or-memory adapter pair).
 // Local-only, by design: never synced, never sent anywhere.

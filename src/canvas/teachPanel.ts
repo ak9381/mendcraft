@@ -3,7 +3,9 @@
 // card, then it's saved (local-only — never Firestore/cloud) and listed with
 // rename/test/delete. See src/input/customGestures.ts for the matching core.
 import {
+  autoFireGesture,
   builtinConflict,
+  createGestureAutoFireState,
   createGestureRecorder,
   createIndexedDbGestureStore,
   createMemoryGestureStore,
@@ -41,6 +43,11 @@ export interface TeachPanel {
   rename(id: string, name: string): Promise<void>;
   remove(id: string): Promise<void>;
   openList(): void;
+  /** Always-on tracking loop: feed one live frame. Matches it against every
+   *  saved gesture (threshold/cooldown/conflict rules in customGestures.ts)
+   *  and fires onTriggered — a no-op while this panel is open (recording or
+   *  listing) so she isn't fighting her own taught gestures mid-teach. */
+  matchFrame(hands: readonly (readonly Pt[])[], now?: number): void;
 }
 
 const SAMPLE_MS = 2500;
@@ -54,6 +61,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
   const store = opts.store ?? (opts.sim ? createMemoryGestureStore() : createIndexedDbGestureStore());
   let gestures: CustomGesture[] = [];
   const loaded = store.load().then((g) => { gestures = g; });
+  const autoFireState = createGestureAutoFireState();
 
   const panel = document.createElement('div');
   panel.className = 'mc-teach';
@@ -243,12 +251,20 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     await store.remove(id);
   }
 
+  function matchFrame(hands: readonly (readonly Pt[])[], now = Date.now()): void {
+    if (!panel.hidden) return; // recording or viewing the list — don't auto-fire
+    if (!gestures.length) return;
+    const gesture = autoFireGesture(hands, gestures, autoFireState, now);
+    if (gesture) opts.onTriggered(gesture);
+  }
+
   return {
     open: () => void open(),
     gestures: () => gestures,
     rename,
     remove,
     openList,
+    matchFrame,
   };
 }
 
