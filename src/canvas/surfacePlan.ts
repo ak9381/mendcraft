@@ -30,6 +30,8 @@ export interface DeviceState {
   volume?: number;
   pending?: boolean;
   error?: string;
+  /** True once we know this lamp isn't the real WiZ bulb (bridge unreachable). */
+  sim?: boolean;
 }
 
 export interface SceneState {
@@ -135,9 +137,10 @@ export function expandPlan(
         onToggle: { event: { name: 'lamp.toggle', context: { deviceId: t.deviceId } } },
         onBrighter: { event: { name: 'lamp.brighter', context: { deviceId: t.deviceId } } },
         onDimmer: { event: { name: 'lamp.dimmer', context: { deviceId: t.deviceId } } },
+        sim: { path: `/devices/${t.deviceId}/sim` },
       });
       const s = devices[t.deviceId] ?? { on: false, brightness: 50 };
-      deviceData[t.deviceId] = { on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '' };
+      deviceData[t.deviceId] = { on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false };
     } else if (t.type === 'plan') {
       components.push({ id: tileComponentId(t), component: 'PlanBoard', boardId: t.boardId, template: t.template });
     } else if (t.type === 'music') {
@@ -225,6 +228,7 @@ export function deviceUpdate(surfaceId: string, deviceId: string, s: DeviceState
   if (s.playing !== undefined) value.playing = s.playing;
   if (s.trackTitle !== undefined) value.trackTitle = s.trackTitle;
   if (s.volume !== undefined) value.volume = s.volume;
+  if (s.sim !== undefined) value.sim = s.sim;
 
   return {
     version: PROTOCOL,

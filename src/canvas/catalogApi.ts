@@ -13,6 +13,7 @@ export const LampTileApi = {
       brightness: CommonSchemas.DynamicNumber,
       pending: CommonSchemas.DynamicBoolean.optional(),
       error: CommonSchemas.DynamicString.optional(),
+      sim: CommonSchemas.DynamicBoolean.optional(),
       onToggle: CommonSchemas.Action,
       onBrighter: CommonSchemas.Action.optional(),
       onDimmer: CommonSchemas.Action.optional(),

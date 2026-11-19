@@ -23,6 +23,9 @@ export interface DeviceStore {
   get(id: string): DeviceState;
   all(): Record<string, DeviceState>;
   act(intent: DeviceIntent): Promise<DeviceState>;
+  /** Flag a device as simulated (or not) without a network round trip —
+   *  used once the WiZ bridge's reachability is known. */
+  setSim(id: string, sim: boolean): void;
 }
 
 export function createDeviceStore(
@@ -87,6 +90,11 @@ export function createDeviceStore(
       }
       publish(intent.deviceId);
       return state[intent.deviceId];
+    },
+    setSim(id, sim) {
+      if (!state[id]) return;
+      state[id] = { ...state[id], sim };
+      publish(id);
     },
   };
 }

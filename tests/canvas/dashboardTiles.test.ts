@@ -9,6 +9,7 @@ import {
 import {
   CATALOG_SCHEMAS,
   ConnectTileApi,
+  LampTileApi,
   MusicTileApi,
   SceneTileApi,
   SwitchTileApi,
@@ -63,6 +64,18 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       };
       expect(ConnectTileApi.schema.safeParse(validConnect).success).toBe(true);
       expect(ConnectTileApi.schema.safeParse({ ...validConnect, unknown: true }).success).toBe(false);
+    });
+
+    it('LampTile accepts an optional sim flag (real WiZ bridge vs the simulated lamp)', () => {
+      const validLamp = {
+        label: 'Desk lamp',
+        on: true,
+        brightness: 80,
+        onToggle: { event: { name: 'lamp.toggle' } },
+      };
+      expect(LampTileApi.schema.safeParse(validLamp).success).toBe(true);
+      expect(LampTileApi.schema.safeParse({ ...validLamp, sim: true }).success).toBe(true);
+      expect(LampTileApi.schema.safeParse({ ...validLamp, sim: 'nope' }).success).toBe(false);
     });
   });
 
@@ -165,6 +178,22 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       const gateResult = gateMessages(msgs, CATALOG_SCHEMAS);
       expect(gateResult.ok).toBe(true);
 
+      // Lamp tile carries a sim binding so the tile can show "SIM" when the
+      // real WiZ bridge isn't reachable.
+      const lampPlan = coerceSurfacePlan({
+        kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }],
+      });
+      if (!lampPlan.ok) throw new Error();
+      const lampMsgs = expandPlan(lampPlan.value, 'surf-2', { 'wiz-desk': { on: true, brightness: 60, sim: true } } as never);
+      const lampComponents = lampMsgs.find((m) => 'updateComponents' in m)?.updateComponents as {
+        components: Array<{ id: string; component: string; [k: string]: unknown }>;
+      };
+      expect(lampComponents.components.find((c) => c.component === 'LampTile')).toMatchObject({
+        sim: { path: '/devices/wiz-desk/sim' },
+      });
+      const lampData = lampMsgs.find((m) => 'updateDataModel' in m)?.updateDataModel as { value?: Record<string, { sim?: boolean }> };
+      expect(lampData.value?.['wiz-desk']?.sim).toBe(true);
+
       // Gate rejects extra props on any of the new tiles
       const badMsg = [
         {
@@ -239,6 +268,23 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       expect(res.playing).toBe(false);
       expect(res.pending).toBe(false);
       expect(res.error).toMatch(/reach the music player/i);
+    });
+
+    it('setSim flags a device as simulated without a network round trip', async () => {
+      const emitted: A2uiMessage[] = [];
+      const store = createDeviceStore(
+        { 'wiz-desk': { on: false, brightness: 40 } },
+        { run: async () => ({}) },
+        (m) => emitted.push(m),
+        () => 'surf-1',
+      );
+
+      store.setSim('wiz-desk', true);
+      expect(store.get('wiz-desk').sim).toBe(true);
+      expect(emitted.length).toBe(1);
+
+      store.setSim('wiz-desk', false);
+      expect(store.get('wiz-desk').sim).toBe(false);
     });
   });
 });

@@ -32,6 +32,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     .meter { height: 14px; border-radius: 7px; background: rgb(242 240 234 / 0.14); overflow: hidden; }
     .meter > i { display: block; height: 100%; background: #f5a623; }
     .pending { color: var(--text-dim, #bdb9b0); } .error { color: #ff8a7a; }
+    .sim-badge { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #bdb9b0); border: 1.5px solid var(--border, #3a3934); border-radius: 999px; padding: 2px 8px; }
   `;
   override render() {
     const p = this.controller?.props;
@@ -41,6 +42,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     return html`<div class="tile ${on ? 'on' : ''}" role="group" aria-label=${String(p.label)}>
       <div class="row"><span class="label">${p.label}</span>
         <span class="state" aria-live="polite">${on ? `On · ${b}%` : 'Off'}</span>
+        ${p.sim ? html`<span class="sim-badge" title="Simulated — the WiZ bridge isn't reachable">SIM</span>` : nothing}
         ${p.pending ? html`<span class="pending">checking…</span>` : nothing}</div>
       <div class="meter" aria-hidden="true"><i style="width:${on ? b : 0}%"></i></div>
       ${p.error ? html`<div class="error" role="status">${p.error}</div>` : nothing}

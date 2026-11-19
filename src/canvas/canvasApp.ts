@@ -19,6 +19,8 @@ import { createCanvasInputs } from './canvasInputs';
 import { parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
+import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
+import { createWizClient, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
 import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
 import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
@@ -52,6 +54,9 @@ export interface CanvasOptions {
   sim?: boolean;
   /** Desktop hub: run Gemini on a redacted prompt for a connected phone. */
   privacyGemini?: (redacted: string) => Promise<string>;
+  /** Real WiZ bridge client; defaults to one pointed at the configured bridge
+   *  URL/token. Pass a fake in tests. Unused when `sim` is set. */
+  wizClient?: WizClient;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -182,7 +187,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- A2UI ----
   const processor = new MessageProcessor([smartCanvasCatalog]);
   const live = new Set<string>();
-  const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? {
+  const simulatedConnector: DeviceConnector = {
     run: (i) => new Promise((res) => setTimeout(() => {
       const cur = store.get(i.deviceId);
       const ack: Partial<DeviceState> = { on: i.on ?? cur.on, brightness: i.brightness ?? cur.brightness };
@@ -191,10 +196,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (i.next) { ack.trackTitle = TRACKS[(TRACKS.indexOf(cur.trackTitle ?? '') + 1 + TRACKS.length) % TRACKS.length]; ack.playing = true; }
       res(ack);
     }, 300)),
-  }, (m) => {
+  };
+  // ?sim=1 stays fully simulated and deterministic — no bridge probing at all.
+  // Otherwise, a real WiZ bridge (scripts/wiz-bridge.mjs) takes over the
+  // wiz-* lamp tiles when it's reachable; everything else, and those lamps
+  // while the bridge is down, stays on the simulated connector (labelled SIM).
+  const wizClient = opts.sim ? null : (opts.wizClient ?? createWizClient());
+  const bridgeStatus: BridgeStatus = { up: false };
+  const defaultConnector = wizClient
+    ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })
+    : simulatedConnector;
+  const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? defaultConnector, (m) => {
     const u = (m as unknown as { updateDataModel: Record<string, unknown> }).updateDataModel;
     for (const sid of live) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
+  if (wizClient && !opts.connector) {
+    void wizClient.health().then((up) => {
+      bridgeStatus.up = up;
+      for (const id of Object.keys(store.all())) if (isWizDevice(id)) store.setSim(id, !up);
+    });
+  }
 
   processor.onSurfaceCreated((s: unknown) => {
     const sid = (s as { id: string }).id;
