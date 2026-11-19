@@ -51,13 +51,13 @@ async function main() {
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     });
     const page = await browser.newPage();
-    await page.setViewport({ width: 1440, height: 900 });
+    await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 3 });
     await page.goto(`${base}/canvas.html?fresh=1&sim=1`, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await sleep(1200);
 
     await page.click('[data-cmd=teach]');
     await sleep(800);
-    await page.screenshot({ path: join(OUT_DIR, 'after-desktop-teach-recording.png') });
+    await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-teach-recording.png') });
 
     // Deterministic synthetic samples resolve fast; wait for the describe
     // step's input to appear (2-3 samples x up to ~1.5s retry/backoff).
@@ -66,14 +66,14 @@ async function main() {
     await page.click('.mc-teach-describe button[type=submit]');
     await page.waitForSelector('.mc-teach-proposal', { timeout: 10000 });
     await sleep(300);
-    await page.screenshot({ path: join(OUT_DIR, 'after-desktop-teach-proposal.png') });
+    await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-teach-proposal.png') });
 
     await page.click('[data-act=keep]');
     await sleep(400);
 
     await page.click('[data-cmd=gestures]');
     await sleep(300);
-    await page.screenshot({ path: join(OUT_DIR, 'after-desktop-custom-gestures-list.png') });
+    await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-custom-gestures-list.png') });
     await page.click('.mc-teach-close');
 
     await page.click('[data-cmd=ai]');
@@ -92,7 +92,7 @@ async function main() {
     await sleep(200);
     const historyText = await page.evaluate(() => document.querySelector('.mc-ai-history')?.textContent ?? '');
     console.log('history snippet:', historyText.slice(0, 300));
-    await page.screenshot({ path: join(OUT_DIR, 'after-desktop-teach-history.png') });
+    await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-teach-history.png') });
 
     console.log('capture-teach — done.');
   } finally {
