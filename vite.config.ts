@@ -173,6 +173,7 @@ export default defineConfig({
         main: path.join(root, 'index.html'),
         canvas: path.join(root, 'canvas.html'),
         spike: path.join(root, 'spike.html'),
+        mobile: path.join(root, 'mobile.html'),
       },
     },
   },
