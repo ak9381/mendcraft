@@ -132,3 +132,91 @@ export function coerceTemplate(raw: unknown): GestureTemplate | null {
   if (!Array.isArray(r.vector) || r.vector.length !== 42 || !r.vector.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 10)) return null;
   return { id: r.id, label: r.label, vector: r.vector as number[], createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0 };
 }
+
+// ---------------------------------------------------------------------------
+// MOTION TEMPLATES — a taught gesture that moves (not held), matched by DTW
+// (Dynamic Time Warping) over the normalised pose sequence so a slower or
+// faster repeat of the same motion still matches. Reuses normalizePose/
+// poseDistance above, so motion templates share the same wrist-relative,
+// scale- and rotation-invariant frame as static ones.
+
+export interface MotionTemplate {
+  id: string;
+  label: string;
+  /** One 42-number normalised pose (see normalizePose) per captured frame. */
+  frames: number[][];
+  createdAt: number;
+}
+
+/** Mean per-frame distance a live sequence may sit from a template and still
+ *  count as the same motion (DTW cost is normalised by path length, so this
+ *  is directly comparable to MATCH_THRESHOLD above). */
+export const MOTION_MATCH_THRESHOLD = 0.16;
+
+/**
+ * Dynamic Time Warping distance between two normalised pose sequences, using
+ * poseDistance as the per-frame cost. O(n*m) with two rolling rows (no O(n*m)
+ * allocation), so a ~75-frame sample against a ~75-frame template is cheap.
+ * The result is divided by the warped path length so longer sequences don't
+ * read as "more different" just by being longer.
+ */
+export function dtwDistance(a: readonly (readonly number[])[], b: readonly (readonly number[])[]): number {
+  const n = a.length, m = b.length;
+  if (!n || !m) return Infinity;
+  let prev = new Array<number>(m + 1).fill(Infinity);
+  let cur = new Array<number>(m + 1).fill(Infinity);
+  prev[0] = 0;
+  for (let i = 1; i <= n; i++) {
+    cur[0] = Infinity;
+    for (let j = 1; j <= m; j++) {
+      const cost = poseDistance(a[i - 1], b[j - 1]);
+      cur[j] = cost + Math.min(prev[j], cur[j - 1], prev[j - 1]);
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return prev[m] / Math.max(n, m);
+}
+
+/** Best-matching motion template for a live (unnormalised) landmark
+ *  sequence, or null if none is close enough. */
+export function matchMotionTemplate(
+  sequence: readonly (readonly Pt[])[],
+  templates: readonly MotionTemplate[],
+  threshold = MOTION_MATCH_THRESHOLD,
+): { id: string; distance: number } | null {
+  const vs = sequence.map(normalizePose).filter((v): v is number[] => v !== null);
+  if (vs.length < 2) return null;
+  let best: { id: string; distance: number } | null = null;
+  for (const t of templates) {
+    if (t.frames.length < 2) continue;
+    const d = dtwDistance(vs, t.frames);
+    if (d <= threshold && (!best || d < best.distance)) best = { id: t.id, distance: d };
+  }
+  return best;
+}
+
+/** Whether a captured sample moved enough to be a motion rather than a held
+ *  pose — the mean per-frame drift of its normalised sequence from its own
+ *  first frame. Used to decide which matcher (nearest-template vs DTW) a
+ *  freshly taught gesture should use. */
+export function sequenceMotion(sequence: readonly (readonly Pt[])[]): number {
+  const vs = sequence.map(normalizePose).filter((v): v is number[] => v !== null);
+  if (vs.length < 2) return 0;
+  let sum = 0;
+  for (let i = 1; i < vs.length; i++) sum += poseDistance(vs[0], vs[i]);
+  return sum / (vs.length - 1);
+}
+
+export function coerceMotionTemplate(raw: unknown): MotionTemplate | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(r.id)) return null;
+  if (typeof r.label !== 'string' || r.label.length > 60) return null;
+  if (!Array.isArray(r.frames) || r.frames.length < 2 || r.frames.length > 200) return null;
+  const frames: number[][] = [];
+  for (const f of r.frames) {
+    if (!Array.isArray(f) || f.length !== 42 || !f.every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 10)) return null;
+    frames.push(f as number[]);
+  }
+  return { id: r.id, label: r.label, frames, createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0 };
+}
