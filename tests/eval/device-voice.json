@@ -1,0 +1,27 @@
+{
+  "name": "device-voice-20",
+  "devices": "EVAL_DEVICES",
+  "note": "Natural device speech against the canvas sim path: English parser plus the scripted Kannada pack. Labels are resolveDeviceVoice() output on EVAL_DEVICES (desk 40%, ceiling 70%, speaker vol 40).",
+  "cases": [
+    { "text": "dim the lamp a bit", "expect": "wiz-desk:b20|wiz-ceiling:b50", "tags": ["en", "dim", "all"] },
+    { "text": "turn everything off", "expect": "wiz-desk:off|wiz-ceiling:off", "tags": ["en", "off", "all"] },
+    { "text": "turn on all the lights", "expect": "wiz-desk:on|wiz-ceiling:on", "tags": ["en", "on", "all"] },
+    { "text": "make the ceiling light brighter", "expect": "wiz-ceiling:on:b90", "tags": ["en", "bright", "named"] },
+    { "text": "set the desk lamp to 30 percent", "expect": "wiz-desk:on:b30", "tags": ["en", "percent", "named"] },
+    { "text": "please turn off the desk lamp", "expect": "wiz-desk:off", "tags": ["en", "off", "named"] },
+    { "text": "turn down the lights", "expect": "wiz-desk:b20|wiz-ceiling:b50", "tags": ["en", "dim", "all"] },
+    { "text": "turn up the lights", "expect": "wiz-desk:on:b60|wiz-ceiling:on:b90", "tags": ["en", "bright", "all"] },
+    { "text": "make it a bit warmer", "expect": "wiz-desk:b20|wiz-ceiling:b50", "tags": ["en", "warm", "all"] },
+    { "text": "lights to 50%", "expect": "wiz-desk:on:b50|wiz-ceiling:on:b50", "tags": ["en", "percent", "all"] },
+    { "text": "pause the music", "expect": "speaker-1:pause", "tags": ["en", "music"] },
+    { "text": "play the music", "expect": "speaker-1:play", "tags": ["en", "music"] },
+    { "text": "skip to the next song", "expect": "speaker-1:next", "tags": ["en", "music"] },
+    { "text": "turn the music down", "expect": "speaker-1:v20", "tags": ["en", "music"] },
+    { "text": "stop the music", "expect": "speaker-1:pause", "tags": ["en", "music"] },
+    { "text": "increase the brightness", "expect": "wiz-desk:on:b60|wiz-ceiling:on:b90", "tags": ["en", "bright", "all"] },
+    { "text": "ದೀಪ ಆಫ್ ಮಾಡು", "expect": "intent:lampOff", "gloss": "turn the lamp off", "tags": ["kn"] },
+    { "text": "ದೀಪ ಆನ್ ಮಾಡು", "expect": "intent:lampOn", "gloss": "turn the lamp on", "tags": ["kn"] },
+    { "text": "ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು", "expect": "intent:dimmer", "gloss": "dim the light", "tags": ["kn"] },
+    { "text": "ಬೆಳಕು ಹೆಚ್ಚಿಸು", "expect": "intent:brighter", "gloss": "increase the light", "tags": ["kn"] }
+  ]
+}

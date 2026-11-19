@@ -44,3 +44,19 @@ describe('statusKey (for localized status lines)', () => {
     expect(parseDeviceCommands('music softer', devices)!.statusKey).toBe('softer');
   });
 });
+
+describe('natural music phrasing', () => {
+  it('stops playback and steps volume with "up" / "down"', () => {
+    expect(parseDeviceCommands('stop the music', devices)!.intents)
+      .toEqual([{ deviceId: 'speaker-1', playing: false }]);
+    expect(parseDeviceCommands('turn the music down', devices)!.intents)
+      .toEqual([{ deviceId: 'speaker-1', volume: 20 }]);
+    expect(parseDeviceCommands('turn the music up', devices)!.intents)
+      .toEqual([{ deviceId: 'speaker-1', volume: 60 }]);
+  });
+
+  it('does not treat "turn down the lights" as a volume change', () => {
+    expect(parseDeviceCommands('turn down the lights', devices)!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', brightness: 20 }]);
+  });
+});

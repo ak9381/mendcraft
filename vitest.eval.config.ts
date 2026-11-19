@@ -1,11 +1,10 @@
 import { defineConfig } from 'vitest/config';
 
-// Dedicated config for `npm run eval:commands`: runs only the eval harness
-// (tests/eval/runEval.ts), which the default `vitest run` suite ignores because
-// it is not a *.test.ts file.
+// Dedicated config for `npm run eval:commands`: runs the command and device-voice
+// harnesses (not *.test.ts, so the default `vitest run` suite ignores the file writes).
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/eval/runEval.ts'],
+    include: ['tests/eval/runEval.ts', 'tests/eval/runDeviceVoice.ts'],
   },
 });

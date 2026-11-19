@@ -49,3 +49,19 @@ describe('device voice commands', () => {
     expect(parseDeviceCommands('', devices)).toBeNull();
   });
 });
+
+describe('natural phrasing the 20-phrase eval covers', () => {
+  it('turns brightness down or up without "dim" / "brighter"', () => {
+    expect(parseDeviceCommands('turn down the lights', devices)!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', brightness: 20 }, { deviceId: 'wiz-ceiling', brightness: 50 }]);
+    expect(parseDeviceCommands('turn up the lights', devices)!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', on: true, brightness: 60 }, { deviceId: 'wiz-ceiling', on: true, brightness: 90 }]);
+    expect(parseDeviceCommands('increase the brightness', devices)!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', on: true, brightness: 60 }, { deviceId: 'wiz-ceiling', on: true, brightness: 90 }]);
+  });
+
+  it('keeps filler words like "a bit" from breaking a dim', () => {
+    expect(parseDeviceCommands('dim the lamp a bit', devices)!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', brightness: 20 }, { deviceId: 'wiz-ceiling', brightness: 50 }]);
+  });
+});

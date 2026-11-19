@@ -56,11 +56,14 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
   const musics = devices.filter((d) => d.kind === 'music');
   const lamps = devices.filter((d) => d.kind !== 'music');
   if (musics.length) {
-    const play = /\bplay\b/.test(t);
-    const pause = /\bpause\b/.test(t);
+    // "the music" / "volume" / "song" lets "turn it down" and "stop" target the
+    // speaker; bare "turn down" without a music word stays a lamp command.
+    const musicNamed = /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t);
+    const play = /\b(play|resume)\b/.test(t);
+    const pause = /\bpause\b/.test(t) || (musicNamed && /\bstop\b/.test(t));
     const next = /\bnext\b/.test(t);
-    const louder = /\blouder\b/.test(t);
-    const softer = /\bsofter\b/.test(t);
+    const louder = /\blouder\b/.test(t) || (musicNamed && /\b(up|higher|increase)\b/.test(t));
+    const softer = /\b(softer|quieter)\b/.test(t) || (musicNamed && /\b(down|lower|decrease)\b/.test(t));
     if (play || pause || next || louder || softer) {
       if (next) return { intents: musics.map((d) => ({ deviceId: d.id, next: true })), say: 'Next song.', statusKey: 'nextSong' };
       if (louder || softer) {
@@ -79,8 +82,12 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
   const percent = /(\d{1,3})\s*(?:percent|%)/.exec(text.toLowerCase());
   const warmer = /\bwarm(er)?\b/.test(t);
   const cooler = /\bcool(er)?\b/.test(t);
-  const dimmer = /\b(dim|dimmer|darker|lower)\b/.test(t);
-  const brighter = /\b(bright|brighter|brighten|lighter)\b/.test(t);
+  const dimmer = /\b(dim|dimmer|darker|lower)\b/.test(t)
+    || /\bturn(?:ing)? down\b/.test(t)
+    || /\b(decrease|reduce|cut)(?: the)? brightness\b/.test(t);
+  const brighter = /\b(bright|brighter|brighten|lighter)\b/.test(t)
+    || /\bturn(?:ing)? up\b/.test(t)
+    || /\b(increase|raise|boost)(?: the)? brightness\b/.test(t);
   const offWord = /\b(off|out)\b/.test(t);
   const onWord = !offWord && /\bon\b/.test(t);
 
