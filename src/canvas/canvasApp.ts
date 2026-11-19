@@ -16,7 +16,7 @@ import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan,
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { createCanvasInputs } from './canvasInputs';
-import { parseGimbalSpeech } from './gimbalCanvas';
+import { followWhileBuilding, parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
@@ -507,16 +507,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say('History: who changed what, and when. The latest change has an Undo.');
   }
 
+  // Gimbal follows the user (native only — soft-fails to a no-op on the web)
+  // for exactly as long as a board is being built, i.e. the model call, not
+  // the Proposal card that waits on her keep/drop afterwards.
+  const withBuildGimbal = <T>(run: () => Promise<T>): Promise<T> => followWhileBuilding(inputs.gimbal, run);
+
   async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus): Promise<boolean> {
     const f = reg.get(frameId); if (!f) return false;
     const engine = engineFor(engineId, script.replace('BOARD', frameId));
     let sentInfo: SentInfo | null = null;
-    const plan = await runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
+    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s); },
       onText: (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; },
       onGhost: (g) => ghost(frameId, g),
       onError: (why) => { aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
-    });
+    }));
     if (!plan || !sentInfo) { ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
   }
@@ -591,9 +596,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     let full = '';
     try {
-      full = await streamOne(engine);
+      full = await withBuildGimbal(() => streamOne(engine));
     } catch (e) {
-      if (!engine.fallback) {
+      const fallbackEngine = engine.fallback;
+      if (!fallbackEngine) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
       }
@@ -601,7 +607,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
       aiSent(utterance, turn.sent);
       try {
-        full = await streamOne(engine.fallback);
+        full = await withBuildGimbal(() => streamOne(fallbackEngine));
       } catch (e2) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;

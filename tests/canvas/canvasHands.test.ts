@@ -160,6 +160,29 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       adapter.update({ hands: [palm], now: 1000 });
       expect(events).toContainEqual({ type: 'palm' });
     });
+
+    it('emits a frame event with the raw hands every call, alongside any gesture event', () => {
+      const events: CanvasHandEvent[] = [];
+      const adapter = createCanvasHandsAdapter((e) => events.push(e));
+
+      const palm = makeOpenPalmHand();
+      adapter.update({ hands: [palm], now: 1000 });
+      const frameEv = events.find((e) => e.type === 'frame');
+      expect(frameEv).toBeDefined();
+      if (frameEv && frameEv.type === 'frame') {
+        expect(frameEv.hands).toHaveLength(1);
+        expect(frameEv.now).toBe(1000);
+      }
+      // Still emits the gesture-specific event too.
+      expect(events).toContainEqual({ type: 'palm' });
+    });
+
+    it('does not emit a frame event when no hands are visible', () => {
+      const events: CanvasHandEvent[] = [];
+      const adapter = createCanvasHandsAdapter((e) => events.push(e));
+      adapter.update({ hands: [], now: 1000 });
+      expect(events.find((e) => e.type === 'frame')).toBeUndefined();
+    });
   });
 
   describe('mountCanvasHands DOM helper', () => {

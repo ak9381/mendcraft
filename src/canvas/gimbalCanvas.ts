@@ -40,6 +40,25 @@ export interface GimbalCanvasController {
 
 export const NO_GIMBAL_WHY = 'The gimbal works in the iPhone app';
 
+/**
+ * Follows the user (native only) for exactly as long as `run` is in flight —
+ * a board being built while Gemini/Nano works — then restores whatever mode
+ * the gimbal was in before. Soft-fails to a no-op on the web, where
+ * `controller.setMode` always resolves `{ ok: false }` without throwing.
+ */
+export async function followWhileBuilding<T>(
+  controller: Pick<GimbalCanvasController, 'mode' | 'setMode'>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prevMode = controller.mode();
+  void controller.setMode('hands').catch(() => {});
+  try {
+    return await run();
+  } finally {
+    void controller.setMode(prevMode).catch(() => {});
+  }
+}
+
 export function parseGimbalSpeech(utterance: string): GimbalSpeechCommand | null {
   if (!utterance) return null;
   const t = utterance

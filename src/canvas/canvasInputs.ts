@@ -14,6 +14,7 @@ import {
   type Box,
   type GimbalCanvasController,
 } from './gimbalCanvas';
+import type { Pt } from '../input/handLogic';
 
 export interface CanvasInputsCallbacks {
   keep?: () => void;
@@ -22,6 +23,9 @@ export interface CanvasInputsCallbacks {
   pointTarget?: (box: Box) => void;
   scanFrame?: (i: number) => void;
   status?: (text: string) => void;
+  /** Every hand-tracking frame (raw landmarks) — e.g. the always-on
+   *  custom-gesture matcher. Fires alongside the gimbal follow below. */
+  frame?: (hands: readonly (readonly Pt[])[], now: number) => void;
 }
 
 export type MountHandsFn = (
@@ -63,6 +67,9 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
       on.palm?.();
     } else if (ev.type === 'point') {
       void gimbal.onPoint(ev.point).catch(() => {});
+    } else if (ev.type === 'frame') {
+      void gimbal.onHandsFrame(ev.hands.map((points) => ({ points })), ev.now).catch(() => {});
+      on.frame?.(ev.hands, ev.now);
     }
   }
 

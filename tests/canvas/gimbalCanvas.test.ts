@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   createGimbalCanvasController,
+  followWhileBuilding,
   parseGimbalSpeech,
+  type GimbalCanvasController,
   type GimbalCanvasOptions,
 } from '../../src/canvas/gimbalCanvas';
 import type { GimbalPlugin } from '../../src/devices/native';
@@ -159,6 +161,54 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(aimCalls[0].yaw).toBeCloseTo(-rad60, 2);
       expect(aimCalls[2].yaw).toBeCloseTo(0, 2);
       expect(aimCalls[4].yaw).toBeCloseTo(rad60, 2);
+    });
+  });
+
+  describe('followWhileBuilding (gimbal follows the user while a board is built)', () => {
+    function fakeController(mode: string, overrides: Partial<GimbalCanvasController> = {}): GimbalCanvasController {
+      return {
+        mode: vi.fn(() => mode as never),
+        setMode: vi.fn(async () => ({ ok: true })),
+        onPoint: vi.fn(async () => ({ ok: true })),
+        onHandsFrame: vi.fn(async () => ({ ok: true })),
+        scan: vi.fn(async () => ({ ok: true })),
+        release: vi.fn(async () => ({ ok: true })),
+        ...overrides,
+      };
+    }
+
+    it('switches to hands mode for the duration of the build, then restores the prior mode', async () => {
+      const controller = fakeController('hold');
+      const calls: string[] = [];
+
+      const result = await followWhileBuilding(controller, async () => {
+        calls.push('building');
+        return 'plan';
+      });
+
+      expect(result).toBe('plan');
+      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'hands');
+      expect(controller.setMode).toHaveBeenNthCalledWith(2, 'hold');
+      expect(calls).toEqual(['building']);
+    });
+
+    it('still restores the prior mode when the build throws', async () => {
+      const controller = fakeController('point');
+
+      await expect(followWhileBuilding(controller, async () => { throw new Error('model error'); }))
+        .rejects.toThrow('model error');
+
+      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'hands');
+      expect(controller.setMode).toHaveBeenNthCalledWith(2, 'point');
+    });
+
+    it('never throws even when the gimbal is unavailable (web soft-fail)', async () => {
+      const controller = fakeController('hold', {
+        setMode: vi.fn(async () => ({ ok: false, why: 'The gimbal works in the iPhone app' })),
+      });
+
+      const result = await followWhileBuilding(controller, async () => 42);
+      expect(result).toBe(42);
     });
   });
 });

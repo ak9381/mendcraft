@@ -78,6 +78,29 @@ describe('canvasInputs', () => {
     expect(fakeGimbal.onPoint).toHaveBeenCalledWith({ x: 0.35, y: 0.65 });
   });
 
+  it('feeds frame events to gimbal onHandsFrame and the onFrame callback', async () => {
+    let capturedHandler: ((ev: CanvasHandEvent) => void) | null = null;
+    const fakeMount = vi.fn((_root: HTMLElement, onEvent: (ev: CanvasHandEvent) => void) => {
+      capturedHandler = onEvent;
+      return Object.assign(vi.fn(), { stop: vi.fn() }) as unknown as CanvasHandsStop;
+    });
+
+    const fakeGimbal = createFakeGimbal();
+    const onFrame = vi.fn();
+    const inputs = createCanvasInputs({
+      hands: fakeMount,
+      gimbal: fakeGimbal,
+      on: { frame: onFrame },
+    });
+
+    await inputs.start({} as HTMLElement);
+    const hands = [[{ x: 0.5, y: 0.5 }]];
+    capturedHandler!({ type: 'frame', hands, now: 1234 });
+
+    expect(fakeGimbal.onHandsFrame).toHaveBeenCalledWith([{ points: hands[0] }], 1234);
+    expect(onFrame).toHaveBeenCalledWith(hands, 1234);
+  });
+
   it('handles speech commands for gimbal and returns true for valid phrases', async () => {
     const onStatus = vi.fn();
     const fakeGimbal = createFakeGimbal({

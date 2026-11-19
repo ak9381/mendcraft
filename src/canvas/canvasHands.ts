@@ -12,7 +12,11 @@ export type CanvasHandEvent =
   | { type: 'keep' }
   | { type: 'drop' }
   | { type: 'point'; point: { x: number; y: number } }
-  | { type: 'palm' };
+  | { type: 'palm' }
+  /** Every frame that has at least one hand — raw landmarks, for continuous
+   *  consumers (gimbal follow, the always-on custom-gesture matcher) that
+   *  need more than the discrete keep/drop/point/palm events above. */
+  | { type: 'frame'; hands: readonly (readonly Pt[])[]; now: number };
 
 export interface CanvasHandsAdapter {
   update(frame: { hands?: Array<{ points?: readonly Pt[] } | readonly Pt[]>; now: number }): void;
@@ -88,6 +92,7 @@ export function createCanvasHandsAdapter(
     if (!handList.length) return;
 
     const rawHands = handList.map(extractPoints);
+    onEvent({ type: 'frame', hands: rawHands, now });
     const motionEvents = motion.update({ hands: rawHands as Pt[][], now });
     for (const mev of motionEvents) {
       if (mev.id === 'palm-swipe-left' || mev.id === 'palm-swipe-right') {
