@@ -14,6 +14,8 @@ import {
   pickCadTool,
   pickRecipeHybrid,
   prepareHybrid,
+  proposeMaterials,
+  refineSearchQuery,
   resolveDeixis,
   warmOnDevice,
   setModelsForTest,
@@ -684,6 +686,24 @@ describe('cloud redaction (the request matches the ledger receipt)', () => {
     const cloud = spy('{"tool":"zoom","args":{"to":"fit"},"confidence":1}', 'in_cloud');
     setModelsForTest({ enabled: true, cadTool: nano.m, cadToolCloud: cloud.m });
     await pickCadTool(MOTHER, 'plan {}', { allowCloud: true });
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('proposeMaterials redacts the request before it reaches Gemini (ONLY_IN_CLOUD, no prior redaction)', async () => {
+    const cloud = spy('{"lighting":{"sunIntensity":1}}', 'in_cloud');
+    setModelsForTest({ enabled: true, copilotMaterials: cloud.m });
+    await proposeMaterials('warm materials for my mother Lakshmi\'s room', 'plan {}');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('refineSearchQuery retries a failed on-device call with a REDACTED cloud prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"query":"bedroom tile"}', 'in_cloud');
+    setModelsForTest({ enabled: true, intent: nano.m, intentCloud: cloud.m });
+    await refineSearchQuery("tile like my mother Lakshmi's kitchen");
     expect(nano.prompts[0]).toContain('Lakshmi');
     expect(cloud.prompts[0]).toContain('[name]');
     expect(cloud.prompts[0]).not.toContain('Lakshmi');

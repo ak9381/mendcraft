@@ -730,12 +730,15 @@ async function initFirebase(): Promise<Models | null> {
     const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
     const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
 
+    // ONLY_ON_DEVICE, like handAdapt/condense below: compileCommand() sends the
+    // raw utterance here, and PREFER_ON_DEVICE's cloud fallback can fire
+    // silently (no throw) on the SDK's own call — which would leak that raw
+    // text with no redaction, since the explicit cloud retry (intentCloud,
+    // via callWithCloudRetry) only runs on a thrown error. ONLY_ON_DEVICE
+    // removes the silent path entirely; the explicit retry still carries the
+    // redacted prompt.
     const intent = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
-      },
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
         promptOptions: { responseConstraint: modeAi.opConstraint },
@@ -762,12 +765,13 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // ONLY_ON_DEVICE for the same reason as `intent` above — fuseIntent()'s
+    // non-forceCloud path sends the raw utterance here by design (Nano never
+    // leaves the device), which PREFER_ON_DEVICE's silent cloud fallback would
+    // defeat. The explicit forceCloud/retry paths keep using fusionCloud with
+    // the redacted prompt.
     const fusion = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
-      },
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
         promptOptions: { responseConstraint: fusionConstraint },
@@ -777,12 +781,12 @@ async function initFirebase(): Promise<Models | null> {
     // Point-and-say: the one multimodal model — a still crop + pointer resolve
     // "this". Image payloads ride the same Firebase AI Logic call, nothing else.
     const deixisSchema = toFirebaseSchema(DEIXIS_CONSTRAINT, Schema);
+    // ONLY_ON_DEVICE, same reasoning as `intent`/`fusion` — resolveDeixis()
+    // sends the raw utterance AND the camera crop image here; a silent
+    // PREFER_ON_DEVICE cloud fallback would leak both. deixisCloud below
+    // still serves the explicit retry-on-throw path with redacted parts.
     const deixis = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: deixisSchema },
-      },
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: DEIXIS_CREATE_OPTIONS,
         promptOptions: { responseConstraint: DEIXIS_CONSTRAINT },
@@ -812,12 +816,9 @@ async function initFirebase(): Promise<Models | null> {
     });
     // Nano with non-English input (en/es/ja). Same schema as `fusion`; the
     // caller only routes here after checkLanguageAvailability() said yes.
+    // ONLY_ON_DEVICE, same reasoning as `fusion` above.
     const fusionLang = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
-      },
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_LANG_CREATE_OPTIONS,
         promptOptions: { responseConstraint: fusionConstraint },
@@ -943,9 +944,11 @@ async function initFirebase(): Promise<Models | null> {
     // CAD copilot. Nano picks a typed tool on the device; the cloud twin only
     // runs if the on-device call throws. Hard questions, email drafts and 3D
     // materials are cloud-only text/JSON models (no image models: no billing).
+    // ONLY_ON_DEVICE, same reasoning as `intent`/`fusion`/`deixis` above —
+    // pickCadTool() sends the raw utterance here; cadToolCloud below still
+    // serves the explicit retry-on-throw path with a redacted prompt.
     const cadTool = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: { model: cloudModel, generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(CAD_TOOL_CONSTRAINT, Schema) } },
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: { createOptions: ON_DEVICE_CREATE_OPTIONS, promptOptions: { responseConstraint: CAD_TOOL_CONSTRAINT } },
     });
     const jsonGen = (constraint: Record<string, unknown>) => ({
@@ -1953,6 +1956,8 @@ export async function refineSearchQuery(
       models.intentCloud ?? null,
       refinePrompt(request),
       'refine-search',
+      ON_DEVICE_TIMEOUT_MS,
+      refinePrompt(protectText(request).text),
     );
     const query = response ? parseRefinedQuery(response.text()) : null;
     if (!query) return null;
@@ -2121,10 +2126,11 @@ export async function proposeMaterials(
   const models = await ensureModels();
   if (!models?.copilotMaterials) return null;
   try {
+    const sent = protectText(request).text;
     const got = await requestHedgedJson(
       models.copilotMaterials,
       models.copilotMaterialsHedge,
-      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${request}"\nRooms: ${summary.slice(0, 600)}`),
+      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${sent}"\nRooms: ${summary.slice(0, 600)}`),
       cloudBudgetMs('long'),
       'materials',
       (raw) => coerceMaterialPlan(raw, presetFor(request)),
