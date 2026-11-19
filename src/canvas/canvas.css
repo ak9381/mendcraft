@@ -29,8 +29,6 @@
 .mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
 .mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; }
 .mc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-.mc-prop-host { position: absolute; z-index: 5; right: 20px; bottom: 20px; width: min(460px, calc(100% - 40px)); }
-.mc-prop-host .mc-proposal { position: static; margin: 0; }
 .mc-ghost { position: absolute; inset: 0; padding: 20px; background: var(--panel); border-radius: 0 0 18px 18px; z-index: 4; display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .mc-ghost-title { margin: 0; font-size: 28px; font-weight: 650; color: var(--accent); opacity: 0.85; }
 .mc-ghost-tile { border: 2px dashed var(--accent); border-radius: 16px; min-height: 120px; padding: 18px; font-size: 22px;
@@ -44,19 +42,39 @@
   border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
   display: flex; flex-direction: column; min-height: 0; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
-/* Keep line + proposal stay on screen; the prompt/reply/history scroll above. */
+/* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
 .mc-ai-pending { flex: 0 0 auto; background: var(--panel); border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
-.mc-ai-pending:not(:has(.mc-proposal)):has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
+.mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
 .mc-ai[data-engine=gemini] { border-color: var(--accent); }
 .mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
-.mc-ai-said { font-size: 18px; color: var(--text); margin: 0 0 6px; }
-.mc-ai-route, .mc-ai-sent, .mc-ai-empty, .mc-ai-state, .mc-ai-ledger, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
-.mc-ai-ledger, .mc-ai-ledger-total { font-size: 13px; }
+.mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
+.mc-ai-ledger-total { font-size: 13px; }
 .mc-ai-state { color: var(--accent-2); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
   border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
 .mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
+
+/* Two live model panels: Nano (on device) and Gemini (cloud), side by side. */
+.mc-model-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+.mc-model-panel { min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
+.mc-model-h { margin: 0 0 6px; font-size: 14px; color: var(--text-dim); }
+.mc-model-status { margin: 4px 0; font-size: 13px; color: var(--accent-2); }
+.mc-model-queue { margin: 4px 0; font-size: 13px; color: var(--accent); }
+.mc-model-sent, .mc-model-ledger { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
+.mc-model-panel pre { max-height: 140px; font-size: 12px; }
+.mc-handoff-track { grid-column: 1 / -1; min-height: 1px; display: flex; flex-direction: column; gap: 6px; }
+.mc-handoff-card { margin: 0; padding: 6px 10px; border-radius: 999px; background: var(--accent-2); color: #0d0d0c;
+  font-size: 12px; font-weight: 600; text-align: center; }
+.mc-handoff-card.is-traveling { animation: mc-handoff-slide 1.1s ease-out; }
+@keyframes mc-handoff-slide { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .mc-handoff-card.is-traveling { animation: none; } }
+@media (max-width: 760px) { .mc-model-panels { grid-template-columns: 1fr; } }
+
+/* Data that stayed on this device: kept-local names next to what the cloud saw. */
+.mc-stayed-local { margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
+.mc-stayed-local ul { margin: 4px 0; padding-left: 20px; font-size: 13px; color: var(--text); }
+.mc-stayed-local-bytes, .mc-stayed-local-route { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
 .mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
@@ -79,7 +97,6 @@
 .mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
 .mc-dock-surface { display: grid; gap: 12px; }
-.mc-ai-lang { margin: 12px 0; }
 .mc-btn[aria-pressed=true] { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
 .mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
 .mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
@@ -208,19 +225,14 @@
   .mc-canvas-status { font-size: 15px; }
   .mc-ai { left: 8px; right: 8px; width: auto; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
-  /* Compact the in-panel proposal so Keep/Drop stay on screen. */
-  .mc-ai-pending .mc-proposal { padding: 10px 12px; }
-  .mc-ai-pending .mc-proposal-title { font-size: 22px; }
-  .mc-ai-pending .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
-  .mc-ai-pending .mc-proposal-route,
-  .mc-ai-pending .mc-proposal-sent { display: none; }
-  /* The Proposal can be taller than the phone panel: let it scroll and keep
-     Keep / Drop pinned at the bottom so they're always reachable (touch or hand). */
-  .mc-ai-pending { flex: 0 1 auto; min-height: 0; overflow: auto; }
-  .mc-ai-pending .mc-proposal-actions { margin-top: 8px; position: sticky; bottom: 0; z-index: 1;
-    background: var(--panel); padding: 8px 0 2px; box-shadow: 0 -12px 12px -8px var(--panel); }
-  .mc-ai-pending .mc-proposal-keep,
-  .mc-ai-pending .mc-proposal-drop { min-height: 52px; font-size: 18px; }
+  .mc-model-panels { grid-template-columns: 1fr; }
+  /* Compact the proposal inside the full-screen review so Approve/Reject stay on screen. */
+  .mc-review-card-host .mc-proposal { padding: 10px 12px; }
+  .mc-review-card-host .mc-proposal-title { font-size: 22px; }
+  .mc-review-card-host .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
+  .mc-review-actions { position: sticky; bottom: 0; z-index: 1; background: var(--panel); padding: 8px 0 2px;
+    box-shadow: 0 -12px 12px -8px var(--panel); }
+  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 52px; font-size: 18px; }
 }
 @media (max-width: 420px) {
   .mc-ai { padding: 10px 12px; }
@@ -349,14 +361,15 @@
 .hand-hover { scale: 1.03; }
 @media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .hand-hover { scale: none; } }
 
-/* Phone Proposal sheet (keep/drop above the thumb bar). */
-.mc-phone-prop { display: none; }
-@media (max-width: 600px) {
-  .mc-phone-prop:not([hidden]) { display: block; position: absolute; z-index: 30; left: 8px; right: 8px;
-    bottom: calc(var(--mc-bar-h, 132px) - 16px); max-height: 58vh; overflow: auto; border-radius: 18px;
-    background: var(--panel); border: 1px solid var(--border); box-shadow: 0 -8px 28px rgb(0 0 0 / 0.5); }
-  .mc-phone-prop .mc-proposal { padding: 12px 14px; }
-  .mc-phone-prop .mc-proposal-title { font-size: 22px; }
-  .mc-phone-prop .mc-proposal-actions { position: sticky; bottom: 0; background: var(--panel); padding: 8px 0 4px; }
-  .mc-phone-prop .mc-proposal-keep, .mc-phone-prop .mc-proposal-drop { min-height: 52px; font-size: 18px; }
-}
+/* Full-screen review: every Proposal that needs a decision opens here —
+   desktop and phone alike — instead of a cramped inline card or sheet. */
+.mc-review-dialog { position: fixed; z-index: 50; inset: 0; background: rgb(10 10 9 / 0.86);
+  display: flex; align-items: center; justify-content: center; padding: 16px; }
+.mc-review-body { width: min(720px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 20px 22px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.6); }
+.mc-review-title { margin: 0 0 12px; font-size: 24px; }
+.mc-review-extra:empty { display: none; }
+.mc-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 48px; font-size: 16px; }
+.mc-review-approve { background: var(--text); color: #0d0d0c; border-color: var(--text); }

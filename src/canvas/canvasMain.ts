@@ -5,14 +5,22 @@ import { mountCanvas } from './canvasApp';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano } from '../ai/nanoStatus';
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
-import { bindDirectory, createDirectory, createIndexedDbDirectoryStore } from '../privacy/directory';
+import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 
 const params = new URLSearchParams(location.search);
 if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
 
 // People directory: tokens in cloud prompts, real names filled back on device.
-bindDirectory(createDirectory(createIndexedDbDirectoryStore()));
+// ?sim=1: seed one example person (Sharma / client / [Client A]) in a fresh,
+// in-memory directory so "floor plan for Mrs Sharma's flat" has something to redact.
+const directoryStore = params.has('sim')
+  ? createMemoryDirectoryStore([{
+      id: 'sim-sharma', name: 'Sharma', role: 'client',
+      token: nextToken('client', []), notes: [], createdAt: Date.now(),
+    }])
+  : createIndexedDbDirectoryStore();
+bindDirectory(createDirectory(directoryStore));
 
 // Honest engine selection: real Nano needs Chrome's Prompt API (and not a phone);
 // real Gemini needs Firebase AI Logic. ?sim=1 forces the scripted box engines.

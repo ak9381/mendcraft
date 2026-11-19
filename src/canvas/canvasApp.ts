@@ -38,8 +38,10 @@ import { activePeople, protectText } from '../privacy/directory';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
-import { mountMicFab } from './micFab';
+import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
+import { MODEL_PANELS_HTML, buildStayedLocalStrip, handoffReason, mountModelPanels } from './modelPanels';
+import { mountReviewDialog } from './reviewDialog';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -143,35 +145,37 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <div class="mc-ai-body">
         <h2 class="mc-ai-h">AI activity</h2>
         <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams.</p>
-        <div class="mc-ai-turn" hidden>
-          <p class="mc-ai-said"></p>
-          <p class="mc-ai-route"></p>
-          <details class="mc-ai-prompt" open><summary>Prompt going in</summary><pre></pre></details>
-          <p class="mc-ai-sent"></p>
-          <p class="mc-ai-ledger"></p>
-          <details class="mc-ai-reply" open><summary>Reply, streaming</summary><pre aria-live="off"></pre></details>
-        </div>
+        ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
       <div class="mc-ai-pending">
         <p class="mc-ai-state" aria-live="polite"></p>
-        <div class="mc-ai-lang"></div>
       </div>
     </aside>`;
-  const phoneProp = document.createElement('section');
-  phoneProp.className = 'mc-phone-prop'; phoneProp.setAttribute('aria-label', 'Proposed change'); phoneProp.hidden = true;
-  root.append(phoneProp);
+  // Every Proposal that needs a decision opens in the full-screen review
+  // dialog (below) — desktop and phone alike, replacing any per-frame or
+  // phone-sheet host this canvas used to need.
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
+  const panels = mountModelPanels(aiPanel);
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
   const history = createCanvasHistory();
   const ledger = createCanvasLedger();
   const say = (t: string) => { statusEl.textContent = t; };
+  // The floating mic is mounted later; "ask for something else" starts it.
+  let micFabRef: MicFab | null = null;
+  const reviewDialog = mountReviewDialog(root, {
+    onAskElse: () => {
+      if (voice?.supported) micFabRef?.toggle();
+      else root.querySelector<HTMLInputElement>('#mc-say-in')?.focus();
+      say('What would you like instead?');
+    },
+  });
 
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
@@ -334,7 +338,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.className = 'mc-frame';
       el.dataset.frame = f.id;
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
-        <div class="mc-frame-body"><div class="mc-prop-host" hidden></div><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
+        <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
       if (surfaces[f.id]) queueMicrotask(() => renderSurface(f.id));
     }
@@ -474,7 +478,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // The panel opens for each AI turn and tucks itself away ~2 s after the
   // last keep / drop, so the board gets its full width back (unless she opened it).
   let aiManual = false; let aiHideTimer = 0;
-  const autoHideAi = () => { clearTimeout(aiHideTimer); aiHideTimer = window.setTimeout(() => { if (!aiManual && !pending && !aiPanel.querySelector('.mc-ai-lang .mc-proposal')) showAi(false); }, 2000); };
+  const autoHideAi = () => { clearTimeout(aiHideTimer); aiHideTimer = window.setTimeout(() => { if (!aiManual && !pending && !reviewDialog.isOpen()) showAi(false); }, 2000); };
   function showAi(on = true): void {
     clearTimeout(aiHideTimer);
     const changed = aiPanel.hidden === on;
@@ -482,21 +486,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
     if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusOnInsets(f.rect, vp(), insets())); }
   }
-  function aiSent(utterance: string, s: SentInfo): void {
+  function aiSent(_utterance: string, s: SentInfo): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
-    aiPanel.querySelector<HTMLElement>('.mc-ai-turn')!.hidden = false;
+    panels.show();
     aiPanel.dataset.engine = s.engine;
-    aiPanel.querySelector('.mc-ai-said')!.textContent = `You said: “${utterance}”`;
-    aiPanel.querySelector('.mc-ai-route')!.textContent = s.routeLine;
-    aiPanel.querySelector('.mc-ai-prompt pre')!.textContent = s.prompt;
-    aiPanel.querySelector('.mc-ai-sent')!.textContent = s.sent ? `What was sent: ${s.sent}` : 'What was sent: nothing. Stays on this device.';
+    const p = panels.forEngine(s.engine);
+    p.setRoute(s.routeLine);
+    p.setPrompt(s.prompt);
+    p.setSent(s.sent);
     // Byte ledger: every AI turn records what actually left the device.
-    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? protectText(s.prompt).text : '' });
-    aiPanel.querySelector('.mc-ai-ledger')!.textContent = formatLedgerLine({ bytes: entry.bytes, engine: s.engine });
+    const protect = s.sent ? protectText(s.prompt) : null;
+    const entry = ledger.record({ engine: s.engine, sentText: protect ? protect.text : '' });
+    p.setLedger(formatLedgerLine({ bytes: entry.bytes, engine: s.engine }));
     ledgerTotalRender();
-    aiPanel.querySelector('.mc-ai-reply pre')!.textContent = '';
-    aiPanel.querySelector('.mc-ai-state')!.textContent = s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…';
+    p.setReply('');
+    p.setStatus(s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…');
+    panels.showStayedLocalStrip(buildStayedLocalStrip({
+      used: protect?.used ?? [],
+      people: activePeople(),
+      bytesSent: entry.bytes,
+      engine: s.engine,
+      routeLine: s.routeLine,
+    }));
   }
   function ghost(frameId: string, g: PartialPlan | null): void {
     const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-ghost`);
@@ -550,7 +562,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let sentInfo: SentInfo | null = null;
     const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s); },
-      onText: (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; },
+      onText: (t) => { panels.forEngine(engineId).setReply(t); },
       onGhost: (g) => ghost(frameId, g),
       onError: (why) => { aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
     }));
@@ -573,9 +585,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         history.push({ frameId, before, after: plan, by: ranId, summary });
         renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
       });
-      const host = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-prop-host`)!;
       const finish = (kept: boolean) => {
-        host.hidden = true; host.innerHTML = ''; card.remove(); phoneProp.hidden = true; ghost(frameId, null); pending = null;
+        reviewDialog.close(); ghost(frameId, null); pending = null;
         aiPanel.querySelector('.mc-ai-state')!.textContent = kept ? `Kept. Say “undo” to put it back.` : 'Dropped. Nothing changed.';
         autoHideAi();
         say(kept ? `Kept: ${summary}. Say “undo” to put it back.` : 'Dropped. Nothing changed.');
@@ -586,13 +597,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         catalog: { helper: ranId === 'nano' ? 'Quick' : 'Deep', byLine: ranId === 'nano' ? 'Quick · on this device' : 'Deep · online',
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
       }, { onKeep: () => { prop.accept(); finish(true); }, onDrop: () => { prop.reject(); finish(false); } });
-      host.innerHTML = '';
-      // Phones: the board is wider than the screen, so the Proposal comes up
-      // as a bottom sheet above the thumb bar instead (reachable by touch and hand).
-      if (isPhone()) { phoneProp.replaceChildren(card); phoneProp.hidden = false; showAi(false); }
-      else { host.append(card); host.hidden = false; }
       tagCardI18n(card);
       pending = { frameId, prop, card };
+      // Every decision — desktop or phone — opens the same full-screen review,
+      // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
+      reviewDialog.open({ title: summary, card });
       say(`${summary}. Pinch or say “keep”; brush or say “drop”.`);
     });
   }
@@ -602,11 +611,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
     if (!kept) return;
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
-      aiPanel.querySelector('.mc-ai-route')!.textContent = ROUTE_LINES.offline;
+      panels.forEngine('nano').setRoute(ROUTE_LINES.offline);
       aiPanel.querySelector('.mc-ai-state')!.textContent = OFFLINE_QUICK_ONLY;
       say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
       return;
     }
+    panels.showHandoff(handoffReason('nano', 'gemini', 'group the lights and add a room plan'), { reducedMotion: reduced });
     await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
   }
   function floorPlan(frameId: string): void {
@@ -625,9 +635,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
     turn.sent.sim = engine.sim;
     aiSent(utterance, turn.sent);
-    if (o.photoNote) aiPanel.querySelector('.mc-ai-sent')!.textContent += ' — no camera or gimbal here, so the photo is simulated.';
+    if (o.photoNote) panels.forEngine(turn.sent.engine).appendSentNote(' — no camera or gimbal here, so the photo is simulated.');
     const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
-      aiPanel.querySelector('.mc-ai-reply pre')!.textContent = chunk;
+      panels.forEngine(turn.sent.engine).setReply(chunk);
       ghost(frameId, parsePartialPlan(chunk));
     });
     let full = '';
@@ -748,7 +758,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
   }
   // Keep / drop act on the waiting board Proposal, else the waiting language Proposal.
-  const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? aiPanel.querySelector(`.mc-ai-lang ${cls}`)) as HTMLButtonElement | null;
+  const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? reviewDialog.currentCard()?.querySelector(cls)) as HTMLButtonElement | null;
   function keep(): void { const b = waitingBtn('.mc-proposal-keep'); if (b) b.click(); else say('Nothing is waiting.'); }
   function drop(): void { const b = waitingBtn('.mc-proposal-drop'); if (b) b.click(); else say('Nothing is waiting.'); }
   function undo(): void {
@@ -794,14 +804,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ].join('\n');
     aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim });
     let full = '';
-    try { full = await engine.stream(prompt, (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; }); }
+    try { full = await engine.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
     catch (e) {
       if (!engine.fallback) {
         const why = `Kannada draft didn’t arrive: ${e instanceof Error ? e.message : String(e)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
       }
-      aiPanel.querySelector('.mc-ai-route')!.textContent = 'SIM · the model didn’t answer, so a prepared Kannada pack is waiting';
-      try { full = await engine.fallback.stream(prompt, (t) => { aiPanel.querySelector('.mc-ai-reply pre')!.textContent = t; }); }
+      panels.forEngine('gemini').setRoute('SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
+      try { full = await engine.fallback.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
       catch (e2) {
         const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
@@ -813,16 +823,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!coerced.ok) { const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
     const next = coerced.value;
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
-    aiPanel.querySelectorAll('.mc-ai-prompt, .mc-ai-reply').forEach((d) => d.removeAttribute('open'));
-    const host = aiPanel.querySelector<HTMLElement>('.mc-ai-lang')!;
     const card = renderProposalCard(document, {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
       catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
     }, {
-      onKeep: () => { host.innerHTML = ''; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
-      onDrop: () => { host.innerHTML = ''; say('Kept English.'); autoHideAi(); },
+      onKeep: () => { reviewDialog.close(); applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
+      onDrop: () => { reviewDialog.close(); say('Kept English.'); autoHideAi(); },
     });
-    host.innerHTML = ''; host.append(card);
+    reviewDialog.open({ title: 'Add Kannada', card });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
@@ -904,6 +912,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (paletteCmd === 'close') { closeTools(); return true; }
     if (/^\s*teach a gesture\s*$/i.test(text)) { teachPanel.open(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { teachPanel.openList(); return true; }
+    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { aiManual = true; showAi(true); return true; }
+    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiManual = false; showAi(false); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
     // Gimbal phrases next: follow my hands / hold still / point / scan the room.
@@ -1010,7 +1020,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const onWindowPointerUp = () => { if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0); };
   const onWindowKeydown = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
-    if (e.key === 'Escape' && focusId) { e.preventDefault(); void overview(); }
+    if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
+    if (e.key !== 'Escape') return;
+    if (focusId) { e.preventDefault(); void overview(); return; }
+    if (!aiPanel.hidden) { e.preventDefault(); aiManual = false; showAi(false); }
   };
   const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } };
   const onWindowOnline = () => setOnline(true);
@@ -1046,6 +1059,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
   const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say) : null;
+  micFabRef = micFab;
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
 
