@@ -802,7 +802,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function addKannada(): void {
     if (pack?.lang === 'kn') { say('Kannada is already on. Say “undo” for English.'); return; }
-    if (!net.isOnline()) { net.queueLater('add kannada'); say(`${LATER_LIST_PROMISE}.`); return; }
+    if (!net.isOnline()) {
+      net.queueLater('add kannada');
+      showAi(true); panels.show();
+      panels.forEngine('nano').setQueued(net.laterCount());
+      say(`${LATER_LIST_PROMISE}.`);
+      return;
+    }
     void languageTurn('add kannada');
   }
   async function languageTurn(utterance: string): Promise<void> {
@@ -813,17 +819,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       `UI string keys: ${Object.keys(EN_PACK.strings).join(', ')}.`,
       'Kannada script only, each string ≤80 chars, no markup.',
     ].join('\n');
+    panels.showHandoff(handoffReason('nano', 'gemini', 'plan the Kannada pack — too complex for on-device'), { reducedMotion: reduced });
     aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim });
     let full = '';
     try { full = await engine.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
     catch (e) {
       if (!engine.fallback) {
+        swarm.settle();
         const why = `Kannada draft didn’t arrive: ${e instanceof Error ? e.message : String(e)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
       }
       panels.forEngine('gemini').setRoute('SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
       try { full = await engine.fallback.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
       catch (e2) {
+        swarm.settle();
         const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
       }
@@ -831,8 +840,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let raw: unknown = null;
     try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
     const coerced = coerceLanguagePack(raw);
-    if (!coerced.ok) { const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
+    if (!coerced.ok) { swarm.settle(); const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
     const next = coerced.value;
+    swarm.settle();
+    const swapCount = Object.keys(next.strings).length;
+    panels.showHandoff(handoffReason('gemini', 'nano', `apply ${swapCount} label swaps locally`), { reducedMotion: reduced });
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
     const card = renderProposalCard(document, {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
@@ -911,6 +923,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
     if (on) {
       const later = net.drainLater();
+      panels.forEngine('nano').setQueued(net.laterCount());
       if (later.length) { say(`Back online. Running ${later.length} saved request${later.length > 1 ? 's' : ''}.`); later.forEach((u) => { if (/kannada|ಕನ್ನಡ/i.test(u)) void languageTurn(u); }); }
       else if (announce) say('Back online.');
     } else if (announce) say(`${OFFLINE_QUICK_ONLY}.`);
@@ -966,7 +979,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return true;
     }
 
-    if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) {
+    if (/\bconnect (everything|all|the room|this room|my room|devices?)\b/i.test(text)) {
       const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
       if (!focusId) { sync(); void focus(target); }
       void connectRoom(target, text); return true;

@@ -15,11 +15,13 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { runArc } from './hand-arc.mjs';
 
 const require = createRequire(import.meta.url);
 const puppeteer = require('puppeteer-core');
 const appRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = process.env.OUT ?? '/workspace/hackathon/firebase-hybrid/screens/sim-main/hand-reach';
+const ARC_OUT = process.env.ARC_OUT ?? '/workspace/hackathon/firebase-hybrid/screens/sim-main/arc';
 const PORT = 5193;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync(OUT, { recursive: true });
@@ -176,6 +178,31 @@ try {
   }
 } finally {
   await browser.close();
+}
+
+// FULL ARC, zero mouse: the whole demo story (dashboard swarm, floor plan,
+// Kannada, offline/online, teach a gesture) driven by the simulated hand
+// plus the say box standing in for voice. Runs once, on its own fresh page,
+// after the per-control audit above. Resilient: a missing control is a
+// recorded miss, not a hang.
+let arc = { misses: [{ step: 'arc', why: 'did not run' }], mouseViolations: 0 };
+try {
+  const arcBrowser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-fake-ui-for-media-stream'] });
+  try {
+    const page = await arcBrowser.newPage();
+    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+    await page.goto(`${BASE}/canvas.html?fresh=1&sim=1`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
+    await page.waitForFunction(() => window.__mcHand && window.__mcHandLib, { timeout: 15000 });
+    await sleep(800);
+    arc = await runArc(page, ARC_OUT);
+    await page.close();
+  } finally {
+    await arcBrowser.close();
+  }
+} catch (e) {
+  arc = { misses: [{ step: 'arc', why: String(e) }], mouseViolations: 0 };
+} finally {
   if (vite) { try { process.kill(-vite.pid); } catch { /* gone */ } }
 }
 
@@ -190,7 +217,8 @@ const report = {
   snapFromNear: all.filter((r) => r.snapsFromNear).length,
   smallButSnaps,
   realHandActivations: real,
+  arc: { misses: arc.misses, mouseViolations: arc.mouseViolations },
 };
 writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ...report, all }, null, 2));
 console.log(JSON.stringify(report, null, 2));
-if (fails.length || real.some((r) => !r.ok)) process.exitCode = 1;
+if (fails.length || real.some((r) => !r.ok) || arc.mouseViolations > 0) process.exitCode = 1;
