@@ -430,12 +430,16 @@ export function fitsRoomMessageRules(raw: unknown): boolean {
 
 // ---- pairing state machine --------------------------------------------------
 
-export type PairState = 'idle' | 'waiting' | 'paired' | 'gone';
-export type PairEvent = 'create' | 'peer-hello' | 'peer-bye' | 'close';
+export type PairState = 'idle' | 'waiting' | 'paired' | 'gone' | 'disconnected';
+export type PairEvent = 'create' | 'peer-hello' | 'peer-bye' | 'close' | 'listen-error';
 
 /** Advance the pairing state; unknown transitions keep the current state. */
 export function advancePair(state: PairState, event: PairEvent): PairState {
   if (event === 'close') return 'idle';
+  // A dropped/denied listener (rules change, transport failure) can hit from
+  // any state except idle — surface it explicitly instead of freezing on the
+  // last-known state, which looks connected when it is not.
+  if (event === 'listen-error') return state === 'idle' ? state : 'disconnected';
   switch (state) {
     case 'idle':
       return event === 'create' ? 'waiting' : state;
@@ -445,6 +449,9 @@ export function advancePair(state: PairState, event: PairEvent): PairState {
       return event === 'peer-bye' ? 'gone' : state;
     case 'gone':
       // A peer may rejoin the same room (e.g. the phone reloaded).
+      return event === 'peer-hello' ? 'paired' : state;
+    case 'disconnected':
+      // The listener can resubscribe and see the peer again.
       return event === 'peer-hello' ? 'paired' : state;
   }
 }
@@ -460,5 +467,7 @@ export function pairStateLabel(state: PairState, role: RelayRole): string {
       return role === 'host' ? 'Phone remote connected.' : 'Paired with the laptop.';
     case 'gone':
       return role === 'host' ? 'Phone left the room.' : 'Laptop left the room.';
+    case 'disconnected':
+      return 'Connection lost — check your network.';
   }
 }

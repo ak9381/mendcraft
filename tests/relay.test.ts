@@ -194,10 +194,20 @@ describe('pairing state machine', () => {
   });
 
   it('has a status line for every state and role', () => {
-    for (const state of ['idle', 'waiting', 'paired', 'gone'] as const) {
+    for (const state of ['idle', 'waiting', 'paired', 'gone', 'disconnected'] as const) {
       expect(pairStateLabel(state, 'host')).toBeTruthy();
       expect(pairStateLabel(state, 'phone')).toBeTruthy();
     }
+  });
+
+  it('moves to an explicit disconnected state on a listener error, from any non-idle state', () => {
+    expect(advancePair('idle', 'listen-error')).toBe('idle'); // never started listening
+    expect(advancePair('waiting', 'listen-error')).toBe('disconnected');
+    expect(advancePair('paired', 'listen-error')).toBe('disconnected');
+    expect(advancePair('gone', 'listen-error')).toBe('disconnected');
+    // A fresh peer-hello (resubscribe succeeded) recovers it.
+    expect(advancePair('disconnected', 'peer-hello')).toBe('paired');
+    expect(advancePair('disconnected', 'close')).toBe('idle');
   });
 });
 
@@ -301,6 +311,30 @@ describe('host + guest sessions over the fake transport', () => {
 
     await host.close();
     expect(host.state()).toBe('idle');
+  });
+
+  it('moves to disconnected (not a silent freeze) when the transport listener errors', async () => {
+    const base = createFakeTransport();
+    const errorCbs: Array<() => void> = [];
+    const flaky: typeof base = {
+      ...base,
+      subscribe(roomId, onMsg, onError) {
+        if (onError) errorCbs.push(onError);
+        return base.subscribe(roomId, onMsg, onError);
+      },
+    };
+    const host = await createHostSession(flaky, seqRandom());
+    const guest = await createGuestSession(flaky, host.token);
+    await flush();
+    expect(host.state()).toBe('paired');
+
+    // host's listener is the first subscribe() call.
+    expect(errorCbs.length).toBeGreaterThanOrEqual(1);
+    errorCbs[0]!();
+    expect(host.state()).toBe('disconnected');
+
+    await guest.close();
+    await host.close();
   });
 
   it('relays phone music state to the host while paired', async () => {

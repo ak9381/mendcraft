@@ -399,6 +399,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     session.onState((s) => {
       if (s === 'paired') setConn('live', 'cloud');
       else if (s === 'gone') setConn('laptop left', 'rules');
+      else if (s === 'disconnected') setConn('connection lost — check your network', 'rules');
       else setConn('waiting for laptop…', 'rules');
     });
     session.onSnapshot(render);

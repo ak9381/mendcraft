@@ -47,7 +47,7 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
           at: fs.serverTimestamp(),
         });
       },
-      subscribe(roomId, onMsg) {
+      subscribe(roomId, onMsg, onError) {
         return fs.onSnapshot(
           fs.query(fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at')),
           (snap) => {
@@ -58,8 +58,11 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
             }
           },
           () => {
-            // Listen failed (rules/offline). Sessions keep their last state; the
-            // UI surfaces connectivity via the pairing state, not a crash.
+            // Listen failed (rules denial, offline, room deleted). Tell the
+            // caller so the pairing state machine can move to an explicit
+            // 'disconnected' state instead of freezing silently on the last
+            // one — "paired" would otherwise look connected when it isn't.
+            onError?.();
           },
         );
       },

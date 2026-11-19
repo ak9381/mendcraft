@@ -99,10 +99,14 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
       cb(state);
     },
     listen(onPeer: (msg: RelayMessage) => void) {
-      unsubscribe = transport.subscribe(roomId, (msg) => {
-        if (msg.from === role) return; // own echo
-        onPeer(msg);
-      });
+      unsubscribe = transport.subscribe(
+        roomId,
+        (msg) => {
+          if (msg.from === role) return; // own echo
+          onPeer(msg);
+        },
+        () => setState(advancePair(state, 'listen-error')),
+      );
       setState(advancePair(state, 'create'));
     },
     async close() {

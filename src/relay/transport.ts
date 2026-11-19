@@ -10,8 +10,11 @@ export interface RelayTransport {
   /** Append a message to the room's channel. */
   publish(roomId: string, msg: RelayMessage): Promise<void>;
   /** Listen for messages in a room (including ones this client sent — callers
-   *  filter by `from`). Returns an unsubscribe function. */
-  subscribe(roomId: string, onMsg: (msg: RelayMessage) => void): () => void;
+   *  filter by `from`). `onError` fires when the underlying listener drops
+   *  (rules denial, offline) so the caller can surface a real disconnected
+   *  state instead of silently freezing on the last-known one. Returns an
+   *  unsubscribe function. */
+  subscribe(roomId: string, onMsg: (msg: RelayMessage) => void, onError?: () => void): () => void;
   /** Map a typable short code → full room token while the host is waiting. */
   setAlias(code: string, roomId: string): Promise<void>;
   resolveAlias(code: string): Promise<string | null>;

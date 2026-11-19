@@ -645,7 +645,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     open.sheet.setStatus('Opening a Relay room…');
     let pairing: PairingView | null = null;
     const res = await startPhoneJoin({
-      onState: (st) => { if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); },
+      onState: (st) => {
+        if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+        else if (st === 'disconnected') pairing?.setStatus('Connection lost — check your network.');
+      },
     });
     if ('error' in res) {
       if (sheetOpen === open) open.sheet.setStatus('Needs network: the Relay room is not reachable right now.');
