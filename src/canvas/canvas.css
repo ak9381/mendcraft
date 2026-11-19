@@ -1,6 +1,18 @@
-/* Smart canvas shell. Uses the app's dark tokens from style.css and maps
-   them onto A2UI's theme variables so basic-catalog text is not faint. */
+/* Smart canvas shell. Warm-paper palette, scoped to this page only (the rest
+   of the app keeps the dark tokens from style.css) — everything mounted
+   under .mc-canvas (including portaled overlays: review dialog, teach
+   panel, swarm dock mini terminal, phone menu) inherits these via the DOM,
+   since they're all appended inside the .mc-canvas root element. */
 .mc-canvas, #spike {
+  --bg: #F7F5F0;
+  --panel: #FFFFFF;
+  --panel-2: #F1EEE6;
+  --border: #E4E0D8;
+  --text: #2B2B2B;
+  --text-dim: #6E6A63;
+  --accent: #6B8F71;
+  --accent-2: #5A7BA6;
+  --focus: #5A7BA6;
   --a2ui-color-on-background: var(--text);
   --a2ui-color-background: transparent;
   --a2ui-color-primary: var(--accent);
@@ -11,11 +23,11 @@
 }
 .mc-canvas { position: fixed; inset: 0; overflow: hidden; background: var(--bg); }
 .mc-viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
-  background-image: radial-gradient(circle, rgb(242 240 234 / 0.12) 1px, transparent 1.4px); }
+  background-image: radial-gradient(circle, rgb(43 43 43 / 0.08) 1px, transparent 1.4px); }
 .mc-canvas[data-mode=focus] .mc-viewport { cursor: default; }
 .mc-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 .mc-frame { position: absolute; display: flex; flex-direction: column; border-radius: 20px; background: var(--panel);
-  border: 2px solid var(--border); box-shadow: 0 10px 40px rgb(0 0 0 / 0.35); transition: opacity 0.2s ease, border-color 0.2s ease; }
+  border: 2px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); transition: opacity 0.2s ease, border-color 0.2s ease; }
 .mc-frame.focused { border-color: var(--accent); }
 .mc-frame.dim { opacity: 0.35; }
 .mc-canvas[data-mode=overview] .mc-frame { cursor: zoom-in; }
@@ -32,7 +44,7 @@
 .mc-ghost { position: absolute; inset: 0; padding: 20px; background: var(--panel); border-radius: 0 0 18px 18px; z-index: 4; display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .mc-ghost-title { margin: 0; font-size: 28px; font-weight: 650; color: var(--accent); opacity: 0.85; }
 .mc-ghost-tile { border: 2px dashed var(--accent); border-radius: 16px; min-height: 120px; padding: 18px; font-size: 22px;
-  color: var(--text); background: rgb(142 157 255 / 0.08); animation: mc-ghost-in 0.25s ease both; }
+  color: var(--text); background: rgb(107 143 113 / 0.08); animation: mc-ghost-in 0.25s ease both; }
 .mc-ghost-tile.plan { min-height: 220px; }
 .mc-ghost-tile.next { min-height: 60px; opacity: 0.4; animation: mc-ghost-pulse 1s ease-in-out infinite alternate; }
 @keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
@@ -46,88 +58,121 @@
 .mc-ghost-tile-kind { font-weight: 650; }
 /* The swarm's target: a selection box + '+' crosshair on the TILE the
    cursor just landed on, not on the cursor badge itself. */
-.mc-ghost-tile.is-swarm-target { position: relative; outline: 3px solid var(--accent, #6e8bff); outline-offset: 2px; }
+.mc-ghost-tile.is-swarm-target { position: relative; outline: 3px solid var(--accent, #6B8F71); outline-offset: 2px; }
 .mc-ghost-tile.is-swarm-target::before { content: '+'; position: absolute; top: -12px; left: -12px; width: 20px; height: 20px;
-  display: grid; place-content: center; border-radius: 50%; background: var(--panel); color: var(--accent, #6e8bff); font-size: 14px; font-weight: 700; }
+  display: grid; place-content: center; border-radius: 50%; background: var(--panel); color: var(--accent, #6B8F71); font-size: 14px; font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { .mc-ghost-tile.stage-frame { opacity: 1; } }
 /* Swarm build cursors: decoration-looking, but each one is a real sub-step
    of the model work (see src/canvas/swarmAgents.ts). Never intercepts
-   pointer/hand hit-testing. */
+   pointer/hand hit-testing. Paper-coloured chip with the agent's own muted
+   accent (Nano green / Gemini blue, from swarmAgents.ts) as the only colour. */
 .mc-swarm { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
 .mc-swarm-cursor { position: absolute; display: flex; align-items: center; gap: 6px; transform: translate(-50%, -50%);
-  padding: 3px 8px 3px 4px; border-radius: 999px; background: rgb(20 20 19 / 0.85);
-  border: 1px solid var(--mc-swarm-color, var(--accent)); white-space: nowrap; pointer-events: none; }
+  padding: 3px 8px 3px 4px; border-radius: 999px; background: rgb(255 255 255 / 0.92);
+  border: 1px solid var(--mc-swarm-color, var(--accent)); box-shadow: 0 2px 8px rgb(0 0 0 / 0.08); white-space: nowrap; pointer-events: none; }
 .mc-swarm-arrow { width: 10px; height: 10px; border-radius: 2px; background: var(--mc-swarm-color, var(--accent));
   clip-path: polygon(0 0, 100% 35%, 35% 100%); }
 .mc-swarm-label { font-size: 11px; color: var(--text); }
 .mc-swarm-cursor.is-editing { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 3px; }
 .mc-swarm-cursor.is-editing::after { content: '+'; position: absolute; left: -16px; top: 50%; transform: translateY(-50%);
   font-size: 12px; color: var(--mc-swarm-color, var(--accent)); }
+/* The dock chip for this agent is open: ring the matching cursor so the two
+   views of the same agent read as one thing. */
+.mc-swarm-cursor.is-dock-open { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 4px; }
 .mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
-  border-radius: 999px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: min(720px, 46vw); min-width: 560px;
-  overflow: hidden; padding: 16px 18px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
+  overflow: hidden; padding: 0; border-radius: 0; background: transparent; border: none; font-size: 16px;
   display: flex; flex-direction: column; min-height: 0; }
-.mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
-.mc-ai-pending { flex: 0 0 auto; background: var(--panel); border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
 .mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
-.mc-ai[data-engine=gemini] { border-color: var(--accent); }
-.mc-ai-h { margin: 0 0 8px; font-size: 20px; } .mc-ai-h3 { margin: 16px 0 6px; font-size: 16px; color: var(--text-dim); }
+/* The old "AI activity" card title is redundant with the aside's own
+   aria-label now that each terminal carries its own "nano"/"gemini" head. */
+.mc-ai-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.mc-ai-h3 { margin: 16px 0 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
 .mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
 .mc-ai-ledger-total { font-size: 13px; }
-.mc-ai-state { color: var(--accent-2); }
+.mc-ai-state { color: var(--text-dim); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 32px; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
-  border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
-.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
+  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
+/* History stays discreet — a quiet trailing log, not a second focal point
+   next to the live terminals. */
+.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; opacity: 0.85; }
+.mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 
-/* Two live model panels: Nano (on device) and Gemini (cloud), side by side.
-   The handoff track overlays the gap BETWEEN the two columns (not a grid
-   cell of its own — a 2-col grid with a 3rd child would wrap to a stacked
-   narrow column, which is the bug this fixes). */
-.mc-model-panels { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 10px 0; }
-.mc-model-panel { min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
-.mc-model-h { margin: 0 0 6px; font-size: 14px; color: var(--text-dim); }
-.mc-model-status { margin: 4px 0; font-size: 13px; color: var(--accent-2); }
-.mc-model-queue { margin: 4px 0; font-size: 13px; color: var(--accent); }
-.mc-model-sent, .mc-model-ledger { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
-.mc-model-panel pre { max-height: 140px; font-size: 12px; }
-.mc-handoff-track { position: absolute; z-index: 3; left: 50%; top: 10px; bottom: 10px; width: min(260px, 60%);
-  transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: stretch; pointer-events: none; }
-.mc-handoff-card { margin: 0; padding: 6px 10px; border-radius: 999px; background: var(--accent-2); color: #0d0d0c;
-  font-size: 12px; font-weight: 600; text-align: center; box-shadow: 0 6px 18px rgb(0 0 0 / 0.35); }
-/* Cards travel from the source panel toward the destination: left→right when
-   Nano hands off to Gemini, right→left the other way. */
-.mc-handoff-card.from-nano.is-traveling { animation: mc-handoff-slide-right 1.1s ease-out; }
-.mc-handoff-card.from-gemini.is-traveling { animation: mc-handoff-slide-left 1.1s ease-out; }
-.mc-handoff-card.is-traveling:not(.from-nano):not(.from-gemini) { animation: mc-handoff-slide 1.1s ease-out; }
-@keyframes mc-handoff-slide { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-@keyframes mc-handoff-slide-right { from { opacity: 0; transform: translateX(-70%); } to { opacity: 1; transform: translateX(0); } }
-@keyframes mc-handoff-slide-left { from { opacity: 0; transform: translateX(70%); } to { opacity: 1; transform: translateX(0); } }
-@media (prefers-reduced-motion: reduce) { .mc-handoff-card.is-traveling { animation: none; } }
-@media (max-width: 760px) { .mc-model-panels { grid-template-columns: 1fr; } .mc-handoff-track { position: static; width: auto; transform: none; margin: 6px 0; } }
+/* Two live terminals — "nano · on this device" and "gemini · cloud" —
+   stacked on the right with their agent dock directly under each, matching
+   screens/palette/term.html: dark charcoal chrome on the warm paper canvas,
+   never neon, never a travelling card. */
+.mc-terminals { display: flex; flex-direction: column; gap: 14px; }
+.mc-terminal-col { display: flex; flex-direction: column; gap: 8px; }
+.mc-terminal { border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
+.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 13px; color: #D8D4CC; }
+.mc-term-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim); }
+.mc-terminal-nano .mc-term-dot, .mc-mini-terminal[data-kind="nano"] .mc-term-dot { background: #8FB394; }
+.mc-terminal-gemini .mc-term-dot, .mc-mini-terminal[data-kind="gemini"] .mc-term-dot { background: #8FA9CC; }
+.mc-term-title { font-weight: 650; }
+.mc-term-where { color: #8A867E; }
+.mc-term-body { position: relative; padding: 12px 14px; font-family: ui-monospace, 'DejaVu Sans Mono', Consolas, monospace;
+  font-size: 12.5px; line-height: 1.7; max-height: 220px; overflow: auto; }
+.mc-term-lines { display: flex; flex-direction: column; }
+.mc-term-line { margin: 0; color: #D8D4CC; white-space: pre-wrap; word-break: break-word; }
+.mc-term-mark { display: inline-block; width: 1.1em; color: inherit; }
+.mc-term-time { color: #8A867E; margin-right: 8px; }
+.mc-term-verb { display: inline-block; min-width: 66px; margin-right: 4px; }
+.mc-term-line--redact { color: #C9B48A; }
+.mc-terminal-nano .mc-term-line--done, .mc-terminal-nano .mc-term-line--replied { color: #8FB394; }
+.mc-terminal-gemini .mc-term-line--done, .mc-terminal-gemini .mc-term-line--replied { color: #8FA9CC; }
+.mc-term-cursor { color: #8A867E; animation: mc-term-blink 1s step-start infinite; }
+@keyframes mc-term-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mc-term-cursor { animation: none; } }
 
-/* Data that stayed on this device: kept-local names next to what the cloud
-   saw. Lives OUTSIDE the scrolling .mc-ai-body (see STAYED_LOCAL_HTML) as a
-   compact, non-scrolling strip so it's visible without scrolling the panel. */
-.mc-stayed-local { flex: 0 0 auto; max-height: 34vh; overflow: auto; margin: 8px 0 0; padding: 10px 12px;
-  border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
-.mc-stayed-local .mc-ai-h3 { margin-top: 0; }
-.mc-stayed-local ul { margin: 4px 0; padding-left: 20px; font-size: 13px; color: var(--text); }
-.mc-stayed-local-bytes, .mc-stayed-local-route { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
+/* Agent dock: a compact row of chips under each terminal, one per agent of
+   that engine — tapping/pinching one opens its mini terminal. */
+.mc-term-dock { margin: 0; }
+.mc-term-dock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px 4px 8px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 12px; cursor: pointer; }
+.mc-dock-chip-cursor { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color, var(--accent)); flex: 0 0 auto; }
+.mc-dock-chip.is-working { border-color: var(--chip-color, var(--accent)); }
+.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 1.1s ease-in-out infinite; }
+.mc-dock-chip.is-done { opacity: 0.7; }
+.mc-dock-chip.is-done .mc-dock-chip-cursor { background: transparent; border: 1px solid var(--chip-color, var(--accent)); }
+.mc-dock-chip-mark { color: var(--chip-color, var(--accent)); font-size: 11px; font-weight: 700; }
+.mc-dock-chip[aria-pressed=true] { outline: 2px solid var(--chip-color, var(--accent)); outline-offset: 2px; }
+.mc-dock-chip-overflow { color: var(--text-dim); }
+@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.35); } }
+@media (prefers-reduced-motion: reduce) { .mc-dock-chip.is-working .mc-dock-chip-cursor { animation: none; } }
+
+/* Floating mini terminal: one agent's own log, same charcoal chrome as the
+   two main terminals, opened by tapping/pinching its dock chip. */
+.mc-mini-terminal { position: fixed; z-index: 45; left: 24px; top: 50%; transform: translateY(-50%);
+  width: min(460px, calc(100% - 48px)); max-height: 70vh; display: flex; flex-direction: column;
+  border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
+.mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
+.mc-mini-close { margin-left: auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;
+  color: #8A867E; font-size: 16px; line-height: 1; cursor: pointer; }
+.mc-mini-close:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+
+/* One compact bar spanning under both terminals: what stayed on this device
+   vs. what actually left it, as real bytes — never a fabricated number. */
+.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-dim); }
+
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
 .mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
-  padding: 10px; border-radius: 18px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
+  padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
-.mc-btn.primary { background: var(--text); color: #0d0d0c; border-color: var(--text); }
+.mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
 .mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
 .mc-say input { flex: 1; min-width: 8rem; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
-  background: var(--bg); color: var(--text); font-size: 18px; }
+  background: var(--panel); color: var(--text); font-size: 18px; }
 .mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
@@ -162,7 +207,7 @@
   border-radius: var(--radius);
   background: var(--panel);
   border: 1px solid var(--border);
-  box-shadow: 0 16px 48px rgb(0 0 0 / 0.5);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.12);
 }
 .mc-connect-head, .mc-pairing-head {
   display: flex;
@@ -212,7 +257,7 @@
   padding: 0 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--panel);
   color: var(--text);
   font-size: 18px;
 }
@@ -239,7 +284,7 @@
 }
 .mc-connect-status, .mc-pair-status {
   font-size: 16px;
-  color: var(--accent-2);
+  color: var(--text-dim);
   min-height: 1.2em;
   margin: 4px 0 10px;
 }
@@ -267,7 +312,7 @@
   .mc-canvas-status { font-size: 15px; }
   .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
-  .mc-model-panels { grid-template-columns: 1fr; }
+  .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
   /* Compact the proposal inside the full-screen review so Approve/Reject stay on screen. */
   .mc-review-card-host .mc-proposal { padding: 10px 12px; }
   .mc-review-card-host .mc-proposal-title { font-size: 22px; }
@@ -289,18 +334,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(11, 15, 20, 0.6);
+  background: rgba(43, 43, 43, 0.45);
 }
 .mc-teach-card {
   position: relative;
   width: min(420px, calc(100% - 32px));
   max-height: calc(100% - 32px);
   overflow: auto;
-  background: var(--panel, #14161b);
-  color: var(--fg, #e7e9ee);
+  background: var(--panel);
+  color: var(--text);
   border-radius: 14px;
   padding: 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
 }
 .mc-teach-close {
   position: absolute;
@@ -316,11 +361,11 @@
 }
 .mc-teach-note { font-size: 13px; opacity: 0.7; margin: 0 28px 12px 0; }
 .mc-teach-count { font-size: 28px; font-weight: 600; margin: 8px 0; }
-.mc-teach-conflict { color: #f59e0b; font-size: 13px; }
+.mc-teach-conflict { color: #b5651d; font-size: 13px; }
 .mc-teach-describe { display: flex; gap: 8px; }
-.mc-teach-describe input { flex: 1; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border, #333); background: transparent; color: inherit; }
+.mc-teach-describe input { flex: 1; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; }
 .mc-teach-list { list-style: none; margin: 0; padding: 0; }
-.mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border, #2a2d33); flex-wrap: wrap; }
+.mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .mc-teach-meter { font-size: 12px; opacity: 0.75; }
 .mc-proposal-engine { font-size: 12px; opacity: 0.7; margin-left: 8px; }
 
@@ -332,10 +377,10 @@
 .mc-menu-icon::before, .mc-menu-icon::after { content: ''; position: absolute; left: 0; }
 .mc-menu-icon::before { top: -6px; }
 .mc-menu-icon::after { top: 6px; }
-.mc-menu-scrim { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / 0.5); }
+.mc-menu-scrim { position: fixed; inset: 0; z-index: 60; background: rgb(43 43 43 / 0.35); }
 .mc-menu-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 61; max-height: 80vh; overflow: auto;
-  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--panel, #1a1a19); color: var(--text);
-  border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -8px 32px rgb(0 0 0 / 0.45);
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--panel); color: var(--text);
+  border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -8px 28px rgb(0 0 0 / 0.12);
   animation: mc-sheet-in 200ms ease-out; touch-action: pan-y; }
 .mc-menu-android { border-top-left-radius: 28px; border-top-right-radius: 28px; font-family: Roboto, system-ui, sans-serif; }
 .mc-menu-ios { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }
@@ -350,19 +395,19 @@
 .mc-menu-items > .mc-btn { width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; padding: 0 16px; }
 .mc-menu-ios .mc-menu-items > .mc-btn { min-height: 44px; border-radius: 12px; }
 .mc-menu-android .mc-menu-items > .mc-btn { border-radius: 999px; border-color: transparent; background: var(--panel-2); }
-.mc-menu-items > .mc-btn[aria-pressed='true'] { outline: 2px solid var(--accent, #8ea2ff); outline-offset: -2px; }
+.mc-menu-items > .mc-btn[aria-pressed='true'] { outline: 2px solid var(--accent); outline-offset: -2px; }
 @keyframes mc-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .mc-menu-sheet { animation: none; } }
 
 /* Big floating mic (micFab.ts): reachable by tap, keyboard and hand pinch. */
 .mc-fab-mic { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: inline-flex; align-items: center; gap: 10px;
-  min-width: 72px; min-height: 72px; padding: 0 22px 0 20px; border-radius: 999px; border: 2px solid var(--text);
-  background: var(--panel-2); color: var(--text); font-size: 18px; font-weight: 600; cursor: pointer;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); }
-.mc-fab-mic:focus-visible { outline: 3px solid var(--accent, #8ea2ff); outline-offset: 3px; }
-.mc-fab-mic.is-listening { background: var(--text); color: #0d0d0c; }
+  min-width: 72px; min-height: 72px; padding: 0 22px 0 20px; border-radius: 999px; border: 2px solid var(--border);
+  background: #FFFFFF; color: var(--text); font-size: 18px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.12); }
+.mc-fab-mic:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-fab-mic.is-listening { background: var(--text); color: #FFFFFF; border-color: var(--text); }
 .mc-fab-mic.is-listening::after { content: ''; position: absolute; inset: -8px; border-radius: inherit;
-  border: 3px solid var(--accent, #8ea2ff); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
+  border: 3px solid var(--accent); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
 @keyframes mc-mic-pulse { from { opacity: 1; transform: scale(0.96); } to { opacity: 0; transform: scale(1.12); } }
 @media (prefers-reduced-motion: reduce) { .mc-fab-mic.is-listening::after { animation: none; opacity: 1; } }
 .mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: calc(min(720px, 46vw) + 32px); }
@@ -378,9 +423,9 @@
 /* On-canvas Tools chip (toolPalette.ts): the bar's buttons + say box stay
    hidden (no fixed chrome) until voice, palm, or this chip summon them. */
 .mc-tools-chip { position: fixed; z-index: 40; right: 24px; bottom: 108px; min-height: 52px; padding: 0 20px;
-  border-radius: 999px; border: 2px solid var(--text); background: var(--panel-2); color: var(--text);
-  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); }
-.mc-tools-chip:focus-visible { outline: 3px solid var(--accent, #8ea2ff); outline-offset: 3px; }
+  border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
+  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-tools-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
 .mc-canvas:has(.mc-ai:not([hidden])) .mc-tools-chip { right: calc(min(720px, 46vw) + 32px); }
 @media (max-width: 600px) { .mc-tools-chip { display: none; } }
@@ -394,11 +439,11 @@
    over empty space, a ring only while pinching. Fixed overlays so they work
    for controls inside shadow DOM too. */
 .mc-hand-frame, .mc-hand-shadow, .mc-hand-ring { position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none; }
-.mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent, #8ea2ff);
-  box-shadow: 0 0 0 4px rgb(142 162 255 / 0.25), 0 0 18px rgb(142 162 255 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
-.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(142 162 255 / 0.4), 0 0 24px rgb(142 162 255 / 0.7); }
-.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle, rgb(255 255 255 / 0.16), transparent 70%); }
-.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #fff; animation: mc-ring-press 260ms ease-out forwards; }
+.mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent);
+  box-shadow: 0 0 0 4px rgb(107 143 113 / 0.18), 0 0 14px rgb(107 143 113 / 0.3); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(107 143 113 / 0.3), 0 0 18px rgb(107 143 113 / 0.45); }
+.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle, rgb(43 43 43 / 0.1), transparent 70%); }
+.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--text); animation: mc-ring-press 260ms ease-out forwards; }
 @keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
 .hand-hover { scale: 1.03; }
 @media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .hand-hover { scale: none; } }
@@ -423,4 +468,4 @@
 .mc-review-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px;
   padding: 16px 0 4px; background: var(--panel); }
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 56px; font-size: 18px; flex: 1 1 180px; }
-.mc-review-approve { background: var(--text); color: #0d0d0c; border-color: var(--text); }
+.mc-review-approve { background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }

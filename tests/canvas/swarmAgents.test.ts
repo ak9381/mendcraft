@@ -13,14 +13,14 @@ import {
 } from '../../src/canvas/swarmAgents';
 
 describe('assignSwarmColor', () => {
-  it('nano is always green', () => {
-    expect(assignSwarmColor('nano', 0)).toBe('#53d17a');
-    expect(assignSwarmColor('nano', 5)).toBe('#53d17a');
+  it('nano is always the warm-paper green', () => {
+    expect(assignSwarmColor('nano', 0)).toBe('#6B8F71');
+    expect(assignSwarmColor('nano', 5)).toBe('#6B8F71');
   });
-  it('gemini alternates blue and purple', () => {
-    expect(assignSwarmColor('gemini', 0)).toBe('#6e8bff');
-    expect(assignSwarmColor('gemini', 1)).toBe('#b388ff');
-    expect(assignSwarmColor('gemini', 2)).toBe('#6e8bff');
+  it('gemini alternates between two blue shades (no purple)', () => {
+    expect(assignSwarmColor('gemini', 0)).toBe('#5A7BA6');
+    expect(assignSwarmColor('gemini', 1)).toBe('#7B9BC2');
+    expect(assignSwarmColor('gemini', 2)).toBe('#5A7BA6');
   });
 });
 
@@ -30,7 +30,7 @@ describe('buildSwarmAgents — cursor count/colour assignment', () => {
       calls: [{ kind: 'gemini', label: 'planner' }],
       subSteps: [{ kind: 'gemini', label: 'tile 2' }, { kind: 'nano', label: 'labels' }, { kind: 'gemini', label: 'tile 3' }],
     });
-    expect(agents.map((a) => a.color)).toEqual(['#6e8bff', '#b388ff', '#53d17a', '#6e8bff']);
+    expect(agents.map((a) => a.color)).toEqual(['#5A7BA6', '#7B9BC2', '#6B8F71', '#5A7BA6']);
   });
 
   it('never marks more than REAL_CALL_CAP agents real, even with more calls', () => {
@@ -72,11 +72,11 @@ describe('buildMixedSwarmPlan', () => {
     const nano = agents.filter((a) => a.kind === 'nano');
     expect(gemini.length).toBeGreaterThan(0);
     expect(nano.length).toBeGreaterThan(0);
-    // Both Gemini colours (blue + purple) and the single Nano green appear.
+    // Both Gemini blue shades and the single Nano green appear.
     const colors = new Set(agents.map((a) => a.color));
-    expect(colors.has('#6e8bff')).toBe(true);
-    expect(colors.has('#b388ff')).toBe(true);
-    expect(colors.has('#53d17a')).toBe(true);
+    expect(colors.has('#5A7BA6')).toBe(true);
+    expect(colors.has('#7B9BC2')).toBe(true);
+    expect(colors.has('#6B8F71')).toBe(true);
   });
 
   it('the pill shows both Gemini and Nano counts', () => {

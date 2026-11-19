@@ -28,7 +28,7 @@ import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCo
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
-import { createCanvasLedger, formatLedgerLine } from './ledger';
+import { createCanvasLedger } from './ledger';
 import { mountCanvasHands } from './canvasHands';
 import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
@@ -40,9 +40,10 @@ import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
-import { MODEL_PANELS_HTML, STAYED_LOCAL_HTML, buildStayedLocalStrip, handoffReason, mountModelPanels } from './modelPanels';
+import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountReviewDialog } from './reviewDialog';
-import { buildMixedSwarmPlan, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
+import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
+import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -149,7 +150,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
-      ${STAYED_LOCAL_HTML}
       <div class="mc-ai-pending">
         <p class="mc-ai-state" aria-live="polite"></p>
       </div>
@@ -160,7 +160,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
-  const swarm: SwarmLayer = createSwarmLayer(root.querySelector<HTMLElement>('.mc-swarm')!, {
+  const swarmEl = root.querySelector<HTMLElement>('.mc-swarm')!;
+  const swarm: SwarmLayer = createSwarmLayer(swarmEl, {
     reducedMotion: reduced,
     onReachTarget: (tileIndex, kind) => flashGhostTarget(tileIndex, kind),
   });
@@ -168,6 +169,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const panels = mountModelPanels(aiPanel);
+  // Dock chips (one per swarm agent, under its engine's terminal) stay in
+  // lockstep with the canvas cursors: tapping a chip rings the matching
+  // `.mc-swarm-cursor` so the two views of the same agent read as one thing.
+  const swarmDock: SwarmDockUi = mountSwarmDock(aiPanel, root, {
+    onOpenAgent: (agentId) => swarmEl.querySelector(`[data-agent-id="${agentId}"]`)?.classList.add('is-dock-open'),
+    onCloseAgent: (agentId) => swarmEl.querySelector(`[data-agent-id="${agentId}"]`)?.classList.remove('is-dock-open'),
+  });
+  const settleSwarm = (): void => { swarm.settle(); swarmDock.settle(); };
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
   const history = createCanvasHistory();
@@ -509,48 +518,46 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
     aiPanel.dataset.engine = s.engine;
-    const p = panels.forEngine(s.engine);
-    p.setRoute(s.routeLine);
-    p.setPrompt(s.prompt);
-    p.setSent(s.sent);
     // Byte ledger: every AI turn records what actually left the device. Scan
     // the spoken utterance too — not just the canned schema prompt — so a
     // name said aloud (e.g. "floor plan for Mrs Sharma's flat") still shows
-    // up in the "stayed on this device" strip even when 0 bytes were sent.
+    // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
-    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
-    p.setLedger(formatLedgerLine({ bytes: entry.bytes, engine: s.engine }));
+    ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
     ledgerTotalRender();
+    panels.setFooterBytes(ledger.totals().totalBytes);
+    // The privacy order invariant: Nano logs `received` + any `redact` lines
+    // before a byte of this turn reaches the Gemini terminal.
+    logTurnReceipt(panels, {
+      engine: s.engine, utterance, used: protect.used, people: activePeople(), cloudPayload: protect.promptText,
+    });
+    if (s.routeLine) panels.forEngine(s.engine).log('note', s.routeLine);
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,
     // layout, tile frames) and Nano (labels, device values, redaction/Kannada
     // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls.
     swarmStartedAt = Date.now();
-    swarm.start(buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
+    const plan = buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
       tileCount: ctx.tileCount,
       redactedName: protect.used.length > 0,
-    }), opts.sim ? 1 : Date.now());
+    });
+    swarm.start(plan, opts.sim ? 1 : Date.now());
     swarm.reportBytes(ledger.totals().totalBytes);
-    p.setReply('');
-    p.setStatus(s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…');
-    panels.showStayedLocalStrip(buildStayedLocalStrip({
-      used: protect.used,
-      people: activePeople(),
-      bytesSent: entry.bytes,
-      engine: s.engine,
-      routeLine: s.routeLine,
-    }));
+    swarmDock.start(buildSwarmAgents(plan), {
+      reducedMotion: reduced,
+      payloads: s.engine === 'gemini' ? { gemini: cloudReceivedDetail(protect.promptText, activePeople()) } : {},
+    });
   }
-  /** The full-screen review's `extra`: what each model did (the live panels)
-   *  plus a copy of the stayed-local strip, so a review is never just the
-   *  proposal summary with no trace of who worked on it or what left the
-   *  device. Clones the live DOM nodes rather than re-deriving their state. */
+  /** The full-screen review's `extra`: the live terminals + footer, so a
+   *  review is never just the proposal summary with no trace of who worked
+   *  on it or what left the device. Clones the live DOM nodes rather than
+   *  re-deriving their state. */
   function buildReviewExtra(): HTMLElement | null {
     const extra = document.createElement('div');
     extra.className = 'mc-review-extra-content';
-    const panelsEl = aiPanel.querySelector<HTMLElement>('.mc-model-panels');
-    if (panelsEl && !panelsEl.hidden) extra.append(panelsEl.cloneNode(true) as HTMLElement);
-    const stripEl = aiPanel.querySelector<HTMLElement>('.mc-stayed-local');
-    if (stripEl && !stripEl.hidden) extra.append(stripEl.cloneNode(true) as HTMLElement);
+    const terminalsEl = aiPanel.querySelector<HTMLElement>('.mc-terminals');
+    if (terminalsEl && !terminalsEl.hidden) extra.append(terminalsEl.cloneNode(true) as HTMLElement);
+    const footerEl = aiPanel.querySelector<HTMLElement>('.mc-ai-footer');
+    if (footerEl && !footerEl.hidden) extra.append(footerEl.cloneNode(true) as HTMLElement);
     return extra.childElementCount ? extra : null;
   }
   // Per-frame ghost reveal timers: a safety net so a tile never sits as an
@@ -651,11 +658,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let sentInfo: SentInfo | null = null;
     const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
-      onText: (t) => { panels.forEngine(engineId).setReply(t); },
       onGhost: (g) => ghost(frameId, g),
-      onError: (why) => { swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
+      onError: (why) => { settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
     }));
-    if (!plan || !sentInfo) { swarm.settle(); ghost(frameId, null); return false; }
+    if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
   }
 
@@ -666,7 +672,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
     await holdSwarmMinimum();
-    swarm.settle();
+    settleSwarm();
+    panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
+      `${plan.tiles.length} tile${plan.tiles.length === 1 ? '' : 's'} filled`);
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
     if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
@@ -705,12 +713,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
     if (!kept) return;
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
-      panels.forEngine('nano').setRoute(ROUTE_LINES.offline);
+      panels.forEngine('nano').log('note', ROUTE_LINES.offline);
       aiPanel.querySelector('.mc-ai-state')!.textContent = OFFLINE_QUICK_ONLY;
       say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
       return;
     }
-    panels.showHandoff(handoffReason('nano', 'gemini', 'group the lights and add a room plan'), { reducedMotion: reduced, from: 'nano' });
+    panels.showHandoff('nano', 'group the lights and add a room plan');
     await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
   }
   function floorPlan(frameId: string, utterance = 'start a floor plan'): void {
@@ -729,9 +737,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
     turn.sent.sim = engine.sim;
     aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
-    if (o.photoNote) panels.forEngine(turn.sent.engine).appendSentNote(' — no camera or gimbal here, so the photo is simulated.');
+    if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
     const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
-      panels.forEngine(turn.sent.engine).setReply(chunk);
       ghost(frameId, parsePartialPlan(chunk));
     });
     let full = '';
@@ -741,7 +748,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const fallbackEngine = engine.fallback;
       if (!fallbackEngine) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
-        swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
       }
       turn.sent.sim = true;
       turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
@@ -750,16 +757,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         full = await withBuildGimbal(() => streamOne(fallbackEngine));
       } catch (e2) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
-        swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
       }
     }
     const parsed = parseModelPlan(full);
-    if (!parsed.ok) { swarm.settle(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+    if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
     const plan = parsed;
     const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
     const merged = mergeTiles(before, plan.value.tiles);
     if (merged.tiles.length === before.tiles.length) {
-      swarm.settle();
+      settleSwarm();
       ghost(frameId, null);
       aiPanel.querySelector('.mc-ai-state')!.textContent = 'Already on this board — nothing new to add.';
       say('That device is already on this board.');
@@ -903,20 +910,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       `UI string keys: ${Object.keys(EN_PACK.strings).join(', ')}.`,
       'Kannada script only, each string ≤80 chars, no markup.',
     ].join('\n');
-    panels.showHandoff(handoffReason('nano', 'gemini', 'plan the Kannada pack — too complex for on-device'), { reducedMotion: reduced, from: 'nano' });
     aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim }, { task: 'kannada' });
+    // The redact-before-handoff invariant: aiSent() above already logged any
+    // Nano redaction, so it's safe to announce the handoff now.
+    panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
     let full = '';
-    try { full = await engine.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
+    try { full = await engine.stream(prompt, () => {}); }
     catch (e) {
       if (!engine.fallback) {
-        swarm.settle();
+        settleSwarm();
         const why = `Kannada draft didn’t arrive: ${e instanceof Error ? e.message : String(e)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
       }
-      panels.forEngine('gemini').setRoute('SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
-      try { full = await engine.fallback.stream(prompt, (t) => { panels.forEngine('gemini').setReply(t); }); }
+      panels.forEngine('gemini').log('note', 'SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
+      try { full = await engine.fallback.stream(prompt, () => {}); }
       catch (e2) {
-        swarm.settle();
+        settleSwarm();
         const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
         aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
       }
@@ -924,11 +933,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let raw: unknown = null;
     try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
     const coerced = coerceLanguagePack(raw);
-    if (!coerced.ok) { swarm.settle(); const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
+    if (!coerced.ok) { settleSwarm(); const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
     const next = coerced.value;
-    swarm.settle();
+    settleSwarm();
     const swapCount = Object.keys(next.strings).length;
-    panels.showHandoff(handoffReason('gemini', 'nano', `apply ${swapCount} label swaps locally`), { reducedMotion: reduced, from: 'gemini' });
+    panels.forEngine('gemini').log('replied', `Kannada pack ready · ${swapCount} swaps`);
+    panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
     const card = renderProposalCard(document, {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',

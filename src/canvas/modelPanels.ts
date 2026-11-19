@@ -1,16 +1,20 @@
-// Two live model panels — Nano (on device) and Gemini (cloud) — replacing the
-// single AI-activity turn view. Each shows the prompt it received, the reply
-// as it streams, and a status line; animated handoff cards travel between
-// them when work is passed from one model to the other.
-import { formatLedgerLine } from './ledger';
-import type { Person } from '../privacy/directory';
+// Two live terminal windows — "nano · on this device" and "gemini · cloud" —
+// replacing the old tinted activity cards. Each is a scrolling monospace log
+// of honestly-labelled steps (received/redact/handoff/plan/build/fill/
+// done/replied/queued/note); handoffs are log lines written into BOTH
+// terminals, never a travelling card. sim mode must never fake which engine
+// did the work: only call .log() on the engine that actually ran.
+import { nothingRaw, type Person } from '../privacy/directory';
 import { esc } from '../core/esc';
+import { formatLedgerLine } from './ledger';
 
 export type ModelEngine = 'nano' | 'gemini';
 
 const ENGINE_LABEL: Record<ModelEngine, string> = { nano: 'Nano', gemini: 'Gemini' };
+const otherEngine = (e: ModelEngine): ModelEngine => (e === 'nano' ? 'gemini' : 'nano');
 
-/** "Nano → Gemini: plan the Kannada pack (too complex for on-device)" */
+/** "Nano → Gemini: plan the Kannada pack (too complex for on-device)" — a
+ *  pure display string, independent of the terminal log lines below. */
 export function handoffReason(from: ModelEngine, to: ModelEngine, reason: string): string {
   return `${ENGINE_LABEL[from]} → ${ENGINE_LABEL[to]}: ${reason}`;
 }
@@ -33,6 +37,8 @@ export interface StayedLocalStrip {
   routeLabel: string;
 }
 
+/** Pure data shaping, kept for callers that still want the kept/cloud split
+ *  (the terminal's "redact" log line is built from `redactLines` below). */
 export function buildStayedLocalStrip(input: StayedLocalStripInput): StayedLocalStrip {
   const { used, people, bytesSent, engine, routeLine } = input;
   const byId = new Map(people.map((p) => [p.id, p] as const));
@@ -49,103 +55,160 @@ export function buildStayedLocalStrip(input: StayedLocalStripInput): StayedLocal
   };
 }
 
-export const MODEL_PANELS_HTML = `
-  <div class="mc-model-panels" hidden>
-    <section class="mc-model-panel mc-model-nano" aria-label="Nano (on device)">
-      <h3 class="mc-model-h">Nano (on device)</h3>
-      <p class="mc-model-status" aria-live="polite"></p>
-      <p class="mc-model-queue" hidden></p>
-      <details class="mc-model-prompt" open><summary>Prompt</summary><pre></pre></details>
-      <p class="mc-model-sent"></p>
-      <p class="mc-model-ledger"></p>
-      <details class="mc-model-reply" open><summary>Reply</summary><pre aria-live="off"></pre></details>
-    </section>
-    <div class="mc-handoff-track" aria-live="polite"></div>
-    <section class="mc-model-panel mc-model-gemini" aria-label="Gemini (cloud)">
-      <h3 class="mc-model-h">Gemini (cloud)</h3>
-      <p class="mc-model-status" aria-live="polite"></p>
-      <details class="mc-model-prompt" open><summary>Prompt (redacted)</summary><pre></pre></details>
-      <p class="mc-model-sent"></p>
-      <p class="mc-model-ledger"></p>
-      <details class="mc-model-reply" open><summary>Reply</summary><pre aria-live="off"></pre></details>
-    </section>
-  </div>`;
+/** "Sharma → [Client A]" per redacted name — the terminal's `redact` log
+ *  line, built from the same protectTurn/buildStayedLocalStrip data. */
+export function redactLines(used: readonly { token: string; personId: string }[], people: readonly Person[]): string[] {
+  const byId = new Map(people.map((p) => [p.id, p] as const));
+  return used.map((u) => {
+    const person = byId.get(u.personId);
+    return `${person ? person.name : '?'} → ${u.token}`;
+  });
+}
 
-/** Kept out of MODEL_PANELS_HTML (which lives inside the scrolling
- *  .mc-ai-body) so callers can place it as a non-scrolling footer that is
- *  always in view — e.g. the Sharma floor-plan turn's "never left" strip. */
-export const STAYED_LOCAL_HTML = `
-  <div class="mc-stayed-local" hidden>
-    <h3 class="mc-ai-h3">Data that stayed on this device</h3>
-    <ul class="mc-stayed-local-kept"></ul>
-    <ul class="mc-stayed-local-cloud"></ul>
-    <p class="mc-stayed-local-bytes"></p>
-    <p class="mc-stayed-local-route"></p>
-  </div>`;
+/** The hard privacy gate on the Gemini terminal's `received` line: it may
+ *  only ever show `payload` (already run through protectForCloud) — never a
+ *  raw name/phone/email. Throws rather than silently logging a leak, since
+ *  a caller reaching this with unredacted text is a bug, not a user error. */
+export function cloudReceivedDetail(payload: string, people: readonly Person[]): string {
+  if (!nothingRaw(payload, people)) {
+    throw new Error('modelPanels: refusing to log unredacted text to the Gemini terminal');
+  }
+  return payload;
+}
+
+export interface TurnReceiptInput {
+  /** Which engine actually ran this turn's real network call. */
+  engine: ModelEngine;
+  /** The raw utterance — logged on Nano only; it never leaves the device. */
+  utterance: string;
+  used: readonly { token: string; personId: string }[];
+  people: readonly Person[];
+  /** The prompt text already run through protectForCloud — what a Gemini
+   *  call, if any, actually sends. Ignored when `engine` is 'nano'. */
+  cloudPayload: string;
+}
+
+/** Logs one turn's receipt in the one order privacy requires: Nano always
+ *  logs `received` (the raw utterance, safe — it stays on this device) and
+ *  then any `redact` lines, BEFORE a single byte of it reaches the Gemini
+ *  terminal. Gemini's own `received` line (when it's the engine that ran)
+ *  is built exclusively from `cloudPayload` via `cloudReceivedDetail`, so it
+ *  can never carry a raw name. Structuring this as one function call (rather
+ *  than leaving the ordering to call-site discipline) is what makes the
+ *  order a real invariant instead of a convention someone can break. */
+export function logTurnReceipt(panels: ModelPanelsUi, input: TurnReceiptInput): void {
+  const nano = panels.forEngine('nano');
+  nano.log('received', input.utterance);
+  redactLines(input.used, input.people).forEach((line) => nano.log('redact', line));
+  if (input.engine === 'gemini') {
+    panels.forEngine('gemini').log('received', cloudReceivedDetail(input.cloudPayload, input.people));
+  }
+}
+
+export type LogVerb = 'received' | 'redact' | 'handoff' | 'plan' | 'build' | 'fill' | 'done' | 'replied' | 'queued' | 'note';
+
+const VERB_MARK: Partial<Record<LogVerb, string>> = { received: '›', done: '✓', replied: '✓' };
+const DONE_VERBS: ReadonlySet<LogVerb> = new Set(['done', 'replied']);
+
+function nowHHMMSS(d: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+export const MODEL_PANELS_HTML = `
+  <div class="mc-terminals" hidden>
+    <div class="mc-terminal-col">
+      <section class="mc-terminal mc-terminal-nano" aria-label="Nano terminal, on this device">
+        <div class="mc-term-head"><span class="mc-term-dot"></span><strong class="mc-term-title">nano</strong><span class="mc-term-where">· on this device</span></div>
+        <div class="mc-term-body" aria-live="polite">
+          <div class="mc-term-lines"></div>
+          <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
+        </div>
+      </section>
+      <div class="mc-term-dock" data-engine="nano" aria-label="Nano agents"><div class="mc-term-dock-chips"></div></div>
+    </div>
+    <div class="mc-terminal-col">
+      <section class="mc-terminal mc-terminal-gemini" aria-label="Gemini terminal, cloud">
+        <div class="mc-term-head"><span class="mc-term-dot"></span><strong class="mc-term-title">gemini</strong><span class="mc-term-where">· cloud</span></div>
+        <div class="mc-term-body" aria-live="polite">
+          <div class="mc-term-lines"></div>
+          <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
+        </div>
+      </section>
+      <div class="mc-term-dock" data-engine="gemini" aria-label="Gemini agents"><div class="mc-term-dock-chips"></div></div>
+    </div>
+  </div>
+  <p class="mc-ai-footer" hidden>Kept on this device: name, address, device IDs · <span class="mc-ai-footer-bytes">0 B sent to cloud</span></p>`;
+
+/** "412 B sent to cloud" / "1.2 KB sent to cloud" — the footer's live byte
+ *  count, generic (no engine name: the footer spans both terminals). */
+export function formatFooterBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB sent to cloud`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB sent to cloud`;
+  return `${Math.max(0, bytes)} B sent to cloud`;
+}
 
 export interface EnginePanelUi {
-  setPrompt(text: string): void;
-  setSent(sent: string | null): void;
-  appendSentNote(note: string): void;
-  setRoute(routeLine: string): void;
-  setStatus(text: string): void;
-  setLedger(text: string): void;
-  setReply(text: string): void;
+  /** Appends one timestamped log line; 'done'/'replied' hide the blinking
+   *  cursor, every other verb shows it (this engine is working). */
+  log(verb: LogVerb, detail: string): void;
+  setWorking(working: boolean): void;
   setQueued(count: number | null): void;
 }
 
 export interface ModelPanelsUi {
   show(): void;
   forEngine(engine: ModelEngine): EnginePanelUi;
-  showHandoff(text: string, opts?: { reducedMotion?: boolean; from?: ModelEngine }): void;
-  showStayedLocalStrip(strip: StayedLocalStrip): void;
-  hideStayedLocalStrip(): void;
+  /** Writes a handoff line into BOTH terminals: "→ gemini: reason" on the
+   *  sender's side, "← nano: reason" on the receiver's — never a travelling
+   *  card, and never fabricated on the engine that didn't send/receive it. */
+  showHandoff(from: ModelEngine, reason: string): void;
+  /** Updates the spanning footer's live "N B sent to cloud" count from the
+   *  real cumulative ledger total — never a fabricated number. */
+  setFooterBytes(bytes: number): void;
 }
 
-function enginePanel(container: HTMLElement, engine: ModelEngine): EnginePanelUi {
-  const panel = container.querySelector<HTMLElement>(`.mc-model-${engine}`)!;
-  const q = (sel: string) => panel.querySelector<HTMLElement>(sel)!;
-  return {
-    setPrompt(text) { q('.mc-model-prompt pre').textContent = text; },
-    setSent(sent) { q('.mc-model-sent').textContent = sent ? `What was sent: ${sent}` : 'What was sent: nothing. Stays on this device.'; },
-    appendSentNote(note) { q('.mc-model-sent').textContent += note; },
-    setRoute(routeLine) { panel.dataset.route = routeLine; },
-    setStatus(text) { q('.mc-model-status').textContent = text; },
-    setLedger(text) { q('.mc-model-ledger').textContent = text; },
-    setReply(text) { q('.mc-model-reply pre').textContent = text; },
+function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document): EnginePanelUi {
+  const panel = container.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
+  const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
+  const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
+  const cursor = panel.querySelector<HTMLElement>('.mc-term-cursor')!;
+  const api: EnginePanelUi = {
+    log(verb, detail) {
+      const line = doc.createElement('p');
+      line.className = `mc-term-line mc-term-line--${verb}`;
+      const mark = VERB_MARK[verb] ?? '';
+      line.innerHTML = `<span class="mc-term-mark">${mark}</span><span class="mc-term-time">${nowHHMMSS()}</span>` +
+        `<span class="mc-term-verb">${verb}</span><span class="mc-term-detail">${esc(detail)}</span>`;
+      lines.append(line);
+      body.scrollTop = body.scrollHeight;
+      api.setWorking(!DONE_VERBS.has(verb));
+    },
+    setWorking(working) {
+      cursor.hidden = !working;
+    },
     setQueued(count) {
-      const el = q('.mc-model-queue');
-      if (count === null || count <= 0) { el.hidden = true; el.textContent = ''; return; }
-      el.hidden = false;
-      el.textContent = `${count} request${count === 1 ? '' : 's'} queued offline — will run on reconnect.`;
+      if (count === null || count <= 0) return;
+      api.log('queued', `${count} request${count === 1 ? '' : 's'} queued offline — will run on reconnect.`);
     },
   };
+  return api;
 }
 
 export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document): ModelPanelsUi {
-  const panels = aiPanel.querySelector<HTMLElement>('.mc-model-panels')!;
-  const track = aiPanel.querySelector<HTMLElement>('.mc-handoff-track')!;
-  const strip = aiPanel.querySelector<HTMLElement>('.mc-stayed-local')!;
-  const nano = enginePanel(aiPanel, 'nano');
-  const gemini = enginePanel(aiPanel, 'gemini');
+  const panels = aiPanel.querySelector<HTMLElement>('.mc-terminals')!;
+  const footer = aiPanel.querySelector<HTMLElement>('.mc-ai-footer')!;
+  const footerBytes = footer.querySelector<HTMLElement>('.mc-ai-footer-bytes')!;
+  const nano = enginePanel(aiPanel, 'nano', doc);
+  const gemini = enginePanel(aiPanel, 'gemini', doc);
   return {
-    show() { panels.hidden = false; },
+    show() { panels.hidden = false; footer.hidden = false; },
     forEngine(engine) { return engine === 'nano' ? nano : gemini; },
-    showHandoff(text, opts = {}) {
-      const card = doc.createElement('p');
-      card.className = `mc-handoff-card${opts.from ? ` from-${opts.from}` : ''}`;
-      card.textContent = text;
-      if (!opts.reducedMotion) card.classList.add('is-traveling');
-      track.append(card);
-      setTimeout(() => card.remove(), 2600);
+    showHandoff(from, reason) {
+      const to = otherEngine(from);
+      (from === 'nano' ? nano : gemini).log('handoff', `→ ${ENGINE_LABEL[to].toLowerCase()}: ${reason}`);
+      (to === 'nano' ? nano : gemini).log('handoff', `← ${ENGINE_LABEL[from].toLowerCase()}: ${reason}`);
     },
-    showStayedLocalStrip(s) {
-      strip.hidden = false;
-      strip.querySelector('.mc-stayed-local-kept')!.innerHTML = s.keptLocalLines.map((l) => `<li>${esc(l)}</li>`).join('');
-      strip.querySelector('.mc-stayed-local-cloud')!.innerHTML = s.sentToCloudLines.map((l) => `<li>${esc(l)}</li>`).join('');
-      strip.querySelector<HTMLElement>('.mc-stayed-local-bytes')!.textContent = s.bytesLabel;
-      strip.querySelector<HTMLElement>('.mc-stayed-local-route')!.textContent = s.routeLabel;
-    },
-    hideStayedLocalStrip() { strip.hidden = true; },
+    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); },
   };
 }

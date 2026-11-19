@@ -24,8 +24,10 @@ export interface SwarmAgentSpec {
 }
 
 export const REAL_CALL_CAP = 3;
-const GEMINI_COLORS = ['#6e8bff', '#b388ff']; // blue, purple
-const NANO_COLOR = '#53d17a'; // green
+// Warm-paper palette (no neon, no purple): two blue shades for Gemini,
+// one green for Nano — matches the Gemini/Nano terminal accents.
+const GEMINI_COLORS = ['#5A7BA6', '#7B9BC2'];
+const NANO_COLOR = '#6B8F71';
 const DEFAULT_SUB_STEPS = 14;
 const FLIGHT_MS = 1400;
 const MIN_TILE_COUNT = 4;
@@ -266,6 +268,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       agents.forEach((a, i) => {
         const el = doc.createElement('div');
         el.className = `mc-swarm-cursor is-${a.kind}`;
+        el.setAttribute('data-agent-id', a.id);
         el.style.setProperty('--mc-swarm-color', a.color);
         el.innerHTML = `<span class="mc-swarm-arrow"></span><span class="mc-swarm-label">${a.label}</span>`;
         container.appendChild(el);

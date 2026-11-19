@@ -76,6 +76,40 @@ async function shot(page, dir, name) {
   await page.screenshot({ path: join(dir, `${name}.png`) }).catch(() => {});
 }
 
+/** Polls until at least one agent dock chip for `kind` exists (mid-build,
+ *  review not yet open) and shoots the instant that's true. */
+async function shotDockFilling(page, dir, name, timeout = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const state = await page.evaluate(() => ({
+      chips: document.querySelectorAll('.mc-dock-chip').length,
+      reviewOpen: !!document.querySelector('.mc-review-dialog:not([hidden])'),
+    }));
+    if (state.chips > 0 && !state.reviewOpen) { await shot(page, dir, name); return { ok: true }; }
+    if (state.reviewOpen) break;
+    await sleep(80);
+  }
+  await shot(page, dir, name);
+  return { ok: false, why: 'dock chips not caught filling' };
+}
+
+/** Waits for at least one working dock chip of `kind`, pinches it (opening
+ *  its mini terminal), and returns whether that succeeded. */
+async function openDockMini(page, kind, timeout = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const has = await page.evaluate((k) => !!document.querySelector(`.mc-term-dock[data-engine="${k}"] .mc-dock-chip`), kind);
+    if (has) break;
+    await sleep(80);
+  }
+  // The hand pointer caches its control list for 250ms (handPointer.ts's
+  // refreshControls); a chip that just appeared needs that cache to turn
+  // over before pointAt() will resolve to it.
+  await sleep(300);
+  const body = `return el.classList.contains('mc-dock-chip') && !!el.closest('[data-engine="${kind}"]');`;
+  return press(page, new Function('el', body));
+}
+
 /** Polls for the swarm mid-flight (cursors visible, review not yet open)
  *  and shoots the instant that's true — the app's own minimum swarm hold
  *  (canvasApp.ts's holdSwarmMinimum, sim-only) keeps that window open for a
@@ -141,22 +175,46 @@ export async function runArc(page, outDir) {
   // 01 — empty canvas: "Let's build something fun", floating mic, tool tiles
   await shot(page, outDir, '01-empty');
 
-  // 02 — "connect devices and make a dashboard to control them": the swarm
-  // builds it live. Shot MUST land mid-build: cursors visible, review not
-  // yet open — wait for the swarm layer instead of guessing a sleep.
-  await say(page, 'connect devices and make a dashboard to control them');
+  // 02 — "connect devices for Mrs Sharma's flat and make a dashboard to
+  // control them": the swarm builds it live, with a name in the utterance so
+  // both the nano draft and the gemini upgrade below exercise redaction, not
+  // just the floor-plan beat. Shot MUST land mid-build: cursors visible,
+  // review not yet open — wait for the swarm layer instead of guessing a sleep.
+  await say(page, "connect devices for Mrs Sharma's flat and make a dashboard to control them");
   note('swarm-visible-dashboard', await shotMidBuild(page, outDir, '02-dashboard-swarm'));
+  note('swarm-dock-filling', await shotDockFilling(page, outDir, '00-swarm-dock'));
 
   // 03 — full-screen review open
   note('review-visible-dashboard', { ok: await waitVisible(page, '.mc-review-dialog:not([hidden])', 8000) });
   await shot(page, outDir, '03-review');
   await approve(page, note, 'approve-dashboard');
+
+  // Mid-swarm on the Gemini upgrade call: pinch a Gemini dock chip, confirm
+  // its mini terminal shows the redacted payload (never the raw "Sharma"),
+  // then close it again — before approving the upgrade below.
+  note('open-gemini-dock-mini', await openDockMini(page, 'gemini'));
+  await sleep(200);
+  const miniPayload = await page.evaluate(() => document.querySelector('.mc-mini-terminal .mc-term-lines')?.textContent ?? '');
+  note('mini-terminal-redacted', { ok: miniPayload.length > 0 && !/sharma/i.test(miniPayload) });
+  await shot(page, outDir, '00-mini-terminal');
+  await shot(page, outDir, '00-gemini-redacted');
+  note('close-gemini-dock-mini', await openDockMini(page, 'gemini'));
+
+  // 00 — both terminals now carry real content from this one turn: Nano's
+  // redact line ("Sharma → [Client A]"), the handoff between engines (logged
+  // the moment the gemini call started, above), and a non-zero footer byte
+  // count (recorded when that call's prompt was sent) — captured right after
+  // closing the mini terminal, before the approve loop below, so no stray
+  // re-render can leave a mini terminal open in this shot.
+  await shot(page, outDir, '00-panels-after');
+
   // The quick draft is followed by a Gemini-upgrade proposal; approve that too.
   for (let i = 0; i < 2; i++) {
     const visible = await waitVisible(page, '.mc-review-approve', 4000);
     if (!visible) break;
     await approve(page, note, `approve-dashboard-upgrade-${i}`);
   }
+
   // 04 — dashboard kept, pinned
   await say(page, 'save');
   await sleep(500);
@@ -170,9 +228,9 @@ export async function runArc(page, outDir) {
   await sleep(500);
   await shot(page, outDir, '05-floorplan');
 
-  // 06 — add Kannada (handoff cards, review, Approve)
+  // 06 — add Kannada (handoff log lines in both terminals, review, Approve)
   await say(page, 'add kannada');
-  note('handoff-visible-kannada', { ok: await waitVisible(page, '.mc-handoff-card', 4000) });
+  note('handoff-visible-kannada', { ok: await waitVisible(page, '.mc-term-line--handoff', 4000) });
   await shot(page, outDir, '06-kannada-handoff');
   await approve(page, note, 'approve-kannada');
   await sleep(500);
