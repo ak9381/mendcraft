@@ -81,7 +81,7 @@ export function buildSimMobileState(screen: MobileScreen, pairedOverride?: boole
     ],
     proposal: {
       prompt: 'add kannada',
-      summary: 'Better: grouped lights + a room plan',
+      summary: 'Kannada labels on 3 devices · Gemini planned, Nano wrote them',
       working: false,
       engine: 'gemini',
     },

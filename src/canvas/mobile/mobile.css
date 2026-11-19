@@ -229,7 +229,17 @@ html, body { margin: 0; }
 
 /* ---- approval screen: bottom sheet --------------------------------------*/
 .mc-m-approval { position: relative; flex: 1 1 auto; justify-content: flex-end; padding: 0; }
-.mc-m-backdrop { position: absolute; inset: 0; background: rgb(11 11 10 / 0.55); }
+.mc-m-backdrop { position: absolute; inset: 0; background: linear-gradient(to bottom, rgb(11 11 10 / 0.05), rgb(11 11 10 / 0.6) 70%); pointer-events: none; }
+/* What the change will look like, behind the sheet, so the top isn't empty. */
+.mc-m-preview { position: absolute; inset: 0; padding: 1.25rem 1rem; display: flex; flex-direction: column; gap: 0.75rem; overflow: hidden; }
+.mc-m-preview-eyebrow { margin: 0; font-size: 0.8125rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-2); }
+.mc-m-preview-title { margin: 0; font-size: 1.75rem; font-weight: 650; color: var(--text); }
+.mc-m-preview-tiles { display: flex; flex-direction: column; gap: 0.625rem; }
+.mc-m-preview-tile { display: flex; flex-direction: column; gap: 0.125rem; padding: 0.875rem 1rem; border-radius: 1rem;
+  border: 1px dashed var(--accent-2); background: var(--panel, #1a1a19); }
+.mc-m-preview-tile.is-on { border-style: solid; }
+.mc-m-preview-new { font-size: 1.125rem; font-weight: 600; color: var(--text); }
+.mc-m-preview-old { font-size: 0.875rem; color: var(--text-dim); }
 .mc-m-sheet {
   position: relative; z-index: 2;
   display: flex; flex-direction: column; gap: 0.75rem;

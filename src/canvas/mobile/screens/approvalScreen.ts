@@ -6,12 +6,29 @@ import type { SimMobileState } from '../mockState';
 import type { Platform } from '../platform';
 import { privacyChipHtml } from '../components/privacyChip';
 
+/** Kannada names the sim proposal would apply, shown as the after-preview. */
+const KANNADA: Record<string, string> = {
+  'wiz-desk': 'ಮೇಜಿನ ದೀಪ',
+  'wiz-ceiling': 'ಮೇಲ್ಛಾವಣಿ ದೀಪ',
+  'speaker-1': 'ಸ್ಪೀಕರ್',
+};
+
 export function renderApprovalScreen(main: HTMLElement, state: SimMobileState, _platform: Platform): void {
   const { proposal, privacy } = state;
   const engineLabel = proposal.engine === 'nano' ? 'Quick · on this device' : 'Deep · online';
 
   main.innerHTML = `
     <div class="mc-m-screen mc-m-approval">
+      <div class="mc-m-preview" aria-hidden="true" inert>
+        <p class="mc-m-preview-eyebrow">Preview · not applied yet</p>
+        <h2 class="mc-m-preview-title">${esc(state.boards.find((b) => b.active)?.title ?? 'Board')}</h2>
+        <div class="mc-m-preview-tiles">${state.devices.map((d) => `
+          <div class="mc-m-preview-tile${d.on ? ' is-on' : ''}">
+            <span class="mc-m-preview-new" lang="kn">${esc(KANNADA[d.id] ?? d.label)}</span>
+            <span class="mc-m-preview-old">${esc(d.label)} · ${esc(d.detail)}</span>
+          </div>`).join('')}
+        </div>
+      </div>
       <div class="mc-m-backdrop" aria-hidden="true"></div>
       <section class="mc-m-sheet" role="group" aria-label="Proposed change">
         <span class="mc-m-sheet-grabber" aria-hidden="true"></span>
