@@ -21,6 +21,11 @@ export interface MicFab {
 export const MIC_IDLE_LABEL = 'Talk';
 export const MIC_LISTENING_LABEL = 'Listening… press to stop';
 
+/** The one mic icon, shared by the canvas floating mic and the mobile say bar. */
+export const MIC_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true" focusable="false">' +
+  '<path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>';
+
 export function micFabState(listening: boolean): { pressed: 'true' | 'false'; label: string } {
   return { pressed: listening ? 'true' : 'false', label: listening ? MIC_LISTENING_LABEL : MIC_IDLE_LABEL };
 }
@@ -37,7 +42,7 @@ export function mountMicFab(
   const el = doc.createElement('button');
   el.type = 'button';
   el.className = 'mc-fab-mic';
-  el.innerHTML = `<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg><span class="mc-fab-mic-label"></span>`;
+  el.innerHTML = `${MIC_ICON_SVG}<span class="mc-fab-mic-label"></span>`;
   const label = el.querySelector<HTMLElement>('.mc-fab-mic-label')!;
   root.append(el);
 

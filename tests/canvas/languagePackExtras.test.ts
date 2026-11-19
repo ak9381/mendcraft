@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { EN_PACK, SCRIPTED_KN_PACK, STATUS_KEYS, coerceLanguagePack, statusText } from '../../src/canvas/languagePack';
 
 describe('new bar-string keys', () => {
-  it('both packs carry the Go / Hold-to-talk / Hands / offline strings', () => {
-    for (const k of ['go', 'holdToTalk', 'hands', 'simulateOffline', 'offlineOn'] as const) {
+  it('both packs carry the Go / Hands / offline strings', () => {
+    for (const k of ['go', 'hands', 'simulateOffline', 'offlineOn'] as const) {
       expect(EN_PACK.strings[k]).toBeTruthy();
       expect(SCRIPTED_KN_PACK.strings[k]).toBeTruthy();
     }

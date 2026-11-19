@@ -11,7 +11,7 @@ export const LANG_STRING_KEYS = [
   'showEverything', 'newBoard', 'save', 'undo', 'ai',
   'sayPlaceholder', 'emptyLead', 'emptyConnect', 'emptyFloorplan',
   'keep', 'drop',
-  'go', 'holdToTalk', 'hands', 'simulateOffline', 'offlineOn',
+  'go', 'hands', 'simulateOffline', 'offlineOn',
 ] as const;
 export type LangStringKey = (typeof LANG_STRING_KEYS)[number];
 
@@ -41,7 +41,7 @@ export const EN_PACK: LanguagePack = {
     sayPlaceholder: 'Say: new board · show everything · go to floor plan',
     emptyLead: 'Empty board.', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
     keep: 'PINCH  keep', drop: 'BRUSH  drop',
-    go: 'Go', holdToTalk: 'Hold to talk', hands: 'Hands',
+    go: 'Go', hands: 'Hands',
     simulateOffline: 'Simulate offline', offlineOn: 'Offline (simulated)',
   },
   phrases: {},
@@ -63,7 +63,6 @@ export const SCRIPTED_KN_PACK: LanguagePack = {
     keep: 'ಇಟ್ಟುಕೋ',
     drop: 'ಬೇಡ',
     go: 'ಹೋಗು',
-    holdToTalk: 'ಮಾತನಾಡಲು ಒತ್ತಿ ಹಿಡಿಯಿರಿ',
     hands: 'ಕೈ ಸನ್ನೆ',
     simulateOffline: 'ಆಫ್‌ಲೈನ್ ಅನುಕರಿಸು',
     offlineOn: 'ಆಫ್‌ಲೈನ್ (ಅನುಕರಣೆ)',

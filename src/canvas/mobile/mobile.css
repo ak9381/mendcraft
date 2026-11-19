@@ -138,9 +138,10 @@ html, body { margin: 0; }
 }
 .mc-m-talk:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .mc-m-talk[aria-pressed="true"] { background: var(--accent-2); border-color: var(--accent-2); }
-/* Material FAB: round, no label padding. */
-.mc-android .mc-m-talk { min-width: var(--mc-m-target); width: 3.5rem; height: 3.5rem; padding: 0; border-radius: 50%; font-size: 0; }
-.mc-android .mc-m-talk::before { content: '\25CF'; font-size: 1.25rem; }
+.mc-m-talk { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
+/* Material FAB: round, icon only, no label. */
+.mc-android .mc-m-talk { min-width: var(--mc-m-target); width: 3.5rem; height: 3.5rem; padding: 0; border-radius: 50%; }
+.mc-android .mc-m-talk-label { display: none; }
 
 /* ---- pair screen --------------------------------------------------------*/
 .mc-m-pair { padding: 1.5rem 1.25rem 0; gap: 1rem; }

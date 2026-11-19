@@ -130,8 +130,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       </div>
       <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
         <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
-        <button class="mc-btn primary" type="submit" data-i18n="go">Go</button>
-        <button class="mc-btn mc-mic" type="button" aria-pressed="false" data-i18n="holdToTalk" hidden>Hold to talk</button></form>
+        <button class="mc-btn primary" type="submit" data-i18n="go">Go</button></form>
       </div>
       <p class="mc-canvas-status" role="status" aria-live="polite"></p>
     </header>
@@ -1043,17 +1042,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyCamera(); persist();
   }, { passive: false });
 
-  // Push-to-talk where the browser has speech recognition (Chrome, Android).
-  const mic = root.querySelector<HTMLButtonElement>('.mc-mic')!;
   const voice = opts.voice ?? null;
-  if (voice?.supported) {
-    mic.hidden = false;
-    const start = () => { mic.setAttribute('aria-pressed', 'true'); voice.pushToTalkStart(); say('Listening…'); };
-    const stop = () => { mic.setAttribute('aria-pressed', 'false'); voice.pushToTalkStop(); };
-    mic.addEventListener('pointerdown', start); mic.addEventListener('pointerup', stop); mic.addEventListener('pointerleave', stop);
-  }
 
-  // Big floating mic: tap, keyboard or pinch toggles listening.
+  // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
   const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say) : null;
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
