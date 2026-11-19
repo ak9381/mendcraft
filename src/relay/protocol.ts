@@ -374,6 +374,60 @@ export function validateMessage(raw: unknown): RelayMessage | null {
   }
 }
 
+// ---- room-write rules mirror -------------------------------------------------
+
+/** Keep in lockstep with `isValidMessage` in firestore.rules — this is a pure
+ *  TS mirror of the same shape/size check, so client payloads can be tested
+ *  against it without a Firestore emulator. */
+const ROOM_MESSAGE_KEYS: readonly string[] = [
+  'v', 'from', 'type', 'at',
+  'cmd', 'run', 'runStatus', 'runControl',
+  'mimeType', 'dataBase64', 'music', 'snapshot', 'ask', 'reply',
+];
+const ROOM_MESSAGE_TYPES: readonly string[] = [
+  'hello', 'bye', 'cmd', 'run', 'runStatus', 'runControl',
+  'frame', 'music', 'state', 'privacyAsk', 'privacyReply',
+];
+/** ~150KB of raw JPEG once decoded — well above the 320px-wide, quality-0.5
+ *  stills remotePage.ts actually sends. */
+export const ROOM_MESSAGE_DATA_BASE64_MAX = 200_000;
+const ROOM_MESSAGE_MIME_TYPE_MAX = 40;
+
+function isSizedString(data: Record<string, unknown>, key: string, maxSize: number): boolean {
+  if (!(key in data)) return true;
+  const v = data[key];
+  return typeof v === 'string' && v.length <= maxSize;
+}
+function isMapField(data: Record<string, unknown>, key: string): boolean {
+  if (!(key in data)) return true;
+  const v = data[key];
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** True when a room-message write would pass firestore.rules' `isValidMessage`
+ *  (shape allowlist + size caps). Ignores the `at` server-timestamp sentinel's
+ *  exact value since that only resolves on the server. */
+export function fitsRoomMessageRules(raw: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const data = raw as Record<string, unknown>;
+  return (
+    Object.keys(data).every((k) => ROOM_MESSAGE_KEYS.includes(k)) &&
+    data.v === 1 &&
+    (data.from === 'host' || data.from === 'phone' || data.from === 'control') &&
+    typeof data.type === 'string' && ROOM_MESSAGE_TYPES.includes(data.type) &&
+    isSizedString(data, 'mimeType', ROOM_MESSAGE_MIME_TYPE_MAX) &&
+    isSizedString(data, 'dataBase64', ROOM_MESSAGE_DATA_BASE64_MAX) &&
+    isMapField(data, 'cmd') &&
+    isMapField(data, 'run') &&
+    isMapField(data, 'runStatus') &&
+    isMapField(data, 'runControl') &&
+    isMapField(data, 'music') &&
+    isMapField(data, 'snapshot') &&
+    isMapField(data, 'ask') &&
+    isMapField(data, 'reply')
+  );
+}
+
 // ---- pairing state machine --------------------------------------------------
 
 export type PairState = 'idle' | 'waiting' | 'paired' | 'gone';

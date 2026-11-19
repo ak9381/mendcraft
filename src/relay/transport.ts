@@ -3,7 +3,7 @@
 // are interchangeable. The fake powers unit tests and the ?sim=1 Play demo —
 // pairing works end-to-end in one page with zero network.
 
-import { validateMessage, type RelayMessage } from './protocol';
+import { fitsRoomMessageRules, validateMessage, type RelayMessage } from './protocol';
 
 export interface RelayTransport {
   readonly kind: 'fake' | 'firestore';
@@ -30,6 +30,11 @@ export function createFakeTransport(): RelayTransport {
       // microtask so a publish inside a handler can't recurse synchronously.
       const valid = validateMessage(JSON.parse(JSON.stringify(msg)));
       if (!valid) throw new Error('relay: refused to publish a malformed message');
+      // Mirrors firestore.rules' write-shape check, so the sim/test path fails
+      // the same way a real Firestore write would.
+      if (!fitsRoomMessageRules({ ...valid, at: new Date() })) {
+        throw new Error('relay: refused to publish a message the room rules would reject');
+      }
       const handlers = rooms.get(roomId);
       if (!handlers) return;
       await Promise.resolve();

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   CODE_LENGTH,
+  ROOM_MESSAGE_DATA_BASE64_MAX,
   TOKEN_ALPHABET,
   TOKEN_LENGTH,
   advancePair,
   buildJoinUrl,
+  fitsRoomMessageRules,
   generateRoomToken,
   groupCode,
   isRemoteRoute,
@@ -122,6 +124,53 @@ describe('relay message envelope', () => {
     // A host must not publish music (only the phone drives playback).
     expect(validateMessage({ v: 1, from: 'host', type: 'music', music: { title: 'S', playing: false, volume: 0.2 } }))
       .toBeNull();
+  });
+});
+
+describe('room-write rules shape (mirrors firestore.rules isValidMessage)', () => {
+  const at = new Date();
+
+  it('accepts every real message shape a client publishes', () => {
+    const samples: unknown[] = [
+      { v: 1, from: 'phone', type: 'hello', at },
+      { v: 1, from: 'host', type: 'bye', at },
+      { v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'undo' }, at },
+      { v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'command', text: 'add a door' }, at },
+      { v: 1, from: 'control', type: 'run', run: { runId: 'r1', recipeId: 'c1', device: 'lamp' }, at },
+      { v: 1, from: 'host', type: 'runStatus', runStatus: { runId: 'r1', recipeId: 'c1', status: 'running' }, at },
+      { v: 1, from: 'control', type: 'runControl', runControl: { runId: 'r1', decision: 'confirm' }, at },
+      { v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: 'a'.repeat(5000), at },
+      { v: 1, from: 'phone', type: 'music', music: { title: 'Song', playing: true, volume: 0.5 }, at },
+      { v: 1, from: 'host', type: 'state', snapshot: { v: 1 }, at },
+      { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'j1', text: 'hi' }, at },
+      { v: 1, from: 'host', type: 'privacyReply', reply: { jobId: 'j1', text: 'hi', routeLine: 'x', sentBytes: 2, cleaned: true }, at },
+    ];
+    for (const s of samples) expect(fitsRoomMessageRules(s)).toBe(true);
+  });
+
+  it('rejects a payload with a key outside the known message shape', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'hello', at, extra: 'nope' })).toBe(false);
+  });
+
+  it('rejects a camera still over the size cap', () => {
+    const big = 'a'.repeat(ROOM_MESSAGE_DATA_BASE64_MAX + 1);
+    expect(
+      fitsRoomMessageRules({ v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: big, at }),
+    ).toBe(false);
+    const ok = 'a'.repeat(ROOM_MESSAGE_DATA_BASE64_MAX);
+    expect(
+      fitsRoomMessageRules({ v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: ok, at }),
+    ).toBe(true);
+  });
+
+  it('rejects an unknown role or type', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'attacker', type: 'hello', at })).toBe(false);
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'evil', at })).toBe(false);
+    expect(fitsRoomMessageRules({ v: 2, from: 'phone', type: 'hello', at })).toBe(false);
+  });
+
+  it('rejects a non-map payload for a nested field', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'cmd', cmd: 'not-a-map', at })).toBe(false);
   });
 });
 
