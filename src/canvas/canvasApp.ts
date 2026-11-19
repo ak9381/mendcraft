@@ -27,6 +27,7 @@ import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatLedgerLine } from './ledger';
 import { mountCanvasHands } from './canvasHands';
+import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
@@ -46,6 +47,9 @@ export interface CanvasOptions {
   seed?: boolean;
   /** Start offline (navigator.onLine at mount); the bar toggle can also force it. */
   online?: boolean;
+  /** ?sim=1: teach-a-gesture records a deterministic synthetic sample and
+   *  keeps taught gestures in memory instead of IndexedDB. */
+  sim?: boolean;
   /** Desktop hub: run Gemini on a redacted prompt for a connected phone. */
   privacyGemini?: (redacted: string) => Promise<string>;
 }
@@ -105,6 +109,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <button class="mc-btn mc-mic" type="button" aria-pressed="false" data-i18n="holdToTalk" hidden>Hold to talk</button></form>
       <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
+      <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
+      <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
       </div>
@@ -143,6 +149,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const history = createCanvasHistory();
   const ledger = createCanvasLedger();
   const say = (t: string) => { statusEl.textContent = t; };
+
+  const teachPanel = mountTeachPanel(root, {
+    devices: () => deviceRefs(),
+    sim: opts.sim,
+    say,
+    onSaved: () => {},
+    onTriggered: (gesture) => {
+      const text = typeof gesture.action.text === 'string' ? gesture.action.text : '';
+      if (text) run(text);
+      const frameId = focusId ?? lastFocus ?? reg.list()[0]?.id ?? '';
+      history.push({ frameId, before: null, after: null, by: 'her', summary: `Custom gesture ${gesture.name} triggered -> ${gesture.actionSummary}` });
+      historyRender();
+    },
+  });
 
   // ---- language pack: UI strings via data-i18n, English when no pack ----
   const str = (k: LangStringKey): string => pack?.strings[k] ?? EN_PACK.strings[k]!;
@@ -809,6 +829,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // ---- commands ----
   function run(text: string): boolean {
+    if (/^\s*teach a gesture\s*$/i.test(text)) { teachPanel.open(); return true; }
+    if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { teachPanel.openList(); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
     // Gimbal phrases next: follow my hands / hold still / point / scan the room.
@@ -872,7 +894,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- input ----
   root.querySelector('.mc-bar')!.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands() } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;

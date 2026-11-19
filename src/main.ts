@@ -7,6 +7,7 @@ import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from 
 import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
+import { createHandHover, magnetPull } from './ui/handHover';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
 import type { GestureAction } from './input/gestureMap';
@@ -5046,6 +5047,11 @@ const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
+const handHover = createHandHover();
+/** How strongly the visual cursor eases toward a hovered control's centre
+ *  (0 = none, 1 = snaps straight there); the real aim point used for hit
+ *  testing is never touched, only where the cursor is drawn. */
+const MAGNET_PULL = 0.35;
 
 function placeCursor(x: number, y: number): void {
   const rect = viewportEl.getBoundingClientRect();
@@ -5134,8 +5140,19 @@ function handleHandEvent(raw: HandEvent): void {
       const s = smoothAim(e.x, e.y, performance.now());
       const raw = toClient(s.x, s.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
-      placeCursorClient(aimed.clientX, aimed.clientY);
-      handCursor.classList.toggle('snapped', !!aimed.id);
+      // The real DOM control under the aim point (if any) gets its own
+      // outline+scale highlight instead of a ring on the cursor — no second,
+      // redundant dot sitting on top of the thing it's pointing at.
+      const ctl = !resting ? handClickable(aimed.clientX, aimed.clientY) : null;
+      handHover.setTarget(ctl);
+      const snapped = !!ctl || !!aimed.id;
+      // Visual-only magnetic pull toward the hovered control's centre; the
+      // aim point used for hit-testing below stays exact.
+      const drawAt = ctl
+        ? magnetPull({ x: aimed.clientX, y: aimed.clientY }, ctl.getBoundingClientRect(), MAGNET_PULL)
+        : { x: aimed.clientX, y: aimed.clientY };
+      placeCursorClient(drawAt.x, drawAt.y);
+      handCursor.classList.toggle('snapped', snapped);
       // Hand coords are mirrored to screen space (x = 1 - camera x); store the
       // camera-frame position so point-and-say can crop the frame there.
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
@@ -5147,7 +5164,6 @@ function handleHandEvent(raw: HandEvent): void {
       // hurt). Hover a button or a canvas object and wait for the ring to fill.
       if (!resting) {
         const now = performance.now();
-        const ctl = handClickable(aimed.clientX, aimed.clientY);
         const target: unknown = ctl ?? aimed.id ?? null;
         const d = dwell.update(target, now);
         handCursor.style.setProperty('--dwell', String(d.progress));
@@ -5229,6 +5245,7 @@ function handleHandEvent(raw: HandEvent): void {
     case 'lost':
       cursorFilter.reset();
       handCursor.hidden = true;
+      handHover.setTarget(null);
       viewport.endDrag?.();
       break;
   }

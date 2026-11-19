@@ -419,6 +419,13 @@ a.brand:hover { color: var(--accent); }
   background: rgba(245, 166, 35, 0.35);
 }
 
+/* No persistent cursor dot (see Akash's "that dot" note): over empty space
+   it's only a very faint soft shadow; over a real target the target itself
+   is highlighted (.hand-hover on a DOM control, setHovered on a canvas
+   object) so the base circle goes fully transparent instead of drawing its
+   own ring on top. Pinching gets a brief contact ring (::before), dwelling
+   keeps its progress ring (::after) — both independent of the base fill so
+   they still show while "snapped" zeroes it out. */
 .hand-cursor {
   /* Size tracks the active interaction profile's target scale (hand-adaptive
      input), set on :root; falls back to 1 before any profile is applied. */
@@ -426,21 +433,43 @@ a.brand:hover { color: var(--accent); }
   width: calc(22px * var(--mc-target-scale, 1));
   height: calc(22px * var(--mc-target-scale, 1));
   margin: calc(-11px * var(--mc-target-scale, 1)) 0 0 calc(-11px * var(--mc-target-scale, 1));
-  border: 3px solid var(--accent);
   border-radius: 50%;
   pointer-events: none;
   z-index: 8;
-  box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(0, 0, 0, 0.35);
-  transition: background 0.1s, width 0.15s, height 0.15s, border-color 0.1s;
-}
-
-.hand-cursor.pinching {
-  background: rgba(79, 156, 255, 0.4);
+  background: transparent;
+  box-shadow: 0 0 16px 4px rgba(255, 255, 255, 0.1);
+  transition: background 0.1s, box-shadow 0.1s;
 }
 
 .hand-cursor.snapped {
-  border-color: #f59e0b;
-  box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgb(245 158 11 / 0.55), 0 0 12px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
+}
+
+.hand-cursor.pinching {
+  background: radial-gradient(circle, rgb(79 156 255 / 0.55) 0%, rgb(79 156 255 / 0.18) 60%, transparent 75%);
+  box-shadow: none;
+}
+
+/* Contact ring: a short pulse right at the pinch (::before), not a lingering
+   dot through a held drag. */
+.hand-cursor::before {
+  content: '';
+  position: absolute;
+  inset: calc(-9px * var(--mc-target-scale, 1));
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  box-sizing: border-box;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hand-cursor.pinching::before { animation: hand-cursor-ring 240ms ease-out; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hand-cursor.pinching::before { opacity: 0.85; transform: scale(0.8); }
+}
+@keyframes hand-cursor-ring {
+  0% { opacity: 0.9; transform: scale(1.5); }
+  100% { opacity: 0; transform: scale(0.8); }
 }
 
 .hand-cursor::after {
@@ -459,10 +488,6 @@ a.brand:hover { color: var(--accent); }
   transform: scale(0.3);
   transition: opacity 0.12s linear;
 }
-.hand-cursor.dwelling {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px #fff, 0 0 0 calc(3px + 8px * var(--dwell, 0)) rgb(142 157 255 / 0.45);
-}
 .hand-cursor.dwelling::after {
   opacity: 1;
   border-color: var(--accent);
@@ -470,6 +495,17 @@ a.brand:hover { color: var(--accent); }
   mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
   transform: scale(calc(0.35 + var(--dwell, 0) * 0.75));
+}
+
+/* The element a hand is over — outline + slight scale, not colour alone, and
+   it never steals keyboard focus (see src/ui/handHover.ts). */
+.hand-hover {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  transform: scale(1.04);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hand-hover { transition: outline-color 0.12s, transform 0.12s; }
 }
 
 .pinch-meter {
