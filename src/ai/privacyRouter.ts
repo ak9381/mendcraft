@@ -73,7 +73,13 @@ export function decidePrivacyRoute(
   if (ctx.hubReachable) {
     return { action: 'hub', routeLine: ROUTE_VIA_HUB, cleaned: true };
   }
-  const ask = ctx.askIfSensitive !== false && looksSensitive(text, people);
+  // looksSensitive only catches a person when their full stored name appears
+  // verbatim — it misses a bare first name ("Tell Priya I'm late" when the
+  // directory has "Priya Sharma"). There's no safe partial-name match without
+  // false positives, so once there's a directory to protect at all, always
+  // ask before a raw/uncleaned cloud call rather than trust the regex alone.
+  const hasDirectory = people.length > 0;
+  const ask = ctx.askIfSensitive !== false && (hasDirectory || looksSensitive(text, people));
   if (ask) return { action: 'ask', routeLine: ROUTE_ASK_FIRST, cleaned: false };
   return { action: 'direct-uncleaned', routeLine: ROUTE_DIRECT_UNCLEANED, cleaned: false };
 }

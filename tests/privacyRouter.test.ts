@@ -52,12 +52,19 @@ describe('decidePrivacyRoute', () => {
     expect(d).toEqual({ action: 'ask', routeLine: ROUTE_ASK_FIRST, cleaned: false });
   });
 
-  it('falls back to a labelled uncleaned Gemini call when the text is not sensitive, or when ask is off', () => {
-    const plain = decidePrivacyRoute('dim the lamp', { hasLocalNano: false, hubReachable: false, isPhone: true }, [priya]);
+  it('falls back to a labelled uncleaned Gemini call only when there is no directory to protect', () => {
+    const plain = decidePrivacyRoute('dim the lamp', { hasLocalNano: false, hubReachable: false, isPhone: true }, []);
     expect(plain).toEqual({ action: 'direct-uncleaned', routeLine: ROUTE_DIRECT_UNCLEANED, cleaned: false });
     const forced = decidePrivacyRoute('email Priya Rao', { hasLocalNano: false, hubReachable: false, askIfSensitive: false }, [priya]);
     expect(forced.action).toBe('direct-uncleaned');
     expect(forced.routeLine).toBe(ROUTE_DIRECT_UNCLEANED);
+  });
+
+  it('asks before a raw cloud call whenever a directory exists, even if the text looks plain — a bare first name ("Tell Priya I\'m late") would not trip the full-name regex', () => {
+    const plain = decidePrivacyRoute('dim the lamp', { hasLocalNano: false, hubReachable: false, isPhone: true }, [priya]);
+    expect(plain).toEqual({ action: 'ask', routeLine: ROUTE_ASK_FIRST, cleaned: false });
+    const bareFirstName = decidePrivacyRoute("Tell Priya I'm late", { hasLocalNano: false, hubReachable: false }, [priya]);
+    expect(bareFirstName.action).toBe('ask');
   });
 });
 
