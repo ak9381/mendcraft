@@ -37,6 +37,8 @@ import { resolveLanguage } from '../ai/language';
 import { activePeople, protectText } from '../privacy/directory';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
+import { createHandPointer, type HandPointer } from './handPointer';
+import { mountMicFab } from './micFab';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -149,6 +151,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <div class="mc-ai-lang"></div>
       </div>
     </aside>`;
+  const phoneProp = document.createElement('section');
+  phoneProp.className = 'mc-phone-prop'; phoneProp.setAttribute('aria-label', 'Proposed change'); phoneProp.hidden = true;
+  root.append(phoneProp);
+  const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
@@ -557,7 +563,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       });
       const host = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-prop-host`)!;
       const finish = (kept: boolean) => {
-        host.hidden = true; host.innerHTML = ''; ghost(frameId, null); pending = null;
+        host.hidden = true; host.innerHTML = ''; card.remove(); phoneProp.hidden = true; ghost(frameId, null); pending = null;
         aiPanel.querySelector('.mc-ai-state')!.textContent = kept ? `Kept. Say “undo” to put it back.` : 'Dropped. Nothing changed.';
         autoHideAi();
         say(kept ? `Kept: ${summary}. Say “undo” to put it back.` : 'Dropped. Nothing changed.');
@@ -568,7 +574,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         catalog: { helper: ranId === 'nano' ? 'Quick' : 'Deep', byLine: ranId === 'nano' ? 'Quick · on this device' : 'Deep · online',
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
       }, { onKeep: () => { prop.accept(); finish(true); }, onDrop: () => { prop.reject(); finish(false); } });
-      host.innerHTML = ''; host.append(card); host.hidden = false;
+      host.innerHTML = '';
+      // Phones: the board is wider than the screen, so the Proposal comes up
+      // as a bottom sheet above the thumb bar instead (reachable by touch and hand).
+      if (isPhone()) { phoneProp.replaceChildren(card); phoneProp.hidden = false; showAi(false); }
+      else { host.append(card); host.hidden = false; }
       tagCardI18n(card);
       pending = { frameId, prop, card };
       say(`${summary}. Pinch or say “keep”; brush or say “drop”.`);
@@ -831,20 +841,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- inputs: hands (pinch keep / brush drop) + gimbal modes in one composer.
   // The existing Hands button starts/stops it; gimbal voice goes via handleSpeech.
   let handsMountOk = false; let handsOn = false; let handsBusy = false;
+  // Every control on screen is reachable by hand (deep hit-test + snap radius).
+  const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function' ? createHandPointer(document) : null;
   const inputs = createCanvasInputs({
     root,
     hands: async (r, onEvent) => { const s = await mountCanvasHands(r, onEvent); handsMountOk = !!s; return s; },
     on: {
-      keep, drop,
+      // A pinch aimed at a control activates that control (handPointer);
+      // only a pinch over empty canvas means "keep".
+      keep: () => { if (!handPointer?.consumedPinch()) keep(); },
+      drop,
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
-      frame: (hands, now) => teachPanel.matchFrame(hands, now),
+      frame: (hands, now) => { handPointer?.update(hands, now); teachPanel.matchFrame(hands, now); },
     },
   });
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsOn) { inputs.stop(); handsOn = false; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handPointer?.lost(); handsOn = false; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
     handsBusy = true; handsMountOk = false;
     await inputs.start(root);
@@ -852,7 +867,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!handsMountOk) { say('No camera here — hands stay off.'); return; }
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
-    say('Hands on: pinch to keep, brush to drop.');
+    say('Hands on: point at any button and pinch to press it. Pinch on empty canvas to keep, brush to drop.');
   }
 
   // ---- offline (simulate + real) ----
@@ -988,6 +1003,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
     phoneMenu?.destroy();
+    micFab?.destroy();
+    handPointer?.destroy();
     removeEventListener('pointermove', onWindowPointerMove);
     removeEventListener('pointerup', onWindowPointerUp);
     removeEventListener('keydown', onWindowKeydown);
@@ -1013,6 +1030,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const stop = () => { mic.setAttribute('aria-pressed', 'false'); voice.pushToTalkStop(); };
     mic.addEventListener('pointerdown', start); mic.addEventListener('pointerup', stop); mic.addEventListener('pointerleave', stop);
   }
+
+  // Big floating mic: tap, keyboard or pinch toggles listening.
+  const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say) : null;
+  // Sim/test hook: drive the hand pointer without a camera.
+  if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
 
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();

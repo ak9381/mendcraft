@@ -12,7 +12,8 @@
     "eval:commands": "vitest run --config vitest.eval.config.ts",
     "eval:device-voice": "vitest run --config vitest.eval.config.ts tests/eval/runDeviceVoice.ts",
     "a11y:axe": "node scripts/a11y-axe.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "hands:reach": "node scripts/hand-reach.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",

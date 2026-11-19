@@ -215,7 +215,11 @@
   .mc-ai-pending .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
   .mc-ai-pending .mc-proposal-route,
   .mc-ai-pending .mc-proposal-sent { display: none; }
-  .mc-ai-pending .mc-proposal-actions { margin-top: 8px; }
+  /* The Proposal can be taller than the phone panel: let it scroll and keep
+     Keep / Drop pinned at the bottom so they're always reachable (touch or hand). */
+  .mc-ai-pending { flex: 0 1 auto; min-height: 0; overflow: auto; }
+  .mc-ai-pending .mc-proposal-actions { margin-top: 8px; position: sticky; bottom: 0; z-index: 1;
+    background: var(--panel); padding: 8px 0 2px; box-shadow: 0 -12px 12px -8px var(--panel); }
   .mc-ai-pending .mc-proposal-keep,
   .mc-ai-pending .mc-proposal-drop { min-height: 52px; font-size: 18px; }
 }
@@ -296,3 +300,49 @@
 .mc-menu-items > .mc-btn[aria-pressed='true'] { outline: 2px solid var(--accent, #8ea2ff); outline-offset: -2px; }
 @keyframes mc-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .mc-menu-sheet { animation: none; } }
+
+/* Big floating mic (micFab.ts): reachable by tap, keyboard and hand pinch. */
+.mc-fab-mic { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: inline-flex; align-items: center; gap: 10px;
+  min-width: 72px; min-height: 72px; padding: 0 22px 0 20px; border-radius: 999px; border: 2px solid var(--text);
+  background: var(--panel-2); color: var(--text); font-size: 18px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); }
+.mc-fab-mic:focus-visible { outline: 3px solid var(--accent, #8ea2ff); outline-offset: 3px; }
+.mc-fab-mic.is-listening { background: var(--text); color: #0d0d0c; }
+.mc-fab-mic.is-listening::after { content: ''; position: absolute; inset: -8px; border-radius: inherit;
+  border: 3px solid var(--accent, #8ea2ff); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
+@keyframes mc-mic-pulse { from { opacity: 1; transform: scale(0.96); } to { opacity: 0; transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { .mc-fab-mic.is-listening::after { animation: none; opacity: 1; } }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: 412px; }
+@media (max-width: 600px) {
+  /* Phones: top-right, clear of the thumb bar and the Proposal sheet (thumbs also have Hold to talk in the bar). */
+  .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
+  .mc-fab-mic .mc-fab-mic-label { display: none; }
+  .mc-fab-mic.is-listening .mc-fab-mic-label { display: inline; }
+  .mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: 12px; }
+  .mc-menu-open .mc-fab-mic { display: none; }
+}
+
+/* Hand pointer feedback (handPointer.ts): no dot. Target frame, faint shadow
+   over empty space, a ring only while pinching. Fixed overlays so they work
+   for controls inside shadow DOM too. */
+.mc-hand-frame, .mc-hand-shadow, .mc-hand-ring { position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none; }
+.mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent, #8ea2ff);
+  box-shadow: 0 0 0 4px rgb(142 162 255 / 0.25), 0 0 18px rgb(142 162 255 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(142 162 255 / 0.4), 0 0 24px rgb(142 162 255 / 0.7); }
+.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle, rgb(255 255 255 / 0.16), transparent 70%); }
+.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #fff; animation: mc-ring-press 260ms ease-out forwards; }
+@keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
+.hand-hover { scale: 1.03; }
+@media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .hand-hover { scale: none; } }
+
+/* Phone Proposal sheet (keep/drop above the thumb bar). */
+.mc-phone-prop { display: none; }
+@media (max-width: 600px) {
+  .mc-phone-prop:not([hidden]) { display: block; position: absolute; z-index: 30; left: 8px; right: 8px;
+    bottom: calc(var(--mc-bar-h, 132px) - 16px); max-height: 58vh; overflow: auto; border-radius: 18px;
+    background: var(--panel); border: 1px solid var(--border); box-shadow: 0 -8px 28px rgb(0 0 0 / 0.5); }
+  .mc-phone-prop .mc-proposal { padding: 12px 14px; }
+  .mc-phone-prop .mc-proposal-title { font-size: 22px; }
+  .mc-phone-prop .mc-proposal-actions { position: sticky; bottom: 0; background: var(--panel); padding: 8px 0 4px; }
+  .mc-phone-prop .mc-proposal-keep, .mc-phone-prop .mc-proposal-drop { min-height: 52px; font-size: 18px; }
+}
