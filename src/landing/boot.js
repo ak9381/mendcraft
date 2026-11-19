@@ -375,7 +375,7 @@ function render(){renderBadge();renderNet();renderInsp();renderLedgers();renderT
 
 /* screens */
 const SCREENS=['landing','editor','ledger','control-room','recipes','preferences'];
-const APP_ROUTES={editor:'/studio',ledger:'/studio',recipes:'/studio',preferences:'/studio','control-room':'/control'};
+const APP_ROUTES={editor:'/canvas.html',ledger:'/canvas.html',recipes:'/canvas.html',preferences:'/canvas.html','control-room':'/canvas.html'};
 function show(n,focus){if(APP_ROUTES[n]){location.assign(APP_ROUTES[n]);return}if(!SCREENS.includes(n))n='landing';S.screen=n;$$('.screen').forEach(s=>s.hidden=s.dataset.screen!==n);
  $('#hdr').classList.toggle('night',n==='landing'||n==='control-room');
  $$('.top nav button').forEach(b=>{if(b.dataset.go===n){b.setAttribute('aria-current','page');b.scrollIntoView({block:'nearest',inline:'nearest'})}else b.removeAttribute('aria-current')});closeMenus();
