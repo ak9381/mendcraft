@@ -120,6 +120,13 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   };
 }
 
+/** How long the typable short code stays resolvable before it auto-expires,
+ *  win or lose — the code is only 40 bits of entropy (brute-forceable in
+ *  principle), so this bounds the window regardless of whether a phone ever
+ *  joins. State-changing session actions always address the room by its
+ *  full 24-char token, never the short code, once a session is established. */
+export const ALIAS_TTL_MS = 5 * 60 * 1000;
+
 /** Laptop side: create a room, wait for the phone, surface commands/frames. */
 export async function createHostSession(
   transport: RelayTransport,
@@ -128,6 +135,13 @@ export async function createHostSession(
   const token = generateRoomToken(random);
   const code = shortCodeOf(token);
   const core = makeCore('host', transport, token);
+  let aliasCleared = false;
+  async function clearAliasOnce(): Promise<void> {
+    if (aliasCleared) return;
+    aliasCleared = true;
+    await transport.clearAlias(code).catch(() => undefined);
+  }
+  const aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
   let musicCb: ((music: MusicStatus) => void) | null = null;
@@ -173,7 +187,8 @@ export async function createHostSession(
       // job once a phone is in the room. Rejoins skip the duplicate ack.
       if (!wasPaired) {
         void transport.publish(token, { v: 1, from: 'host', type: 'hello' }).catch(() => undefined);
-        void transport.clearAlias(code).catch(() => undefined);
+        clearTimeout(aliasTimer);
+        void clearAliasOnce();
       }
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
@@ -216,7 +231,8 @@ export async function createHostSession(
       transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
     publishState,
     close: async () => {
-      await transport.clearAlias(code).catch(() => undefined);
+      clearTimeout(aliasTimer);
+      await clearAliasOnce();
       await core.close();
     },
   };

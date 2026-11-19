@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CODE_LENGTH,
   ROOM_MESSAGE_DATA_BASE64_MAX,
@@ -22,7 +22,7 @@ import {
   type RelayMessage,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
+import { ALIAS_TTL_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
 
 const seqRandom =
   (start = 0): RandomBytes =>
@@ -231,6 +231,37 @@ describe('fake transport', () => {
     expect(await t.resolveAlias('ABCDEFGH')).toBe('token-1');
     await t.clearAlias('ABCDEFGH');
     expect(await t.resolveAlias('ABCDEFGH')).toBeNull();
+  });
+});
+
+describe('host session short-code alias TTL', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('auto-expires the short code if nobody joins in time', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    await vi.advanceTimersByTimeAsync(ALIAS_TTL_MS);
+    expect(await t.resolveAlias(host.code)).toBeNull();
+    // A late close() after the alias already expired must not throw.
+    await host.close();
+  });
+
+  it('does not fire the expiry timer once the phone has paired', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.state()).toBe('paired');
+    expect(await t.resolveAlias(host.code)).toBeNull(); // cleared on pair, not by the timer
+    await vi.advanceTimersByTimeAsync(ALIAS_TTL_MS);
+    await guest.close();
+    await host.close();
   });
 });
 
