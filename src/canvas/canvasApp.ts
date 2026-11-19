@@ -493,6 +493,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
     if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusOnInsets(f.rect, vp(), insets())); }
   }
+  // sim's scripted engines can resolve near-instantly, which would settle
+  // the swarm (and open the review) before a screenshot — or a person — ever
+  // sees it mid-flight. Hold it visible for a minimum stretch in sim only;
+  // real network latency already paces it for everyone else.
+  const SWARM_MIN_HOLD_MS = 2600;
+  let swarmStartedAt = 0;
+  async function holdSwarmMinimum(): Promise<void> {
+    if (!opts.sim) return;
+    const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+  }
   function aiSent(_utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
@@ -510,6 +521,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,
     // layout, tile frames) and Nano (labels, device values, redaction/Kannada
     // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls.
+    swarmStartedAt = Date.now();
     swarm.start(buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
       tileCount: ctx.tileCount,
       redactedName: (protect?.used.length ?? 0) > 0,
@@ -633,9 +645,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
-    // The proposal/review is ready — the swarm settles now, not decoration
+  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
+    // The proposal/review is ready — the swarm settles now (after a minimum
+    // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
+    await holdSwarmMinimum();
     swarm.settle();
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
     if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }

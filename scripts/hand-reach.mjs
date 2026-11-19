@@ -68,6 +68,22 @@ async function audit(page, state) {
   }, state);
 }
 
+// Waits for a selector to exist AND be on-screen; resolves false (never
+// throws) on timeout so a missing control is a recorded miss, not a hang.
+async function waitForVisible(page, selector, timeout = 8000) {
+  try {
+    await page.waitForFunction((sel) => {
+      const el = document.querySelector(sel);
+      if (!el || el.hidden) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }, { timeout }, selector);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Real hand activation of the first control matching a predicate.
 async function handPress(page, test) {
   return page.evaluate(async (src) => {
@@ -109,28 +125,22 @@ try {
     await sleep(300);
 
     real.push({ device: d.name, step: 'Connect this room', ...await handPress(page, (el, l) => /connect this room/i.test(l)) });
-    await sleep(2500);
+    // Every decision — desktop or phone — opens the same full-screen review;
+    // its own Approve/Reject are the only visible decision controls (the
+    // underlying Proposal's Keep/Drop stay in the DOM, hidden, for Approve
+    // to proxy-click).
+    await waitForVisible(page, '.mc-review-approve', 5000);
     all.push(...await audit(page, S('proposal')));
-    if (d.name !== 'desktop') { /* phone: screenshot the proposal reachable by hand */ }
-    let kept = await handPress(page, (el, l) => /^keep/i.test(l));
-    if (!kept.ok) {
-      // Phones: the Proposal lives in the AI activity panel — open it by hand first.
-      real.push({ device: d.name, step: 'AI activity (to review)', ...await handPress(page, (el) => el.dataset?.cmd === 'ai') });
-      await sleep(500);
-      all.push(...await audit(page, S('proposal-panel')));
-      await page.screenshot({ path: join(OUT, `${d.name}-proposal-by-hand.png`) });
-      kept = await handPress(page, (el, l) => /^keep/i.test(l));
-      await sleep(300);
-      await handPress(page, (el) => el.dataset?.cmd === 'ai');
-    }
-    real.push({ device: d.name, step: 'Keep', ...kept });
-    // The sim follows the quick draft with a Gemini upgrade Proposal: keep that too.
+    const kept = await handPress(page, (el, l) => /^approve$/i.test(l));
+    real.push({ device: d.name, step: 'Approve', ...kept });
+    // The sim follows the quick draft with a Gemini upgrade Proposal: approve that too.
     for (let i = 0; i < 2; i++) {
-      await sleep(2500);
-      const more = await handPress(page, (el, l) => /^keep/i.test(l));
+      const visible = await waitForVisible(page, '.mc-review-approve', 4000);
+      if (!visible) break;
+      const more = await handPress(page, (el, l) => /^approve$/i.test(l));
       if (!more.ok) break;
       all.push(...await audit(page, S('upgrade-proposal')));
-      real.push({ device: d.name, step: 'Keep upgrade', ...more });
+      real.push({ device: d.name, step: 'Approve upgrade', ...more });
     }
     await sleep(1500);
     all.push(...await audit(page, S('dashboard')));
@@ -162,7 +172,9 @@ try {
     await page.evaluate(() => { window.__mcHand.setDryRun(true); window.__mcHand.pinch(false); window.__mcHand.setDryRun(false); window.__mcHand.lost(); });
 
     // Connect sheet
-    await page.type('#mc-say-in', 'connect a device'); await page.keyboard.press('Enter'); await sleep(800);
+    await page.evaluate(() => { const i = document.querySelector('#mc-say-in'); i.focus(); i.value = ''; });
+    await page.keyboard.type('connect a device');
+    await page.keyboard.press('Enter'); await sleep(800);
     all.push(...await audit(page, S('connect-sheet')));
     await page.keyboard.press('Escape'); await sleep(200);
 
