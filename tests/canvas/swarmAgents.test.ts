@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignSwarmColor,
+  buildMixedSwarmPlan,
   buildSwarmAgents,
-  buildSwarmPlanForCall,
   createSwarmLayer,
   honestyNote,
   poseAt,
   REAL_CALL_CAP,
   swarmPillText,
   type SwarmAgentSpec,
+  type SwarmTask,
 } from '../../src/canvas/swarmAgents';
 
 describe('assignSwarmColor', () => {
@@ -51,25 +52,111 @@ describe('buildSwarmAgents — cursor count/colour assignment', () => {
   });
 });
 
-describe('buildSwarmPlanForCall', () => {
-  it('lands in the ~10-20 cursor range the demo calls for', () => {
-    const plan = buildSwarmPlanForCall('gemini');
-    const agents = buildSwarmAgents(plan);
-    expect(agents.length).toBeGreaterThanOrEqual(10);
-    expect(agents.length).toBeLessThanOrEqual(20);
-    expect(agents.filter((a) => a.real).length).toBe(1);
+describe('buildMixedSwarmPlan', () => {
+  const tasks: SwarmTask[] = ['dashboard', 'floorplan', 'kannada', 'generic'];
+
+  it('lands in the ~10-20 cursor range for every task and real engine', () => {
+    for (const task of tasks) {
+      for (const real of ['gemini', 'nano'] as const) {
+        const agents = buildSwarmAgents(buildMixedSwarmPlan(real, task));
+        expect(agents.length).toBeGreaterThanOrEqual(10);
+        expect(agents.length).toBeLessThanOrEqual(20);
+        expect(agents.filter((a) => a.real).length).toBe(1);
+      }
+    }
   });
 
-  it('labels nano as "Nano · labels" and gemini as "Gemini · planner"', () => {
-    expect(buildSwarmPlanForCall('nano').calls[0].label).toBe('Nano · labels');
-    expect(buildSwarmPlanForCall('gemini').calls[0].label).toBe('Gemini · planner');
+  it('mixes Gemini AND Nano cursors, not all-one-kind', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard'));
+    const gemini = agents.filter((a) => a.kind === 'gemini');
+    const nano = agents.filter((a) => a.kind === 'nano');
+    expect(gemini.length).toBeGreaterThan(0);
+    expect(nano.length).toBeGreaterThan(0);
+    // Both Gemini colours (blue + purple) and the single Nano green appear.
+    const colors = new Set(agents.map((a) => a.color));
+    expect(colors.has('#6e8bff')).toBe(true);
+    expect(colors.has('#b388ff')).toBe(true);
+    expect(colors.has('#53d17a')).toBe(true);
+  });
+
+  it('the pill shows both Gemini and Nano counts', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard'));
+    const gemini = agents.filter((a) => a.kind === 'gemini').length;
+    const nano = agents.filter((a) => a.kind === 'nano').length;
+    const text = swarmPillText({ agents: agents.length, gemini, nano, bytes: 0 });
+    expect(text).toContain(`Gemini ${gemini}`);
+    expect(text).toContain(`Nano ${nano}`);
+  });
+
+  it('never marks more than REAL_CALL_CAP agents real', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('nano', 'dashboard'));
+    expect(agents.filter((a) => a.real).length).toBeLessThanOrEqual(REAL_CALL_CAP);
+  });
+
+  it('labels the real call per task and engine', () => {
+    expect(buildMixedSwarmPlan('nano', 'dashboard').calls[0].label).toBe('Nano · labels');
+    expect(buildMixedSwarmPlan('gemini', 'dashboard').calls[0].label).toBe('Gemini · planner');
+    expect(buildMixedSwarmPlan('nano', 'floorplan').calls[0].label).toBe('Nano · room labels');
+    expect(buildMixedSwarmPlan('gemini', 'kannada').calls[0].label).toBe('Gemini · translation plan');
+  });
+
+  it('uses Kannada-swap labels for the kannada task', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'kannada'));
+    expect(agents.some((a) => a.label.includes('Kannada'))).toBe(true);
+  });
+
+  it('adds an honest redaction cursor when a name was redacted', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('nano', 'dashboard', { redactedName: true }));
+    expect(agents.some((a) => a.label.includes('redaction'))).toBe(true);
+  });
+
+  it('tile-bound sub-steps share a tileIndex across Gemini (frame) and Nano (label)', () => {
+    const plan = buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 5 });
+    const agents = buildSwarmAgents(plan);
+    const tileIndexes = new Set(agents.filter((a) => a.tileIndex != null).map((a) => a.tileIndex));
+    expect(tileIndexes.has(0)).toBe(true);
+    expect(tileIndexes.has(4)).toBe(true);
+    const framers = agents.filter((a) => a.tileIndex === 0 && a.kind === 'gemini');
+    const labelers = agents.filter((a) => a.tileIndex === 0 && a.kind === 'nano');
+    expect(framers.length).toBeGreaterThan(0);
+    expect(labelers.length).toBeGreaterThan(0);
+  });
+
+  it('clamps tile count into [4, 8] regardless of a tiny or huge plan', () => {
+    const tiny = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 1 }));
+    const huge = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 50 }));
+    expect(tiny.length).toBeGreaterThanOrEqual(10);
+    expect(huge.length).toBeLessThanOrEqual(20);
   });
 });
 
 describe('honestyNote', () => {
   it('states agent count vs real model call count', () => {
-    const agents = buildSwarmAgents(buildSwarmPlanForCall('gemini'));
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard'));
     expect(honestyNote(agents)).toBe(`${agents.length} agents show the real steps of about 1 model call.`);
+  });
+});
+
+describe('poseAt — unique non-overlapping targets', () => {
+  it('spreads end positions across a grid with a minimum separation', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard'));
+    const ends = agents.map((a, i) => poseAt(a, i, 999999, { seed: 1, total: agents.length }));
+    let minDist = Infinity;
+    for (let i = 0; i < ends.length; i++) {
+      for (let j = i + 1; j < ends.length; j++) {
+        const dx = ends[i].x - ends[j].x;
+        const dy = ends[i].y - ends[j].y;
+        minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy));
+      }
+    }
+    expect(minDist).toBeGreaterThan(0.05);
+  });
+
+  it('is deterministic for the same seed (?sim=1 safe to record)', () => {
+    const agents = buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard'));
+    const a = agents.map((a, i) => poseAt(a, i, 700, { seed: 3, total: agents.length }));
+    const b = agents.map((a, i) => poseAt(a, i, 700, { seed: 3, total: agents.length }));
+    expect(a).toEqual(b);
   });
 });
 
@@ -144,10 +231,10 @@ describe('createSwarmLayer', () => {
   it('spawns one element per agent and shows the pill', () => {
     const container = new FakeEl('div') as unknown as HTMLElement;
     const layer = createSwarmLayer(container, { reducedMotion: true, doc: fakeDoc, raf: undefined, caf: undefined });
-    layer.start(buildSwarmPlanForCall('nano'), 1);
+    layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
     const c = container as unknown as FakeEl;
     // pill + N cursors
-    expect(c.children.length).toBe(1 + buildSwarmAgents(buildSwarmPlanForCall('nano')).length);
+    expect(c.children.length).toBe(1 + buildSwarmAgents(buildMixedSwarmPlan('nano', 'dashboard')).length);
     expect(c.hidden).toBe(false);
   });
 
@@ -159,7 +246,7 @@ describe('createSwarmLayer', () => {
       raf: () => { rafCalls++; return 1; },
       caf: () => {},
     });
-    layer.start(buildSwarmPlanForCall('gemini'), 1);
+    layer.start(buildMixedSwarmPlan('gemini', 'dashboard'), 1);
     expect(rafCalls).toBe(0);
   });
 
@@ -172,16 +259,44 @@ describe('createSwarmLayer', () => {
       caf: () => {},
       now: () => 0,
     });
-    layer.start(buildSwarmPlanForCall('gemini'), 1);
+    layer.start(buildMixedSwarmPlan('gemini', 'dashboard'), 1);
     expect(rafCalls).toBe(1);
   });
 
   it('settle hides the container and removes cursors', () => {
     const container = new FakeEl('div') as unknown as HTMLElement;
     const layer = createSwarmLayer(container, { reducedMotion: true, doc: fakeDoc });
-    layer.start(buildSwarmPlanForCall('nano'), 1);
+    layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
     layer.settle();
     const c = container as unknown as FakeEl;
     expect(c.hidden).toBe(true);
+  });
+
+  it('fires onReachTarget once per tile-bound agent under reduced motion (all start at the end pose)', () => {
+    const container = new FakeEl('div') as unknown as HTMLElement;
+    const hits: Array<{ tileIndex: number; kind: string }> = [];
+    const layer = createSwarmLayer(container, {
+      reducedMotion: true, doc: fakeDoc,
+      onReachTarget: (tileIndex, kind) => hits.push({ tileIndex, kind }),
+    });
+    const plan = buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 4 });
+    layer.start(plan, 1);
+    const tileAgents = buildSwarmAgents(plan).filter((a) => a.tileIndex != null);
+    expect(hits.length).toBe(tileAgents.length);
+    expect(hits.some((h) => h.tileIndex === 0 && h.kind === 'gemini')).toBe(true);
+    expect(hits.some((h) => h.tileIndex === 0 && h.kind === 'nano')).toBe(true);
+  });
+
+  it('never fires onReachTarget twice for the same agent in one run', () => {
+    const container = new FakeEl('div') as unknown as HTMLElement;
+    let calls = 0;
+    const layer = createSwarmLayer(container, { reducedMotion: true, doc: fakeDoc, onReachTarget: () => { calls++; } });
+    const plan = buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 4 });
+    layer.start(plan, 1);
+    const tileAgentCount = buildSwarmAgents(plan).filter((a) => a.tileIndex != null).length;
+    expect(calls).toBe(tileAgentCount);
+    layer.settle();
+    layer.start(plan, 1);
+    expect(calls).toBe(tileAgentCount * 2);
   });
 });

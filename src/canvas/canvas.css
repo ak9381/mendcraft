@@ -38,6 +38,18 @@
 @keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
 @keyframes mc-ghost-pulse { to { opacity: 0.15; } }
 .mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
+/* Progressive tile fill: an empty frame first, then a kind badge (the
+   Gemini "tile frame" cursor landing), then the typed label/value (the
+   Nano "label" cursor landing) — see flashGhostTarget in canvasApp.ts. */
+.mc-ghost-tile.stage-frame { opacity: 0.55; }
+.mc-ghost-tile.stage-controls, .mc-ghost-tile.stage-labels { opacity: 1; transition: opacity 0.2s ease; }
+.mc-ghost-tile-kind { font-weight: 650; }
+/* The swarm's target: a selection box + '+' crosshair on the TILE the
+   cursor just landed on, not on the cursor badge itself. */
+.mc-ghost-tile.is-swarm-target { position: relative; outline: 3px solid var(--accent, #6e8bff); outline-offset: 2px; }
+.mc-ghost-tile.is-swarm-target::before { content: '+'; position: absolute; top: -12px; left: -12px; width: 20px; height: 20px;
+  display: grid; place-content: center; border-radius: 50%; background: var(--panel); color: var(--accent, #6e8bff); font-size: 14px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .mc-ghost-tile.stage-frame { opacity: 1; } }
 /* Swarm build cursors: decoration-looking, but each one is a real sub-step
    of the model work (see src/canvas/swarmAgents.ts). Never intercepts
    pointer/hand hit-testing. */
@@ -54,8 +66,8 @@
 .mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
   border-radius: 999px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: 380px; overflow: hidden; padding: 16px 18px;
-  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: min(720px, 46vw); min-width: 560px;
+  overflow: hidden; padding: 16px 18px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
   display: flex; flex-direction: column; min-height: 0; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
@@ -71,24 +83,38 @@
   border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
 .mc-ai-history { margin: 0; padding-left: 20px; color: var(--text); } .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 
-/* Two live model panels: Nano (on device) and Gemini (cloud), side by side. */
-.mc-model-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
+/* Two live model panels: Nano (on device) and Gemini (cloud), side by side.
+   The handoff track overlays the gap BETWEEN the two columns (not a grid
+   cell of its own — a 2-col grid with a 3rd child would wrap to a stacked
+   narrow column, which is the bug this fixes). */
+.mc-model-panels { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 10px 0; }
 .mc-model-panel { min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); }
 .mc-model-h { margin: 0 0 6px; font-size: 14px; color: var(--text-dim); }
 .mc-model-status { margin: 4px 0; font-size: 13px; color: var(--accent-2); }
 .mc-model-queue { margin: 4px 0; font-size: 13px; color: var(--accent); }
 .mc-model-sent, .mc-model-ledger { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
 .mc-model-panel pre { max-height: 140px; font-size: 12px; }
-.mc-handoff-track { grid-column: 1 / -1; min-height: 1px; display: flex; flex-direction: column; gap: 6px; }
+.mc-handoff-track { position: absolute; z-index: 3; left: 50%; top: 10px; bottom: 10px; width: min(260px, 60%);
+  transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: stretch; pointer-events: none; }
 .mc-handoff-card { margin: 0; padding: 6px 10px; border-radius: 999px; background: var(--accent-2); color: #0d0d0c;
-  font-size: 12px; font-weight: 600; text-align: center; }
-.mc-handoff-card.is-traveling { animation: mc-handoff-slide 1.1s ease-out; }
+  font-size: 12px; font-weight: 600; text-align: center; box-shadow: 0 6px 18px rgb(0 0 0 / 0.35); }
+/* Cards travel from the source panel toward the destination: left→right when
+   Nano hands off to Gemini, right→left the other way. */
+.mc-handoff-card.from-nano.is-traveling { animation: mc-handoff-slide-right 1.1s ease-out; }
+.mc-handoff-card.from-gemini.is-traveling { animation: mc-handoff-slide-left 1.1s ease-out; }
+.mc-handoff-card.is-traveling:not(.from-nano):not(.from-gemini) { animation: mc-handoff-slide 1.1s ease-out; }
 @keyframes mc-handoff-slide { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes mc-handoff-slide-right { from { opacity: 0; transform: translateX(-70%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes mc-handoff-slide-left { from { opacity: 0; transform: translateX(70%); } to { opacity: 1; transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) { .mc-handoff-card.is-traveling { animation: none; } }
-@media (max-width: 760px) { .mc-model-panels { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .mc-model-panels { grid-template-columns: 1fr; } .mc-handoff-track { position: static; width: auto; transform: none; margin: 6px 0; } }
 
-/* Data that stayed on this device: kept-local names next to what the cloud saw. */
-.mc-stayed-local { margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
+/* Data that stayed on this device: kept-local names next to what the cloud
+   saw. Lives OUTSIDE the scrolling .mc-ai-body (see STAYED_LOCAL_HTML) as a
+   compact, non-scrolling strip so it's visible without scrolling the panel. */
+.mc-stayed-local { flex: 0 0 auto; max-height: 34vh; overflow: auto; margin: 8px 0 0; padding: 10px 12px;
+  border-radius: 12px; background: var(--panel-2); border: 1px solid var(--border); }
+.mc-stayed-local .mc-ai-h3 { margin-top: 0; }
 .mc-stayed-local ul { margin: 4px 0; padding-left: 20px; font-size: 13px; color: var(--text); }
 .mc-stayed-local-bytes, .mc-stayed-local-route { margin: 4px 0; font-size: 12px; color: var(--text-dim); }
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
@@ -239,7 +265,7 @@
   .mc-dock { top: calc(8px + env(safe-area-inset-top, 0px)); max-height: calc(100% - var(--mc-bar-h, 132px) - 16px); }
   .mc-say input { min-height: 44px; font-size: 16px; }
   .mc-canvas-status { font-size: 15px; }
-  .mc-ai { left: 8px; right: 8px; width: auto; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
+  .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-model-panels { grid-template-columns: 1fr; }
   /* Compact the proposal inside the full-screen review so Approve/Reject stay on screen. */
@@ -339,7 +365,7 @@
   border: 3px solid var(--accent, #8ea2ff); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
 @keyframes mc-mic-pulse { from { opacity: 1; transform: scale(0.96); } to { opacity: 0; transform: scale(1.12); } }
 @media (prefers-reduced-motion: reduce) { .mc-fab-mic.is-listening::after { animation: none; opacity: 1; } }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: 412px; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: calc(min(720px, 46vw) + 32px); }
 @media (max-width: 600px) {
   /* Phones: top-right, clear of the thumb bar and the Proposal sheet (thumbs also have a talk toggle in the bar). */
   .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
@@ -356,7 +382,7 @@
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); }
 .mc-tools-chip:focus-visible { outline: 3px solid var(--accent, #8ea2ff); outline-offset: 3px; }
 .mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-tools-chip { right: 412px; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-tools-chip { right: calc(min(720px, 46vw) + 32px); }
 @media (max-width: 600px) { .mc-tools-chip { display: none; } }
 
 /* Fully empty canvas (?fresh=1): a soft centred prompt instead of fixed chrome. */
@@ -378,14 +404,23 @@
 @media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .hand-hover { scale: none; } }
 
 /* Full-screen review: every Proposal that needs a decision opens here —
-   desktop and phone alike — instead of a cramped inline card or sheet. */
-.mc-review-dialog { position: fixed; z-index: 50; inset: 0; background: rgb(10 10 9 / 0.86);
-  display: flex; align-items: center; justify-content: center; padding: 16px; }
-.mc-review-body { width: min(720px, 100%); max-height: calc(100vh - 32px); overflow: auto;
-  border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 20px 22px;
-  box-shadow: 0 20px 60px rgb(0 0 0 / 0.6); }
-.mc-review-title { margin: 0 0 12px; font-size: 24px; }
+   desktop and phone alike — instead of a cramped inline card or sheet. The
+   body fills the viewport (not a centred card) so the plan/diff, what each
+   model did, prompts and the stayed-local strip all have room; the three
+   hand-reachable decision buttons sit at the bottom, always in view. */
+.mc-review-dialog { position: fixed; z-index: 50; inset: 0; background: var(--bg);
+  display: flex; flex-direction: column; }
+.mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; max-width: 1100px; margin: 0 auto;
+  display: flex; flex-direction: column; overflow: auto; padding: 28px 32px; }
+.mc-review-title { margin: 0 0 16px; font-size: 30px; }
 .mc-review-extra:empty { display: none; }
-.mc-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 48px; font-size: 16px; }
+.mc-review-card-host { flex: 1 1 auto; }
+/* The underlying Proposal's own Keep/Drop stay in the DOM — Approve/Reject
+   proxy-click them, and voice "keep"/"drop" still work — but are never shown
+   here; the review's own Approve/Reject/Ask buttons are the only visible
+   decision controls. */
+.mc-review-card-host .mc-proposal-actions { display: none; }
+.mc-review-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px;
+  padding: 16px 0 4px; background: var(--panel); }
+.mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 56px; font-size: 18px; flex: 1 1 180px; }
 .mc-review-approve { background: var(--text); color: #0d0d0c; border-color: var(--text); }

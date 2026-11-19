@@ -69,7 +69,12 @@ export const MODEL_PANELS_HTML = `
       <p class="mc-model-ledger"></p>
       <details class="mc-model-reply" open><summary>Reply</summary><pre aria-live="off"></pre></details>
     </section>
-  </div>
+  </div>`;
+
+/** Kept out of MODEL_PANELS_HTML (which lives inside the scrolling
+ *  .mc-ai-body) so callers can place it as a non-scrolling footer that is
+ *  always in view — e.g. the Sharma floor-plan turn's "never left" strip. */
+export const STAYED_LOCAL_HTML = `
   <div class="mc-stayed-local" hidden>
     <h3 class="mc-ai-h3">Data that stayed on this device</h3>
     <ul class="mc-stayed-local-kept"></ul>
@@ -92,7 +97,7 @@ export interface EnginePanelUi {
 export interface ModelPanelsUi {
   show(): void;
   forEngine(engine: ModelEngine): EnginePanelUi;
-  showHandoff(text: string, opts?: { reducedMotion?: boolean }): void;
+  showHandoff(text: string, opts?: { reducedMotion?: boolean; from?: ModelEngine }): void;
   showStayedLocalStrip(strip: StayedLocalStrip): void;
   hideStayedLocalStrip(): void;
 }
@@ -128,7 +133,7 @@ export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document)
     forEngine(engine) { return engine === 'nano' ? nano : gemini; },
     showHandoff(text, opts = {}) {
       const card = doc.createElement('p');
-      card.className = 'mc-handoff-card';
+      card.className = `mc-handoff-card${opts.from ? ` from-${opts.from}` : ''}`;
       card.textContent = text;
       if (!opts.reducedMotion) card.classList.add('is-traveling');
       track.append(card);
