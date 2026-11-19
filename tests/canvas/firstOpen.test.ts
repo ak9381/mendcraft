@@ -22,4 +22,16 @@ describe('first open', () => {
     expect(d.focusId).toBe(d.frames[0].id);
     expect(d.surfaces).toEqual({});
   });
+
+  it('starts fully blank — zero boards — on ?fresh=1', () => {
+    const d = initialDoc(null, { fresh: true }, makeSeed);
+    expect(d.frames).toHaveLength(0);
+    expect(d.focusId).toBeNull();
+    expect(d.surfaces).toEqual({});
+  });
+
+  it('a stored doc wins over ?fresh=1', () => {
+    const stored: CanvasDoc = { ...seed, camera: { x: 9, y: 9, z: 1 } };
+    expect(initialDoc(stored, { fresh: true }, makeSeed)).toBe(stored);
+  });
 });

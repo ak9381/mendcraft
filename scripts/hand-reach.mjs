@@ -93,6 +93,19 @@ try {
     const S = (s) => `${d.name}:${s}`;
     all.push(...await audit(page, S('start')));
 
+    // ?fresh=1 opens fully blank (no boards): open the Tools palette by hand
+    // first — on phones that's the always-visible Menu button; on desktop
+    // it's the small Tools chip beside the mic — then make a board to work in.
+    if (d.name === 'desktop') {
+      real.push({ device: d.name, step: 'Tools (hand)', ...await handPress(page, (el) => el.classList.contains('mc-tools-chip')) });
+    } else {
+      real.push({ device: d.name, step: 'Menu (hand, to open tools)', ...await handPress(page, (el) => el.classList.contains('mc-menu-btn')) });
+    }
+    await sleep(300);
+    all.push(...await audit(page, S('tools-open')));
+    real.push({ device: d.name, step: 'New board (hand)', ...await handPress(page, (el) => el.dataset?.cmd === 'new') });
+    await sleep(300);
+
     real.push({ device: d.name, step: 'Connect this room', ...await handPress(page, (el, l) => /connect this room/i.test(l)) });
     await sleep(2500);
     all.push(...await audit(page, S('proposal')));

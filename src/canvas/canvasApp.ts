@@ -39,6 +39,7 @@ import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
 import { mountMicFab } from './micFab';
+import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -53,6 +54,9 @@ export interface CanvasOptions {
   seed?: boolean;
   /** Start offline (navigator.onLine at mount); the bar toggle can also force it. */
   online?: boolean;
+  /** ?fresh=1 with nothing stored: open fully blank, zero boards, for the
+   *  "let's build something fun" prompt instead of a seeded Board 1. */
+  fresh?: boolean;
   /** ?sim=1: teach-a-gesture records a deterministic synthetic sample and
    *  keeps taught gestures in memory instead of IndexedDB. */
   sim?: boolean;
@@ -94,7 +98,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const reduced = opts.reducedMotion ?? matchMedia('(prefers-reduced-motion: reduce)').matches;
   let stored: CanvasDoc | null = null;
   try { stored = parseCanvasDoc(JSON.parse(storage.getItem(STORAGE_KEY) ?? 'null')); } catch { stored = null; }
-  const doc = initialDoc(stored, { seed: opts.seed }, seedDoc);
+  const doc = initialDoc(stored, { seed: opts.seed, fresh: opts.fresh }, seedDoc);
   const reg: FrameRegistry = createFrameRegistry(doc.frames);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
   let camera: Camera = doc.camera;
@@ -107,6 +111,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.classList.add('mc-canvas');
   root.innerHTML = `
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div></div>
+    <div class="mc-blank" hidden>
+      <p class="mc-blank-lead">Let's build something fun.</p>
+      <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or open your palm.</p>
+    </div>
     <header class="mc-bar">
       <div class="mc-bar-tools">
       <div class="mc-bar-btns">
@@ -157,6 +165,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
+  const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
@@ -335,6 +344,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   function sync(): void {
     const frames = reg.list();
+    blankEl.hidden = frames.length > 0;
     const ids = new Set(frames.map((f) => f.id));
     world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); deviceSurfaces.untrack(el.dataset.frame!); el.remove(); } });
     for (const f of frames) {
@@ -411,8 +421,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   async function overview(): Promise<void> {
     focusId = null; sync(); clearDock();
-    await flyTo(fitRects(reg.list().map((f) => f.rect), vp(), Math.max(56, barH())));
-    say(`${reg.list().length} boards. Pick one, or say “go to …”.`);
+    const list = reg.list();
+    await flyTo(fitRects(list.map((f) => f.rect), vp(), Math.max(56, barH())));
+    say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
     const n = reg.list().length + 1;
@@ -853,6 +864,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // only a pinch over empty canvas means "keep".
       keep: () => { if (!handPointer?.consumedPinch()) keep(); },
       drop,
+      palm: () => toggleTools(),
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
@@ -888,6 +900,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // ---- commands ----
   function run(text: string): boolean {
+    const paletteCmd = matchPaletteCommand(text);
+    if (paletteCmd === 'open') { openTools(); return true; }
+    if (paletteCmd === 'close') { closeTools(); return true; }
     if (/^\s*teach a gesture\s*$/i.test(text)) { teachPanel.open(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { teachPanel.openList(); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
@@ -957,6 +972,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
+  const toolPalette = mountToolPalette(root);
+  function openTools(): void { if (isPhone()) phoneMenu?.open(); else toolPalette.open(); }
+  function closeTools(): void { if (isPhone()) phoneMenu?.close(); else toolPalette.close(); }
+  function toggleTools(): void { if (isPhone()) (phoneMenu?.isOpen() ? phoneMenu.close() : phoneMenu?.open()); else toolPalette.toggle(); }
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
     reg.setPinned(id, false); sync(); updateDock(); persist(); say('Unpinned.');
@@ -1005,6 +1024,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
     phoneMenu?.destroy();
+    toolPalette.destroy();
     micFab?.destroy();
     handPointer?.destroy();
     removeEventListener('pointermove', onWindowPointerMove);

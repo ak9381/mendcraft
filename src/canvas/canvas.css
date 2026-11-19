@@ -322,6 +322,21 @@
   .mc-menu-open .mc-fab-mic { display: none; }
 }
 
+/* On-canvas Tools chip (toolPalette.ts): the bar's buttons + say box stay
+   hidden (no fixed chrome) until voice, palm, or this chip summon them. */
+.mc-tools-chip { position: fixed; z-index: 40; right: 24px; bottom: 108px; min-height: 52px; padding: 0 20px;
+  border-radius: 999px; border: 2px solid var(--text); background: var(--panel-2); color: var(--text);
+  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); }
+.mc-tools-chip:focus-visible { outline: 3px solid var(--accent, #8ea2ff); outline-offset: 3px; }
+.mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-tools-chip { right: 412px; }
+@media (max-width: 600px) { .mc-tools-chip { display: none; } }
+
+/* Fully empty canvas (?fresh=1): a soft centred prompt instead of fixed chrome. */
+.mc-blank { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 10px; pointer-events: none; z-index: 1; }
+.mc-blank-lead { margin: 0; font-size: 34px; font-weight: 650; color: var(--text); }
+.mc-blank-hint { margin: 0; font-size: 18px; color: var(--text-dim); }
+
 /* Hand pointer feedback (handPointer.ts): no dot. Target frame, faint shadow
    over empty space, a ring only while pinching. Fixed overlays so they work
    for controls inside shadow DOM too. */
