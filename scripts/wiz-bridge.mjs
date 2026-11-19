@@ -16,48 +16,32 @@
 
 import { createServer } from 'node:http';
 import dgram from 'node:dgram';
+import { randomBytes } from 'node:crypto';
+import { isAllowedOrigin, isIPv4, sanitizeParams } from './wizBridge.lib.mjs';
 
 const WIZ_PORT = 38899;
 const BROADCAST = '255.255.255.255';
 
-// Only ever send to a dotted-quad IPv4 literal — NEVER a hostname (which would
-// make dgram do a DNS lookup and let a caller aim this process at an arbitrary
-// host). Combined with the wildcard CORS below, a strict destination check is
-// what keeps a stray web page from using the bridge as a UDP relay.
-function isIPv4(s) {
-  if (typeof s !== 'string') return false;
-  const parts = s.split('.');
-  return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
-}
-
-// Re-enforce WiZ's param whitelist + ranges server-side (wiz.ts clamps on the
-// client, but the bridge must not trust the wire). Unknown keys are dropped.
-function sanitizeParams(raw) {
-  const out = {};
-  if (!raw || typeof raw !== 'object') return out;
-  const clampInt = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n))));
-  if (typeof raw.state === 'boolean') out.state = raw.state;
-  if (Number.isFinite(Number(raw.dimming))) out.dimming = clampInt(raw.dimming, 10, 100);
-  if (Number.isFinite(Number(raw.temp))) out.temp = clampInt(raw.temp, 2200, 6500);
-  for (const ch of ['r', 'g', 'b']) {
-    if (Number.isFinite(Number(raw[ch]))) out[ch] = clampInt(raw[ch], 0, 255);
-  }
-  if (Number.isFinite(Number(raw.sceneId))) out.sceneId = clampInt(raw.sceneId, 0, 1000);
-  return out;
-}
-
 // ---- args -----------------------------------------------------------------
 function parseArgs(argv) {
-  const out = { host: '127.0.0.1', port: 38888, bulb: null };
+  const out = { host: '127.0.0.1', port: 38888, bulb: null, token: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--host') out.host = argv[++i];
     else if (a === '--port') out.port = Number(argv[++i]) || out.port;
     else if (a === '--bulb') out.bulb = argv[++i];
+    else if (a === '--token') out.token = argv[++i]; // fixed token, for scripted/dev use only
   }
   return out;
 }
 const args = parseArgs(process.argv.slice(2));
+
+// Random per-run token, required via the `x-wiz-token` header on every
+// request. Printed once at startup — the web app reads it from ?wizToken= or
+// localStorage (see src/devices/wizClient.ts) and the user pastes/bookmarks
+// it. Without this, any webpage open in the same browser could CSRF
+// /setPilot to drive the lamp (the wildcard-CORS + no-auth bug this closes).
+const TOKEN = args.token || randomBytes(16).toString('hex');
 
 // ---- UDP socket (shared) --------------------------------------------------
 const udp = dgram.createSocket('udp4');
@@ -125,17 +109,23 @@ function discover(windowMs = 900) {
 }
 
 // ---- HTTP server ----------------------------------------------------------
-function send(res, status, body) {
+function send(res, origin, status, body) {
   const json = JSON.stringify(body);
-  res.writeHead(status, {
+  const headers = {
     'content-type': 'application/json',
-    // Local-only tool: the web app is a different origin (vite dev / hosting),
-    // so reflect any origin. No credentials are ever used.
-    'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type, x-wiz-token',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
-  });
+  };
+  // Only echo back an Access-Control-Allow-Origin for an allowlisted origin —
+  // every other caller gets a response with no CORS header, so the browser
+  // refuses to let the page read it. No credentials are ever used.
+  if (isAllowedOrigin(origin)) headers['access-control-allow-origin'] = origin;
+  res.writeHead(status, headers);
   res.end(json);
+}
+
+function hasValidToken(req) {
+  return req.headers['x-wiz-token'] === TOKEN;
 }
 
 function readJson(req) {
@@ -156,32 +146,34 @@ function readJson(req) {
 }
 
 const server = createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') return send(res, 204, {});
+  const origin = req.headers.origin;
+  if (req.method === 'OPTIONS') return send(res, origin, 204, {}); // preflight: no token on this leg
+  if (!hasValidToken(req)) return send(res, origin, 401, { error: 'missing or wrong x-wiz-token header' });
   const url = new URL(req.url, 'http://localhost');
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
-      return send(res, 200, { ok: true, bridge: 'wiz', bulb: args.bulb ?? null });
+      return send(res, origin, 200, { ok: true, bridge: 'wiz', bulb: args.bulb ?? null });
     }
     if (req.method === 'GET' && url.pathname === '/discover') {
-      return send(res, 200, { bulbs: await discover() });
+      return send(res, origin, 200, { bulbs: await discover() });
     }
     if (req.method === 'POST' && url.pathname === '/getPilot') {
       const body = await readJson(req);
       const ip = body.ip || args.bulb;
-      if (!ip) return send(res, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
-      if (!isIPv4(ip)) return send(res, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
-      return send(res, 200, { result: await request(ip, { method: 'getPilot', params: {} }) });
+      if (!ip) return send(res, origin, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
+      if (!isIPv4(ip)) return send(res, origin, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
+      return send(res, origin, 200, { result: await request(ip, { method: 'getPilot', params: {} }) });
     }
     if (req.method === 'POST' && url.pathname === '/setPilot') {
       const body = await readJson(req);
       const ip = body.ip || args.bulb;
-      if (!ip) return send(res, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
-      if (!isIPv4(ip)) return send(res, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
-      return send(res, 200, { result: await request(ip, { method: 'setPilot', params: sanitizeParams(body.params) }) });
+      if (!ip) return send(res, origin, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
+      if (!isIPv4(ip)) return send(res, origin, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
+      return send(res, origin, 200, { result: await request(ip, { method: 'setPilot', params: sanitizeParams(body.params) }) });
     }
-    send(res, 404, { error: 'not found' });
+    send(res, origin, 404, { error: 'not found' });
   } catch (err) {
-    send(res, 502, { error: String(err?.message || err) });
+    send(res, origin, 502, { error: String(err?.message || err) });
   }
 });
 
@@ -192,7 +184,9 @@ udp.bind(() => {
       console.log('[wiz-bridge] bound to 0.0.0.0 for LAN phones — do NOT expose this to the internet.');
     }
     if (args.bulb) console.log(`[wiz-bridge] default bulb: ${args.bulb}`);
-    console.log('[wiz-bridge] GET /health  GET /discover  POST /getPilot  POST /setPilot');
+    console.log(`[wiz-bridge] token: ${TOKEN}`);
+    console.log(`[wiz-bridge] open the app with ?wizToken=${TOKEN} once, or set localStorage['mendcraft.wizToken'].`);
+    console.log('[wiz-bridge] GET /health  GET /discover  POST /getPilot  POST /setPilot  (all require header x-wiz-token)');
   });
 });
 

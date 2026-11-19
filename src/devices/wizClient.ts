@@ -67,9 +67,30 @@ export function resolveBridgeUrl(
   return DEFAULT_BRIDGE_URL;
 }
 
+/** Resolve the bridge's auth token: ?wizToken= wins (and is persisted to
+ *  localStorage so a bookmarked/shared link keeps working), then a prior
+ *  localStorage value. Empty when neither is set — the bridge then answers
+ *  401 and the connector falls back to the simulated device. */
+export function resolveWizToken(
+  search = typeof window !== 'undefined' ? window.location.search : '',
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null,
+): string {
+  try {
+    const q = new URLSearchParams(search).get('wizToken');
+    if (q) {
+      storage?.setItem('mendcraft.wizToken', q);
+      return q;
+    }
+    return storage?.getItem('mendcraft.wizToken') ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export function createWizClient(
   baseUrl: string = resolveBridgeUrl(),
   fetchImpl: FetchLike = (input, init) => fetch(input, init) as unknown as ReturnType<FetchLike>,
+  token: string = resolveWizToken(),
 ): WizClient {
   const base = baseUrl.replace(/\/$/, '');
 
@@ -78,7 +99,7 @@ export function createWizClient(
     try {
       res = await fetchImpl(`${base}${path}`, {
         method: body ? 'POST' : 'GET',
-        headers: body ? { 'content-type': 'application/json' } : undefined,
+        headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-wiz-token': token },
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch {
