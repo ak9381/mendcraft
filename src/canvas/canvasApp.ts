@@ -21,7 +21,7 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { createWizClient, type WizClient } from '../devices/wizClient';
+import { createWizClient, resolveWizToken, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
 import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
 import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
@@ -215,7 +215,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Otherwise, a real WiZ bridge (scripts/wiz-bridge.mjs) takes over the
   // wiz-* lamp tiles when it's reachable; everything else, and those lamps
   // while the bridge is down, stays on the simulated connector (labelled SIM).
-  const wizClient = opts.sim ? null : (opts.wizClient ?? createWizClient());
+  // No bridge token means the bridge would refuse us anyway (401), so don't
+  // probe localhost at all: no console noise for visitors without a lamp.
+  const wizClient = opts.sim ? null : (opts.wizClient ?? (resolveWizToken() ? createWizClient() : null));
   const bridgeStatus: BridgeStatus = { up: false };
   const defaultConnector = wizClient
     ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })

@@ -4,7 +4,7 @@
 // legacy page from the old single-page studio and only mounts behind a
 // feature flag (?flags=name, persisted to localStorage so it survives a
 // redirect) — otherwise it bounces to the canvas:
-//   /                          → the marketing landing
+//   /                          → the old marketing landing     [flag: landing]
 //   /studio (or ?sim / ?play)  → the old hands-free editor      [flag: studio]
 //   /remote (or ?view=remote)  → the phone remote + camera page [flag: remote]
 //   /phone (or ?view=phone)    → the remote's "lamp & music" PWA variant [flag: remote]
@@ -73,7 +73,8 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
     // The judges link now opens the seeded canvas tour instead of the old page.
     window.location.replace('/canvas.html?sim=1');
   }
-} else if (isLandingRoute(window.location.pathname, window.location.search)) {
+} else if (isLandingRoute(window.location.pathname, window.location.search) && flags.has('landing')) {
+  // The old landing tells the earlier story; the front door is the canvas now.
   const { mountLandingPage } = await import('./landing/landingPage');
   mountLandingPage(document.querySelector<HTMLDivElement>('#app')!);
 } else if (flags.has('studio')) {

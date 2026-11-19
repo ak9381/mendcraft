@@ -75,9 +75,9 @@ tablets get a split view. Deep links: `?mobileScreen=pair|canvas|dashboard|appro
 
 ## Feature flags
 
-Older modules (studio, phone remote, `/control`, legacy judges page) are kept
-but off by default; every route lands on the canvas. Turn one on with
-`?flags=studio,remote,control,judgesLegacy` or `localStorage['mc.flags']`.
+Older modules (the old landing page, studio, phone remote, `/control`, legacy
+judges page) are kept but off by default; every route lands on the canvas. Turn
+one on with `?flags=landing,studio,remote,control,judgesLegacy` or `localStorage['mc.flags']`.
 
 ---
 
