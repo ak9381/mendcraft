@@ -194,16 +194,13 @@
 
 /* Phone and short laptop: full-width AI panel so the Keep line isn't clipped. */
 @media (max-width: 600px) {
-  /* Phones: the bar moves to the thumb zone at the bottom. The say row is
-     always fully visible; the tool buttons become one swipeable strip. */
+  /* Phones: the bar sits in the thumb zone at the bottom: the say row, then
+     Review / New board / Menu. Other tools live in the menu sheet (phoneMenu.ts). */
   .mc-bar { left: 8px; right: 8px; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); padding: 8px; }
   .mc-bar-tools { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
-  .mc-bar-btns { display: flex; gap: 8px; overflow-x: auto; overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity; scrollbar-width: none; padding-bottom: 2px;
-    -webkit-mask-image: linear-gradient(to right, #000 92%, transparent);
-            mask-image: linear-gradient(to right, #000 92%, transparent); }
-  .mc-bar-btns::-webkit-scrollbar { display: none; }
-  .mc-bar-btns > .mc-btn { flex: 0 0 auto; white-space: nowrap; scroll-snap-align: start; }
+  .mc-phone .mc-bar-btns { display: none; }
+  .mc-phone-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .mc-phone-actions > .mc-btn { min-height: 48px; white-space: nowrap; padding: 0 8px; }
   .mc-btn { min-height: 44px; font-size: 16px; }
   .mc-say { flex: 0 0 auto; min-width: 0; }
   .mc-say .mc-btn { flex: 0 0 auto; white-space: nowrap; }
@@ -269,3 +266,33 @@
 .mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border, #2a2d33); flex-wrap: wrap; }
 .mc-teach-meter { font-size: 12px; opacity: 0.75; }
 .mc-proposal-engine { font-size: 12px; opacity: 0.7; margin-left: 8px; }
+
+/* Phone tools menu (phoneMenu.ts). iOS: bottom sheet with a grabber.
+   Android: Material 3 modal sheet with 28dp top corners and tonal buttons. */
+.mc-menu-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.mc-menu-icon, .mc-menu-icon::before, .mc-menu-icon::after { display: block; width: 18px; height: 2px; border-radius: 2px; background: currentColor; }
+.mc-menu-icon { position: relative; }
+.mc-menu-icon::before, .mc-menu-icon::after { content: ''; position: absolute; left: 0; }
+.mc-menu-icon::before { top: -6px; }
+.mc-menu-icon::after { top: 6px; }
+.mc-menu-scrim { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / 0.5); }
+.mc-menu-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 61; max-height: 80vh; overflow: auto;
+  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--panel, #1a1a19); color: var(--text);
+  border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -8px 32px rgb(0 0 0 / 0.45);
+  animation: mc-sheet-in 200ms ease-out; touch-action: pan-y; }
+.mc-menu-android { border-top-left-radius: 28px; border-top-right-radius: 28px; font-family: Roboto, system-ui, sans-serif; }
+.mc-menu-ios { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }
+.mc-menu-grabber { display: block; width: 36px; height: 5px; margin: 4px auto 8px; border-radius: 999px; background: var(--border); cursor: grab; }
+.mc-menu-android .mc-menu-grabber { width: 32px; height: 4px; margin: 16px auto 12px; }
+.mc-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mc-menu-title { margin: 0; font-size: 22px; font-weight: 650; }
+.mc-menu-close { min-height: 44px; }
+.mc-menu-group { margin-top: 16px; }
+.mc-menu-group-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-menu-items { display: flex; flex-direction: column; gap: 8px; }
+.mc-menu-items > .mc-btn { width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; padding: 0 16px; }
+.mc-menu-ios .mc-menu-items > .mc-btn { min-height: 44px; border-radius: 12px; }
+.mc-menu-android .mc-menu-items > .mc-btn { border-radius: 999px; border-color: transparent; background: var(--panel-2); }
+.mc-menu-items > .mc-btn[aria-pressed='true'] { outline: 2px solid var(--accent, #8ea2ff); outline-offset: -2px; }
+@keyframes mc-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mc-menu-sheet { animation: none; } }

@@ -35,6 +35,7 @@ import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, protectText } from '../privacy/directory';
 import { attachPrivacyHub } from '../relay/privacyHub';
+import { mountPhoneMenu } from './phoneMenu';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -922,10 +923,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- input ----
-  root.querySelector('.mc-bar')!.addEventListener('click', (e) => {
+  // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
+  root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
     ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
+  const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
     reg.setPinned(id, false); sync(); updateDock(); persist(); say('Unpinned.');
@@ -973,6 +976,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
+    phoneMenu?.destroy();
     removeEventListener('pointermove', onWindowPointerMove);
     removeEventListener('pointerup', onWindowPointerUp);
     removeEventListener('keydown', onWindowKeydown);
