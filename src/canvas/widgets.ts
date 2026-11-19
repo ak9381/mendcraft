@@ -14,6 +14,7 @@ import {
 import { ROOM_CATALOG_ID } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
 import { createPlanRenderer } from '../plan/renderer';
+import type { ViewportHandle } from '../core/controller';
 import { buildPlanTemplate } from '../plan/templates';
 
 export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
@@ -59,6 +60,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
   static readonly tagName = 'mc-plan-board';
   protected override readonly api = PlanBoardApi;
   private mounted: string | null = null;
+  private view: ViewportHandle | null = null;
   override createRenderRoot() { return this; }
   override render() {
     const p = this.controller?.props;
@@ -72,12 +74,20 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     const key = `${p.boardId}:${p.template}`;
     if (this.mounted === key) return;
     this.mounted = key;
+    this.view?.dispose();
     host.innerHTML = '';
     const controller = createPlanController();
     controller.applyGenerated?.({ ops: buildPlanTemplate(p.template) });
     const view = createPlanRenderer(host, controller, () => {});
+    this.view = view;
     view.render();
     requestAnimationFrame(() => { view.fit?.(); view.render(); });
+  }
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.view?.dispose();
+    this.view = null;
+    this.mounted = null;
   }
 }
 

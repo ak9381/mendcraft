@@ -947,13 +947,37 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return;
     drag = { x: e.clientX, y: e.clientY }; dragged = false;
   });
-  addEventListener('pointermove', (e) => {
+  // Window-level listeners outlive `root`'s own DOM (removing root's children
+  // doesn't remove these), so a remount leaks them unless destroy() below
+  // explicitly removes each one closing over this mount's stale state.
+  const onWindowPointerMove = (e: PointerEvent) => {
     if (!drag || focusId) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
     dragged = true; camera = panBy(camera, dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
-  });
-  addEventListener('pointerup', () => { if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0); });
+  };
+  const onWindowPointerUp = () => { if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0); };
+  const onWindowKeydown = (e: KeyboardEvent) => {
+    if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
+    if (e.key === 'Escape' && focusId) { e.preventDefault(); void overview(); }
+  };
+  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } };
+  const onWindowOnline = () => setOnline(true);
+  const onWindowOffline = () => setOnline(false);
+  addEventListener('pointermove', onWindowPointerMove);
+  addEventListener('pointerup', onWindowPointerUp);
+  addEventListener('keydown', onWindowKeydown);
+  addEventListener('resize', onWindowResize);
+  addEventListener('online', onWindowOnline);
+  addEventListener('offline', onWindowOffline);
+  function destroy(): void {
+    removeEventListener('pointermove', onWindowPointerMove);
+    removeEventListener('pointerup', onWindowPointerUp);
+    removeEventListener('keydown', onWindowKeydown);
+    removeEventListener('resize', onWindowResize);
+    removeEventListener('online', onWindowOnline);
+    removeEventListener('offline', onWindowOffline);
+  }
   viewport.addEventListener('wheel', (e) => {
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return; // the board's own zoom
     e.preventDefault();
@@ -962,11 +986,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     camera = zoomAbout(camera, { x: e.clientX - r.left, y: e.clientY - r.top }, Math.exp(-e.deltaY * 0.0015));
     applyCamera(); persist();
   }, { passive: false });
-  addEventListener('keydown', (e) => {
-    if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
-    if (e.key === 'Escape' && focusId) { e.preventDefault(); void overview(); }
-  });
-  addEventListener('resize', () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } });
 
   // Push-to-talk where the browser has speech recognition (Chrome, Android).
   const mic = root.querySelector<HTMLButtonElement>('.mc-mic')!;
@@ -978,10 +997,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     mic.addEventListener('pointerdown', start); mic.addEventListener('pointerup', stop); mic.addEventListener('pointerleave', stop);
   }
 
-  // Real connectivity events mirror the simulate toggle.
-  addEventListener('online', () => setOnline(true));
-  addEventListener('offline', () => setOnline(false));
-
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();
   if (pack) opts.voice?.setLang?.(resolveLanguage(pack.lang).speechLang);
@@ -991,6 +1006,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   updateDock();
   if (focusId) void focus(focusId); else if (!stored) void overview();
 
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list() };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;
