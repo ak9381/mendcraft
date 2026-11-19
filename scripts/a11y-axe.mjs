@@ -40,6 +40,13 @@ const SCREENS = [
   { name: 'judges', path: '/judges' },
   { name: 'canvas', path: '/canvas.html?fresh=1&sim=1' },
   { name: 'tour-open', path: '/studio?sim=1', clickTourHelp: true },
+  { name: 'mobile-pair', path: '/mobile.html?sim=1&mobileScreen=pair' },
+  { name: 'mobile-pair-paired', path: '/mobile.html?sim=1&mobileScreen=pair&paired=1' },
+  { name: 'mobile-canvas', path: '/mobile.html?sim=1&mobileScreen=canvas' },
+  { name: 'mobile-dashboard', path: '/mobile.html?sim=1&mobileScreen=dashboard' },
+  { name: 'mobile-approval', path: '/mobile.html?sim=1&mobileScreen=approval' },
+  { name: 'mobile-gimbal', path: '/mobile.html?sim=1&mobileScreen=gimbal' },
+  { name: 'mobile-tablet', path: '/mobile.html?sim=1&mobileScreen=tablet' },
 ];
 
 async function main() {
