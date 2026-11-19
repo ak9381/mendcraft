@@ -108,6 +108,7 @@ async function main() {
         const screen = PHONE_SCREENS[i];
         const url = `${base}/mobile.html?sim=1&mobileScreen=${screen}&platform=${device.platform}`;
         await page.goto(url, { waitUntil: 'networkidle0', timeout: 20000 });
+        await page.evaluate(() => document.fonts.ready);
         await sleep(250);
         const name = `${device.prefix}-${String(i + 1).padStart(2, '0')}-${screen}.png`;
         await page.screenshot({ path: resolve(OUT, name) });
