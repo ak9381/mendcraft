@@ -33,7 +33,7 @@ can actually reach another machine.
 | **prefer-on-device** (`PREFER_ON_DEVICE`) | sometimes | runs on Nano; on fallback sends the same abstract text. Every fallback is a ledger cloud call | sensor streams |
 | **on-device-only** (`ONLY_ON_DEVICE`) | **no** | hand-adaptive profile pick runs with no `inCloudParams` — raw hand numbers can never leave, even if Nano is missing | everything |
 | **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
-| **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames | frames go to the paired device, never to Gemini |
+| **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames. A phone without Nano may send a prompt to the desktop hub so the hub can redact it (tokens like [Client A]) before Gemini; the raw prompt is not sent to Gemini | frames go to the paired device, never to Gemini |
 | **remote-config** | yes | a one-way config pull (model ids, prompt-template ids, flags) | no user data |
 | **spotify** | yes | playback commands and search text to Spotify's API; optional Web Playback SDK | camera, hand, face, voice audio, access tokens (tokens stay in this browser) |
 | **network-fetch** | sometimes | the declared `fetch()` allowlist (LAN lamp bridge + Spotify + Openverse / Wikimedia) | anything not registered here |

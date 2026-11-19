@@ -17,6 +17,8 @@ import {
   type RelayRunControl,
   type RelayRunRequest,
   type RelayRunStatus,
+  type PrivacyAsk,
+  type PrivacyReply,
 } from './protocol';
 import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
 import type { RelayTransport } from './transport';
@@ -48,6 +50,10 @@ export interface HostSession extends SessionBase {
   onRunControl(cb: (control: RelayRunControl) => void): void;
   /** Publish live run status back to the room (what step, awaiting-confirm…). */
   publishRunStatus(status: RelayRunStatus): Promise<void>;
+  /** A phone without Nano sent a prompt for the hub to clean, then Gemini. */
+  onPrivacyAsk(cb: (ask: PrivacyAsk) => void): void;
+  /** Return a filled, cleaned answer (and the route line + byte count). */
+  sendPrivacyReply(reply: PrivacyReply): Promise<void>;
 }
 
 /** Read-only-ish iPad dashboard view: it reads snapshots, and can REQUEST a run
@@ -67,6 +73,8 @@ export interface GuestSession extends SessionBase {
   sendCommand(cmd: RelayCommand): Promise<void>;
   sendFrame(frame: RelayFrame): Promise<void>;
   sendMusic(music: MusicStatus): Promise<void>;
+  /** Send a raw prompt to the desktop hub; resolves with the filled reply. */
+  sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
 }
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
@@ -125,6 +133,7 @@ export async function createHostSession(
   let musicCb: ((music: MusicStatus) => void) | null = null;
   let runCb: ((run: RelayRunRequest) => void) | null = null;
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
+  let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
   // The most recent snapshot, re-sent whenever a /control iPad announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -145,6 +154,10 @@ export async function createHostSession(
     }
     if (msg.type === 'runControl') {
       runControlCb?.(msg.runControl);
+      return;
+    }
+    if (msg.type === 'privacyAsk') {
+      privacyAskCb?.(msg.ask);
       return;
     }
     if (msg.from === 'control') {
@@ -196,6 +209,11 @@ export async function createHostSession(
     },
     publishRunStatus: (status) =>
       transport.publish(token, { v: 1, from: 'host', type: 'runStatus', runStatus: status }),
+    onPrivacyAsk: (cb) => {
+      privacyAskCb = cb;
+    },
+    sendPrivacyReply: (reply) =>
+      transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
     publishState,
     close: async () => {
       await transport.clearAlias(code).catch(() => undefined);
@@ -211,9 +229,18 @@ export async function createGuestSession(
 ): Promise<GuestSession> {
   const core = makeCore('phone', transport, roomId);
 
+  const pending = new Map<string, { resolve: (r: PrivacyReply) => void; timer: ReturnType<typeof setTimeout> }>();
   core.listen((msg) => {
     if (msg.type === 'hello') core.setState(advancePair(core.state, 'peer-hello'));
     else if (msg.type === 'bye') core.setState(advancePair(core.state, 'peer-bye'));
+    else if (msg.type === 'privacyReply') {
+      const wait = pending.get(msg.reply.jobId);
+      if (wait) {
+        clearTimeout(wait.timer);
+        pending.delete(msg.reply.jobId);
+        wait.resolve(msg.reply);
+      }
+    }
   });
   await transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' });
 
@@ -228,6 +255,19 @@ export async function createGuestSession(
       }),
     sendMusic: (music) =>
       transport.publish(roomId, { v: 1, from: 'phone', type: 'music', music }),
+    sendPrivacyAsk: (ask, timeoutMs = 20000) =>
+      new Promise<PrivacyReply>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(ask.jobId);
+          reject(new Error('hub did not reply'));
+        }, timeoutMs);
+        pending.set(ask.jobId, { resolve, timer });
+        void transport.publish(roomId, { v: 1, from: 'phone', type: 'privacyAsk', ask }).catch((err) => {
+          clearTimeout(timer);
+          pending.delete(ask.jobId);
+          reject(err);
+        });
+      }),
     close: () => core.close(),
   };
 }

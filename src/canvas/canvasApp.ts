@@ -29,7 +29,8 @@ import { mountCanvasHands } from './canvasHands';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
-import { protectText } from '../privacy/directory';
+import { activePeople, protectText } from '../privacy/directory';
+import { attachPrivacyHub } from '../relay/privacyHub';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -44,6 +45,8 @@ export interface CanvasOptions {
   seed?: boolean;
   /** Start offline (navigator.onLine at mount); the bar toggle can also force it. */
   online?: boolean;
+  /** Desktop hub: run Gemini on a redacted prompt for a connected phone. */
+  privacyGemini?: (redacted: string) => Promise<string>;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -651,6 +654,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     if (sheetOpen !== open) { void res.stop(); return; } // she closed it while we connected
     pairingStop = res.stop;
+    if (opts.privacyGemini) attachPrivacyHub(res.session, () => activePeople(), opts.privacyGemini);
     sheetOpen = null; // the pairing card replaces the sheet in the same host
     pairing = showPairing(open.host, {
       code: res.code,

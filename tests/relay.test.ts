@@ -268,3 +268,36 @@ describe('host + guest sessions over the fake transport', () => {
     expect(guest2.state()).toBe('paired');
   });
 });
+
+describe('privacyAsk / privacyReply on the wire', () => {
+  it('accepts a phone ask and a host reply, and rejects the wrong role', () => {
+    const ask = { jobId: 'pv-1', text: 'email Priya Rao' };
+    expect(validateMessage({ v: 1, from: 'phone', type: 'privacyAsk', ask })).toEqual({
+      v: 1, from: 'phone', type: 'privacyAsk', ask,
+    });
+    expect(validateMessage({ v: 1, from: 'host', type: 'privacyAsk', ask })).toBeNull();
+    const reply = { jobId: 'pv-1', text: 'Hi Priya Rao', routeLine: 'routed via Mac: Nano cleaned, then Gemini', sentBytes: 20, cleaned: true };
+    expect(validateMessage({ v: 1, from: 'host', type: 'privacyReply', reply })).toMatchObject({ type: 'privacyReply', reply });
+    expect(validateMessage({ v: 1, from: 'phone', type: 'privacyReply', reply })).toBeNull();
+  });
+
+  it('a guest ask is cleaned on the host and the filled reply comes back', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    host.onPrivacyAsk((ask) => {
+      void host.sendPrivacyReply({
+        jobId: ask.jobId,
+        text: 'Hi Priya Rao',
+        routeLine: 'routed via Mac: Nano cleaned, then Gemini',
+        sentBytes: 24,
+        cleaned: true,
+      });
+    });
+    const reply = await guest.sendPrivacyAsk({ jobId: 'pv-9', text: 'email Priya Rao' });
+    expect(reply.text).toBe('Hi Priya Rao');
+    expect(reply.cleaned).toBe(true);
+    expect(reply.sentBytes).toBe(24);
+  });
+});

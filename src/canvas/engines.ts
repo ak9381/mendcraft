@@ -4,19 +4,25 @@
 // Gemini is real when a cloud TextGenModel is reachable, else a scripted SIM.
 // planEngines() is pure (unit-tested); createEngines() wires the real I/O.
 import { scriptedEngine, type EngineId, type SurfaceEngine } from './aiTurn';
+import { ROUTE_PHONE_NO_NANO, ROUTE_VIA_HUB } from '../ai/privacyRouter';
 
-export const PHONE_NANO_NOTE = "Gemini · cloud — Nano isn't on this phone, so Deep drafted it";
+export const PHONE_NANO_NOTE = ROUTE_PHONE_NO_NANO;
 export const NO_NANO_NOTE = "Gemini · cloud — Nano isn't available here, so Deep drafted it";
+export { ROUTE_VIA_HUB };
 
 export interface EngineEnv {
   /** Chrome's Prompt API (globalThis.LanguageModel) is present. */
   hasLanguageModel: boolean;
-  /** Capacitor iOS/Android — Nano isn't available here. */
+  /** Capacitor iOS/Android shell. */
   isPhone: boolean;
   /** A usable cloud TextGenModel is reachable. */
   hasCloud: boolean;
   /** ?sim=1 — force scripted engines for the box/demo. */
   sim: boolean;
+  /** Android ML Kit GenAI checkStatus reported AVAILABLE. */
+  androidNano?: boolean;
+  /** Desktop Chrome hub is reachable over the sync room or LAN. */
+  hubReachable?: boolean;
 }
 
 export interface EngineChoice {
@@ -31,10 +37,12 @@ export interface EngineChoice {
 export function planEngines(env: EngineEnv): { nano: EngineChoice; gemini: EngineChoice } {
   if (env.sim) return { nano: { engine: 'nano', sim: true }, gemini: { engine: 'gemini', sim: true } };
   const gemini: EngineChoice = { engine: 'gemini', sim: !env.hasCloud };
-  const nanoOnDevice = env.hasLanguageModel && !env.isPhone;
+  const nanoOnDevice = (env.hasLanguageModel && !env.isPhone) || !!env.androidNano;
   const nano: EngineChoice = nanoOnDevice
     ? { engine: 'nano', sim: false }
-    : { engine: 'gemini', sim: !env.hasCloud, routeNote: env.isPhone ? PHONE_NANO_NOTE : NO_NANO_NOTE };
+    : { engine: 'gemini', sim: !env.hasCloud, routeNote: env.isPhone
+      ? (env.hubReachable ? ROUTE_VIA_HUB : PHONE_NANO_NOTE)
+      : NO_NANO_NOTE };
   return { nano, gemini };
 }
 
@@ -57,6 +65,8 @@ export interface EnginesRuntime {
   cloud?: CloudStream | null;
   isPhone?: boolean;
   sim?: boolean;
+  androidNano?: boolean;
+  hubReachable?: boolean;
 }
 
 function realNanoEngine(lm: PromptApi, routeNote?: string): SurfaceEngine {
@@ -96,7 +106,14 @@ function engineFromChoice(choice: EngineChoice, json: string, rt: EnginesRuntime
 
 /** Engine factories keyed by step id, for mountCanvas({ engines }). */
 export function createEngines(rt: EnginesRuntime): Partial<Record<EngineId, (json: string) => SurfaceEngine>> {
-  const env: EngineEnv = { hasLanguageModel: !!rt.languageModel, isPhone: !!rt.isPhone, hasCloud: !!rt.cloud, sim: !!rt.sim };
+  const env: EngineEnv = {
+    hasLanguageModel: !!rt.languageModel,
+    isPhone: !!rt.isPhone,
+    hasCloud: !!rt.cloud,
+    sim: !!rt.sim,
+    androidNano: !!rt.androidNano,
+    hubReachable: !!rt.hubReachable,
+  };
   const plan = planEngines(env);
   return {
     nano: (json) => engineFromChoice(plan.nano, json, rt),

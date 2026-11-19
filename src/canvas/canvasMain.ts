@@ -3,6 +3,7 @@ import '../style.css';
 import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
+import { checkDeviceNano, hasUsableNano } from '../ai/nanoStatus';
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
@@ -25,12 +26,29 @@ const cloud: CloudStream | undefined = isEnabled()
       return text;
     }
   : undefined;
-const engines = createEngines({ languageModel: languageModel ?? null, cloud: cloud ?? null, isPhone, sim: params.has('sim') });
+const nano = await checkDeviceNano();
+const engines = createEngines({
+  languageModel: languageModel ?? null,
+  cloud: cloud ?? null,
+  isPhone,
+  androidNano: isPhone && hasUsableNano(nano),
+  sim: params.has('sim'),
+});
 
 const root = document.getElementById('canvas')!;
 let handle: ReturnType<typeof mountCanvas> | null = null;
 const voice = createVoiceController((t) => handle?.run(t));
-handle = mountCanvas(root, { voice, engines, seed: params.has('seed') });
+handle = mountCanvas(root, {
+  voice, engines, seed: params.has('seed'),
+  privacyGemini: cloud
+    ? (redacted) => cloud(redacted, () => undefined)
+    : undefined,
+});
+if (isPhone && !hasUsableNano(nano)) {
+  // Status chip in the AI panel uses the engine route note; this keeps
+  // the same wording on the document title bar for a quick read.
+  root.dataset.nano = nano.label;
+}
 (window as unknown as { __canvas: unknown }).__canvas = handle;
 
 // Warm App Check + cloud models in the background so the first keep isn't a cold start.

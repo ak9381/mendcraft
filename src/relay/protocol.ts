@@ -4,9 +4,17 @@
 // here is deterministic and unit-tested: token/code generation, join-URL
 // build/parse, the message envelope, and the pairing state machine.
 
-/** Crockford base32: no I/L/O/U, so codes survive being read aloud or typed. */
 import type { ControlSnapshot } from './controlSnapshot';
+import {
+  validatePrivacyAsk,
+  validatePrivacyReply,
+  type PrivacyAsk,
+  type PrivacyReply,
+} from '../ai/privacyRouter';
 
+export type { PrivacyAsk, PrivacyReply } from '../ai/privacyRouter';
+
+/** Crockford base32: no I/L/O/U, so codes survive being read aloud or typed. */
 export const TOKEN_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** 24 chars × 5 bits = 120 bits of entropy — the room id is the capability. */
 export const TOKEN_LENGTH = 24;
@@ -223,7 +231,11 @@ export type RelayMessage =
   /** The laptop's privacy-safe state for the iPad /control dashboard. Only a
    *  host sends it; the snapshot carries NO camera/landmark/audio (see
    *  controlSnapshot.ts). Validated loosely here and re-coerced on receipt. */
-  | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot };
+  | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot }
+  /** Phone → desktop hub: raw prompt for Nano+rules redaction. Not sent to Gemini. */
+  | { v: 1; from: 'phone'; type: 'privacyAsk'; ask: PrivacyAsk }
+  /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
+  | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
 const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic'];
 
@@ -346,6 +358,16 @@ export function validateMessage(raw: unknown): RelayMessage | null {
       if (from !== 'phone') return null;
       const music = validateMusic(m.music);
       return music ? { v: 1, from: 'phone', type: 'music', music } : null;
+    }
+    case 'privacyAsk': {
+      if (from !== 'phone') return null;
+      const ask = validatePrivacyAsk(m.ask);
+      return ask ? { v: 1, from: 'phone', type: 'privacyAsk', ask } : null;
+    }
+    case 'privacyReply': {
+      if (from !== 'host') return null;
+      const reply = validatePrivacyReply(m.reply);
+      return reply ? { v: 1, from: 'host', type: 'privacyReply', reply } : null;
     }
     default:
       return null;

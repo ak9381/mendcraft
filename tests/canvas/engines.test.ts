@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEngines, planEngines, NO_NANO_NOTE, PHONE_NANO_NOTE } from '../../src/canvas/engines';
+import { ROUTE_VIA_HUB } from '../../src/ai/privacyRouter';
 
 describe('engine selection (honest labels)', () => {
   it('uses real Nano on device when the Prompt API is present and it is not a phone', () => {
@@ -50,5 +51,24 @@ describe('createEngines', () => {
     const gemini = engines.gemini!('{"kind":"room","title":"Draft","tiles":[]}');
     expect(gemini.sim).toBe(true);
     expect(gemini.fallback).toBeUndefined();
+  });
+});
+
+describe('engine selection — Android Nano and hub', () => {
+  it('uses on-device Nano when ML Kit checkStatus is AVAILABLE, even on a phone', () => {
+    const p = planEngines({ hasLanguageModel: false, isPhone: true, hasCloud: true, sim: false, androidNano: true });
+    expect(p.nano).toEqual({ engine: 'nano', sim: false });
+  });
+
+  it('on a phone without Nano, a reachable hub is labelled as cleaned on the Mac', () => {
+    const p = planEngines({ hasLanguageModel: false, isPhone: true, hasCloud: true, sim: false, hubReachable: true });
+    expect(p.nano.engine).toBe('gemini');
+    expect(p.nano.routeNote).toBe(ROUTE_VIA_HUB);
+  });
+
+  it('on a phone without Nano or hub, the label is Gemini (no Nano on this phone)', () => {
+    const p = planEngines({ hasLanguageModel: false, isPhone: true, hasCloud: true, sim: false, hubReachable: false });
+    expect(p.nano.routeNote).toBe(PHONE_NANO_NOTE);
+    expect(PHONE_NANO_NOTE).toBe('Gemini (no Nano on this phone)');
   });
 });
