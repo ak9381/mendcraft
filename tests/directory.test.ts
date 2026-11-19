@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createDirectory, createMemoryDirectoryStore, createIndexedDbDirectoryStore, protectForCloud, fillNames, nothingRaw, nextToken,
+  createDirectory, createMemoryDirectoryStore, createIndexedDbDirectoryStore, protectForCloud, protectTurn, fillNames, nothingRaw, nextToken,
   appendFilledSuffix, FILLED_ON_DEVICE_SUFFIX, type Person, type DirectoryStore,
 } from '../src/privacy/directory';
 
@@ -78,6 +78,33 @@ describe('protectForCloud / fillNames round trip', () => {
     expect(body.text).toContain("For Lakshmi's bathroom");
     expect(appendFilledSuffix('Deep · online', subject.filled + body.filled)).toBe(`Deep · online ${FILLED_ON_DEVICE_SUFFIX}`);
     expect(appendFilledSuffix('Deep · online', 0)).toBe('Deep · online');
+  });
+});
+
+describe('protectTurn', () => {
+  it('catches a name said aloud even when the canned prompt never repeats it', async () => {
+    const store = createMemoryDirectoryStore();
+    const d = createDirectory(store, () => 1, () => 'sim-sharma');
+    await Promise.resolve();
+    d.add({ name: 'Sharma', role: 'client', note: '' });
+    const people = d.people();
+    // the canned schema prompt carries no names at all — only the utterance does.
+    const result = protectTurn("floor plan for Mrs Sharma's flat", '{"kind":"plan","title":"Floor plan"}', people);
+    expect(result.used.map((u) => u.token)).toEqual(['[Client A]']);
+  });
+
+  it('merges mentions from both the utterance and the prompt without duplicates', async () => {
+    const { d } = await seeded();
+    const people = d.people();
+    const result = protectTurn('for Priya Sharma', 'Notes for Priya Sharma and Ravi', people);
+    expect(result.used.map((u) => u.token).sort()).toEqual(['[Client A]', '[Contractor A]']);
+    expect(result.promptText).toBe('Notes for [Client A] and [Contractor A]');
+  });
+
+  it('is honest when nobody is mentioned', async () => {
+    const { d } = await seeded();
+    const result = protectTurn('a floor plan', '{"kind":"plan"}', d.people());
+    expect(result.used).toEqual([]);
   });
 });
 

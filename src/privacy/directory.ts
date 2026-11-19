@@ -390,6 +390,23 @@ export function protectText(text: string, planNames: string[] = []): ProtectResu
   return protectForCloud(text, activePeople(), planNames);
 }
 
+export interface ProtectTurnResult {
+  used: { token: string; personId: string }[];
+  promptText: string;
+}
+
+/** Merges protected mentions from the spoken utterance and the sent prompt
+ *  into one list — a name said aloud (e.g. "floor plan for Mrs Sharma's
+ *  flat") but absent from the canned prompt schema still needs to surface
+ *  on the stayed-local strip, even when 0 bytes were sent. */
+export function protectTurn(utterance: string, prompt: string, people: readonly Person[] = activePeople()): ProtectTurnResult {
+  const promptProtect = protectForCloud(prompt, people);
+  const utteranceProtect = protectForCloud(utterance, people);
+  const byId = new Map(promptProtect.used.map((u) => [u.personId, u] as const));
+  utteranceProtect.used.forEach((u) => byId.set(u.personId, u));
+  return { used: [...byId.values()], promptText: promptProtect.text };
+}
+
 export function fillVisible(text: string): FillResult {
   return fillNames(text, activePeople());
 }

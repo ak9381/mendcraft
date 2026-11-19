@@ -34,7 +34,7 @@ import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
-import { activePeople, protectText } from '../privacy/directory';
+import { activePeople, protectTurn } from '../privacy/directory';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
@@ -504,7 +504,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
-  function aiSent(_utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number } = {}): void {
+  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
@@ -513,9 +513,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     p.setRoute(s.routeLine);
     p.setPrompt(s.prompt);
     p.setSent(s.sent);
-    // Byte ledger: every AI turn records what actually left the device.
-    const protect = s.sent ? protectText(s.prompt) : null;
-    const entry = ledger.record({ engine: s.engine, sentText: protect ? protect.text : '' });
+    // Byte ledger: every AI turn records what actually left the device. Scan
+    // the spoken utterance too — not just the canned schema prompt — so a
+    // name said aloud (e.g. "floor plan for Mrs Sharma's flat") still shows
+    // up in the "stayed on this device" strip even when 0 bytes were sent.
+    const protect = protectTurn(utterance, s.prompt);
+    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
     p.setLedger(formatLedgerLine({ bytes: entry.bytes, engine: s.engine }));
     ledgerTotalRender();
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,
@@ -524,18 +527,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     swarmStartedAt = Date.now();
     swarm.start(buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
       tileCount: ctx.tileCount,
-      redactedName: (protect?.used.length ?? 0) > 0,
+      redactedName: protect.used.length > 0,
     }), opts.sim ? 1 : Date.now());
     swarm.reportBytes(ledger.totals().totalBytes);
     p.setReply('');
     p.setStatus(s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…');
     panels.showStayedLocalStrip(buildStayedLocalStrip({
-      used: protect?.used ?? [],
+      used: protect.used,
       people: activePeople(),
       bytesSent: entry.bytes,
       engine: s.engine,
       routeLine: s.routeLine,
     }));
+  }
+  /** The full-screen review's `extra`: what each model did (the live panels)
+   *  plus a copy of the stayed-local strip, so a review is never just the
+   *  proposal summary with no trace of who worked on it or what left the
+   *  device. Clones the live DOM nodes rather than re-deriving their state. */
+  function buildReviewExtra(): HTMLElement | null {
+    const extra = document.createElement('div');
+    extra.className = 'mc-review-extra-content';
+    const panelsEl = aiPanel.querySelector<HTMLElement>('.mc-model-panels');
+    if (panelsEl && !panelsEl.hidden) extra.append(panelsEl.cloneNode(true) as HTMLElement);
+    const stripEl = aiPanel.querySelector<HTMLElement>('.mc-stayed-local');
+    if (stripEl && !stripEl.hidden) extra.append(stripEl.cloneNode(true) as HTMLElement);
+    return extra.childElementCount ? extra : null;
   }
   // Per-frame ghost reveal timers: a safety net so a tile never sits as an
   // empty dashed placeholder forever, even if its swarm cursor never lands
@@ -679,7 +695,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
-      reviewDialog.open({ title: summary, card });
+      reviewDialog.open({ title: summary, card, extra: buildReviewExtra() });
       say(`${summary}. Pinch or say “keep”; brush or say “drop”.`);
     });
   }
@@ -921,7 +937,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onKeep: () => { reviewDialog.close(); applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
       onDrop: () => { reviewDialog.close(); say('Kept English.'); autoHideAi(); },
     });
-    reviewDialog.open({ title: 'Add Kannada', card });
+    reviewDialog.open({ title: 'Add Kannada', card, extra: buildReviewExtra() });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
@@ -1057,8 +1073,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // route to the Nano floor-plan turn with the full utterance so any name
     // in it (e.g. Sharma) gets redacted by the stayed-local strip.
     if (/\bfloor\s*plans?\b/i.test(text)) {
-      const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-      if (!focusId) { sync(); void focus(target); }
+      const cur = focusId;
+      // If the current board already has a surface (e.g. the Living room
+      // dashboard), pin it and draw the plan on a fresh board instead of
+      // drawing the CAD swarm/ghost on top of the dashboard mid-build.
+      let target = cur ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
+      if (cur && surfaces[cur]) { reg.setPinned(cur, true); target = reg.add('note', `Board ${reg.list().length + 1}`).id; }
+      if (focusId !== target) { sync(); void focus(target); }
       floorPlan(target, text); return true;
     }
 
