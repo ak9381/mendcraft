@@ -42,6 +42,7 @@ import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { MODEL_PANELS_HTML, buildStayedLocalStrip, handoffReason, mountModelPanels } from './modelPanels';
 import { mountReviewDialog } from './reviewDialog';
+import { buildSwarmPlanForCall, createSwarmLayer, type SwarmLayer } from './swarmAgents';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -112,7 +113,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   root.classList.add('mc-canvas');
   root.innerHTML = `
-    <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div></div>
+    <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div><div class="mc-swarm" hidden></div></div>
     <div class="mc-blank" hidden>
       <p class="mc-blank-lead">Let's build something fun.</p>
       <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or open your palm.</p>
@@ -158,6 +159,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
+  const swarm: SwarmLayer = createSwarmLayer(root.querySelector<HTMLElement>('.mc-swarm')!, { reducedMotion: reduced });
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
@@ -181,6 +183,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     devices: () => deviceRefs(),
     sim: opts.sim,
     say,
+    openReview: (title, card) => reviewDialog.open({ title, card }),
     onSaved: () => {},
     onTriggered: (gesture) => {
       const text = typeof gesture.action.text === 'string' ? gesture.action.text : '';
@@ -500,6 +503,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const entry = ledger.record({ engine: s.engine, sentText: protect ? protect.text : '' });
     p.setLedger(formatLedgerLine({ bytes: entry.bytes, engine: s.engine }));
     ledgerTotalRender();
+    // Swarm cursors spin up for this real call — honest sub-steps of the
+    // model work actually happening, capped at REAL_CALL_CAP real calls.
+    swarm.start(buildSwarmPlanForCall(s.engine), opts.sim ? 1 : Date.now());
+    swarm.reportBytes(ledger.totals().totalBytes);
     p.setReply('');
     p.setStatus(s.engine === 'nano' ? 'Quick is drafting on this device…' : 'Deep is improving it online…');
     panels.showStayedLocalStrip(buildStayedLocalStrip({
@@ -564,15 +571,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s); },
       onText: (t) => { panels.forEngine(engineId).setReply(t); },
       onGhost: (g) => ghost(frameId, g),
-      onError: (why) => { aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
+      onError: (why) => { swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
     }));
-    if (!plan || !sentInfo) { ghost(frameId, null); return false; }
+    if (!plan || !sentInfo) { swarm.settle(); ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
   function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
+    // The proposal/review is ready — the swarm settles now, not decoration
+    // running past the real work it stood for.
+    swarm.settle();
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
     if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
@@ -647,7 +657,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const fallbackEngine = engine.fallback;
       if (!fallbackEngine) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
       }
       turn.sent.sim = true;
       turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
@@ -656,15 +666,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         full = await withBuildGimbal(() => streamOne(fallbackEngine));
       } catch (e2) {
         const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        swarm.settle(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
       }
     }
     const parsed = parseModelPlan(full);
-    if (!parsed.ok) { ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+    if (!parsed.ok) { swarm.settle(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
     const plan = parsed;
     const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
     const merged = mergeTiles(before, plan.value.tiles);
     if (merged.tiles.length === before.tiles.length) {
+      swarm.settle();
       ghost(frameId, null);
       aiPanel.querySelector('.mc-ai-state')!.textContent = 'Already on this board — nothing new to add.';
       say('That device is already on this board.');

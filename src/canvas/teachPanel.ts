@@ -35,6 +35,11 @@ export interface TeachPanelOptions {
    *  ("Custom gesture <name> triggered -> <action>"). */
   onTriggered(gesture: CustomGesture): void;
   say(s: string): void;
+  /** Open the taught-gesture Proposal in the shared full-screen review
+   *  (Approve/Reject/Ask for something else) instead of this panel's own
+   *  card, so there is one decision surface for every AI proposal. When
+   *  omitted (e.g. a test harness), the card renders inline as before. */
+  openReview?(title: string, card: HTMLElement): void;
 }
 
 export interface TeachPanel {
@@ -158,16 +163,19 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       ? `<p class="mc-teach-conflict">This looks like the built-in “${conflict.label}” (${conflict.does}). Saving will use yours instead when it matches confidently.</p>`
       : '';
     const engineLabel = parsed.engine === 'rules' ? 'Rules · on device' : parsed.engine === 'nano' ? 'Nano · on device' : 'Gemini · cloud';
-    show(`
-      <article class="mc-proposal is-waiting mc-teach-proposal">
-        <header><strong>Teach: ${parsed.summary}</strong><span class="mc-proposal-engine">${engineLabel}</span></header>
-        <p>Your gesture → <strong>${parsed.summary}</strong></p>
-        ${conflictLine}
-      </article>`);
     const proposal = createSurfaceProposal(`teach-${Date.now()}`, parsed.engine === 'rules' ? 'rules' : parsed.engine, parsed.summary, [], () => {});
-    actions.innerHTML = '<button class="mc-btn" data-act="reject">Reject</button><button class="mc-btn primary" data-act="keep">Keep</button>';
-    actions.querySelector('[data-act=reject]')!.addEventListener('click', () => { proposal.reject(); close(); });
-    actions.querySelector('[data-act=keep]')!.addEventListener('click', () => void (async () => {
+    const card = document.createElement('article');
+    card.className = 'mc-proposal is-waiting mc-teach-proposal';
+    card.innerHTML = `
+      <header><strong>Teach: ${parsed.summary}</strong><span class="mc-proposal-engine">${engineLabel}</span></header>
+      <p>Your gesture → <strong>${parsed.summary}</strong></p>
+      ${conflictLine}
+      <div class="mc-proposal-actions">
+        <button class="mc-btn mc-proposal-drop" type="button">Reject</button>
+        <button class="mc-btn primary mc-proposal-keep" type="button">Keep</button>
+      </div>`;
+    card.querySelector('.mc-proposal-drop')!.addEventListener('click', () => { proposal.reject(); close(); });
+    card.querySelector('.mc-proposal-keep')!.addEventListener('click', () => void (async () => {
       proposal.accept();
       await loaded;
       const gesture: CustomGesture = {
@@ -187,6 +195,14 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       opts.onSaved(gesture);
       close();
     })());
+    // The recording modal's job is done — the decision happens on one
+    // shared surface (the full-screen review), never two cards at once.
+    close();
+    if (opts.openReview) { opts.openReview(`Teach: ${parsed.summary}`, card); return; }
+    panel.hidden = false;
+    body.innerHTML = '';
+    body.appendChild(card);
+    actions.innerHTML = '';
   }
 
   async function open(): Promise<void> {

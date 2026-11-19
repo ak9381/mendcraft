@@ -38,6 +38,22 @@
 @keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
 @keyframes mc-ghost-pulse { to { opacity: 0.15; } }
 .mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
+/* Swarm build cursors: decoration-looking, but each one is a real sub-step
+   of the model work (see src/canvas/swarmAgents.ts). Never intercepts
+   pointer/hand hit-testing. */
+.mc-swarm { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.mc-swarm-cursor { position: absolute; display: flex; align-items: center; gap: 6px; transform: translate(-50%, -50%);
+  padding: 3px 8px 3px 4px; border-radius: 999px; background: rgb(20 20 19 / 0.85);
+  border: 1px solid var(--mc-swarm-color, var(--accent)); white-space: nowrap; pointer-events: none; }
+.mc-swarm-arrow { width: 10px; height: 10px; border-radius: 2px; background: var(--mc-swarm-color, var(--accent));
+  clip-path: polygon(0 0, 100% 35%, 35% 100%); }
+.mc-swarm-label { font-size: 11px; color: var(--text); }
+.mc-swarm-cursor.is-editing { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 3px; }
+.mc-swarm-cursor.is-editing::after { content: '+'; position: absolute; left: -16px; top: 50%; transform: translateY(-50%);
+  font-size: 12px; color: var(--mc-swarm-color, var(--accent)); }
+.mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
+  border-radius: 999px; background: rgb(20 20 19 / 0.92); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: 380px; overflow: hidden; padding: 16px 18px;
   border-radius: 18px; background: var(--panel); border: 1px solid var(--border); font-size: 16px;
   display: flex; flex-direction: column; min-height: 0; }
