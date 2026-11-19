@@ -328,7 +328,9 @@ export function validateMessage(raw: unknown): RelayMessage | null {
     case 'state':
       // Only a host publishes state; the payload is validated loosely here
       // (object with the snapshot version) and defensively re-coerced by the
-      // dashboard via coerceSnapshot before anything is rendered.
+      // dashboard via coerceSnapshot before anything is rendered. The cast
+      // below is UNCHECKED wire data — every consumer of this message's
+      // `snapshot` MUST call coerceSnapshot() on it before reading any field.
       if (from !== 'host') return null;
       if (typeof m.snapshot !== 'object' || m.snapshot === null) return null;
       if ((m.snapshot as { v?: unknown }).v !== 1) return null;

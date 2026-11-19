@@ -189,10 +189,19 @@ export interface HistoryEntry {
   packAfter?: LanguagePack | null;
 }
 
+/** Cap on retained history entries — a long session keeps growing entries
+ *  otherwise, making the render list (and its full-list scan) ever bigger. */
+const HISTORY_CAP = 200;
+
 export function createCanvasHistory() {
   const entries: HistoryEntry[] = [];
   return {
-    push(e: Omit<HistoryEntry, 'at' | 'undone'>): HistoryEntry { const h = { ...e, at: Date.now(), undone: false }; entries.push(h); return h; },
+    push(e: Omit<HistoryEntry, 'at' | 'undone'>): HistoryEntry {
+      const h = { ...e, at: Date.now(), undone: false };
+      entries.push(h);
+      if (entries.length > HISTORY_CAP) entries.splice(0, entries.length - HISTORY_CAP);
+      return h;
+    },
     undo(): HistoryEntry | null { for (let i = entries.length - 1; i >= 0; i--) if (!entries[i].undone) { entries[i].undone = true; return entries[i]; } return null; },
     list: () => entries.map((e) => ({ ...e })),
   };

@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  createDirectory, createMemoryDirectoryStore, protectForCloud, fillNames, nothingRaw, nextToken,
-  appendFilledSuffix, FILLED_ON_DEVICE_SUFFIX, type Person,
+  createDirectory, createMemoryDirectoryStore, createIndexedDbDirectoryStore, protectForCloud, fillNames, nothingRaw, nextToken,
+  appendFilledSuffix, FILLED_ON_DEVICE_SUFFIX, type Person, type DirectoryStore,
 } from '../src/privacy/directory';
 
 async function seeded() {
@@ -78,5 +78,38 @@ describe('protectForCloud / fillNames round trip', () => {
     expect(body.text).toContain("For Lakshmi's bathroom");
     expect(appendFilledSuffix('Deep · online', subject.filled + body.filled)).toBe(`Deep · online ${FILLED_ON_DEVICE_SUFFIX}`);
     expect(appendFilledSuffix('Deep · online', 0)).toBe('Deep · online');
+  });
+});
+
+describe('storage failures are logged, not silent', () => {
+  it('load() warns when IndexedDB is unavailable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createIndexedDbDirectoryStore(undefined);
+    expect(await store.load()).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('save() warns when IndexedDB is unavailable', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createIndexedDbDirectoryStore(undefined);
+    await store.save([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('createDirectory warns instead of swallowing a rejecting store.save', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const brokenStore: DirectoryStore = {
+      async load() { return []; },
+      async save() { throw new Error('disk full'); },
+    };
+    const d = createDirectory(brokenStore, () => 1, () => 'id1');
+    await Promise.resolve();
+    d.add({ name: 'Priya', role: 'client', note: '' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

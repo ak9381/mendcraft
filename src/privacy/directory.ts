@@ -266,7 +266,8 @@ export function createIndexedDbDirectoryStore(
           };
           req.onerror = () => reject(req.error);
         });
-      } catch {
+      } catch (err) {
+        console.warn('directory: load failed, starting empty', err);
         return [];
       }
     },
@@ -279,8 +280,9 @@ export function createIndexedDbDirectoryStore(
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error);
         });
-      } catch {
+      } catch (err) {
         // Private mode / IDB blocked — stay in memory.
+        console.warn('directory: save failed, staying in memory', err);
       }
     },
   };
@@ -296,7 +298,7 @@ export function createDirectory(
   let ready: Promise<void> | null = null;
 
   function emit(): void {
-    void store.save(people);
+    store.save(people).catch((err) => console.warn('directory: failed to persist people', err));
     for (const fn of subs) fn();
   }
 

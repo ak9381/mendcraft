@@ -3,7 +3,7 @@
 // and the teach / correction parsers. No network, no IndexedDB — the real app
 // swaps in the IndexedDB adapter behind the same PhrasebookStore interface.
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_FEWSHOT,
   MAX_OP_CHARS,
@@ -94,6 +94,52 @@ describe('phrasebook store: create / load / update', () => {
     expect(await pb.update('missing', { op: {} })).toBeNull();
     await pb.remove(e.id);
     expect(pb.count()).toBe(0);
+  });
+
+  it('add() does not add in memory when persistence rejects, and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failingStore: PhrasebookStore = {
+      async load() { return []; },
+      async put() { throw new Error('quota exceeded'); },
+      async remove() {},
+    };
+    const pb = createPhrasebook(failingStore, opts);
+    await pb.init();
+    await pb.add({ phrase: 'wider', op: { v: 1 }, mode: 'plan', kind: 'phrase' });
+    expect(pb.count()).toBe(0);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('update() rolls back the in-memory entry when persistence rejects, and warns', async () => {
+    const store = createMemoryPhrasebookStore();
+    const pb = createPhrasebook(store, opts);
+    await pb.init();
+    const e = await pb.add({ phrase: 'wider', op: { v: 1 }, mode: 'plan', kind: 'phrase' });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalPut = store.put.bind(store);
+    store.put = async () => { throw new Error('disk full'); };
+    const result = await pb.update(e.id, { op: { v: 2 } });
+    expect(result?.op).toEqual({ v: 1 });
+    expect(pb.entries().find((x) => x.id === e.id)?.op).toEqual({ v: 1 });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    store.put = originalPut;
+  });
+
+  it('remove() keeps the in-memory entry when persistence rejects, and warns', async () => {
+    const store = createMemoryPhrasebookStore();
+    const pb = createPhrasebook(store, opts);
+    await pb.init();
+    const e = await pb.add({ phrase: 'wider', op: { v: 1 }, mode: 'plan', kind: 'phrase' });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    store.remove = async () => { throw new Error('disk full'); };
+    await pb.remove(e.id);
+    expect(pb.count()).toBe(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

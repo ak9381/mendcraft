@@ -89,6 +89,17 @@ describe('history (human in the loop)', () => {
     expect(h.list()).toHaveLength(2);
     expect(h.list().every((e) => e.undone)).toBe(true);
   });
+
+  it('caps unbounded growth by dropping the oldest entries once the cap is exceeded', () => {
+    const h = createCanvasHistory();
+    for (let i = 0; i < 250; i++) {
+      h.push({ frameId: 'f1', before: null, after: null, by: 'nano', summary: `change ${i}` });
+    }
+    const list = h.list();
+    expect(list.length).toBeLessThanOrEqual(200);
+    expect(list[list.length - 1].summary).toBe('change 249');
+    expect(list[0].summary).not.toBe('change 0');
+  });
 });
 
 describe('approval words', () => {

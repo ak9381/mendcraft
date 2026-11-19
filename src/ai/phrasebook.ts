@@ -270,11 +270,18 @@ export function createPhrasebook(store: PhrasebookStore, opts: PhrasebookOptions
       // its id/seq) rather than piling up contradictory examples.
       const dup = findDuplicate(input.phrase, input.mode);
       if (dup) {
+        const prev = { ...dup };
         dup.phrase = input.phrase;
         dup.op = input.op;
         dup.kind = input.kind;
         dup.createdAt = now();
-        await store.put(dup);
+        try {
+          await store.put(dup);
+        } catch (err) {
+          Object.assign(dup, prev);
+          console.warn('phrasebook: failed to persist update', err);
+          return dup;
+        }
         emit();
         return dup;
       }
@@ -288,8 +295,13 @@ export function createPhrasebook(store: PhrasebookStore, opts: PhrasebookOptions
         createdAt: now(),
         seq,
       };
+      try {
+        await store.put(entry);
+      } catch (err) {
+        console.warn('phrasebook: failed to persist new entry', err);
+        return entry;
+      }
       byId.set(entry.id, entry);
-      await store.put(entry);
       emit();
       return entry;
     },
@@ -297,16 +309,31 @@ export function createPhrasebook(store: PhrasebookStore, opts: PhrasebookOptions
     async update(id, patch) {
       const entry = byId.get(id);
       if (!entry) return null;
+      const prev = { ...entry };
       if (patch.phrase !== undefined) entry.phrase = patch.phrase;
       if (patch.op !== undefined) entry.op = patch.op;
-      await store.put(entry);
+      try {
+        await store.put(entry);
+      } catch (err) {
+        Object.assign(entry, prev);
+        console.warn('phrasebook: failed to persist update', err);
+        return entry;
+      }
       emit();
       return entry;
     },
 
     async remove(id) {
-      if (!byId.delete(id)) return;
-      await store.remove(id);
+      const entry = byId.get(id);
+      if (!entry) return;
+      byId.delete(id);
+      try {
+        await store.remove(id);
+      } catch (err) {
+        byId.set(id, entry);
+        console.warn('phrasebook: failed to persist removal', err);
+        return;
+      }
       emit();
     },
 
