@@ -19,6 +19,7 @@ import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
+import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { createWizClient, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
@@ -190,6 +191,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- A2UI ----
   const processor = new MessageProcessor([smartCanvasCatalog]);
   const live = new Set<string>();
+  // Which live surfaces have a tile bound to a given deviceId — built from
+  // each plan's tiles whenever a surface is (re)rendered, so device patches
+  // fan out only to surfaces that actually show that device.
+  const deviceSurfaces = createDeviceSurfaceIndex();
   const simulatedConnector: DeviceConnector = {
     run: (i) => new Promise((res) => setTimeout(() => {
       const cur = store.get(i.deviceId);
@@ -211,7 +216,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : simulatedConnector;
   const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? defaultConnector, (m) => {
     const u = (m as unknown as { updateDataModel: Record<string, unknown> }).updateDataModel;
-    for (const sid of live) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
+    const path = typeof u.path === 'string' ? u.path : '';
+    const deviceId = path.startsWith('/devices/') ? path.slice('/devices/'.length) : '';
+    const targets = deviceId ? deviceSurfaces.targetsFor(deviceId) : undefined;
+    const sids = targets && targets.size ? targets : live;
+    for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
   if (wizClient && !opts.connector) {
     void wizClient.health().then((up) => {
@@ -256,6 +265,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
     live.delete(id);
     processor.processMessages(g.messages as never);
+    deviceSurfaces.track(id, plan);
     return true;
   }
 
@@ -268,7 +278,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const insets = () => ({ top: barH(), left: dockInset(), right: 0 });
 
   function clearDock(): void {
-    for (const sid of [...live]) if (sid.endsWith('-dock')) live.delete(sid);
+    for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
     dockSurfaceEl.innerHTML = '';
     dockEl.hidden = true;
   }
@@ -286,6 +296,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!g.ok) return;
     live.delete(sid);
     processor.processMessages(g.messages as never);
+    deviceSurfaces.track(sid, dockPlan);
   }
   /** Show the dock when a pinned room board is NOT the one being edited. */
   function updateDock(): void {
@@ -317,7 +328,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function sync(): void {
     const frames = reg.list();
     const ids = new Set(frames.map((f) => f.id));
-    world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); el.remove(); } });
+    world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); deviceSurfaces.untrack(el.dataset.frame!); el.remove(); } });
     for (const f of frames) {
       const el = frameEl(f);
       Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${f.rect.w}px`, height: `${f.rect.h}px` });
@@ -722,7 +733,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
-    if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); }
+    if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); deviceSurfaces.untrack(h.frameId); }
     const el = world.querySelector<HTMLElement>(`[data-frame="${h.frameId}"] .mc-surface`);
     if (el && !h.before) el.innerHTML = '';
     if (h.before) renderSurface(h.frameId);

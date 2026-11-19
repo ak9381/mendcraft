@@ -145,21 +145,21 @@ export function reduceA2uiMessages(
   prevState: FallbackRendererState | undefined,
   messages: A2uiMessage[],
 ): { state: FallbackRendererState; trees: Record<string, RenderTree> } {
-  const state: FallbackRendererState = prevState
-    ? {
-        surfaces: Object.fromEntries(
-          Object.entries(prevState.surfaces).map(([sid, s]) => [
-            sid,
-            {
-              surfaceId: s.surfaceId,
-              catalogId: s.catalogId,
-              components: { ...s.components },
-              dataModel: deepClone(s.dataModel),
-            },
-          ]),
-        ),
-      }
-    : { surfaces: {} };
+  // Surfaces not targeted by this batch are copied by reference — only
+  // surfaces a message actually mutates get a fresh (cloned) SurfaceState.
+  const state: FallbackRendererState = prevState ? { surfaces: { ...prevState.surfaces } } : { surfaces: {} };
+  const cloned = new Set<string>();
+  const ownSurface = (sid: string): SurfaceState | undefined => {
+    const s = state.surfaces[sid];
+    if (!s || cloned.has(sid)) return s;
+    cloned.add(sid);
+    return (state.surfaces[sid] = {
+      surfaceId: s.surfaceId,
+      catalogId: s.catalogId,
+      components: { ...s.components },
+      dataModel: deepClone(s.dataModel),
+    });
+  };
 
   for (const m of messages) {
     if (!m || typeof m !== 'object') continue;
@@ -173,12 +173,13 @@ export function reduceA2uiMessages(
         components: {},
         dataModel: {},
       };
+      cloned.add(cs.surfaceId);
     } else if (msg.updateComponents && typeof msg.updateComponents === 'object') {
       const uc = msg.updateComponents as {
         surfaceId: string;
         components: Array<{ id: string; component: string; [k: string]: unknown }>;
       };
-      const s = state.surfaces[uc.surfaceId];
+      const s = ownSurface(uc.surfaceId);
       if (s && Array.isArray(uc.components)) {
         for (const c of uc.components) {
           if (c && c.id) {
@@ -188,7 +189,7 @@ export function reduceA2uiMessages(
       }
     } else if (msg.updateDataModel && typeof msg.updateDataModel === 'object') {
       const ud = msg.updateDataModel as { surfaceId: string; path: string; value: unknown };
-      const s = state.surfaces[ud.surfaceId];
+      const s = ownSurface(ud.surfaceId);
       if (s) {
         applyPathUpdate(s.dataModel, ud.path, ud.value);
       }

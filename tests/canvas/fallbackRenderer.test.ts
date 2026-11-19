@@ -124,6 +124,29 @@ describe('Part 5: src/canvas/fallbackRenderer.ts (pure reducer & fallback render
     expect(updatedLamp.props.pending).toBe(true);
   });
 
+  it('leaves surfaces not targeted by the batch untouched by reference, and does not mutate the previous snapshot', () => {
+    const coerced = coerceSurfacePlan(samplePlan);
+    if (!coerced.ok) throw new Error();
+
+    const untouchedMessages = expandPlan(coerced.value, 'surf-untouched', initialDevices as never);
+    const touchedMessages = expandPlan(coerced.value, 'surf-touched', initialDevices as never);
+    const { state: prevState } = reduceA2uiMessages(undefined, [...untouchedMessages, ...touchedMessages]);
+
+    const prevUntouched = prevState.surfaces['surf-untouched'];
+    const prevTouchedDataModel = prevState.surfaces['surf-touched'].dataModel;
+
+    const updateMsg = deviceUpdate('surf-touched', 'lamp-1', { on: false, brightness: 10, pending: false, error: '' });
+    const next = reduceA2uiMessages(prevState, [updateMsg]);
+
+    // Untouched surface is carried over by reference, not deep-cloned.
+    expect(next.state.surfaces['surf-untouched']).toBe(prevUntouched);
+
+    // Touched surface's dataModel was cloned, not mutated in place, and reflects the update.
+    expect(next.state.surfaces['surf-touched'].dataModel).not.toBe(prevTouchedDataModel);
+    expect((prevTouchedDataModel.devices as Record<string, { on: boolean }>)['lamp-1'].on).toBe(true);
+    expect(next.trees['surf-touched'].nodesById['lamp-lamp-1'].props.on).toBe(false);
+  });
+
   it('handles deleteSurface message by removing the surface tree', () => {
     const coerced = coerceSurfacePlan(samplePlan);
     if (!coerced.ok) throw new Error();
