@@ -55,7 +55,7 @@ async function main() {
     await page.goto(`${base}/canvas.html?fresh=1&sim=1`, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await sleep(1200);
 
-    await page.click('[data-cmd=teach]');
+    await page.evaluate(() => document.querySelector('[data-cmd=teach]').click()); // phones: it lives in the Menu sheet
     await sleep(800);
     await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-teach-recording.png') });
 
@@ -71,12 +71,12 @@ async function main() {
     await page.click('[data-act=keep]');
     await sleep(400);
 
-    await page.click('[data-cmd=gestures]');
+    await page.evaluate(() => document.querySelector('[data-cmd=gestures]').click()); // phones: it lives in the Menu sheet
     await sleep(300);
     await page.screenshot({ path: join(OUT_DIR, 'after-iphone15-custom-gestures-list.png') });
     await page.click('.mc-teach-close');
 
-    await page.click('[data-cmd=ai]');
+    await page.evaluate(() => document.querySelector('[data-cmd=ai]').click()); // phones: it lives in the Menu sheet
     const historyClicked = await page.evaluate(() => {
       const el = Array.from(document.querySelectorAll('.mc-ai-history, .mc-ai')).find((n) => n.textContent?.includes('triggered'));
       return !!el;
@@ -84,7 +84,7 @@ async function main() {
     console.log('history line present before trigger (expected false):', historyClicked);
 
     // Trigger it via the list's Test button to exercise the runtime path.
-    await page.click('[data-cmd=gestures]');
+    await page.evaluate(() => document.querySelector('[data-cmd=gestures]').click()); // phones: it lives in the Menu sheet
     await sleep(200);
     await page.click('[data-act=test]');
     await sleep(600);
