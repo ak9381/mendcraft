@@ -226,6 +226,21 @@ export interface EditItemRef {
   label: string;
 }
 
+export interface ContainmentEl {
+  contains(other: unknown): boolean;
+}
+
+/** Keeps only the elements with no OTHER matched element as an ancestor —
+ *  e.g. given a Card containing a nested StatTile plus a top-level sibling
+ *  tile, keeps the card and the sibling, drops the StatTile. This is how
+ *  nested children (inside a Card/Tabs/Grid/Row/Split) stay inside their
+ *  parent instead of getting their own independent move/resize chrome: the
+ *  caller just needs to list every candidate (any depth), not know the
+ *  tree shape. Works regardless of nesting depth or which container type. */
+export function topLevelOf<T extends ContainmentEl>(all: T[]): T[] {
+  return all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+}
+
 export interface EditBoardOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   createElement(tag: string): EditEl;

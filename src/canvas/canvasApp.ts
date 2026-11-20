@@ -23,7 +23,12 @@ import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { createWizClient, resolveWizToken, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
-import { ConnectTileElement, LampTileElement, MusicTileElement, PlanBoardElement, SceneTileElement, SwitchTileElement, smartCanvasCatalog } from './widgets';
+import {
+  CardTileElement, ChartTileElement, ConnectTileElement, FormTileElement, GridTileElement,
+  LampTileElement, MusicTileElement, PlanBoardElement, RowTileElement, SceneTileElement,
+  SplitTileElement, StatTileElement, SwitchTileElement, TableTileElement, TabsTileElement,
+  VisualTileElement, smartCanvasCatalog,
+} from './widgets';
 import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
@@ -43,7 +48,7 @@ import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel } from './dragPanel';
-import { mountEditBoard, type EditEl, type EditItemRef } from './editBoard';
+import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
@@ -88,18 +93,37 @@ const TRACKS = ['Morning light', 'Monsoon raga', 'Evening calm'];
 // land as direct children of the same Column/`.mc-fb-column` host, in the
 // same order as the surface plan's tiles — so editBoard.ts's stable key is
 // just that tile's `tileComponentId`, zipped by position.
-const LIVE_TILE_TAGS = ['mc-lamp-tile', 'mc-music-tile', 'mc-switch-tile', 'mc-scene-tile', 'mc-connect-tile', 'mc-plan-board'];
+//
+// Nested layouts complicate this: a Card can contain a StatTile, and both
+// match the same tag/class list below (any depth). `topLevelOf` (editBoard.ts)
+// is what keeps nested children from getting their own independent chrome —
+// it keeps only the matches with no OTHER match as an ancestor, so the Card
+// (or Grid, Row, Tabs, Split) is the edit item and its children just move
+// with it.
+const LIVE_TILE_TAGS = [
+  'mc-lamp-tile', 'mc-music-tile', 'mc-switch-tile', 'mc-scene-tile', 'mc-connect-tile', 'mc-plan-board',
+  'mc-row', 'mc-grid', 'mc-card', 'mc-tabs', 'mc-split',
+  'mc-stat-tile', 'mc-chart-tile', 'mc-table-tile', 'mc-form-tile', 'mc-visual-tile',
+];
+const FALLBACK_TILE_SELECTOR = '.mc-fb-tile, .mc-fb-row, .mc-fb-grid, .mc-fb-card, .mc-fb-tabs, .mc-fb-split';
 
 function collectTileEls(surfaceEl: HTMLElement): HTMLElement[] {
   const live = Array.from(surfaceEl.querySelectorAll<HTMLElement>(LIVE_TILE_TAGS.join(',')));
-  if (live.length) return live;
-  return Array.from(surfaceEl.querySelectorAll<HTMLElement>('.mc-fb-tile'));
+  const all = live.length ? live : Array.from(surfaceEl.querySelectorAll<HTMLElement>(FALLBACK_TILE_SELECTOR));
+  return topLevelOf(all);
 }
 
 function tileEditLabel(t: TileSpec): string {
   if (t.type === 'lamp' || t.type === 'music' || t.type === 'switch' || t.type === 'scene') return t.label;
   if (t.type === 'connect') return t.label ?? 'Connect a device';
-  return 'Floor plan';
+  if (t.type === 'plan') return 'Floor plan';
+  if (t.type === 'stat') return t.label;
+  if (t.type === 'chart' || t.type === 'table' || t.type === 'form' || t.type === 'visual') return t.title;
+  if (t.type === 'card') return t.title || 'Card';
+  if (t.type === 'row') return 'Row';
+  if (t.type === 'grid') return 'Grid';
+  if (t.type === 'tabs') return 'Tabs';
+  return 'Split';
 }
 
 export function seedDoc(): CanvasDoc {
@@ -119,7 +143,11 @@ export function seedDoc(): CanvasDoc {
 }
 
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
-  for (const El of [LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement]) {
+  for (const El of [
+    LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement,
+    RowTileElement, GridTileElement, CardTileElement, TabsTileElement, SplitTileElement,
+    StatTileElement, ChartTileElement, TableTileElement, FormTileElement, VisualTileElement,
+  ]) {
     if (!customElements.get(El.tagName)) customElements.define(El.tagName, El as unknown as CustomElementConstructor);
   }
   const storage = opts.storage ?? localStorage;
@@ -209,7 +237,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const out: EditItemRef[] = [];
       plan.tiles.forEach((t, i) => {
         const el = els[i];
-        if (el) out.push({ key: tileComponentId(t), el: el as unknown as EditEl, label: tileEditLabel(t) });
+        if (el) out.push({ key: tileComponentId(t, [i]), el: el as unknown as EditEl, label: tileEditLabel(t) });
       });
       return out;
     },
@@ -340,10 +368,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     el.surface = s;
     host.append(el);
     live.add(sid);
-    (s as { onAction: { subscribe(f: (a: { name: string; context: { deviceId: string } }) => void): void } }).onAction.subscribe((a) => {
+    type WidgetAction = { name: string; context?: Record<string, unknown>; metadata?: Record<string, unknown> };
+    (s as { onAction: { subscribe(f: (a: WidgetAction) => void): void } }).onAction.subscribe((a) => {
       if (a.name === 'connect.start') { openConnectSheet(sid); return; }
-      const id = a.context?.deviceId; const cur = id ? store.get(id) : undefined;
-      if (!cur) return;
+      // New general-purpose widgets: wired through the same onAction bus as
+      // every device tile, but their payload has no deviceId — the live
+      // (Lit) path carries per-click specifics in `metadata` (the A2UI
+      // controller's calling convention for dynamic action data), the
+      // fallback (plain-DOM) path puts the same thing straight in `context`.
+      if (a.name === 'table.rowAction') {
+        const row = (a.context?.row ?? a.metadata?.row) as string[] | undefined;
+        say(row ? `Opened ${row[0]}.` : 'Opened row.');
+        return;
+      }
+      if (a.name === 'form.submit') {
+        say('Form submitted.');
+        return;
+      }
+      if (a.name === 'visual.action') {
+        const label = (a.context?.label ?? a.metadata?.label) as string | undefined;
+        const action = (a.context?.action ?? a.metadata?.action) as string | undefined;
+        say(label ? `${label}.` : action ? `${action}.` : 'Activated.');
+        return;
+      }
+      const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
+      if (!cur || !id) return;
       if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
       if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
       if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
