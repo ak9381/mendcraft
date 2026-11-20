@@ -178,7 +178,6 @@ export const FormTileApi = {
       title: z.string(),
       fields: z.array(FormFieldSchema),
       submitLabel: z.string(),
-      onFieldChange: CommonSchemas.Action,
       onSubmit: CommonSchemas.Action,
     })
     .strict(),

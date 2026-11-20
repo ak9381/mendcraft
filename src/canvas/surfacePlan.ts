@@ -420,7 +420,6 @@ export function expandPlan(
         title: t.title,
         fields: t.fields,
         submitLabel: t.submitLabel,
-        onFieldChange: { event: { name: 'form.fieldChange', context: { formId: id } } },
         onSubmit: { event: { name: 'form.submit', context: { formId: id } } },
       });
     } else if (t.type === 'visual') {

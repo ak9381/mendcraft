@@ -8,9 +8,17 @@
 // tabindex, aria-label) — never trust this string with innerHTML before it
 // has been through here.
 
+export type VisualNode =
+  | { kind: 'element'; tag: string; attrs: Record<string, string>; children: VisualNode[] }
+  | { kind: 'text'; text: string };
+
 export interface SanitizeResult {
   html: string;
   removed: string[];
+  /** The same sanitized result as a walkable tree — renderers build real DOM
+   *  nodes from this directly (createElement/setAttribute/appendChild),
+   *  rather than re-parsing `html` with innerHTML + querySelectorAll. */
+  nodes: VisualNode[];
 }
 
 /** lowercase tag name -> canonical output spelling (SVG is case-sensitive). */
@@ -146,9 +154,23 @@ function sanitizeAttrValue(lowerName: string, value: string): string | null {
  *  `<base>`/`<img>`, and any non-local `href`/`xlink:href` — then promotes
  *  `[data-action]` elements to `role="button"` + `tabindex="0"` +
  *  `aria-label` so they're real hand-reachable controls once mounted. */
+function serialize(nodes: VisualNode[]): string {
+  return nodes
+    .map((n) => {
+      if (n.kind === 'text') return n.text;
+      const attrStr = Object.entries(n.attrs)
+        .map(([k, v]) => `${k}="${escapeAttr(v)}"`)
+        .join(' ');
+      const open = `<${n.tag}${attrStr ? ' ' + attrStr : ''}`;
+      if (VOID_TAGS.has(n.tag.toLowerCase()) && !n.children.length) return `${open} />`;
+      return `${open}>${serialize(n.children)}</${n.tag}>`;
+    })
+    .join('');
+}
+
 export function sanitizeVisualMarkup(raw: string): SanitizeResult {
   const removed: string[] = [];
-  if (typeof raw !== 'string' || !raw) return { html: '', removed };
+  if (typeof raw !== 'string' || !raw) return { html: '', removed, nodes: [] };
 
   const noComments = raw
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -156,9 +178,16 @@ export function sanitizeVisualMarkup(raw: string): SanitizeResult {
     .replace(/<![a-zA-Z][^>]*>/g, '')
     .replace(/<\?[\s\S]*?\?>/g, '');
 
-  let out = '';
+  const roots: VisualNode[] = [];
+  type Frame = { name: string; banned: boolean; node: Extract<VisualNode, { kind: 'element' }> | null };
+  const stack: Frame[] = [];
+  const appendChild = (node: VisualNode): void => {
+    const top = stack[stack.length - 1];
+    if (top?.node) top.node.children.push(node);
+    else roots.push(node);
+  };
+
   let lastIndex = 0;
-  const stack: Array<{ name: string; banned: boolean }> = [];
   TAG_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = TAG_RE.exec(noComments))) {
@@ -166,19 +195,14 @@ export function sanitizeVisualMarkup(raw: string): SanitizeResult {
     const textBefore = noComments.slice(lastIndex, m.index);
     lastIndex = m.index + full.length;
     const insideBanned = stack.some((s) => s.banned);
-    if (!insideBanned) out += textBefore;
+    if (!insideBanned && textBefore) appendChild({ kind: 'text', text: textBefore });
 
     const lname = rawName.toLowerCase();
     const selfClose = !!selfCloseSlash || VOID_TAGS.has(lname);
 
     if (closing) {
       for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].name === lname) {
-          const wasBanned = stack[i].banned;
-          stack.length = i;
-          if (!wasBanned && !insideBanned) out += `</${ALLOWED_TAGS[lname] ?? lname}>`;
-          break;
-        }
+        if (stack[i].name === lname) { stack.length = i; break; }
       }
       continue;
     }
@@ -187,12 +211,12 @@ export function sanitizeVisualMarkup(raw: string): SanitizeResult {
     if (banned) removed.push(lname);
 
     if (insideBanned || banned) {
-      if (!selfClose) stack.push({ name: lname, banned: true });
+      if (!selfClose) stack.push({ name: lname, banned: true, node: null });
       continue;
     }
 
     const attrs = parseAttrs(attrsStr);
-    const kept: string[] = [];
+    const keptAttrs: Record<string, string> = {};
     let hasDataAction = false;
     let hasRole = false;
     let hasAriaLabel = false;
@@ -210,20 +234,20 @@ export function sanitizeVisualMarkup(raw: string): SanitizeResult {
       const safeVal = sanitizeAttrValue(lowerName, value);
       if (safeVal === null) { removed.push(`${lname}[${lowerName}]`); continue; }
       const outName = ATTR_CASE[lowerName] ?? lowerName;
-      kept.push(`${outName}="${escapeAttr(safeVal)}"`);
+      keptAttrs[outName] = safeVal;
     }
     if (hasDataAction) {
-      if (!hasRole) kept.push('role="button"');
-      if (!hasTabindex) kept.push('tabindex="0"');
-      if (!hasAriaLabel) kept.push(`aria-label="${escapeAttr(dataLabelVal || humanize(dataActionVal))}"`);
+      if (!hasRole) keptAttrs.role = 'button';
+      if (!hasTabindex) keptAttrs.tabindex = '0';
+      if (!hasAriaLabel) keptAttrs['aria-label'] = dataLabelVal || humanize(dataActionVal);
     }
 
-    const outTag = ALLOWED_TAGS[lname];
-    out += `<${outTag}${kept.length ? ' ' + kept.join(' ') : ''}${selfClose ? ' /' : ''}>`;
-    if (!selfClose) stack.push({ name: lname, banned: false });
+    const node: Extract<VisualNode, { kind: 'element' }> = { kind: 'element', tag: ALLOWED_TAGS[lname], attrs: keptAttrs, children: [] };
+    appendChild(node);
+    if (!selfClose) stack.push({ name: lname, banned: false, node });
   }
   const tail = noComments.slice(lastIndex);
-  out += tail;
+  if (!stack.some((s) => s.banned) && tail) appendChild({ kind: 'text', text: tail });
 
-  return { html: out, removed };
+  return { html: serialize(roots), removed, nodes: roots };
 }
