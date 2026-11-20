@@ -2,6 +2,7 @@
 import '../style.css';
 import './canvas.css';
 import { mountCanvas } from './canvasApp';
+import { autoHandsFromSearch } from './canvasHands';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano } from '../ai/nanoStatus';
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
@@ -49,6 +50,7 @@ const voice = createVoiceController((t) => handle?.run(t));
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh'), sim: params.has('sim'),
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
+  autoHands: autoHandsFromSearch(location.search),
   privacyGemini: cloud
     ? (redacted) => cloud(redacted, () => undefined)
     : undefined,

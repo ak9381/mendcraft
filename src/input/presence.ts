@@ -24,6 +24,7 @@ import {
   type FaceSignature,
   type FaceBox,
 } from './faceLogic';
+export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
 import { resolveCameraStream } from './cameraShare';
 
@@ -72,6 +73,11 @@ export interface PresenceTracker {
   register(): boolean;
   /** Forget the signature and revert to best-2-hands behaviour. */
   reregister(): void;
+  /** Lock onto a previously captured signature (sessionStorage re-lock). */
+  registerSignature(sig: FaceSignature): void;
+  /** The signature of the current main face (pre-registration) or the one the
+   *  operator registered with — for persisting across a reload. Stays on-device. */
+  currentSignature(): FaceSignature | null;
   readonly isRegistered: boolean;
   readonly isFacing: boolean;
   readonly isPaused: boolean;
@@ -265,35 +271,52 @@ export function createPresenceTracker(
   }
 
   async function start(existing?: MediaStream): Promise<void> {
-    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-    // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
-    // locked-down GPUs, software renderers) cannot create it, so fall back to the
-    // CPU delegate automatically rather than failing the whole camera. Tracking is
-    // slower on CPU but still works — far better than no hands/face at all.
-    handLm = await createWithFallback((delegate) =>
-      HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-        runningMode: 'VIDEO',
-        numHands: 4,
-      }),
-    );
-    faceLm = await createWithFallback((delegate) =>
-      FaceLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
-        runningMode: 'VIDEO',
-        numFaces: 4,
-        outputFacialTransformationMatrixes: true,
-      }),
-    );
-
+    // Ask for the camera FIRST, in parallel with the wasm/model downloads, so
+    // Chrome's permission prompt appears immediately and a model/CSP failure
+    // can never hide it (the old order threw before getUserMedia was reached,
+    // so the user never even saw a camera prompt).
     const picked = resolveCameraStream(existing);
-    if (picked.stream) {
-      stream = picked.stream;
-      ownsStream = false;
-    } else {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
-      ownsStream = true;
+    const streamPromise: Promise<{ stream: MediaStream; owns: boolean }> = picked.stream
+      ? Promise.resolve({ stream: picked.stream, owns: false })
+      : navigator.mediaDevices
+          .getUserMedia({ video: { width: 640, height: 480 }, audio: false })
+          .then((s) => ({ stream: s, owns: true }));
+    // Mark the rejection handled so a camera failure during model loading
+    // never surfaces as an unhandled rejection; the real await below rethrows.
+    streamPromise.catch(() => undefined);
+
+    try {
+      const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+      // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
+      // locked-down GPUs, software renderers) cannot create it, so fall back to the
+      // CPU delegate automatically rather than failing the whole camera. Tracking is
+      // slower on CPU but still works — far better than no hands/face at all.
+      handLm = await createWithFallback((delegate) =>
+        HandLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+          runningMode: 'VIDEO',
+          numHands: 4,
+        }),
+      );
+      faceLm = await createWithFallback((delegate) =>
+        FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+          runningMode: 'VIDEO',
+          numFaces: 4,
+          outputFacialTransformationMatrixes: true,
+        }),
+      );
+    } catch (err) {
+      // Models/wasm failed: release the camera we may have just opened.
+      streamPromise
+        .then(({ stream: s, owns }) => { if (owns) for (const t of s.getTracks()) t.stop(); })
+        .catch(() => undefined);
+      throw err;
     }
+
+    const got = await streamPromise;
+    stream = got.stream;
+    ownsStream = got.owns;
     video.srcObject = stream;
     await video.play();
 
@@ -317,16 +340,33 @@ export function createPresenceTracker(
     onFrame?.({ hands: [], rejectedHands: [], faces: [], facing: lastFacing, registered: operator.registered, paused: false });
   }
 
+  let registeredSig: FaceSignature | null = null;
+
   function register(): boolean {
     if (mainIdx === null) return false;
-    operator.register(candidates[mainIdx].signature);
+    registeredSig = candidates[mainIdx].signature;
+    operator.register(registeredSig);
     operatorIdx = mainIdx;
     gate.reset();
     binder.reset();
     return true;
   }
 
+  function registerSignature(sig: FaceSignature): void {
+    registeredSig = sig;
+    operator.register(sig);
+    operatorIdx = null; // re-acquired on the next face frame that matches
+    gate.reset();
+    binder.reset();
+  }
+
+  function currentSignature(): FaceSignature | null {
+    if (registeredSig) return registeredSig;
+    return mainIdx !== null ? candidates[mainIdx]?.signature ?? null : null;
+  }
+
   function reregister(): void {
+    registeredSig = null;
     operator.reset();
     operatorIdx = null;
     gate.reset();
@@ -340,6 +380,8 @@ export function createPresenceTracker(
     setPinchThreshold(on, off) { processor.setPinchThreshold(on, off); },
     register,
     reregister,
+    registerSignature,
+    currentSignature,
     get isRegistered() { return operator.registered; },
     get isFacing() { return lastFacing; },
     get isPaused() { return lastPaused; },

@@ -112,7 +112,7 @@ try {
   for (const d of DEVICES) {
     const page = await browser.newPage();
     await page.setViewport({ width: d.width, height: d.height, deviceScaleFactor: d.dpr, isMobile: d.mobile, hasTouch: d.mobile });
-    await page.goto(`${BASE}/canvas.html?fresh=1&sim=1${d.platform ? `&platform=${d.platform}` : ''}`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(`${BASE}/canvas.html?fresh=1&sim=1&hands=0${d.platform ? `&platform=${d.platform}` : ''}`, { waitUntil: 'networkidle2', timeout: 60000 });
     await page.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
     await page.waitForFunction(() => window.__mcHand && window.__mcHandLib, { timeout: 15000 });
     await sleep(800);
@@ -225,7 +225,7 @@ try {
   try {
     const page = await arcBrowser.newPage();
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-    await page.goto(`${BASE}/canvas.html?fresh=1&sim=1`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(`${BASE}/canvas.html?fresh=1&sim=1&hands=0`, { waitUntil: 'networkidle2', timeout: 60000 });
     await page.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
     await page.waitForFunction(() => window.__mcHand && window.__mcHandLib, { timeout: 15000 });
     await sleep(800);
@@ -254,7 +254,7 @@ try {
   try {
     const page = await scBrowser.newPage();
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-    await page.goto(`${BASE}/canvas.html?showcase=energy&sim=1`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(`${BASE}/canvas.html?showcase=energy&sim=1&hands=0`, { waitUntil: 'networkidle2', timeout: 60000 });
     await page.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
     await page.waitForFunction(() => window.__mcHand && window.__mcHandLib, { timeout: 15000 });
     await sleep(800);
