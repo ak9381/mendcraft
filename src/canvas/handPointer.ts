@@ -263,7 +263,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       el.focus({ preventScroll: true });
       return;
     }
-    el.click();
+    // SVGElement (VisualTile's promoted [data-action] zones) has no .click().
+    // Dispatch the same bubbling, composed click the dry-run path already uses
+    // so a pinch on a room-zone <rect> fires the listener visualMount wired.
+    if (typeof el.click === 'function') el.click();
+    else el.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, cancelable: true }));
   }
 
   function dragTo(x: number) {

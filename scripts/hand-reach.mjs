@@ -51,12 +51,20 @@ async function audit(page, state) {
       const r = el.getBoundingClientRect();
       const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
       const inShadow = el.getRootNode() !== document;
-      let delivered = false;
+      // Range inputs activate by drag, not click (handPointer.ts's press()
+      // routes them straight to a value-drag on pinch-down) — and dry-run
+      // deliberately suppresses the 'input'/'change' it would otherwise
+      // dispatch, same as it suppresses 'click' for everything else. So
+      // `lastActivated` (set unconditionally, dry-run or not) is the only
+      // signal available for them; every other control still needs the
+      // 'click' listener to prove the event actually reached it.
+      const isRange = el.matches('input[type=range]');
+      let delivered = isRange;
       const mark = () => { delivered = true; };
-      el.addEventListener('click', mark, { capture: true, once: true });
+      if (!isRange) el.addEventListener('click', mark, { capture: true, once: true });
       const got = H.pointAt(cx, cy);
       H.pinch(true); H.pinch(false);
-      el.removeEventListener('click', mark, { capture: true });
+      if (!isRange) el.removeEventListener('click', mark, { capture: true });
       // also check the snap radius: aim 24px outside the control's edge
       const near = H.pointAt(r.right + 24, cy);
       res.push({ state, label: controlLabel(el), tag: el.tagName.toLowerCase(), inShadow, w: Math.round(r.width), h: Math.round(r.height),
@@ -228,6 +236,60 @@ try {
   }
 } catch (e) {
   arc = { misses: [{ step: 'arc', why: String(e) }], mouseViolations: 0 };
+}
+
+// SHOWCASE: the rich nested dashboard (?showcase=energy — never reachable
+// from the default demo URLs). Audits every new control type in the one
+// state they're actually visible in: tab buttons switching panels (each
+// switch brings a different panel's controls into reach — sortable table
+// header, row-action button, toggle/slider/segmented-choice/submit, and the
+// VisualTile's promoted data-action zones), then toggles Edit mode to check
+// the new top-level tiles (Grid/Tabs/Card) get real move/resize chrome.
+// Folds its findings into the SAME `all`/`real` arrays the per-device audit
+// above uses, so a showcase regression fails the run exactly like any
+// other control would — additive only; doesn't touch the arc or per-device
+// loop above it.
+try {
+  const scBrowser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-fake-ui-for-media-stream'] });
+  try {
+    const page = await scBrowser.newPage();
+    await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+    await page.goto(`${BASE}/canvas.html?showcase=energy&sim=1`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
+    await page.waitForFunction(() => window.__mcHand && window.__mcHandLib, { timeout: 15000 });
+    await sleep(800);
+    // The energy showcase is a compact split (tabs beside the VisualTile)
+    // so room-zone controls stay inside the default 1000×680 board at this
+    // 1440×900 viewport. scrollIntoView is only a safety net if a future
+    // fixture grows past the fold — collectControls ignores off-screen nodes.
+    const scrollIntoView = (sel) => page.evaluate((s) => document.querySelector(s)?.scrollIntoView({ block: 'center' }), sel);
+
+    all.push(...await audit(page, 'showcase:usage-tab'));
+
+    real.push({ device: 'showcase', step: 'Room zone (hand)', ...await handPress(page, (el, l) => el.dataset?.action === 'zone-living' || /living room zone/i.test(l)) });
+    await sleep(200);
+
+    real.push({ device: 'showcase', step: 'Devices tab (hand)', ...await handPress(page, (el, l) => el.getAttribute('role') === 'tab' && /devices/i.test(l)) });
+    await sleep(300);
+    all.push(...await audit(page, 'showcase:devices-tab')); // sortable table header + row-action button now in reach
+
+    real.push({ device: 'showcase', step: 'Settings tab (hand)', ...await handPress(page, (el, l) => el.getAttribute('role') === 'tab' && /settings/i.test(l)) });
+    await sleep(300);
+    all.push(...await audit(page, 'showcase:settings-tab')); // toggle/slider/choice/submit now in reach
+
+    await scrollIntoView('.mc-edit-toggle');
+    real.push({ device: 'showcase', step: 'Edit board (hand)', ...await handPress(page, (el) => el.classList.contains('mc-edit-toggle')) });
+    await waitForVisible(page, '.mc-edit-canvas.mc-editing', 3000);
+    await sleep(300);
+    all.push(...await audit(page, 'showcase:editing')); // Grid/Tabs/Card top-level move+resize handles
+    await page.screenshot({ path: join(OUT, 'showcase-editing.png') });
+    real.push({ device: 'showcase', step: 'Done editing (hand)', ...await handPress(page, (el) => el.classList.contains('mc-edit-toggle')) });
+    await page.close();
+  } finally {
+    await scBrowser.close();
+  }
+} catch (e) {
+  all.push({ state: 'showcase', label: 'showcase pass', tag: 'error', inShadow: false, w: 0, h: 0, resolved: false, activated: false, snapsFromNear: false, error: String(e) });
 } finally {
   if (vite) { try { process.kill(-vite.pid); } catch { /* gone */ } }
 }

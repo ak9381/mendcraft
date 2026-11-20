@@ -99,6 +99,10 @@ const GENERIC_ATTRS = new Set([
   'dominant-baseline', 'offset', 'stop-color', 'stop-opacity', 'gradientunits',
   'gradienttransform', 'patternunits', 'patterncontentunits', 'preserveaspectratio',
   'markerwidth', 'markerheight', 'orient', 'refx', 'refy', 'style',
+  // Not a security concern (no URL, nothing executes) — lets a decorative
+  // label sitting on top of a clickable shape get out of the way of hit
+  // testing instead of stealing the click from the shape underneath it.
+  'pointer-events',
 ]);
 
 /** Attribute names whose canonical on-the-wire casing we preserve (SVG is

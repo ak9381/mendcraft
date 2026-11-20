@@ -1,5 +1,5 @@
 // Lit implementations of the smart-canvas catalog (DOM side of catalogApi.ts).
-import { html, nothing, css } from 'lit';
+import { html, svg, nothing, css } from 'lit';
 import { A2uiLitElement } from '@a2ui/lit/v0_9';
 import { Catalog } from '@a2ui/web_core/v0_9';
 import { A2uiColumn, A2uiText } from '@a2ui/web_core/v0_9/basic_catalog';
@@ -373,28 +373,33 @@ export class ChartTileElement extends A2uiLitElement<typeof ChartTileApi> {
     const series = Array.isArray(p.series) ? (p.series as Array<{ label: string; value: number }>) : [];
     const max = Math.max(...series.map((s) => s.value), 1);
     const ariaLabel = series.map((s) => `${s.label}: ${s.value}`).join(', ');
+    // Use lit's `svg` tag (not `html`) so <rect>/<circle>/<polyline>
+    // actually mint SVG elements. A nested html`` template inside <svg>
+    // creates inert HTMLUnknownElements — the bars never paint.
     let shapes = nothing as unknown;
     if (p.chartType === 'ring') {
       const total = series.reduce((a, s) => a + Math.max(s.value, 0), 0) || 1;
       let acc = 0;
       const colors = ['#6B8F71', '#C98B3C', '#5A7BA6', '#6E6A63'];
       const circumference = 2 * Math.PI * 24;
-      shapes = html`${series.map((s, i) => {
+      shapes = svg`${series.map((s, i) => {
         const frac = Math.max(s.value, 0) / total;
         const offset = -acc * circumference;
         acc += frac;
-        return html`<circle cx="30" cy="30" r="24" fill="none" stroke=${colors[i % colors.length]} stroke-width="10" stroke-dasharray=${`${frac * circumference} ${circumference}`} stroke-dashoffset=${offset} />`;
+        return svg`<circle cx="30" cy="30" r="24" fill="none" stroke=${colors[i % colors.length]} stroke-width="10" stroke-dasharray=${`${frac * circumference} ${circumference}`} stroke-dashoffset=${offset} />`;
       })}`;
     } else if (p.chartType === 'line') {
       const pts = series.map((s, i) => `${(i / Math.max(series.length - 1, 1)) * 110 + 5},${55 - (s.value / max) * 50}`).join(' ');
-      shapes = html`<polyline points=${pts} fill="none" stroke="#5A7BA6" stroke-width="2" />`;
+      shapes = svg`<polyline points=${pts} fill="none" stroke="#5A7BA6" stroke-width="2" />`;
     } else {
       const barWidth = 100 / Math.max(series.length, 1);
-      shapes = html`${series.map((s, i) => html`<rect x=${5 + i * barWidth} y=${55 - (s.value / max) * 50} width=${barWidth * 0.7} height=${(s.value / max) * 50} fill="#C98B3C" />`)}`;
+      shapes = svg`${series.map((s, i) => svg`<rect x=${5 + i * barWidth} y=${55 - (s.value / max) * 50} width=${barWidth * 0.7} height=${(s.value / max) * 50} fill="#C98B3C" />
+        <text x=${5 + i * barWidth + barWidth * 0.35} y="68" text-anchor="middle" fill="#6E6A63" font-size="7">${s.label.slice(0, 2)}</text>`)}`;
     }
+    const viewBox = p.chartType === 'bar' || !p.chartType ? '0 0 120 72' : '0 0 120 60';
     return html`<div class="tile" role="group" aria-label=${String(p.title || 'Chart')}>
       <div class="label">${p.title}</div>
-      <svg viewBox="0 0 120 60" role="img" aria-label=${ariaLabel}>${shapes}</svg>
+      <svg viewBox=${viewBox} role="img" aria-label=${ariaLabel}>${shapes}</svg>
     </div>`;
   }
 }
