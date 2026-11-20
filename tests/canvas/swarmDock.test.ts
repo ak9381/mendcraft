@@ -152,7 +152,11 @@ function buildAiPanel(): El {
   for (const engine of ['nano', 'gemini']) {
     const dock = new El('div'); dock.className = 'mc-term-dock'; dock.setAttribute('data-engine', engine);
     const chips = new El('div'); chips.className = 'mc-term-dock-chips';
-    dock.append(chips);
+    const history = new El('details'); history.className = 'mc-term-dock-history'; history.hidden = true;
+    const historyChips = new El('div'); historyChips.className = 'mc-term-dock-history-chips';
+    const historyCount = new El('span'); historyCount.className = 'mc-term-dock-history-count'; historyCount.textContent = '0';
+    history.append(historyCount, historyChips);
+    dock.append(chips, history);
     aiPanel.append(dock);
   }
   return aiPanel;
@@ -217,6 +221,55 @@ describe('mountSwarmDock — chips per engine', () => {
     expect(overflow.textContent).toBe('+3');
     overflow.dispatch('click', overflow);
     expect(chips.children.length).toBe(9);
+  });
+});
+
+describe('mountSwarmDock — session history', () => {
+  it('folds the previous turn into history instead of discarding it, and clears the live dock', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div') as unknown as HTMLElement;
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root, { doc: fakeDoc, ...immediateTimers() });
+    dock.start([agent('real-0', 'nano', 'Nano · labels')], { reducedMotion: true });
+    dock.settle();
+    dock.start([agent('real-1', 'nano', 'Nano · device values')], { reducedMotion: true });
+    const liveChips = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-chips')!;
+    const historyChips = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-history-chips')!;
+    const history = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-history')!;
+    const count = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-history-count')!;
+    expect(liveChips.children.length).toBe(1);
+    expect(liveChips.children[0].attrs['data-agent-id']).toBe('real-1');
+    expect(historyChips.children.length).toBe(1);
+    expect(historyChips.children[0].attrs['data-agent-id']).toBe('real-0');
+    expect(historyChips.children[0].classSet.has('is-done')).toBe(true);
+    expect(history.hidden).toBe(false);
+    expect(count.textContent).toBe('1');
+  });
+
+  it('a folded-into-overflow agent still gets a real chip once it lands in history', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div') as unknown as HTMLElement;
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root, { doc: fakeDoc, ...immediateTimers() });
+    const agents = Array.from({ length: 9 }, (_, i) => agent(`sub-${i}`, 'gemini', `Gemini · tile ${i + 1}`));
+    dock.start(agents, { reducedMotion: true });
+    dock.settle(); // 6 real chips + an un-expanded overflow still hiding 3
+    dock.start([agent('real-0', 'gemini', 'Gemini · planner')], { reducedMotion: true });
+    const historyChips = aiPanel.querySelector('.mc-term-dock[data-engine="gemini"] .mc-term-dock-history-chips')!;
+    expect(historyChips.children.length).toBe(9);
+    expect(historyChips.children.every((c) => c.classSet.has('is-done'))).toBe(true);
+  });
+
+  it('a history chip still opens its own mini terminal when tapped', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div');
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root as unknown as HTMLElement, { doc: fakeDoc, ...immediateTimers() });
+    dock.start([agent('real-0', 'gemini', 'Gemini · planner')], { reducedMotion: true, payloads: { gemini: 'Dashboard for [Client A]' } });
+    dock.settle();
+    dock.start([agent('real-1', 'gemini', 'Gemini · layout')], { reducedMotion: true });
+    const historyChip = aiPanel.querySelector('.mc-term-dock[data-engine="gemini"] .mc-term-dock-history-chips')!.children[0];
+    historyChip.dispatch('click', historyChip);
+    const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
+    expect(mini.hidden).toBe(false);
+    expect(mini.querySelector('.mc-term-title')!.textContent).toBe('planner');
   });
 });
 

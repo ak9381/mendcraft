@@ -82,9 +82,14 @@
 .mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
   border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
+/* The terminal column is reserved: cursors and the pill they summarise stay
+   inside the visible board area and never fly under it (percentages inside
+   .mc-swarm recompute against this narrower box), same shift the Tools chip
+   and Talk fab already make for the same reason — see below. */
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-swarm { right: calc(min(720px, 46vw) + 32px); }
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: min(720px, 46vw); min-width: 560px;
-  overflow: hidden; padding: 0; border-radius: 0; background: transparent; border: none; font-size: 16px;
-  display: flex; flex-direction: column; min-height: 0; }
+  overflow: hidden; padding: 14px 14px 14px 16px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); font-size: 16px; display: flex; flex-direction: column; min-height: 0; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
 .mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
@@ -148,10 +153,24 @@
 @keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.35); } }
 @media (prefers-reduced-motion: reduce) { .mc-dock-chip.is-working .mc-dock-chip-cursor { animation: none; } }
 
+/* Every past turn's chips, kept for the whole session but folded away by
+   default so the dock never grows taller than one row until she opens it. */
+.mc-term-dock-history { margin-top: 6px; }
+.mc-term-dock-history summary { min-height: 28px; display: inline-flex; align-items: center; padding: 2px 10px;
+  border-radius: 999px; color: var(--text-dim); font-size: 12px; cursor: pointer; list-style: none; }
+.mc-term-dock-history summary::-webkit-details-marker { display: none; }
+.mc-term-dock-history summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mc-term-dock-history[open] summary { color: var(--text); }
+.mc-term-dock-history-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-height: 120px; overflow: auto; }
+.mc-term-dock-history-chips .mc-dock-chip { opacity: 0.6; }
+
 /* Floating mini terminal: one agent's own log, same charcoal chrome as the
-   two main terminals, opened by tapping/pinching its dock chip. */
-.mc-mini-terminal { position: fixed; z-index: 45; left: 24px; top: 50%; transform: translateY(-50%);
-  width: min(460px, calc(100% - 48px)); max-height: 70vh; display: flex; flex-direction: column;
+   two main terminals, opened by tapping/pinching its dock chip. Docked in a
+   fixed spot right next to the terminal column it was opened from — a chip
+   only exists while that column is open, never near the flying cursors
+   (which stay mid-canvas) or the Tools/Talk fabs (reserved below it). */
+.mc-mini-terminal { position: fixed; z-index: 45; right: calc(min(720px, 46vw) + 32px); left: auto; bottom: 180px; top: auto; transform: none;
+  width: min(420px, calc(100% - 48px)); max-height: min(60vh, 420px); display: flex; flex-direction: column;
   border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 .mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
 .mc-mini-close { margin-left: auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;

@@ -59,9 +59,14 @@ export interface SwarmDockUi {
   destroy(): void;
 }
 
-function dockEl(aiPanel: HTMLElement, engine: SwarmKind): { chips: HTMLElement } {
+function dockEl(aiPanel: HTMLElement, engine: SwarmKind): { chips: HTMLElement; history: HTMLDetailsElement; historyChips: HTMLElement; historyCount: HTMLElement } {
   const dock = aiPanel.querySelector<HTMLElement>(`.mc-term-dock[data-engine="${engine}"]`)!;
-  return { chips: dock.querySelector<HTMLElement>('.mc-term-dock-chips')! };
+  return {
+    chips: dock.querySelector<HTMLElement>('.mc-term-dock-chips')!,
+    history: dock.querySelector<HTMLDetailsElement>('.mc-term-dock-history')!,
+    historyChips: dock.querySelector<HTMLElement>('.mc-term-dock-history-chips')!,
+    historyCount: dock.querySelector<HTMLElement>('.mc-term-dock-history-count')!,
+  };
 }
 
 export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: SwarmDockOptions = {}): SwarmDockUi {
@@ -227,19 +232,50 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     markWorking(id);
   }
 
+  /** A chip that was folded into the live-dock overflow (or never reached
+   *  addChip before the next turn started) still needs a real element to
+   *  live in history — materialise it now, already marked done. */
+  function materializeHistoryChip(id: string): HTMLElement {
+    const rec = records.get(id)!;
+    const chip = chipHtml(rec.agent);
+    rec.chip = chip;
+    return chip;
+  }
+
+  /** Every agent chip from the turn that's ending moves into its engine's
+   *  foldable history (never discarded) — still tappable to reopen that
+   *  agent's own log for the rest of the session — and the live dock clears
+   *  for the next turn's chips. */
+  function foldPreviousTurn(): void {
+    const grouped: Record<SwarmKind, string[]> = { nano: [], gemini: [] };
+    order.forEach((id) => { const rec = records.get(id); if (rec) grouped[rec.agent.kind].push(id); });
+    (['nano', 'gemini'] as const).forEach((kind) => {
+      const ids = grouped[kind];
+      if (!ids.length) return;
+      const { chips, history, historyChips, historyCount } = dockEl(aiPanel, kind);
+      ids.forEach((id) => {
+        const chip = records.get(id)!.chip ?? materializeHistoryChip(id);
+        chip.classList.remove('is-working');
+        chip.classList.add('is-done');
+        chip.querySelector<HTMLElement>('.mc-dock-chip-mark')!.textContent = '✓';
+        historyChips.append(chip);
+      });
+      chips.innerHTML = '';
+      historyCount.textContent = String(historyChips.children.length);
+      history.hidden = false;
+    });
+  }
+
   return {
     start(agents, startOpts = {}) {
       clearTimers();
       closeMini();
-      records.clear();
+      foldPreviousTurn();
       order = agents.map((a) => a.id);
       reducedMotion = !!startOpts.reducedMotion;
       payloads = startOpts.payloads ?? {};
       overflowDone = {};
       agents.forEach((a) => records.set(a.id, { agent: a, state: 'pending', chip: null, lines: [] }));
-      [aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-chips')!,
-        aiPanel.querySelector('.mc-term-dock[data-engine="gemini"] .mc-term-dock-chips')!]
-        .forEach((el) => { el.innerHTML = ''; });
       agents.forEach((a, i) => {
         if (reducedMotion) { addChip(a.id); return; }
         const id = setTimeoutFn(() => addChip(a.id), Math.min(i * STAGGER_MS, MAX_STAGGER_MS));

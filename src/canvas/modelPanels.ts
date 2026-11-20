@@ -125,7 +125,13 @@ export const MODEL_PANELS_HTML = `
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
       </section>
-      <div class="mc-term-dock" data-engine="nano" aria-label="Nano agents"><div class="mc-term-dock-chips"></div></div>
+      <div class="mc-term-dock" data-engine="nano" aria-label="Nano agents">
+        <div class="mc-term-dock-chips"></div>
+        <details class="mc-term-dock-history" hidden>
+          <summary>History (<span class="mc-term-dock-history-count">0</span>)</summary>
+          <div class="mc-term-dock-history-chips"></div>
+        </details>
+      </div>
     </div>
     <div class="mc-terminal-col">
       <section class="mc-terminal mc-terminal-gemini" aria-label="Gemini terminal, cloud">
@@ -135,7 +141,13 @@ export const MODEL_PANELS_HTML = `
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
       </section>
-      <div class="mc-term-dock" data-engine="gemini" aria-label="Gemini agents"><div class="mc-term-dock-chips"></div></div>
+      <div class="mc-term-dock" data-engine="gemini" aria-label="Gemini agents">
+        <div class="mc-term-dock-chips"></div>
+        <details class="mc-term-dock-history" hidden>
+          <summary>History (<span class="mc-term-dock-history-count">0</span>)</summary>
+          <div class="mc-term-dock-history-chips"></div>
+        </details>
+      </div>
     </div>
   </div>
   <p class="mc-ai-footer" hidden>Kept on this device: name, address, device IDs · <span class="mc-ai-footer-bytes">0 B sent to cloud</span></p>`;
