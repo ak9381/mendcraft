@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { distToRect, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH } from '../../src/canvas/handPointer';
+import { distToRect, DRAG_HANDLE, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH } from '../../src/canvas/handPointer';
 import { micFabState, mountMicFab, MIC_LISTENING_LABEL } from '../../src/canvas/micFab';
 
 const hand = (gap: number) => {
@@ -43,6 +43,17 @@ describe('hand pointer maths', () => {
     expect(sliderValueAt(200, r, 0, 100, 1)).toBe(50);
     expect(sliderValueAt(263, r, 0, 100, 10)).toBe(80);
     expect(sliderValueAt(999, r, 0, 100, 1)).toBe(100);
+  });
+});
+
+describe('DRAG_HANDLE', () => {
+  it('forwards pinch-hold for both panel-drag and editBoard move/resize handles', () => {
+    // editBoard.ts's move/resize handles ride the same pointerdown/move/up
+    // forwarding dragPanel.ts's title bars use — the hand pointer only needs
+    // to recognise the element as "forward, don't tap-activate", regardless
+    // of which handle kind it is.
+    expect(DRAG_HANDLE).toContain('[data-mc-drag-handle]');
+    expect(DRAG_HANDLE).toContain('[data-mc-resize-handle]');
   });
 });
 

@@ -147,6 +147,20 @@ try {
     real.push({ device: d.name, step: 'Lamp tile (shadow DOM)', ...await handPress(page, (el, l) => el.getRootNode() !== document && /turn on|turn off|brighter|dimmer/i.test(l)) });
     await sleep(400);
 
+    // Edit mode (editBoard.ts): Edit -> Done/Reset layout/move+resize
+    // handles all appear and must be hand-reachable; press Done again so the
+    // rest of the audit (connect sheet, teach, gestures) sees normal state.
+    if (d.name === 'desktop') {
+      real.push({ device: d.name, step: 'Edit board (hand)', ...await handPress(page, (el) => el.classList.contains('mc-edit-toggle')) });
+      await waitForVisible(page, '.mc-edit-canvas.mc-editing', 3000);
+      await sleep(300);
+      all.push(...await audit(page, S('editing')));
+      real.push({ device: d.name, step: 'Move the first tile (hand)', ...await handPress(page, (el) => el.classList?.contains?.('mc-edit-move')) });
+      await sleep(300);
+      real.push({ device: d.name, step: 'Done editing (hand)', ...await handPress(page, (el) => el.classList.contains('mc-edit-toggle')) });
+      await sleep(300);
+    }
+
     // AI activity / history
     if (d.mobile) {
       real.push({ device: d.name, step: 'Menu (hand)', ...await handPress(page, (el) => el.classList.contains('mc-menu-btn')) });

@@ -1,0 +1,355 @@
+import { describe, expect, it } from 'vitest';
+import {
+  clampMove, clampResize, computeBounds, terminalCutPx,
+  loadFrameLayout, saveFrameLayout, clearFrameLayout,
+  mountItemHandles, mountEditBoard,
+  MIN_ITEM_SIZE, MAX_ITEM_SIZE,
+  type EditEl, type EditItemRef, type ItemLayout, type Rect, type PointerLikeEvent,
+} from '../../src/canvas/editBoard';
+
+describe('clampMove', () => {
+  const bounds: Rect = { left: 12, top: 12, width: 776, height: 576 };
+  it('leaves an in-bounds item alone', () => {
+    expect(clampMove({ left: 100, top: 100, width: 300, height: 200 }, bounds)).toEqual({ left: 100, top: 100, width: 300, height: 200 });
+  });
+  it('pulls an item back onto the board from past any edge', () => {
+    expect(clampMove({ left: -500, top: -500, width: 300, height: 200 }, bounds)).toEqual({ left: 12, top: 12, width: 300, height: 200 });
+    expect(clampMove({ left: 5000, top: 5000, width: 300, height: 200 }, bounds)).toEqual({ left: 488, top: 388, width: 300, height: 200 });
+  });
+});
+
+describe('clampResize', () => {
+  const bounds: Rect = { left: 12, top: 12, width: 776, height: 576 };
+  it('leaves an in-range size alone', () => {
+    expect(clampResize({ left: 12, top: 12, width: 300, height: 220 }, bounds)).toEqual({ left: 12, top: 12, width: 300, height: 220 });
+  });
+  it('never shrinks below MIN_ITEM_SIZE — controls inside the tile stay usable', () => {
+    expect(clampResize({ left: 12, top: 12, width: 50, height: 50 }, bounds)).toEqual({ left: 12, top: 12, ...MIN_ITEM_SIZE });
+  });
+  it('never grows past MAX_ITEM_SIZE', () => {
+    expect(clampResize({ left: 12, top: 12, width: 5000, height: 5000 }, bounds)).toEqual({ left: 12, top: 12, ...MAX_ITEM_SIZE });
+  });
+  it('never grows past the board edge from the item’s own corner', () => {
+    // right edge of bounds is at 788; an item at left:600 can only grow to 188 wide.
+    expect(clampResize({ left: 600, top: 12, width: 300, height: 220 }, bounds).width).toBe(188);
+  });
+});
+
+describe('terminalCutPx', () => {
+  it('is zero when there is no AI panel or they do not overlap', () => {
+    expect(terminalCutPx({ left: 0, top: 0, width: 800, height: 600 }, null)).toBe(0);
+    expect(terminalCutPx({ left: 0, top: 0, width: 800, height: 600 }, { left: 900, top: 0, width: 400, height: 600 })).toBe(0);
+  });
+  it('is the overlap in px when the board runs under the reserved terminal column', () => {
+    // board right edge at 800, ai panel starts at 700 → 100px overlap.
+    expect(terminalCutPx({ left: 0, top: 0, width: 800, height: 600 }, { left: 700, top: 0, width: 400, height: 600 })).toBe(100);
+  });
+});
+
+describe('computeBounds', () => {
+  it('pads all sides and shrinks the right edge by the terminal cut', () => {
+    expect(computeBounds({ width: 800, height: 600 }, 100, 12)).toEqual({ left: 12, top: 12, width: 676, height: 576 });
+  });
+  it('never goes negative on a board smaller than the padding', () => {
+    expect(computeBounds({ width: 10, height: 10 }, 0, 12)).toEqual({ left: 12, top: 12, width: 0, height: 0 });
+  });
+});
+
+describe('frame layout persistence', () => {
+  function memoryStorage(): Storage {
+    const m = new Map<string, string>();
+    return {
+      getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k),
+      clear: () => m.clear(), key: () => null, length: 0,
+    } as Storage;
+  }
+  it('round-trips a saved layout, scoped per frame', () => {
+    const s = memoryStorage();
+    expect(loadFrameLayout(s, 'f1')).toBeNull();
+    const map = { 'lamp-wiz-desk': { left: 10, top: 20, width: 300, height: 200 } };
+    saveFrameLayout(s, 'f1', map);
+    expect(loadFrameLayout(s, 'f1')).toEqual(map);
+    expect(loadFrameLayout(s, 'f2')).toBeNull();
+    clearFrameLayout(s, 'f1');
+    expect(loadFrameLayout(s, 'f1')).toBeNull();
+  });
+  it('treats a corrupt stored value as absent rather than throwing', () => {
+    const s = memoryStorage();
+    s.setItem('mc.editLayout.f1', 'not json');
+    expect(loadFrameLayout(s, 'f1')).toBeNull();
+  });
+  it('a storage that throws (private mode) never breaks the caller', () => {
+    const angry: Storage = {
+      getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); },
+      removeItem: () => { throw new Error('blocked'); }, clear: () => {}, key: () => null, length: 0,
+    } as Storage;
+    expect(() => saveFrameLayout(angry, 'f1', {})).not.toThrow();
+    expect(loadFrameLayout(angry, 'f1')).toBeNull();
+    expect(() => clearFrameLayout(angry, 'f1')).not.toThrow();
+  });
+});
+
+describe('mountItemHandles', () => {
+  function makeHandle() {
+    const listeners: Record<string, Array<(e: PointerLikeEvent) => void>> = {};
+    return {
+      addEventListener(type: string, fn: (e: PointerLikeEvent) => void) { (listeners[type] ??= []).push(fn); },
+      removeEventListener(type: string, fn: (e: PointerLikeEvent) => void) { listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn); },
+      fire(type: string, e: PointerLikeEvent) { listeners[type]?.forEach((fn) => fn(e)); },
+    };
+  }
+  const bounds: Rect = { left: 0, top: 0, width: 1000, height: 1000 };
+  const initial: ItemLayout = { left: 100, top: 100, width: 300, height: 220 };
+
+  it('drags: pointerdown then pointermove by a delta moves the item by that delta', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds });
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 150, clientY: 130 });
+    expect(item.style.left).toBe('150px');
+    expect(item.style.top).toBe('130px');
+    expect(item.style.width).toBe('300px'); // move never touches size
+  });
+
+  it('resizes: pointerdown then pointermove by a delta grows width/height by that delta, position unchanged', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds });
+    resize.fire('pointerdown', { clientX: 400, clientY: 320 }); // bottom-right corner of the 300x220 box at (100,100)
+    resize.fire('pointermove', { clientX: 450, clientY: 370 }); // +50,+50
+    expect(item.style.width).toBe('350px');
+    expect(item.style.height).toBe('270px');
+    expect(item.style.left).toBe('100px');
+    expect(item.style.top).toBe('100px');
+  });
+
+  it('clamps a resize against live bounds (re-read every move, e.g. the terminal column opening mid-drag)', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    let liveBounds: Rect = bounds;
+    mountItemHandles(item, move, resize, initial, { getBounds: () => liveBounds });
+    resize.fire('pointerdown', { clientX: 400, clientY: 320 });
+    liveBounds = { left: 0, top: 0, width: 420, height: 1000 }; // the AI panel just opened, narrowing the board
+    resize.fire('pointermove', { clientX: 2000, clientY: 320 }); // tries to grow way past the new edge
+    expect(Number.parseFloat(item.style.width!)).toBeLessThanOrEqual(420 - 100); // can't pass the new right edge from left:100
+  });
+
+  it('commits the final layout on pointerup, not on every move', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    const commits: ItemLayout[] = [];
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds, onCommit: (l) => commits.push(l) });
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 120, clientY: 100 });
+    move.fire('pointermove', { clientX: 140, clientY: 100 });
+    expect(commits).toHaveLength(0);
+    move.fire('pointerup', { clientX: 140, clientY: 100 });
+    expect(commits).toEqual([{ left: 140, top: 100, width: 300, height: 220 }]);
+  });
+
+  it('a pointercancel ends the drag like pointerup (no stuck drag state)', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds });
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 120, clientY: 100 });
+    move.fire('pointercancel', { clientX: 120, clientY: 100 });
+    const before = item.style.left;
+    move.fire('pointermove', { clientX: 900, clientY: 900 }); // ignored: no drag in progress
+    expect(item.style.left).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------- mountEditBoard
+
+/** Minimal hand-rolled fake DOM, in the same style the rest of this suite
+ *  uses for DOM modules under Vitest's node environment (no jsdom). */
+class FakeEl implements EditEl {
+  tag: string;
+  classes = new Set<string>();
+  style: { left?: string; top?: string; width?: string; height?: string; minHeight?: string; position?: string } = {};
+  parentElement: FakeEl | null = null;
+  clientWidth = 2000;
+  clientHeight = 2000;
+  hidden = false;
+  disabled = false;
+  textContent = '';
+  attrs: Record<string, string> = {};
+  rect: Rect = { left: 0, top: 0, width: 300, height: 200 };
+  listeners: Record<string, Array<(e: PointerLikeEvent) => void>> = {};
+  constructor(tag: string) { this.tag = tag; }
+  classList = {
+    add: (c: string) => this.classes.add(c),
+    remove: (c: string) => this.classes.delete(c),
+    toggle: (c: string, on?: boolean) => { const next = on ?? !this.classes.has(c); if (next) this.classes.add(c); else this.classes.delete(c); return next; },
+    contains: (c: string) => this.classes.has(c),
+  };
+  getBoundingClientRect(): Rect { return this.rect; }
+  append(...nodes: FakeEl[]): void { for (const n of nodes) n.parentElement = this; }
+  remove(): void { this.parentElement = null; }
+  setAttribute(k: string, v: string): void { this.attrs[k] = v; }
+  addEventListener(type: string, fn: (e: PointerLikeEvent) => void): void { (this.listeners[type] ??= []).push(fn); }
+  removeEventListener(type: string, fn: (e: PointerLikeEvent) => void): void { this.listeners[type] = (this.listeners[type] ?? []).filter((f) => f !== fn); }
+  fire(type: string, e?: Partial<PointerLikeEvent>): void { this.listeners[type]?.forEach((fn) => fn((e ?? {}) as PointerLikeEvent)); }
+  click(): void { this.fire('click'); }
+}
+
+function memoryStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k),
+    clear: () => m.clear(), key: () => null, length: 0,
+  } as Storage;
+}
+
+function setup() {
+  const created: FakeEl[] = [];
+  const createElement = (tag: string): EditEl => { const el = new FakeEl(tag); created.push(el); return el; };
+  const root = new FakeEl('div');
+  const aiPanel = new FakeEl('aside'); aiPanel.hidden = true; aiPanel.rect = { left: 1200, top: 0, width: 400, height: 900 };
+
+  const columnF1 = new FakeEl('a2ui-basic-column');
+  const lamp = new FakeEl('mc-lamp-tile'); lamp.rect = { left: 20, top: 60, width: 300, height: 180 }; lamp.parentElement = columnF1;
+  const music = new FakeEl('mc-music-tile'); music.rect = { left: 20, top: 260, width: 300, height: 180 }; music.parentElement = columnF1;
+
+  const itemsByFrame: Record<string, EditItemRef[]> = {
+    f1: [
+      { key: 'lamp-wiz-desk', el: lamp, label: 'Desk lamp' },
+      { key: 'music-speaker-1', el: music, label: 'Speaker' },
+    ],
+  };
+
+  const storage = memoryStorage();
+  const ctl = mountEditBoard(root as unknown as EditEl, {
+    storage, createElement, getAiPanelEl: () => aiPanel,
+    getItems: (frameId) => itemsByFrame[frameId] ?? [],
+  });
+  const byClass = (cls: string) => created.filter((e) => e.classes.has(cls));
+  const editBtn = byClass('mc-edit-toggle')[0];
+  const resetBtn = byClass('mc-edit-reset')[0];
+  return { created, root, aiPanel, columnF1, lamp, music, storage, ctl, byClass, editBtn, resetBtn };
+}
+
+describe('mountEditBoard', () => {
+  it('disables Edit with no focused board, enables it once one has tiles', () => {
+    const { ctl, editBtn } = setup();
+    expect(editBtn.disabled).toBe(true);
+    ctl.setFocus(null, false);
+    expect(editBtn.disabled).toBe(true);
+    ctl.setFocus('f1', true);
+    expect(editBtn.disabled).toBe(false);
+    expect(ctl.editing).toBe(false);
+  });
+
+  it('does nothing to an un-edited board (no wrapping, tiles stay in their normal flow)', () => {
+    const { ctl, columnF1, lamp, byClass } = setup();
+    ctl.setFocus('f1', true);
+    expect(lamp.parentElement).toBe(columnF1); // never touched
+    expect(byClass('mc-edit-canvas')).toHaveLength(0);
+  });
+
+  it('Edit wraps every tile, measures its current box, and persists the layout', () => {
+    const { ctl, editBtn, lamp, music, storage, byClass } = setup();
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    expect(ctl.editing).toBe(true);
+
+    const lampWrapper = lamp.parentElement!;
+    expect(lampWrapper.classes.has('mc-edit-item')).toBe(true);
+    const canvasEl = lampWrapper.parentElement!;
+    expect(canvasEl.classes.has('mc-edit-canvas')).toBe(true);
+    expect(canvasEl.classes.has('mc-editing')).toBe(true);
+    // lamp and music share a left edge (natural rect left:20 for both) →
+    // the padding (12px) becomes their left after clamping off the origin.
+    expect(lampWrapper.style.left).toBe('12px');
+    expect(lampWrapper.style.top).toBe('12px');
+    // natural height (180) is below MIN_ITEM_SIZE.height (200) — grown to stay usable.
+    expect(lampWrapper.style.height).toBe('200px');
+    const musicWrapper = music.parentElement!;
+    expect(musicWrapper.style.top).toBe('200px'); // natural gap preserved (260-60=200)
+
+    const saved = loadFrameLayout(storage, 'f1')!;
+    expect(saved['lamp-wiz-desk']).toEqual({ left: 12, top: 12, width: 300, height: 200 });
+    expect(saved['music-speaker-1']).toEqual({ left: 12, top: 200, width: 300, height: 200 });
+
+    const moveHandles = byClass('mc-edit-move');
+    const lampMove = moveHandles.find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    expect(lampMove.attrs['data-mc-drag-handle']).toBe('');
+    const resizeHandles = byClass('mc-edit-resize');
+    const lampResize = resizeHandles.find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    expect(lampResize.attrs['data-mc-resize-handle']).toBe('');
+  });
+
+  it('Done (Edit off) keeps the positioned layout and only hides the chrome', () => {
+    const { ctl, editBtn, lamp, byClass } = setup();
+    ctl.setFocus('f1', true);
+    editBtn.click(); // on
+    const firstWrapperLeft = lamp.parentElement!.style.left;
+    editBtn.click(); // off
+    expect(ctl.editing).toBe(false);
+    const canvasEl = byClass('mc-edit-canvas').at(-1)!;
+    expect(canvasEl.classes.has('mc-editing')).toBe(false);
+    expect(lamp.parentElement!.classes.has('mc-edit-item')).toBe(true); // still positioned
+    expect(lamp.parentElement!.style.left).toBe(firstWrapperLeft); // same spot
+  });
+
+  it('a saved layout from an earlier session is re-applied even while Edit is off', () => {
+    const { ctl, storage, lamp, music } = setup();
+    saveFrameLayout(storage, 'f1', {
+      'lamp-wiz-desk': { left: 999, top: 50, width: 260, height: 210 },
+      'music-speaker-1': { left: 40, top: 300, width: 280, height: 220 },
+    });
+    ctl.setFocus('f1', true); // editing stays off
+    expect(ctl.editing).toBe(false);
+    expect(lamp.parentElement!.style.left).toBe('999px');
+    expect(lamp.parentElement!.style.height).toBe('210px');
+    expect(music.parentElement!.style.top).toBe('300px');
+  });
+
+  it('Reset layout clears a saved layout and remeasures the natural flow', () => {
+    const { ctl, editBtn, resetBtn, storage, lamp } = setup();
+    saveFrameLayout(storage, 'f1', { 'lamp-wiz-desk': { left: 999, top: 999, width: 300, height: 300 }, 'music-speaker-1': { left: 5, top: 5, width: 250, height: 250 } });
+    ctl.setFocus('f1', true);
+    editBtn.click(); // on — still shows the stale saved spot
+    expect(lamp.parentElement!.style.left).toBe('999px');
+
+    resetBtn.click();
+    expect(loadFrameLayout(storage, 'f1')).not.toBeNull();
+    // natural measurement (origin-subtracted, clamped) is back to {12,12,300,200} as in the fresh-board test.
+    expect(lamp.parentElement!.style.left).toBe('12px');
+    expect(lamp.parentElement!.style.top).toBe('12px');
+    expect(resetBtn.hidden).toBe(false); // reset stays in edit mode, ready to re-customize
+  });
+
+  it('switching to a different (or no) focused board hides chrome on the one left behind', () => {
+    const { ctl, editBtn, byClass } = setup();
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    expect(byClass('mc-edit-canvas').at(-1)!.classes.has('mc-editing')).toBe(true);
+
+    ctl.setFocus('f2', false); // a board with no items known to getItems()
+    expect(ctl.editing).toBe(false);
+    // hiding chrome on the way out rebuilds the wrapper (unwrap+rewrap, same
+    // as any other applyFrame pass) — the latest one is the one that matters.
+    expect(byClass('mc-edit-canvas').at(-1)!.classes.has('mc-editing')).toBe(false);
+    expect(editBtn.disabled).toBe(true);
+  });
+
+  it('clamps the board clear of the reserved terminal column when the AI panel is open', () => {
+    const { ctl, editBtn, aiPanel, byClass } = setup();
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const canvasEl = byClass('mc-edit-canvas').at(-1)!;
+    canvasEl.rect = { left: 0, top: 0, width: 1300, height: 900 }; // board runs right up to the AI panel
+    canvasEl.clientWidth = 1300;
+    aiPanel.hidden = false; // the AI panel is open and overlaps the board's right edge
+    const lampResize = byClass('mc-edit-resize').find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    const lampWrapper = lampResize.parentElement!;
+    lampWrapper.style.left = '12px'; lampWrapper.style.top = '12px'; lampWrapper.style.width = '300px'; lampWrapper.style.height = '200px';
+    lampResize.fire('pointerdown', { clientX: 312, clientY: 212 });
+    lampResize.fire('pointermove', { clientX: 5000, clientY: 212 }); // tries to grow far past the terminal column
+    // aiPanel.left (1200) minus the item's left (12) is the hard ceiling.
+    expect(Number.parseFloat(lampWrapper.style.width!)).toBeLessThanOrEqual(1200 - 12);
+  });
+});

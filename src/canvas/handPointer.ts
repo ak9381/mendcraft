@@ -25,12 +25,13 @@ export interface Rect { left: number; top: number; width: number; height: number
 export const INTERACTIVE =
   'button, a[href], input:not([type=hidden]), select, textarea, summary, [role=button], [role=slider], [role=switch], [role=checkbox], [role=tab], [role=menuitem], [role=option], [contenteditable=true]';
 
-/** A panel's drag handle (its title bar) — also a plain `[role=button]`, so
- *  it's reachable through the same INTERACTIVE/collectControls path as any
- *  other control. A pinch-hold that moves drags it (see dragPanel.ts, which
- *  listens for the pointerdown/move/up this dispatches); a pinch-release
- *  with no real movement activates it like a tap instead. */
-export const DRAG_HANDLE = '[data-mc-drag-handle]';
+/** A panel's drag handle (its title bar) or a board item's move/resize
+ *  handle (editBoard.ts) — also plain `button`s, so they're reachable
+ *  through the same INTERACTIVE/collectControls path as any other control.
+ *  A pinch-hold that moves drags it (see dragPanel.ts and editBoard.ts,
+ *  which listen for the pointerdown/move/up this dispatches); a
+ *  pinch-release with no real movement activates it like a tap instead. */
+export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the

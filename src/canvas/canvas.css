@@ -43,6 +43,46 @@
 .mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 .mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
+
+/* Edit mode (editBoard.ts): every tile pulled into its own absolutely
+   positioned wrapper inside one `.mc-edit-canvas`, so it can be dragged and
+   resized freely. Chrome (border + handles) only shows while `.mc-editing`
+   is on the canvas — the layout itself (left/top/width/height, set inline
+   by editBoard.ts) stays applied either way. */
+.mc-edit-canvas { position: relative; }
+/* No overflow:hidden here — the move/resize grips sit just outside this
+   box (negative top/left/right/bottom below) and would get clipped, unable
+   to receive clicks/pinches, if this box clipped its own overflow. */
+.mc-edit-item { border-radius: 16px; }
+.mc-edit-item > :first-child { display: block; width: 100%; height: 100%; }
+/* Explicit min-width/min-height here: the global `button{min-width/height:
+   var(--target)}` (60px touch target) is a different property than `width`/
+   `height`, so it would otherwise stack as a floor underneath these and
+   force the corner grips up to 60px regardless of the size set below. */
+.mc-edit-move, .mc-edit-resize { display: none; position: absolute; width: 40px; height: 40px; min-width: 40px; min-height: 40px; align-items: center; justify-content: center;
+  border-radius: 50%; border: 2px solid var(--border); background: #FFFFFF; color: var(--text); font-size: 18px; line-height: 1; padding: 0;
+  cursor: grab; touch-action: none; z-index: 2; box-shadow: 0 2px 8px rgb(0 0 0 / 0.1); }
+.mc-edit-move:active, .mc-edit-resize:active { cursor: grabbing; }
+.mc-edit-move:focus-visible, .mc-edit-resize:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-edit-canvas.mc-editing .mc-edit-item { outline: 2px dashed var(--border); outline-offset: 3px; }
+.mc-edit-canvas.mc-editing .mc-edit-move, .mc-edit-canvas.mc-editing .mc-edit-resize { display: flex; }
+.mc-edit-move { top: -18px; left: -18px; }
+.mc-edit-resize { bottom: -18px; right: -18px; cursor: nwse-resize; }
+.mc-edit-resize:active { cursor: nwse-resize; }
+
+/* Edit / Done / Reset layout trio: stacked above the Tools chip, same fixed
+   column (right: 24px), same shift-for-the-AI-panel pattern. Amber only for
+   the active Edit/Done control — warm paper otherwise. */
+.mc-edit-toggle, .mc-edit-reset { position: fixed; z-index: 40; right: 24px; min-height: 52px; padding: 0 18px;
+  border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
+  font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-edit-toggle { bottom: 172px; }
+.mc-edit-reset { bottom: 236px; min-height: 44px; font-size: 13px; }
+.mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
+.mc-edit-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-edit-toggle, .mc-canvas:has(.mc-ai:not([hidden])) .mc-edit-reset { right: calc(min(720px, 46vw) + 32px); }
+@media (max-width: 600px) { .mc-edit-toggle, .mc-edit-reset { display: none; } }
 .mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
 .mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; }
 .mc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }

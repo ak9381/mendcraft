@@ -7,7 +7,7 @@ import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, panBy, zoomAbout, type Camera, type Viewport } from './camera';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame } from './canvasCommands';
-import { expandPlan, type A2uiMessage, type DeviceState, type SurfacePlan } from './surfacePlan';
+import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
@@ -43,6 +43,7 @@ import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel } from './dragPanel';
+import { mountEditBoard, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
@@ -79,6 +80,27 @@ const STUB_DEVICES: Record<string, DeviceState> = {
   'speaker-1': { on: false, brightness: 0, playing: false, trackTitle: 'Morning light', volume: 40 },
 };
 const TRACKS = ['Morning light', 'Monsoon raga', 'Evening calm'];
+
+// ---- edit mode: tile discovery across both render paths ----
+// Live A2UI (widgets.ts) renders each tile as a custom element in light DOM
+// (the Column and the surface host don't use shadow roots); the fallback
+// renderer (fallbackRenderer.ts) renders the same tiles as plain divs. Both
+// land as direct children of the same Column/`.mc-fb-column` host, in the
+// same order as the surface plan's tiles — so editBoard.ts's stable key is
+// just that tile's `tileComponentId`, zipped by position.
+const LIVE_TILE_TAGS = ['mc-lamp-tile', 'mc-music-tile', 'mc-switch-tile', 'mc-scene-tile', 'mc-connect-tile', 'mc-plan-board'];
+
+function collectTileEls(surfaceEl: HTMLElement): HTMLElement[] {
+  const live = Array.from(surfaceEl.querySelectorAll<HTMLElement>(LIVE_TILE_TAGS.join(',')));
+  if (live.length) return live;
+  return Array.from(surfaceEl.querySelectorAll<HTMLElement>('.mc-fb-tile'));
+}
+
+function tileEditLabel(t: TileSpec): string {
+  if (t.type === 'lamp' || t.type === 'music' || t.type === 'switch' || t.type === 'scene') return t.label;
+  if (t.type === 'connect') return t.label ?? 'Connect a device';
+  return 'Floor plan';
+}
 
 export function seedDoc(): CanvasDoc {
   const r = createFrameRegistry();
@@ -171,6 +193,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const panels = mountModelPanels(aiPanel);
+  // Edit mode: a hand-reachable Edit/Done/Reset trio (near the Tools chip)
+  // that lets anything on the focused board — tiles, widgets, floor plans,
+  // live A2UI or the fallback renderer alike — be moved and resized by
+  // pinch, mouse or touch. See editBoard.ts for the move/resize/clamp logic;
+  // `getItems` below is the only place that knows about A2UI/catalog specifics.
+  const editBoard = mountEditBoard(root as unknown as EditEl, {
+    createElement: (tag) => document.createElement(tag) as unknown as EditEl,
+    getAiPanelEl: () => aiPanel as unknown as EditEl,
+    getItems: (frameId) => {
+      const plan = surfaces[frameId];
+      const surfaceEl = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`);
+      if (!plan || !surfaceEl) return [];
+      const els = collectTileEls(surfaceEl);
+      const out: EditItemRef[] = [];
+      plan.tiles.forEach((t, i) => {
+        const el = els[i];
+        if (el) out.push({ key: tileComponentId(t), el: el as unknown as EditEl, label: tileEditLabel(t) });
+      });
+      return out;
+    },
+  });
   // Nano/Gemini terminals: pinch-hold the title bar (or mouse/touch-drag it)
   // to float the terminal anywhere on screen; the reset button puts it back
   // in its column slot. Position persists in sessionStorage per engine.
@@ -377,7 +420,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
-      if (surfaces[f.id]) queueMicrotask(() => renderSurface(f.id));
+      if (surfaces[f.id]) queueMicrotask(() => {
+        renderSurface(f.id);
+        if (f.id === focusId) editBoard.setFocus(focusId, !!surfaces[f.id]?.tiles.length);
+      });
     }
     return el;
   }
@@ -408,6 +454,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.dataset.mode = focusId ? 'focus' : 'overview';
     applyStrings();
     applyCamera();
+    editBoard.setFocus(focusId, !!focusId && !!surfaces[focusId]?.tiles.length);
   }
 
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
