@@ -4,6 +4,7 @@
 // change goes on a history she can undo.
 import { extractJson } from '../ai/cloudJson';
 import { fillVisible } from '../privacy/directory';
+import { redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
 import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
 
@@ -28,10 +29,18 @@ export interface SentInfo { engine: EngineId; prompt: string; sent: string | nul
 
 const SCHEMA_LINE = `{"kind":"room"|"plan","title":string,"tiles":[{"type":"lamp","deviceId":string,"label":string}|{"type":"plan","boardId":string,"template":${PLAN_TEMPLATES.map((t) => `"${t}"`).join('|')}}]}`;
 
-export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: { sim?: boolean } = {}): SentInfo {
-  // Addresses and MACs stay on the device; models only see ids and names.
-  const devices = req.devices.map((d) => `- ${d.id}: ${d.label} (${d.kind})`).join('\n') || '- none found yet';
-  const current = req.current ? `\nCurrent board: ${JSON.stringify(req.current)}` : '';
+export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: { sim?: boolean; deviceIdSession?: DeviceIdSession } = {}): SentInfo {
+  // Real device ids never reach the cloud: Gemini only ever sees this
+  // session's stable "Device N" placeholders (Nano, which never leaves the
+  // device, keeps seeing the real ids). See parseModelPlan for the reverse.
+  const session = engine === 'gemini' ? opts.deviceIdSession : undefined;
+  const ids = req.devices.map((d) => d.id);
+  let devices = req.devices.map((d) => `- ${d.id}: ${d.label} (${d.kind})`).join('\n') || '- none found yet';
+  let current = req.current ? `\nCurrent board: ${JSON.stringify(req.current)}` : '';
+  if (session) {
+    devices = redactDeviceIds(devices, ids, session);
+    if (current) current = `\nCurrent board: ${redactDeviceIds(JSON.stringify(req.current), ids, session)}`;
+  }
   const prompt = [
     'You build one board on a smart canvas. Reply with JSON only, matching:',
     SCHEMA_LINE,
@@ -109,13 +118,17 @@ export function normalizePlanRaw(raw: unknown, depth = 0): unknown {
   return raw;
 }
 
-export function parseModelPlan(text: string): { ok: true; value: SurfacePlan } | { ok: false; error: string } {
+export function parseModelPlan(text: string, deviceIdSession?: DeviceIdSession): { ok: true; value: SurfacePlan } | { ok: false; error: string } {
   const raw = extractJson(text);
   if (raw == null) return { ok: false, error: 'The reply was not a board plan.' };
   const normalized = normalizePlanRaw(raw);
-  const filled = fillVisible(JSON.stringify(normalized));
+  const stringified = JSON.stringify(normalized);
+  // Reverse order from the send side: real device ids back first (a "Device
+  // N" placeholder in a lamp/music/switch tile's deviceId), then real names.
+  const restored = deviceIdSession ? restoreDeviceIds(stringified, deviceIdSession) : stringified;
+  const filled = fillVisible(restored);
   let parsed: unknown = normalized;
-  if (filled.filled) {
+  if (filled.text !== stringified) {
     try { parsed = JSON.parse(filled.text); } catch { parsed = normalized; }
   }
   const plan = coerceSurfacePlan(parsed);
@@ -124,8 +137,8 @@ export function parseModelPlan(text: string): { ok: true; value: SurfacePlan } |
 }
 
 /** Run one engine over one request. Returns a validated plan or null. */
-export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}): Promise<SurfacePlan | null> {
-  const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim });
+export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: { deviceIdSession?: DeviceIdSession } = {}): Promise<SurfacePlan | null> {
+  const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
   if (engine.routeLine) sent.routeLine = engine.routeLine;
   ui.onSent?.(sent);
   let ghostCount = -1;
@@ -154,7 +167,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   }
   const g = parsePartialPlan(final);
   if (g.tiles.length !== ghostCount) ui.onGhost?.(g);
-  const plan = parseModelPlan(final);
+  const plan = parseModelPlan(final, opts.deviceIdSession);
   if (!plan.ok) { ui.onError?.(plan.error.startsWith('The reply') ? plan.error : `Refused the plan: ${plan.error}`); return null; }
   return plan.value;
 }

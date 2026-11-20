@@ -35,6 +35,7 @@ import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, protectTurn } from '../privacy/directory';
+import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
@@ -229,6 +230,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // each plan's tiles whenever a surface is (re)rendered, so device patches
   // fan out only to surfaces that actually show that device.
   const deviceSurfaces = createDeviceSurfaceIndex();
+  // One mapping for this whole session: a device id gets the same "Device N"
+  // placeholder every time it reaches Gemini, for as long as this canvas
+  // stays open (never persisted — a reload renumbers from Device 1).
+  const deviceIdSession = createDeviceIdSession();
   const simulatedConnector: DeviceConnector = {
     run: (i) => new Promise((res) => setTimeout(() => {
       const cur = store.get(i.deviceId);
@@ -660,7 +665,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
       onGhost: (g) => ghost(frameId, g),
       onError: (why) => { settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
-    }));
+    }, { deviceIdSession }));
     if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
   }
