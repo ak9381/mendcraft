@@ -561,3 +561,43 @@
   border-radius: 999px; padding: 6px 14px; font-size: 13px;
   box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
 .mc-reg-chip[hidden] { display: none; }
+
+/* Guided registration (scanPanel.ts/scanRegistration.ts): the amber chip and
+   blank-canvas CTA open a full-viewport scan overlay with a progress ring and
+   step checklist, so owner face+hands registration reads as one clear flow. */
+.mc-register-chip { position: fixed; z-index: 40; right: 24px; bottom: 236px; min-height: 52px; padding: 0 20px;
+  border-radius: 999px; border: 2px solid var(--action); background: var(--action); color: #FFFFFF;
+  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-register-chip:hover { filter: brightness(0.95); }
+.mc-register-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-register-chip { right: calc(min(720px, 46vw) + 32px); }
+@media (max-width: 600px) { .mc-register-chip { display: none; } }
+
+.mc-blank .mc-blank-register { pointer-events: auto; justify-self: center; margin-top: 10px;
+  min-height: 56px; padding: 0 30px; font-size: 17px; font-weight: 600; border-radius: 999px;
+  background: var(--action); border-color: var(--action); color: #FFFFFF; }
+
+.mc-scan { position: fixed; inset: 0; z-index: 80; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
+.mc-scan[hidden] { display: none; }
+.mc-scan-card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px;
+  padding: 28px 32px; width: min(380px, calc(100vw - 48px)); display: grid; gap: 14px;
+  justify-items: center; text-align: center; box-shadow: 0 18px 48px rgb(43 43 43 / 0.18); }
+.mc-scan-card h2 { margin: 0; font-size: 20px; color: var(--text); }
+.mc-scan-ring { width: 110px; height: 110px; }
+.mc-scan-ring-track { fill: none; stroke: var(--panel-2); stroke-width: 7; }
+.mc-scan-ring-fill { fill: none; stroke: var(--action); stroke-width: 7; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 55px 55px; transition: stroke-dashoffset 120ms linear; }
+.mc-scan-ring-label { font: 600 15px system-ui, sans-serif; fill: var(--text); }
+.mc-scan.is-done .mc-scan-ring-fill { stroke: var(--accent); }
+.mc-scan-prompt { margin: 0; font-size: 15px; color: var(--text); min-height: 1.4em; }
+.mc-scan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: start; }
+.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 14px; }
+.mc-scan-steps li.is-active { color: var(--text); font-weight: 600; }
+.mc-scan-steps li.is-done { color: var(--text); }
+.mc-scan-tick { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--border); position: relative; }
+.mc-scan-steps li.is-done .mc-scan-tick { border-color: var(--accent); background: var(--accent); }
+.mc-scan-steps li.is-done .mc-scan-tick::after { content: '\2713'; color: #FFFFFF; font-size: 12px;
+  line-height: 18px; display: block; text-align: center; }
+.mc-scan .mc-scan-cancel { min-height: 48px; padding: 0 26px; }
+@media (prefers-reduced-motion: reduce) { .mc-scan-ring-fill { transition: none; } }

@@ -36,7 +36,12 @@ import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
 import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
-import { createRegistrationFlow, loadStoredSignature, storeSignature, REG_PROMPTS } from './registration';
+import {
+  SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, replayInputFor, storeOwner,
+  type OwnerRecord,
+} from './scanRegistration';
+import { mountScanPanel } from './scanPanel';
+import { computeSignature } from '../input/faceLogic';
 import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
@@ -183,6 +188,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     <div class="mc-blank" hidden>
       <p class="mc-blank-lead">Let's build something fun.</p>
       <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or open your palm.</p>
+      <button type="button" class="mc-btn mc-blank-register" data-cmd="register">Register</button>
     </div>
     <header class="mc-bar">
       <div class="mc-bar-tools">
@@ -1114,51 +1120,111 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every control on screen is reachable by hand (deep hit-test + snap radius).
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function' ? createHandPointer(document) : null;
 
-  // ---- owner registration: look at the camera → right pinch → left pinch,
-  // then presence locks to that face and binds hands to it (ignoring other
-  // people). Hand-driven, persisted for the session, skipped in ?sim=1.
-  const regFlow = createRegistrationFlow();
+  // ---- owner registration: the amber Register button (empty canvas + the
+  // bottom-right Edit/Tools/Talk stack) opens a guided SCAN — face → left
+  // palm → right palm (scanRegistration.ts state machine, scanPanel.ts UI).
+  // Each step averages a geometry signature over a stable hold window; the
+  // result is stored for the session and locks presence to that owner (face
+  // signature + preferred hand proportions via handBinding). Nothing
+  // auto-starts and Cancel leaves the canvas exactly as it was; ?sim=1 runs
+  // a scripted replay of the same UI so the demo needs no camera.
   const regStorage = typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+  const scanFlow = createScanFlow(opts.sim ? SCAN_SIM : SCAN_DEFAULTS);
+  let replayTimer: ReturnType<typeof setInterval> | null = null;
   const regChip = typeof document !== 'undefined' ? document.createElement('div') : null;
   if (regChip) {
     regChip.className = 'mc-reg-chip';
     regChip.hidden = true;
     root.append(regChip);
   }
+  const registerChip = typeof document !== 'undefined' ? document.createElement('button') : null;
+  if (registerChip) {
+    registerChip.type = 'button';
+    registerChip.className = 'mc-register-chip';
+    registerChip.dataset.cmd = 'register';
+    registerChip.textContent = 'Register';
+    root.append(registerChip);
+  }
+  const scanPanel = typeof document !== 'undefined'
+    ? mountScanPanel(root, { onCancel: () => closeScan('Cancelled. Nothing changed.') })
+    : null;
   function setRegChip(text: string | null): void {
     if (!regChip) return;
     regChip.hidden = !text;
     if (text) regChip.textContent = text;
   }
-  function onPresenceFrame(f: PresenceFrame): void {
-    if (opts.sim) return;
-    if (regFlow.step === 'done') {
-      if (f.registered && f.paused) setRegChip('Paused — face the camera to resume');
-      else if (f.registered) setRegChip(REG_PROMPTS.done);
-      return;
-    }
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const st = regFlow.update({
-      faceVisible: f.faces.length > 0,
-      hands: f.hands.map((h) => ({ label: h.label, pinching: h.pinching })),
-      now,
-    });
-    if (st.justAdvanced && st.step === 'right') handsHandle?.presence?.register();
-    if (st.justAdvanced && st.step === 'done') {
-      storeSignature(regStorage, handsHandle?.presence?.currentSignature() ?? null);
-    }
-    setRegChip(st.prompt);
+  function refreshRegisterLabels(): void {
+    const label = loadOwner(regStorage) ? 'Re-register' : 'Register';
+    if (registerChip) registerChip.textContent = label;
+    const blankBtn = root.querySelector<HTMLElement>('.mc-blank-register');
+    if (blankBtn) blankBtn.textContent = label;
   }
-  function beginRegistration(): void {
-    if (opts.sim || !handsHandle?.presence) { regFlow.complete(); setRegChip(null); return; }
-    const stored = loadStoredSignature(regStorage);
-    if (stored) {
-      handsHandle.presence.registerSignature(stored);
-      regFlow.complete();
-      setRegChip(REG_PROMPTS.done);
+  function applyOwnerLock(owner: OwnerRecord): void {
+    handsHandle?.presence?.registerSignature(owner.face);
+    handsHandle?.presence?.setOwnerHands(ownerHandsOf(owner));
+  }
+  function stopReplay(): void {
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  }
+  function closeScan(message?: string): void {
+    stopReplay();
+    scanPanel?.close();
+    if (message) say(message);
+  }
+  function completeScan(): void {
+    const owner = scanFlow.result();
+    if (!owner) return;
+    storeOwner(regStorage, owner);
+    // In ?sim=1 there is no real face to re-acquire — the stored owner and the
+    // chip are the demo; locking presence would only flap to "paused".
+    if (!opts.sim) applyOwnerLock(owner);
+    setRegChip('Registered');
+    refreshRegisterLabels();
+    say('Registered. Tracking is locked to you.');
+    setTimeout(() => closeScan(), 900); // leave the ✓ on screen for a beat
+  }
+  function openScan(): void {
+    if (!scanPanel || scanPanel.isOpen()) return;
+    scanFlow.reset();
+    if (opts.sim) {
+      // Scripted replay: feed the flow whatever its current step asks for.
+      scanPanel.open();
+      stopReplay();
+      replayTimer = setInterval(() => {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const st = scanFlow.update(replayInputFor(scanFlow.step, now));
+        scanPanel.setState(st);
+        if (st.step === 'done' && st.justAdvanced) { stopReplay(); completeScan(); }
+      }, 60);
       return;
     }
-    if (regFlow.step !== 'done') { regFlow.reset(); setRegChip(REG_PROMPTS.face); }
+    void (async () => {
+      // The scan needs the camera; toggleHands already explains any failure.
+      if (!handsOn) { await toggleHands(); if (!handsOn) return; }
+      scanPanel.open();
+    })();
+  }
+  function onPresenceFrame(f: PresenceFrame): void {
+    if (opts.sim) return; // replay drives the sim scan; no chip churn either
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (scanPanel?.isOpen()) {
+      const op = f.faces.find((x) => x.isOperator) ?? f.faces[0] ?? null;
+      const st = scanFlow.update({
+        faceSig: f.operatorFace ? computeSignature(f.operatorFace) : null,
+        faceCenter: op ? { x: op.box.cx, y: op.box.cy } : null,
+        hands: f.hands.map((h) => ({ label: h.label, points: h.points })),
+        now,
+      });
+      scanPanel.setState(st);
+      if (st.step === 'done' && st.justAdvanced) completeScan();
+      return;
+    }
+    if (f.registered) setRegChip(f.paused ? 'Paused — face the camera to resume' : 'Registered');
+  }
+  function restoreOwnerLock(): void {
+    if (opts.sim) return;
+    const owner = loadOwner(regStorage);
+    if (owner) { applyOwnerLock(owner); setRegChip('Registered'); }
   }
 
   const inputs = createCanvasInputs({
@@ -1187,7 +1253,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
     handsBusy = true; handsMountOk = false;
     await inputs.start(root);
@@ -1197,15 +1263,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!handsMountOk) { say(lastHandsError ?? 'No camera here — hands stay off.'); return; }
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
-    beginRegistration();
+    restoreOwnerLock();
     say('Hands on: point at any button and pinch to press it. Pinch on empty canvas to keep, brush to drop.');
-  }
-  function reregister(): void {
-    storeSignature(regStorage, null);
-    handsHandle?.presence?.reregister();
-    regFlow.reset();
-    if (handsOn && !opts.sim) setRegChip(REG_PROMPTS.face);
-    say(handsOn ? 'Registration cleared. Look at the camera to register.' : 'Registration cleared. Press Hands to register.');
   }
 
   // ---- offline (simulate + real) ----
@@ -1310,7 +1369,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), reregister, teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
@@ -1371,6 +1430,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     toolPalette.destroy();
     micFab?.destroy();
     handPointer?.destroy();
+    stopReplay();
+    scanPanel?.destroy();
+    registerChip?.remove();
+    regChip?.remove();
     removeEventListener('pointermove', onWindowPointerMove);
     removeEventListener('pointerup', onWindowPointerUp);
     removeEventListener('keydown', onWindowKeydown);
@@ -1402,6 +1465,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   sync();
   updateDock();
+  refreshRegisterLabels();
+  if (loadOwner(regStorage)) setRegChip('Registered'); // survives a reload within the session
   if (focusId) void focus(focusId); else if (!stored) void overview();
 
   // Hands + face are ON BY DEFAULT: the camera prompt appears right away and

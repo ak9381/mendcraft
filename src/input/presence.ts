@@ -26,6 +26,7 @@ import {
 } from './faceLogic';
 export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
+import type { OwnerHands } from './handSignature';
 import { resolveCameraStream } from './cameraShare';
 
 export type { HandEvent, HandFrame } from './handLogic';
@@ -75,6 +76,8 @@ export interface PresenceTracker {
   reregister(): void;
   /** Lock onto a previously captured signature (sessionStorage re-lock). */
   registerSignature(sig: FaceSignature): void;
+  /** The owner's scanned hand proportions — binding prefers matching hands. */
+  setOwnerHands(owner: OwnerHands | null): void;
   /** The signature of the current main face (pre-registration) or the one the
    *  operator registered with — for persisting across a reload. Stays on-device. */
   currentSignature(): FaceSignature | null;
@@ -231,6 +234,7 @@ export function createPresenceTracker(
           index: i,
           wrist: h.landmarks[WRIST],
           label: h.label,
+          points: h.landmarks,
         }));
         const acceptedIdx = binder.bind(cands, box);
         const acceptedSet = new Set(acceptedIdx);
@@ -382,6 +386,7 @@ export function createPresenceTracker(
     reregister,
     registerSignature,
     currentSignature,
+    setOwnerHands(owner) { binder.setOwnerHands(owner); },
     get isRegistered() { return operator.registered; },
     get isFacing() { return lastFacing; },
     get isPaused() { return lastPaused; },

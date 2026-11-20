@@ -123,6 +123,20 @@ try {
     // first — on phones that's the always-visible Menu button; on desktop
     // it's the small Tools chip beside the mic — then make a board to work in.
     if (d.name === 'desktop') {
+      // Register scan (scanPanel.ts): the amber Register button — both the
+      // prominent one on the empty canvas and the bottom-right chip — must be
+      // pressable by hand. Press the chip, see the scan panel open, then
+      // Cancel by hand so the rest of the audit runs on a clean canvas.
+      real.push({ device: d.name, step: 'Register chip (hand)', ...await handPress(page, (el) => el.classList.contains('mc-register-chip')) });
+      const scanOpened = await waitForVisible(page, '.mc-scan-card', 3000);
+      real.push({ device: d.name, step: 'Register scan opens', ok: scanOpened });
+      if (scanOpened) {
+        all.push(...await audit(page, S('register-scan')));
+        real.push({ device: d.name, step: 'Cancel scan (hand)', ...await handPress(page, (el) => el.classList.contains('mc-scan-cancel')) });
+        await sleep(300);
+        const scanClosed = await page.evaluate(() => document.querySelector('.mc-scan')?.hidden === true);
+        real.push({ device: d.name, step: 'Scan closed, canvas usable', ok: !!scanClosed });
+      }
       real.push({ device: d.name, step: 'Tools (hand)', ...await handPress(page, (el) => el.classList.contains('mc-tools-chip')) });
     } else {
       real.push({ device: d.name, step: 'Menu (hand, to open tools)', ...await handPress(page, (el) => el.classList.contains('mc-menu-btn')) });

@@ -6,6 +6,7 @@
 
 import type { Pt } from './handLogic';
 import type { FaceBox } from './faceLogic';
+import { handSignatureRatios, matchesOwner, type OwnerHands } from './handSignature';
 
 export interface HandCandidate {
   /** Original index into the landmarker output (what we feed back downstream). */
@@ -14,6 +15,9 @@ export interface HandCandidate {
   wrist: Pt;
   /** MediaPipe handedness label, "Left" | "Right" (optional). */
   label?: string;
+  /** All 21 landmarks, when available — lets the binder prefer hands whose
+   *  bone proportions match the registered owner's scan (handSignature.ts). */
+  points?: readonly Pt[];
 }
 
 export interface BindOptions {
@@ -29,6 +33,9 @@ export interface BindOptions {
   continuityRadius?: number;
   /** Score reduction applied to continuous hands when ranking. */
   continuityBonus?: number;
+  /** Score reduction for hands whose proportions + handedness match the
+   *  registered owner's scanned hands. */
+  ownerBonus?: number;
   /**
    * Coordinate convention for the handedness side check. MediaPipe labels
    * handedness as if the image were mirrored (selfie). With raw (unmirrored)
@@ -52,6 +59,7 @@ const DEFAULTS = {
   maxHands: 2,
   continuityRadius: 0.12,
   continuityBonus: 0.25,
+  ownerBonus: 0.4,
   mirrored: false,
 };
 
@@ -88,19 +96,26 @@ export function handFitsFace(c: HandCandidate, box: FaceBox, opts: BindOptions =
 export interface HandBinder {
   /** Returns the accepted original indices (≤ maxHands), nearest-first. */
   bind(hands: HandCandidate[], box: FaceBox): number[];
+  /** The owner's scanned hands (registration) — matching hands rank first. */
+  setOwnerHands(owner: OwnerHands | null): void;
   reset(): void;
 }
 
 /**
  * Stateful binder: filters hands through handFitsFace, then ranks survivors by
  * distance to the face (closer first), giving a continuity bonus to wrists near
- * previously accepted ones so a steady pair of hands stays selected.
+ * previously accepted ones so a steady pair of hands stays selected — and,
+ * once the owner's hands are scanned, a larger bonus to hands whose bone
+ * proportions + handedness match the scan, so a bystander's closer hand
+ * cannot outrank the owner's.
  */
 export function createHandBinder(opts: BindOptions = {}): HandBinder {
   const maxHands = opts.maxHands ?? DEFAULTS.maxHands;
   const continuityRadius = opts.continuityRadius ?? DEFAULTS.continuityRadius;
   const continuityBonus = opts.continuityBonus ?? DEFAULTS.continuityBonus;
+  const ownerBonus = opts.ownerBonus ?? DEFAULTS.ownerBonus;
   let prevWrists: Pt[] = [];
+  let owner: OwnerHands | null = null;
 
   function bind(hands: HandCandidate[], box: FaceBox): number[] {
     const scored = hands
@@ -110,7 +125,14 @@ export function createHandBinder(opts: BindOptions = {}): HandBinder {
         const cont = prevWrists.some(
           (w) => Math.hypot(w.x - s.h.wrist.x, w.y - s.h.wrist.y) < continuityRadius,
         );
-        return { index: s.h.index, wrist: s.h.wrist, score: s.fit.dist - (cont ? continuityBonus : 0) };
+        const mine =
+          !!owner && !!s.h.points && s.h.points.length >= 21 &&
+          matchesOwner({ ratios: handSignatureRatios(s.h.points), label: s.h.label }, owner);
+        return {
+          index: s.h.index,
+          wrist: s.h.wrist,
+          score: s.fit.dist - (cont ? continuityBonus : 0) - (mine ? ownerBonus : 0),
+        };
       })
       .sort((a, b) => a.score - b.score);
 
@@ -121,6 +143,7 @@ export function createHandBinder(opts: BindOptions = {}): HandBinder {
 
   return {
     bind,
+    setOwnerHands(o) { owner = o; },
     reset() { prevWrists = []; },
   };
 }

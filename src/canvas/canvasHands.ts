@@ -173,7 +173,7 @@ export interface MountCanvasHandsOptions {
 export type CanvasHandsHandle = CanvasHandsStop & {
   presence?: Pick<
     PresenceTracker,
-    'register' | 'reregister' | 'registerSignature' | 'currentSignature' | 'isRegistered'
+    'register' | 'reregister' | 'registerSignature' | 'currentSignature' | 'setOwnerHands' | 'isRegistered'
   >;
 };
 
@@ -276,6 +276,7 @@ export async function mountCanvasHands(
     reregister: () => live.reregister(),
     registerSignature: (sig) => live.registerSignature(sig),
     currentSignature: () => live.currentSignature(),
+    setOwnerHands: (owner) => live.setOwnerHands(owner),
     get isRegistered() { return live.isRegistered; },
   };
   return stop as CanvasHandsHandle;
