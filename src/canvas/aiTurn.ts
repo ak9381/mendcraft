@@ -5,7 +5,7 @@
 import { extractJson } from '../ai/cloudJson';
 import { fillVisible } from '../privacy/directory';
 import { redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
-import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
+import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
 
 export type EngineId = 'nano' | 'gemini';
@@ -27,7 +27,33 @@ export interface DeviceHint { id: string; label: string; kind: string; host?: st
 export interface SurfaceRequest { utterance: string; frameTitle: string; devices: DeviceHint[]; current?: SurfacePlan | null }
 export interface SentInfo { engine: EngineId; prompt: string; sent: string | null; routeLine: string; sim: boolean }
 
-const SCHEMA_LINE = `{"kind":"room"|"plan","title":string,"tiles":[{"type":"lamp","deviceId":string,"label":string}|{"type":"plan","boardId":string,"template":${PLAN_TEMPLATES.map((t) => `"${t}"`).join('|')}}]}`;
+const TEMPLATE_UNION = PLAN_TEMPLATES.map((t) => `"${t}"`).join('|');
+// Leaf tiles: device controls plus the general-purpose widgets. Container
+// tiles nest more tiles (leaf or container) inside `children`/`tabs[].
+// children`/`first`+`second` — that recursion is what lets a reply compose
+// a whole dashboard instead of one flat row of device tiles.
+const LEAF_SCHEMA = [
+  `{"type":"lamp"|"music"|"switch","deviceId":string,"label":string}`,
+  `{"type":"scene","sceneId":string,"label":string}`,
+  `{"type":"connect","label":string}`,
+  `{"type":"plan","boardId":string,"template":${TEMPLATE_UNION}}`,
+  `{"type":"stat","label":string,"value":string,"delta":string,"trend":"up"|"down"|"neutral","spark":number[]}`,
+  `{"type":"chart","title":string,"chartType":"bar"|"line"|"ring","series":[{"label":string,"value":number}]}`,
+  `{"type":"table","title":string,"columns":string[],"rows":string[][],"sortable":boolean,"rowActionLabel":string}`,
+  `{"type":"form","title":string,"submitLabel":string,"fields":[{"kind":"toggle","id":string,"label":string,"value":boolean}|{"kind":"slider","id":string,"label":string,"value":number,"min":number,"max":number}|{"kind":"choice","id":string,"label":string,"options":string[],"value":string}]}`,
+  `{"type":"visual","title":string,"markup":string}`,
+].join('|');
+const CONTAINER_SCHEMA = [
+  `{"type":"row","children":[Tile]}`,
+  `{"type":"grid","columns":2|3|4,"children":[Tile]}`,
+  `{"type":"card","title":string,"children":[Tile]}`,
+  `{"type":"tabs","tabs":[{"label":string,"children":[Tile]}]}`,
+  `{"type":"split","direction":"row"|"column","first":[Tile],"second":[Tile]}`,
+].join('|');
+const SCHEMA_LINE = [
+  `{"kind":"room"|"plan","title":string,"tiles":[Tile]}`,
+  `Tile = ${LEAF_SCHEMA} | ${CONTAINER_SCHEMA}`,
+].join('\n');
 
 export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: { sim?: boolean; deviceIdSession?: DeviceIdSession } = {}): SentInfo {
   // Real device ids never reach the cloud: Gemini only ever sees this
@@ -44,7 +70,9 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
   const prompt = [
     'You build one board on a smart canvas. Reply with JSON only, matching:',
     SCHEMA_LINE,
-    `At most ${MAX_TILES} tiles. Only use device ids from the list. No other widget types.`,
+    `At most ${MAX_TILES} top-level tiles (a row/grid/card/tabs/split counts as one of those, and can nest more tiles inside — up to ${MAX_DEPTH} levels deep, ${MAX_NODES} tiles total across the whole board). Only use device ids from the list.`,
+    'For a simple request, keep it simple and flat, like before. For a richer dashboard or app, compose row/grid/card/tabs/split with stat/chart/table/form/visual tiles.',
+    'visual.markup is inline SVG/HTML that gets sanitized before it ever renders: no <script>, no event-handler attributes, no external urls. Mark a clickable region with a data-action attribute (and optionally data-label).',
     `Board: ${req.frameTitle}`,
     `Devices in the room:\n${devices}${current}`,
     `She said: "${req.utterance}"`,

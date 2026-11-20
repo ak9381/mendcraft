@@ -167,3 +167,38 @@ describe('runSurfaceTurn SIM fallback', () => {
     expect(lines.at(-1)).toMatch(/didn’t answer|prepared draft/i);
   });
 });
+
+describe('redaction covers nested surface plans', () => {
+  it('redacts a device id nested inside a Card/Row even though the plan is now a tree', async () => {
+    const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
+    const session = createDeviceIdSession();
+    const nestedReq = {
+      utterance: 'build a dashboard',
+      frameTitle: 'Board 9',
+      devices: [{ id: 'wiz-desk', label: 'Desk lamp', kind: 'lamp' }],
+      current: {
+        kind: 'room' as const,
+        title: 'Energy',
+        tiles: [{ type: 'card' as const, title: 'Lighting', children: [{ type: 'lamp' as const, deviceId: 'wiz-desk', label: 'Desk lamp' }] }],
+      },
+    };
+    const r = buildSurfacePrompt(nestedReq, 'gemini', { deviceIdSession: session });
+    expect(r.prompt).not.toContain('wiz-desk');
+    expect(r.prompt).toContain('Device 1');
+  });
+
+  it('round-trips a nested plan with a redacted device id back to the real id', async () => {
+    const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
+    const session = createDeviceIdSession();
+    session.tokenFor('wiz-desk'); // seed the mapping, as buildSurfacePrompt would have
+    const modelReply = '{"kind":"room","title":"Energy","tiles":[{"type":"card","title":"Lighting","children":[{"type":"lamp","deviceId":"Device 1","label":"Desk lamp"}]}]}';
+    const parsed = parseModelPlan(modelReply, session);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const card = parsed.value.tiles[0];
+    if (card.type !== 'card') throw new Error('expected card');
+    const lamp = card.children[0];
+    if (lamp.type !== 'lamp') throw new Error('expected lamp');
+    expect(lamp.deviceId).toBe('wiz-desk');
+  });
+});
