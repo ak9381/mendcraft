@@ -31,6 +31,7 @@ import {
 } from './widgets';
 import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
+import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
@@ -77,6 +78,10 @@ export interface CanvasOptions {
   /** Real WiZ bridge client; defaults to one pointed at the configured bridge
    *  URL/token. Pass a fake in tests. Unused when `sim` is set. */
   wizClient?: WizClient;
+  /** ?showcase=energy: open the rich multi-section home-energy dashboard
+   *  fixture instead of any stored/seeded/fresh doc — a deliberate opt-in
+   *  demo of nested layouts, never reachable from the default boot paths. */
+  showcase?: 'energy';
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -154,7 +159,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const reduced = opts.reducedMotion ?? matchMedia('(prefers-reduced-motion: reduce)').matches;
   let stored: CanvasDoc | null = null;
   try { stored = parseCanvasDoc(JSON.parse(storage.getItem(STORAGE_KEY) ?? 'null')); } catch { stored = null; }
-  const doc = initialDoc(stored, { seed: opts.seed, fresh: opts.fresh }, seedDoc);
+  // Showcase is a deliberate opt-in detour: it never consults storage/seed/
+  // fresh, and nothing in the default boot paths (?fresh=1&sim=1 included)
+  // can reach it.
+  const doc = opts.showcase === 'energy' ? buildEnergyShowcaseDoc() : initialDoc(stored, { seed: opts.seed, fresh: opts.fresh }, seedDoc);
   const reg: FrameRegistry = createFrameRegistry(doc.frames);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
   let camera: Camera = doc.camera;

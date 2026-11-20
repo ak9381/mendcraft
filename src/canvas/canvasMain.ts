@@ -48,6 +48,7 @@ let handle: ReturnType<typeof mountCanvas> | null = null;
 const voice = createVoiceController((t) => handle?.run(t));
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh'), sim: params.has('sim'),
+  showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   privacyGemini: cloud
     ? (redacted) => cloud(redacted, () => undefined)
     : undefined,
