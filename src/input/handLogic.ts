@@ -21,12 +21,17 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
   { idle: '#e879f9', pinch: '#4ade80' },
 ];
 
-// Loose by default so a soft / incomplete close (arthritis, tremor) still
-// registers. Values are thumb–index gap ÷ wrist–middle-MCP (hand size), so
-// they stay stable as the hand moves toward or away from the camera.
-// Calibration and the interaction profile may tighten or loosen these.
-export const DEFAULT_PINCH_ON = 0.50;
-export const DEFAULT_PINCH_OFF = 0.64;
+// Values are thumb–index gap ÷ wrist–middle-MCP (hand size), so they stay
+// stable as the hand moves toward or away from the camera. These MUST match
+// HAND_FEEL.pinchOn/pinchOff (src/canvas/handFeel.ts) and PINCH_CLASSIFY
+// (gestures.ts) — one pinch definition across pointer, keep and overlay; a
+// consistency test guards it. The old 0.50/0.64 was loose enough that a
+// half-closed pointing hand read as a pinch (the "hover triggers things"
+// bug); 0.38/0.52 is back near the original M1 feel (0.35/0.48), deliberate
+// but still forgiving of an incomplete close. Calibration and the
+// interaction profile may tighten or loosen these per user.
+export const DEFAULT_PINCH_ON = 0.38;
+export const DEFAULT_PINCH_OFF = 0.52;
 /** Movement (in mirrored screen units) that disqualifies a pinch from being a tap. */
 export const TAP_MOVE_LIMIT = 0.045;
 
@@ -49,6 +54,9 @@ export interface HandInput {
 export interface HandFrame {
   /** Stable slot 0 or 1 -> colour. */
   slot: number;
+  /** MediaPipe handedness label ("Left"/"Right"), when known — the owner
+   *  registration flow uses it for "show your right hand". */
+  label?: string;
   /** All 21 points, mirrored to screen space (0..1). */
   points: Pt[];
   pinching: boolean;
@@ -211,6 +219,7 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       const colors = HAND_COLORS[slot];
       frames.push({
         slot,
+        label: st.label,
         points,
         pinching: st.pinching,
         owner: owner === slot,

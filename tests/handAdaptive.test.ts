@@ -145,8 +145,10 @@ describe('createHandMetricsSampler', () => {
   });
 
   it('uses handLogic thresholds and derives sessionMs from timestamps', () => {
-    expect(DEFAULT_PINCH_ON).toBe(0.50);
-    expect(DEFAULT_PINCH_OFF).toBe(0.64);
+    // Tightened from 0.50/0.64 (handFeel.ts rationale): the loose engage made
+    // a half-closed hovering hand read as a pinch. Profiles still loosen it.
+    expect(DEFAULT_PINCH_ON).toBe(0.38);
+    expect(DEFAULT_PINCH_OFF).toBe(0.52);
     const s = createHandMetricsSampler();
     for (const f of pinchFrames(1000, 0.2)) s.push(f);
     expect(s.snapshot().sessionMs).toBe(40);

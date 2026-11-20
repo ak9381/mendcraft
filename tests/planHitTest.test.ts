@@ -121,12 +121,17 @@ describe('pinch detection with real-looking landmarks', () => {
     expect(pinchGapRatio(farPts)).toBeCloseTo(0.4, 2);
   });
 
-  it('registers a loose arthritis-style pinch that never fully closes (ratio 0.4)', () => {
+  // Updated for the tightened default thresholds (0.38/0.52, handFeel.ts):
+  // the old 0.50 engage meant a half-closed pointing hand read as a pinch —
+  // Akash's "hovering triggers things" bug. A soft incomplete close (0.35)
+  // still registers; users who need a looser pinch get it via the adaptive
+  // hand profile (handProfile.ts calls setPinchThreshold with 0.60/0.74).
+  it('registers a soft incomplete pinch that never fully closes (ratio 0.35)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
     const open = rawHand(0.4, 0.6, 0.16); // ratio 0.8
-    const loose = rawHand(0.4, 0.6, 0.08); // ratio 0.4 < 0.50
-    expect(pinchGapRatio(loose)).toBeCloseTo(0.4, 2);
+    const loose = rawHand(0.4, 0.6, 0.07); // ratio 0.35 < 0.38
+    expect(pinchGapRatio(loose)).toBeCloseTo(0.35, 2);
     expect(pinchGapRatio(loose)).toBeLessThan(DEFAULT_PINCH_ON);
     p.process([{ landmarks: open, label: 'Right' }]);
     p.process([{ landmarks: loose, label: 'Right' }]);
@@ -143,10 +148,10 @@ describe('pinch detection with real-looking landmarks', () => {
   it('releases only after the off-threshold (hysteresis)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.08), label: 'Right' }]); // 0.4, on
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.11), label: 'Right' }]); // 0.55, still held
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.07), label: 'Right' }]); // 0.35, on (< 0.38)
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.09), label: 'Right' }]); // 0.45, between on/off: still held
     expect(events.filter((e) => e.type === 'pinch-end')).toHaveLength(0);
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.14), label: 'Right' }]); // 0.70, off
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.14), label: 'Right' }]); // 0.70, off (> 0.52)
     expect(events.some((e) => e.type === 'pinch-end')).toBe(true);
   });
 

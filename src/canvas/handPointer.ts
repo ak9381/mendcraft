@@ -16,6 +16,16 @@
 // a control activates it (click / focus); pinch on a range slider drags it.
 
 import { createOneEuroFilter } from '../input/oneEuro';
+import {
+  HAND_FEEL,
+  createDeadZone,
+  createPinchMachine,
+  createPositionHistory,
+  createScalarEuro,
+  createStickyTarget,
+  cursorAnchor,
+  pickPrimaryHand,
+} from './handFeel';
 
 type P = { x: number; y: number };
 type LM = { x: number; y: number; z?: number };
@@ -35,8 +45,9 @@ export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the
- *  edges of the UI don't need an arm at full stretch. */
-export const REACH = { x0: 0.15, x1: 0.85, y0: 0.12, y1: 0.82 };
+ *  edges of the UI (top toolbar included) don't need an arm at full stretch.
+ *  Single source of truth: HAND_FEEL.reach (12%–88%). */
+export const REACH = HAND_FEEL.reach;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -56,8 +67,9 @@ export function pinchRatio(lm: readonly LM[]): number {
   return d(lm[4], lm[8]) / size;
 }
 
-/** Pure: pinch with hysteresis so the edge doesn't chatter. */
-export function nextPinch(wasPinched: boolean, ratio: number, on = 0.32, off = 0.45): boolean {
+/** Pure: pinch with hysteresis so the edge doesn't chatter. Thresholds come
+ *  from HAND_FEEL so every pinch in the app (pointer, keep, classify) agrees. */
+export function nextPinch(wasPinched: boolean, ratio: number, on = HAND_FEEL.pinchOn, off = HAND_FEEL.pinchOff): boolean {
   return wasPinched ? ratio < off : ratio < on;
 }
 
@@ -176,7 +188,12 @@ export interface HandPointer {
 export function createHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
   const snapPx = opts.snapPx ?? 56;
   let dryRun = !!opts.dryRun;
-  const euro = createOneEuroFilter({ minCutoff: 1.2, beta: 4 });
+  const euro = createOneEuroFilter(HAND_FEEL.cursorFilter);
+  const ratioEuro = createScalarEuro(HAND_FEEL.pinchFilter);
+  const deadZone = createDeadZone(HAND_FEEL.deadZonePx);
+  const pinchFsm = createPinchMachine(HAND_FEEL);
+  const history = createPositionHistory(HAND_FEEL.freezeLookbackMs + 300);
+  const sticky = createStickyTarget<HTMLElement>((el) => el.getBoundingClientRect(), HAND_FEEL);
 
   const frame = doc.createElement('div');
   frame.className = 'mc-hand-frame'; frame.setAttribute('aria-hidden', 'true'); frame.hidden = true;
@@ -231,8 +248,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       frame.classList.toggle('is-pressed', pinched);
     } else {
       frame.hidden = true;
+      // Over empty space: a soft low-contrast ring (no dot) that tightens
+      // while pinching — see .mc-hand-shadow in canvas.css.
       shadow.hidden = pt.x < 0;
       shadow.style.transform = `translate(${pt.x - 28}px, ${pt.y - 28}px)`;
+      shadow.classList.toggle('is-pinched', pinched);
     }
     ring.hidden = !pinched;
     if (pinched) {
@@ -310,7 +330,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     paint();
   }
 
-  function aim(p: P): HTMLElement | null {
+  function aim(p: P, stickyNow?: number): HTMLElement | null {
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
     if (draggingHandle) {
@@ -319,7 +339,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       paint();
       return draggingHandle;
     }
-    setTarget(resolve(p));
+    const resolved = resolve(p);
+    // Sticky hysteresis runs on the TRACKING clock (the frame timestamps the
+    // camera loop feeds update()), never the wall clock — pointAt() (sim /
+    // audits) bypasses it entirely for determinism.
+    setTarget(stickyNow !== undefined ? sticky.update(resolved, p, stickyNow) : resolved);
     paint();
     return target;
   }
@@ -329,19 +353,47 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
     }
-    setTarget(null); pt = { x: -1, y: -1 }; euro.reset(); paint();
+    setTarget(null); pt = { x: -1, y: -1 };
+    euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); history.reset(); sticky.reset();
+    paint();
   }
 
   return {
     update(hands, t) {
-      const h = hands[0];
-      if (!h || h.length < 21) return;
+      // Only a real foreground hand drives the cursor; small background hands
+      // (someone behind you) are ignored outright.
+      const h = pickPrimaryHand(hands as readonly (readonly { x: number; y: number }[])[]);
+      if (!h) return;
       if (lostTimer) clearTimeout(lostTimer);
       lostTimer = setTimeout(lost, 400);
-      const mid = { x: (h[4].x + h[8].x) / 2, y: (h[4].y + h[8].y) / 2 };
-      const s = euro.filter(mid.x, mid.y, t);
-      aim(mapToScreen(s, innerWidth, innerHeight));
-      press(nextPinch(pinched, pinchRatio(h)));
+
+      // Anchor on the index-MCP/palm-centre blend (not the fingertips, which
+      // jump the moment you pinch), 1-Euro-smoothed, with a micro dead-zone.
+      const anchor = cursorAnchor(h);
+      const s = euro.filter(anchor.x, anchor.y, t);
+      const p = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
+      history.push(p, t);
+
+      // Pinch ratio is smoothed too, then debounced with hysteresis +
+      // refractory: hover can NEVER activate anything — only this machine's
+      // justDown/justUp edges press and release.
+      const ratio = ratioEuro.filter(pinchRatio(h), t);
+      const st = pinchFsm.update(ratio, t);
+
+      if (st.justDown) {
+        // CURSOR FREEZE: the click target is where the cursor was BEFORE the
+        // fingers started closing, so the pinch motion can't drag it off a
+        // small button. The cursor then stays locked for the whole pinch
+        // (sliders and drag handles excepted — they need live motion).
+        const pre = history.at(t - HAND_FEEL.freezeLookbackMs) ?? p;
+        aim(pre, t);
+        press(true);
+      } else if (st.pinched) {
+        if (dragging || draggingHandle) aim(p, t);
+      } else {
+        if (st.justUp) press(false);
+        aim(p, t);
+      }
     },
     pointAt(x, y) { return aim({ x, y }); },
     pinch: press,

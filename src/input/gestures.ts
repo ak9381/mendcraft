@@ -36,9 +36,11 @@ const MIDDLE = [9, 10, 12] as const;
 const RING = [13, 14, 16] as const;
 const PINKY = [17, 18, 20] as const;
 
-/** Classification pinch threshold (thumb↔index tip / hand size). Slightly more
- *  forgiving than the pointer's on-threshold so a held pinch pose reads stably. */
-export const PINCH_CLASSIFY = 0.4;
+/** Classification pinch threshold (thumb↔index tip / hand size). MUST match
+ *  DEFAULT_PINCH_ON (handLogic.ts) and HAND_FEEL.pinchOn (handFeel.ts) so a
+ *  "pinch" means the same thing to the pointer, the keep gesture and the
+ *  overlay — a consistency test guards it. */
+export const PINCH_CLASSIFY = 0.38;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 

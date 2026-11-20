@@ -520,11 +520,17 @@
 .mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent);
   box-shadow: 0 0 0 4px rgb(107 143 113 / 0.18), 0 0 14px rgb(107 143 113 / 0.3); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
 .mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(107 143 113 / 0.3), 0 0 18px rgb(107 143 113 / 0.45); }
-.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle, rgb(43 43 43 / 0.1), transparent 70%); }
-.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--text); animation: mc-ring-press 260ms ease-out forwards; }
+/* Hand cursor over empty space: a soft, low-contrast sage ring in the warm
+   paper palette — never a solid dark dot (Akash: "remove the dot"). It
+   tightens while pinching. */
+.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%;
+  border: 2px solid rgb(107 143 113 / 0.5); background: rgb(107 143 113 / 0.05);
+  box-shadow: 0 1px 8px rgb(43 43 43 / 0.06); scale: 1; transition: scale 120ms ease, border-color 120ms ease; }
+.mc-hand-shadow.is-pinched { scale: 0.55; border-color: rgb(107 143 113 / 0.85); }
+.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgb(107 143 113 / 0.9); animation: mc-ring-press 260ms ease-out forwards; }
 @keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
 .hand-hover { scale: 1.03; }
-@media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .hand-hover { scale: none; } }
+@media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .mc-hand-shadow { transition: none; } .hand-hover { scale: none; } }
 
 /* Full-screen review: every Proposal that needs a decision opens here —
    desktop and phone alike — instead of a cramped inline card or sheet. The
@@ -547,3 +553,11 @@
   padding: 16px 0 4px; background: var(--panel); }
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 56px; font-size: 18px; flex: 1 1 180px; }
 .mc-review-approve { background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+
+/* Owner-registration / lock chip (registration.ts flow in canvasApp.ts):
+   a small warm-paper pill under the bar. Never interactive. */
+.mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 60;
+  background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px;
+  box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
+.mc-reg-chip[hidden] { display: none; }
