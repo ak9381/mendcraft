@@ -116,7 +116,21 @@
 .mc-terminals { display: flex; flex-direction: column; gap: 14px; }
 .mc-terminal-col { display: flex; flex-direction: column; gap: 8px; }
 .mc-terminal { border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
+/* Draggable (pinch-hold on the title bar, or mouse/touch): docked in the
+   column's normal flow until first moved, then a fixed floating window that
+   snaps to stay fully on screen and remembers its spot for the session —
+   see dragPanel.ts. A plain spacer holds its old slot open underneath it. */
+.mc-terminal.is-floating { position: fixed; z-index: 46; width: min(460px, calc(100% - 48px)); max-height: 60vh; }
+.mc-terminal.is-floating .mc-term-body { max-height: calc(60vh - 40px); }
+.mc-terminal-spacer { height: 0; }
 .mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 13px; color: #D8D4CC; }
+.mc-term-drag { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; cursor: grab; touch-action: none; border-radius: 6px; }
+.mc-term-drag:active { cursor: grabbing; }
+.mc-term-drag:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+.mc-term-reset-pos { flex: 0 0 auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;
+  color: #8A867E; font-size: 15px; line-height: 1; cursor: pointer; }
+.mc-term-reset-pos:hover, .mc-term-reset-pos:focus-visible { color: #D8D4CC; }
+.mc-term-reset-pos:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
 .mc-term-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim); }
 .mc-terminal-nano .mc-term-dot, .mc-mini-terminal[data-kind="nano"] .mc-term-dot { background: #8FB394; }
 .mc-terminal-gemini .mc-term-dot, .mc-mini-terminal[data-kind="gemini"] .mc-term-dot { background: #8FA9CC; }

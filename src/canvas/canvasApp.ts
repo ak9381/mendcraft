@@ -42,6 +42,7 @@ import { createHandPointer, type HandPointer } from './handPointer';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
+import { mountDraggablePanel } from './dragPanel';
 import { mountReviewDialog } from './reviewDialog';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
@@ -170,6 +171,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const panels = mountModelPanels(aiPanel);
+  // Nano/Gemini terminals: pinch-hold the title bar (or mouse/touch-drag it)
+  // to float the terminal anywhere on screen; the reset button puts it back
+  // in its column slot. Position persists in sessionStorage per engine.
+  (['nano', 'gemini'] as const).forEach((engine) => {
+    const panel = aiPanel.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
+    const handle = panel.querySelector<HTMLElement>('.mc-term-drag')!;
+    const resetBtn = aiPanel.querySelector<HTMLElement>(`.mc-term-reset-pos[data-engine="${engine}"]`)!;
+    const drag = mountDraggablePanel(panel, handle, { id: engine }, () => {
+      const spacer = document.createElement('div');
+      spacer.className = 'mc-terminal-spacer';
+      spacer.setAttribute('aria-hidden', 'true');
+      return spacer;
+    });
+    resetBtn.addEventListener('click', () => drag.resetPosition());
+  });
   // Dock chips (one per swarm agent, under its engine's terminal) stay in
   // lockstep with the canvas cursors: tapping a chip rings the matching
   // `.mc-swarm-cursor` so the two views of the same agent read as one thing.

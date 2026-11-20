@@ -119,7 +119,12 @@ export const MODEL_PANELS_HTML = `
   <div class="mc-terminals" hidden>
     <div class="mc-terminal-col">
       <section class="mc-terminal mc-terminal-nano" aria-label="Nano terminal, on this device">
-        <div class="mc-term-head"><span class="mc-term-dot"></span><strong class="mc-term-title">nano</strong><span class="mc-term-where">· on this device</span></div>
+        <div class="mc-term-head">
+          <span class="mc-term-drag" data-mc-drag-handle role="button" tabindex="0" aria-label="Move the Nano terminal">
+            <span class="mc-term-dot"></span><strong class="mc-term-title">nano</strong><span class="mc-term-where">· on this device</span>
+          </span>
+          <button type="button" class="mc-term-reset-pos" data-engine="nano" aria-label="Reset Nano terminal position">⟲</button>
+        </div>
         <div class="mc-term-body" aria-live="polite">
           <div class="mc-term-lines"></div>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
@@ -135,7 +140,12 @@ export const MODEL_PANELS_HTML = `
     </div>
     <div class="mc-terminal-col">
       <section class="mc-terminal mc-terminal-gemini" aria-label="Gemini terminal, cloud">
-        <div class="mc-term-head"><span class="mc-term-dot"></span><strong class="mc-term-title">gemini</strong><span class="mc-term-where">· cloud</span></div>
+        <div class="mc-term-head">
+          <span class="mc-term-drag" data-mc-drag-handle role="button" tabindex="0" aria-label="Move the Gemini terminal">
+            <span class="mc-term-dot"></span><strong class="mc-term-title">gemini</strong><span class="mc-term-where">· cloud</span>
+          </span>
+          <button type="button" class="mc-term-reset-pos" data-engine="gemini" aria-label="Reset Gemini terminal position">⟲</button>
+        </div>
         <div class="mc-term-body" aria-live="polite">
           <div class="mc-term-lines"></div>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>

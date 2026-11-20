@@ -25,6 +25,14 @@ export interface Rect { left: number; top: number; width: number; height: number
 export const INTERACTIVE =
   'button, a[href], input:not([type=hidden]), select, textarea, summary, [role=button], [role=slider], [role=switch], [role=checkbox], [role=tab], [role=menuitem], [role=option], [contenteditable=true]';
 
+/** A panel's drag handle (its title bar) — also a plain `[role=button]`, so
+ *  it's reachable through the same INTERACTIVE/collectControls path as any
+ *  other control. A pinch-hold that moves drags it (see dragPanel.ts, which
+ *  listens for the pointerdown/move/up this dispatches); a pinch-release
+ *  with no real movement activates it like a tap instead. */
+export const DRAG_HANDLE = '[data-mc-drag-handle]';
+const DRAG_MOVE_THRESHOLD_PX = 6;
+
 /** Reach box: this part of the camera frame maps to the full screen, so the
  *  edges of the UI don't need an arm at full stretch. */
 export const REACH = { x0: 0.15, x1: 0.85, y0: 0.12, y1: 0.82 };
@@ -144,6 +152,9 @@ export interface HandPointerOptions {
   onEmptyPinch?: () => void;
   /** Test hook: deliver a click event but stop it before app handlers run. */
   dryRun?: boolean;
+  /** Test hook: builds the event dispatched to a DRAG_HANDLE element on
+   *  pinch down/move/up. Defaults to a real PointerEvent. */
+  createDragEvent?: (type: string, p: P) => Event;
 }
 
 export interface HandPointer {
@@ -178,6 +189,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let target: HTMLElement | null = null;
   let pressedOn: HTMLElement | null = null;
   let dragging: HTMLInputElement | null = null;
+  let draggingHandle: HTMLElement | null = null;
+  let dragHandleStart: P = { x: 0, y: 0 };
+  let dragHandleMoved = false;
   let pinched = false;
   let lastActivated: HTMLElement | null = null;
   let consumedUntil = -Infinity;
@@ -185,10 +199,19 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let lostTimer: ReturnType<typeof setTimeout> | null = null;
 
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const createDragEvent = opts.createDragEvent ?? ((type: string, p: P) =>
+    new PointerEvent(type, { bubbles: true, composed: true, cancelable: true, clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'pen' }));
 
   function refreshControls(force = false) {
     const t = now();
     if (force || t - controlsAt > 250) { controls = collectControls(doc); controlsAt = t; }
+  }
+
+  /** Forwards the pinch-hold as a plain pointer event to a drag handle —
+   *  never during a dry-run probe, which must never actually move anything. */
+  function dispatchDragEvent(el: HTMLElement, type: string, p: P): void {
+    if (dryRun) return;
+    el.dispatchEvent(createDragEvent(type, p));
   }
 
   function resolve(p: P): HTMLElement | null {
@@ -258,12 +281,23 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (down) {
       pressedOn = target;
       if (target && target.matches('input[type=range]')) { dragging = target as HTMLInputElement; dragTo(pt.x); consumedUntil = now() + 700; }
+      else if (target && target.matches(DRAG_HANDLE)) {
+        draggingHandle = target; dragHandleStart = pt; dragHandleMoved = false;
+        dispatchDragEvent(target, 'pointerdown', pt);
+        consumedUntil = now() + 700;
+      }
       else if (!target) opts.onEmptyPinch?.();
       else consumedUntil = now() + 700;
     } else {
       if (dragging) {
         if (!dryRun) dragging.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
         lastActivated = dragging; dragging = null;
+      } else if (draggingHandle) {
+        dispatchDragEvent(draggingHandle, 'pointerup', pt);
+        // A pinch that never really moved reads as a tap, same as any other
+        // control — only a genuine drag skips the click.
+        if (!dragHandleMoved) activate(draggingHandle); else lastActivated = draggingHandle;
+        draggingHandle = null;
       } else if (pressedOn && pressedOn === target) activate(pressedOn);
       pressedOn = null;
       refreshControls(true);
@@ -274,13 +308,22 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function aim(p: P): HTMLElement | null {
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
+    if (draggingHandle) {
+      if (Math.hypot(p.x - dragHandleStart.x, p.y - dragHandleStart.y) > DRAG_MOVE_THRESHOLD_PX) dragHandleMoved = true;
+      dispatchDragEvent(draggingHandle, 'pointermove', p);
+      paint();
+      return draggingHandle;
+    }
     setTarget(resolve(p));
     paint();
     return target;
   }
 
   function lost() {
-    if (pinched) { pinched = false; dragging = null; pressedOn = null; }
+    if (pinched) {
+      if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
+      pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
+    }
     setTarget(null); pt = { x: -1, y: -1 }; euro.reset(); paint();
   }
 
