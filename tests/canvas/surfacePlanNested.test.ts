@@ -105,3 +105,17 @@ describe('new component schemas', () => {
     expect(gateMessages(bad, CATALOG_SCHEMAS).ok).toBe(false);
   });
 });
+
+describe('visual tile markup is sanitized at coerce time', () => {
+  it('strips a <script> from a visual tile before it ever becomes a SurfacePlan', () => {
+    const raw = { kind: 'room', title: 'x', tiles: [{ type: 'visual', title: 'Zone map', markup: '<svg><script>evil()</script><rect data-action="z" width="1" height="1"/></svg>' }] };
+    const r = coerceSurfacePlan(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const visual = r.value.tiles[0];
+    if (visual.type !== 'visual') throw new Error();
+    expect(visual.markup).not.toMatch(/script/i);
+    expect(visual.markup).not.toMatch(/evil/);
+    expect(visual.markup).toContain('data-action="z"');
+  });
+});

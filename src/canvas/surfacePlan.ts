@@ -1,6 +1,7 @@
 // Smart canvas — the compact "surface plan" that Nano drafts and Gemini
 // upgrades. Models never write raw A2UI: they emit this small JSON, which is
 // coerced here and expanded deterministically into A2UI v0.9 messages.
+import { sanitizeVisualMarkup } from './visualSanitize';
 
 export const PROTOCOL = 'v0.9' as const;
 export const ROOM_CATALOG_ID = 'https://mendcraft.web.app/catalogs/smart-canvas/v0.json';
@@ -214,8 +215,15 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   }
   if (o.type === 'visual') {
     const title = cleanText(o.title, 40);
-    const markup = typeof o.markup === 'string' ? o.markup.slice(0, 20000) : null;
-    if (!title || !markup) return { ok: false, error: 'visual tile needs a title and markup' };
+    const rawMarkup = typeof o.markup === 'string' ? o.markup.slice(0, 20000) : null;
+    if (!title || !rawMarkup) return { ok: false, error: 'visual tile needs a title and markup' };
+    // Sanitized here — the earliest point untrusted markup enters the
+    // system — so every consumer of a coerced SurfacePlan (both render
+    // paths, any echo back into a prompt) only ever sees safe markup.
+    // Both render paths re-sanitize again right before innerHTML too
+    // (belt and suspenders — see widgets.ts/fallbackRenderer.ts).
+    const markup = sanitizeVisualMarkup(rawMarkup).html;
+    if (!markup) return { ok: false, error: 'visual tile markup had nothing safe left after sanitizing' };
     return { ok: true, value: { type: 'visual', title, markup } };
   }
   if (o.type === 'row') {
