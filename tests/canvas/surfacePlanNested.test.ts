@@ -96,3 +96,12 @@ describe('nested surface plan', () => {
     expect(tileComponentId(r.value.tiles[0], [0])).toBe(tileComponentId(r.value.tiles[0], [0]));
   });
 });
+
+describe('new component schemas', () => {
+  it('rejects a Grid with an out-of-enum column count', async () => {
+    const { gateMessages } = await import('../../src/canvas/gate');
+    const { CATALOG_SCHEMAS } = await import('../../src/canvas/catalogApi');
+    const bad = [{ version: 'v0.9', updateComponents: { surfaceId: 's', components: [{ id: 'g', component: 'Grid', columns: 7, children: [] }] } }];
+    expect(gateMessages(bad, CATALOG_SCHEMAS).ok).toBe(false);
+  });
+});

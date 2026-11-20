@@ -2,7 +2,7 @@
 import { z, type ZodTypeAny } from 'zod';
 import { CommonSchemas } from '@a2ui/web_core/v0_9';
 import { A2uiColumn, A2uiText } from '@a2ui/web_core/v0_9/basic_catalog';
-import { PLAN_TEMPLATES } from './surfacePlan';
+import { CHART_TYPES, PLAN_TEMPLATES, TREND_KINDS } from './surfacePlan';
 
 export const LampTileApi = {
   name: 'LampTile',
@@ -83,6 +83,118 @@ export const ConnectTileApi = {
     .strict(),
 };
 
+// ---- layout containers (nested A2UI trees) ----
+
+export const RowApi = {
+  name: 'Row',
+  schema: z.object({ children: z.array(z.string()) }).strict(),
+};
+
+export const GridApi = {
+  name: 'Grid',
+  schema: z
+    .object({
+      columns: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+      children: z.array(z.string()),
+    })
+    .strict(),
+};
+
+export const CardApi = {
+  name: 'Card',
+  schema: z.object({ title: z.string(), children: z.array(z.string()) }).strict(),
+};
+
+export const TabsApi = {
+  name: 'Tabs',
+  schema: z
+    .object({
+      tabs: z.array(z.object({ label: z.string(), children: z.array(z.string()) }).strict()),
+    })
+    .strict(),
+};
+
+export const SplitApi = {
+  name: 'Split',
+  schema: z
+    .object({
+      direction: z.enum(['row', 'column']),
+      first: z.array(z.string()),
+      second: z.array(z.string()),
+    })
+    .strict(),
+};
+
+// ---- general-purpose widgets ----
+
+export const StatTileApi = {
+  name: 'StatTile',
+  schema: z
+    .object({
+      label: z.string(),
+      value: z.string(),
+      delta: z.string(),
+      trend: z.enum(TREND_KINDS),
+      spark: z.array(z.number()),
+    })
+    .strict(),
+};
+
+export const ChartTileApi = {
+  name: 'ChartTile',
+  schema: z
+    .object({
+      title: z.string(),
+      chartType: z.enum(CHART_TYPES),
+      series: z.array(z.object({ label: z.string(), value: z.number() }).strict()),
+    })
+    .strict(),
+};
+
+export const TableTileApi = {
+  name: 'TableTile',
+  schema: z
+    .object({
+      title: z.string(),
+      columns: z.array(z.string()),
+      rows: z.array(z.array(z.string())),
+      sortable: z.boolean(),
+      rowActionLabel: z.string(),
+      onRowAction: CommonSchemas.Action,
+    })
+    .strict(),
+};
+
+const FormFieldSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('toggle'), id: z.string(), label: z.string(), value: z.boolean() }).strict(),
+  z.object({ kind: z.literal('slider'), id: z.string(), label: z.string(), value: z.number(), min: z.number(), max: z.number() }).strict(),
+  z.object({ kind: z.literal('choice'), id: z.string(), label: z.string(), options: z.array(z.string()), value: z.string() }).strict(),
+]);
+
+export const FormTileApi = {
+  name: 'FormTile',
+  schema: z
+    .object({
+      title: z.string(),
+      fields: z.array(FormFieldSchema),
+      submitLabel: z.string(),
+      onFieldChange: CommonSchemas.Action,
+      onSubmit: CommonSchemas.Action,
+    })
+    .strict(),
+};
+
+export const VisualTileApi = {
+  name: 'VisualTile',
+  schema: z
+    .object({
+      title: z.string(),
+      markup: z.string(),
+      onAction: CommonSchemas.Action,
+    })
+    .strict(),
+};
+
 /** Every component the gate allows, by name. */
 export const CATALOG_SCHEMAS: Record<string, ZodTypeAny> = {
   Column: A2uiColumn.schema,
@@ -93,4 +205,14 @@ export const CATALOG_SCHEMAS: Record<string, ZodTypeAny> = {
   SwitchTile: SwitchTileApi.schema,
   SceneTile: SceneTileApi.schema,
   ConnectTile: ConnectTileApi.schema,
+  Row: RowApi.schema,
+  Grid: GridApi.schema,
+  Card: CardApi.schema,
+  Tabs: TabsApi.schema,
+  Split: SplitApi.schema,
+  StatTile: StatTileApi.schema,
+  ChartTile: ChartTileApi.schema,
+  TableTile: TableTileApi.schema,
+  FormTile: FormTileApi.schema,
+  VisualTile: VisualTileApi.schema,
 };
