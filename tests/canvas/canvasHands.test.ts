@@ -1,8 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
+  autoHandsFromSearch,
   createCanvasHandsAdapter,
+  getLastCameraError,
   mapGestureToCanvasEvent,
   mountCanvasHands,
+  shouldAutoStartHands,
   type CanvasHandEvent,
 } from '../../src/canvas/canvasHands';
 import type { Pt } from '../../src/input/handLogic';
@@ -125,17 +128,35 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
   });
 
   describe('hand landmark frames processing', () => {
-    it('recognizes pinch pose and emits keep', () => {
+    // keep now needs HAND_FEEL.keepFrames (3) consecutive pinch frames — a
+    // single-frame tracking dip can no longer keep a proposal by accident.
+    it('emits keep only after 3 consecutive pinch frames, once', () => {
       const events: CanvasHandEvent[] = [];
       const adapter = createCanvasHandsAdapter((e) => events.push(e));
 
       const pinch = makePinchingHand();
       adapter.update({ hands: [pinch], now: 1000 });
-      expect(events).toContainEqual({ type: 'keep' });
+      adapter.update({ hands: [pinch], now: 1033 });
+      expect(events.filter((e) => e.type === 'keep')).toHaveLength(0); // 2 frames: not yet
+      adapter.update({ hands: [pinch], now: 1066 });
+      expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
 
-      // Immediate next frame does not duplicate keep
+      // Holding the pinch does not re-fire within the refractory window.
+      adapter.update({ hands: [pinch], now: 1100 });
       adapter.update({ hands: [pinch], now: 1200 });
       expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
+    });
+
+    it('a 1–2 frame pinch dip never emits keep (hover cannot activate)', () => {
+      const events: CanvasHandEvent[] = [];
+      const adapter = createCanvasHandsAdapter((e) => events.push(e));
+      const pinch = makePinchingHand();
+      const point = makePointingHand();
+      adapter.update({ hands: [pinch], now: 1000 });
+      adapter.update({ hands: [point], now: 1033 }); // dip broken
+      adapter.update({ hands: [pinch], now: 1066 });
+      adapter.update({ hands: [pinch], now: 1100 });
+      expect(events.filter((e) => e.type === 'keep')).toHaveLength(0);
     });
 
     it('recognizes pointing and emits point with index fingertip', () => {
@@ -152,16 +173,41 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       }
     });
 
-    it('recognizes open palm and emits palm', () => {
+    // palm now requires a HELD open palm (HAND_FEEL.palmHoldMs = 600 ms) with
+    // a refractory period — the per-frame palm event toggled the tools panel
+    // every single frame, which was the "hover glitches the tools" bug.
+    it('emits palm only after the open palm is held 600 ms, then refractory', () => {
       const events: CanvasHandEvent[] = [];
       const adapter = createCanvasHandsAdapter((e) => events.push(e));
 
       const palm = makeOpenPalmHand();
       adapter.update({ hands: [palm], now: 1000 });
-      expect(events).toContainEqual({ type: 'palm' });
+      adapter.update({ hands: [palm], now: 1300 });
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(0); // not held long enough
+      adapter.update({ hands: [palm], now: 1650 });
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(1);
+      // Still holding: refractory blocks an immediate second toggle.
+      adapter.update({ hands: [palm], now: 2300 });
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(1);
+      // After the refractory a fresh hold fires again.
+      adapter.update({ hands: [palm], now: 3200 });
+      adapter.update({ hands: [palm], now: 3850 });
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(2);
     });
 
-    it('emits a frame event with the raw hands every call, alongside any gesture event', () => {
+    it('a palm waved past the camera (not held) emits nothing', () => {
+      const events: CanvasHandEvent[] = [];
+      const adapter = createCanvasHandsAdapter((e) => events.push(e));
+      const palm = makeOpenPalmHand();
+      const point = makePointingHand();
+      adapter.update({ hands: [palm], now: 1000 });
+      adapter.update({ hands: [point], now: 1400 }); // hold broken before 600 ms
+      adapter.update({ hands: [palm], now: 1500 });
+      adapter.update({ hands: [point], now: 1900 });
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(0);
+    });
+
+    it('emits a frame event with the raw hands every call', () => {
       const events: CanvasHandEvent[] = [];
       const adapter = createCanvasHandsAdapter((e) => events.push(e));
 
@@ -173,8 +219,8 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
         expect(frameEv.hands).toHaveLength(1);
         expect(frameEv.now).toBe(1000);
       }
-      // Still emits the gesture-specific event too.
-      expect(events).toContainEqual({ type: 'palm' });
+      // No palm yet — palm needs a 600 ms hold (see the hold tests above).
+      expect(events.filter((e) => e.type === 'palm')).toHaveLength(0);
     });
 
     it('does not emit a frame event when no hands are visible', () => {
@@ -195,6 +241,7 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       const fakeRoot = { appendChild: vi.fn(), getBoundingClientRect: () => ({ width: 640, height: 480 }) } as unknown as HTMLElement;
 
       const originalNav = globalThis.navigator;
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         Object.defineProperty(globalThis, 'navigator', {
           value: { mediaDevices: undefined },
@@ -205,6 +252,7 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
         const res = await mountCanvasHands(fakeRoot, () => {});
         expect(res).toBeNull();
       } finally {
+        quiet.mockRestore();
         Object.defineProperty(globalThis, 'navigator', {
           value: originalNav,
           configurable: true,
@@ -217,6 +265,7 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       const fakeRoot = { appendChild: vi.fn(), getBoundingClientRect: () => ({ width: 640, height: 480 }) } as unknown as HTMLElement;
 
       const originalNav = globalThis.navigator;
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         Object.defineProperty(globalThis, 'navigator', {
           value: {
@@ -231,12 +280,92 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
         const res = await mountCanvasHands(fakeRoot, () => {});
         expect(res).toBeNull();
       } finally {
+        quiet.mockRestore();
         Object.defineProperty(globalThis, 'navigator', {
           value: originalNav,
           configurable: true,
           writable: true,
         });
       }
+    });
+
+    it('surfaces the real reason via onError + getLastCameraError + console.error', async () => {
+      const fakeRoot = { appendChild: vi.fn(), getBoundingClientRect: () => ({ width: 640, height: 480 }) } as unknown as HTMLElement;
+      const originalNav = globalThis.navigator;
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const onError = vi.fn();
+      try {
+        Object.defineProperty(globalThis, 'navigator', {
+          value: { mediaDevices: undefined },
+          configurable: true,
+          writable: true,
+        });
+        const res = await mountCanvasHands(fakeRoot, () => {}, { onError });
+        expect(res).toBeNull();
+        expect(onError).toHaveBeenCalledTimes(1);
+        const [reason] = onError.mock.calls[0]!;
+        expect(reason).toBe('Camera needs a secure (https) page — hands stay off.');
+        expect(getLastCameraError()).toBe(reason);
+        expect(logged).toHaveBeenCalledWith('[mendcraft] camera/hands failed:', expect.anything());
+      } finally {
+        logged.mockRestore();
+        Object.defineProperty(globalThis, 'navigator', {
+          value: originalNav,
+          configurable: true,
+          writable: true,
+        });
+      }
+    });
+
+    it('fails fast with the blocked message when the camera permission is already denied', async () => {
+      const fakeRoot = { appendChild: vi.fn(), getBoundingClientRect: () => ({ width: 640, height: 480 }) } as unknown as HTMLElement;
+      const originalNav = globalThis.navigator;
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const onError = vi.fn();
+      const getUserMedia = vi.fn();
+      try {
+        Object.defineProperty(globalThis, 'navigator', {
+          value: {
+            mediaDevices: { getUserMedia },
+            permissions: { query: vi.fn(async () => ({ state: 'denied' })) },
+          },
+          configurable: true,
+          writable: true,
+        });
+        const res = await mountCanvasHands(fakeRoot, () => {}, { onError });
+        expect(res).toBeNull();
+        expect(onError.mock.calls[0]![0]).toBe(
+          'Camera blocked — click the camera icon in the address bar, choose Allow, then press Hands.',
+        );
+        expect(getUserMedia).not.toHaveBeenCalled(); // fail fast, no model loading either
+      } finally {
+        quiet.mockRestore();
+        Object.defineProperty(globalThis, 'navigator', {
+          value: originalNav,
+          configurable: true,
+          writable: true,
+        });
+      }
+    });
+  });
+
+  describe('auto-start gating (hands on by default)', () => {
+    it('?hands=0 is the only opt-out', () => {
+      expect(autoHandsFromSearch('')).toBe(true);
+      expect(autoHandsFromSearch('?fresh=1&sim=1')).toBe(true);
+      expect(autoHandsFromSearch('?hands=0')).toBe(false);
+      expect(autoHandsFromSearch('?fresh=1&hands=0&sim=1')).toBe(false);
+      expect(autoHandsFromSearch('?hands=1')).toBe(true);
+    });
+
+    it('auto-starts only where getUserMedia exists (silent no-op in jsdom/tests)', () => {
+      const withCam = { mediaDevices: { getUserMedia: () => {} } };
+      expect(shouldAutoStartHands(undefined, withCam)).toBe(true);
+      expect(shouldAutoStartHands(true, withCam)).toBe(true);
+      expect(shouldAutoStartHands(false, withCam)).toBe(false); // ?hands=0
+      expect(shouldAutoStartHands(true, { mediaDevices: undefined })).toBe(false);
+      expect(shouldAutoStartHands(true, {})).toBe(false);
+      expect(shouldAutoStartHands(true, null)).toBe(false);
     });
   });
 });

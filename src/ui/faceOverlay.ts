@@ -14,6 +14,9 @@ export interface FaceOverlay {
 
 export interface FaceOverlayOptions {
   reducedMotion?: boolean;
+  /** Override the bracket colours (the canvas passes warm-paper tones). */
+  operatorColor?: string;
+  dimColor?: string;
 }
 
 const OPERATOR_COLOR = '#38f8a0';
@@ -38,6 +41,8 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
   container.appendChild(canvas);
   const ctx = canvas.getContext('2d')!;
   const reducedMotion = opts.reducedMotion ?? readReducedMotion();
+  const operatorColor = opts.operatorColor ?? OPERATOR_COLOR;
+  const dimColor = opts.dimColor ?? DIM_COLOR;
 
   let opacity = 0;
   let wasIdle = true;
@@ -85,7 +90,7 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
     else opacity += (target - opacity) * Math.min(1, (1000 / FADE_MS) * (1 / 60));
 
     // Rejected hands first, faint grey, so operator graphics sit on top.
-    ctx.strokeStyle = DIM_COLOR;
+    ctx.strokeStyle = dimColor;
     ctx.globalAlpha = 0.3;
     ctx.lineWidth = 2 * dpr;
     ctx.lineCap = 'round';
@@ -104,7 +109,7 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
       const y = face.box.y * h;
       const bw = face.box.w * w;
       const bh = face.box.h * h;
-      const color = face.isOperator ? OPERATOR_COLOR : DIM_COLOR;
+      const color = face.isOperator ? operatorColor : dimColor;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = color;
@@ -119,7 +124,7 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
 
       if (face.isOperator) {
         const label = face.facing ? 'Facing this device' : 'Not facing';
-        const badgeColor = face.facing ? OPERATOR_COLOR : '#f59e0b';
+        const badgeColor = face.facing ? operatorColor : '#f59e0b';
         ctx.font = `${13 * dpr}px system-ui, sans-serif`;
         const padX = 8 * dpr;
         const tw = ctx.measureText(label).width;

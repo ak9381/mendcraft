@@ -35,7 +35,9 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
-import { mountCanvasHands } from './canvasHands';
+import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
+import { createRegistrationFlow, loadStoredSignature, storeSignature, REG_PROMPTS } from './registration';
+import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
@@ -82,6 +84,9 @@ export interface CanvasOptions {
    *  fixture instead of any stored/seeded/fresh doc — a deliberate opt-in
    *  demo of nested layouts, never reachable from the default boot paths. */
   showcase?: 'energy';
+  /** Hands + face tracking start automatically on mount (default). ?hands=0
+   *  opts out. Where getUserMedia doesn't exist (jsdom) it is a silent no-op. */
+  autoHands?: boolean;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -187,6 +192,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
       <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
+      <button data-cmd="reregister" class="mc-btn">Re-register</button>
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
@@ -1103,11 +1109,70 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- inputs: hands (pinch keep / brush drop) + gimbal modes in one composer.
   // The existing Hands button starts/stops it; gimbal voice goes via handleSpeech.
   let handsMountOk = false; let handsOn = false; let handsBusy = false;
+  let lastHandsError: string | null = null;
+  let handsHandle: CanvasHandsHandle | null = null;
   // Every control on screen is reachable by hand (deep hit-test + snap radius).
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function' ? createHandPointer(document) : null;
+
+  // ---- owner registration: look at the camera → right pinch → left pinch,
+  // then presence locks to that face and binds hands to it (ignoring other
+  // people). Hand-driven, persisted for the session, skipped in ?sim=1.
+  const regFlow = createRegistrationFlow();
+  const regStorage = typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+  const regChip = typeof document !== 'undefined' ? document.createElement('div') : null;
+  if (regChip) {
+    regChip.className = 'mc-reg-chip';
+    regChip.hidden = true;
+    root.append(regChip);
+  }
+  function setRegChip(text: string | null): void {
+    if (!regChip) return;
+    regChip.hidden = !text;
+    if (text) regChip.textContent = text;
+  }
+  function onPresenceFrame(f: PresenceFrame): void {
+    if (opts.sim) return;
+    if (regFlow.step === 'done') {
+      if (f.registered && f.paused) setRegChip('Paused — face the camera to resume');
+      else if (f.registered) setRegChip(REG_PROMPTS.done);
+      return;
+    }
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const st = regFlow.update({
+      faceVisible: f.faces.length > 0,
+      hands: f.hands.map((h) => ({ label: h.label, pinching: h.pinching })),
+      now,
+    });
+    if (st.justAdvanced && st.step === 'right') handsHandle?.presence?.register();
+    if (st.justAdvanced && st.step === 'done') {
+      storeSignature(regStorage, handsHandle?.presence?.currentSignature() ?? null);
+    }
+    setRegChip(st.prompt);
+  }
+  function beginRegistration(): void {
+    if (opts.sim || !handsHandle?.presence) { regFlow.complete(); setRegChip(null); return; }
+    const stored = loadStoredSignature(regStorage);
+    if (stored) {
+      handsHandle.presence.registerSignature(stored);
+      regFlow.complete();
+      setRegChip(REG_PROMPTS.done);
+      return;
+    }
+    if (regFlow.step !== 'done') { regFlow.reset(); setRegChip(REG_PROMPTS.face); }
+  }
+
   const inputs = createCanvasInputs({
     root,
-    hands: async (r, onEvent) => { const s = await mountCanvasHands(r, onEvent); handsMountOk = !!s; return s; },
+    hands: async (r, onEvent) => {
+      const s = await mountCanvasHands(r, onEvent, {
+        onError: (reason) => { lastHandsError = reason; },
+        onPresence: onPresenceFrame,
+      });
+      handsHandle = s;
+      handsMountOk = !!s;
+      if (s) lastHandsError = null;
+      return s;
+    },
     on: {
       // A pinch aimed at a control activates that control (handPointer);
       // only a pinch over empty canvas means "keep".
@@ -1122,15 +1187,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsOn) { inputs.stop(); handPointer?.lost(); handsOn = false; btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
     handsBusy = true; handsMountOk = false;
     await inputs.start(root);
     handsBusy = false;
-    if (!handsMountOk) { say('No camera here — hands stay off.'); return; }
+    // The honest reason, not a generic line: permission denied, busy webcam
+    // and a blocked MediaPipe download each read differently (cameraError.ts).
+    if (!handsMountOk) { say(lastHandsError ?? 'No camera here — hands stay off.'); return; }
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
+    beginRegistration();
     say('Hands on: point at any button and pinch to press it. Pinch on empty canvas to keep, brush to drop.');
+  }
+  function reregister(): void {
+    storeSignature(regStorage, null);
+    handsHandle?.presence?.reregister();
+    regFlow.reset();
+    if (handsOn && !opts.sim) setRegChip(REG_PROMPTS.face);
+    say(handsOn ? 'Registration cleared. Look at the camera to register.' : 'Registration cleared. Press Hands to register.');
   }
 
   // ---- offline (simulate + real) ----
@@ -1235,7 +1310,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), reregister, teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
@@ -1328,6 +1403,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   sync();
   updateDock();
   if (focusId) void focus(focusId); else if (!stored) void overview();
+
+  // Hands + face are ON BY DEFAULT: the camera prompt appears right away and
+  // tracking starts with no click; the Hands button still toggles off/on.
+  // Opt out with ?hands=0. Silent no-op where getUserMedia doesn't exist
+  // (jsdom / unit tests), so a failure message never appears without a camera.
+  if (shouldAutoStartHands(opts.autoHands, typeof navigator !== 'undefined' ? navigator : null)) {
+    void toggleHands();
+  }
 
   return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), destroy };
 }
