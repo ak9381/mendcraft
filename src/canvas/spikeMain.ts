@@ -24,7 +24,7 @@ root.innerHTML = `
     <button id="b-upgrade">2 · Gemini upgrade</button>
     <button id="b-evil">3 · Forged widget</button>
   </div>
-  <section id="proposal" hidden style="border:2px solid var(--accent);border-radius:16px;padding:16px;margin-bottom:16px;background:#101a33"></section>
+  <section id="proposal" hidden style="border:2px solid var(--accent);border-radius:16px;padding:16px;margin-bottom:16px;background:var(--panel-2, #F1EEE6)"></section>
   <section id="surface-host"></section>`;
 const log = (t: string) => { root.querySelector('#log')!.textContent = t; };
 

@@ -13,6 +13,11 @@
   --accent: #6B8F71;
   --accent-2: #5A7BA6;
   --focus: #5A7BA6;
+  /* Shared with widgets.ts's device tiles (lamp/music/switch/scene): amber
+     for the one primary action a tile offers, a muted warm red for errors —
+     never the old dark-theme's periwinkle/coral/mint literals. */
+  --action: #C98B3C;
+  --danger: #B5453A;
   --a2ui-color-on-background: var(--text);
   --a2ui-color-background: transparent;
   --a2ui-color-primary: var(--accent);
@@ -301,7 +306,7 @@
 }
 .mc-pair-qr-wrap img {
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: #FFFFFF;
   padding: 8px;
 }
 .mc-pair-code-row {

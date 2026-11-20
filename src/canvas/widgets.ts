@@ -22,18 +22,18 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
   protected override readonly api = LampTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid #d9d4c7; border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 var(--font-sans, system-ui), 'Noto Sans Kannada', sans-serif; color: var(--text, #f2f0ea); border-color: var(--border, #3a3934); }
-    .tile.on { border-color: #f5a623; background: #2a2214; }
+    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 var(--font-sans, system-ui), 'Noto Sans Kannada', sans-serif; color: var(--text, #2B2B2B); }
+    .tile.on { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }
     .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: transparent; color: var(--text, #f2f0ea); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
-    button.primary { background: var(--text, #f2f0ea); color: #0d0d0c; }
-    .meter { height: 14px; border-radius: 7px; background: rgb(242 240 234 / 0.14); overflow: hidden; }
-    .meter > i { display: block; height: 100%; background: #f5a623; }
-    .pending { color: var(--text-dim, #bdb9b0); } .error { color: #ff8a7a; }
-    .sim-badge { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #bdb9b0); border: 1.5px solid var(--border, #3a3934); border-radius: 999px; padding: 2px 8px; }
+    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
+    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
+    .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
+    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
+    .sim-badge { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #6E6A63); border: 1.5px solid var(--border, #E4E0D8); border-radius: 999px; padding: 2px 8px; }
   `;
   override render() {
     const p = this.controller?.props;
@@ -65,7 +65,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
   override render() {
     const p = this.controller?.props;
     if (!p) return nothing;
-    return html`<div class="mc-plan-board" style="height:420px;border:2px solid #d9d4c7;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
+    return html`<div class="mc-plan-board" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
   }
   override updated() {
     const p = this.controller?.props;
@@ -96,17 +96,17 @@ export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
   protected override readonly api = MusicTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid var(--border, #3a3934); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); }
-    .tile.playing { border-color: var(--accent, #8e9dff); background: #161a29; }
+    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
+    .tile.playing { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }
     .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: transparent; color: var(--text, #f2f0ea); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
-    button.primary { background: var(--text, #f2f0ea); color: #0d0d0c; }
-    .meter { height: 14px; border-radius: 7px; background: rgb(242 240 234 / 0.14); overflow: hidden; }
-    .meter > i { display: block; height: 100%; background: var(--accent, #8e9dff); }
-    .pending { color: var(--text-dim, #bdb9b0); } .error { color: #ff8a7a; }
+    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
+    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
+    .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
+    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
   `;
   override render() {
     const p = this.controller?.props;
@@ -137,15 +137,15 @@ export class SwitchTileElement extends A2uiLitElement<typeof SwitchTileApi> {
   protected override readonly api = SwitchTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid var(--border, #3a3934); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); }
-    .tile.on { border-color: var(--accent-2, #6ee7a8); background: #12241b; }
+    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
+    .tile.on { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }
     .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: transparent; color: var(--text, #f2f0ea); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
-    button.primary { background: var(--text, #f2f0ea); color: #0d0d0c; }
-    .pending { color: var(--text-dim, #bdb9b0); } .error { color: #ff8a7a; }
+    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
+    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
   `;
   override render() {
     const p = this.controller?.props;
@@ -170,14 +170,14 @@ export class SceneTileElement extends A2uiLitElement<typeof SceneTileApi> {
   protected override readonly api = SceneTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px solid var(--border, #3a3934); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #191917); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); }
-    .tile.active { border-color: var(--accent, #8e9dff); background: #181d2f; }
+    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
+    .tile.active { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .label { font-size: 24px; font-weight: 600; }
     .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: transparent; color: var(--text, #f2f0ea); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
-    button.primary { background: var(--text, #f2f0ea); color: #0d0d0c; }
+    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
+    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
   `;
   override render() {
     const p = this.controller?.props;
@@ -200,10 +200,10 @@ export class ConnectTileElement extends A2uiLitElement<typeof ConnectTileApi> {
   protected override readonly api = ConnectTileApi;
   static override styles = css`
     :host { display: block; }
-    .tile { border: 2px dashed var(--border, #3a3934); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel-2, #141413); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #f2f0ea); align-content: center; justify-items: start; }
+    .tile { border: 2px dashed var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel-2, #F1EEE6); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); align-content: center; justify-items: start; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    button { font: inherit; min-height: 64px; min-width: 140px; border-radius: 12px; border: 2px solid var(--text, #f2f0ea); background: var(--text, #f2f0ea); color: #0d0d0c; cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #8e9dff); outline-offset: 3px; }
+    button { font: inherit; min-height: 64px; min-width: 140px; border-radius: 12px; border: 2px solid var(--action, #C98B3C); background: var(--action, #C98B3C); color: #FFFFFF; cursor: pointer; }
+    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
   `;
   override render() {
     const p = this.controller?.props;
