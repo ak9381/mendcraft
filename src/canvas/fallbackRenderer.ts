@@ -4,7 +4,19 @@
 // SceneTile, ConnectTile into a host element without @a2ui/lit (plain DOM).
 //
 // Pure part: message reducer to a render tree with resolved bindings.
-import type { A2uiMessage } from './surfacePlan';
+import type { A2uiMessage, FormField } from './surfacePlan';
+import { sanitizeVisualMarkup } from './visualSanitize';
+import { buildVisualDom } from './visualMount';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** `createElementNS` when the doc supports it (a real Document, or a test
+ *  fake that implements it) — SVG shapes minted via plain `createElement`
+ *  render as inert HTMLUnknownElements, not vector graphics. */
+function svgEl(doc: Document, tag: string): HTMLElement {
+  const d = doc as unknown as { createElementNS?(ns: string, t: string): HTMLElement };
+  return d.createElementNS ? d.createElementNS(SVG_NS, tag) : doc.createElement(tag);
+}
 
 export interface RenderNode {
   id: string;
@@ -118,16 +130,31 @@ export function buildRenderTree(surface: SurfaceState): RenderTree {
     };
   }
 
-  // Link children if specified in root/column
+  // Link children if specified in root/column (and any other component with
+  // a flat `children` id array — Row/Grid/Card/Split all reuse this same
+  // shape so they need no special case here).
   for (const comp of Object.values(surface.components)) {
+    const parentNode = nodesById[comp.id];
+    if (!parentNode) continue;
     const rawChildren = comp.children;
     if (Array.isArray(rawChildren)) {
-      const parentNode = nodesById[comp.id];
-      if (parentNode) {
-        parentNode.children = rawChildren
-          .map((cid) => (typeof cid === 'string' ? nodesById[cid] : null))
-          .filter((n): n is RenderNode => n !== null && n !== undefined);
-      }
+      parentNode.children = rawChildren
+        .map((cid) => (typeof cid === 'string' ? nodesById[cid] : null))
+        .filter((n): n is RenderNode => n !== null && n !== undefined);
+    }
+    // Tabs nests its child-id arrays one level deeper (`tabs[].children`),
+    // so the generic `children` link above never reaches them — resolve
+    // those ids into real RenderNodes here, in place on the props.
+    const rawTabs = comp.tabs;
+    if (Array.isArray(rawTabs)) {
+      parentNode.props.tabs = rawTabs.map((t) => {
+        if (!t || typeof t !== 'object') return t;
+        const to = t as { label?: unknown; children?: unknown };
+        const children = Array.isArray(to.children)
+          ? to.children.map((cid) => (typeof cid === 'string' ? nodesById[cid] : null)).filter((n): n is RenderNode => n !== null)
+          : [];
+        return { label: to.label, children };
+      });
     }
   }
 
@@ -208,17 +235,24 @@ export function reduceA2uiMessages(
 }
 
 /** Plain DOM node renderer for a RenderNode without @a2ui/lit. */
-function renderNodeToDom(
+export function renderNodeToDom(
   node: RenderNode,
   doc: Document,
   onAction?: (action: FallbackAction) => void,
 ): HTMLElement {
   const p = node.props;
 
-  function triggerAction(act: unknown): void {
+  function triggerAction(act: unknown, extraContext?: Record<string, unknown>): void {
     if (act && typeof act === 'object' && 'event' in act) {
       const ev = (act as { event: FallbackAction }).event;
-      onAction?.(ev);
+      const merged = extraContext ? { ...ev, context: { ...(ev.context ?? {}), ...extraContext } } : ev;
+      onAction?.(merged);
+    }
+  }
+
+  function renderChildren(el: HTMLElement): void {
+    if (node.children) {
+      for (const child of node.children) el.appendChild(renderNodeToDom(child, doc, onAction));
     }
   }
 
@@ -227,11 +261,371 @@ function renderNodeToDom(
     el.className = 'mc-fb-column';
     el.style.display = 'grid';
     el.style.gap = '16px';
-    if (node.children) {
-      for (const child of node.children) {
-        el.appendChild(renderNodeToDom(child, doc, onAction));
+    renderChildren(el);
+    return el;
+  }
+
+  if (node.component === 'Row') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-row';
+    el.style.display = 'flex';
+    el.style.flexWrap = 'wrap';
+    el.style.gap = '16px';
+    renderChildren(el);
+    return el;
+  }
+
+  if (node.component === 'Grid') {
+    const cols = typeof p.columns === 'number' ? p.columns : 2;
+    const el = doc.createElement('div');
+    el.className = `mc-fb-grid mc-fb-grid-${cols}`;
+    el.style.display = 'grid';
+    el.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    el.style.gap = '16px';
+    renderChildren(el);
+    return el;
+  }
+
+  if (node.component === 'Card') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-card';
+    el.style.border = '2px solid #E4E0D8';
+    el.style.borderRadius = '16px';
+    el.style.background = '#FFFFFF';
+    el.style.padding = '16px';
+    el.style.display = 'grid';
+    el.style.gap = '12px';
+    if (p.title) {
+      const h = doc.createElement('h3');
+      h.className = 'mc-fb-card-title';
+      h.textContent = String(p.title);
+      el.appendChild(h);
+    }
+    renderChildren(el);
+    return el;
+  }
+
+  if (node.component === 'Tabs') {
+    const tabs = Array.isArray(p.tabs) ? (p.tabs as Array<{ label: string; children: RenderNode[] }>) : [];
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tabs';
+    const bar = doc.createElement('div');
+    bar.className = 'mc-fb-tab-bar';
+    bar.setAttribute('role', 'tablist');
+    const panels = doc.createElement('div');
+    panels.className = 'mc-fb-tab-panels';
+    el.appendChild(bar);
+    el.appendChild(panels);
+
+    const panelEls: HTMLElement[] = [];
+    const buttonEls: HTMLElement[] = [];
+    tabs.forEach((tab, i) => {
+      const btn = doc.createElement('button');
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(i === 0));
+      btn.className = `mc-fb-tab-btn${i === 0 ? ' active' : ''}`;
+      btn.textContent = tab.label;
+      bar.appendChild(btn);
+      buttonEls.push(btn);
+
+      const panel = doc.createElement('div');
+      panel.className = 'mc-fb-tab-panel';
+      panel.style.display = 'grid';
+      panel.style.gap = '16px';
+      panel.hidden = i !== 0;
+      for (const child of tab.children ?? []) panel.appendChild(renderNodeToDom(child as RenderNode, doc, onAction));
+      panels.appendChild(panel);
+      panelEls.push(panel);
+
+      btn.addEventListener('click', () => {
+        panelEls.forEach((pe, j) => { pe.hidden = j !== i; });
+        buttonEls.forEach((be, j) => {
+          be.classList.toggle('active', j === i);
+          be.setAttribute('aria-selected', String(j === i));
+        });
+      });
+    });
+    return el;
+  }
+
+  if (node.component === 'Split') {
+    const direction = p.direction === 'column' ? 'column' : 'row';
+    const firstCount = typeof p.firstCount === 'number' ? p.firstCount : 0;
+    const el = doc.createElement('div');
+    el.className = `mc-fb-split mc-fb-split-${direction}`;
+    el.style.display = 'flex';
+    el.style.flexDirection = direction;
+    el.style.gap = '16px';
+    const firstEl = doc.createElement('div');
+    firstEl.className = 'mc-fb-split-pane';
+    firstEl.style.flex = '1';
+    const secondEl = doc.createElement('div');
+    secondEl.className = 'mc-fb-split-pane';
+    secondEl.style.flex = '1';
+    const children = node.children ?? [];
+    for (const child of children.slice(0, firstCount)) firstEl.appendChild(renderNodeToDom(child, doc, onAction));
+    for (const child of children.slice(firstCount)) secondEl.appendChild(renderNodeToDom(child, doc, onAction));
+    el.appendChild(firstEl);
+    el.appendChild(secondEl);
+    return el;
+  }
+
+  if (node.component === 'StatTile') {
+    const trend = p.trend === 'up' ? '▲' : p.trend === 'down' ? '▼' : '';
+    const trendColor = p.trend === 'up' ? '#6B8F71' : p.trend === 'down' ? '#B5453A' : '#6E6A63';
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tile stat';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', String(p.label || 'Stat'));
+    const labelEl = doc.createElement('div');
+    labelEl.className = 'label';
+    labelEl.textContent = String(p.label || '');
+    const valueEl = doc.createElement('div');
+    valueEl.className = 'value';
+    valueEl.textContent = String(p.value ?? '');
+    el.appendChild(labelEl);
+    el.appendChild(valueEl);
+    if (p.delta) {
+      const deltaEl = doc.createElement('div');
+      deltaEl.className = 'delta';
+      deltaEl.style.color = trendColor;
+      deltaEl.textContent = `${trend} ${String(p.delta)}`.trim();
+      el.appendChild(deltaEl);
+    }
+    if (Array.isArray(p.spark) && p.spark.length > 1) {
+      const spark = p.spark as number[];
+      const max = Math.max(...spark, 1);
+      const min = Math.min(...spark, 0);
+      const range = Math.max(max - min, 1);
+      const w = 100;
+      const h = 24;
+      const pts = spark.map((v, i) => `${(i / (spark.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
+      const svg = svgEl(doc, 'svg');
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      svg.setAttribute('class', 'sparkline');
+      svg.setAttribute('aria-hidden', 'true');
+      const poly = svgEl(doc, 'polyline');
+      poly.setAttribute('points', pts);
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke', trendColor);
+      poly.setAttribute('stroke-width', '2');
+      svg.appendChild(poly);
+      el.appendChild(svg);
+    }
+    return el;
+  }
+
+  if (node.component === 'ChartTile') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tile chart';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', String(p.title || 'Chart'));
+    const h = doc.createElement('div');
+    h.className = 'label';
+    h.textContent = String(p.title || '');
+    el.appendChild(h);
+    const series = Array.isArray(p.series) ? (p.series as Array<{ label: string; value: number }>) : [];
+    const svg = svgEl(doc, 'svg');
+    svg.setAttribute('viewBox', '0 0 120 60');
+    svg.setAttribute('class', 'chart-svg');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', series.map((s) => `${s.label}: ${s.value}`).join(', '));
+    const max = Math.max(...series.map((s) => s.value), 1);
+    if (p.chartType === 'ring') {
+      const total = series.reduce((a, s) => a + Math.max(s.value, 0), 0) || 1;
+      let angle = 0;
+      const colors = ['#6B8F71', '#C98B3C', '#5A7BA6', '#6E6A63'];
+      series.forEach((s, i) => {
+        const frac = Math.max(s.value, 0) / total;
+        const circle = svgEl(doc, 'circle');
+        circle.setAttribute('cx', '30');
+        circle.setAttribute('cy', '30');
+        circle.setAttribute('r', '24');
+        circle.setAttribute('fill', 'none');
+        circle.setAttribute('stroke', colors[i % colors.length]);
+        circle.setAttribute('stroke-width', '10');
+        const circumference = 2 * Math.PI * 24;
+        circle.setAttribute('stroke-dasharray', `${frac * circumference} ${circumference}`);
+        circle.setAttribute('stroke-dashoffset', String(-angle * circumference));
+        svg.appendChild(circle);
+        angle += frac;
+      });
+    } else if (p.chartType === 'line') {
+      const pts = series.map((s, i) => `${(i / Math.max(series.length - 1, 1)) * 110 + 5},${55 - (s.value / max) * 50}`).join(' ');
+      const poly = svgEl(doc, 'polyline');
+      poly.setAttribute('points', pts);
+      poly.setAttribute('fill', 'none');
+      poly.setAttribute('stroke', '#5A7BA6');
+      poly.setAttribute('stroke-width', '2');
+      svg.appendChild(poly);
+    } else {
+      const barWidth = 100 / Math.max(series.length, 1);
+      series.forEach((s, i) => {
+        const barH = (s.value / max) * 50;
+        const rect = svgEl(doc, 'rect');
+        rect.setAttribute('x', String(5 + i * barWidth));
+        rect.setAttribute('y', String(55 - barH));
+        rect.setAttribute('width', String(barWidth * 0.7));
+        rect.setAttribute('height', String(barH));
+        rect.setAttribute('fill', '#C98B3C');
+        svg.appendChild(rect);
+      });
+    }
+    el.appendChild(svg);
+    return el;
+  }
+
+  if (node.component === 'TableTile') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tile table';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', String(p.title || 'Table'));
+    const h = doc.createElement('div');
+    h.className = 'label';
+    h.textContent = String(p.title || '');
+    el.appendChild(h);
+
+    const columns = Array.isArray(p.columns) ? (p.columns as string[]) : [];
+    let rows = Array.isArray(p.rows) ? (p.rows as string[][]).slice() : [];
+    let sortCol: number | null = null;
+    let sortAsc = true;
+
+    const table = doc.createElement('table');
+    table.className = 'mc-fb-table';
+    const thead = doc.createElement('thead');
+    const headRow = doc.createElement('tr');
+    const tbody = doc.createElement('tbody');
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    thead.appendChild(headRow);
+    el.appendChild(table);
+
+    function renderRows(): void {
+      tbody.textContent = '';
+      for (let ri = 0; ri < rows.length; ri++) {
+        const tr = doc.createElement('tr');
+        for (const cell of rows[ri]) {
+          const td = doc.createElement('td');
+          td.textContent = cell;
+          tr.appendChild(td);
+        }
+        if (p.sortable || p.rowActionLabel) {
+          const td = doc.createElement('td');
+          if (p.rowActionLabel) {
+            const btn = doc.createElement('button');
+            btn.setAttribute('type', 'button');
+            btn.textContent = String(p.rowActionLabel);
+            const rowIndex = ri;
+            btn.addEventListener('click', () => triggerAction(p.onRowAction, { rowIndex, row: rows[rowIndex] }));
+            td.appendChild(btn);
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
       }
     }
+
+    columns.forEach((colLabel, ci) => {
+      const th = doc.createElement('th');
+      if (p.sortable) {
+        const btn = doc.createElement('button');
+        btn.setAttribute('type', 'button');
+        btn.className = 'mc-fb-sort-btn';
+        btn.textContent = colLabel;
+        btn.addEventListener('click', () => {
+          sortAsc = sortCol === ci ? !sortAsc : true;
+          sortCol = ci;
+          rows = rows.slice().sort((a, b) => (sortAsc ? 1 : -1) * a[ci].localeCompare(b[ci]));
+          renderRows();
+        });
+        th.appendChild(btn);
+      } else {
+        th.textContent = colLabel;
+      }
+      headRow.appendChild(th);
+    });
+    if (p.sortable || p.rowActionLabel) headRow.appendChild(doc.createElement('th'));
+    renderRows();
+    return el;
+  }
+
+  if (node.component === 'FormTile') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tile form';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', String(p.title || 'Form'));
+    const h = doc.createElement('div');
+    h.className = 'label';
+    h.textContent = String(p.title || '');
+    el.appendChild(h);
+
+    const fields = Array.isArray(p.fields) ? (p.fields as FormField[]) : [];
+    const values: Record<string, boolean | number | string> = {};
+    for (const f of fields) {
+      values[f.id] = f.kind === 'toggle' ? !!f.value : f.kind === 'slider' ? (f.value ?? f.min ?? 0) : (f.value ?? f.options?.[0] ?? '');
+      const row = doc.createElement('div');
+      row.className = 'row';
+      const label = doc.createElement('label');
+      label.textContent = f.label;
+      row.appendChild(label);
+      if (f.kind === 'toggle') {
+        const input = doc.createElement('input');
+        input.setAttribute('type', 'checkbox');
+        input.setAttribute('aria-label', f.label);
+        if (f.value) input.setAttribute('checked', 'checked');
+        input.addEventListener('change', (e) => { values[f.id] = !!(e as { target?: { checked?: boolean } }).target?.checked; });
+        row.appendChild(input);
+      } else if (f.kind === 'slider') {
+        const input = doc.createElement('input');
+        input.setAttribute('type', 'range');
+        input.setAttribute('aria-label', f.label);
+        input.setAttribute('min', String(f.min ?? 0));
+        input.setAttribute('max', String(f.max ?? 100));
+        input.setAttribute('value', String(f.value ?? f.min ?? 0));
+        input.addEventListener('input', (e) => { values[f.id] = Number((e as { target?: { value?: string } }).target?.value ?? 0); });
+        row.appendChild(input);
+      } else if (f.kind === 'choice') {
+        for (const opt of f.options) {
+          const btn = doc.createElement('button');
+          btn.setAttribute('type', 'button');
+          btn.setAttribute('aria-pressed', String(opt === f.value));
+          btn.className = `mc-fb-choice${opt === f.value ? ' active' : ''}`;
+          btn.textContent = opt;
+          btn.addEventListener('click', () => { values[f.id] = opt; });
+          row.appendChild(btn);
+        }
+      }
+      el.appendChild(row);
+    }
+
+    const submitRow = doc.createElement('div');
+    submitRow.className = 'row';
+    const submitBtn = doc.createElement('button');
+    submitBtn.className = 'primary';
+    submitBtn.setAttribute('type', 'button');
+    submitBtn.textContent = String(p.submitLabel || 'Submit');
+    submitBtn.addEventListener('click', () => triggerAction(p.onSubmit, { values: { ...values } }));
+    submitRow.appendChild(submitBtn);
+    el.appendChild(submitRow);
+    return el;
+  }
+
+  if (node.component === 'VisualTile') {
+    const el = doc.createElement('div');
+    el.className = 'mc-fb-tile visual';
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', String(p.title || 'Visual'));
+    const h = doc.createElement('div');
+    h.className = 'label';
+    h.textContent = String(p.title || '');
+    el.appendChild(h);
+    const frame = doc.createElement('div');
+    frame.className = 'mc-fb-visual-frame';
+    const { nodes } = sanitizeVisualMarkup(String(p.markup || ''));
+    const built = buildVisualDom(nodes, doc as never, ({ action, label }) => triggerAction(p.onAction, { action, label }));
+    for (const n of built) frame.appendChild(n as HTMLElement);
+    el.appendChild(frame);
     return el;
   }
 

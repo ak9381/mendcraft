@@ -445,7 +445,7 @@ export function expandPlan(
     } else if (t.type === 'split') {
       const firstIds = t.first.map((c, i) => expandNode(c, [...path, 0, i]));
       const secondIds = t.second.map((c, i) => expandNode(c, [...path, 1, i]));
-      components.push({ id, component: 'Split', direction: t.direction, first: firstIds, second: secondIds });
+      components.push({ id, component: 'Split', direction: t.direction, firstCount: firstIds.length, children: [...firstIds, ...secondIds] });
     }
     return id;
   }

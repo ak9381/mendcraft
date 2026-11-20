@@ -119,8 +119,11 @@ export const SplitApi = {
   schema: z
     .object({
       direction: z.enum(['row', 'column']),
-      first: z.array(z.string()),
-      second: z.array(z.string()),
+      // Reuses the same flat `children` id array every other container uses
+      // (so fallbackRenderer's generic child-linking needs no Split-specific
+      // case) — the first `firstCount` ids are pane one, the rest are pane two.
+      firstCount: z.number().int().min(0),
+      children: z.array(z.string()),
     })
     .strict(),
 };

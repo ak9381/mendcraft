@@ -21,6 +21,16 @@ export interface SanitizeResult {
   nodes: VisualNode[];
 }
 
+/** Canonical-case SVG tags — a renderer must mint these via
+ *  `createElementNS('http://www.w3.org/2000/svg', tag)`, not
+ *  `createElement(tag)`, or they render as inert HTMLUnknownElements
+ *  instead of actual vector shapes. */
+export const SVG_TAGS = new Set([
+  'svg', 'g', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
+  'text', 'tspan', 'defs', 'use', 'symbol', 'clipPath', 'linearGradient',
+  'radialGradient', 'stop', 'marker', 'pattern', 'title', 'desc',
+]);
+
 /** lowercase tag name -> canonical output spelling (SVG is case-sensitive). */
 const ALLOWED_TAGS: Record<string, string> = {
   svg: 'svg',
