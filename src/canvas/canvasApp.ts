@@ -58,8 +58,11 @@ import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanel
 import { mountDraggablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
-import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmTask } from './swarmAgents';
+import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
+import { mountMorphCard } from './morphCard';
+import { attachMorphPointers, createMorphFlow, type MorphFlow } from './morphFlow';
+import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTargetRef } from './morphTarget';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -650,7 +653,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
-  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number } = {}): void {
+  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
@@ -673,7 +676,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // layout, tile frames) and Nano (labels, device values, redaction/Kannada
     // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls.
     swarmStartedAt = Date.now();
-    const plan = buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
+    const plan = ctx.swarmPlan ?? buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
       tileCount: ctx.tileCount,
       redactedName: protect.used.length > 0,
     });
@@ -734,7 +737,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function flashGhostTarget(tileIndex: number, kind: SwarmKind): void {
     const id = focusId ?? lastFocus;
     const tileEl = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-ghost-tile[data-tile-i="${tileIndex}"]`) : null;
-    if (!tileEl) return;
+    // A morph turn has no ghost — its cursors land on the real tile instead.
+    if (!tileEl) { morphFlow?.pulseTarget(); return; }
     tileEl.classList.add('is-swarm-target');
     window.setTimeout(() => tileEl.classList.remove('is-swarm-target'), 900);
     revealGhostTile(tileEl, kind === 'gemini' ? 'controls' : 'labels');
@@ -1117,8 +1121,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let handsMountOk = false; let handsOn = false; let handsBusy = false;
   let lastHandsError: string | null = null;
   let handsHandle: CanvasHandsHandle | null = null;
+  // Morph flow (assigned after the mic mounts below). The hand adapter and
+  // the gesture recognizers reference it lazily — null until then is "off".
+  let morphFlow: MorphFlow | null = null;
   // Every control on screen is reachable by hand (deep hit-test + snap radius).
-  const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function' ? createHandPointer(document) : null;
+  // onPinch is the morph hold's hand adapter: the debounced pinch edges feed
+  // the same tap/hold/drag classifier mouse and touch use — 'down' aims from
+  // the frozen pre-pinch point, a release before the fire stays a plain tap.
+  const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
+    ? createHandPointer(document, {
+        onPinch: (ev) => {
+          if (!morphFlow) return;
+          if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
+          else if (ev.phase === 'move') morphFlow.moveHold(ev.p);
+          else if (ev.phase === 'up') morphFlow.endHold();
+          else morphFlow.cancelHold();
+        },
+      })
+    : null;
 
   // ---- owner registration: the amber Register button (empty canvas + the
   // bottom-right Edit/Tools/Talk stack) opens a guided SCAN — face → left
@@ -1233,6 +1253,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        // A pinch the morph classifier armed on must not ALSO read as the
+        // 1200 ms pinch-hold-still (the morph opens the mic itself).
+        suppressMotion: (id) => id === 'pinch-hold-still' && !!morphFlow?.holdActive(),
       });
       handsHandle = s;
       handsMountOk = !!s;
@@ -1241,8 +1264,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     },
     on: {
       // A pinch aimed at a control activates that control (handPointer);
-      // only a pinch over empty canvas means "keep".
-      keep: () => { if (!handPointer?.consumedPinch()) keep(); },
+      // only a pinch over empty canvas means "keep" — and a pinch the morph
+      // hold armed on is the morph's, not a keep.
+      keep: () => { if (!morphFlow?.holdActive() && !handPointer?.consumedPinch()) keep(); },
       drop,
       palm: () => toggleTools(),
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
@@ -1284,6 +1308,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // ---- commands ----
   function run(text: string): boolean {
+    // Morph-first: while the morph card is open, speech (and the say box)
+    // means "edit this tile"; "undo" / "cancel" are meta-commands handled
+    // locally and never reach a model.
+    if (morphFlow?.handleSpeech(text)) return true;
     const paletteCmd = matchPaletteCommand(text);
     if (paletteCmd === 'open') { openTools(); return true; }
     if (paletteCmd === 'close') { closeTools(); return true; }
@@ -1429,6 +1457,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneMenu?.destroy();
     toolPalette.destroy();
     micFab?.destroy();
+    detachMorphPointers();
+    morphFlow?.destroy();
+    morphCard.destroy();
     handPointer?.destroy();
     stopReplay();
     scanPanel?.destroy();
@@ -1457,6 +1488,136 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   micFabRef = micFab;
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
+
+  // ---- morph: pinch-hold (or mouse/touch long-press) a tile, speak a change,
+  // Gemini patches that ONE tile in place. All orchestration is morphFlow.ts;
+  // this block only provides the host seams: tile stamping + hit-testing,
+  // the engine, the terminals/swarm receipt, apply/undo, and the adapters.
+  //
+  // Tile hosts are stamped lazily (at hold time, not render time): both render
+  // paths emit one element per plan node in pre-order document order, so
+  // zipping them against enumerateMorphTiles gives each host its stable
+  // tileComponentId without touching the renderers.
+  function stampMorphTiles(frameId: string): HTMLElement[] {
+    const plan = surfaces[frameId];
+    const surfaceEl = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`);
+    if (!plan || !surfaceEl) return [];
+    const liveEls = Array.from(surfaceEl.querySelectorAll<HTMLElement>(LIVE_TILE_TAGS.join(',')));
+    const els = liveEls.length ? liveEls : Array.from(surfaceEl.querySelectorAll<HTMLElement>(FALLBACK_TILE_SELECTOR));
+    const entries = enumerateMorphTiles(plan);
+    els.forEach((el) => { el.removeAttribute('data-mc-tile'); el.removeAttribute('data-mc-frame'); });
+    entries.forEach((entry, i) => {
+      const el = els[i];
+      if (el) { el.setAttribute('data-mc-tile', entry.id); el.setAttribute('data-mc-frame', frameId); }
+    });
+    return els;
+  }
+  const morphDisabled = (): boolean =>
+    !focusId || editBoard.editing || reviewDialog.isOpen() || !!pending || (scanPanel?.isOpen() ?? false);
+  const morphResolve = (pt: { x: number; y: number }): MorphTargetRef | null => {
+    const fid = focusId;
+    const plan = fid ? surfaces[fid] : null;
+    if (!fid || !plan) return null;
+    stampMorphTiles(fid);
+    return resolveMorphTarget(document as unknown as MorphDoc, pt, plan, { frameId: fid });
+  };
+  const morphTargetByIndex = (index: number): MorphTargetRef | null => {
+    const fid = focusId;
+    const plan = fid ? surfaces[fid] : null;
+    if (!fid || !plan) return null;
+    const els = stampMorphTiles(fid);
+    const host = els[index];
+    const id = host?.getAttribute('data-mc-tile');
+    if (!host || !id) return null;
+    const entry = enumerateMorphTiles(plan).find((e) => e.id === id);
+    if (!entry) return null;
+    return { tileId: entry.id, path: entry.path, spec: entry.spec, label: entry.label, rect: host.getBoundingClientRect(), host };
+  };
+  // The morph swarm: one real Gemini call, every cursor pinned to the tile.
+  const morphSwarmPlan = (tileIndex: number, redactedName: boolean): SwarmPlanInput => ({
+    calls: [{ kind: 'gemini', label: 'Gemini · tile edit' }],
+    subSteps: [
+      { kind: 'gemini', label: 'Gemini · revise tile', tileIndex },
+      { kind: 'gemini', label: 'Gemini · keep layout', tileIndex },
+      ...(redactedName ? [{ kind: 'nano' as const, label: 'Nano · redaction', tileIndex }] : []),
+      { kind: 'nano', label: 'Nano · labels', tileIndex },
+      { kind: 'nano', label: 'Nano · device values', tileIndex },
+    ],
+  });
+  function applyMorph(frameId: string, patched: SurfacePlan, summary: string): boolean {
+    const f = reg.get(frameId);
+    if (!f) return false;
+    const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
+    if (!check.ok) { say(`Blocked a tile that did not pass the check: ${check.errors[0]}`); return false; }
+    const before = surfaces[frameId] ?? null;
+    surfaces[frameId] = patched;
+    history.push({ frameId, before, after: patched, by: 'gemini', summary });
+    renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
+    return true;
+  }
+  const morphCard = mountMorphCard(root, {
+    onCancel: () => morphFlow?.cancel(),
+    onUndo: () => { undo(); morphFlow?.cancel(); },
+    onAutoClose: () => morphFlow?.onCardAutoClosed(),
+  });
+  morphFlow = createMorphFlow({
+    doc: document,
+    root,
+    card: morphCard,
+    resolveTarget: morphResolve,
+    targetByIndex: morphTargetByIndex,
+    frameId: () => focusId,
+    plan: (fid) => surfaces[fid] ?? null,
+    disabled: morphDisabled,
+    engine: (json) => engineFor('gemini', json),
+    deviceIdSession,
+    sim: opts.sim,
+    mic: {
+      start: () => { if (micFab && !micFab.listening) micFab.toggle(); },
+      stop: () => micFab?.stop(),
+      // ?sim=1 has no camera or mic: the card always asks the user to type.
+      supported: () => !!voice?.supported && !opts.sim,
+    },
+    apply: applyMorph,
+    undo,
+    ui: {
+      sent: (s, o) => aiSent(o.utterance, s, { swarmPlan: morphSwarmPlan(o.tileIndex, protectTurn(o.utterance, s.prompt).used.length > 0) }),
+      log: (engine, verb, detail) => panels.forEngine(engine).log(verb, detail),
+      handoff: (reason) => panels.showHandoff('nano', reason),
+      settle: async () => { await holdSwarmMinimum(); settleSwarm(); autoHideAi(); },
+      state: (text) => { aiPanel.querySelector('.mc-ai-state')!.textContent = text; say(text); },
+    },
+    typing: (on) => toolPalette.peekSay(on),
+    // The say box, its Go button, and Talk must stay clickable while the
+    // card is open — only a press outside all of those cancels the morph.
+    protectedPoint: (p) => {
+      for (const el of [root.querySelector<HTMLElement>('.mc-say'), micFab?.el ?? null]) {
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        if (p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom) return true;
+      }
+      return false;
+    },
+    // The hold fired mid-pinch: letting go must not also click the control
+    // under the finger (the mouse/touch adapter swallows its own click).
+    onFired: () => handPointer?.suppressNextRelease(),
+  });
+  const detachMorphPointers = attachMorphPointers(root, morphFlow, document);
+  // ?sim=1: the deterministic replay — same classifier on an injected clock,
+  // scripted Gemini, injected utterance; no camera or mic anywhere.
+  if (opts.sim && typeof window !== 'undefined') {
+    (window as unknown as { __mcMorph?: unknown }).__mcMorph = {
+      replay: async (index = 0, utterance = 'change the color to warm amber'): Promise<boolean> => {
+        const id = focusId ?? lastFocus ?? reg.list().find((f) => surfaces[f.id])?.id ?? null;
+        if (!id) return false;
+        if (focusId !== id) await focus(id);
+        if (!morphFlow?.simulateHold(index)) return false;
+        setTimeout(() => { morphFlow?.handleSpeech(utterance); }, 1400);
+        return true;
+      },
+    };
+  }
 
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();

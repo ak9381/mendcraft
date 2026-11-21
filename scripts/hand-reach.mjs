@@ -169,6 +169,41 @@ try {
     real.push({ device: d.name, step: 'Lamp tile (shadow DOM)', ...await handPress(page, (el, l) => el.getRootNode() !== document && /turn on|turn off|brighter|dimmer/i.test(l)) });
     await sleep(400);
 
+    // Morph (morphFlow.ts): a hand pinch HELD ~1s on a tile opens the morph
+    // card (a quick pinch stays a tap — covered by every other step here).
+    // Cancel by hand, hold again, speak via the say box (sim has no mic),
+    // then Undo by hand. Desktop only, like the edit-mode walk.
+    if (d.name === 'desktop') {
+      const morphHoldStep = () => page.evaluate(async () => {
+        const tile = document.querySelector('mc-lamp-tile, .mc-fb-tile');
+        if (!tile) return { ok: false, why: 'no tile on the board' };
+        const r = tile.getBoundingClientRect();
+        window.__mcHand.pointAt(r.left + r.width / 2, r.top + r.height / 2);
+        window.__mcHand.pinch(true);
+        await new Promise((res) => setTimeout(res, 1250));
+        window.__mcHand.pinch(false);
+        const card = document.querySelector('.mc-morph-card');
+        return card && !card.hidden ? { ok: true } : { ok: false, why: 'morph card did not open' };
+      });
+      real.push({ device: d.name, step: 'Morph hold on a tile (hand)', ...await morphHoldStep() });
+      await page.screenshot({ path: join(OUT, `${d.name}-morph-card.png`) });
+      real.push({ device: d.name, step: 'Morph cancel (hand)', ...await handPress(page, (el) => el.classList.contains('mc-morph-cancel')) });
+      await sleep(300);
+      const held = await morphHoldStep();
+      real.push({ device: d.name, step: 'Morph hold again (hand)', ...held });
+      if (held.ok) {
+        await page.evaluate(() => { const i = document.querySelector('#mc-say-in'); i.focus(); i.value = ''; });
+        await page.keyboard.type('change the color to warm amber');
+        await page.keyboard.press('Enter');
+        const undoSeen = await waitForVisible(page, '.mc-morph-undo', 15000);
+        await page.screenshot({ path: join(OUT, `${d.name}-morph-done.png`) });
+        real.push({ device: d.name, step: 'Morph undo (hand)', ...(undoSeen
+          ? await handPress(page, (el) => el.classList.contains('mc-morph-undo'))
+          : { ok: false, why: 'Undo chip never appeared' }) });
+        await sleep(400);
+      }
+    }
+
     // Edit mode (editBoard.ts): Edit -> Done/Reset layout/move+resize
     // handles all appear and must be hand-reachable; press Done again so the
     // rest of the audit (connect sheet, teach, gestures) sees normal state.

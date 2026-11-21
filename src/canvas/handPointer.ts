@@ -168,6 +168,12 @@ export interface HandPointerOptions {
   /** Test hook: builds the event dispatched to a DRAG_HANDLE element on
    *  pinch down/move/up. Defaults to a real PointerEvent. */
   createDragEvent?: (type: string, p: P) => Event;
+  /** Observer on the debounced pinch edges (the morph hold classifier's hand
+   *  adapter). 'down' carries the FROZEN aim point (pre-pinch position);
+   *  'move' carries the live point every pinched frame; fires for both real
+   *  tracking frames and the sim pinch() path. Purely additive — it never
+   *  changes what the pointer itself does. */
+  onPinch?: (ev: { phase: 'down' | 'move' | 'up' | 'cancel'; p: P; now: number }) => void;
 }
 
 export interface HandPointer {
@@ -180,6 +186,10 @@ export interface HandPointer {
   readonly lastActivated: HTMLElement | null;
   /** True briefly after a pinch was used on a control (so it isn't also "keep"). */
   consumedPinch(): boolean;
+  /** The current pinch's release must NOT activate what it pressed on — a
+   *  morph hold fired mid-pinch, so letting go is "done holding", not a tap
+   *  on the control under the finger. One-shot; cleared on release. */
+  suppressNextRelease(): void;
   setDryRun(on: boolean): void;
   lost(): void;
   destroy(): void;
@@ -213,6 +223,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let pinched = false;
   let lastActivated: HTMLElement | null = null;
   let consumedUntil = -Infinity;
+  let suppressRelease = false;
   let pt: P = { x: -1, y: -1 };
   let lostTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -303,6 +314,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function press(down: boolean) {
     if (down === pinched) return;
     pinched = down;
+    opts.onPinch?.({ phase: down ? 'down' : 'up', p: pt, now: now() });
     if (down) {
       pressedOn = target;
       if (target && target.matches('input[type=range]')) { dragging = target as HTMLInputElement; dragTo(pt.x); consumedUntil = now() + 700; }
@@ -314,7 +326,12 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       else if (!target) opts.onEmptyPinch?.();
       else consumedUntil = now() + 700;
     } else {
-      if (dragging) {
+      if (suppressRelease) {
+        // A morph hold fired during this pinch: tear the press down without
+        // activating anything — no click, no slider change, no handle tap.
+        if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointerup', pt);
+        dragging = null; draggingHandle = null;
+      } else if (dragging) {
         if (!dryRun) dragging.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
         lastActivated = dragging; dragging = null;
       } else if (draggingHandle) {
@@ -324,6 +341,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         if (!dragHandleMoved) activate(draggingHandle); else lastActivated = draggingHandle;
         draggingHandle = null;
       } else if (pressedOn && pressedOn === target) activate(pressedOn);
+      suppressRelease = false;
       pressedOn = null;
       refreshControls(true);
     }
@@ -352,6 +370,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (pinched) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
+      suppressRelease = false;
+      opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
     }
     setTarget(null); pt = { x: -1, y: -1 };
     euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); history.reset(); sticky.reset();
@@ -390,6 +410,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         press(true);
       } else if (st.pinched) {
         if (dragging || draggingHandle) aim(p, t);
+        // The cursor stays frozen, but the morph hold's slop check needs the
+        // LIVE hand position — drifting past slop must cancel the hold.
+        opts.onPinch?.({ phase: 'move', p, now: t });
       } else {
         if (st.justUp) press(false);
         aim(p, t);
@@ -400,6 +423,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     get target() { return target; },
     get lastActivated() { return lastActivated; },
     consumedPinch: () => now() < consumedUntil || !!target,
+    suppressNextRelease() { if (pinched) suppressRelease = true; },
     setDryRun(on) { dryRun = on; },
     lost,
     destroy() { lost(); if (lostTimer) clearTimeout(lostTimer); frame.remove(); shadow.remove(); ring.remove(); },

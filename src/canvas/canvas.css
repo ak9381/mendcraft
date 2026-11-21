@@ -246,6 +246,8 @@
   padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
+/* Morph's type-it path (no mic): peek just the say box, not the buttons row. */
+.mc-bar-tools.mc-bar-tools-peek .mc-bar-btns { display: none; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
 .mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
 .mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
@@ -601,3 +603,43 @@
   line-height: 18px; display: block; text-align: center; }
 .mc-scan .mc-scan-cancel { min-height: 48px; padding: 0 26px; }
 @media (prefers-reduced-motion: reduce) { .mc-scan-ring-fill { transition: none; } }
+
+/* MORPH CARD (morphCard.ts): the small anchored card that names a tile when
+   a pinch-hold/long-press arms a morph, then walks listening -> working ->
+   done/empty/error. Warm-paper palette like the rest of the canvas chrome —
+   no glow, no neon, no purple, only the one soft shadow below. Anchored with
+   `position: fixed` by morphCard.ts itself (left/top/bottom), so this rule
+   only sets the look, not the placement math. Sits above tile content and
+   the floating chips/docks, below the full-screen review dialog and scan
+   overlay. */
+.mc-morph-card { position: fixed; z-index: 60; width: min(320px, calc(100vw - 16px));
+  background: #F7F5F0; color: #2A2A26; border: 1px solid #D8D4C8; border-left: 3px solid #C98B3C;
+  border-radius: 14px; padding: 14px 16px; display: grid; gap: 10px;
+  box-shadow: 0 2px 8px rgb(42 42 38 / 0.12); }
+.mc-morph-card[hidden] { display: none; }
+.mc-morph-card-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.mc-morph-card-title strong { font-weight: 700; }
+.mc-morph-card-line { margin: 0; font-size: 14px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
+.mc-morph-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.mc-morph-dot.is-sage { background: #6B8F71; }
+.mc-morph-dot.is-amber { background: #C98B3C; }
+.mc-morph-chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.mc-morph-cancel, .mc-morph-undo { min-height: 44px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 14px; font-weight: 600; cursor: pointer; }
+.mc-morph-cancel:hover, .mc-morph-undo:hover { filter: brightness(0.97); }
+.mc-morph-undo { border-color: #C98B3C; color: #C98B3C; }
+
+/* MORPH HOLD RING + TARGET OUTLINE (morphFlow.ts): the amber fill ring at
+   the frozen hold point (progress is shown, not hidden in a timer — release
+   before the fill completes and nothing happens), and the 2px amber outline
+   on the tile a fired morph is about. The ring's conic-gradient fill is set
+   inline by morphFlow; this only shapes the donut. No glow, no neon. */
+.mc-morph-ring { position: fixed; z-index: 59; width: 44px; height: 44px; border-radius: 50%;
+  pointer-events: none; -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px)); }
+.mc-morph-ring[hidden] { display: none; }
+.mc-morph-target { outline: 2px solid #C98B3C; outline-offset: 3px; border-radius: 10px; }
+.mc-morph-target.is-morph-pulse { outline-width: 3px; outline-color: #B57830; }
+@media (prefers-reduced-motion: no-preference) {
+  .mc-morph-target.is-morph-pulse { transition: outline-color 180ms ease, outline-width 180ms ease; }
+}

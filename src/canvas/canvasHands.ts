@@ -32,6 +32,10 @@ export interface CanvasHandsAdapter {
 
 export interface CanvasHandsOptions {
   refractoryMs?: number;
+  /** Drop a motion-recognizer event by id for this frame — e.g. a pinch the
+   *  morph hold classifier armed on must never also emit `pinch-hold-still`
+   *  (the morph opens the mic itself; firing both would double-toggle). */
+  suppressMotion?: (id: string) => boolean;
 }
 
 export function mapGestureToCanvasEvent(
@@ -103,7 +107,9 @@ export function createCanvasHandsAdapter(
 
     const rawHands = handList.map(extractPoints);
     onEvent({ type: 'frame', hands: rawHands, now });
-    const motionEvents = motion.update({ hands: rawHands as Pt[][], now });
+    const motionEvents = motion
+      .update({ hands: rawHands as Pt[][], now })
+      .filter((mev) => !opts.suppressMotion?.(mev.id));
     for (const mev of motionEvents) {
       if (mev.id === 'palm-swipe-left' || mev.id === 'palm-swipe-right') {
         fire({ type: 'drop' }, now);
@@ -166,6 +172,8 @@ export interface MountCanvasHandsOptions {
   /** Every presence frame (hands + faces + operator state) — the owner
    *  registration flow listens here. */
   onPresence?: (frame: PresenceFrame) => void;
+  /** Passed through to the gesture adapter (see CanvasHandsOptions). */
+  suppressMotion?: (id: string) => boolean;
 }
 
 /** The stop function, plus the presence APIs the owner-registration flow
@@ -224,7 +232,7 @@ export async function mountCanvasHands(
   let faces: FaceOverlay | null = null;
 
   try {
-    const adapter = createCanvasHandsAdapter(onEvent);
+    const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
     overlay = createHandOverlay(root);
     // Faces are part of the same presence stream and must be VISIBLE: a soft
     // bracket per face (glowing for the operator, dim for others) in the warm

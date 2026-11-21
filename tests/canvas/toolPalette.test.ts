@@ -26,10 +26,17 @@ describe('matchPaletteCommand (voice parsing)', () => {
 
 function fakeEl() {
   const handlers: Record<string, (e?: unknown) => void> = {};
+  const classes = new Set<string>();
   return {
     hidden: false, id: '', className: '', type: '', textContent: '',
     attrs: {} as Record<string, string>,
     isConnected: true,
+    classList: {
+      add: (...cs: string[]) => cs.forEach((c) => classes.add(c)),
+      remove: (...cs: string[]) => cs.forEach((c) => classes.delete(c)),
+      contains: (c: string) => classes.has(c),
+      toggle: (c: string, on?: boolean) => { (on ?? !classes.has(c)) ? classes.add(c) : classes.delete(c); },
+    },
     setAttribute(k: string, v: string) { this.attrs[k] = v; },
     getAttribute(k: string) { return this.attrs[k] ?? null; },
     addEventListener(t: string, f: (e?: unknown) => void) { handlers[t] = f; },
@@ -132,5 +139,30 @@ describe('mountToolPalette', () => {
     // open()/close() are desktop-only concerns on a phone layout.
     palette.open();
     expect(palette.isOpen()).toBe(false);
+  });
+
+  it('peekSay(true) reveals the say box via a class, without opening the full palette', () => {
+    const { tools, chip, root, win } = setup(false);
+    const palette = mountToolPalette(root, win);
+    palette.peekSay(true);
+    expect(tools.hidden).toBe(false);
+    expect(tools.classList.contains('mc-bar-tools-peek')).toBe(true);
+    expect(palette.isOpen()).toBe(false);
+    expect(chip.attrs['aria-expanded']).toBe('false');
+
+    palette.peekSay(false);
+    expect(tools.hidden).toBe(true);
+    expect(tools.classList.contains('mc-bar-tools-peek')).toBe(false);
+  });
+
+  it('peekSay(true) is a no-op on top of an explicit open() — nothing is hidden early by peekSay(false) after', () => {
+    const { tools, root, win } = setup(false);
+    const palette = mountToolPalette(root, win);
+    palette.open();
+    palette.peekSay(true);
+    expect(tools.classList.contains('mc-bar-tools-peek')).toBe(false); // already fully open
+    palette.peekSay(false);
+    expect(tools.hidden).toBe(false); // the explicit open() still holds
+    expect(palette.isOpen()).toBe(true);
   });
 });

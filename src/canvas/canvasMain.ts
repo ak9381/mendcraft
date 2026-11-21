@@ -62,5 +62,15 @@ if (isPhone && !hasUsableNano(nano)) {
 }
 (window as unknown as { __canvas: unknown }).__canvas = handle;
 
+// ?sim=1&demo=morph (best with &seed=1): the deterministic morph replay —
+// a scripted pinch-hold on the first tile, the card, an injected utterance,
+// the scripted Gemini patch — with no camera or mic.
+if (params.has('sim') && params.get('demo') === 'morph') {
+  setTimeout(() => {
+    void (window as unknown as { __mcMorph?: { replay(index?: number, utterance?: string): Promise<boolean> } })
+      .__mcMorph?.replay();
+  }, 2500);
+}
+
 // Warm App Check + cloud models in the background so the first keep isn't a cold start.
 void prepareHybrid();

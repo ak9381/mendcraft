@@ -24,6 +24,11 @@ export interface ToolPalette {
   close(): void;
   toggle(): void;
   isOpen(): boolean;
+  /** Reveal just the say box (not the buttons row, not a full open()) so a
+   *  mic-less flow (morph's type-it path) can be typed into without the
+   *  user having to open Tools first. Idempotent; a real open()/close() or
+   *  the phone layout always wins over a peek. */
+  peekSay(on: boolean): void;
   destroy(): void;
 }
 
@@ -43,10 +48,12 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
 
   let phone = false;
   let openState = false;
+  let peek = false;
   let lastFocus: HTMLElement | null = null;
 
   function apply(): void {
-    tools.hidden = !phone && !openState;
+    tools.hidden = !phone && !openState && !peek;
+    tools.classList.toggle('mc-bar-tools-peek', peek && !openState);
     chip.hidden = phone;
     chip.setAttribute('aria-expanded', String(openState));
   }
@@ -67,6 +74,12 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
   function toggle(): void {
     (openState ? close : open)();
   }
+  function peekSay(on: boolean): void {
+    if (peek === on) return;
+    peek = on;
+    apply();
+    if (on) tools.querySelector<HTMLInputElement>('#mc-say-in')?.focus();
+  }
 
   chip.addEventListener('click', toggle);
   // A tool ran: close the palette after the delegated handler has seen the click.
@@ -83,7 +96,7 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
   onMq();
 
   return {
-    open, close, toggle,
+    open, close, toggle, peekSay,
     isOpen: () => openState,
     destroy() {
       mq?.removeEventListener?.('change', onMq);

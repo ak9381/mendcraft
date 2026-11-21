@@ -20,7 +20,11 @@ export type SimFeature =
   | 'adapt' | 'offline' | 'online' | 'accept-a11y'
   // Relay pairing beats: a simulated phone joins over the in-page fake
   // transport (no Firestore), drives the editor, then leaves.
-  | 'relay-pair' | 'relay-undo' | 'relay-cmd' | 'relay-gone';
+  | 'relay-pair' | 'relay-undo' | 'relay-cmd' | 'relay-gone'
+  // Canvas morph beat: a deterministic pinch-hold replay on a tile (same
+  // classifier, injected clock) + an injected utterance — no camera, no mic.
+  // The canvas shell implements it (window.__mcMorph.replay / ?demo=morph).
+  | 'morph';
 
 export interface SimStep {
   label: string;

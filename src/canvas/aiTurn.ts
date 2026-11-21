@@ -50,9 +50,11 @@ const CONTAINER_SCHEMA = [
   `{"type":"tabs","tabs":[{"label":string,"children":[Tile]}]}`,
   `{"type":"split","direction":"row"|"column","first":[Tile],"second":[Tile]}`,
 ].join('|');
+/** The Tile grammar on its own — shared with the morph (single-tile) prompt. */
+export const TILE_SCHEMA_LINE = `Tile = ${LEAF_SCHEMA} | ${CONTAINER_SCHEMA}`;
 const SCHEMA_LINE = [
   `{"kind":"room"|"plan","title":string,"tiles":[Tile]}`,
-  `Tile = ${LEAF_SCHEMA} | ${CONTAINER_SCHEMA}`,
+  TILE_SCHEMA_LINE,
 ].join('\n');
 
 export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: { sim?: boolean; deviceIdSession?: DeviceIdSession } = {}): SentInfo {

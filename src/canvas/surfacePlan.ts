@@ -267,6 +267,15 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   return { ok: false, error: `unknown tile type ${String(o.type)}` };
 }
 
+/** Untrusted model output -> ONE valid tile (the morph patch path): the same
+ *  per-tile validation coerceSurfacePlan runs, over a single node tree. */
+export function coerceTileSpec(raw: unknown): Coerced<TileSpec> {
+  const res = coerceTile(raw, 1, new Set(), { n: 0 });
+  if (!res.ok) return res;
+  if (!res.value) return { ok: false, error: 'tile had no valid content' };
+  return { ok: true, value: res.value };
+}
+
 /** Untrusted model output -> a valid SurfacePlan, or a reason it was refused. */
 export function coerceSurfacePlan(raw: unknown): Coerced<SurfacePlan> {
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'not an object' };
