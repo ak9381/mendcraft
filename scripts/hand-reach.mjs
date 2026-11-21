@@ -201,6 +201,11 @@ try {
           ? await handPress(page, (el) => el.classList.contains('mc-morph-undo'))
           : { ok: false, why: 'Undo chip never appeared' }) });
         await sleep(400);
+        // canvasApp.ts's autoHideAi() only hides the AI panel 2s after
+        // settle(), so it's still up and overlapping the board right after
+        // Undo — wait for it (collectControls filters .mc-edit-move handles
+        // underneath it) before the edit-mode walk starts.
+        await page.waitForFunction(() => document.querySelector('.mc-ai')?.hidden === true, { timeout: 3000 }).catch(() => {});
       }
     }
 
