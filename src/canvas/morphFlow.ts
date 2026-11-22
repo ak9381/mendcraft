@@ -65,6 +65,9 @@ export interface MorphFlowDeps {
    *  morphed tile's expandPlan path, so the host can self-check just that
    *  one tile after the splice. */
   apply(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): boolean;
+  /** When set, the patched tile is shown in the full-screen review and only
+   *  applied after Approve — plan-first, same as a board build. */
+  propose?(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): Promise<boolean>;
   undo(): void;
   ui: MorphUiHooks;
   /** No mic (?sim=1, or a browser with no speech API): the card asks the
@@ -329,7 +332,18 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     await deps.ui.settle();
     if (g !== gen) return;
     const summary = morphSummary(t.label, utterance);
-    if (!deps.apply(fid, patched, summary, t.path)) { deps.card.showError("Couldn't make that change."); clearOutline(); phase = 'idle'; return; }
+    deps.ui.log('gemini', 'plan', summary);
+    const accepted = deps.propose
+      ? await deps.propose(fid, patched, summary, t.path)
+      : deps.apply(fid, patched, summary, t.path);
+    if (g !== gen) return;
+    if (!accepted) {
+      deps.card.showError('Dropped. Nothing changed.');
+      clearOutline();
+      phase = 'idle';
+      deps.ui.state('Dropped. Nothing changed.');
+      return;
+    }
     deps.ui.log('gemini', 'build', `patched ${t.label}`);
     deps.ui.log('gemini', 'done', 'one tile changed');
     deps.ui.state(`Changed ${t.label}. Undo is on the card.`);

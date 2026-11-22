@@ -324,6 +324,9 @@ export interface SelfCheckDeps {
   /** Commit the applied fix to undo history only after the re-check
    *  passed — a rolled-back attempt must not become an Undo step. */
   commitFix?: () => void;
+  /** Human gate: return false to skip applying a fix that would change the
+   *  tile (Reject / Ask else). A no-op or identical reply may be auto-true. */
+  confirmFix?: (rawReply: string) => Promise<boolean> | boolean;
 }
 
 export interface SelfCheckStat { label: string; dumpReplayMs: number; fixPassS: number | null; passed: boolean }
@@ -386,6 +389,14 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckStat> 
     const tf0 = now();
     try {
       const reply = await deps.requestFix(buildFixPrompt(outcome.dump, outcome.failures, deps.spec));
+      if (deps.confirmFix && !(await deps.confirmFix(reply))) {
+        fixPassS = (now() - tf0) / 1000;
+        badge.setState('warning');
+        logBoth('self-check: fix declined — last good tile kept');
+        const stat: SelfCheckStat = { label, dumpReplayMs, fixPassS, passed: false };
+        selfCheckStats.push(stat);
+        return stat;
+      }
       const newHost = await deps.applyFix(reply);
       fixPassS = (now() - tf0) / 1000;
       if (newHost) {

@@ -87,6 +87,19 @@ class FakeEl {
   get innerHTML() { return this.html; }
   append(...nodes: FakeEl[]) { this.children.push(...nodes); }
   appendChild(node: FakeEl) { this.children.push(node); return node; }
+  classList = {
+    add: (...cs: string[]) => {
+      const cur = new Set(this.className.split(/\s+/).filter(Boolean));
+      cs.forEach((c) => cur.add(c));
+      this.className = [...cur].join(' ');
+    },
+    remove: (...cs: string[]) => {
+      const cur = new Set(this.className.split(/\s+/).filter(Boolean));
+      cs.forEach((c) => cur.delete(c));
+      this.className = [...cur].join(' ');
+    },
+    contains: (c: string) => this.className.split(/\s+/).includes(c),
+  };
   setAttribute(k: string, v: string) { this.attrs[k] = v; }
   getAttribute(k: string) { return this.attrs[k] ?? null; }
   querySelector<T = FakeEl>(sel: string): T | null {
@@ -310,5 +323,19 @@ describe('logTurnReceipt — privacy order invariant', () => {
       engine: 'gemini', utterance: 'dashboard for Mrs Sharma', used: [{ token: '[Client A]', personId: 'p1' }],
       people: [sharma], cloudPayload: 'Dashboard for Sharma: bulb, plug',
     })).toThrow();
+  });
+});
+
+describe('EnginePanelUi.fail (blink red)', () => {
+  it('logs a fail line and marks the terminal is-failing', () => {
+    const root = fakePanel();
+    const nano = root.querySelector('.mc-terminal-nano');
+    const panels = mountModelPanels(root, fakeDoc);
+    panels.forEngine('gemini').fail('Went offline mid-request — the last board is unchanged.');
+    const gemini = root.querySelector('.mc-terminal-gemini') as any;
+    expect(gemini.className).toContain('is-failing');
+    const lines = gemini.querySelector('.mc-term-lines');
+    expect(lines.children[0].className).toContain('mc-term-line--fail');
+    expect(lines.children[0].innerHTML).toContain('Went offline mid-request');
   });
 });

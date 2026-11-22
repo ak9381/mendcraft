@@ -411,6 +411,23 @@ describe('runSelfCheck', () => {
     expect(rollbackFix).not.toHaveBeenCalled();
   });
 
+  it('does not apply a fix the user declined in review — last good tile stays', async () => {
+    const host = fakeHost({ left: 0, top: 0, width: 100, height: 40 }, { 'data-mc-tile': 'Desk lamp' });
+    const doc = fakeDoc([]);
+    const requestFix = vi.fn().mockResolvedValue('{"type":"lamp"}');
+    const applyFix = vi.fn();
+    const confirmFix = vi.fn().mockResolvedValue(false);
+    const logs: string[] = [];
+    const stat = await runSelfCheck({
+      host, spec: { type: 'lamp', deviceId: 'd1', label: 'Desk lamp' }, tileId: 'lamp-d1-declined', doc,
+      log: (_e, _v, d) => logs.push(d), requestFix, applyFix, confirmFix,
+    });
+    expect(confirmFix).toHaveBeenCalledTimes(1);
+    expect(applyFix).not.toHaveBeenCalled();
+    expect(stat.passed).toBe(false);
+    expect(logs.some((d) => d.includes('fix declined'))).toBe(true);
+  });
+
   it('marks a warning with no fix pass when the host offers none', async () => {
     const host = fakeHost({ left: 0, top: 0, width: 100, height: 40 }, { 'data-mc-tile': 'Desk lamp' });
     const doc = fakeDoc([]);

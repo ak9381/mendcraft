@@ -847,7 +847,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
       onGhost: (g) => ghost(frameId, g),
-      onError: (why) => { settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
+      onError: (why) => {
+        settleSwarm();
+        panels.forEngine(engineId).fail(why);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+      },
     }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
     if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
@@ -871,10 +875,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return new Promise((done) => {
       const before = surfaces[frameId] ?? null;
       const prop = createSurfaceProposal(`p-${Date.now()}`, ranId, summary, check.messages, () => {
-        surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
-        history.push({ frameId, before, after: plan, by: ranId, summary });
-        renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
-        selfCheckTiles(frameId);
+        try {
+          surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
+          if (!renderSurface(frameId)) throw new Error('Could not render the board');
+          history.push({ frameId, before, after: plan, by: ranId, summary });
+          sync(); updateDock(); persist(); historyRender();
+          selfCheckTiles(frameId);
+        } catch (e) {
+          if (before) { surfaces[frameId] = before; renderSurface(frameId); }
+          else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`); if (el) el.innerHTML = ''; }
+          sync(); updateDock(); persist();
+          const why = e instanceof Error ? e.message : 'The build failed after Approve';
+          panels.forEngine(ranId).fail(why);
+          say(why);
+        }
       });
       const finish = (kept: boolean) => {
         reviewDialog.close(); ghost(frameId, null); pending = null;
@@ -1142,6 +1156,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!coerced.ok) {
       settleSwarm();
       const why = coerced.error.startsWith('incomplete') ? INCOMPLETE_KN_LINE : `Refused the pack: ${coerced.error}`;
+      panels.forEngine('gemini').fail(why);
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
     }
     const next = coerced.value;
@@ -1683,6 +1698,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           applyFix: session.applyFix,
           rollbackFix: session.rollbackFix,
           commitFix: session.commitFix,
+          confirmFix: async (raw) => {
+            const plan = surfaces[frameId];
+            const original = plan ? tileAtPath(plan, target.path) : null;
+            if (!plan || !original) return false;
+            const parsed = parseMorphTile(raw, original, deviceIdSession);
+            if (!parsed.ok) return false;
+            if (JSON.stringify(parsed.value) === JSON.stringify(original)) return true;
+            return new Promise((done) => {
+              const card = renderProposalCard(document, {
+                id: `p-fix-${target.id}`, title: `Fix ${target.label}`, youAsked: 'self-check fix', status: 'changed',
+                catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · self-check fix', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the tile dump and the problems', technicalLine: 'Gemini · self-check fix' },
+              }, {
+                onKeep: () => { reviewDialog.close(); done(true); },
+                onDrop: () => { reviewDialog.close(); done(false); },
+              });
+              reviewDialog.open({ title: `Fix ${target.label}`, card, extra: buildReviewExtra() });
+            });
+          },
         }).then((stat) => { if (!stat.passed) onUnverified?.(); });
       }
     });
@@ -1731,6 +1764,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (path) {
       selfCheckTiles(frameId, path, () => {
         undo();
+        panels.forEngine('gemini').fail(MORPH_UNVERIFIED_LINE);
         say(MORPH_UNVERIFIED_LINE);
       });
     }
@@ -1760,6 +1794,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       supported: () => !!voice?.supported && !opts.sim,
     },
     apply: applyMorph,
+    propose: (fid, patched, summary, path) => new Promise((done) => {
+      const card = renderProposalCard(document, {
+        id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
+        catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
+      }, {
+        onKeep: () => { reviewDialog.close(); done(applyMorph(fid, patched, summary, path)); },
+        onDrop: () => { reviewDialog.close(); done(false); },
+      });
+      reviewDialog.open({ title: summary, card, extra: buildReviewExtra() });
+    }),
     undo,
     ui: {
       sent: (s, o) => aiSent(o.utterance, s, { swarmPlan: morphSwarmPlan(o.tileIndex, protectTurn(o.utterance, s.prompt).used.length > 0) }),

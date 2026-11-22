@@ -105,10 +105,10 @@ export function logTurnReceipt(panels: ModelPanelsUi, input: TurnReceiptInput): 
   }
 }
 
-export type LogVerb = 'received' | 'redact' | 'handoff' | 'plan' | 'build' | 'fill' | 'done' | 'replied' | 'queued' | 'note';
+export type LogVerb = 'received' | 'redact' | 'handoff' | 'plan' | 'build' | 'fill' | 'done' | 'replied' | 'queued' | 'note' | 'fail';
 
-const VERB_MARK: Partial<Record<LogVerb, string>> = { received: '›', done: '✓', replied: '✓' };
-const DONE_VERBS: ReadonlySet<LogVerb> = new Set(['done', 'replied']);
+const VERB_MARK: Partial<Record<LogVerb, string>> = { received: '›', done: '✓', replied: '✓', fail: '!' };
+const DONE_VERBS: ReadonlySet<LogVerb> = new Set(['done', 'replied', 'fail']);
 
 function nowHHMMSS(d: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -177,6 +177,8 @@ export interface EnginePanelUi {
   log(verb: LogVerb, detail: string): void;
   setWorking(working: boolean): void;
   setQueued(count: number | null): void;
+  /** Log a one-line failure and blink this terminal red. */
+  fail(detail: string): void;
 }
 
 export interface ModelPanelsUi {
@@ -207,7 +209,10 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
       lines.append(line);
       body.scrollTop = body.scrollHeight;
       api.setWorking(!DONE_VERBS.has(verb));
+      if (verb === 'fail') panel.classList.add('is-failing');
+      else if (DONE_VERBS.has(verb)) panel.classList.remove('is-failing');
     },
+    fail(detail) { api.log('fail', detail); },
     setWorking(working) {
       cursor.hidden = !working;
     },
