@@ -1816,7 +1816,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // The say box, its Go button, and Talk must stay clickable while the
     // card is open — only a press outside all of those cancels the morph.
     protectedPoint: (p) => {
-      for (const el of [root.querySelector<HTMLElement>('.mc-say'), micFab?.el ?? null]) {
+      // The full-screen review (plan-first morph Approve / Reject / Ask else)
+      // must not count as "a press outside the morph card", or a pinch on
+      // Approve cancels the in-flight morph and the Undo chip never appears.
+      const extra = [
+        root.querySelector<HTMLElement>('.mc-say'),
+        micFab?.el ?? null,
+        document.querySelector<HTMLElement>('.mc-review-dialog:not([hidden])'),
+      ];
+      for (const el of extra) {
         if (!el) continue;
         const r = el.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;

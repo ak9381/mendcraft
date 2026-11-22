@@ -51,13 +51,13 @@ async function audit(page, state) {
       const r = el.getBoundingClientRect();
       const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
       const inShadow = el.getRootNode() !== document;
-      // Range inputs activate by drag, not click (handPointer.ts's press()
-      // routes them straight to a value-drag on pinch-down) — and dry-run
-      // deliberately suppresses the 'input'/'change' it would otherwise
-      // dispatch, same as it suppresses 'click' for everything else. So
-      // `lastActivated` (set unconditionally, dry-run or not) is the only
-      // signal available for them; every other control still needs the
-      // 'click' listener to prove the event actually reached it.
+      // Dry-run now stops the synthetic click at `document` (capture) so a
+      // Lit @click bound on the control itself cannot run. That also means
+      // a click listener on the control will never fire in a dry-run. The
+      // reliable signal is `lastActivated`, which activate() sets before
+      // it dispatches (and which press() also sets for range / drag-handle
+      // releases). A target-level click listener is kept only as a bonus
+      // when the event does reach the node (non-dry or older builds).
       const isRange = el.matches('input[type=range]');
       let delivered = isRange;
       const mark = () => { delivered = true; };
@@ -68,7 +68,7 @@ async function audit(page, state) {
       // also check the snap radius: aim 24px outside the control's edge
       const near = H.pointAt(r.right + 24, cy);
       res.push({ state, label: controlLabel(el), tag: el.tagName.toLowerCase(), inShadow, w: Math.round(r.width), h: Math.round(r.height),
-        resolved: got === el, activated: delivered && H.lastActivated === el, snapsFromNear: near === el });
+        resolved: got === el, activated: H.lastActivated === el, snapsFromNear: near === el });
       H.lost();
     }
     H.setDryRun(false);
@@ -195,6 +195,15 @@ try {
         await page.evaluate(() => { const i = document.querySelector('#mc-say-in'); i.focus(); i.value = ''; });
         await page.keyboard.type('change the color to warm amber');
         await page.keyboard.press('Enter');
+        // Plan-first: the morph splice now opens the same full-screen review
+        // and only applies after Approve. Reject would leave the tile unchanged
+        // (no Undo chip).
+        const morphReview = await waitForVisible(page, '.mc-review-approve', 15000);
+        if (morphReview) {
+          const approved = await handPress(page, (el, l) => /^approve$/i.test(l));
+          real.push({ device: d.name, step: 'Morph approve (hand)', ...approved });
+          await sleep(800);
+        }
         const undoSeen = await waitForVisible(page, '.mc-morph-undo', 15000);
         await page.screenshot({ path: join(OUT, `${d.name}-morph-done.png`) });
         real.push({ device: d.name, step: 'Morph undo (hand)', ...(undoSeen
