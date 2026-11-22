@@ -1541,7 +1541,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId) { e.preventDefault(); void overview(); return; }
     if (!aiPanel.hidden) { e.preventDefault(); aiManual = false; showAi(false); }
   };
-  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } };
+  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
+  // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
+  // and review padding don't slide under the bar.
+  const barEl = root.querySelector<HTMLElement>('.mc-bar');
+  const barRo = typeof ResizeObserver !== 'undefined' && barEl
+    ? new ResizeObserver(() => { root.style.setProperty('--mc-bar-h', `${barH()}px`); })
+    : null;
+  if (barEl && barRo) barRo.observe(barEl);
   const onWindowOnline = () => setOnline(true);
   const onWindowOffline = () => setOnline(false);
   addEventListener('pointermove', onWindowPointerMove);
@@ -1568,6 +1576,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('resize', onWindowResize);
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
+    barRo?.disconnect();
   }
   viewport.addEventListener('wheel', (e) => {
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return; // the board's own zoom

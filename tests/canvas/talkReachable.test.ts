@@ -78,3 +78,52 @@ describe('the full-screen review dialog never traps clicks on the Tools bar', ()
     expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('padding-top: var(--mc-bar-h');
   });
 });
+
+function zIndex(cls: string): number {
+  const n = Number(ruleFor(canvasCss, cls).match(/z-index:\s*(\d+)/)?.[1]);
+  return n;
+}
+
+function bottomPx(cls: string): number | null {
+  const m = ruleFor(canvasCss, cls).match(/bottom:\s*(\d+)px/);
+  return m ? Number(m[1]) : null;
+}
+
+describe('chrome stacking: canvas bits stay under a full-screen review', () => {
+  // The morph card, hold ring, self-check marks, and the non-interactive
+  // "Registered" pill must not punch through the review (item 11 glitch hunt:
+  // the morph card at z=60 sat on top of the z=50 review and covered the plan).
+  it('morph card, hold ring, self-check marks, and the registered pill sit below the review', () => {
+    const reviewZ = zIndex('.mc-review-dialog');
+    expect(reviewZ).toBeGreaterThan(0);
+    expect(zIndex('.mc-morph-card')).toBeLessThan(reviewZ);
+    expect(zIndex('.mc-morph-ring')).toBeLessThan(reviewZ);
+    expect(zIndex('.mc-self-check')).toBeLessThan(reviewZ);
+    expect(zIndex('.mc-reg-chip')).toBeLessThan(reviewZ);
+  });
+
+  it('the Tools bar still sits above the review (Approve stays reachable, bar stays usable)', () => {
+    expect(zIndex('.mc-bar')).toBeGreaterThan(zIndex('.mc-review-dialog'));
+  });
+});
+
+describe('Edit Reset layout does not cover the Register chip', () => {
+  // Both chips share the right-side column. They used to share bottom: 236px,
+  // so Reset was untappable and Register looked clipped.
+  it('Reset is stacked above Register with a gap at least as tall as the Register chip', () => {
+    const reset = bottomPx('.mc-edit-reset');
+    const register = bottomPx('.mc-register-chip');
+    expect(reset).not.toBeNull();
+    expect(register).not.toBeNull();
+    expect(reset).toBeGreaterThan(register! + 52);
+  });
+});
+
+describe('on a phone, the review reserves the bottom Tools bar so Approve stays visible', () => {
+  it('the 600px review rule adds padding-bottom: var(--mc-bar-h)', () => {
+    // The phone media block re-declares .mc-review-dialog; ruleFor joins every
+    // rule that mentions the class, so the phone padding-bottom is in the blob.
+    const all = ruleFor(canvasCss, '.mc-review-dialog');
+    expect(all).toContain('padding-bottom: var(--mc-bar-h');
+  });
+});

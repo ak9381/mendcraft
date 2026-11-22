@@ -77,7 +77,10 @@
   border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
   font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-edit-toggle { bottom: 172px; }
-.mc-edit-reset { bottom: 236px; min-height: 44px; font-size: 13px; }
+/* Register chip already occupies this column's next slot up from Edit
+   (same right edge). Stack Reset one chip above Register so both stay
+   tappable in Edit mode. */
+.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 13px; }
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
 .mc-edit-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -269,8 +272,8 @@
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
 .mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
 .mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
-.mc-say input { flex: 1; min-width: 8rem; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
-  background: var(--panel); color: var(--text); font-size: 18px; }
+.mc-say input { flex: 1; min-width: 0; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); font-size: 18px; text-overflow: ellipsis; }
 .mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
@@ -411,8 +414,9 @@
   .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
-  /* The bar moved to the bottom thumb zone above — no top offset to reserve. */
-  .mc-review-dialog { padding-top: 0; }
+  /* The bar sits in the thumb zone at the bottom, so the review must reserve
+     that strip — otherwise Approve / Reject / Ask else hide under the bar. */
+  .mc-review-dialog { padding-top: 0; padding-bottom: var(--mc-bar-h, 132px); }
   /* Compact the proposal inside the full-screen review so Approve/Reject stay on screen. */
   .mc-review-card-host .mc-proposal { padding: 10px 12px; }
   .mc-review-card-host .mc-proposal-title { font-size: 22px; }
@@ -581,7 +585,7 @@
 
 /* Owner-registration / lock chip (registration.ts flow in canvasApp.ts):
    a small warm-paper pill under the bar. Never interactive. */
-.mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 60;
+.mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 49;
   background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
   border-radius: 999px; padding: 6px 14px; font-size: 13px;
   box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
@@ -635,7 +639,7 @@
    only sets the look, not the placement math. Sits above tile content and
    the floating chips/docks, below the full-screen review dialog and scan
    overlay. */
-.mc-morph-card { position: fixed; z-index: 60; width: min(320px, calc(100vw - 16px));
+.mc-morph-card { position: fixed; z-index: 49; width: min(320px, calc(100vw - 16px));
   background: #F7F5F0; color: #2A2A26; border: 1px solid #D8D4C8; border-left: 3px solid #C98B3C;
   border-radius: 14px; padding: 14px 16px; display: grid; gap: 10px;
   box-shadow: 0 2px 8px rgb(42 42 38 / 0.12); }
@@ -657,7 +661,7 @@
    before the fill completes and nothing happens), and the 2px amber outline
    on the tile a fired morph is about. The ring's conic-gradient fill is set
    inline by morphFlow; this only shapes the donut. No glow, no neon. */
-.mc-morph-ring { position: fixed; z-index: 59; width: 44px; height: 44px; border-radius: 50%;
+.mc-morph-ring { position: fixed; z-index: 48; width: 44px; height: 44px; border-radius: 50%;
   pointer-events: none; -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px)); }
 .mc-morph-ring[hidden] { display: none; }
@@ -667,7 +671,7 @@
    passes, a restrained warning colour if it still fails after the one fix
    pass. pointer-events: none so it never blocks the real hit-test it is
    itself verifying. No new colours: reuses --action/--accent/--danger. */
-.mc-self-check { position: fixed; z-index: 59; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+.mc-self-check { position: fixed; z-index: 47; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
 .mc-self-check.is-checking { background: var(--action, #C98B3C); }
 .mc-self-check.is-passed { background: var(--accent, #6B8F71); }
 .mc-self-check.is-warning { background: var(--danger, #B5453A); }
