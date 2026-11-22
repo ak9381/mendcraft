@@ -63,6 +63,8 @@ import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
 import { attachMorphPointers, createMorphFlow, type MorphFlow } from './morphFlow';
 import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTargetRef } from './morphTarget';
+import { applyMorphPatch, parseMorphTile, tileAtPath } from '../ai/morphEdit';
+import { runSelfCheck, scriptedFixJson } from './selfCheck';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -827,6 +829,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
         history.push({ frameId, before, after: plan, by: ranId, summary });
         renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
+        selfCheckTiles(frameId);
       });
       const finish = (kept: boolean) => {
         reviewDialog.close(); ghost(frameId, null); pending = null;
@@ -1512,6 +1515,53 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     return els;
   }
+  function tileSelfCheckLog(engine: 'nano' | 'gemini', _verb: string, detail: string): void {
+    panels.forEngine(engine).log('note', detail);
+  }
+  function selfCheckFixApply(frameId: string, path: number[]): (rawReply: string) => HTMLElement | null {
+    return (rawReply: string) => {
+      const plan = surfaces[frameId];
+      const original = plan ? tileAtPath(plan, path) : null;
+      if (!plan || !original) return null;
+      const parsed = parseMorphTile(rawReply, original, deviceIdSession);
+      if (!parsed.ok) return null;
+      const patched = applyMorphPatch(plan, path, parsed.value);
+      if (!patched) return null;
+      const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
+      if (!check.ok) return null;
+      const before = surfaces[frameId] ?? null;
+      surfaces[frameId] = patched;
+      history.push({ frameId, before, after: patched, by: 'gemini', summary: 'self-check fix' });
+      renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
+      const els = stampMorphTiles(frameId);
+      const idx = enumerateMorphTiles(patched).findIndex((e) => e.path.length === path.length && e.path.every((v, i) => v === path[i]));
+      return idx >= 0 ? (els[idx] ?? null) : null;
+    };
+  }
+  /** Self-check tiles right after they land in the DOM — every top-level
+   *  tile of a freshly kept proposal, or (with `wantPath`) just the one tile
+   *  morphFlow just spliced. Shared by both the normal build path and the
+   *  morph splice path, per the host's own tile stamping (stampMorphTiles). */
+  function selfCheckTiles(frameId: string, wantPath?: number[]): void {
+    const plan = surfaces[frameId];
+    if (!plan) return;
+    const els = stampMorphTiles(frameId);
+    const entries = enumerateMorphTiles(plan);
+    entries.forEach((entry, i) => {
+      const want = wantPath
+        ? entry.path.length === wantPath.length && entry.path.every((v, j) => v === wantPath[j])
+        : entry.path.length === 1;
+      const el = els[i];
+      if (!want || !el) return;
+      void runSelfCheck({
+        host: el,
+        spec: entry.spec,
+        log: tileSelfCheckLog,
+        requestFix: (prompt) => engineFor('gemini', scriptedFixJson(entry.spec)).stream(prompt, () => {}),
+        applyFix: selfCheckFixApply(frameId, entry.path),
+      });
+    });
+  }
   const morphDisabled = (): boolean =>
     !focusId || editBoard.editing || reviewDialog.isOpen() || !!pending || (scanPanel?.isOpen() ?? false);
   const morphResolve = (pt: { x: number; y: number }): MorphTargetRef | null => {
@@ -1544,7 +1594,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       { kind: 'nano', label: 'Nano · device values', tileIndex },
     ],
   });
-  function applyMorph(frameId: string, patched: SurfacePlan, summary: string): boolean {
+  function applyMorph(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): boolean {
     const f = reg.get(frameId);
     if (!f) return false;
     const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
@@ -1553,6 +1603,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     surfaces[frameId] = patched;
     history.push({ frameId, before, after: patched, by: 'gemini', summary });
     renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
+    if (path) selfCheckTiles(frameId, path);
     return true;
   }
   const morphCard = mountMorphCard(root, {

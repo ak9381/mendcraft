@@ -638,6 +638,17 @@
   pointer-events: none; -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px)); }
 .mc-morph-ring[hidden] { display: none; }
+
+/* SELF-CHECK MARK (selfCheck.ts): a small dot pinned to a tile's corner
+   right after it's built or morphed — amber while checking, sage once it
+   passes, a restrained warning colour if it still fails after the one fix
+   pass. pointer-events: none so it never blocks the real hit-test it is
+   itself verifying. No new colours: reuses --action/--accent/--danger. */
+.mc-self-check { position: fixed; z-index: 59; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+.mc-self-check.is-checking { background: var(--action, #C98B3C); }
+.mc-self-check.is-passed { background: var(--accent, #6B8F71); }
+.mc-self-check.is-warning { background: var(--danger, #B5453A); }
+
 .mc-morph-target { outline: 2px solid #C98B3C; outline-offset: 3px; border-radius: 10px; }
 .mc-morph-target.is-morph-pulse { outline-width: 3px; outline-color: #B57830; }
 @media (prefers-reduced-motion: no-preference) {

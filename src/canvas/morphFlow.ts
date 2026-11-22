@@ -61,8 +61,10 @@ export interface MorphFlowDeps {
   deviceIdSession?: DeviceIdSession;
   sim?: boolean;
   mic: { start(): void; stop(): void; supported(): boolean };
-  /** Gate + swap the patched plan in + history push + render. */
-  apply(frameId: string, patched: SurfacePlan, summary: string): boolean;
+  /** Gate + swap the patched plan in + history push + render. `path` is the
+   *  morphed tile's expandPlan path, so the host can self-check just that
+   *  one tile after the splice. */
+  apply(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): boolean;
   undo(): void;
   ui: MorphUiHooks;
   /** No mic (?sim=1, or a browser with no speech API): the card asks the
@@ -327,7 +329,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     await deps.ui.settle();
     if (g !== gen) return;
     const summary = morphSummary(t.label, utterance);
-    if (!deps.apply(fid, patched, summary)) { deps.card.showError("Couldn't make that change."); clearOutline(); phase = 'idle'; return; }
+    if (!deps.apply(fid, patched, summary, t.path)) { deps.card.showError("Couldn't make that change."); clearOutline(); phase = 'idle'; return; }
     deps.ui.log('gemini', 'build', `patched ${t.label}`);
     deps.ui.log('gemini', 'done', 'one tile changed');
     deps.ui.state(`Changed ${t.label}. Undo is on the card.`);
