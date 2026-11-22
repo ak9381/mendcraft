@@ -15,6 +15,7 @@ import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, 
 import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
+import { dispatchRelayCommand } from './relayCommands';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
@@ -1034,6 +1035,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           pairing?.setStatus(line);
           say(line);
         }
+      },
+      // Phone utterances ride the same run() path as the say box / Talk, so a
+      // build still opens review before anything is kept.
+      onCommand: (cmd) => {
+        dispatchRelayCommand(cmd, {
+          run,
+          undo,
+          toggleMic: () => micFabRef?.toggle(),
+          nudge: (dx, dy) => {
+            camera = panBy(camera, -dx * 48, -dy * 48);
+            applyCamera();
+          },
+        });
       },
     });
     if ('error' in res) {
