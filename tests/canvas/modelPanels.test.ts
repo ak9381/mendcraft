@@ -109,11 +109,12 @@ function fakePanel(): HTMLElement {
   // real nesting isn't needed since FakeEl.querySelector walks all children.
   const build = (engine: string) => {
     const section = new FakeEl('section'); section.className = `mc-terminal mc-terminal-${engine}`;
+    const queued = new FakeEl('span'); queued.className = 'mc-term-queued'; queued.hidden = true;
     const body = new FakeEl('div'); body.className = 'mc-term-body';
     const lines = new FakeEl('div'); lines.className = 'mc-term-lines';
     const cursor = new FakeEl('span'); cursor.className = 'mc-term-cursor'; cursor.hidden = true;
     body.append(lines, cursor);
-    section.append(body);
+    section.append(queued, body);
     return section;
   };
   const panels = new FakeEl('div'); panels.className = 'mc-terminals'; panels.hidden = true;
@@ -174,6 +175,40 @@ describe('mountModelPanels — terminal log lines', () => {
     panels.forEngine('nano').setQueued(2);
     expect(lines.children.length).toBe(1);
     expect(lines.children[0].innerHTML).toContain('2 requests queued offline');
+  });
+
+  it('singular wording for exactly one queued request', () => {
+    const aiPanel = fakePanel();
+    const panels = mountModelPanels(aiPanel, fakeDoc);
+    const lines = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-nano')!.querySelector('.mc-term-lines')!;
+    panels.forEngine('nano').setQueued(1);
+    expect(lines.children[0].innerHTML).toContain('1 request queued offline — will run on reconnect.');
+    expect(lines.children[0].innerHTML).not.toContain('requests');
+  });
+
+  it('setQueued also shows a stable head badge, independent of the scrolling log — ' +
+    'readable even after later turns log more lines, and cleared once the queue drains', () => {
+    const aiPanel = fakePanel();
+    const panels = mountModelPanels(aiPanel, fakeDoc);
+    const nano = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-nano')!;
+    const badge = nano.querySelector('.mc-term-queued')!;
+    expect(badge.hidden).toBe(true);
+
+    panels.forEngine('nano').setQueued(1);
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toContain('1 request queued offline — will run on reconnect.');
+
+    // An unrelated later turn logs more lines into the same scrolling body —
+    // the badge (outside .mc-term-lines) must still read "1 queued".
+    panels.forEngine('nano').log('received', 'an unrelated turn');
+    panels.forEngine('nano').log('done', 'done');
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toContain('1 request queued offline — will run on reconnect.');
+
+    // Reconnecting drains the queue to 0 — the badge must actually clear,
+    // not stay stuck (setQueued(0) used to bail out before touching it).
+    panels.forEngine('nano').setQueued(0);
+    expect(badge.hidden).toBe(true);
   });
 
   it('never fabricates work on the engine that did not log anything', () => {

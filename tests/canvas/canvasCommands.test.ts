@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCanvasCommand, resolveFrame } from '../../src/canvas/canvasCommands';
+import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from '../../src/canvas/canvasCommands';
 
 const frames = [
   { id: 'f1', title: 'Living room' },
@@ -52,5 +52,30 @@ describe('canvas voice commands', () => {
     expect(resolveFrame(frames, 'second')).toBe('f2');
     expect(resolveFrame(frames, 'board 3')).toBe('f3');
     expect(resolveFrame(frames, 'last one')).toBe('f3');
+  });
+});
+
+describe('saveShouldPin', () => {
+  it('pins an unpinned focused board', () => {
+    expect(saveShouldPin({ pinned: false })).toBe(true);
+  });
+  it('leaves an already-pinned board alone (idempotent; unpin stays the only way off)', () => {
+    expect(saveShouldPin({ pinned: true })).toBe(false);
+  });
+  it('does nothing with no board focused', () => {
+    expect(saveShouldPin(null)).toBe(false);
+    expect(saveShouldPin(undefined)).toBe(false);
+  });
+});
+
+describe('saveShouldOpenNextBoard', () => {
+  it('opens a new board when saving an unpinned dockable room (so the dock can show)', () => {
+    expect(saveShouldOpenNextBoard({ pinned: false }, { kind: 'room' }, true)).toBe(true);
+  });
+  it('does not open a new board for an already-pinned room, a plan, or a room with no dock tiles', () => {
+    expect(saveShouldOpenNextBoard({ pinned: true }, { kind: 'room' }, true)).toBe(false);
+    expect(saveShouldOpenNextBoard({ pinned: false }, { kind: 'plan' }, true)).toBe(false);
+    expect(saveShouldOpenNextBoard({ pinned: false }, { kind: 'room' }, false)).toBe(false);
+    expect(saveShouldOpenNextBoard(null, { kind: 'room' }, true)).toBe(false);
   });
 });

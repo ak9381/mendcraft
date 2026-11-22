@@ -251,6 +251,11 @@ export interface EditBoardOptions {
   getItems(frameId: string): EditItemRef[];
   minSize?: Size;
   maxSize?: Size;
+  /** Fired once a move or resize drag ends (pointerup/cancel) and the new
+   *  layout has been saved — the hook the self-check corner mark uses to
+   *  re-check a tile after it's been dragged or resized, not only after it
+   *  was first built. */
+  onItemCommit?(frameId: string, key: string): void;
 }
 
 export interface EditBoardController {
@@ -382,6 +387,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
           for (const other of items) { const ol = saved[other.key]; if (ol) bottom = Math.max(bottom, ol.top + ol.height); }
           canvasEl.style.minHeight = `${bottom + PAD}px`;
           if (storage) saveFrameLayout(storage, frameId, saved);
+          opts.onItemCommit?.(frameId, it.key);
         },
       });
 

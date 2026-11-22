@@ -217,6 +217,39 @@ export function scriptedFixJson(spec: TileSpec): string {
   return JSON.stringify(spec);
 }
 
+/** Pairs enumerateMorphTiles-style entries (container and leaf, in pre-order)
+ *  with the host elements a render pass just produced in the same order,
+ *  keeping only the ones matching `wantPath` (or every top-level entry when
+ *  omitted) that actually rendered — the gate that decides whether a tile
+ *  gets self-checked at all. */
+export function selectSelfCheckTargets<E extends { path: number[] }>(
+  entries: readonly E[],
+  hosts: readonly (HTMLElement | undefined | null)[],
+  wantPath?: number[],
+): Array<E & { host: HTMLElement }> {
+  const out: Array<E & { host: HTMLElement }> = [];
+  entries.forEach((entry, i) => {
+    const want = wantPath
+      ? entry.path.length === wantPath.length && entry.path.every((v, j) => v === wantPath[j])
+      : entry.path.length === 1;
+    const host = hosts[i];
+    if (want && host) out.push({ ...entry, host });
+  });
+  return out;
+}
+
+/** Defers `run` until any renders a Lit/A2UI surface just queued (its own,
+ *  and every nested tile's — always scheduled via microtasks, however many
+ *  levels deep) have actually flushed. The JS microtask queue always drains
+ *  completely before the next macrotask runs, regardless of how many levels
+ *  of nested `requestUpdate` chained into more microtasks, so waiting one
+ *  macrotask tick (the default schedule) is enough no matter the tile tree's
+ *  depth — unlike calling `run` synchronously right after kicking off the
+ *  render, which is what left the self-check mark never actually running. */
+export function afterTilesRendered(run: () => void, schedule: (cb: () => void) => void = (cb) => setTimeout(cb, 0)): void {
+  schedule(run);
+}
+
 export type SelfCheckState = 'checking' | 'passed' | 'warning';
 
 export interface SelfCheckBadge { setState(s: SelfCheckState): void; remove(): void }

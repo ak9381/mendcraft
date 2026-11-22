@@ -203,7 +203,7 @@ function memoryStorage(): Storage {
   } as Storage;
 }
 
-function setup() {
+function setup(onItemCommit?: (frameId: string, key: string) => void) {
   const created: FakeEl[] = [];
   const createElement = (tag: string): EditEl => { const el = new FakeEl(tag); created.push(el); return el; };
   const root = new FakeEl('div');
@@ -224,6 +224,7 @@ function setup() {
   const ctl = mountEditBoard(root as unknown as EditEl, {
     storage, createElement, getAiPanelEl: () => aiPanel,
     getItems: (frameId) => itemsByFrame[frameId] ?? [],
+    onItemCommit,
   });
   const byClass = (cls: string) => created.filter((e) => e.classes.has(cls));
   const editBtn = byClass('mc-edit-toggle')[0];
@@ -351,5 +352,19 @@ describe('mountEditBoard', () => {
     lampResize.fire('pointermove', { clientX: 5000, clientY: 212 }); // tries to grow far past the terminal column
     // aiPanel.left (1200) minus the item's left (12) is the hard ceiling.
     expect(Number.parseFloat(lampWrapper.style.width!)).toBeLessThanOrEqual(1200 - 12);
+  });
+
+  it('fires onItemCommit with the frame id and the tile key once a drag ends (self-check re-check hook)', () => {
+    const commits: Array<[string, string]> = [];
+    const { ctl, editBtn, byClass } = setup((frameId, key) => commits.push([frameId, key]));
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const lampMove = byClass('mc-edit-move').find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    lampMove.fire('pointerdown', { clientX: 100, clientY: 100 });
+    expect(commits).toHaveLength(0); // no commit mid-drag
+    lampMove.fire('pointermove', { clientX: 140, clientY: 120 });
+    expect(commits).toHaveLength(0);
+    lampMove.fire('pointerup');
+    expect(commits).toEqual([['f1', 'lamp-wiz-desk']]);
   });
 });

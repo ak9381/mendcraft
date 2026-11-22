@@ -72,5 +72,10 @@ if (params.has('sim') && params.get('demo') === 'morph') {
   }, 2500);
 }
 
-// Warm App Check + cloud models in the background so the first keep isn't a cold start.
-void prepareHybrid();
+// Warm App Check + cloud models in the background so the first keep isn't a
+// cold start — but never under ?sim=1, which stays fully scripted/on-device
+// by design (same reasoning as skipping the WiZ bridge probe above); an
+// auto-generated preview channel domain is often not in the App Check /
+// reCAPTCHA authorized-domains list, so this call alone can 403 there for no
+// reason a sim run needs to care about.
+if (!params.has('sim')) void prepareHybrid();

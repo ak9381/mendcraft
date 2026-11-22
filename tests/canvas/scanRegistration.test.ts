@@ -12,6 +12,7 @@ import {
   storeOwner,
   OWNER_STORAGE_KEY,
   ownerHandsOf,
+  registerButtonLabel,
   type ScanFrameInput,
   type OwnerRecord,
 } from '../../src/canvas/scanRegistration';
@@ -248,5 +249,10 @@ describe('owner storage', () => {
   it('ownerHandsOf maps an OwnerRecord to {left, right}', () => {
     const owner = sampleOwner();
     expect(ownerHandsOf(owner)).toEqual({ left: owner.left, right: owner.right });
+  });
+
+  it('registerButtonLabel says "Register" with no owner yet, "Re-register" once one exists', () => {
+    expect(registerButtonLabel(null)).toBe('Register');
+    expect(registerButtonLabel(sampleOwner())).toBe('Re-register');
   });
 });

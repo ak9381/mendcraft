@@ -6,7 +6,7 @@ import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, panBy, zoomAbout, type Camera, type Viewport } from './camera';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
-import { parseCanvasCommand, resolveFrame } from './canvasCommands';
+import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
 import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
@@ -37,7 +37,7 @@ import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusT
 import { createCanvasLedger } from './ledger';
 import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
-  SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, replayInputFor, storeOwner,
+  SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
   type OwnerRecord,
 } from './scanRegistration';
 import { mountScanPanel } from './scanPanel';
@@ -64,7 +64,7 @@ import { mountMorphCard } from './morphCard';
 import { attachMorphPointers, createMorphFlow, type MorphFlow } from './morphFlow';
 import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTargetRef } from './morphTarget';
 import { applyMorphPatch, parseMorphTile, tileAtPath } from '../ai/morphEdit';
-import { runSelfCheck, scriptedFixJson } from './selfCheck';
+import { afterTilesRendered, runSelfCheck, scriptedFixJson, selectSelfCheckTargets } from './selfCheck';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -265,6 +265,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (el) out.push({ key: tileComponentId(t, [i]), el: el as unknown as EditEl, label: tileEditLabel(t) });
       });
       return out;
+    },
+    onItemCommit: (frameId, key) => {
+      const plan = surfaces[frameId];
+      const entry = plan ? enumerateMorphTiles(plan).find((e) => e.id === key) : undefined;
+      if (entry) selfCheckTiles(frameId, entry.path);
     },
   });
   // Nano/Gemini terminals: pinch-hold the title bar (or mouse/touch-drag it)
@@ -593,10 +598,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(`New board. Say “connect everything in this room”.`);
   }
   function save(): void {
+    // Saving an unpinned board also pins it. If it's a dockable room
+    // dashboard, open a fresh board too so the dashboard actually appears
+    // in the side dock and the main canvas is clear (the dock only shows a
+    // pinned room that is not the focused board). "pin"/"unpin" stay their
+    // own commands for anyone who wants that without saving.
+    const f = focusId ? reg.get(focusId) : null;
+    const surface = f ? surfaces[f.id] : undefined;
+    const openNext = saveShouldOpenNextBoard(f, surface, !!surface?.tiles.some(isDockTile));
+    if (saveShouldPin(f)) reg.setPinned(f!.id, true);
     persist(true);
     savedAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const f = focusId ? reg.get(focusId) : null;
-    say(f ? `Saved ${f.title} at ${savedAt}.` : `Saved the canvas at ${savedAt}.`);
+    const msg = f ? `Saved ${f.title} at ${savedAt}.` : `Saved the canvas at ${savedAt}.`;
+    if (openNext) {
+      const next = reg.add('note', `Board ${reg.list().length + 1}`);
+      focusId = next.id;
+      lastFocus = next.id;
+      sync();
+      updateDock();
+      persist();
+      void flyTo(focusOnInsets(next.rect, vp(), insets()));
+      window.dispatchEvent(new Event('resize'));
+      say(msg);
+      return;
+    }
+    sync();
+    updateDock();
+    say(msg);
   }
   function step(dir: 1 | -1): void {
     const list = reg.list(); if (!list.length) return;
@@ -1177,10 +1205,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (text) regChip.textContent = text;
   }
   function refreshRegisterLabels(): void {
-    const label = loadOwner(regStorage) ? 'Re-register' : 'Register';
+    const label = registerButtonLabel(loadOwner(regStorage));
     if (registerChip) registerChip.textContent = label;
     const blankBtn = root.querySelector<HTMLElement>('.mc-blank-register');
     if (blankBtn) blankBtn.textContent = label;
+    const toolbarBtn = root.querySelector<HTMLElement>('[data-cmd=reregister]');
+    if (toolbarBtn) toolbarBtn.textContent = label;
   }
   function applyOwnerLock(owner: OwnerRecord): void {
     handsHandle?.presence?.registerSignature(owner.face);
@@ -1540,26 +1570,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Self-check tiles right after they land in the DOM — every top-level
    *  tile of a freshly kept proposal, or (with `wantPath`) just the one tile
-   *  morphFlow just spliced. Shared by both the normal build path and the
-   *  morph splice path, per the host's own tile stamping (stampMorphTiles). */
+   *  morphFlow just spliced or edit mode just dragged/resized. Shared by the
+   *  build path, the morph splice path and the edit-commit path, per the
+   *  host's own tile stamping (stampMorphTiles).
+   *
+   *  The A2UI surface (and every nested tile) is a Lit element, which always
+   *  defers its first render by at least one microtask — so stamping hosts
+   *  in the SAME tick as renderSurface/applyMorph/an edit commit finds
+   *  nothing yet and silently skips every tile. afterTilesRendered waits
+   *  past that render instead. */
   function selfCheckTiles(frameId: string, wantPath?: number[]): void {
-    const plan = surfaces[frameId];
-    if (!plan) return;
-    const els = stampMorphTiles(frameId);
-    const entries = enumerateMorphTiles(plan);
-    entries.forEach((entry, i) => {
-      const want = wantPath
-        ? entry.path.length === wantPath.length && entry.path.every((v, j) => v === wantPath[j])
-        : entry.path.length === 1;
-      const el = els[i];
-      if (!want || !el) return;
-      void runSelfCheck({
-        host: el,
-        spec: entry.spec,
-        log: tileSelfCheckLog,
-        requestFix: (prompt) => engineFor('gemini', scriptedFixJson(entry.spec)).stream(prompt, () => {}),
-        applyFix: selfCheckFixApply(frameId, entry.path),
-      });
+    afterTilesRendered(() => {
+      const plan = surfaces[frameId];
+      if (!plan) return;
+      const els = stampMorphTiles(frameId);
+      const entries = enumerateMorphTiles(plan);
+      for (const target of selectSelfCheckTargets(entries, els, wantPath)) {
+        void runSelfCheck({
+          host: target.host,
+          spec: target.spec,
+          log: tileSelfCheckLog,
+          requestFix: (prompt) => engineFor('gemini', scriptedFixJson(target.spec)).stream(prompt, () => {}),
+          applyFix: selfCheckFixApply(frameId, target.path),
+        });
+      }
     });
   }
   const morphDisabled = (): boolean =>

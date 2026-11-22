@@ -4,9 +4,9 @@
 // trick handPointerPipeline.test.ts uses), no jsdom.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  assertControlCount, assertLabels, assertNonOverlapping, assertReachable, assertWired,
+  afterTilesRendered, assertControlCount, assertLabels, assertNonOverlapping, assertReachable, assertWired,
   checkTile, dumpText, dumpTile, expectedControlCount, mountSelfCheckBadge, replayTaps,
-  runSelfCheck, scriptedFixJson, statusLine, type TileDump,
+  runSelfCheck, scriptedFixJson, selectSelfCheckTargets, statusLine, type TileDump,
 } from '../../src/canvas/selfCheck';
 import { createHandPointer } from '../../src/canvas/handPointer';
 import type { TileSpec } from '../../src/canvas/surfacePlan';
@@ -180,6 +180,63 @@ describe('checkTile', () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.failures).toEqual([]);
     expect(statusLine(outcome)).toBe('self-check: 1 control, tap replay ok, 0 overlaps');
+  });
+});
+
+describe('selectSelfCheckTargets (canvas wiring: entries ↔ rendered hosts)', () => {
+  const lamp = (id: string, path: number[]) => ({ id, path, spec: { type: 'lamp' as const, deviceId: id, label: id }, label: id });
+
+  it('pairs only top-level entries with a rendered host when wantPath is omitted (the build/morph-all path)', () => {
+    const entries = [lamp('a', [0]), lamp('nested', [0, 0]), lamp('b', [1])];
+    const hostA = fakeHost({ left: 0, top: 0, width: 10, height: 10 });
+    const hostNested = fakeHost({ left: 0, top: 0, width: 10, height: 10 });
+    const hostB = fakeHost({ left: 0, top: 0, width: 10, height: 10 });
+    const targets = selectSelfCheckTargets(entries, [hostA, hostNested, hostB]);
+    expect(targets.map((t) => t.id)).toEqual(['a', 'b']); // nested (path.length 2) excluded
+    expect(targets[0].host).toBe(hostA);
+  });
+
+  it('matches a single entry by wantPath (the morph-splice / edit-commit path)', () => {
+    const entries = [lamp('a', [0]), lamp('b', [1])];
+    const hostA = fakeHost({ left: 0, top: 0, width: 10, height: 10 });
+    const hostB = fakeHost({ left: 0, top: 0, width: 10, height: 10 });
+    const targets = selectSelfCheckTargets(entries, [hostA, hostB], [1]);
+    expect(targets.map((t) => t.id)).toEqual(['b']);
+  });
+
+  it('drops an entry whose host has not rendered yet — the exact shape of the original bug', () => {
+    const entries = [lamp('a', [0]), lamp('b', [1])];
+    // Only "a" has rendered so far; "b"'s host is still pending (undefined).
+    const targets = selectSelfCheckTargets(entries, [fakeHost({ left: 0, top: 0, width: 10, height: 10 }), undefined]);
+    expect(targets.map((t) => t.id)).toEqual(['a']);
+  });
+});
+
+describe('afterTilesRendered (defers past pending Lit/A2UI renders)', () => {
+  it('runs immediately once the schedule callback fires', () => {
+    let ran = false;
+    const schedule = (cb: () => void) => cb();
+    afterTilesRendered(() => { ran = true; }, schedule);
+    expect(ran).toBe(true);
+  });
+
+  it('default schedule (a macrotask) waits out microtasks queued before it — even nested ones, ' +
+    'the same chain a Lit surface + its nested tiles produce', async () => {
+    const order: string[] = [];
+    // Simulates the A2UI surface's own render (job A) queueing a nested
+    // tile's render (job B) from inside it — two levels of microtask, both
+    // queued before afterTilesRendered's macrotask below.
+    queueMicrotask(() => { order.push('surface-render'); queueMicrotask(() => order.push('nested-tile-render')); });
+    afterTilesRendered(() => order.push('self-check'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(['surface-render', 'nested-tile-render', 'self-check']);
+  });
+
+  it('calling self-check synchronously (the original bug) would run BEFORE any of that has rendered', () => {
+    const order: string[] = [];
+    queueMicrotask(() => order.push('surface-render'));
+    order.push('self-check-synchronous'); // what the old code effectively did
+    expect(order).toEqual(['self-check-synchronous']); // render hasn't happened yet — hosts are empty
   });
 });
 

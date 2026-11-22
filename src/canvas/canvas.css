@@ -181,6 +181,11 @@
 .mc-terminal-gemini .mc-term-dot, .mc-mini-terminal[data-kind="gemini"] .mc-term-dot { background: #8FA9CC; }
 .mc-term-title { font-weight: 650; }
 .mc-term-where { color: #8A867E; }
+/* Lives in the terminal's head, not its scrolling body — stays visible and
+   stable (for a screenshot or a glance) however many lines log afterward,
+   until reconnecting actually clears the queue. */
+.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  background: rgb(201 139 60 / 0.22); color: #E7B274; }
 .mc-term-body { position: relative; padding: 12px 14px; font-family: ui-monospace, 'DejaVu Sans Mono', Consolas, monospace;
   font-size: 12.5px; line-height: 1.7; max-height: 220px; overflow: auto; }
 .mc-term-lines { display: flex; flex-direction: column; }
@@ -243,7 +248,10 @@
 .mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
 .mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
-  padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 10; }
+  padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px);
+  /* Above the full-screen review dialog (z-index 50, see .mc-review-dialog) so Save/Tools/etc.
+     stay reachable while a review (including the Gemini follow-up one) is open. */
+  z-index: 51; }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
 /* Morph's type-it path (no mic): peek just the say box, not the buttons row. */
@@ -393,6 +401,8 @@
   .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
+  /* The bar moved to the bottom thumb zone above — no top offset to reserve. */
+  .mc-review-dialog { padding-top: 0; }
   /* Compact the proposal inside the full-screen review so Approve/Reject stay on screen. */
   .mc-review-card-host .mc-proposal { padding: 10px 12px; }
   .mc-review-card-host .mc-proposal-title { font-size: 22px; }
@@ -540,7 +550,10 @@
    model did, prompts and the stayed-local strip all have room; the three
    hand-reachable decision buttons sit at the bottom, always in view. */
 .mc-review-dialog { position: fixed; z-index: 50; inset: 0; background: var(--bg);
-  display: flex; flex-direction: column; }
+  display: flex; flex-direction: column;
+  /* Leaves the Tools bar's own strip clear (it renders above this dialog)
+     instead of running review content underneath it, unreachable. */
+  padding-top: var(--mc-bar-h, 132px); }
 .mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; max-width: 1100px; margin: 0 auto;
   display: flex; flex-direction: column; overflow: auto; padding: 28px 32px; }
 .mc-review-title { margin: 0 0 16px; font-size: 30px; }

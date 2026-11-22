@@ -206,6 +206,13 @@ export function ownerHandsOf(owner: OwnerRecord): OwnerHands {
   return { left: owner.left, right: owner.right };
 }
 
+/** Every Register-ish control (chip, empty-canvas button, Tools-bar button)
+ *  reads this so none of them can say "Re-register" before anyone is
+ *  actually registered. */
+export function registerButtonLabel(owner: OwnerRecord | null): string {
+  return owner ? 'Re-register' : 'Register';
+}
+
 // ---------------------------------------------------------------- sim replay
 
 /** A deterministic synthetic open palm (same construction as the test

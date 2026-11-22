@@ -61,3 +61,20 @@ describe('overlays never cover the Talk button', () => {
     expect(said).toContain('Listening…');
   });
 });
+
+describe('the full-screen review dialog never traps clicks on the Tools bar', () => {
+  // A dashboard's second (Gemini "Better: …") review can land while the bar
+  // is showing Save/Tools/etc. — the bar must stay on top and clickable, not
+  // buried under the review's full-screen (inset: 0) overlay.
+  it('the Tools bar sits above the review dialog in stacking order', () => {
+    const barZ = Number(ruleFor(canvasCss, '.mc-bar').match(/z-index:\s*(\d+)/)?.[1]);
+    const reviewZ = Number(ruleFor(canvasCss, '.mc-review-dialog').match(/z-index:\s*(\d+)/)?.[1]);
+    expect(Number.isNaN(barZ)).toBe(false);
+    expect(Number.isNaN(reviewZ)).toBe(false);
+    expect(barZ).toBeGreaterThan(reviewZ);
+  });
+
+  it('the review dialog reserves the bar\'s own height instead of running content under it', () => {
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('padding-top: var(--mc-bar-h');
+  });
+});

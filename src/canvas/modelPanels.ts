@@ -123,6 +123,7 @@ export const MODEL_PANELS_HTML = `
           <span class="mc-term-drag" data-mc-drag-handle role="button" tabindex="0" aria-label="Move the Nano terminal">
             <span class="mc-term-dot"></span><strong class="mc-term-title">nano</strong><span class="mc-term-where">· on this device</span>
           </span>
+          <span class="mc-term-queued" role="status" hidden></span>
           <button type="button" class="mc-term-reset-pos" data-engine="nano" aria-label="Reset Nano terminal position">⟲</button>
         </div>
         <div class="mc-term-body" aria-live="polite">
@@ -195,6 +196,7 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
   const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
   const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
   const cursor = panel.querySelector<HTMLElement>('.mc-term-cursor')!;
+  const queuedBadge = panel.querySelector<HTMLElement>('.mc-term-queued');
   const api: EnginePanelUi = {
     log(verb, detail) {
       const line = doc.createElement('p');
@@ -210,8 +212,18 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
       cursor.hidden = !working;
     },
     setQueued(count) {
+      // A log line alone scrolls out of view the moment anything else logs
+      // (a review arriving, the next turn's lines) — this badge lives in the
+      // terminal's head, outside the scrolling body, so the full queued-offline message stays
+      // visible and stable until reconnecting actually clears it.
+      const n = count ?? 0;
+      const msg = `${n} request${n === 1 ? '' : 's'} queued offline — will run on reconnect.`;
+      if (queuedBadge) {
+        queuedBadge.hidden = n <= 0;
+        if (n > 0) queuedBadge.textContent = msg;
+      }
       if (count === null || count <= 0) return;
-      api.log('queued', `${count} request${count === 1 ? '' : 's'} queued offline — will run on reconnect.`);
+      api.log('queued', msg);
     },
   };
   return api;

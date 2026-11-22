@@ -40,6 +40,25 @@ export function parseCanvasCommand(text: string): CanvasCommand | null {
   return null;
 }
 
+/** Whether running "save" should also pin the focused board to the side
+ *  dock — yes, unless it's pinned already; "unpin" stays the only way back
+ *  off, and nothing happens with no board focused. */
+export function saveShouldPin(focused: { pinned: boolean } | null | undefined): boolean {
+  return !!focused && !focused.pinned;
+}
+
+/** "save" should also open a new board (so the dashboard actually appears
+ *  in the side dock and the main canvas is clear) when the focused board is
+ *  an unpinned dockable room. The dock only renders a pinned room that is
+ *  NOT the focused board — pinning alone would leave it hidden. */
+export function saveShouldOpenNextBoard(
+  focused: { pinned: boolean } | null | undefined,
+  surface: { kind: string } | null | undefined,
+  hasDockTiles: boolean,
+): boolean {
+  return saveShouldPin(focused) && surface?.kind === 'room' && hasDockTiles;
+}
+
 const ORD: Record<string, number> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10, one: 1, two: 2, three: 3, four: 4, five: 5 };
 
 function lev(a: string, b: string): number {
