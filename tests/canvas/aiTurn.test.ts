@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSurfacePrompt, createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
+import { OFFLINE_MID_LINE } from '../../src/canvas/failLines';
 import { focusOnInset } from '../../src/canvas/camera';
 import { parseCanvasCommand } from '../../src/canvas/canvasCommands';
 
@@ -74,6 +75,15 @@ describe('runSurfaceTurn', () => {
   it('scripted engines say SIM on their route line', () => {
     expect(scriptedEngine('nano', PLAN).sim).toBe(true);
     expect(buildSurfacePrompt(req, 'nano', { sim: true }).routeLine).toMatch(/^SIM · /);
+  });
+  it('aborts a mid-stream cloud turn when cancelled, with no plan and no fallback', async () => {
+    let why = '';
+    let cancelled = false;
+    const engine = scriptedEngine('gemini', PLAN, { chunk: 20, delayMs: 15 });
+    const task = runSurfaceTurn(req, engine, { onError: (e) => { why = e; }, onGhost: () => { cancelled = true; } }, { isCancelled: () => cancelled });
+    const plan = await task;
+    expect(plan).toBeNull();
+    expect(why).toBe(OFFLINE_MID_LINE);
   });
 });
 

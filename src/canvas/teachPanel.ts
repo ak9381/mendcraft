@@ -19,6 +19,7 @@ import { resolveGestureAction, type GestureActionEngines } from './gestureAction
 import { createSurfaceProposal } from './proposalBuffer';
 import { buildHandPose } from '../dev/trackingSim';
 import { createPresenceTracker } from '../input/presence';
+import { CAMERA_LOST_TEACH } from './failLines';
 import type { DeviceRef } from './deviceCommands';
 import type { Pt } from '../input/handLogic';
 
@@ -86,6 +87,10 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
   function close(): void { panel.hidden = true; body.innerHTML = ''; actions.innerHTML = ''; }
   function show(html: string): void { body.innerHTML = html; }
 
+  class CameraLost extends Error {
+    constructor() { super(CAMERA_LOST_TEACH); this.name = 'CameraLost'; }
+  }
+
   async function captureSample(): Promise<Pt[][]> {
     if (opts.sim) {
       // Deterministic synthetic recording: a held thumbs-up with a tiny,
@@ -96,14 +101,21 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       });
     }
     const frames: Pt[][] = [];
+    let lost = false;
     const tracker = createPresenceTracker(() => {}, (f) => {
       const h = f.hands[0];
       if (h) frames.push(h.points);
-    });
+    }, { onCameraLost: () => { lost = true; } });
     try {
       await tracker.start();
-      await wait(SAMPLE_MS);
-    } catch {
+      const t0 = Date.now();
+      while (Date.now() - t0 < SAMPLE_MS) {
+        if (lost) throw new CameraLost();
+        await wait(50);
+      }
+      if (lost) throw new CameraLost();
+    } catch (e) {
+      if (e instanceof CameraLost) throw e;
       // no camera available — resolve with whatever (likely nothing) we got
     } finally {
       tracker.stop();
@@ -208,7 +220,20 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
   async function open(): Promise<void> {
     panel.hidden = false;
     actions.innerHTML = '';
-    const { frames, result } = await recordSamples();
+    let frames: Pt[][] = [];
+    let result: Awaited<ReturnType<typeof recordSamples>>['result'] | undefined;
+    try {
+      const rec = await recordSamples();
+      frames = rec.frames;
+      result = rec.result;
+    } catch (e) {
+      const lost = e instanceof CameraLost || (e instanceof Error && e.name === 'CameraLost');
+      show(`<p>${lost ? CAMERA_LOST_TEACH : 'Couldn’t get a clean reading — try again with your whole hand in view.'}</p>`);
+      actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
+      panel.querySelector('[data-act=close]')!.addEventListener('click', close);
+      if (lost) opts.say(CAMERA_LOST_TEACH);
+      return;
+    }
     if (result?.status !== 'done') {
       show('<p>Couldn’t get a clean reading — try again with your whole hand in view.</p>');
       actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';

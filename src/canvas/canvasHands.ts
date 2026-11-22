@@ -174,6 +174,8 @@ export interface MountCanvasHandsOptions {
   onPresence?: (frame: PresenceFrame) => void;
   /** Passed through to the gesture adapter (see CanvasHandsOptions). */
   suppressMotion?: (id: string) => boolean;
+  /** Camera track ended while tracking (unplug / OS revoke) — not a start failure. */
+  onCameraLost?: () => void;
 }
 
 /** The stop function, plus the presence APIs the owner-registration flow
@@ -252,6 +254,7 @@ export async function mountCanvasHands(
           now: typeof performance !== 'undefined' ? performance.now() : Date.now(),
         });
       },
+      { onCameraLost: opts.onCameraLost },
     );
 
     const live = findLiveCameraStream();

@@ -7,6 +7,7 @@ import { fillVisible } from '../privacy/directory';
 import { redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
 import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
+import { OFFLINE_MID_LINE } from './failLines';
 
 export type EngineId = 'nano' | 'gemini';
 
@@ -166,21 +167,32 @@ export function parseModelPlan(text: string, deviceIdSession?: DeviceIdSession):
   return plan;
 }
 
+class MidStreamOffline extends Error {
+  constructor() { super(OFFLINE_MID_LINE); this.name = 'MidStreamOffline'; }
+}
+
 /** Run one engine over one request. Returns a validated plan or null. */
-export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: { deviceIdSession?: DeviceIdSession } = {}): Promise<SurfacePlan | null> {
+export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: { deviceIdSession?: DeviceIdSession; isCancelled?: () => boolean } = {}): Promise<SurfacePlan | null> {
   const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
   if (engine.routeLine) sent.routeLine = engine.routeLine;
   ui.onSent?.(sent);
   let ghostCount = -1;
   let final: string;
+  const throwIfCancelled = (): void => { if (opts.isCancelled?.()) throw new MidStreamOffline(); };
   const streamOne = async (eng: SurfaceEngine) => eng.stream(sent.prompt, (full) => {
+    throwIfCancelled();
     ui.onText?.(full);
     const g = parsePartialPlan(full);
     if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
   });
   try {
     final = await streamOne(engine);
+    throwIfCancelled();
   } catch (e) {
+    if (e instanceof MidStreamOffline) {
+      ui.onError?.(OFFLINE_MID_LINE);
+      return null;
+    }
     if (!engine.fallback) {
       ui.onError?.(`${engine.id === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`);
       return null;
@@ -190,7 +202,12 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     ui.onSent?.(sent);
     try {
       final = await streamOne(engine.fallback);
+      throwIfCancelled();
     } catch (e2) {
+      if (e2 instanceof MidStreamOffline) {
+        ui.onError?.(OFFLINE_MID_LINE);
+        return null;
+      }
       ui.onError?.(`${engine.id === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`);
       return null;
     }

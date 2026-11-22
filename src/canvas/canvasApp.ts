@@ -65,6 +65,10 @@ import { attachMorphPointers, createMorphFlow, type MorphFlow } from './morphFlo
 import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTargetRef } from './morphTarget';
 import { applyMorphPatch, parseMorphTile, tileAtPath } from '../ai/morphEdit';
 import { runSelfCheck, scriptedFixJson, selectSelfCheckTargets, waitForLayout } from './selfCheck';
+import {
+  CAMERA_LOST_REGISTER, INCOMPLETE_KN_LINE, MORPH_UNVERIFIED_LINE,
+  phoneDropLine, saveSpokenLine, tryWriteStorage,
+} from './failLines';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -571,10 +575,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function snapshot(): CanvasDoc {
     return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined };
   }
-  function persist(now = false): void {
+  function persist(now = false): boolean {
     clearTimeout(persistTimer);
-    const write = () => { try { storage.setItem(STORAGE_KEY, JSON.stringify(snapshot())); } catch { /* quota: keep running */ } };
-    if (now) write(); else persistTimer = window.setTimeout(write, 250);
+    const write = (): boolean => tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+    if (now) return write();
+    persistTimer = window.setTimeout(write, 250);
+    return true;
   }
 
   // ---- navigation ----
@@ -606,10 +612,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const f = focusId ? reg.get(focusId) : null;
     const surface = f ? surfaces[f.id] : undefined;
     const openNext = saveShouldOpenNextBoard(f, surface, !!surface?.tiles.some(isDockTile));
-    if (saveShouldPin(f)) reg.setPinned(f!.id, true);
-    persist(true);
+    const pinThisSave = saveShouldPin(f);
+    if (pinThisSave) reg.setPinned(f!.id, true);
+    const wrote = persist(true);
+    if (!wrote) {
+      // In-memory board (and a pin we just set) stay; do not invent a new
+      // empty board or claim the write landed.
+      sync();
+      updateDock();
+      say(saveSpokenLine(false, f?.title ?? null, ''));
+      return;
+    }
     savedAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const msg = f ? `Saved ${f.title} at ${savedAt}.` : `Saved the canvas at ${savedAt}.`;
+    const msg = saveSpokenLine(true, f ? f.title : null, savedAt);
     if (openNext) {
       const next = reg.add('note', `Board ${reg.list().length + 1}`);
       focusId = next.id;
@@ -831,7 +846,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
       onGhost: (g) => ghost(frameId, g),
       onError: (why) => { settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); },
-    }, { deviceIdSession }));
+    }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
     if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
     return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
   }
@@ -1014,7 +1029,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const res = await startPhoneJoin({
       onState: (st) => {
         if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
-        else if (st === 'disconnected') pairing?.setStatus('Connection lost — check your network.');
+        else if (st === 'disconnected' || st === 'gone') {
+          const line = phoneDropLine(false);
+          pairing?.setStatus(line);
+          say(line);
+        }
       },
     });
     if ('error' in res) {
@@ -1105,7 +1124,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let raw: unknown = null;
     try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
     const coerced = coerceLanguagePack(raw);
-    if (!coerced.ok) { settleSwarm(); const why = `Refused the pack: ${coerced.error}`; aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return; }
+    if (!coerced.ok) {
+      settleSwarm();
+      const why = coerced.error.startsWith('incomplete') ? INCOMPLETE_KN_LINE : `Refused the pack: ${coerced.error}`;
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+    }
     const next = coerced.value;
     settleSwarm();
     const swapCount = Object.keys(next.strings).length;
@@ -1286,6 +1309,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        onCameraLost: () => {
+          if (scanPanel?.isOpen()) closeScan(CAMERA_LOST_REGISTER);
+        },
         // A pinch the morph classifier armed on must not ALSO read as the
         // 1200 ms pinch-hold-still (the morph opens the mic itself).
         suppressMotion: (id) => id === 'pinch-hold-still' && !!morphFlow?.holdActive(),
@@ -1617,7 +1643,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  in the SAME tick as renderSurface/applyMorph/an edit commit finds
    *  nothing yet and silently skips every tile. afterTilesRendered waits
    *  past that render instead. */
-  function selfCheckTiles(frameId: string, wantPath?: number[]): void {
+  function selfCheckTiles(frameId: string, wantPath?: number[], onUnverified?: () => void): void {
     waitForLayout(() => {
       const plan = surfaces[frameId];
       if (!plan) return;
@@ -1634,7 +1660,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           applyFix: session.applyFix,
           rollbackFix: session.rollbackFix,
           commitFix: session.commitFix,
-        });
+        }).then((stat) => { if (!stat.passed) onUnverified?.(); });
       }
     });
   }
@@ -1679,7 +1705,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     surfaces[frameId] = patched;
     history.push({ frameId, before, after: patched, by: 'gemini', summary });
     renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
-    if (path) selfCheckTiles(frameId, path);
+    if (path) {
+      selfCheckTiles(frameId, path, () => {
+        undo();
+        say(MORPH_UNVERIFIED_LINE);
+      });
+    }
     return true;
   }
   const morphCard = mountMorphCard(root, {

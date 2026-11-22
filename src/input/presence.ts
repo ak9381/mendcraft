@@ -112,9 +112,22 @@ function mirrorBox(b: FaceBox): FaceBox {
   return { x, y: b.y, w: b.w, h: b.h, cx: 1 - b.cx, cy: b.cy };
 }
 
+/** Fire `onLost` when a live camera track ends on its own (unplug, OS
+ *  revoke) — not when we called stop() (stillLive is then false). */
+export function watchTracksForEnd(
+  stream: { getTracks(): Array<{ addEventListener(type: 'ended', fn: () => void): void }> },
+  onLost: () => void,
+  stillLive: () => boolean,
+): void {
+  for (const t of stream.getTracks()) {
+    t.addEventListener('ended', () => { if (stillLive()) onLost(); });
+  }
+}
+
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
+  opts?: { onCameraLost?: () => void },
 ): PresenceTracker {
   const video = document.createElement('video');
   video.playsInline = true;
@@ -325,6 +338,7 @@ export function createPresenceTracker(
     await video.play();
 
     running = true;
+    if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running);
     rafId = requestAnimationFrame(loop);
   }
 

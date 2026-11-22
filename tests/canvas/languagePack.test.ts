@@ -6,12 +6,18 @@ const knStrings = { showEverything: 'ಎಲ್ಲಾ ತೋರಿಸು', newBoa
 
 describe('coerceLanguagePack', () => {
   it('accepts a valid Kannada pack with known keys and intents', () => {
-    const r = coerceLanguagePack({ lang: 'kn', strings: knStrings, phrases: { lampOn: ['ದೀಪ ಆನ್ ಮಾಡು'] } });
+    const r = coerceLanguagePack(SCRIPTED_KN_PACK);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.value.strings.keep).toBe('ಇಟ್ಟುಕೋ');
       expect(r.value.phrases.lampOn).toEqual(['ದೀಪ ಆನ್ ಮಾಡು']);
     }
+  });
+
+  it('rejects a partial pack that would leave some chrome in English', () => {
+    const r = coerceLanguagePack({ lang: 'kn', strings: knStrings, phrases: { lampOn: ['ದೀಪ ಆನ್ ಮಾಡು'] } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/incomplete pack: missing string/);
   });
 
   it('rejects an unknown string key', () => {
@@ -27,7 +33,7 @@ describe('coerceLanguagePack', () => {
   });
 
   it('rejects a phrase for an unknown intent', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: knStrings, phrases: { hack: ['ಆನ್'] } }).ok).toBe(false);
+    expect(coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { hack: ['ಆನ್'] } }).ok).toBe(false);
   });
 
   it('rejects a string longer than 80 chars', () => {

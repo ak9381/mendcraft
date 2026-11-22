@@ -99,6 +99,8 @@ export function coerceLanguagePack(raw: unknown): Coerced<LanguagePack> {
     strings[k as LangStringKey] = v;
   }
   if (!Object.keys(strings).length) return { ok: false, error: 'no strings' };
+  const missing = LANG_STRING_KEYS.filter((k) => !strings[k]);
+  if (missing.length) return { ok: false, error: `incomplete pack: missing string "${missing[0]}"` };
 
   const phrases: Partial<Record<IntentKey, string[]>> = {};
   if (r.phrases !== undefined) {
