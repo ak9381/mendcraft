@@ -105,12 +105,24 @@ describe('mountToolPalette', () => {
     expect(chip.attrs['aria-expanded']).toBe('false');
   });
 
-  it('toggle() flips open/closed', () => {
+  it('toggle() flips open/closed when calls are spaced past the debounce gap', () => {
     const { root, win } = setup(false);
     const palette = mountToolPalette(root, win);
-    palette.toggle();
+    palette.toggle(0);
     expect(palette.isOpen()).toBe(true);
-    palette.toggle();
+    palette.toggle(500);
+    expect(palette.isOpen()).toBe(false);
+  });
+
+  it('one pinch or click is one toggle — a second toggle inside the gap is ignored (the flicker bug)', () => {
+    const { root, win } = setup(false);
+    const palette = mountToolPalette(root, win);
+    palette.toggle(0);
+    expect(palette.isOpen()).toBe(true);
+    palette.toggle(10);
+    palette.toggle(100);
+    expect(palette.isOpen()).toBe(true);
+    palette.toggle(500);
     expect(palette.isOpen()).toBe(false);
   });
 

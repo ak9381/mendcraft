@@ -53,6 +53,7 @@ import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, type HandPointer } from './handPointer';
+import { createToggleLatch } from './handFeel';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
@@ -1474,9 +1475,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
+  const toolsLatch = createToggleLatch();
   function openTools(): void { if (isPhone()) phoneMenu?.open(); else toolPalette.open(); }
   function closeTools(): void { if (isPhone()) phoneMenu?.close(); else toolPalette.close(); }
-  function toggleTools(): void { if (isPhone()) (phoneMenu?.isOpen() ? phoneMenu.close() : phoneMenu?.open()); else toolPalette.toggle(); }
+  function toggleTools(): void {
+    if (isPhone()) {
+      if (!toolsLatch.allow()) return;
+      if (phoneMenu?.isOpen()) phoneMenu.close(); else phoneMenu?.open();
+      return;
+    }
+    toolPalette.toggle();
+  }
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
     reg.setPinned(id, false); sync(); updateDock(); persist(); say('Unpinned.');

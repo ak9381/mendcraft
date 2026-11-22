@@ -6,6 +6,7 @@
 // phoneMenu.ts's own Menu sheet; this module no-ops there so the phone's
 // primary say/mic/ai/new bar is left alone.
 import { PHONE_QUERY } from './phoneMenu';
+import { createToggleLatch } from './handFeel';
 
 export type PaletteCommand = 'open' | 'close' | null;
 
@@ -22,7 +23,7 @@ export function matchPaletteCommand(text: string): PaletteCommand {
 export interface ToolPalette {
   open(): void;
   close(): void;
-  toggle(): void;
+  toggle(now?: number): void;
   isOpen(): boolean;
   /** Reveal just the say box (not the buttons row, not a full open()) so a
    *  mic-less flow (morph's type-it path) can be typed into without the
@@ -50,6 +51,7 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
   let openState = false;
   let peek = false;
   let lastFocus: HTMLElement | null = null;
+  const latch = createToggleLatch();
 
   function apply(): void {
     tools.hidden = !phone && !openState && !peek;
@@ -71,7 +73,8 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
     apply();
     (lastFocus && lastFocus.isConnected ? lastFocus : chip).focus();
   }
-  function toggle(): void {
+  function toggle(now?: number): void {
+    if (!latch.allow(now)) return;
     (openState ? close : open)();
   }
   function peekSay(on: boolean): void {
@@ -81,7 +84,7 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
     if (on) tools.querySelector<HTMLInputElement>('#mc-say-in')?.focus();
   }
 
-  chip.addEventListener('click', toggle);
+  chip.addEventListener('click', () => toggle());
   // A tool ran: close the palette after the delegated handler has seen the click.
   tools.addEventListener('click', (e) => {
     if ((e.target as HTMLElement).closest('[data-cmd]')) win.setTimeout(close, 0);

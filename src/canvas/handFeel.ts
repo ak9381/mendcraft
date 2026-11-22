@@ -299,6 +299,29 @@ export function createHoldGesture(
   };
 }
 
+/** Minimum gap between Tools-panel toggles so one pinch or click cannot
+ *  flicker the panel open and shut (chip click + palm, or pinch chatter). */
+export const TOOLS_TOGGLE_GAP_MS = 450;
+
+export interface ToggleLatch {
+  /** True when this call should run the toggle; false if it's too soon. */
+  allow(now?: number): boolean;
+  reset(): void;
+}
+
+export function createToggleLatch(gapMs = TOOLS_TOGGLE_GAP_MS): ToggleLatch {
+  let last = -Infinity;
+  return {
+    allow(now) {
+      const t = now ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (t - last < gapMs) return false;
+      last = t;
+      return true;
+    },
+    reset() { last = -Infinity; },
+  };
+}
+
 // ---------------------------------------------------------------- 1D euro
 
 export interface Scalar1Euro {

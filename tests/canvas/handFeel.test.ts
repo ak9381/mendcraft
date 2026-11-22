@@ -5,6 +5,8 @@ import {
   HAND_FEEL,
   createDeadZone,
   createHoldGesture,
+  createToggleLatch,
+  TOOLS_TOGGLE_GAP_MS,
   createPinchMachine,
   createPositionHistory,
   createScalarEuro,
@@ -211,5 +213,14 @@ describe('background-hand filter + anchor', () => {
     expect(after.x).toBeCloseTo(anchor.x, 5);
     expect(after.y).toBeCloseTo(anchor.y, 5);
     expect(palmCenter(h).x).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('createToggleLatch (Tools flicker)', () => {
+  it('allows the first call and ignores another inside the gap', () => {
+    const latch = createToggleLatch(TOOLS_TOGGLE_GAP_MS);
+    expect(latch.allow(0)).toBe(true);
+    expect(latch.allow(TOOLS_TOGGLE_GAP_MS - 1)).toBe(false);
+    expect(latch.allow(TOOLS_TOGGLE_GAP_MS)).toBe(true);
   });
 });
