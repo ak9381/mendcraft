@@ -64,7 +64,7 @@ import { mountMorphCard } from './morphCard';
 import { attachMorphPointers, createMorphFlow, type MorphFlow } from './morphFlow';
 import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTargetRef } from './morphTarget';
 import { applyMorphPatch, parseMorphTile, tileAtPath } from '../ai/morphEdit';
-import { afterTilesRendered, runSelfCheck, scriptedFixJson, selectSelfCheckTargets } from './selfCheck';
+import { runSelfCheck, scriptedFixJson, selectSelfCheckTargets, waitForLayout } from './selfCheck';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -1548,24 +1548,62 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function tileSelfCheckLog(engine: 'nano' | 'gemini', _verb: string, detail: string): void {
     panels.forEngine(engine).log('note', detail);
   }
-  function selfCheckFixApply(frameId: string, path: number[]): (rawReply: string) => HTMLElement | null {
-    return (rawReply: string) => {
+  function waitForStampedHost(frameId: string, path: number[]): Promise<HTMLElement | null> {
+    return new Promise((resolve) => waitForLayout(() => {
       const plan = surfaces[frameId];
-      const original = plan ? tileAtPath(plan, path) : null;
-      if (!plan || !original) return null;
-      const parsed = parseMorphTile(rawReply, original, deviceIdSession);
-      if (!parsed.ok) return null;
-      const patched = applyMorphPatch(plan, path, parsed.value);
-      if (!patched) return null;
-      const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
-      if (!check.ok) return null;
-      const before = surfaces[frameId] ?? null;
-      surfaces[frameId] = patched;
-      history.push({ frameId, before, after: patched, by: 'gemini', summary: 'self-check fix' });
-      renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
+      if (!plan) { resolve(null); return; }
       const els = stampMorphTiles(frameId);
-      const idx = enumerateMorphTiles(patched).findIndex((e) => e.path.length === path.length && e.path.every((v, i) => v === path[i]));
-      return idx >= 0 ? (els[idx] ?? null) : null;
+      const idx = enumerateMorphTiles(plan).findIndex((e) => e.path.length === path.length && e.path.every((v, i) => v === path[i]));
+      resolve(idx >= 0 ? (els[idx] ?? null) : null);
+    }));
+  }
+  /** Trial-apply a self-check fix, commit it to undo history only after
+   *  the re-check passes, and roll the canvas back to `before` otherwise.
+   *  Waiting for layout before returning the host is what used to make
+   *  "fix pass did not apply" fire even when the patch was already in
+   *  `surfaces` — stampMorphTiles in the same tick as renderSurface found
+   *  no Lit hosts yet. */
+  function selfCheckFixSession(frameId: string, path: number[]): {
+    applyFix: (rawReply: string) => Promise<HTMLElement | null>;
+    rollbackFix: () => Promise<HTMLElement | null>;
+    commitFix: () => void;
+  } {
+    let before: (typeof surfaces)[string] | null = null;
+    let after: (typeof surfaces)[string] | null = null;
+    let pending = false;
+    return {
+      applyFix: async (rawReply: string) => {
+        const plan = surfaces[frameId];
+        const original = plan ? tileAtPath(plan, path) : null;
+        if (!plan || !original) return null;
+        const parsed = parseMorphTile(rawReply, original, deviceIdSession);
+        if (!parsed.ok) return null;
+        const patched = applyMorphPatch(plan, path, parsed.value);
+        if (!patched) return null;
+        const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
+        if (!check.ok) return null;
+        before = surfaces[frameId] ?? null;
+        after = patched;
+        pending = true;
+        surfaces[frameId] = patched;
+        renderSurface(frameId); sync(); updateDock(); persist();
+        return waitForStampedHost(frameId, path);
+      },
+      rollbackFix: async () => {
+        if (!pending) return null;
+        if (before) surfaces[frameId] = before;
+        else delete surfaces[frameId];
+        pending = false;
+        after = null;
+        renderSurface(frameId); sync(); updateDock(); persist();
+        return waitForStampedHost(frameId, path);
+      },
+      commitFix: () => {
+        if (!pending || !after) return;
+        history.push({ frameId, before, after, by: 'gemini', summary: 'self-check fix' });
+        historyRender();
+        pending = false;
+      },
     };
   }
   /** Self-check tiles right after they land in the DOM — every top-level
@@ -1580,18 +1618,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  nothing yet and silently skips every tile. afterTilesRendered waits
    *  past that render instead. */
   function selfCheckTiles(frameId: string, wantPath?: number[]): void {
-    afterTilesRendered(() => {
+    waitForLayout(() => {
       const plan = surfaces[frameId];
       if (!plan) return;
       const els = stampMorphTiles(frameId);
       const entries = enumerateMorphTiles(plan);
       for (const target of selectSelfCheckTargets(entries, els, wantPath)) {
+        const session = selfCheckFixSession(frameId, target.path);
         void runSelfCheck({
           host: target.host,
           spec: target.spec,
+          tileId: target.id,
           log: tileSelfCheckLog,
           requestFix: (prompt) => engineFor('gemini', scriptedFixJson(target.spec)).stream(prompt, () => {}),
-          applyFix: selfCheckFixApply(frameId, target.path),
+          applyFix: session.applyFix,
+          rollbackFix: session.rollbackFix,
+          commitFix: session.commitFix,
         });
       }
     });

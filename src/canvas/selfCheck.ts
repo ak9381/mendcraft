@@ -32,7 +32,9 @@ export function dumpTile(host: HTMLElement, doc: Document = document): TileDump 
   const rect = host.getBoundingClientRect();
   const role = host.getAttribute('role') || host.tagName.toLowerCase();
   const label = host.getAttribute('aria-label') || host.getAttribute('data-mc-tile') || role;
-  const controls = collectControls(doc)
+  // ignoreViewport: a sound tile below the fold used to look like it had
+  // zero buttons, because collectControls clips anything off-screen.
+  const controls = collectControls(doc, { ignoreViewport: true })
     .filter((el) => hostContains(host, el))
     .map((el, i) => ({
       id: el.id || el.getAttribute('data-action') || `${el.tagName.toLowerCase()}-${i}`,
@@ -77,13 +79,17 @@ export function failureLine(f: SelfCheckFailure): string {
  *  Tile grammar in aiTurn.ts's TILE_SCHEMA_LINE. */
 export function expectedControlCount(spec: TileSpec): number {
   switch (spec.type) {
-    case 'lamp': case 'switch': case 'music': case 'scene': case 'connect': case 'plan':
+    case 'lamp': case 'switch': case 'music': case 'scene': case 'connect':
       return 1;
     case 'form':
       return spec.fields.length + 1; // one control per field, plus Submit
     case 'table':
       return spec.rowActionLabel ? spec.rows.length : 0;
-    case 'stat': case 'chart':
+    // 'plan' has no onXxx action in its catalogApi schema, unlike every
+    // other case above — it embeds a self-contained mini CAD surface with
+    // its own interaction model, not a single semantic HTML control, so
+    // (like stat/chart) the self-check has nothing to require here.
+    case 'stat': case 'chart': case 'plan':
       return 0;
     case 'visual':
       return (spec.markup.match(/data-action/g) ?? []).length;
@@ -120,9 +126,13 @@ export function assertReachable(dump: TileDump, doc: Document = document): SelfC
     const insideTile = cx >= dump.rect.left - 1 && cx <= dump.rect.left + dump.rect.width + 1 &&
       cy >= dump.rect.top - 1 && cy <= dump.rect.top + dump.rect.height + 1;
     const insideViewport = cx >= 0 && cx <= vw && cy >= 0 && cy <= vh;
-    const top = interactiveAncestor(deepElementFromPoint(doc, clamp(cx, 0, vw - 1), clamp(cy, 0, vh - 1)));
-    const hit = top === c.el || (!!top && (c.el.contains(top) || top.contains(c.el)));
-    if (!insideTile || !insideViewport || !hit) out.push({ kind: 'unreachable', id: c.id });
+    // Shadow-DOM buttons aren't in the host's light tree, so Node.contains
+    // can't be used alone — hostContains already crosses shadow roots.
+    const hitEl = interactiveAncestor(deepElementFromPoint(doc, clamp(cx, 0, Math.max(0, vw - 1)), clamp(cy, 0, Math.max(0, vh - 1))));
+    const hit = !!(hitEl && (hitEl === c.el || c.el.contains(hitEl) || hitEl.contains(c.el) || hostContains(c.el, hitEl) || hostContains(hitEl, c.el)));
+    // Off-viewport but still inside the tile: the board is taller than the
+    // window, not a broken control. Only demand a hit-test when on screen.
+    if (!insideTile || (insideViewport && !hit)) out.push({ kind: 'unreachable', id: c.id });
   }
   return out;
 }
@@ -177,6 +187,9 @@ export interface CheckOutcome { ok: boolean; failures: SelfCheckFailure[]; dump:
  *  code a real hand or mouse would — then is torn down immediately. */
 export function checkTile(host: HTMLElement, spec: TileSpec, doc: Document = document): CheckOutcome {
   const dump = dumpTile(host, doc);
+  if (expectedControlCount(spec) === 0) {
+    return { ok: true, failures: [], dump: { ...dump, controls: [] }, replay: [] };
+  }
   const pointer = createHandPointer(doc, { dryRun: true });
   const replay = replayTaps(pointer, dump);
   pointer.destroy();
@@ -250,6 +263,17 @@ export function afterTilesRendered(run: () => void, schedule: (cb: () => void) =
   schedule(run);
 }
 
+/** afterTilesRendered, then two animation frames so layout (scroll, flex,
+ *  measure) has settled before dump/assert — a setTimeout(0) flush is
+ *  enough for Lit to exist, but controls can still sit at a stale rect
+ *  for a frame, which made a sound on-screen lamp look unreachable. */
+export function waitForLayout(run: () => void, schedule?: (cb: () => void) => void): void {
+  const raf = typeof requestAnimationFrame === 'function'
+    ? (cb: () => void) => { requestAnimationFrame(cb); }
+    : (cb: () => void) => { setTimeout(cb, 16); };
+  afterTilesRendered(() => raf(() => raf(run)), schedule);
+}
+
 export type SelfCheckState = 'checking' | 'passed' | 'warning';
 
 export interface SelfCheckBadge { setState(s: SelfCheckState): void; remove(): void }
@@ -276,6 +300,15 @@ export interface SelfCheckLog { (engine: 'nano' | 'gemini', verb: string, detail
 export interface SelfCheckDeps {
   host: HTMLElement;
   spec: TileSpec;
+  /** The tile's own stable id (the same one enumerateMorphTiles/
+   *  selectSelfCheckTargets use, e.g. "lamp-wiz-desk") — lets a re-check of
+   *  the SAME tile (after a drag/resize commit, a morph, another build)
+   *  replace its own corner mark instead of leaving the old one in the DOM:
+   *  without this, `.mc-self-check` marks pile up one per check, and
+   *  `document.querySelector('.mc-self-check')` always finds the FIRST
+   *  (oldest, stale-position) one — which is why the mark looked like it
+   *  never followed a dragged tile. */
+  tileId: string;
   doc?: Document;
   log: SelfCheckLog;
   now?: () => number;
@@ -285,6 +318,12 @@ export interface SelfCheckDeps {
   /** Parse, validate and splice the reply back in; returns the new tile's
    *  host element (for the re-check) or null if it could not be applied. */
   applyFix?: (rawReply: string) => Promise<HTMLElement | null> | HTMLElement | null;
+  /** Restore the last good tile if the one-shot fix applied but the
+   *  re-check still failed — never leave a worse state on the canvas. */
+  rollbackFix?: () => Promise<HTMLElement | null> | HTMLElement | null;
+  /** Commit the applied fix to undo history only after the re-check
+   *  passed — a rolled-back attempt must not become an Undo step. */
+  commitFix?: () => void;
 }
 
 export interface SelfCheckStat { label: string; dumpReplayMs: number; fixPassS: number | null; passed: boolean }
@@ -297,6 +336,33 @@ if (typeof window !== 'undefined') {
   (window as unknown as { __mcSelfCheck?: { stats: SelfCheckStat[] } }).__mcSelfCheck = { stats: selfCheckStats };
 }
 
+/** One live corner mark per tile id — see SelfCheckDeps.tileId. */
+const badgesByTileId = new Map<string, SelfCheckBadge>();
+
+
+/** Scroll `host` into view for a dump/replay that needs on-screen hit-testing,
+ *  then restore every scrollable ancestor so the canvas does not jump to the
+ *  last tile mid-demo. */
+export function withScrolledIntoView<T>(host: HTMLElement, run: () => T): T {
+  if (typeof host.scrollIntoView !== 'function') return run();
+  const snaps: Array<{ el: Element; top: number; left: number }> = [];
+  try {
+    let cur: Element | null = host;
+    while (cur) {
+      snaps.push({ el: cur, top: cur.scrollTop || 0, left: cur.scrollLeft || 0 });
+      cur = cur.parentElement;
+    }
+    const se = host.ownerDocument?.scrollingElement;
+    if (se && !snaps.some((s) => s.el === se)) snaps.push({ el: se, top: se.scrollTop || 0, left: se.scrollLeft || 0 });
+    try { host.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch { /* jsdom */ }
+    return run();
+  } finally {
+    for (const s of snaps) {
+      try { (s.el as HTMLElement).scrollTop = s.top; (s.el as HTMLElement).scrollLeft = s.left; } catch { /* ignore */ }
+    }
+  }
+}
+
 /** The whole lifecycle for one tile: checking mark up immediately, dump +
  *  replay + assert, mark passed/warning — and if it failed, at most ONE
  *  Gemini fix pass, re-checked once, never looped. */
@@ -304,9 +370,11 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckStat> 
   const doc = deps.doc ?? document;
   const now = deps.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
   const logBoth = (detail: string): void => { deps.log('nano', 'note', detail); deps.log('gemini', 'note', detail); };
-  let badge = mountSelfCheckBadge(deps.host, doc);
+  badgesByTileId.get(deps.tileId)?.remove();
   const t0 = now();
-  let outcome = checkTile(deps.host, deps.spec, doc);
+  let outcome = withScrolledIntoView(deps.host, () => checkTile(deps.host, deps.spec, doc));
+  let badge = mountSelfCheckBadge(deps.host, doc);
+  badgesByTileId.set(deps.tileId, badge);
   const dumpReplayMs = now() - t0;
   const label = outcome.dump.label;
   logBoth(statusLine(outcome));
@@ -322,14 +390,31 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckStat> 
       fixPassS = (now() - tf0) / 1000;
       if (newHost) {
         badge.remove();
+        outcome = withScrolledIntoView(newHost, () => checkTile(newHost, deps.spec, doc));
         badge = mountSelfCheckBadge(newHost, doc);
-        outcome = checkTile(newHost, deps.spec, doc);
+        badgesByTileId.set(deps.tileId, badge);
         if (outcome.ok) {
           badge.setState('passed');
+          deps.commitFix?.();
           logBoth(`self-check: fix verified in ${fixPassS.toFixed(2)}s, 0 problems`);
         } else {
+          let restored: HTMLElement | null = null;
+          if (deps.rollbackFix) {
+            try { restored = await deps.rollbackFix(); } catch { restored = null; }
+          }
+          if (restored) {
+            badge.remove();
+            outcome = withScrolledIntoView(restored, () => checkTile(restored, deps.spec, doc));
+            badge = mountSelfCheckBadge(restored, doc);
+            badgesByTileId.set(deps.tileId, badge);
+          }
           badge.setState('warning');
-          logBoth(`self-check: still ${outcome.failures.length} problem${outcome.failures.length === 1 ? '' : 's'} after one fix — leaving it up`);
+          logBoth(restored
+            ? `self-check: still ${outcome.failures.length || 'some'} problem${(outcome.failures.length || 1) === 1 ? '' : 's'} after one fix — restored the last good tile`
+            : `self-check: still ${outcome.failures.length} problem${outcome.failures.length === 1 ? '' : 's'} after one fix — leaving it up`);
+          // A rolled-back tile is still a warning if it failed originally;
+          // outcome.ok may be false on the restored (original) tile too.
+          outcome = { ...outcome, ok: false };
         }
       } else {
         badge.setState('warning');
@@ -337,8 +422,19 @@ export async function runSelfCheck(deps: SelfCheckDeps): Promise<SelfCheckStat> 
       }
     } catch {
       fixPassS = (now() - tf0) / 1000;
+      let restored: HTMLElement | null = null;
+      if (deps.rollbackFix) {
+        try { restored = await deps.rollbackFix(); } catch { restored = null; }
+      }
+      if (restored) {
+        badge.remove();
+        badge = mountSelfCheckBadge(restored, doc);
+        badgesByTileId.set(deps.tileId, badge);
+      }
       badge.setState('warning');
-      logBoth('self-check: fix pass failed — leaving it up');
+      logBoth(restored
+        ? 'self-check: fix pass failed — restored the last good tile'
+        : 'self-check: fix pass failed — leaving it up');
     }
   } else {
     badge.setState('warning');

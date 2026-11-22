@@ -30,6 +30,10 @@ export function fakeEl(tag: string, rect: FakeRect, attrs: Record<string, string
     style: {} as Record<string, string>,
     className: '',
     hidden: false,
+    // Set by fakeDoc() for any element it's handed — lets dispatchEvent
+    // simulate the capturing phase an ancestor listener runs during, same
+    // as a real DOM dispatch (see fakeDoc's addEventListener below).
+    ownerDocument: null as any,
     getAttribute: (n: string) => attrs[n] ?? null,
     setAttribute: (n: string, v: string) => { attrs[n] = v; },
     matches: (sel: string) => sel.split(',').some((s) => s.trim().startsWith('button')),
@@ -41,15 +45,22 @@ export function fakeEl(tag: string, rect: FakeRect, attrs: Record<string, string
     addEventListener(type: string, fn: (e: unknown) => void) { (listeners[type] ??= []).push(fn); },
     removeEventListener(type: string, fn: (e: unknown) => void) { listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn); },
     dispatchEvent(e: { type: string }) {
+      let stopped = false;
       const withStops = Object.assign(e, {
-        stopImmediatePropagation: (e as { stopImmediatePropagation?: () => void }).stopImmediatePropagation ?? (() => {}),
+        stopImmediatePropagation: () => { stopped = true; },
         preventDefault: (e as { preventDefault?: () => void }).preventDefault ?? (() => {}),
       });
-      (listeners[e.type] ?? []).slice().forEach((fn) => fn(withStops));
+      // Capturing phase: an ancestor (fakeDoc) listener runs BEFORE the
+      // target's own — a real browser dispatch always reaches the root
+      // first. If it stops propagation, the target's own listeners (the
+      // app's real @click handler included) never run.
+      (el.ownerDocument?.__captureListeners?.(e.type) ?? []).slice().forEach((fn: (e: unknown) => void) => { if (!stopped) fn(withStops); });
+      if (!stopped) (listeners[e.type] ?? []).slice().forEach((fn) => fn(withStops));
       return true;
     },
     click() { el.dispatchEvent({ type: 'click' }); },
-    remove() { /* no-op: tests don't need real detach bookkeeping */ },
+    removed: false,
+    remove() { el.removed = true; },
   };
   return el;
 }
@@ -60,7 +71,8 @@ export function fakeHost(rect: FakeRect, attrs: Record<string, string> = {}, tag
 
 export function fakeDoc(controls: any[], o: { body?: { append: (...els: any[]) => void } } = {}): any {
   const body = o.body ?? { append: () => {} };
-  return {
+  const captureListeners: Record<string, Array<(e: unknown) => void>> = {};
+  const doc: any = {
     body,
     createElement: (tag: string) => fakeEl(tag, { left: 0, top: 0, width: 0, height: 0 }),
     querySelectorAll: (sel: string) => {
@@ -72,5 +84,12 @@ export function fakeDoc(controls: any[], o: { body?: { append: (...els: any[]) =
         const r = b.getBoundingClientRect();
         return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
       }) ?? null,
+    // handPointer's dry-run activate() stops the click here (an ancestor,
+    // during the capturing phase) — see fakeEl's dispatchEvent.
+    addEventListener(type: string, fn: (e: unknown) => void) { (captureListeners[type] ??= []).push(fn); },
+    removeEventListener(type: string, fn: (e: unknown) => void) { captureListeners[type] = (captureListeners[type] ?? []).filter((f) => f !== fn); },
+    __captureListeners: (type: string) => captureListeners[type] ?? [],
   };
+  controls.forEach((c) => { c.ownerDocument = doc; });
+  return doc;
 }

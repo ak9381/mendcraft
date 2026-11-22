@@ -123,29 +123,40 @@ export function interactiveAncestor(el: Element | null): HTMLElement | null {
   return null;
 }
 
-function isUsable(el: HTMLElement): boolean {
+export interface CollectControlsOpts {
+  /** Include controls that are currently off-screen (below the fold).
+   *  Self-check uses this so a sound tile that just hasn't been scrolled
+   *  into view isn't reported as "missing every button". Hands still
+   *  drop them — they aren't reachable by a pinch until they are. */
+  ignoreViewport?: boolean;
+}
+
+function isUsable(el: HTMLElement, opts?: CollectControlsOpts): boolean {
   if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') return false;
   if (el.closest('[inert]')) return false;
   const r = el.getBoundingClientRect();
   if (r.width < 1 || r.height < 1) return false;
   const cv = (el as HTMLElement & { checkVisibility?: (o?: object) => boolean }).checkVisibility;
   if (cv && !cv.call(el, { checkOpacity: true, checkVisibilityCSS: true })) return false;
-  if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+  if (!opts?.ignoreViewport && (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth)) return false;
   return true;
 }
 
 /** Every usable interactive control in the document, including open shadow
  *  roots, limited to a visible modal dialog when one is open. */
-export function collectControls(doc: Document = document): HTMLElement[] {
+export function collectControls(doc: Document = document, opts?: CollectControlsOpts): HTMLElement[] {
   const out: HTMLElement[] = [];
   const walk = (scope: Document | ShadowRoot) => {
-    scope.querySelectorAll<HTMLElement>(INTERACTIVE).forEach((el) => { if (isUsable(el)) out.push(el); });
+    scope.querySelectorAll<HTMLElement>(INTERACTIVE).forEach((el) => { if (isUsable(el, opts)) out.push(el); });
     scope.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
   };
   walk(doc);
   const modal = Array.from(doc.querySelectorAll<HTMLElement>('[aria-modal=true]')).find((m) => !m.hidden && m.getBoundingClientRect().height > 0);
   const scoped = modal ? out.filter((el) => modal.contains(el)) : out;
   // Only controls that are on top at their centre (not covered by a sheet).
+  // Off-screen centres make elementFromPoint return null — skip this clip
+  // when the caller asked to include below-the-fold controls.
+  if (opts?.ignoreViewport) return scoped;
   return scoped.filter((el) => {
     const r = el.getBoundingClientRect();
     const cx = clamp(r.left + r.width / 2, 0, innerWidth - 1), cy = clamp(r.top + r.height / 2, 0, innerHeight - 1);
@@ -284,10 +295,17 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     consumedUntil = now() + 700;
     if (dryRun) {
       const stop = (e: Event) => { e.stopImmediatePropagation(); e.preventDefault(); };
-      // Capture at the target itself: the event reaches the control, app handlers don't run.
-      el.addEventListener('click', stop, { capture: true, once: true });
+      // Capture on `doc`, not `el`: a listener added to the target itself
+      // fires in REGISTRATION ORDER regardless of its capture flag (the DOM
+      // spec only gives capture priority over ancestors, not over earlier
+      // listeners on the same node) — so stopping on `el` ran AFTER
+      // whatever real @click handler the app (e.g. a Lit tile) already
+      // bound at render time, letting the "dry run" fire it for real. A
+      // capture listener on an ancestor runs during the capturing phase,
+      // strictly before the event ever reaches the target's own listeners.
+      doc.addEventListener('click', stop, { capture: true, once: true });
       el.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, cancelable: true }));
-      el.removeEventListener('click', stop, { capture: true });
+      doc.removeEventListener('click', stop, { capture: true });
       return;
     }
     if (el.matches('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable=true]')) {
