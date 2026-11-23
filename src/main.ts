@@ -5351,6 +5351,9 @@ function handleHandEvent(raw: HandEvent): void {
       onboarding.notifyPinch();
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       if (!clickCooldown.ready(now)) break;
+      // B-172: a mouse press outside the open More menu closes it (pointerdown
+      // listener); a hand pinch carries no pointerdown, so close it here too.
+      if (overflowMenu.isOpen() && !overflowMenu.contains(document.elementFromPoint(aimed.clientX, aimed.clientY))) overflowMenu.close();
       const consumed = (): void => { clickCooldown.arm(now); };
       if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) { consumed(); break; }
       // A pinch over the on-screen keyboard presses the key under the cursor.
