@@ -54,7 +54,7 @@ export function bothOnFixture(doc: PlanDoc, id: string, p: Point, q: Point, slac
 }
 
 export interface TwoHandSession {
-  readonly kind: Mode['kind'] | 'twist-or-resize' | 'draw-wall' | 'draw-room';
+  readonly kind: Mode['kind'] | 'twist-or-resize' | 'draw-wall' | 'draw-room' | 'measure';
   move(a: Point, b: Point): void;
   /** Release: the live steps become one undoable op. */
   end(): void;
@@ -185,5 +185,42 @@ export function beginTwoHandDraw(
     },
     end() { done = true; view.render(); }, // the live op IS the one undo step
     cancel() { if (done) return; done = true; rollback(); view.render(); },
+  };
+}
+
+// ---- two-hand TAPE MEASURE (B-055): with the Measure tool active, two
+// pinches read the distance between the hands live, like a tape. Nothing is
+// added on release; a tap soon after keeps it as a permanent dimension.
+
+export const TAPE_KEEP_MS = 4000;
+
+export function tapeText(mm: number): string {
+  return mm >= 1000 ? `${(mm / 1000).toFixed(2)} m` : `${Math.round(mm)} mm`;
+}
+
+export interface TwoHandTape extends TwoHandSession {
+  /** The last measured span (world mm), or null if never moved. */
+  span(): { a: Point; b: Point } | null;
+}
+
+export function beginTwoHandMeasure(view: SessionView & { showHint?(t: string, o?: { sticky?: boolean }): void }): TwoHandTape | null {
+  if (!view.toWorld) return null;
+  let last: { a: Point; b: Point } | null = null;
+  let done = false;
+  return {
+    kind: 'measure',
+    move(pa, pb) {
+      if (done) return;
+      last = { a: view.toWorld!(pa.x, pa.y), b: view.toWorld!(pb.x, pb.y) };
+      view.showHint?.(`Tape: ${tapeText(Math.hypot(last.b.x - last.a.x, last.b.y - last.a.y))}`, { sticky: true });
+    },
+    end() {
+      if (done) return;
+      done = true;
+      if (last) view.showHint?.(`Tape: ${tapeText(Math.hypot(last.b.x - last.a.x, last.b.y - last.a.y))} — tap to keep it as a dimension.`);
+      else view.showHint?.('');
+    },
+    cancel() { if (done) return; done = true; last = null; view.showHint?.(''); },
+    span: () => last,
   };
 }

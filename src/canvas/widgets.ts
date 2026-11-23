@@ -24,7 +24,7 @@ import {
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
 import { createPlanRenderer } from '../plan/renderer';
-import { beginTwoHandDraw, beginTwoHandSession, type TwoHandSession } from '../plan/twoHandSession';
+import { beginTwoHandDraw, beginTwoHandMeasure, beginTwoHandSession, TAPE_KEEP_MS, type TwoHandSession, type TwoHandTape } from '../plan/twoHandSession';
 import { snapToGrid } from '../plan/snap';
 import type { ViewportHandle } from '../core/controller';
 import type { HandSurface } from './handPointer';
@@ -104,6 +104,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     let two: { mid: { x: number; y: number }; span: number } | null = null;
     let additiveNext = false;
     let edit: TwoHandSession | null = null;
+    // A just-released two-hand tape: a tap within TAPE_KEEP_MS keeps it.
+    let tape: { a: { x: number; y: number }; b: { x: number; y: number }; until: number } | null = null;
     host.dataset.handSurface = '';
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
@@ -130,13 +132,14 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         // and rolled back if a hand is lost. Anything else zooms/pans.
         if (phase === 'start' && a && b) {
           const tool = host.querySelector<HTMLElement>('.mc-palette .active[data-tool]')?.dataset.tool;
-          edit = tool === 'wall' || tool === 'room' ? beginTwoHandDraw(controller, view, tool, (p) => snapToGrid(p)) : beginTwoHandSession(controller, view, a, b); if (edit) { two = null; view.setLiveGesture?.(true); host.dataset.twoHandEdit = edit.kind; return; } }
+          tape = null;
+          edit = tool === 'wall' || tool === 'room' ? beginTwoHandDraw(controller, view, tool, (p) => snapToGrid(p)) : tool === 'measure' ? beginTwoHandMeasure(view) : beginTwoHandSession(controller, view, a, b); if (edit) { two = null; view.setLiveGesture?.(true); host.dataset.twoHandEdit = edit.kind; return; } }
         if (edit) {
           // Edits follow the RAW hands only: the smoothed points carry no rotation
           // and keep coasting through the release grace frames, which would
           // un-twist the fixture just before it commits.
           if (phase === 'move' && raw) { edit.move(raw.a, raw.b); host.dataset.twoHandEdit = edit.kind; }
-          else if (phase === 'end' || phase === 'cancel') { if (phase === 'end') edit.end(); else edit.cancel(); view.setLiveGesture?.(false); edit = null; delete host.dataset.twoHandEdit; }
+          else if (phase === 'end' || phase === 'cancel') { if (phase === 'end') edit.end(); else edit.cancel(); if (phase === 'end' && edit.kind === 'measure') { const sp = (edit as TwoHandTape).span(); tape = sp ? { ...sp, until: Date.now() + TAPE_KEEP_MS } : null; } view.setLiveGesture?.(false); edit = null; delete host.dataset.twoHandEdit; }
           return;
         }
         if (phase === 'end' || phase === 'cancel' || !a || !b) { two = null; return; }
@@ -159,7 +162,11 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         return false;
       },
       tap: (x, y) => {
-        host.focus({ preventScroll: true }); // like a mouse press: plan keys (Esc, Delete) work next
+        host.focus({ preventScroll: true });
+        if (tape) {
+          const t = tape; tape = null;
+          if (Date.now() <= t.until && controller.applyOp({ op: 'add_dim', ax: t.a.x, ay: t.a.y, bx: t.b.x, by: t.b.y }).ok) { view.render(); view.showHint?.('Dimension kept.'); return; }
+        } // like a mouse press: plan keys (Esc, Delete) work next
         // A hold on empty floor released without a drag = Shift+click on empty:
         // keep the selection (a plain tap there would clear it).
         if (additiveNext) { additiveNext = false; return; }
