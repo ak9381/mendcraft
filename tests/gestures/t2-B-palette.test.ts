@@ -111,7 +111,7 @@ describe('B-002 drag a placeable item off the palette arms pick-and-place', () =
 });
 
 describe('B-023 BUG: dragging a non-placeable tool (e.g. Wall) off the palette arms nothing at all', () => {
-  it.fails('wall is not placeable; a >6px drift before release should still at least arm the tool on release, but it does not — BUG: src/core/palette.ts:51-61 onWinMove nulls `press` unconditionally on any >6px drift (even for non-placeable items), and onWinUp (palette.ts:62-68) only arms `if (press)`, so a hand tremor that drifts >6px while pressing a non-placeable tool like Wall silently drops the interaction: neither onArm nor onPlaceStart ever fires', () => {
+  it('FIXED: wall is not placeable; a >6px drift before release should still at least arm the tool on release, but it does not — BUG: src/core/palette.ts:51-61 onWinMove nulls `press` unconditionally on any >6px drift (even for non-placeable items), and onWinUp (palette.ts:62-68) only arms `if (press)`, so a hand tremor that drifts >6px while pressing a non-placeable tool like Wall silently drops the interaction: neither onArm nor onPlaceStart ever fires', () => {
     installFakeDom();
     const host = new FakeNode('div') as unknown as HTMLElement;
     const armed: string[] = [];
@@ -175,8 +175,8 @@ describe('B-008 left hand vs right hand: tool activation is hand-agnostic', () =
   });
 });
 
-describe('B-009 BUG: hand lost mid-press leaves the palette stuck "armed" with no cancel path', () => {
-  it.fails('no pointercancel listener exists at all; if the pointer stream ends without a window pointerup (hand drops out of frame), `press` is left set — BUG: src/core/palette.ts only registers window "pointermove"/"pointerup" (palette.ts:69-70), never "pointercancel", so a resumed/unrelated pointermove far later is misread as the drag threshold for the stale press', () => {
+describe('B-009 (fixed): hand lost mid-press leaves the palette stuck "armed" with no cancel path', () => {
+  it('FIXED: no pointercancel listener exists at all; if the pointer stream ends without a window pointerup (hand drops out of frame), `press` is left set — BUG: src/core/palette.ts only registers window "pointermove"/"pointerup" (palette.ts:69-70), never "pointercancel", so a resumed/unrelated pointermove far later is misread as the drag threshold for the stale press', () => {
     installFakeDom();
     const host = new FakeNode('div') as unknown as HTMLElement;
     const armed: string[] = [];
@@ -186,7 +186,8 @@ describe('B-009 BUG: hand lost mid-press leaves the palette stuck "armed" with n
     down(btn, 10, 10); // hand begins pressing Door
     // hand leaves the camera frame here — no pointerup, no pointercancel ever fires
     // ... much later, tracking resumes with the hand somewhere unrelated:
-    winMove(500, 500);
+    // A real browser reports buttons: 0 on a move with nothing pressed.
+    (globalThis as unknown as { window: { dispatchEvent: Function } }).window.dispatchEvent({ type: 'pointermove', clientX: 500, clientY: 500, buttons: 0 });
     // Expectation: the stale press from before tracking was lost should NOT
     // resurrect itself as a place-start once tracking resumes.
     expect(placed).toEqual([]);
@@ -239,5 +240,22 @@ describe('B-015 z-order: an open flyout sub-item occupies its own rect independe
     down(groupBtn, 5, 5);
     winUp(); // opens the flyout
     expect(handle.itemAt(110, 110)?.toolId).toBe('chair');
+  });
+});
+
+describe('B-009 pointercancel ends a press without arming or placing', () => {
+  it('pointercancel mid-press then a later held move/up does nothing', () => {
+    installFakeDom();
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    const armed: string[] = [];
+    const placed: string[] = [];
+    const handle = createPalette(host, [doorItem], { onArm: (id) => armed.push(id), onPlaceStart: (id) => placed.push(id) });
+    const btn = handle.element.children[0] as unknown as FakeNode;
+    down(btn, 10, 10);
+    (globalThis as unknown as { window: { dispatchEvent: Function } }).window.dispatchEvent({ type: 'pointercancel' });
+    winMove(300, 300);
+    winUp();
+    expect(placed).toEqual([]);
+    expect(armed).toEqual([]);
   });
 });

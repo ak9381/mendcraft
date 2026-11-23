@@ -50,13 +50,20 @@ export function createPalette(
   }
   function onWinMove(e: PointerEvent): void {
     if (!press) return;
+    // B-009: a move with no button held means the press ended where we never
+    // saw it (hand left the frame, release outside the window) — drop the
+    // stale press instead of misreading this move as a drag-to-place.
+    // Synthetic hand events (isTrusted false) carry no buttons, so skip them.
+    if (e.buttons === 0 && e.isTrusted !== false) { press = null; return; }
     if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
       const item = press.item;
+      // B-023: a non-placeable tool (Wall) has no drag-to-place, so tremor
+      // drift past 6px must not swallow the tap — keep the press and arm on
+      // release, same as a clean tap.
+      if (!item.placeable) return;
       press = null;
-      if (item.placeable) {
-        closeFlyouts();
-        cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
-      }
+      closeFlyouts();
+      cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
     }
   }
   function onWinUp(): void {
@@ -66,8 +73,12 @@ export function createPalette(
     }
     press = null;
   }
+  /** B-009: pointercancel / window blur end a press without arming. */
+  function onWinCancel(): void { press = null; }
   window.addEventListener('pointermove', onWinMove);
   window.addEventListener('pointerup', onWinUp);
+  window.addEventListener('pointercancel', onWinCancel);
+  window.addEventListener('blur', onWinCancel);
 
   /** Build one armable button (press→arm, press+drag→place) into `parent`. */
   function makeButton(item: PaletteItemSpec, parent: HTMLElement, visible: () => boolean): HTMLButtonElement {
@@ -130,7 +141,12 @@ export function createPalette(
       for (const [id, btn] of buttons) btn.classList.toggle('active', id === toolId);
     },
     itemAt(x, y) {
-      for (const { item, btn, visible } of flat) {
+      // C150: an open flyout sits visually ON TOP of the dock, so hit-test its
+      // items first — a pinch must reach what the user sees, not the covered
+      // dock button registered earlier.
+      const inFlyout = (b: HTMLButtonElement) => flyouts.some((f) => !f.hidden && b.parentElement === f);
+      const ordered = [...flat.filter((f) => inFlyout(f.btn)), ...flat.filter((f) => !inFlyout(f.btn))];
+      for (const { item, btn, visible } of ordered) {
         if (!visible()) continue;
         const r = btn.getBoundingClientRect();
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return item;
@@ -141,6 +157,8 @@ export function createPalette(
     dispose() {
       window.removeEventListener('pointermove', onWinMove);
       window.removeEventListener('pointerup', onWinUp);
+      window.removeEventListener('pointercancel', onWinCancel);
+      window.removeEventListener('blur', onWinCancel);
       root.remove();
     },
   };

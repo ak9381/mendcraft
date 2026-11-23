@@ -153,7 +153,7 @@ describe('C148 palette button — left vs right hand', () => {
 });
 
 describe('C150 palette button — overlapping z-order with an open flyout', () => {
-  it.fails('BUG: itemAt() should hit-test the visually topmost (open flyout) button, not the first-registered dock button, when their rects overlap — src/core/palette.ts:132-139 iterates `flat` in registration order with no z-order/visual-stacking check', () => {
+  it('FIXED: itemAt() should hit-test the visually topmost (open flyout) button, not the first-registered dock button, when their rects overlap — src/core/palette.ts:132-139 iterates `flat` in registration order with no z-order/visual-stacking check', () => {
     const host = new FakeElement('div');
     const dockItem: PaletteItemSpec = { toolId: 'select', label: 'Select', icon: 'S', shortcut: 's' };
     const flyoutItem: PaletteItemSpec = { toolId: 'stairs', label: 'Stairs', icon: 'St', shortcut: '', placeable: true };
