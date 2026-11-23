@@ -37,7 +37,8 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
-import { mountCanvasHands, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
+import { mountCanvasHands, oneHandPinchPoint, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
+import { createHandPan } from './handPan';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
   type OwnerRecord,
@@ -1449,6 +1450,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (r.ended) { if (twoHandGrab) persist(); twoHandGrab = null; }
   }
 
+  // ---- one-hand pinch-drag pan on empty canvas (A1-012). A still pinch keeps
+  // firing 'keep' (suppressed only once a drag crosses threshold); a dragged
+  // pinch pans the view. Two-hand gesture, edit mode, and a pinch aimed at a
+  // control all opt out (fed null) so brush-to-drop and control-clicks survive.
+  const handPan = createHandPan();
+  function handleHandPan(hands: readonly (readonly { x: number; y: number }[])[], _now: number): void {
+    if (editBoard.editing || twoHandGrab || twoHandResizing) { if (handPan.panning) persist(); handPan.reset(); return; }
+    const w = viewport.clientWidth || innerWidth;
+    const h = viewport.clientHeight || innerHeight;
+    if (twoHandPinchPoints(hands, w, h)) { if (handPan.panning) persist(); handPan.reset(); return; }
+    const pt = handPointer?.consumedPinch() ? null : oneHandPinchPoint(hands, w, h);
+    const wasPanning = handPan.panning;
+    const d = handPan.update(pt);
+    if (d && (d.dx || d.dy)) { camera = panBy(camera, d.dx, d.dy); applyCamera(); }
+    if (wasPanning && !handPan.panning) persist(); // pinch lifted mid-pan
+  }
+
   const inputs = createCanvasInputs({
     root,
     hands: async (r, onEvent) => {
@@ -1471,13 +1489,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // A pinch aimed at a control activates that control (handPointer);
       // only a pinch over empty canvas means "keep" — and a pinch the morph
       // hold armed on is the morph's, not a keep.
-      keep: () => { if (!morphFlow?.holdActive() && !handPointer?.consumedPinch()) keep(); },
+      keep: () => { if (!morphFlow?.holdActive() && !handPointer?.consumedPinch() && !handPan.panning) keep(); },
       drop,
       palm: () => toggleTools(),
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
-      frame: (hands, now) => { handleTwoHand(hands, now); handPointer?.update(hands, now); teachPanel.matchFrame(hands, now); },
+      frame: (hands, now) => { handleTwoHand(hands, now); handPointer?.update(hands, now); handleHandPan(hands, now); teachPanel.matchFrame(hands, now); },
     },
   });
   async function toggleHands(): Promise<void> {

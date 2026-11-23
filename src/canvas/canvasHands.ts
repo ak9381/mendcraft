@@ -86,6 +86,25 @@ export function twoHandPinchPoints(
   return { p: toScreen(pinching[0]), q: toScreen(pinching[1]) };
 }
 
+/**
+ * One-hand pinch extractor for the pinch-drag pan (A1-012). Returns the single
+ * pinch point in SCREEN pixels (same selfie-mirrored reach-box mapping as the
+ * hand cursor and twoHandPinchPoints), but only when EXACTLY one hand is
+ * pinching — so the two-hand zoom/pan path is never disturbed. Returns null
+ * otherwise. Pure (no DOM): the caller passes the viewport size.
+ */
+export function oneHandPinchPoint(
+  hands: readonly (readonly Pt[])[],
+  w: number,
+  h: number,
+): { x: number; y: number } | null {
+  const pinching = hands.filter((hnd) => hnd && hnd.length >= 21 && classifyGesture(hnd as Pt[]) === 'pinch');
+  if (pinching.length !== 1) return null;
+  const hnd = pinching[0];
+  const mid = { x: (hnd[THUMB_TIP].x + hnd[INDEX_TIP].x) / 2, y: (hnd[THUMB_TIP].y + hnd[INDEX_TIP].y) / 2 };
+  return mapToScreen(mid, w, h);
+}
+
 export function createCanvasHandsAdapter(
   onEvent: (event: CanvasHandEvent) => void,
   opts: CanvasHandsOptions = {},

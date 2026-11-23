@@ -390,4 +390,24 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       expect(Math.abs(pts!.p.x - pts!.q.x)).toBeGreaterThan(1);
     });
   });
+
+  describe('oneHandPinchPoint (exactly one pinching hand -> screen px) [A1-012]', () => {
+    it('returns null with zero or two+ pinching hands (two-hand path is untouched)', async () => {
+      const { oneHandPinchPoint } = await import('../../src/canvas/canvasHands');
+      expect(oneHandPinchPoint([], 1000, 800)).toBeNull();
+      expect(oneHandPinchPoint([makeOpenPalmHand()], 1000, 800)).toBeNull();
+      const right = makePinchingHand().map((p) => ({ x: p.x + 0.2, y: p.y }));
+      expect(oneHandPinchPoint([makePinchingHand(), right], 1000, 800)).toBeNull();
+    });
+
+    it('returns the single pinch midpoint in screen px', async () => {
+      const { oneHandPinchPoint } = await import('../../src/canvas/canvasHands');
+      const pt = oneHandPinchPoint([makePinchingHand()], 1000, 800);
+      expect(pt).not.toBeNull();
+      expect(pt!.x).toBeGreaterThanOrEqual(0);
+      expect(pt!.x).toBeLessThanOrEqual(1000);
+      expect(pt!.y).toBeGreaterThanOrEqual(0);
+      expect(pt!.y).toBeLessThanOrEqual(800);
+    });
+  });
 });
