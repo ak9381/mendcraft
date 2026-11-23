@@ -60,7 +60,9 @@ export function createPalette(
       // B-023: a non-placeable tool (Wall) has no drag-to-place, so tremor
       // drift past 6px must not swallow the tap — keep the press and arm on
       // release, same as a clean tap.
-      if (!item.placeable) return;
+      // A deliberate slide well off the button (> 48px) still cancels, like
+      // releasing a mouse outside a button.
+      if (!item.placeable) { if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 48) press = null; return; }
       press = null;
       closeFlyouts();
       cb.onPlaceStart(item.toolId, e.clientX, e.clientY);

@@ -259,3 +259,17 @@ describe('B-009 pointercancel ends a press without arming or placing', () => {
     expect(armed).toEqual([]);
   });
 });
+
+describe('B-023 a deliberate slide far off a non-placeable tool cancels (mouse-button convention)', () => {
+  it('drift > 48px then release arms nothing', () => {
+    installFakeDom();
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    const armed: string[] = [];
+    const handle = createPalette(host, [wallItem], { onArm: (id) => armed.push(id), onPlaceStart: () => {} });
+    const btn = handle.element.children[0] as unknown as FakeNode;
+    down(btn, 10, 10);
+    winMove(10, 120);
+    winUp();
+    expect(armed).toEqual([]);
+  });
+});
