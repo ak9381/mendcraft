@@ -68,6 +68,10 @@ export function createPalette(
       cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
     }
   }
+  // Set by any real pointer press on a palette button. A click that follows a
+  // pointer press is that same press's tail and must not act twice.
+  let pointerPressAt = -Infinity;
+  const pressedRecently = () => performance.now() - pointerPressAt < 800;
   function onWinUp(): void {
     if (press) {
       cb.onArm(press.item.toolId);
@@ -101,7 +105,16 @@ export function createPalette(
     btn.dataset.tool = item.toolId;
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      pointerPressAt = performance.now();
       press = { item, x: e.clientX, y: e.clientY };
+    });
+    // A click with no pointer press before it — keyboard Enter/Space, or the
+    // canvas hand pointer's pinch (which dispatches a click) — arms the tool
+    // too, so a tool is never mouse-only.
+    btn.addEventListener('click', () => {
+      if (pressedRecently()) return;
+      cb.onArm(item.toolId);
+      closeFlyouts();
     });
     buttons.set(item.toolId, btn);
     flat.push({ item, btn, visible });
@@ -123,12 +136,18 @@ export function createPalette(
       flyout.className = 'mc-flyout';
       flyout.hidden = true;
       for (const sub of item.group) makeButton(sub, flyout, () => !flyout.hidden);
-      btn.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
+      const toggleFlyout = () => {
         const willOpen = flyout.hidden;
         closeFlyouts();
         flyout.hidden = !willOpen;
+      };
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        pointerPressAt = performance.now();
+        toggleFlyout();
       });
+      // Keyboard / hand-pinch click opens the flyout too (see makeButton).
+      btn.addEventListener('click', () => { if (!pressedRecently()) toggleFlyout(); });
       flyouts.push(flyout);
       root.appendChild(btn);
       root.appendChild(flyout);

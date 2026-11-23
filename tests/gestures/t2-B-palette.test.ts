@@ -273,3 +273,26 @@ describe('B-023 a deliberate slide far off a non-placeable tool cancels (mouse-b
     expect(armed).toEqual([]);
   });
 });
+
+describe('B-001 keyboard/hand-pinch click arms a palette tool (no pointer press)', () => {
+  it('a bare click arms once; a pointer press + release + its trailing click arms once', () => {
+    installFakeDom();
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    const armed: string[] = [];
+    const handle = createPalette(host, [wallItem], { onArm: (id) => armed.push(id), onPlaceStart: () => {} });
+    const btn = handle.element.children[0] as unknown as FakeNode;
+    btn.dispatchEvent({ type: 'click' });
+    expect(armed).toEqual(['wall']);
+    down(btn, 10, 10); winUp(); btn.dispatchEvent({ type: 'click' });
+    expect(armed).toEqual(['wall', 'wall']);
+  });
+  it('a bare click on the Furniture group opens its flyout', () => {
+    installFakeDom();
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    const handle = createPalette(host, [groupItem], { onArm: () => {}, onPlaceStart: () => {} });
+    const groupBtn = handle.element.children[0] as unknown as FakeNode;
+    const flyout = handle.element.children[1] as unknown as FakeNode;
+    groupBtn.dispatchEvent({ type: 'click' });
+    expect(flyout.hidden).toBe(false);
+  });
+});
