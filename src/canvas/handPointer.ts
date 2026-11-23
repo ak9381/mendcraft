@@ -53,6 +53,9 @@ export interface HandSurface {
   drag(x: number, y: number): void;
   endDrag(): void;
   tap(x: number, y: number): void;
+  /** Two-hand pinch over the surface (client px): anchored zoom + pan, so the
+   *  plan under each finger follows that finger. */
+  pinch2?(phase: 'start' | 'move' | 'end', a?: { x: number; y: number }, b?: { x: number; y: number }): void;
 }
 export function handSurfaceAt(el: Element | null): HandSurface | null {
   const host = (el as HTMLElement | null)?.closest?.('[data-hand-surface]') as (HTMLElement & { __mcHandSurface?: HandSurface }) | null;
@@ -599,7 +602,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     pinch: press,
     get target() { return target; },
     get lastActivated() { return lastActivated; },
-    consumedPinch: () => now() < consumedUntil || !!target,
+    consumedPinch: () => now() < consumedUntil || !!target || !!surface,
     suppressNextRelease() { if (pinched) suppressRelease = true; },
     setDryRun(on) { dryRun = on; },
     lost,

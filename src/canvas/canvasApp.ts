@@ -54,7 +54,7 @@ import { activePeople, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, type HandPointer } from './handPointer';
+import { createHandPointer, deepElementFromPoint, handSurfaceAt, type HandPointer, type HandSurface } from './handPointer';
 import { createToggleLatch } from './handFeel';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
@@ -1426,6 +1426,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // see a board wider than the screen. One-hand behaviour is untouched.
   const twoHand = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
   let twoHandGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
+  let twoHandSurface: { surf: HandSurface; p0: Vec; q0: Vec; off: Vec } | null = null;
   let twoHandResizing = false; // Edit mode: a tile is being two-hand resized.
   let twoHandResizeGrab: { p0: Vec; q0: Vec; off: Vec } | null = null;
   function handleTwoHand(hands: readonly (readonly { x: number; y: number }[])[], now: number): void {
@@ -1463,6 +1464,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
 
+    // Over a floor-plan board: the two-hand pinch zooms/pans the PLAN (like the
+    // wheel over it), anchored at the fingers — not the whole canvas.
+    if (r.started && pts) {
+      const vpRect = viewport.getBoundingClientRect();
+      const off = { x: vpRect.left, y: vpRect.top };
+      const a = { x: pts.p.x + off.x, y: pts.p.y + off.y }, b = { x: pts.q.x + off.x, y: pts.q.y + off.y };
+      const surf = handSurfaceAt(deepElementFromPoint(document, (a.x + b.x) / 2, (a.y + b.y) / 2));
+      if (surf?.pinch2) { twoHandSurface = { surf, p0: pts.p, q0: pts.q, off }; surf.pinch2('start', a, b); return; }
+    }
+    if (twoHandSurface) {
+      const g = twoHandSurface;
+      if (r.active) {
+        const p1 = applyTransform(r.transform, g.p0), q1 = applyTransform(r.transform, g.q0);
+        g.surf.pinch2?.('move', { x: p1.x + g.off.x, y: p1.y + g.off.y }, { x: q1.x + g.off.x, y: q1.y + g.off.y });
+      }
+      if (r.ended) { g.surf.pinch2?.('end'); twoHandSurface = null; }
+      return;
+    }
     if (r.started && pts) {
       if (focusId) { focusId = null; sync(); } // match the wheel: zoom happens in overview
       twoHandGrab = { p0: pts.p, q0: pts.q, cam0: camera };
@@ -1484,7 +1503,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // control all opt out (fed null) so brush-to-drop and control-clicks survive.
   const handPan = createHandPan();
   function handleHandPan(hands: readonly (readonly { x: number; y: number }[])[], _now: number): void {
-    if (editBoard.editing || twoHandGrab || twoHandResizing) { if (handPan.panning) persist(); handPan.reset(); return; }
+    if (editBoard.editing || twoHandGrab || twoHandResizing || twoHandSurface) { if (handPan.panning) persist(); handPan.reset(); return; }
     const w = viewport.clientWidth || innerWidth;
     const h = viewport.clientHeight || innerHeight;
     if (twoHandPinchPoints(hands, w, h)) { if (handPan.panning) persist(); handPan.reset(); return; }

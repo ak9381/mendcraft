@@ -98,3 +98,26 @@ describe('Hand surface (floor-plan board): tap when still, drag once moved, fini
     hp.destroy();
   });
 });
+
+describe('Hand surface drag keeps the canvas from panning underneath it', () => {
+  it('consumedPinch stays true for the whole surface pinch, even past 700ms', () => {
+    const surfEl = fakeEl('div', { left: 0, top: 0, width: 800, height: 600 });
+    const api = { beginDrag: () => true, drag: () => {}, endDrag: () => {}, tap: () => {} };
+    surfEl.closest = (sel: string) => (sel === '[data-hand-surface]' ? Object.assign(surfEl, { __mcHandSurface: api }) : null);
+    const doc = fakeDoc([]);
+    doc.elementFromPoint = () => surfEl;
+    let t = 0;
+    const realNow = performance.now.bind(performance);
+    (performance as any).now = () => t;
+    try {
+      const hp = createHandPointer(doc, {});
+      hp.pointAt(100, 100); hp.pinch(true);
+      t = 5000; hp.pointAt(160, 100);
+      expect(hp.consumedPinch()).toBe(true);
+      hp.pinch(false);
+      t = 10000;
+      expect(hp.consumedPinch()).toBe(false);
+      hp.destroy();
+    } finally { (performance as any).now = realNow; }
+  });
+});

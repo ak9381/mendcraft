@@ -99,6 +99,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     // the drawing area itself did nothing (no walls, no select, no move). Expose
     // the plan's own pinch API (the one the old studio fed) as a hand surface.
     let handPan: { x: number; y: number } | null = null;
+    let two: { mid: { x: number; y: number }; span: number } | null = null;
     host.dataset.handSurface = '';
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
@@ -117,6 +118,17 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         view.drag?.(x, y);
       },
       endDrag: () => { if (handPan) { handPan = null; return; } view.endDrag?.(); },
+      pinch2: (phase, a, b) => {
+        if (phase === 'end' || !a || !b) { two = null; return; }
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const span = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+        if (phase === 'start' || !two) { two = { mid, span }; return; }
+        // Incremental: zoom about the previous midpoint by the span ratio, then
+        // carry that point to the new midpoint — grabbed points track fingers.
+        view.zoomAt?.(span / two.span, two.mid.x, two.mid.y);
+        view.panByPx?.(mid.x - two.mid.x, mid.y - two.mid.y);
+        two = { mid, span };
+      },
       tap: (x, y) => {
         host.focus({ preventScroll: true }); // like a mouse press: plan keys (Esc, Delete) work next
         if (view.tap?.(x, y)) return;
