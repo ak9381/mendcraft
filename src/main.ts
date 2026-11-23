@@ -1405,7 +1405,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, .mc-walk, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
