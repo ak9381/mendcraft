@@ -14,9 +14,29 @@ export interface HandHover {
   readonly current: HTMLElement | null;
 }
 
+export interface HandHoverOptions {
+  /** Called whenever the hovered target changes, with the hint text to show
+   *  (or null to hide). Lets a mouse-free hand user see the `title`/`aria-label`
+   *  hint a mouse user gets "for free" via the native tooltip. */
+  onTooltip?: (text: string | null, el: HTMLElement | null) => void;
+}
+
 const HOVER_CLASS = 'hand-hover';
 
-export function createHandHover(): HandHover {
+/** The hint a hand user should see for an element, mirroring what a mouse user
+ *  gets from the native `title` tooltip. Falls back to the accessible name.
+ *  Pure + defensively guarded so it is safe on any object. */
+export function tooltipTextFor(el: HTMLElement | null): string | null {
+  const get = (el as { getAttribute?: (n: string) => string | null } | null)?.getAttribute;
+  if (typeof get !== 'function') return null;
+  for (const attr of ['title', 'aria-label', 'data-tooltip']) {
+    const v = get.call(el, attr);
+    if (v && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+export function createHandHover(opts: HandHoverOptions = {}): HandHover {
   let current: HTMLElement | null = null;
   return {
     setTarget(el) {
@@ -24,6 +44,7 @@ export function createHandHover(): HandHover {
       current?.classList.remove(HOVER_CLASS);
       current = el;
       current?.classList.add(HOVER_CLASS);
+      opts.onTooltip?.(tooltipTextFor(el), el);
     },
     get current() { return current; },
   };

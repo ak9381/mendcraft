@@ -445,6 +445,25 @@ a.brand:hover { color: var(--accent); }
   box-shadow: none;
 }
 
+/* Hint bubble shown for a hand user hovering a control (mouse users get this
+   from the native `title` tooltip; hands have no mouseover). */
+.hand-tooltip {
+  position: absolute;
+  z-index: 9;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  background: rgb(20 20 24 / 0.92);
+  color: #f5f5f7;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+}
+.hand-tooltip[hidden] { display: none; }
+
 .hand-cursor.pinching {
   background: radial-gradient(circle, rgb(79 156 255 / 0.55) 0%, rgb(79 156 255 / 0.18) 60%, transparent 75%);
   box-shadow: none;

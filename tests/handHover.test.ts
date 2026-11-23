@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { createHandHover, magnetPull } from '../src/ui/handHover';
+import { describe, expect, it, vi } from 'vitest';
+import { createHandHover, magnetPull, tooltipTextFor } from '../src/ui/handHover';
 
 describe('magnetPull', () => {
   const rect = { x: 100, y: 100, width: 40, height: 20 }; // centre (120, 110)
@@ -62,5 +62,38 @@ describe('createHandHover', () => {
     hover.setTarget(a);
     hover.setTarget(a);
     expect(a.classList.contains('hand-hover')).toBe(true);
+  });
+});
+
+describe('C046/C-ROBUST hand-user tooltips (tooltipTextFor + onTooltip)', () => {
+  function elWith(attrs: Record<string, string>): HTMLElement {
+    const classes = new Set<string>();
+    return {
+      classList: { add: (c: string) => classes.add(c), remove: (c: string) => classes.delete(c), contains: (c: string) => classes.has(c) },
+      getAttribute: (n: string) => attrs[n] ?? null,
+    } as unknown as HTMLElement;
+  }
+
+  it('reads title, then aria-label, then data-tooltip; trims and ignores blanks', () => {
+    expect(tooltipTextFor(elWith({ title: 'Close panel' }))).toBe('Close panel');
+    expect(tooltipTextFor(elWith({ 'aria-label': 'Mic' }))).toBe('Mic');
+    expect(tooltipTextFor(elWith({ 'data-tooltip': ' Hint ' }))).toBe('Hint');
+    expect(tooltipTextFor(elWith({ title: '   ' }))).toBeNull();
+    expect(tooltipTextFor(elWith({}))).toBeNull();
+  });
+
+  it('is defensive on objects with no getAttribute (never throws)', () => {
+    expect(tooltipTextFor(null)).toBeNull();
+    expect(tooltipTextFor({ classList: {} } as unknown as HTMLElement)).toBeNull();
+  });
+
+  it('fires onTooltip with the hint on hover and null when the target clears', () => {
+    const onTooltip = vi.fn();
+    const hover = createHandHover({ onTooltip });
+    const btn = elWith({ title: 'Undo' });
+    hover.setTarget(btn);
+    expect(onTooltip).toHaveBeenLastCalledWith('Undo', btn);
+    hover.setTarget(null);
+    expect(onTooltip).toHaveBeenLastCalledWith(null, null);
   });
 });

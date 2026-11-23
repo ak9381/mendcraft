@@ -5121,7 +5121,23 @@ const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
-const handHover = createHandHover();
+// A hand user has no mouse, so native `title` tooltips never fire. Surface the
+// same hint text in a small bubble anchored above the hovered control.
+const handTip = document.createElement('div');
+handTip.className = 'hand-tooltip';
+handTip.hidden = true;
+viewportEl.appendChild(handTip);
+const handHover = createHandHover({
+  onTooltip(text, el) {
+    if (!text || !el) { handTip.hidden = true; return; }
+    const vr = viewportEl.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    handTip.textContent = text;
+    handTip.hidden = false;
+    handTip.style.left = `${er.left - vr.left + er.width / 2}px`;
+    handTip.style.top = `${Math.max(0, er.top - vr.top - 8)}px`;
+  },
+});
 /** How strongly the visual cursor eases toward a hovered control's centre
  *  (0 = none, 1 = snaps straight there); the real aim point used for hit
  *  testing is never touched, only where the cursor is drawn. */
