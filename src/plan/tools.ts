@@ -33,6 +33,16 @@ const docOf = (ctx: ToolContext): PlanDoc => ctx.snapshot() as PlanDoc;
 /** Object-snap radius in mm that tracks the zoom (≥ one grid cell, ~14 px). */
 const snapRadius = (ctx: ToolContext): number => Math.max(GRID_MM, 14 / ctx.scale());
 
+// Grab radii for the direct-manipulation handles (wall endpoint, fixture rotate)
+// in screen px. A mouse is precise, so it keeps the tight legacy targets; a hand
+// pinch is the hardest case for shaky / low-effort input to land on a tiny
+// handle, so it gets a far more forgiving target in the spirit of the app's own
+// 56 px aim-radius convention (hitTest.DEFAULT_AIM_RADIUS_PX). See B-104, B-111.
+const ENDPOINT_GRAB_PX = { mouse: 10, pinch: 26 } as const;
+const ROTATE_GRAB_PX = { mouse: 12, pinch: 26 } as const;
+const grabRadius = (p: ToolPointer, tbl: { mouse: number; pinch: number }): number =>
+  p.source === 'pinch' ? tbl.pinch : tbl.mouse;
+
 // ─── Selection helpers (also used by the renderer's global keys) ────────────
 
 type Clip =
@@ -198,20 +208,21 @@ function createSelectTool(ctx: ToolContext): Tool {
     if (selectionIds(ctx).length !== 1) return null;
     const wall = docOf(ctx).walls.find((w) => w.id === ctx.selectedId());
     if (!wall) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
     for (const end of ['a', 'b'] as const) {
       const s = ctx.toScreen(wall[end]);
-      if (Math.hypot(s.x - p.x, s.y - p.y) <= 10) return { wallId: wall.id, end };
+      if (Math.hypot(s.x - p.x, s.y - p.y) <= r) return { wallId: wall.id, end };
     }
     return null;
   }
 
-  /** Rotate handle of the single selected fixture, hit within 12 px. */
+  /** Rotate handle of the single selected fixture (forgiving radius by source). */
   function rotateHandleAt(p: ToolPointer): string | null {
     if (selectionIds(ctx).length !== 1) return null;
     const f = docOf(ctx).fixtures.find((x) => x.id === ctx.selectedId());
     if (!f) return null;
     const s = ctx.toScreen(fixtureHandlePoint(f, 30 / ctx.scale()));
-    return Math.hypot(s.x - p.x, s.y - p.y) <= 12 ? f.id : null;
+    return Math.hypot(s.x - p.x, s.y - p.y) <= grabRadius(p, ROTATE_GRAB_PX) ? f.id : null;
   }
 
   function marqueeOverlay(start: Point, cur: Point): void {

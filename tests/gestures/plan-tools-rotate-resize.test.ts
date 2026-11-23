@@ -82,20 +82,59 @@ describe('B-112/B-113/B-114 wall endpoint stretch (move_end), both ends symmetri
   });
 });
 
-describe('B-119 endpoint hit-radius boundary (10px, not profile-scaled)', () => {
-  it('a grab exactly at 10px still hits; just past it (11px) misses and falls through to a body-drag/select', () => {
+describe('B-119 endpoint hit-radius boundary (mouse precise, hand forgiving)', () => {
+  function grabEnd(source: 'mouse' | 'pinch', dist: number): boolean {
     const doc = emptyPlan();
     doc.walls.push(wall('w1', 0, 0, 1000, 0));
     const h = makeFakeCtx({ pickResult: 'w1', selectedId: 'w1', doc });
     const tool = selectToolFrom(h.ctx);
-    tool.onDown!(ptr(0, 10, 'pinch')); // dist 10 from wall.a — within radius
-    tool.onMove!(ptr(0, 50, 'pinch'));
-    expect(h.state.applied.some((a) => a.op === 'move_end')).toBe(true);
+    tool.onDown!(ptr(0, dist, source)); // dist px straight off wall.a
+    tool.onMove!(ptr(0, 50, source));
+    return h.state.applied.some((a) => a.op === 'move_end');
+  }
+  it('mouse keeps the tight 10px target: exactly 10 hits, 11 misses', () => {
+    expect(grabEnd('mouse', 10)).toBe(true);
+    expect(grabEnd('mouse', 11)).toBe(false);
+  });
+});
 
-    const miss = makeFakeCtx({ pickResult: 'w1', selectedId: 'w1', doc });
-    const tool2 = selectToolFrom(miss.ctx);
-    tool2.onDown!(ptr(0, 11, 'pinch')); // dist 11 — just outside the 10px radius
-    tool2.onMove!(ptr(0, 50, 'pinch'));
-    expect(miss.state.applied.some((a) => a.op === 'move_end')).toBe(false);
+// B-111: the wall-endpoint handle was a 10px target for BOTH devices, far below
+// the app's 56px aim-radius standard — punishing for a hand. It is now forgiving
+// for pinch while a mouse stays precise.
+describe('B-111 wall endpoint handle: forgiving pinch grab radius', () => {
+  function grabEnd(source: 'mouse' | 'pinch', dist: number): boolean {
+    const doc = emptyPlan();
+    doc.walls.push(wall('w1', 0, 0, 1000, 0));
+    const h = makeFakeCtx({ pickResult: 'w1', selectedId: 'w1', doc });
+    const tool = selectToolFrom(h.ctx);
+    tool.onDown!(ptr(0, dist, source));
+    tool.onMove!(ptr(0, 50, source));
+    return h.state.applied.some((a) => a.op === 'move_end');
+  }
+  it('a pinch 11px off the endpoint (a mouse miss) now grabs the endpoint', () => {
+    expect(grabEnd('mouse', 11)).toBe(false);
+    expect(grabEnd('pinch', 11)).toBe(true);
+  });
+  it('a pinch is forgiving out to ~26px but not unbounded', () => {
+    expect(grabEnd('pinch', 25)).toBe(true);
+    expect(grabEnd('pinch', 40)).toBe(false); // still falls through to body-drag/select
+  });
+});
+
+// B-104: the fixture rotate handle was a 12px target for both devices; now a
+// pinch gets the same forgiving radius as the endpoint handle.
+describe('B-104 rotate handle: forgiving pinch grab radius', () => {
+  function grabHandle(source: 'mouse' | 'pinch', off: number): boolean {
+    const doc = emptyPlan();
+    doc.fixtures.push(fixture('f1', 0, 0)); // handle at (0, 230) when rotation is 0
+    const h = makeFakeCtx({ pickResult: 'f1', selectedId: 'f1', doc });
+    const tool = selectToolFrom(h.ctx);
+    tool.onDown!(ptr(0, 230 + off, source));
+    tool.onMove!(ptr(150, 190, source));
+    return h.state.applied.some((a) => a.op === 'rotate');
+  }
+  it('a pinch 20px off the handle (a mouse miss) still grabs it', () => {
+    expect(grabHandle('mouse', 20)).toBe(false);
+    expect(grabHandle('pinch', 20)).toBe(true);
   });
 });
