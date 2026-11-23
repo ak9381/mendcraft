@@ -5019,6 +5019,15 @@ btnRedo.addEventListener('click', () => {
   controller.applyOp({ op: 'redo' });
   renderAll();
 });
+// Escape closes the on-screen keyboard first when it is open (topmost layer),
+// before any panel under it.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || !keyboard.isOpen() || document.querySelector('.mc-hand-select')) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  keyboard.close();
+  toggleButton(btnKeyboard, false);
+}, true);
 // B-142: keyboard Undo/Redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y), the same op as the buttons.
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
