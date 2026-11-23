@@ -1921,8 +1921,14 @@ function processGestureFrame(f: PresenceFrame): void {
       applyCadTwoHandEdit(cadEdit, p, q);
     } else if (r.active && cadGrabMid) {
       const step = incrementalZoomPan(cadLastT, r.transform, cadGrabMid);
-      viewport.zoomAt?.(step.factor, step.anchor.x, step.anchor.y);
-      if (step.pan.x || step.pan.y) viewport.panByPx?.(step.pan.x, step.pan.y);
+      if (viewport.is3D?.()) {
+        // In 3D the same two-hand pinch orbits (midpoint move) + dollies (span).
+        viewport.dolly3D?.(step.factor);
+        if (step.pan.x || step.pan.y) viewport.orbit3D?.(step.pan.x, step.pan.y);
+      } else {
+        viewport.zoomAt?.(step.factor, step.anchor.x, step.anchor.y);
+        if (step.pan.x || step.pan.y) viewport.panByPx?.(step.pan.x, step.pan.y);
+      }
       cadLastT = r.transform;
     }
     if (r.ended) { cadGrabMid = null; cadEdit = null; }

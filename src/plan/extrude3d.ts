@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { orbitOffset, dollyOffset } from './orbit3d';
 import { wallDir, wallLength, wallMidpoint, type Fixture, type PlanDoc } from './doc';
 // Segment math lives in editing.ts (pure, unit-tested): per-wall height and
 // per-opening sill/height are honoured there.
@@ -23,6 +24,10 @@ export interface ExtrudeView {
   walk(on: boolean, room?: string): boolean;
   walkStep(step: WalkStep): void;
   walking(): boolean;
+  /** Orbit the camera by a screen-pixel delta (two-hand pinch midpoint move). */
+  orbit(dxPx: number, dyPx: number): void;
+  /** Dolly the camera: factor > 1 moves closer (two-hand pinch span ratio). */
+  dolly(factor: number): void;
 }
 
 /** Eye height and step sizes for the walkthrough, mm / degrees. */
@@ -244,6 +249,27 @@ export function createExtrudeView(
   }
   window.addEventListener('keydown', onWalkKey);
 
+  // Hand-driven orbit/dolly: manipulate the camera offset (position − target)
+  // via the pure spherical helpers, then let controls.update() apply damping.
+  function camOffset(): { x: number; y: number; z: number } {
+    return { x: camera.position.x - controls.target.x, y: camera.position.y - controls.target.y, z: camera.position.z - controls.target.z };
+  }
+  function setCamOffset(o: { x: number; y: number; z: number }): void {
+    camera.position.set(controls.target.x + o.x, controls.target.y + o.y, controls.target.z + o.z);
+    controls.update();
+  }
+  function orbit(dxPx: number, dyPx: number): void {
+    if (walkState) return; // orbiting is disabled while walking
+    const w = container.clientWidth || 1;
+    const h = container.clientHeight || 1;
+    // Match OrbitControls' feel: a full element width ≈ 2π azimuth, height ≈ π.
+    setCamOffset(orbitOffset(camOffset(), -(2 * Math.PI) * (dxPx / w), Math.PI * (dyPx / h)));
+  }
+  function dolly(factor: number): void {
+    if (walkState) return;
+    setCamOffset(dollyOffset(camOffset(), factor, 500, 200000));
+  }
+
   let animating = true;
   function loop(): void {
     if (!animating) return;
@@ -269,6 +295,8 @@ export function createExtrudeView(
     walk,
     walkStep,
     walking: () => !!walkState,
+    orbit,
+    dolly,
     dispose() {
       window.removeEventListener('keydown', onWalkKey);
       animating = false;

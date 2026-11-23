@@ -982,6 +982,8 @@ export function createPlanRenderer(
     // planner (src/plan/twoHandEdit.ts), which reasons in world space.
     toWorld: (clientX, clientY) => toWorld(clientX, clientY),
     screenScale: () => scale,
+    orbit3D(dx, dy) { view3d?.orbit(dx, dy); },
+    dolly3D(factor) { view3d?.dolly(factor); },
     setLayerHidden(layer, isHidden) {
       if (!isLayerId(layer)) return;
       if (isHidden) hidden.add(layer); else hidden.delete(layer);

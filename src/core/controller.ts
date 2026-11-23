@@ -123,6 +123,10 @@ export interface ViewportHandle {
   toWorld?(clientX: number, clientY: number): { x: number; y: number };
   /** Current px-per-world-unit of the 2D view (grab radius in mm = px/scale). */
   screenScale?(): number;
+  /** Orbit the 3D view by a screen-px delta (two-hand pinch midpoint move). */
+  orbit3D?(dx: number, dy: number): void;
+  /** Dolly the 3D view: factor > 1 moves closer (two-hand pinch span ratio). */
+  dolly3D?(factor: number): void;
   /** Hide / show a drawing layer (view only; the plan is untouched). */
   setLayerHidden?(layer: string, hidden: boolean): void;
   hiddenLayers?(): string[];
