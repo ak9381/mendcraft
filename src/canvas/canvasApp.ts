@@ -1725,6 +1725,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   micFabRef = micFab;
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
+  // Sim/test hook: feed a raw two-hand landmark frame straight into the same
+  // path the camera's presence stream uses, so headless verification can drive
+  // the anchored two-hand pinch (canvas zoom/pan) without a camera.
+  if (opts.sim && typeof window !== 'undefined') {
+    (window as unknown as { __mcHand2?: { feedFrame(hands: readonly (readonly { x: number; y: number }[])[], now: number): void } }).__mcHand2 = {
+      feedFrame: (hands, now) => { handleTwoHand(hands, now); },
+    };
+  }
 
   // ---- morph: pinch-hold (or mouse/touch long-press) a tile, speak a change,
   // Gemini patches that ONE tile in place. All orchestration is morphFlow.ts;
