@@ -82,14 +82,6 @@ export function resizeByHandle(layout: ItemLayout, handle: ResizeHandleDir, dx: 
 
 export interface XY { x: number; y: number }
 
-/** Pure: Akash's two-hand anchored resize. Each finger is assigned to the
- *  NEAREST corner of the grab-time `box`; that corner then tracks its finger's
- *  delta. Opposite corners → the box spans between the two fingers; same-side
- *  corners → that shared edge moves (the other axis of each corner still
- *  tracks its own finger); a still hand → only the other corner moves. Deltas
- *  are frame-invariant, so callers can assign corners in client space and apply
- *  the result to a tile's own local layout. No clamping here — pure geometry;
- *  bounds/min/max are enforced by the caller via {@link clampResize}. */
 /** Gap kept between a nudged tile and the tile it was pushed clear of. */
 export const NUDGE_GAP_PX = 8;
 /** Edge overlap between neighbouring tiles that still counts as side by side. */
@@ -138,6 +130,14 @@ export function nearestFreeSpot(box: ItemLayout, others: readonly ItemLayout[], 
 /** A two-hand grab this close to a tile corner takes hold of that corner. */
 export const CORNER_GRAB_PX = 60;
 
+/** Pure: Akash's two-hand anchored resize. Each finger is assigned to the
+ *  NEAREST corner of the grab-time `box`; that corner then tracks its finger's
+ *  delta. Opposite corners → the box spans between the two fingers; same-side
+ *  corners → that shared edge moves (the other axis of each corner still
+ *  tracks its own finger); a still hand → only the other corner moves. Deltas
+ *  are frame-invariant, so callers can assign corners in client space and apply
+ *  the result to a tile's own local layout. No clamping here — pure geometry;
+ *  bounds/min/max are enforced by the caller via {@link clampResize}. */
 export function resizeToCorners(box: Rect, grabA: XY, grabB: XY, curA: XY, curB: XY): Rect {
   const l = box.left, t = box.top, r = box.left + box.width, b = box.top + box.height;
   const corners = { TL: { x: l, y: t }, TR: { x: r, y: t }, BL: { x: l, y: b }, BR: { x: r, y: b } } as const;

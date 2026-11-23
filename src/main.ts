@@ -5448,7 +5448,20 @@ function handleHandEvent(raw: HandEvent): void {
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
       if (handRangeEl) { handRangeTo(handRangeEl, clientX); break; }
-      if (handDragEl) { handDragPointer('pointermove', handDragEl, clientX, clientY); break; }
+      if (handDragEl) {
+        // A mouse that slides off a press-and-hold button fires pointerleave
+        // (cancels the hold); a hand that drifts off does the same.
+        if (handDragEl.matches(HAND_HOLD_BUTTONS)) {
+          const r = handDragEl.getBoundingClientRect();
+          if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) {
+            handDragEl.dispatchEvent(new PointerEvent('pointerleave', { clientX, clientY, pointerId: 9001, pointerType: 'pen' }));
+            handDragEl = null;
+            break;
+          }
+        }
+        handDragPointer('pointermove', handDragEl, clientX, clientY);
+        break;
+      }
       if (refBoard.handleHand(e, { x: clientX, y: clientY })) break;
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
       if (controller.selectedId()) {
