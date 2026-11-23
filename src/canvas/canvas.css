@@ -482,10 +482,10 @@
 }
 .mc-teach-close {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 32px;
-  height: 32px;
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
   border: none;
   background: transparent;
   color: inherit;
@@ -584,7 +584,9 @@
 .mc-hand-shadow.is-pinched { scale: 0.55; border-color: rgb(107 143 113 / 0.85); }
 .mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgb(107 143 113 / 0.9); animation: mc-ring-press 260ms ease-out forwards; }
 @keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
-.hand-hover { scale: 1.03; }
+/* Text fields are wide: a 3% grow on a 1200px input spills ~18px over the
+   Go button beside it, so the hand (and mouse) then hit the input instead. */
+.hand-hover:not(input, textarea, select) { scale: 1.03; }
 @media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .mc-hand-shadow { transition: none; } .hand-hover { scale: none; } }
 
 /* Full-screen review: every Proposal that needs a decision opens here —
