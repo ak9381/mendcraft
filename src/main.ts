@@ -2162,7 +2162,7 @@ async function runAccessibilityCheck(): Promise<boolean> {
   }
   const summary = controller.summary();
   const sent = issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
-  const res = await explainAccessibility(sent, summary);
+  const res = await explainAccessibility(sent, summary, planLabelNames());
   setBadge(res.source);
   recordLedger(
     res.source, 'a11y-explain',
@@ -2677,7 +2677,7 @@ async function runGuidelineCheck(region: RegionId, speak = true, quiet = false):
   }
   const sent = report.issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
   beginDeepWait('copilot');
-  const res = await explainAccessibility(sent, controller.summary());
+  const res = await explainAccessibility(sent, controller.summary(), planLabelNames());
   endDeepWait();
   recordLedger(res.source, 'guideline-explain', res.source === 'cloud' ? 'explain findings' : REASON_TEXT.private, `issues: ${JSON.stringify(sent)}`);
   if (res.items.length) {
@@ -2774,7 +2774,7 @@ async function handleHardQuestion(
       const streamRoute = routeGemini({ kind: judgement ? 'judgment' : 'hard', condensed: opts?.condensed, redacted });
       publishRoute(streamRoute);
       copilotPanel.setAnswer({ question, text: revealAnswer(partial, streamRoute).text, by: 'Gemini · cloud', route: revealAnswer(partial, streamRoute).route ?? streamRoute });
-    }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
+    }, planLabelNames()).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
   });
   endDeepWait();
   if (raced.kind === 'nano-tool') {
@@ -2856,7 +2856,7 @@ async function askChecklistItem(id: string): Promise<void> {
   if (!isOnline() || !cloudConfigured) { say('Still no signal. I will keep it on the list.'); return; }
   beginDeepWait('copilot');
   const sent = protectText(it.question, planLabelNames());
-  const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, undefined, planLabelNames());
   endDeepWait();
   if (!res) { say("Gemini couldn't answer that right now."); return; }
   const shown = revealAnswer(res.answer, routeGemini({ kind: 'hard', model: res.model, why: res.why }));
@@ -2882,7 +2882,7 @@ async function emailClient(): Promise<boolean> {
   let route: RouteInfo = routeOffline();
   if (isOnline() && cloudConfigured) {
     beginDeepWait('email');
-    const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary());
+    const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary(), planLabelNames());
     endDeepWait();
     if (res) {
       const subj = fillVisible(res.draft.subject);
@@ -3107,7 +3107,7 @@ async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Sou
         toggleButton(btnCopilot, true);
         beginDeepWait('lighting');
         verifierEl.textContent = deepWorkingLabel('lighting');
-        const res = await proposeMaterials(style, controller.summary());
+        const res = await proposeMaterials(style, controller.summary(), planLabelNames());
         endDeepWait();
         if (res) {
           plan = res.plan;
@@ -3534,7 +3534,7 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
     // compare it only claims "checked".
     const question = job.payload.prompt ?? '';
     const sent = protectText(question, planLabelNames());
-    const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, undefined, planLabelNames());
     if (!res) {
       await jobQueue.setStatus(job.id, 'error', 'Gemini could not check this yet');
       return;
@@ -3562,7 +3562,7 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
     return;
   }
   if (job.kind === 'a11y') {
-    const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '');
+    const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '', planLabelNames());
     recordLedger(res.source, 'a11y-explain (queued)',
       res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private,
       `issues: ${JSON.stringify(job.payload.issues ?? [])}\ndesign: ${job.payload.summary ?? ''}`);
@@ -4970,7 +4970,7 @@ speculative = createSpeculativeEngine({
   askCloud: async (s) => {
     // Same rules-first redaction as the hard-question race: the SENT text
     // swaps her names for neutral tokens; the draft card keeps her words.
-    const res = await askCopilot(protectText(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    const res = await askCopilot(protectText(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, undefined, planLabelNames());
     return res ? { answer: res.answer, calls: res.calls, why: res.why, model: res.model } : null;
   },
   onUpdate: (d, stats) => {

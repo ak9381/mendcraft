@@ -1671,6 +1671,7 @@ const A11Y_EXPLAIN_PROMPT = `You are an accessibility reviewer inside a design t
 export async function explainAccessibility(
   issues: readonly Pick<A11yIssue, 'id' | 'rule' | 'message' | 'citation'>[],
   summary: string,
+  planNames: string[] = [],
 ): Promise<ExplainA11yResult> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -1678,7 +1679,7 @@ export async function explainAccessibility(
     try {
       const mode = getActiveMode();
       const prompt = withPreamble(
-        `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
+        `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${protectText(summary, planNames).text}`,
       );
       const got = await requestHedgedJson(
         models.a11yExplain,
@@ -2055,6 +2056,7 @@ export async function askCopilot(
   summary: string,
   region: string,
   onChunk?: (text: string) => void,
+  planNames: string[] = [],
 ): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number; model: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -2067,7 +2069,7 @@ export async function askCopilot(
       if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
     };
     const sent = protectText(question).text;
-    const prompt = withPreamble(copilotAnswerPrompt(sent, summary, region));
+    const prompt = withPreamble(copilotAnswerPrompt(sent, protectText(summary, planNames).text, region));
     const got = await requestHedgedJson(
       models.copilotAnswer,
       models.copilotAnswerHedge,
@@ -2091,6 +2093,7 @@ export async function askCopilot(
 export async function draftClientEmail(
   items: { question: string; answer?: string }[],
   summary: string,
+  planNames: string[] = [],
 ): Promise<{ draft: EmailDraft; source: Source; ms: number; model?: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -2100,10 +2103,11 @@ export async function draftClientEmail(
       question: protectText(i.question).text,
       answer: i.answer ? protectText(i.answer).text : i.answer,
     }));
+    const safeSummary = protectText(summary, planNames).text;
     const got = await requestHedgedJson(
       models.copilotEmail,
       models.copilotEmailHedge,
-      withPreamble(emailPrompt(safeItems, summary)),
+      withPreamble(emailPrompt(safeItems, safeSummary)),
       cloudBudgetMs('long'),
       'client email',
       coerceEmailDraft,
@@ -2121,6 +2125,7 @@ export async function draftClientEmail(
 export async function proposeMaterials(
   request: string,
   summary: string,
+  planNames: string[] = [],
 ): Promise<{ plan: MaterialPlan; source: Source; ms: number; model?: string } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -2130,7 +2135,7 @@ export async function proposeMaterials(
     const got = await requestHedgedJson(
       models.copilotMaterials,
       models.copilotMaterialsHedge,
-      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${sent}"\nRooms: ${summary.slice(0, 600)}`),
+      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${sent}"\nRooms: ${protectText(summary, planNames).text.slice(0, 600)}`),
       cloudBudgetMs('long'),
       'materials',
       (raw) => coerceMaterialPlan(raw, presetFor(request)),
