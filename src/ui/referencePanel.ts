@@ -341,6 +341,16 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     currentUrl = '';
   }
 
+  // Escape closes the panel when focus is in it or nowhere in particular (keyboard parity with ✕).
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || root.hidden || e.defaultPrevented) return;
+    const a = document.activeElement;
+    if (a && a !== document.body && !root.contains(a)) return;
+    e.preventDefault();
+    close();
+  };
+  document.addEventListener('keydown', onKey);
+
   return {
     element: root,
     open,
@@ -348,6 +358,6 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     toggle() { root.hidden ? open() : close(); },
     isOpen: () => !root.hidden,
     runRecipe,
-    dispose() { clearTimer(); if (teacher) teacher.stop(); root.remove(); },
+    dispose() { clearTimer(); if (teacher) teacher.stop(); document.removeEventListener('keydown', onKey); root.remove(); },
   };
 }

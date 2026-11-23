@@ -65,7 +65,14 @@ class FakeNode {
 
 function installFakeDom() {
   const g = globalThis as Record<string, unknown>;
-  g.document = { createElement: (tag: string) => new FakeNode(tag) };
+  const docKeys: Array<(e: unknown) => void> = [];
+  g.document = {
+    createElement: (tag: string) => new FakeNode(tag),
+    body: null, activeElement: null,
+    addEventListener: (t: string, fn: (e: unknown) => void) => { if (t === 'keydown') docKeys.push(fn); },
+    removeEventListener: (t: string, fn: (e: unknown) => void) => { const i = docKeys.indexOf(fn); if (i >= 0) docKeys.splice(i, 1); },
+    pressKey(key: string) { let prevented = false; const e = { key, get defaultPrevented() { return prevented; }, preventDefault() { prevented = true; } }; for (const fn of [...docKeys]) fn(e); return prevented; },
+  };
   g.window = globalThis;
 }
 
@@ -95,6 +102,18 @@ describe('browser reference panel hand path', () => {
     expect(panel.isOpen()).toBe(true);
     closeBtn.click(); // generic click-synthesis, same as handPointer.ts's activate()
     expect(panel.isOpen()).toBe(false);
+  });
+
+  it('B-181 Escape closes the open panel, like its ✕ button', () => {
+    const panel = createReferencePanel();
+    const doc = (globalThis as unknown as { document: { pressKey(k: string): boolean } }).document;
+    expect(doc.pressKey('Escape')).toBe(false); // closed: Escape is left alone
+    panel.open();
+    expect(doc.pressKey('Enter')).toBe(false);
+    expect(panel.isOpen()).toBe(true);
+    expect(doc.pressKey('Escape')).toBe(true);
+    expect(panel.isOpen()).toBe(false);
+    panel.dispose();
   });
 
   it('C035 a pinch-drag on the header moves the panel (real pointerdown/move, clamped at 0)', () => {
