@@ -1275,6 +1275,9 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
   color: #475569;
 }
 .mc-props[hidden] { display: none; }
+.mc-props .mc-props-actions { display: flex; justify-content: flex-start; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.mc-props .mc-props-actions button { min-height: 44px; min-width: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.mc-props .mc-props-actions button:hover { background: #f1f5f9; }
 .mc-props-title {
   font-weight: 600; margin: 0; color: #0f172a;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

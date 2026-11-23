@@ -286,6 +286,11 @@ export function createPlanRenderer(
     apply: (op) => ctx.apply(op),
     snapshot: () => doc(),
     selectedId: () => controller.selectedId(),
+    actions: {
+      rotate: () => rotateSelected(ctx),
+      duplicate: () => duplicateSelected(ctx),
+      remove: () => deleteSelected(ctx),
+    },
   });
   palette.setActive('select');
   showHint(tools[0].hint ?? '');

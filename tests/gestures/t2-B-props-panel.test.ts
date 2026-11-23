@@ -263,3 +263,42 @@ describe('B-115 wall length resize via numInput (props panel)', () => {
 describe('B-071/B-068/B-070 on-screen keyboard auto-open for props-panel/text-tool fields', () => {
   it.skip('CAMERA-ONLY/untestable here: src/ui/onscreenKeyboard.ts gates its focusin handler on `el instanceof HTMLInputElement/HTMLTextAreaElement` (onscreenKeyboard.ts:42-48), which requires real DOM globals; this repo\'s vitest runs with environment "node" (no jsdom), so the hand-rolled FakeNode used elsewhere in this file is never `instanceof HTMLInputElement` and cannot exercise that integration', () => {});
 });
+
+describe('B-107/B-131/B-136 on-screen twins of Ctrl+R, Delete, Ctrl+D (hand/touch parity)', () => {
+  function mount(doc: PlanDoc, sel: string) {
+    installFakeDom();
+    const calls: string[] = [];
+    const { io: deps } = io(doc, sel);
+    deps.actions = {
+      rotate: () => { calls.push('rotate'); return true; },
+      duplicate: () => { calls.push('duplicate'); return true; },
+      remove: () => { calls.push('remove'); return true; },
+    };
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    createPropsPanel(host, deps);
+    return { root: host as unknown as FakeNode, calls };
+  }
+  it('a fixture gets Rotate 90°, Duplicate and Delete buttons that run the same actions as the keys', () => {
+    const doc = emptyPlan(); doc.fixtures.push(fixture('f1'));
+    const { root, calls } = mount(doc, 'f1');
+    findByText(root, 'Rotate 90°')!.children.find((c) => c.textContent === 'Rotate 90°')!.fire('click');
+    findByText(root, 'Duplicate')!.children.find((c) => c.textContent === 'Duplicate')!.fire('click');
+    findByText(root, 'Delete')!.children.find((c) => c.textContent === 'Delete')!.fire('click');
+    expect(calls).toEqual(['rotate', 'duplicate', 'remove']);
+  });
+  it('a wall gets Duplicate and Delete but no Rotate (Ctrl+R does nothing to a wall)', () => {
+    const doc = emptyPlan(); doc.walls.push(wall('w1'));
+    const { root } = mount(doc, 'w1');
+    expect(findByText(root, 'Rotate 90°')).toBeUndefined();
+    expect(findByText(root, 'Duplicate')).toBeDefined();
+    expect(findByText(root, 'Delete')).toBeDefined();
+  });
+  it('no actions io → no action row (older callers unchanged)', () => {
+    installFakeDom();
+    const doc = emptyPlan(); doc.walls.push(wall('w1'));
+    const { io: deps } = io(doc, 'w1');
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    createPropsPanel(host, deps);
+    expect(findByText(host as unknown as FakeNode, 'Delete')).toBeUndefined();
+  });
+});

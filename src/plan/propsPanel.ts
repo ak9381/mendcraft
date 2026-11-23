@@ -18,6 +18,10 @@ export interface PropsPanelIO {
   apply(op: unknown): { ok: boolean; error?: string };
   snapshot(): PlanDoc;
   selectedId(): string | null;
+  /** On-screen twins of the keyboard chords (Ctrl+R, Ctrl+D, Delete) so a
+   *  hand — or a touch screen — can do what the keys do. Each returns whether
+   *  it applied. */
+  actions?: { rotate?(): boolean; duplicate?(): boolean; remove?(): boolean };
 }
 
 export interface PropsPanelHandle {
@@ -58,6 +62,26 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       if (Number.isFinite(v)) onCommit(v);
     });
     return inp;
+  }
+
+  function actionsRow(canRotate: boolean): HTMLElement | null {
+    const a = io.actions;
+    if (!a) return null;
+    const box = document.createElement('div');
+    box.className = 'mc-props-row mc-props-actions';
+    const add = (label: string, title: string, fn?: () => boolean) => {
+      if (!fn) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener('click', () => { fn(); });
+      box.appendChild(b);
+    };
+    if (canRotate) add('Rotate 90°', 'Rotate 90° (Ctrl+R)', a.rotate);
+    add('Duplicate', 'Duplicate (Ctrl+D)', a.duplicate);
+    add('Delete', 'Delete (Del)', a.remove);
+    return box.children.length ? box : null;
   }
 
   let expanded = false;
@@ -103,6 +127,8 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
         root.appendChild(row('Height (mm)', numInput(walls[0].height ?? DEFAULTS.wallHeight, 100, (v) =>
           batch(walls.map((w) => ({ op: 'set_height', target: w.id, height: v }))))));
       }
+      const act = actionsRow(ids.some((x) => d.fixtures.some((f) => f.id === x) || d.openings.some((o) => o.id === x && o.kind === 'door')));
+      if (act) root.appendChild(act);
       root.hidden = false;
       return;
     }
@@ -174,6 +200,8 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       title.textContent = `Dimension ${dim.id}`;
       root.appendChild(row('Measures', w ? `${w.id} · ${mmToMetresLabel(wallLength(w))}` : '—'));
     }
+    const act = actionsRow(!!fixture || opening?.kind === 'door');
+    if (act) root.appendChild(act);
     root.hidden = false;
   }
 

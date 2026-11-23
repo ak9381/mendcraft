@@ -103,6 +103,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     host.dataset.handSurface = '';
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
+    (host as HTMLElement & { __mcPlanPick?: (x: number, y: number) => string | null }).__mcPlanPick = (x, y) => view.pick?.(x, y) ?? null;
     (host as HTMLElement & { __mcHandSurface?: HandSurface }).__mcHandSurface = {
       hover: (x, y) => view.hover?.(x, y),
       // Nothing grabbed (Select tool on empty floor) pans the plan, the same
