@@ -275,9 +275,16 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
 
   function resolve(p: P): HTMLElement | null {
     refreshControls();
-    const direct = interactiveAncestor(deepElementFromPoint(doc, p.x, p.y));
+    const raw = deepElementFromPoint(doc, p.x, p.y);
+    const direct = interactiveAncestor(raw);
     if (direct && controls.includes(direct)) return direct;
-    return pickNearest(p, controls.map((el) => ({ item: el, rect: el.getBoundingClientRect() })), snapPx);
+    const near = pickNearest(p, controls.map((el) => ({ item: el, rect: el.getBoundingClientRect() })), snapPx);
+    if (near) return near;
+    // C114: a dismiss scrim (tap-away-to-close) is not a control, so a hand
+    // could never close a sheet the way a finger does. Target it only on a
+    // direct hit with no control in snap range, so it never steals a snap.
+    const dismiss = (raw as HTMLElement | null)?.closest?.('[data-hand-dismiss]') as HTMLElement | null;
+    return dismiss ?? null;
   }
 
   function paint() {

@@ -51,6 +51,7 @@ export function mountPhoneMenu(root: HTMLElement, win: Window = window): PhoneMe
 
   const scrim = doc.createElement('div');
   scrim.className = 'mc-menu-scrim';
+  scrim.dataset.handDismiss = '';
   scrim.hidden = true;
   const sheet = doc.createElement('div');
   sheet.id = 'mc-menu-sheet';

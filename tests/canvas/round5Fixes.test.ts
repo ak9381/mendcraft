@@ -9,7 +9,7 @@ const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.ur
 describe('A7-017 hover grow never covers the Go button beside the say box', () => {
   it('canvas: .hand-hover grows only non-text controls', () => {
     expect(canvasCss).not.toMatch(/^\.hand-hover\s*\{\s*scale/m);
-    expect(canvasCss).toMatch(/\.hand-hover:not\(input, textarea, select\)\s*\{\s*scale/);
+    expect(canvasCss).toMatch(/\.hand-hover:not\(input, textarea, select, \[data-hand-dismiss\]\)\s*\{\s*scale/);
   });
   it('plan: text fields under .hand-hover do not transform', () => {
     expect(planCss).toMatch(/input\.hand-hover, textarea\.hand-hover, select\.hand-hover \{ transform: none; \}/);
