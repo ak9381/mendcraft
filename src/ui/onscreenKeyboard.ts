@@ -31,6 +31,12 @@ export interface OnScreenKeyboard {
 }
 
 const DEFAULT_DWELL_MS = 600;
+/** After the initial dwell, Backspace keeps firing this often while still held
+ *  (native key-repeat), so a hand user can clear a field without re-dwelling
+ *  per character. Only Backspace repeats — auto-repeating letters would be a
+ *  footgun for a shaky hand. */
+const REPEAT_MS = 150;
+const REPEAT_KEYS = new Set(['Backspace']);
 
 function isEditable(el: EventTarget | null): el is EditableField {
   if (!(el instanceof HTMLElement)) return false;
@@ -54,6 +60,7 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
   let autoOpen = false;
   let dwellKey: HTMLButtonElement | null = null;
   let dwellTimer: number | null = null;
+  let repeatTimer: number | null = null;
   let dwellMs = DEFAULT_DWELL_MS;
   const letterKeys: HTMLButtonElement[] = [];
 
@@ -162,20 +169,28 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
 
   function clearDwell(): void {
     if (dwellTimer !== null) { clearTimeout(dwellTimer); dwellTimer = null; }
+    if (repeatTimer !== null) { clearTimeout(repeatTimer); repeatTimer = null; }
     dwellKey?.classList.remove('dwelling');
     dwellKey = null;
   }
 
   function startDwell(btn: HTMLButtonElement): void {
-    if (btn === dwellKey) return;
+    if (btn === dwellKey) return; // already dwelling / repeating on this key
     clearDwell();
     dwellKey = btn;
     btn.classList.add('dwelling');
     dwellTimer = window.setTimeout(() => {
-      btn.classList.remove('dwelling');
-      dwellKey = null;
       dwellTimer = null;
       btn.click();
+      if (REPEAT_KEYS.has(btn.dataset.key ?? '')) {
+        // Keep dwellKey = btn so staying over it keeps repeating (startDwell
+        // early-returns) and moving off / losing the hand clears the repeat.
+        const tick = (): void => { btn.click(); repeatTimer = window.setTimeout(tick, REPEAT_MS); };
+        repeatTimer = window.setTimeout(tick, REPEAT_MS);
+      } else {
+        btn.classList.remove('dwelling');
+        dwellKey = null;
+      }
     }, dwellMs);
   }
 

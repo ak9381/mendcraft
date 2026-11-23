@@ -188,6 +188,23 @@ describe('on-screen keyboard hand path (pressAt / hoverAt)', () => {
     expect(field.value).toBe(''); // the key must not have fired
   });
 
+  it('C018 holding Backspace repeats the delete while the hand stays over it, and stops when it leaves', () => {
+    vi.useFakeTimers();
+    field.value = 'hello'; field.selectionStart = 5; field.selectionEnd = 5;
+    const root = kb.element as unknown as FakeNode;
+    dom.setHit(findKey(root, 'Backspace'));
+    kb.hoverAt(1, 1);
+    vi.advanceTimersByTime(600); // initial dwell fires the first delete
+    expect(field.value).toBe('hell');
+    vi.advanceTimersByTime(150); expect(field.value).toBe('hel'); // repeat
+    vi.advanceTimersByTime(150); expect(field.value).toBe('he');
+    // Hand moves off the key — the repeat stops.
+    dom.setHit(null);
+    kb.hoverAt(999, 999);
+    vi.advanceTimersByTime(600);
+    expect(field.value).toBe('he');
+  });
+
   it('C008 hoverAt (a "point", not a pinch) never presses immediately — only a completed dwell or pressAt do', () => {
     dom.setHit(findKey(kb.element as unknown as FakeNode, 'a'));
     kb.hoverAt(10, 10);
