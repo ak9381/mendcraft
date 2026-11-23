@@ -110,3 +110,40 @@ describe('B-122 opening width by dragging a jamb on canvas', () => {
     expect(grab('pinch')).toBe(true);
   });
 });
+
+describe('B-120 room resize by dragging a corner', () => {
+  // A 1000×1000 room: four walls looping (0,0)→(1000,0)→(1000,1000)→(0,1000).
+  function setup() {
+    const doc = emptyPlan();
+    doc.walls.push(wall('w1', 0, 0, 1000, 0));
+    doc.walls.push(wall('w2', 1000, 0, 1000, 1000));
+    doc.walls.push(wall('w3', 1000, 1000, 0, 1000));
+    doc.walls.push(wall('w4', 0, 1000, 0, 0));
+    doc.rooms.push({ id: 'r1', name: 'Room', wallIds: ['w1', 'w2', 'w3', 'w4'] });
+    return makeFakeCtx({ pickResult: 'r1', selectedId: 'r1', doc });
+  }
+
+  it.each(['mouse', 'pinch'] as const)('%s: grabbing a corner drives move_end on the owning wall (cascade pulls the neighbour)', (source) => {
+    const { ctx, state } = setup();
+    const select = selectToolFrom(ctx);
+    select.onDown!(ptr(0, 0, source)); // the (0,0) corner
+    select.onMove!(ptr(-200, 0, source)); // pull it out
+    const mv = state.applied.find((a) => a.op === 'move_end') as { target: string; end: string; x: number; y: number } | undefined;
+    expect(mv).toBeDefined();
+    expect(mv!.end).toBe('a'); // w1.a sits at (0,0)
+    expect(mv!.x).toBe(-200);
+    expect(mv!.y).toBe(0);
+  });
+
+  it('a pinch gets a forgiving corner grab radius a mouse does not', () => {
+    const grab = (source: 'mouse' | 'pinch') => {
+      const { ctx, state } = setup();
+      const select = selectToolFrom(ctx);
+      select.onDown!(ptr(0, 18, source)); // 18px off the corner
+      select.onMove!(ptr(-200, 0, source));
+      return state.applied.some((a) => a.op === 'move_end');
+    };
+    expect(grab('mouse')).toBe(false);
+    expect(grab('pinch')).toBe(true);
+  });
+});

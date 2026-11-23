@@ -241,6 +241,30 @@ function createSelectTool(ctx: ToolContext): Tool {
     return null;
   }
 
+  /** A corner of the single selected room's polygon, mapped to the owning
+   *  wall's endpoint. Dragging it reuses move_end, whose cascade already pulls
+   *  the coincident neighbour wall, so the whole corner moves (B-120). */
+  function roomCornerAt(p: ToolPointer): { wallId: string; end: 'a' | 'b' } | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const d = docOf(ctx);
+    const room = d.rooms.find((r) => r.id === ctx.selectedId());
+    if (!room) return null;
+    const poly = roomPolygon(room, d);
+    if (!poly) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    for (const v of poly) {
+      const s = ctx.toScreen(v);
+      if (Math.hypot(s.x - p.x, s.y - p.y) > r) continue;
+      for (const wid of room.wallIds) {
+        const w = d.walls.find((x) => x.id === wid);
+        if (!w) continue;
+        if (Math.hypot(w.a.x - v.x, w.a.y - v.y) < 1) return { wallId: wid, end: 'a' };
+        if (Math.hypot(w.b.x - v.x, w.b.y - v.y) < 1) return { wallId: wid, end: 'b' };
+      }
+    }
+    return null;
+  }
+
   /** A jamb (near/far edge) of the single selected opening, for drag-to-resize
    *  the opening width directly on canvas (B-122). Forgiving radius by source. */
   function openingJambAt(p: ToolPointer): { id: string; edge: 'near' | 'far' } | null {
@@ -275,7 +299,7 @@ function createSelectTool(ctx: ToolContext): Tool {
     shortcut: 'v',
     hint: 'Click to select (Shift toggles, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
     onDown(p) {
-      const handle = endpointAt(p);
+      const handle = endpointAt(p) ?? roomCornerAt(p);
       if (handle) {
         drag = { kind: 'end', ...handle };
         return true;
