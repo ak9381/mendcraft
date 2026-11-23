@@ -17,6 +17,7 @@
 
 import { createOneEuroFilter } from '../input/oneEuro';
 import { createDragVelocity, createMomentum, scrollableAncestor } from './handScroll';
+import { tooltipTextFor } from '../ui/handHover';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -186,6 +187,12 @@ export interface HandPointerOptions {
    *  tracking frames and the sim pinch() path. Purely additive — it never
    *  changes what the pointer itself does. */
   onPinch?: (ev: { phase: 'down' | 'move' | 'up' | 'cancel'; p: P; now: number }) => void;
+  /** A hand user has no mouseover, so native `title` tooltips never fire.
+   *  Fires with the hint text (title → aria-label → data-tooltip) for whatever
+   *  the cursor is over — a hovered control, or any `[title]`/`[data-tooltip]`
+   *  element under the raw point (so a hint-only, non-clickable element like
+   *  the swarm pill is reachable too). null hides the bubble. */
+  onTooltip?: (text: string | null, el: HTMLElement | null) => void;
 }
 
 export interface HandPointer {
@@ -300,6 +307,37 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     target?.classList.remove('hand-hover');
     target = el;
     target?.classList.add('hand-hover');
+  }
+
+  // Hand-user dwell tooltip (A1-047 / A5-017): the hint for the hovered control,
+  // or — when the cursor isn't on a control — the nearest `[title]`/
+  // `[data-tooltip]`/`[aria-label]` element under the raw point, so a hint-only
+  // element (the swarm pill) surfaces its note too. Deduped so the bubble isn't
+  // re-emitted every frame.
+  let tipEl: HTMLElement | null = null;
+  function isControlish(el: HTMLElement): boolean {
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' || tag === 'SUMMARY') return true;
+    const role = el.getAttribute?.('role') ?? '';
+    return /^(button|tab|switch|menuitem|checkbox|radio|slider|link|option)$/.test(role);
+  }
+  function hintUnder(p: P): HTMLElement | null {
+    let cur = deepElementFromPoint(doc, p.x, p.y) as HTMLElement | null;
+    // Only explicit hints here — an aria-label on a landmark/region (the whole
+    // "Smart canvas" root) is a screen-reader name, not a tooltip.
+    while (cur) {
+      if (cur.getAttribute?.('title')?.trim() || cur.getAttribute?.('data-tooltip')?.trim()) return cur;
+      if (cur.getAttribute?.('aria-label')?.trim() && isControlish(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+  function emitTooltip(controlTarget: HTMLElement | null): void {
+    if (!opts.onTooltip) return;
+    const el = (controlTarget && tooltipTextFor(controlTarget)) ? controlTarget : hintUnder(pt);
+    if (el === tipEl) return;
+    tipEl = el;
+    opts.onTooltip(tooltipTextFor(el), el);
   }
 
   function activate(el: HTMLElement) {
@@ -443,6 +481,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     // camera loop feeds update()), never the wall clock — pointAt() (sim /
     // audits) bypasses it entirely for determinism.
     setTarget(stickyNow !== undefined ? sticky.update(resolved, p, stickyNow) : resolved);
+    emitTooltip(target);
     paint();
     return target;
   }
@@ -456,6 +495,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
     }
     setTarget(null); pt = { x: -1, y: -1 };
+    if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
     euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); history.reset(); sticky.reset();
     paint();
   }

@@ -1260,6 +1260,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // onPinch is the morph hold's hand adapter: the debounced pinch edges feed
   // the same tap/hold/drag classifier mouse and touch use — 'down' aims from
   // the frozen pre-pinch point, a release before the fire stays a plain tap.
+  // A hand user has no mouseover, so native `title` tooltips never fire.
+  // Mirror the plan side (C046): a small bubble anchored above whatever the
+  // hand cursor dwells on — any control, or a hint-only element like the swarm
+  // pill (A1-047 / A5-017).
+  const handTip = typeof document !== 'undefined' ? document.createElement('div') : null;
+  if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
         onPinch: (ev) => {
@@ -1268,6 +1274,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           else if (ev.phase === 'move') morphFlow.moveHold(ev.p);
           else if (ev.phase === 'up') morphFlow.endHold();
           else morphFlow.cancelHold();
+        },
+        onTooltip: (text, el) => {
+          if (!handTip) return;
+          if (!text || !el) { handTip.hidden = true; return; }
+          const r = el.getBoundingClientRect();
+          handTip.textContent = text;
+          handTip.hidden = false;
+          // Clamp inside the screen; flip below a control at the top edge
+          // (phone bar, dock) so the bubble never renders off-screen.
+          const below = r.top < 40;
+          handTip.classList.toggle('below', below);
+          handTip.style.left = `${Math.min(innerWidth - 8, Math.max(8, r.left + r.width / 2))}px`;
+          handTip.style.top = `${below ? r.bottom + 8 : r.top - 8}px`;
         },
       })
     : null;
@@ -1764,6 +1783,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     scanPanel?.destroy();
     registerChip?.remove();
     regChip?.remove();
+    handTip?.remove();
     removeEventListener('pointermove', onWindowPointerMove);
     removeEventListener('pointerup', onWindowPointerUp);
     removeEventListener('pointercancel', onWindowPointerUp);
