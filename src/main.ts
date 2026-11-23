@@ -1406,7 +1406,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, .mc-walk, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, .mc-session-cluster, .mc-hint-strip, .mc-walk, .mc-copilot, .mc-router-panel, .mc-ledger-panel, .mc-a11y-panel, .mc-pair-panel, .mc-fsctl, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 /** C044/C045: pointer-driven panel handles (the reference browser's title bar
  *  and corner grip) — a hand pinch-drag on one is forwarded as the same
  *  pointerdown/move/up a mouse sends, instead of panning the canvas under it. */
@@ -1430,7 +1430,11 @@ function handClickable(clientX: number, clientY: number): HTMLElement | null {
 function activateControl(ctl: HTMLElement): void {
   // C172–C175: a native popup is out of the hand's reach — open the in-page list.
   if (ctl instanceof HTMLSelectElement) { ctl.focus(); openHandSelect(ctl); }
-  else if (ctl instanceof HTMLInputElement && ctl.type === 'text') ctl.focus();
+  else if (ctl instanceof HTMLInputElement && ctl.type === 'text') {
+    ctl.focus();
+    // A hand has no keys: a pinch on a text field brings up the on-screen keyboard for it.
+    keyboard.open(ctl); toggleButton(btnKeyboard, keyboard.isOpen());
+  }
   else ctl.click();
 }
 
