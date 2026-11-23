@@ -143,7 +143,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       <div id="c-scene3d" class="scene3d-overlay" hidden role="dialog" aria-modal="true" aria-label="Fullscreen 3D review">
         <div class="scene3d-bar">
           <span id="c-scene3d-title" class="scene3d-title">3D review</span>
-          <span class="scene3d-hint">Drag to orbit · pinch to zoom</span>
+          <span class="scene3d-hint">Drag to orbit · two-finger pinch or scroll to zoom</span>
           <button id="c-scene3d-close" type="button" class="scene3d-close">Close ✕</button>
         </div>
         <div id="c-scene3d-stage" class="scene3d-stage"></div>
