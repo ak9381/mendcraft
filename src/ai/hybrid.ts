@@ -481,6 +481,18 @@ export async function generateWithBudget(
   return { response };
 }
 
+/** A canvas reply worth racing on: an object with a `tiles` list at the top
+ *  or one envelope down (e.g. {"plan":{...}}), which the canvas layer unwraps.
+ *  A bare `{}` or tile-less object must NOT win the hedge race — it made the
+ *  live board turn fail with "tiles must be a list" while the backup model
+ *  would have answered (live-build study, 01:40 IST). */
+export function looksLikeSurfacePlan(raw: unknown, depth = 0): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 2) return false;
+  const o = raw as Record<string, unknown>;
+  if (Array.isArray(o.tiles)) return true;
+  return Object.values(o).some((v) => looksLikeSurfacePlan(v, depth + 1));
+}
+
 /**
  * Smart-canvas seam: stream a surface-plan prompt through the cloud (Firebase AI
  * Logic) and resolve the full text. Returns null when no cloud model is reachable
@@ -504,7 +516,7 @@ export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) 
       sent.text,
       cloudBudgetMs('long'),
       'canvas plan',
-      (raw) => (raw && typeof raw === 'object' ? raw : null),
+      (raw) => (looksLikeSurfacePlan(raw) ? raw : null),
       onChunk,
     );
     if (!got) return null;
