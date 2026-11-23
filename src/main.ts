@@ -147,6 +147,7 @@ import { isFirebaseConfigured } from './firebase/app';
 import {
   createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
 } from './offline/queue';
+import { isValidStaged } from './offline/staged';
 import { createNetworkMonitor, routeBigJob } from './offline/network';
 import {
   createPhrasebook, createIndexedDbPhrasebookStore,
@@ -3400,8 +3401,11 @@ function controlChecklist() {
 refreshCopilot();
 void syncSite();
 
-/** Cloud results awaiting the user's accept/reject. Kept in memory only (large,
- *  and re-fetchable on the next reconnect), keyed by job id. */
+/** Cloud results awaiting the user's accept/reject, keyed by job id. Also mirrored
+ *  onto the job in the queue store (QueuedJob.staged) so a `ready` job survives a
+ *  reload and can be restored with Apply/Discard; this map is rehydrated from the
+ *  store on init. Only ever what was already staged locally — never re-sent to the
+ *  cloud. */
 type StagedResult =
   | { kind: 'plan'; payload: { ops: unknown[] }; source: Source }
   | { kind: 'a11y'; items: A11yExplanation[]; source: Source };
@@ -3465,21 +3469,33 @@ function renderJobRow(job: QueuedJob): HTMLLIElement {
   const actions = document.createElement('div');
   actions.className = 'queue-item-actions';
   const result = staged.get(job.id);
-  if (job.status === 'ready' && result) {
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.textContent = 'Apply';
-    if (result.kind !== 'a11y' && job.mode !== mode.id) {
-      apply.disabled = true;
-      apply.title = `Switch to ${job.mode} mode to apply.`;
+  if (job.status === 'ready') {
+    if (result && isValidStaged(result)) {
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.textContent = 'Apply';
+      if (result.kind !== 'a11y' && job.mode !== mode.id) {
+        apply.disabled = true;
+        apply.title = `Switch to ${job.mode} mode to apply.`;
+      }
+      apply.addEventListener('click', () => void acceptJob(job.id));
+      actions.append(apply);
+    } else {
+      // A ready job whose staged result didn't survive the reload (an older
+      // build that didn't persist it, or a corrupt record): don't leave it stuck
+      // with only Discard — offer Re-run so the cloud can produce it again.
+      const rerun = document.createElement('button');
+      rerun.type = 'button';
+      rerun.textContent = 'Re-run';
+      rerun.title = 'The saved result is missing — run this on the cloud again.';
+      rerun.addEventListener('click', () => void rerunJob(job.id));
+      actions.append(rerun);
     }
-    apply.addEventListener('click', () => void acceptJob(job.id));
-    actions.append(apply);
   }
   const dismiss = document.createElement('button');
   dismiss.type = 'button';
   dismiss.className = 'ghost';
-  dismiss.textContent = job.status === 'ready' ? 'Reject' : 'Remove';
+  dismiss.textContent = job.status === 'ready' ? 'Discard' : 'Remove';
   dismiss.addEventListener('click', () => void dismissJob(job.id));
   actions.append(dismiss);
 
@@ -3531,6 +3547,22 @@ async function dismissJob(id: string): Promise<void> {
     staged.delete(id);
     await jobQueue.remove(id);
     say('Removed from the queue.');
+  } finally {
+    settling.delete(id);
+  }
+}
+
+/** Re-queue a restored `ready` job whose staged cloud result was lost on reload,
+ *  so the cloud can produce it again rather than the job staying stuck. Clearing
+ *  the staged field happens inside setStatus (any status other than `ready`). */
+async function rerunJob(id: string): Promise<void> {
+  if (settling.has(id)) return;
+  settling.add(id);
+  try {
+    staged.delete(id);
+    await jobQueue.setStatus(id, 'queued');
+    say('Re-running this on the cloud.');
+    if (net.online()) void drainQueue();
   } finally {
     settling.delete(id);
   }
@@ -3649,6 +3681,15 @@ net.subscribe((online) => {
   }
 });
 void jobQueue.init().then(() => {
+  // Rehydrate the in-memory staged map from any `ready` jobs that survived the
+  // reload, so their cloud result is restored with Apply/Discard instead of
+  // being stuck with no button. A ready job with a missing/corrupt payload is
+  // left un-staged — renderJobRow then offers Re-run.
+  for (const job of jobQueue.jobs()) {
+    if (job.status === 'ready' && isValidStaged(job.staged)) {
+      staged.set(job.id, job.staged as StagedResult);
+    }
+  }
   renderQueue();
   if (net.online()) void drainQueue(); // finish anything left queued from a prior session
 });

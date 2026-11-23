@@ -56,6 +56,12 @@ export interface QueuedJob {
   status: JobStatus;
   /** Last error message when status === 'error'. */
   error?: string;
+  /** The cloud result awaiting accept/reject, for a `ready` job. Persisted so a
+   *  ready job (cloud already answered) can be restored with Apply/Discard after
+   *  a reload instead of getting stuck with no button. Only ever what was already
+   *  staged locally for the user to see — never re-sent to the cloud. Kept
+   *  JSON-serialisable. Cleared whenever status leaves `ready`. */
+  staged?: unknown;
 }
 
 /** Persistence seam. Both adapters below (in-memory, IndexedDB) implement this,
@@ -94,7 +100,7 @@ export interface JobQueue {
   nextRunnable(): QueuedJob | null;
   count(): number;
   enqueue(input: NewJob): Promise<QueuedJob>;
-  setStatus(id: string, status: JobStatus, error?: string): Promise<QueuedJob | null>;
+  setStatus(id: string, status: JobStatus, error?: string, staged?: unknown): Promise<QueuedJob | null>;
   remove(id: string): Promise<void>;
   /** Observe any change (enqueue/status/remove). Returns an unsubscribe fn. */
   subscribe(fn: (jobs: QueuedJob[]) => void): () => void;
@@ -153,12 +159,20 @@ export function createJobQueue(store: QueueStore, opts: JobQueueOptions = {}): J
       return job;
     },
 
-    async setStatus(id, status, error) {
+    async setStatus(id, status, error, staged) {
       const job = byId.get(id);
       if (!job) return null;
       job.status = status;
       if (status === 'error') job.error = error;
       else delete job.error;
+      // The staged cloud result belongs to `ready` only: persist it when the job
+      // becomes ready, and drop it the moment the job moves on (re-queued, etc.)
+      // so a stale result can't be applied to a job that's about to re-run.
+      if (status === 'ready') {
+        if (staged !== undefined) job.staged = staged;
+      } else {
+        delete job.staged;
+      }
       await store.put(job);
       emit();
       return job;
