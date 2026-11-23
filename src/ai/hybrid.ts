@@ -1126,7 +1126,15 @@ async function callWithCloudRetry(
   } catch (err) {
     noteError(`${label} (hybrid)`, err);
     if (!cloud) throw err;
-    const { response } = await cloud.generateContent(cloudPrompt);
+    // The cloud retry needs its own hard timeout just like every other cloud
+    // call here: if it hangs (slow network / stalled AI-Logic stream) the caller
+    // would otherwise never resolve OR reject, so the rules-floor fallback never
+    // fires and the turn freezes with no error surfaced.
+    const { response } = await withTimeout(
+      cloud.generateContent(cloudPrompt),
+      CLOUD_GENERATE_TIMEOUT_MS,
+      `${label} (cloud retry)`,
+    );
     return { text: () => response.text(), inferenceSource: 'in_cloud' };
   }
 }

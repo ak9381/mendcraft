@@ -281,6 +281,26 @@ describe('cloud retry when the on-device call throws', () => {
     expect(r.source).toBe('rules');
     expect(r.result).toEqual({ op: 'undo' });
   });
+
+  it('falls to rules when the cloud retry hangs (never settles)', async () => {
+    // On-device throws, then the cloud retry leg hangs. Without a hard timeout
+    // on that retry the turn would never resolve OR reject and the UI freezes.
+    vi.useFakeTimers();
+    try {
+      setModelsForTest({
+        enabled: true,
+        intent: { generateContent: async () => { throw new Error('nano blew up'); } },
+        intentCloud: { generateContent: () => new Promise(() => {}) }, // never settles
+      });
+      const promise = compileCommand('undo', '{}', null);
+      await vi.advanceTimersByTimeAsync(9000); // past CLOUD_GENERATE_TIMEOUT_MS
+      const r = await promise;
+      expect(r.source).toBe('rules');
+      expect(r.result).toEqual({ op: 'undo' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('App Check required', () => {
