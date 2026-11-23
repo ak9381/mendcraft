@@ -425,3 +425,14 @@ describe('C080 a held thumbs-up keeps the pending proposal (Approve twin)', () =
     expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
   });
 });
+
+describe('C080 a custom gesture taught over thumbs-up silences the built-in keep', () => {
+  it('suppressMotion("thumbs-up") → no keep', async () => {
+    const { buildHandPose } = await import('../../src/dev/trackingSim');
+    const thumb = buildHandPose('thumbs-up', { x: 0.5, y: 0.6 }, 0.22) as Pt[];
+    const events: CanvasHandEvent[] = [];
+    const a = createCanvasHandsAdapter((e) => events.push(e), { suppressMotion: (id) => id === 'thumbs-up' });
+    for (let t = 0; t <= 900; t += 33) a.update({ hands: [thumb], now: 1000 + t });
+    expect(events.filter((e) => e.type === 'keep')).toHaveLength(0);
+  });
+});

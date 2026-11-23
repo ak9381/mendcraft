@@ -182,7 +182,8 @@ export function createCanvasHandsAdapter(
     pinchFrames = anyPinch ? pinchFrames + 1 : 0;
     if (pinchFrames === HAND_FEEL.keepFrames) fire({ type: 'keep' }, now);
     if (palmHold.update(anyPalm, now)) fire({ type: 'palm' }, now);
-    if (thumbHold.update(anyThumb, now)) fire({ type: 'keep' }, now);
+    // A taught custom gesture that claims thumbs-up wins (suppressMotion).
+    if (thumbHold.update(anyThumb, now) && !opts.suppressMotion?.('thumbs-up')) fire({ type: 'keep' }, now);
   }
 
   return {

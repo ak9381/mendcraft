@@ -1525,7 +1525,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         },
         // A pinch the morph classifier armed on must not ALSO read as the
         // 1200 ms pinch-hold-still (the morph opens the mic itself).
-        suppressMotion: (id) => id === 'pinch-hold-still' && (!!morphFlow?.holdActive() || !!handPointer?.surfaceBusy()),
+        suppressMotion: (id) => (id === 'pinch-hold-still' && (!!morphFlow?.holdActive() || !!handPointer?.surfaceBusy()))
+          // "Saving will use yours instead": a custom gesture taught over a
+          // built-in (e.g. thumbs-up) silences the built-in.
+          || teachPanel.gestures().some((g) => g.conflictsWith === id),
       });
       handsHandle = s;
       handsMountOk = !!s;
