@@ -1926,10 +1926,10 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 18px;
-  height: 18px;
+  width: 32px;   /* big enough to pinch (C044); the grip mark stays small */
+  height: 32px;
   cursor: nwse-resize;
-  background: linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 60%, transparent 60%);
+  background: linear-gradient(135deg, transparent 70%, var(--border) 70%, var(--border) 76%, transparent 76%, transparent 84%, var(--border) 84%, var(--border) 90%, transparent 90%);
   touch-action: none;
 }
 

@@ -1407,6 +1407,19 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
 const HAND_CLICK_ZONES = '#topbar, .mc-walk, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+/** C044/C045: pointer-driven panel handles (the reference browser's title bar
+ *  and corner grip) — a hand pinch-drag on one is forwarded as the same
+ *  pointerdown/move/up a mouse sends, instead of panning the canvas under it. */
+const HAND_DRAG_HANDLES = '.mc-ref-head, .mc-ref-resize';
+let handDragEl: HTMLElement | null = null;
+function handDragPointer(type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel', el: HTMLElement, clientX: number, clientY: number): void {
+  el.dispatchEvent(new PointerEvent(type, { clientX, clientY, pointerId: 9001, pointerType: 'pen', isPrimary: false, bubbles: true, cancelable: true, buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1 }));
+}
+function handDragHandleAt(clientX: number, clientY: number): HTMLElement | null {
+  const hit = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+  if (!hit || hit.closest('button, a[href], input, select')) return null;
+  return hit.closest<HTMLElement>(HAND_DRAG_HANDLES);
+}
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -5343,6 +5356,8 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      handDragEl = handDragHandleAt(aimed.clientX, aimed.clientY);
+      if (handDragEl) { handDragPointer('pointerdown', handDragEl, aimed.clientX, aimed.clientY); break; }
       viewport.beginDrag?.(aimed.clientX, aimed.clientY);
       break;
     }
@@ -5381,6 +5396,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Follow the hand during a drag — don't remagnet mid-gesture.
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
+      if (handDragEl) { handDragPointer('pointermove', handDragEl, clientX, clientY); break; }
       if (refBoard.handleHand(e, { x: clientX, y: clientY })) break;
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
       if (controller.selectedId()) {
@@ -5391,6 +5407,7 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      if (handDragEl) { const el = handDragEl; handDragEl = null; const c = lastPointer ?? { clientX: 0, clientY: 0 }; handDragPointer('pointerup', el, c.clientX, c.clientY); break; }
       if (lastPointer && refBoard.handleHand(e, { x: lastPointer.clientX, y: lastPointer.clientY })) break;
       viewport.endDrag?.();
       break;
@@ -5399,6 +5416,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.hidden = true;
       handHover.setTarget(null);
       handHintEl = null; handTip.hidden = true;
+      if (handDragEl) { const el = handDragEl; handDragEl = null; handDragPointer('pointercancel', el, 0, 0); }
       keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
       viewport.endDrag?.();
       break;

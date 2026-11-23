@@ -210,7 +210,7 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     const r = root.getBoundingClientRect();
     dragDX = e.clientX - r.left;
     dragDY = e.clientY - r.top;
-    head.setPointerCapture(e.pointerId);
+    try { head.setPointerCapture(e.pointerId); } catch { /* a forwarded hand drag has no live pointer to capture */ }
     e.preventDefault();
   });
   head.addEventListener('pointermove', (e) => {
@@ -228,16 +228,19 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
 
   // ─── resize handle (pointer-based) ──────────────────────────────────────────
   let resizing = false;
+  let grabOff = { x: 0, y: 0 }; // where in the grip it was taken, so the corner doesn't jump
   resizer.addEventListener('pointerdown', (e) => {
     resizing = true;
-    resizer.setPointerCapture(e.pointerId);
+    const r0 = root.getBoundingClientRect();
+    grabOff = { x: r0.left + r0.width - e.clientX, y: r0.top + r0.height - e.clientY };
+    try { resizer.setPointerCapture(e.pointerId); } catch { /* a forwarded hand drag has no live pointer to capture */ }
     e.preventDefault();
   });
   resizer.addEventListener('pointermove', (e) => {
     if (!resizing) return;
     const r = root.getBoundingClientRect();
-    root.style.width = `${Math.max(240, e.clientX - r.left)}px`;
-    root.style.height = `${Math.max(180, e.clientY - r.top)}px`;
+    root.style.width = `${Math.max(240, e.clientX + grabOff.x - r.left)}px`;
+    root.style.height = `${Math.max(180, e.clientY + grabOff.y - r.top)}px`;
   });
   const endResize = (e: PointerEvent) => {
     if (!resizing) return;
