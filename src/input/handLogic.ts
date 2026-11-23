@@ -171,12 +171,14 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
     const frames: HandFrame[] = [];
     const present = new Set(slotOf);
 
-    // Hands that disappeared: end their pinch and forget their label.
+    // Hands that disappeared: end their pinch, but KEEP their handedness label
+    // so a hand returning after a tracking dip (even when both hands drop out
+    // together and MediaPipe re-reports them in a different array order) re-binds
+    // to its original colour slot by label rather than by array position.
     slots.forEach((st, i) => {
       if (!present.has(i) && st.seen) {
         release(i);
         st.seen = false;
-        st.label = undefined;
       }
     });
 

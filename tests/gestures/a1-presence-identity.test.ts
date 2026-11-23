@@ -95,15 +95,11 @@ describe('A1-023 hand presence: re-entry resumes the same identity', () => {
     expect(f.find((h) => h.label === 'Right')!.slot).toBe(1);
   });
 
-  // BUG: when BOTH hands drop out in the same frame (e.g. a shared occlusion)
-  // and reappear in a different array order than before, assignSlots
-  // (handLogic.ts:143-155) has already cleared both slots' `label` the
-  // instant they were absent (handLogic.ts:175-181), so re-entry falls
-  // through to the position-based "first free slot" branch instead of the
-  // handedness-label match — the two hands silently swap colour slots. A
-  // real user would see their own hand's cursor colour jump to the other
-  // hand's colour after a shared tracking dropout.
-  it.skip('BUG: both hands dropping out together and reappearing in a different order swap colour slots instead of keeping identity — handLogic.ts:175-181', () => {
+  // FIXED (F4): disappearing hands keep their handedness label, so when BOTH
+  // hands drop out in the same frame (a shared occlusion) and MediaPipe
+  // re-reports them in a different array order, re-entry re-binds by label
+  // (handLogic.ts assignSlots) and each hand regains its original colour slot.
+  it('both hands dropping out together and reappearing in a different order keep their colour slots by handedness', () => {
     const { p } = setupLogic();
     let f = p.process([{ landmarks: hand(0.3, 0.5), label: 'Left' }, { landmarks: hand(0.7, 0.5), label: 'Right' }]);
     expect(f.find((h) => h.label === 'Left')!.slot).toBe(0);
@@ -113,7 +109,7 @@ describe('A1-023 hand presence: re-entry resumes the same identity', () => {
 
     // Both reappear, but MediaPipe reports them in the opposite array order.
     f = p.process([{ landmarks: hand(0.7, 0.5), label: 'Right' }, { landmarks: hand(0.3, 0.5), label: 'Left' }]);
-    expect(f.find((h) => h.label === 'Left')!.slot).toBe(0); // fails: actually lands on slot 1
-    expect(f.find((h) => h.label === 'Right')!.slot).toBe(1); // fails: actually lands on slot 0
+    expect(f.find((h) => h.label === 'Left')!.slot).toBe(0);
+    expect(f.find((h) => h.label === 'Right')!.slot).toBe(1);
   });
 });
