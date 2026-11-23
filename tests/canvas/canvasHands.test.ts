@@ -368,4 +368,26 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       expect(shouldAutoStartHands(true, null)).toBe(false);
     });
   });
+
+  describe('twoHandPinchPoints (both hands pinching -> screen px pair)', () => {
+    it('returns null with fewer than two pinching hands', async () => {
+      const { twoHandPinchPoints } = await import('../../src/canvas/canvasHands');
+      expect(twoHandPinchPoints([], 1000, 800)).toBeNull();
+      expect(twoHandPinchPoints([makePinchingHand()], 1000, 800)).toBeNull();
+      expect(twoHandPinchPoints([makePinchingHand(), makeOpenPalmHand()], 1000, 800)).toBeNull();
+    });
+
+    it('returns both pinch midpoints in screen px when two hands pinch', async () => {
+      const { twoHandPinchPoints } = await import('../../src/canvas/canvasHands');
+      const left = makePinchingHand();
+      const right = makePinchingHand().map((p) => ({ x: p.x + 0.2, y: p.y })); // shifted
+      const pts = twoHandPinchPoints([left, right], 1000, 800);
+      expect(pts).not.toBeNull();
+      expect(pts!.p.x).toBeGreaterThanOrEqual(0);
+      expect(pts!.p.x).toBeLessThanOrEqual(1000);
+      expect(pts!.q.x).toBeGreaterThanOrEqual(0);
+      // the two hands sit at different screen x (mirrored, but still distinct)
+      expect(Math.abs(pts!.p.x - pts!.q.x)).toBeGreaterThan(1);
+    });
+  });
 });

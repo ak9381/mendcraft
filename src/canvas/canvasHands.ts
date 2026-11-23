@@ -2,7 +2,8 @@
 // 'keep' on pinch, 'drop' on brush/swipe, 'point' with normalised fingertip,
 // and 'palm' for open palm. Includes 600 ms refractory debounce for 'keep'.
 import { classifyGesture, type Pt } from '../input/gestures';
-import { INDEX_TIP } from '../input/handLogic';
+import { INDEX_TIP, THUMB_TIP } from '../input/handLogic';
+import { mapToScreen } from './handPointer';
 import { createMotionRecognizer } from '../input/motionGestures';
 import { createPresenceTracker, type PresenceFrame, type PresenceTracker } from '../input/presence';
 import { findLiveCameraStream } from '../input/cameraShare';
@@ -61,6 +62,28 @@ export function mapGestureToCanvasEvent(
     return { type: 'point', point: pt };
   }
   return null;
+}
+
+/**
+ * Both-hands-pinch extractor for anchored two-hand zoom/pan. Given the raw hand
+ * landmark frames, returns the two pinch points in SCREEN pixels (the same
+ * selfie-mirrored reach-box mapping the hand cursor uses, so the zoom anchors
+ * exactly where the user sees their pinches) — but only when at least two hands
+ * are pinching. Returns null otherwise, so one-hand behaviour is untouched.
+ * Pure (no DOM): the caller passes the viewport size.
+ */
+export function twoHandPinchPoints(
+  hands: readonly (readonly Pt[])[],
+  w: number,
+  h: number,
+): { p: { x: number; y: number }; q: { x: number; y: number } } | null {
+  const pinching = hands.filter((hnd) => hnd && hnd.length >= 21 && classifyGesture(hnd as Pt[]) === 'pinch');
+  if (pinching.length < 2) return null;
+  const toScreen = (hnd: readonly Pt[]) => {
+    const mid = { x: (hnd[THUMB_TIP].x + hnd[INDEX_TIP].x) / 2, y: (hnd[THUMB_TIP].y + hnd[INDEX_TIP].y) / 2 };
+    return mapToScreen(mid, w, h);
+  };
+  return { p: toScreen(pinching[0]), q: toScreen(pinching[1]) };
 }
 
 export function createCanvasHandsAdapter(

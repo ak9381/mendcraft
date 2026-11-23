@@ -4,7 +4,8 @@
 // (for anything a model proposes) held in a Proposal until kept.
 import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
-import { cameraTransform, fitRects, focusOnInsets, lerpCamera, panBy, zoomAbout, type Camera, type Viewport } from './camera';
+import { cameraTransform, fitRects, focusOnInsets, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
+import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
 import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
@@ -36,7 +37,7 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
-import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
+import { mountCanvasHands, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
   type OwnerRecord,
@@ -1387,6 +1388,35 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (owner) { applyOwnerLock(owner); setRegChip('Registered'); }
   }
 
+  // ---- two-hand pinch: anchored zoom + pan (touch-screen feel). Both hands
+  // pinching on empty canvas drives the camera through twoHandTransform.ts (the
+  // grabbed points track the fingers). Rotation OFF — boards never tilt. In
+  // FOCUS we first drop to overview (exactly like the wheel does), because the
+  // plan engine hit-tests in screen pixels and is only editable at z = 1; so
+  // two-hand ZOOM lives in overview, which is also where a phone pans/zooms to
+  // see a board wider than the screen. One-hand behaviour is untouched.
+  const twoHand = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
+  let twoHandGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
+  function handleTwoHand(hands: readonly (readonly { x: number; y: number }[])[], now: number): void {
+    const w = viewport.clientWidth || innerWidth;
+    const h = viewport.clientHeight || innerHeight;
+    const pts = twoHandPinchPoints(hands, w, h);
+    const r = twoHand.update({ p: pts?.p ?? null, q: pts?.q ?? null, now });
+    if (r.started && pts) {
+      if (focusId) { focusId = null; sync(); } // match the wheel: zoom happens in overview
+      twoHandGrab = { p0: pts.p, q0: pts.q, cam0: camera };
+      return;
+    }
+    if (r.active && twoHandGrab) {
+      // Effective (smoothed/clamped/dead-zoned) current points from the transform.
+      const p1 = applyTransform(r.transform, twoHandGrab.p0);
+      const q1 = applyTransform(r.transform, twoHandGrab.q0);
+      camera = twoHandCamera(twoHandGrab.cam0, twoHandGrab.p0, twoHandGrab.q0, p1, q1);
+      applyCamera();
+    }
+    if (r.ended) { if (twoHandGrab) persist(); twoHandGrab = null; }
+  }
+
   const inputs = createCanvasInputs({
     root,
     hands: async (r, onEvent) => {
@@ -1415,7 +1445,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
-      frame: (hands, now) => { handPointer?.update(hands, now); teachPanel.matchFrame(hands, now); },
+      frame: (hands, now) => { handleTwoHand(hands, now); handPointer?.update(hands, now); teachPanel.matchFrame(hands, now); },
     },
   });
   async function toggleHands(): Promise<void> {
@@ -1574,20 +1604,62 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (frame && frame !== focusId && !dragged) void focus(frame);
   });
   let drag: { x: number; y: number } | null = null; let dragged = false;
+  // Touch two-finger pinch: same anchored transform as the two-hand gesture, so
+  // a phone pinch zooms/pans the canvas exactly like a touch screen. Tracked by
+  // pointerId in viewport-local px; while two fingers are down the single-finger
+  // pan is suppressed. Overview only (drops focus first, like the wheel).
+  const touchPts = new Map<number, Vec>();
+  const touchPinch = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
+  let touchGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
+  const vpPoint = (e: PointerEvent): Vec => {
+    const r = viewport.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  function driveTouchPinch(now: number): void {
+    const two = [...touchPts.values()];
+    const r = touchPinch.update({ p: two[0] ?? null, q: two[1] ?? null, now });
+    if (r.started && two.length >= 2) {
+      if (focusId) { focusId = null; sync(); }
+      touchGrab = { p0: two[0], q0: two[1], cam0: camera };
+      drag = null; dragged = true; // suppress the one-finger pan + tap-to-focus
+      return;
+    }
+    if (r.active && touchGrab && two.length >= 2) {
+      const p1 = applyTransform(r.transform, touchGrab.p0);
+      const q1 = applyTransform(r.transform, touchGrab.q0);
+      camera = twoHandCamera(touchGrab.cam0, touchGrab.p0, touchGrab.q0, p1, q1);
+      applyCamera();
+    }
+    if (r.ended) { if (touchGrab) persist(); touchGrab = null; }
+  }
   viewport.addEventListener('pointerdown', (e) => {
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return;
+    if (e.pointerType === 'touch') {
+      touchPts.set(e.pointerId, vpPoint(e));
+      if (touchPts.size >= 2) { driveTouchPinch(e.timeStamp); return; }
+    }
     drag = { x: e.clientX, y: e.clientY }; dragged = false;
   });
   // Window-level listeners outlive `root`'s own DOM (removing root's children
   // doesn't remove these), so a remount leaks them unless destroy() below
   // explicitly removes each one closing over this mount's stale state.
   const onWindowPointerMove = (e: PointerEvent) => {
+    if (e.pointerType === 'touch' && touchPts.has(e.pointerId)) {
+      touchPts.set(e.pointerId, vpPoint(e));
+      if (touchPts.size >= 2) { driveTouchPinch(e.timeStamp); return; }
+    }
     if (!drag || focusId) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
     dragged = true; camera = panBy(camera, dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
   };
-  const onWindowPointerUp = () => { if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0); };
+  const onWindowPointerUp = (e: PointerEvent) => {
+    if (e.pointerType === 'touch' && touchPts.delete(e.pointerId) && touchPts.size < 2) {
+      if (touchGrab) persist();
+      touchPinch.reset(); touchGrab = null;
+    }
+    if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0);
+  };
   const onWindowKeydown = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
@@ -1608,6 +1680,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const onWindowOffline = () => setOnline(false);
   addEventListener('pointermove', onWindowPointerMove);
   addEventListener('pointerup', onWindowPointerUp);
+  addEventListener('pointercancel', onWindowPointerUp);
   addEventListener('keydown', onWindowKeydown);
   addEventListener('resize', onWindowResize);
   addEventListener('online', onWindowOnline);
@@ -1629,6 +1702,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     regChip?.remove();
     removeEventListener('pointermove', onWindowPointerMove);
     removeEventListener('pointerup', onWindowPointerUp);
+    removeEventListener('pointercancel', onWindowPointerUp);
     removeEventListener('keydown', onWindowKeydown);
     removeEventListener('resize', onWindowResize);
     removeEventListener('online', onWindowOnline);
