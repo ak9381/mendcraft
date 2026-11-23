@@ -5019,6 +5019,17 @@ btnRedo.addEventListener('click', () => {
   controller.applyOp({ op: 'redo' });
   renderAll();
 });
+// B-142: keyboard Undo/Redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y), the same op as the buttons.
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest?.('input, textarea, select, [contenteditable]')) return;
+  const k = e.key.toLowerCase();
+  const op = k === 'z' ? (e.shiftKey ? 'redo' : 'undo') : k === 'y' && !e.shiftKey ? 'redo' : null;
+  if (!op) return;
+  e.preventDefault();
+  (op === 'undo' ? btnUndo : btnRedo).click();
+});
 btnExport.addEventListener('click', async () => {
   controller.export();
   say(`${mode.exportLabel}.`);

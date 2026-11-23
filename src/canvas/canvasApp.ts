@@ -1835,6 +1835,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // A board widget already used this key (the floor plan's Escape ends the
     // wall being drawn) — don't also zoom the canvas out from under it.
     if (e.defaultPrevented) return;
+    // B-142 parity: Ctrl/Cmd+Z is the keyboard's Undo (same guard as the button and voice).
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') { e.preventDefault(); userUndo(); return; }
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
