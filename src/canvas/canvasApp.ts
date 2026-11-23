@@ -1340,6 +1340,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function openScan(): void {
     if (!scanPanel || scanPanel.isOpen()) return;
+    // The scan overlay is z-index 80 — above the review (50) AND above the bar
+    // (51) that keeps "Re-register" clickable during a review. Opening it over
+    // an open review would bury Approve/Reject (the human-in-the-loop gate),
+    // same hole pass 1 closed for teach and the phone menu sheet.
+    if (reviewDialog.isOpen()) { say('Finish the review first — keep or drop, then register.'); return; }
     scanFlow.reset();
     if (opts.sim) {
       // Scripted replay: feed the flow whatever its current step asks for.
