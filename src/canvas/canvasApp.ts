@@ -956,6 +956,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
   }
 
+  /** Boards whose Deep (Gemini) pass was skipped offline; run on reconnect. */
+  const deepLater: Array<{ frameId: string; utterance: string }> = [];
+  async function runDeepLater(): Promise<void> {
+    while (deepLater.length && net.isOnline()) {
+      if (reviewBusy()) return; // retried after the waiting proposal is decided
+      const next = deepLater.shift()!;
+      if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue; // board deleted meanwhile
+      panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
+      panels.showHandoff('nano', 'group the lights and add a room plan');
+      await aiTurn(next.frameId, 'gemini', next.utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
+    }
+  }
+
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
@@ -963,6 +976,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
       panels.forEngine('nano').log('note', ROUTE_LINES.offline);
       aiPanel.querySelector('.mc-ai-state')!.textContent = OFFLINE_QUICK_ONLY;
+      // A7-026: the status promises Deep will run on reconnect — actually
+      // queue it (one per board), and count it with the other saved requests.
+      if (!deepLater.some((d) => d.frameId === frameId)) deepLater.push({ frameId, utterance });
+      panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
       say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
       return;
     }
@@ -1588,8 +1605,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
     if (on) {
       const later = net.drainLater();
-      panels.forEngine('nano').setQueued(net.laterCount());
-      if (later.length) { say(`Back online. Running ${later.length} saved request${later.length > 1 ? 's' : ''}.`); later.forEach((u) => { if (/kannada|ಕನ್ನಡ/i.test(u)) void languageTurn(u); }); }
+      const n = later.length + deepLater.length;
+      panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
+      if (n) { say(`Back online. Running ${n} saved request${n > 1 ? 's' : ''}.`); later.forEach((u) => { if (/kannada|ಕನ್ನಡ/i.test(u)) void languageTurn(u); }); void runDeepLater(); }
       else if (announce) say('Back online.');
     } else if (announce) say(`${OFFLINE_QUICK_ONLY}.`);
   }
