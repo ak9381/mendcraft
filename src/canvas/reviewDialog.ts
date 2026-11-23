@@ -80,8 +80,16 @@ export function mountReviewDialog(
   const rejectBtn = btn(doc, 'mc-review-reject', 'Reject', () => run('reject'));
   const askElseBtn = btn(doc, 'mc-review-ask-else', 'Ask for something else', () => run('ask-else'));
   actions.append(approveBtn, rejectBtn, askElseBtn);
+  // A visible, pinch-sized ✕ that maps to Escape semantics (A5-005): closes
+  // WITHOUT deciding, so the proposal stays waiting and voice/pinch keep·drop
+  // still resume it. It sits in the dialog's top-right corner — a direct child
+  // of the dialog, never inside .mc-review-actions — so it can never cover
+  // Approve/Reject/Ask-else (which are sticky at the bottom).
+  const closeBtn = btn(doc, 'mc-review-close', '✕', () => close());
+  closeBtn.setAttribute('aria-label', 'Close without deciding');
+  closeBtn.setAttribute('title', 'Close — decide later with voice or a pinch');
   body.append(titleEl, extraEl, cardHost, actions);
-  dialog.append(body);
+  dialog.append(closeBtn, body);
   root.append(dialog);
 
   function onKeydown(e: KeyboardEvent): void {

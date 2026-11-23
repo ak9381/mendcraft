@@ -104,6 +104,31 @@ describe('mountReviewDialog', () => {
     expect(wasDropped()).toBe(false);
   });
 
+  it('the ✕ close control dismisses without deciding — proposal stays waiting [A5-005]', () => {
+    const { root } = setup();
+    const dialog = mountReviewDialog(root, {}, fakeDoc as unknown as Document);
+    const { card, wasKept, wasDropped } = fakeCard();
+    dialog.open({ title: 'Review', card });
+    const closeBtn = (root as unknown as FakeEl).querySelector('.mc-review-close');
+    expect(closeBtn).not.toBeNull();
+    closeBtn!.click();
+    expect(dialog.isOpen()).toBe(false);
+    expect(wasKept()).toBe(false);
+    expect(wasDropped()).toBe(false);
+  });
+
+  it('the ✕ lives outside the action row so it can never cover Approve/Reject/Ask-else [A5-005]', () => {
+    const { root } = setup();
+    mountReviewDialog(root, {}, fakeDoc as unknown as Document);
+    const dialogEl = (root as unknown as FakeEl).children.find((c) => c.className === 'mc-review-dialog')!;
+    // Direct child of the dialog (sibling of the body), not nested in the actions.
+    const closeBtn = dialogEl.children.find((c) => c.className.includes('mc-review-close'));
+    expect(closeBtn).toBeTruthy();
+    const actions = (root as unknown as FakeEl).querySelector('.mc-review-actions') as FakeEl | null;
+    const inActions = actions?.querySelector('.mc-review-close') ?? null;
+    expect(inActions).toBeNull();
+  });
+
   it('close() is a no-op when not open', () => {
     const { root } = setup();
     const dialog = mountReviewDialog(root, {}, fakeDoc as unknown as Document);

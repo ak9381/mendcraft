@@ -595,6 +595,12 @@
   padding: 16px 0 4px; background: var(--panel); }
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 56px; font-size: 18px; flex: 1 1 180px; }
 .mc-review-approve { background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+/* Pinch-sized ✕ in the dialog's top-right. Anchored to the dialog (not the
+   scrolling body) and clear of the bottom action row, so it never overlaps
+   Approve/Reject/Ask-else. 48px square — comfortable for a hand pointer. */
+.mc-review-close { position: absolute; top: calc(var(--mc-bar-h, 132px) + 8px); right: 16px; z-index: 2;
+  width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center; font-size: 22px; line-height: 1; flex: 0 0 auto; }
 
 /* Owner-registration / lock chip (registration.ts flow in canvasApp.ts):
    a small warm-paper pill under the bar. Never interactive. */
