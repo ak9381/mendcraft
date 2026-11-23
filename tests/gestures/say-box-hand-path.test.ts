@@ -80,8 +80,10 @@ describe('C026 pinch-release on the say input focuses it, same generic path as a
     feed(160, 50, false, 3); // release
     expect(input.focus).toHaveBeenCalledTimes(1);
     // …and announces a HAND focus so the canvas docks the on-screen keyboard.
-    expect(input.dispatchEvent).toHaveBeenCalledTimes(1);
-    expect((input.dispatchEvent.mock.calls[0][0] as Event).type).toBe('mc-hand-text-focus');
+    const types = input.dispatchEvent.mock.calls.map((c) => (c[0] as Event).type);
+    expect(types.filter((t) => t === 'mc-hand-text-focus')).toHaveLength(1);
+    // The press itself is announced too (the hand's stand-in for pointerdown).
+    expect(types).toContain('mc-hand-press');
     hp.destroy();
   });
 });

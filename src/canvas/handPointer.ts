@@ -46,6 +46,10 @@ export const INTERACTIVE =
 /** A drawing area that takes the hand directly (the floor-plan board): no
  *  controls inside, so the pointer hands it hover, tap and drag in client px.
  *  Found via `[data-hand-surface]` + the element's `__mcHandSurface`. */
+/** Fired (bubbling, composed) where a real hand pinch lands — the hand's
+ *  stand-in for the pointerdown a mouse press would fire there. */
+export const HAND_PRESS = 'mc-hand-press';
+
 export interface HandSurface {
   hover?(x: number, y: number): void;
   /** true if something was grabbed (a tool started, a selection moves). */
@@ -476,6 +480,13 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     opts.onPinch?.({ phase: down ? 'down' : 'up', p: pt, now: now() });
     if (down) {
       pressedOn = target;
+      // A mouse press fires pointerdown wherever it lands, which "click away"
+      // dismissers listen for (swarmDock's mini terminal). The hand's clicks
+      // carry no pointerdown, so announce the press itself.
+      if (!dryRun) {
+        const under = target ?? deepElementFromPoint(doc, pt.x, pt.y) ?? doc.documentElement;
+        under?.dispatchEvent?.(new CustomEvent(HAND_PRESS, { bubbles: true, composed: true, detail: { x: pt.x, y: pt.y } }));
+      }
       if (target && target.matches('input[type=range]')) { dragging = target as HTMLInputElement; dragTo(pt.x); consumedUntil = now() + 700; }
       else if (target && target.matches(DRAG_HANDLE)) {
         draggingHandle = target; dragHandleStart = pt; dragHandleMoved = false;

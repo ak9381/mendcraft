@@ -149,6 +149,8 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     closeMini();
   }
   doc.addEventListener('pointerdown', onDocPointerDown, true);
+  // A hand pinch (handPointer's HAND_PRESS) dismisses the same way a mouse press does.
+  doc.addEventListener('mc-hand-press', onDocPointerDown, true);
 
   function markWorking(id: string): void {
     const rec = records.get(id);
@@ -290,6 +292,7 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     destroy() {
       clearTimers();
       doc.removeEventListener('pointerdown', onDocPointerDown, true);
+      doc.removeEventListener('mc-hand-press', onDocPointerDown, true);
       mini.remove();
     },
   };
