@@ -958,6 +958,26 @@ export function createPlanRenderer(
       fitted = true;
       render();
     },
+    // Anchored zoom about a client-space point — the two-hand pinch zooms about
+    // the pinch midpoint so the plan tracks the fingers (not the view centre).
+    zoomAt(factor, clientX, clientY) {
+      const rect = svg.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      const f = Math.min(4, Math.max(0.25, factor));
+      originX = cx - (cx - originX) * f;
+      originY = cy - (cy - originY) * f;
+      scale *= f;
+      fitted = true;
+      render();
+    },
+    // Pan by a screen-pixel delta — the translation leg of the two-hand pinch.
+    panByPx(dx, dy) {
+      originX += dx;
+      originY += dy;
+      fitted = true;
+      render();
+    },
     setLayerHidden(layer, isHidden) {
       if (!isLayerId(layer)) return;
       if (isHidden) hidden.add(layer); else hidden.delete(layer);

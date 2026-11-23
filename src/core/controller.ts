@@ -115,6 +115,10 @@ export interface ViewportHandle {
   is3D?(): boolean;
   /** Zoom the 2D view: factor > 1 zooms in. */
   zoom?(factor: number): void;
+  /** Anchored zoom about a client-space point (two-hand pinch midpoint). */
+  zoomAt?(factor: number, clientX: number, clientY: number): void;
+  /** Pan the 2D view by a screen-pixel delta (two-hand pinch translation). */
+  panByPx?(dx: number, dy: number): void;
   /** Hide / show a drawing layer (view only; the plan is untouched). */
   setLayerHidden?(layer: string, hidden: boolean): void;
   hiddenLayers?(): string[];

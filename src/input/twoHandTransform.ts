@@ -94,6 +94,26 @@ export function solveSimilarity(p0: Vec, q0: Vec, p1: Vec, q1: Vec, opts: SolveO
   return { scale, rotation: 0, tx: m1.x - scale * m0.x, ty: m1.y - scale * m0.y };
 }
 
+/**
+ * Decompose the step between two cumulative transforms into an incremental
+ * anchored zoom+pan, for renderers that only expose zoom-about-a-point and
+ * pan-by-pixels (the CAD plan renderer) rather than an absolute camera. Given
+ * the previous and current cumulative transforms and the grab midpoint, returns
+ * the per-frame zoom `factor`, the `anchor` to zoom about, and the `pan` to
+ * apply after — so the content under the fingers' previous midpoint lands under
+ * their current midpoint (anchored tracking without a baseline reset).
+ */
+export function incrementalZoomPan(
+  prev: SimilarityTransform,
+  cur: SimilarityTransform,
+  grabMid: Vec,
+): { factor: number; anchor: Vec; pan: Vec } {
+  const factor = prev.scale > 1e-9 ? cur.scale / prev.scale : 1;
+  const anchor = applyTransform(prev, grabMid);
+  const now = applyTransform(cur, grabMid);
+  return { factor, anchor, pan: { x: now.x - anchor.x, y: now.y - anchor.y } };
+}
+
 // ---------------------------------------------------------------- controller
 
 export interface TwoHandOptions extends SolveOptions {

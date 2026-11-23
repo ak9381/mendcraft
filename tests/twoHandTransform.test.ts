@@ -5,6 +5,8 @@ import {
   span,
   midpoint,
   createTwoHandGesture,
+  incrementalZoomPan,
+  IDENTITY,
   type Vec,
 } from '../src/input/twoHandTransform';
 
@@ -160,6 +162,29 @@ describe('createTwoHandGesture (controller)', () => {
     const r = g.update({ p: P(0), q: P(1000), now: 16 });
     expect(Number.isFinite(r.transform.scale)).toBe(true);
     expect(r.transform.scale).toBeLessThanOrEqual(8 + 1e-9);
+  });
+
+  it('incrementalZoomPan: from identity to a 2x cumulative is a 2x step about the grab midpoint', () => {
+    const grabMid = P(100, 50);
+    const cur = solveSimilarity(P(40), P(60), P(30), P(70), {}); // 2x about mid 50
+    const step = incrementalZoomPan(IDENTITY, cur, grabMid);
+    expect(near(step.factor, 2)).toBe(true);
+    expect(step.anchor).toEqual(grabMid); // identity maps the grab midpoint to itself
+  });
+
+  it('incrementalZoomPan: pure pan contributes a translation and factor 1', () => {
+    const grabMid = P(0, 0);
+    const prev = { ...IDENTITY };
+    const cur = { scale: 1, rotation: 0, tx: 30, ty: -12 };
+    const step = incrementalZoomPan(prev, cur, grabMid);
+    expect(near(step.factor, 1)).toBe(true);
+    expect(near(step.pan.x, 30)).toBe(true);
+    expect(near(step.pan.y, -12)).toBe(true);
+  });
+
+  it('incrementalZoomPan: guards a zero previous scale (no NaN)', () => {
+    const step = incrementalZoomPan({ scale: 0, rotation: 0, tx: 0, ty: 0 }, { scale: 2, rotation: 0, tx: 0, ty: 0 }, P(0, 0));
+    expect(Number.isFinite(step.factor)).toBe(true);
   });
 
   it('reset clears the gesture so the next both-hands frame starts fresh', () => {

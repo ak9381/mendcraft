@@ -10,6 +10,7 @@ import { createFaceOverlay } from './ui/faceOverlay';
 import { createHandHover, magnetPull } from './ui/handHover';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
+import { createTwoHandGesture, incrementalZoomPan, midpoint, IDENTITY, type SimilarityTransform, type Vec } from './input/twoHandTransform';
 import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
 import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
@@ -955,6 +956,20 @@ viewportEl.appendChild(gesturesPanel.element);
 
 let gestureMap = gesturesPanel.getMap();
 const gestureRecognizer = createGestureRecognizer();
+// Anchored two-hand pinch zoom/pan for the plan view: the grabbed points track
+// the fingers (dead-zone/grace/clamp/smoothing from twoHandTransform.ts),
+// driven incrementally through the renderer's zoomAt/panByPx.
+const cadTwoHand = createTwoHandGesture({ rotate: false, minScale: 0.2, maxScale: 8 });
+let cadGrabMid: Vec | null = null;
+let cadLastT: SimilarityTransform = { ...IDENTITY };
+/** A hand's pinch midpoint (thumb+index tips) mapped to client px, through the
+ *  same mirror + calibrated reach + viewport mapping the hand cursor uses. */
+function handPinchClient(h: ReadonlyArray<{ x: number; y: number }>): Vec {
+  const mid = { x: (h[4].x + h[8].x) / 2, y: (h[4].y + h[8].y) / 2 };
+  const p = reachPoint(1 - mid.x, mid.y);
+  const c = toClient(p.x, p.y);
+  return { x: c.clientX, y: c.clientY };
+}
 
 // ---- hand-adaptive input (all on-device) ----
 // Numbers computed from the operator's hand landmarks (never video) drive an
@@ -1877,10 +1892,24 @@ function processGestureFrame(f: PresenceFrame): void {
   const res = gestureRecognizer.update({ hands, now });
   gesturesPanel.feedPreview(res.gesture);
   for (const g of res.fired) { gestureGuide.highlight(g === 'pinch' ? null : g); runGestureAction(gestureMap[g]); }
-  // Two-hand pinch-zoom nudges the viewport zoom when mapped to "zoom".
-  if (res.gesture === 'two-hand-zoom' && gestureMap['two-hand-zoom'] === 'zoom' && Math.abs(res.zoomDelta) > 0.015) {
-    const key = res.zoomDelta > 0 ? '=' : '-';
-    viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  // Two-hand pinch = anchored zoom/pan (the grabbed points track the fingers),
+  // when mapped to "zoom" (the gestureMap remap still gates it). Feeding null
+  // when the pose isn't held lets the controller end + apply grace.
+  if (gestureMap['two-hand-zoom'] === 'zoom') {
+    const bothPinch = res.gesture === 'two-hand-zoom' && !!hands[0] && !!hands[1];
+    const p = bothPinch ? handPinchClient(hands[0]) : null;
+    const q = bothPinch ? handPinchClient(hands[1]) : null;
+    const r = cadTwoHand.update({ p, q, now });
+    if (r.started && p && q) {
+      cadGrabMid = midpoint(p, q);
+      cadLastT = { ...IDENTITY };
+    } else if (r.active && cadGrabMid) {
+      const step = incrementalZoomPan(cadLastT, r.transform, cadGrabMid);
+      viewport.zoomAt?.(step.factor, step.anchor.x, step.anchor.y);
+      if (step.pan.x || step.pan.y) viewport.panByPx?.(step.pan.x, step.pan.y);
+      cadLastT = r.transform;
+    }
+    if (r.ended) cadGrabMid = null;
   }
 }
 
