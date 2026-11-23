@@ -25,3 +25,11 @@ describe('phone menu swipe-down by hand (C115)', () => {
     expect(pm).toContain("sheet.querySelector('.mc-menu-grabber')?.addEventListener('click', () => close())");
   });
 });
+
+describe('hand lost mid slider drag (C169)', () => {
+  const hp = readFileSync('src/canvas/handPointer.ts', 'utf8');
+  it('lost() finishes the slider with a change event at the value it reached', () => {
+    const lost = hp.slice(hp.indexOf('function lost()'), hp.indexOf('function lost()') + 900);
+    expect(lost).toContain("if (dragging && !dryRun) dragging.dispatchEvent(new Event('change'");
+  });
+});

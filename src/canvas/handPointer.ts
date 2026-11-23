@@ -602,6 +602,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function lost() {
     if (pinched) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
+      // C169: a slider keeps the value it reached (no snap back, no fling) — so
+      // finish it like a release does, or 'change' listeners never see it.
+      if (dragging && !dryRun) dragging.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
       if (surface && surfaceDragging) surface.endDrag(); // hand left mid-drag: finish, never leave it stuck
       surface = null; surfaceDragging = false; surfaceHeld = false; clearSurfaceHold();
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
