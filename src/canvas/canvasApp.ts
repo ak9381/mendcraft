@@ -1171,6 +1171,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? reviewDialog.currentCard()?.querySelector(cls)) as HTMLButtonElement | null;
   function keep(): void { const b = waitingBtn('.mc-proposal-keep'); if (b) b.click(); else say('Nothing is waiting.'); }
   function drop(): void { const b = waitingBtn('.mc-proposal-drop'); if (b) b.click(); else say('Nothing is waiting.'); }
+  /** C186: Undo asked for (voice, typed, palette) while a review waits: the
+   *  review is the single gate — same as teach — so nothing shifts under the
+   *  draft it shows, and every input gets the same answer (the hand can't reach
+   *  the palette behind the modal review at all). */
+  function userUndo(): void {
+    if (reviewDialog.isOpen()) { say('Finish the review first — keep or drop, then undo.'); return; }
+    undo();
+  }
   function undo(): void {
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
@@ -1275,7 +1283,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'save': save(); return true;
       case 'keep': keep(); return true;
       case 'drop': drop(); return true;
-      case 'undo': undo(); return true;
+      case 'undo': userUndo(); return true;
       default: {
         const refs = deviceRefs().filter((d) => d.kind !== 'music'); // lamp phrases never touch the speaker
         if (!refs.length) { say('No devices here yet.'); return true; }
@@ -1660,7 +1668,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         case 'newFrame': newBoard(); break;
         case 'keep': keep(); break;
         case 'drop': drop(); break;
-        case 'undo': undo(); break;
+        case 'undo': userUndo(); break;
         case 'showEverything': void overview(); break;
         case 'save': save(); break;
         case 'back': if (focusId) void overview(); else if (lastFocus) void focus(lastFocus); break;
@@ -1722,7 +1730,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
