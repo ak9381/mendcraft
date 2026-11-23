@@ -6,7 +6,7 @@
 // DOM and the focused field, inserting at the caret and firing real input events
 // so every existing handler runs unchanged.
 
-import { KEY_ROWS, pressKey, type FieldState, type SpecialKey } from '../input/keyboardLogic';
+import { KEY_ROWS, pressKey, shiftAfter, type FieldState, type ShiftState, type SpecialKey } from '../input/keyboardLogic';
 
 type EditableField = HTMLInputElement | HTMLTextAreaElement;
 
@@ -57,6 +57,7 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
 
   let field: EditableField | null = null;
   let shift = false;
+  let caps: ShiftState = { shift: false, caps: false, lastShiftAt: -Infinity };
   let autoOpen = false;
   let dwellKey: HTMLButtonElement | null = null;
   let dwellTimer: number | null = null;
@@ -116,7 +117,10 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
 
   function refreshShift(): void {
     shiftBtn.classList.toggle('active', shift);
+    shiftBtn.classList.toggle('caps', caps.caps);
     shiftBtn.setAttribute('aria-pressed', String(shift));
+    shiftBtn.textContent = caps.caps ? '⇪ Caps' : '⇧ Shift';
+    shiftBtn.setAttribute('aria-label', caps.caps ? 'Caps lock on — tap Shift to release' : 'Shift (double-tap for caps lock)');
     for (const b of letterKeys) b.textContent = shift ? b.dataset.key!.toUpperCase() : b.dataset.key!;
   }
 
@@ -129,7 +133,8 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
       end: field.selectionEnd ?? field.value.length,
     };
     const r = pressKey(state, key, shift);
-    shift = r.shift;
+    caps = shiftAfter(caps, key, r.shift, typeof performance !== 'undefined' ? performance.now() : Date.now());
+    shift = caps.shift;
     refreshShift();
 
     if (r.close) { close(); return; }

@@ -110,3 +110,17 @@ export function pressKey(
       return insert(shiftChar(key, shift));
   }
 }
+
+/** C015: double-tapping Shift latches caps-lock (as on phone keyboards); one
+ *  more Shift tap releases it. Window is generous for hands (a pinch tap has
+ *  a ~300ms click cooldown). */
+export const CAPS_DOUBLE_TAP_MS = 600;
+export interface ShiftState { shift: boolean; caps: boolean; lastShiftAt: number }
+export function shiftAfter(s: ShiftState, key: string, resultShift: boolean, now: number): ShiftState {
+  if (key === 'Shift') {
+    if (s.caps) return { shift: false, caps: false, lastShiftAt: -Infinity };
+    if (now - s.lastShiftAt < CAPS_DOUBLE_TAP_MS) return { shift: true, caps: true, lastShiftAt: -Infinity };
+    return { shift: resultShift, caps: false, lastShiftAt: now };
+  }
+  return { ...s, shift: s.caps ? true : resultShift };
+}
