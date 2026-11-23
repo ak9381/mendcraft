@@ -94,10 +94,15 @@ export function focusOnInset(r: Rect, vp: Viewport, insetTop: number): Camera {
 }
 
 /** Focus at 1:1 centred in the space left after a top bar and a left/right dock,
- *  so a pinned-board dock never covers the focused board. */
-export function focusOnInsets(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number }): Camera {
+ *  so a pinned-board dock never covers the focused board. A board larger than
+ *  that space (a wide dashboard on a narrow phone) is pinned top-left just inside
+ *  the inset with `margin` px instead of centred, so its title and first tiles
+ *  are visible and the user can one-finger-pan to the rest. */
+export function focusOnInsets(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number }, margin = 16): Camera {
   const top = insets.top ?? 0, left = insets.left ?? 0, right = insets.right ?? 0;
   const availW = Math.max(1, vp.w - left - right);
   const availH = Math.max(1, vp.h - top);
-  return { x: Math.round(r.x + r.w / 2 - (left + availW / 2)), y: Math.round(r.y + r.h / 2 - (top + availH / 2)), z: 1 };
+  const x = r.w > availW ? r.x - left - margin : r.x + r.w / 2 - (left + availW / 2);
+  const y = r.h > availH ? r.y - top - margin : r.y + r.h / 2 - (top + availH / 2);
+  return { x: Math.round(x), y: Math.round(y), z: 1 };
 }
