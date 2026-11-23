@@ -68,6 +68,46 @@ describe('camera', () => {
   });
 });
 
+describe('twoHandCamera (anchored two-finger pinch)', () => {
+  it('pulling the fingers apart zooms in and keeps the world under the midpoint fixed', async () => {
+    const { twoHandCamera } = await import('../../src/canvas/camera');
+    const c0 = { x: 100, y: 50, z: 0.5 };
+    const p0 = { x: 500, y: 400 }, q0 = { x: 700, y: 400 }; // span 200, mid (600,400)
+    const p1 = { x: 400, y: 400 }, q1 = { x: 800, y: 400 }; // span 400 -> 2x
+    const mid0 = { x: 600, y: 400 }, mid1 = { x: 600, y: 400 };
+    const wMid = screenToWorld(c0, mid0);
+    const c1 = twoHandCamera(c0, p0, q0, p1, q1);
+    expect(c1.z).toBeCloseTo(1, 9); // 0.5 * 2
+    const after = worldToScreen(c1, wMid);
+    expect(after.x).toBeCloseTo(mid1.x, 6);
+    expect(after.y).toBeCloseTo(mid1.y, 6);
+  });
+
+  it('translating both fingers pans without changing zoom', async () => {
+    const { twoHandCamera } = await import('../../src/canvas/camera');
+    const c0 = { x: 0, y: 0, z: 0.5 };
+    const p0 = { x: 500, y: 400 }, q0 = { x: 700, y: 400 };
+    const p1 = { x: 560, y: 440 }, q1 = { x: 760, y: 440 }; // shifted +60,+40, same span
+    const c1 = twoHandCamera(c0, p0, q0, p1, q1);
+    expect(c1.z).toBeCloseTo(0.5, 9);
+    // world under mid0 should now sit under mid1
+    const wMid = screenToWorld(c0, { x: 600, y: 400 });
+    const after = worldToScreen(c1, wMid);
+    expect(after.x).toBeCloseTo(660, 6);
+    expect(after.y).toBeCloseTo(440, 6);
+  });
+
+  it('clamps zoom to MIN_Z / MAX_Z', async () => {
+    const { twoHandCamera } = await import('../../src/canvas/camera');
+    const c0 = { x: 0, y: 0, z: 1 };
+    const inUp = twoHandCamera(c0, { x: 590, y: 400 }, { x: 610, y: 400 }, { x: 100, y: 400 }, { x: 1100, y: 400 });
+    expect(inUp.z).toBe(MAX_Z);
+    const c1 = { x: 0, y: 0, z: 0.1 };
+    const out = twoHandCamera(c1, { x: 100, y: 400 }, { x: 1100, y: 400 }, { x: 590, y: 400 }, { x: 610, y: 400 });
+    expect(out.z).toBe(MIN_Z);
+  });
+});
+
 describe('lerpCamera', () => {
   it('starts at a, ends at b, and keeps zoom between them', async () => {
     const { lerpCamera } = await import('../../src/canvas/camera');

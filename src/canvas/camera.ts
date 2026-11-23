@@ -32,6 +32,26 @@ export function panBy(c: Camera, dx: number, dy: number): Camera {
   return { x: c.x - dx / c.z, y: c.y - dy / c.z, z: c.z };
 }
 
+/**
+ * Anchored two-finger pinch: given the two pinch points where the gesture
+ * grabbed (p0,q0) and where they are now (p1,q1), return the camera that zooms
+ * by the span ratio and pans so the world point that was under the pinch
+ * midpoint stays under the (moving) midpoint — a touch-screen pinch. No
+ * rotation: the plan engine hit-tests in screen pixels and never tilts. Zoom is
+ * clamped to [MIN_Z, MAX_Z]. See twoHandTransform.ts for the pure maths and
+ * grace/dead-zone/smoothing that pick the p/q points fed here.
+ */
+export function twoHandCamera(c: Camera, p0: Pt, q0: Pt, p1: Pt, q1: Pt): Camera {
+  const span0 = Math.hypot(q0.x - p0.x, q0.y - p0.y);
+  const span1 = Math.hypot(q1.x - p1.x, q1.y - p1.y);
+  const factor = span0 > 1e-6 ? span1 / span0 : 1;
+  const z = clampZ(c.z * factor);
+  const mid0 = { x: (p0.x + q0.x) / 2, y: (p0.y + q0.y) / 2 };
+  const mid1 = { x: (p1.x + q1.x) / 2, y: (p1.y + q1.y) / 2 };
+  const w = screenToWorld(c, mid0); // world point under the grab midpoint
+  return { x: w.x - mid1.x / z, y: w.y - mid1.y / z, z };
+}
+
 /** Centre a board at exactly 1:1 on whole pixels (editing scale). */
 export function focusOn(r: Rect, vp: Viewport): Camera {
   return { x: Math.round(r.x + r.w / 2 - vp.w / 2), y: Math.round(r.y + r.h / 2 - vp.h / 2), z: 1 };
