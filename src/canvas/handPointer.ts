@@ -629,7 +629,12 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         aim(p, t);
       }
     },
-    pointAt(x, y) { return aim({ x, y }); },
+    // Mirrors update(): a held pinch over a scroll list drags it (the sim /
+    // audit hook used to skip this, so hand scrolling was untestable).
+    pointAt(x, y) {
+      if (pinched && scrollEl && !dragging && !draggingHandle && !surface) { scrollDrag({ x, y }); return target; }
+      return aim({ x, y });
+    },
     pinch: press,
     get target() { return target; },
     get lastActivated() { return lastActivated; },
