@@ -26,7 +26,7 @@ import {
   type Room,
   type Wall,
 } from './doc';
-import { DEFAULTS } from './ops';
+import { DEFAULTS, PLAN_LIMITS } from './ops';
 
 const docOf = (ctx: ToolContext): PlanDoc => ctx.snapshot() as PlanDoc;
 
@@ -199,6 +199,7 @@ function createSelectTool(ctx: ToolContext): Tool {
     | { kind: 'end'; wallId: string; end: 'a' | 'b' }
     | { kind: 'multi'; ids: string[]; grabWorld: Point; applied: Point }
     | { kind: 'rotate'; id: string }
+    | { kind: 'resizeFix'; id: string }
     | { kind: 'marquee'; startWorld: Point; additive: boolean }
     | null;
   let drag: Drag = null;
@@ -225,6 +226,20 @@ function createSelectTool(ctx: ToolContext): Tool {
     return Math.hypot(s.x - p.x, s.y - p.y) <= grabRadius(p, ROTATE_GRAB_PX) ? f.id : null;
   }
 
+  /** A corner of the single selected fixture's footprint, for drag-to-resize
+   *  (B-123). Forgiving radius by source, like the endpoint/rotate handles. */
+  function fixtureCornerAt(p: ToolPointer): string | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const f = docOf(ctx).fixtures.find((x) => x.id === ctx.selectedId());
+    if (!f) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    for (const corner of fixturePolygon(f)) {
+      const s = ctx.toScreen(corner);
+      if (Math.hypot(s.x - p.x, s.y - p.y) <= r) return f.id;
+    }
+    return null;
+  }
+
   function marqueeOverlay(start: Point, cur: Point): void {
     ctx.setOverlay((ov) => {
       ov.rect(ctx.toScreen(start), ctx.toScreen(cur), '#2563eb', 'rgba(37,99,235,0.06)');
@@ -248,6 +263,11 @@ function createSelectTool(ctx: ToolContext): Tool {
       const rotId = rotateHandleAt(p);
       if (rotId) {
         drag = { kind: 'rotate', id: rotId };
+        return true;
+      }
+      const resizeId = fixtureCornerAt(p);
+      if (resizeId) {
+        drag = { kind: 'resizeFix', id: resizeId };
         return true;
       }
       const world = ctx.toWorld(p.x, p.y);
@@ -294,6 +314,28 @@ function createSelectTool(ctx: ToolContext): Tool {
         if (delta < -180) delta += 360;
         if (Math.abs(delta) >= 1) ctx.apply({ op: 'rotate', target: f.id, angle: delta });
         ctx.setStatus(`Rotation ${Math.round(desired)}° (snaps to 15°)`);
+        return;
+      }
+      if (drag.kind === 'resizeFix') {
+        const f = d.fixtures.find((x) => x.id === (drag as { id: string }).id);
+        if (!f) return;
+        // Work in the fixture's own (un-rotated) frame, anchored at its centre,
+        // so dragging a corner scales w/d symmetrically and never moves x/y —
+        // matching set_size, which only changes w/d.
+        const rad = (f.rotation * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = world.x - f.x;
+        const dy = world.y - f.y;
+        const lx = dx * cos + dy * sin;
+        const ly = -dx * sin + dy * cos;
+        const { min, max } = PLAN_LIMITS.fixtureSize;
+        const w = Math.max(min, Math.min(max, snapValueToGrid(Math.abs(lx) * 2)));
+        const dd = Math.max(min, Math.min(max, snapValueToGrid(Math.abs(ly) * 2)));
+        if (Math.abs(w - f.w) >= 1 || Math.abs(dd - f.d) >= 1) {
+          ctx.apply({ op: 'set_size', target: f.id, w, d: dd });
+          ctx.setStatus(`${mmToMetresLabel(w)} × ${mmToMetresLabel(dd)}`);
+        }
         return;
       }
       overTrash = ctx.overTrash(p.x, p.y);
@@ -360,7 +402,7 @@ function createSelectTool(ctx: ToolContext): Tool {
         const ids = drag.additive ? [...new Set([...selectionIds(ctx), ...hits])] : hits;
         ctx.setOverlay(null);
         setSelection(ctx, ids);
-      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && overTrash) {
+      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && drag.kind !== 'resizeFix' && overTrash) {
         deleteSelected(ctx);
       }
       drag = null;
