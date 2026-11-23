@@ -19,6 +19,7 @@ export interface MicFab {
 }
 
 export const MIC_IDLE_LABEL = 'Talk';
+export const LISTENING_STATUS = 'Listening…';
 export const MIC_LISTENING_LABEL = 'Listening… press to stop';
 
 /** The one mic icon, shared by the canvas floating mic and the mobile say bar. */
@@ -34,7 +35,7 @@ export function mountMicFab(
   root: HTMLElement,
   voice: MicVoice | null,
   say: (text: string) => void,
-  opts: { maxMs?: number; setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout } = {},
+  opts: { maxMs?: number; setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout; getStatus?: () => string } = {},
 ): MicFab {
   const doc = root.ownerDocument;
   const maxMs = opts.maxMs ?? 15000;
@@ -57,20 +58,23 @@ export function mountMicFab(
     label.textContent = s.label;
     el.classList.toggle('is-listening', listening);
   }
-  function stop() {
+  function stop(timedOut = false) {
     if (!listening) return;
     listening = false;
     if (timer) { clearT(timer); timer = null; }
     try { voice?.pushToTalkStop(); } catch { /* recogniser already stopped */ }
     render();
+    // Nothing was heard (no turn replaced the line): don't leave "Listening…"
+    // up after the mic is off. A turn's own status is never overwritten.
+    if (opts.getStatus?.() === LISTENING_STATUS) say(timedOut ? 'Stopped listening — nothing heard.' : 'Stopped listening.');
   }
   function toggle() {
     if (listening) { stop(); return; }
     if (!voice?.supported) { say('Voice needs Chrome or the phone app here. You can type in the say box.'); return; }
     listening = true;
     try { voice.pushToTalkStart(); } catch { listening = false; say('The mic could not start.'); render(); return; }
-    say('Listening…');
-    timer = setT(stop, maxMs);
+    say(LISTENING_STATUS);
+    timer = setT(() => stop(true), maxMs);
     render();
   }
   el.addEventListener('click', toggle);
@@ -79,7 +83,7 @@ export function mountMicFab(
   return {
     el,
     get listening() { return listening; },
-    toggle, stop,
+    toggle, stop: () => stop(),
     destroy() { stop(); el.remove(); },
   };
 }

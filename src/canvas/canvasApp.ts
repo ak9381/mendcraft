@@ -1850,7 +1850,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const voice = opts.voice ?? null;
 
   // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
-  const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say) : null;
+  const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say, { getStatus: () => statusEl.textContent ?? '' }) : null;
   micFabRef = micFab;
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;

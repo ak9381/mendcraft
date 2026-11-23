@@ -127,3 +127,35 @@ describe('on a phone, the review reserves the bottom Tools bar so Approve stays 
     expect(all).toContain('padding-bottom: var(--mc-bar-h');
   });
 });
+
+describe('Talk stop clears a stale "Listening…" line (A7-020)', () => {
+  function mk(status: { text: string }) {
+    const listeners: Record<string, () => void> = {};
+    const el = {
+      type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>,
+      classList: { toggle: vi.fn() },
+      setAttribute(k: string, v: string) { this.attrs[k] = v; },
+      addEventListener(t: string, f: () => void) { listeners[t] = f; },
+      querySelector: () => ({ textContent: '' }),
+      remove: vi.fn(),
+    };
+    const root = { ownerDocument: { createElement: () => el }, append: vi.fn() } as unknown as HTMLElement;
+    const voice = { supported: true, pushToTalkStart: vi.fn(), pushToTalkStop: vi.fn() };
+    let fire: (() => void) | null = null;
+    const fab = mountMicFab(root, voice, (t) => { status.text = t; }, { setTimer: ((f: () => void) => { fire = f; return 1; }) as never, clearTimer: (() => {}) as never, getStatus: () => status.text });
+    return { fab, click: () => listeners.click(), timeout: () => fire?.() };
+  }
+  it('a second tap with nothing heard says it stopped', () => {
+    const s = { text: '' }; const m = mk(s);
+    m.click(); expect(s.text).toBe('Listening…');
+    m.click(); expect(m.fab.listening).toBe(false); expect(s.text).toBe('Stopped listening.');
+  });
+  it('the 15s safety stop says nothing was heard', () => {
+    const s = { text: '' }; const m = mk(s);
+    m.click(); m.timeout(); expect(s.text).toBe('Stopped listening — nothing heard.');
+  });
+  it('never overwrites a turn that already replaced the line', () => {
+    const s = { text: '' }; const m = mk(s);
+    m.click(); s.text = 'Building your dashboard…'; m.click(); expect(s.text).toBe('Building your dashboard…');
+  });
+});
