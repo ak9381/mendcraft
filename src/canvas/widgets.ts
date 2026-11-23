@@ -100,17 +100,19 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     // the plan's own pinch API (the one the old studio fed) as a hand surface.
     let handPan: { x: number; y: number } | null = null;
     let two: { mid: { x: number; y: number }; span: number } | null = null;
+    let additiveNext = false;
     host.dataset.handSurface = '';
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
     (host as HTMLElement & { __mcPlanPick?: (x: number, y: number) => string | null }).__mcPlanPick = (x, y) => view.pick?.(x, y) ?? null;
     (host as HTMLElement & { __mcHandSurface?: HandSurface }).__mcHandSurface = {
-      hover: (x, y) => view.hover?.(x, y),
+      hover: (x, y) => { additiveNext = false; view.hover?.(x, y); }, // hand open again: a stale hold never carries over
       // Nothing grabbed (Select tool on empty floor) pans the plan, the same
       // as a mouse drag on empty floor.
       beginDrag: (x, y) => {
         host.focus({ preventScroll: true });
-        const grabbed = view.beginDrag?.(x, y) ?? false;
+        const grabbed = view.beginDrag?.(x, y, additiveNext ? { additive: true } : undefined) ?? false;
+        additiveNext = false;
         handPan = grabbed ? null : { x, y };
         return grabbed;
       },
@@ -134,10 +136,16 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
       // selection (the hand has no Shift key).
       hold: (x, y) => {
         host.focus({ preventScroll: true });
-        return view.toggleSelectAt?.(x, y) ?? false;
+        if (view.toggleSelectAt?.(x, y)) return true;
+        // Held on empty floor: the next drag is an ADDITIVE marquee (Shift+drag).
+        additiveNext = true;
+        return false;
       },
       tap: (x, y) => {
         host.focus({ preventScroll: true }); // like a mouse press: plan keys (Esc, Delete) work next
+        // A hold on empty floor released without a drag = Shift+click on empty:
+        // keep the selection (a plain tap there would clear it).
+        if (additiveNext) { additiveNext = false; return; }
         if (view.tap?.(x, y)) return;
         // Same as the old studio's pinch-tap: magnet-aim, then select what's there.
         const id = view.aim?.(x, y)?.id ?? view.pick(x, y);

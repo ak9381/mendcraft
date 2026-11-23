@@ -549,6 +549,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (!surfaceDragging && !surfaceHeld && Math.hypot(p.x - surfaceStart.x, p.y - surfaceStart.y) > DRAG_MOVE_THRESHOLD_PX) {
         clearSurfaceHold();
         surfaceDragging = true;
+        // A plan drag is never a tile morph: drop the morph hold for this pinch.
+        opts.onPinch?.({ phase: 'cancel', p, now: now() });
         surface.beginDrag(surfaceStart.x, surfaceStart.y);
       }
       if (surfaceDragging) surface.drag(p.x, p.y);

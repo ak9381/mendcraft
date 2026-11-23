@@ -906,15 +906,18 @@ export function createPlanRenderer(
     render,
     fit,
     pick,
-    beginDrag(clientX, clientY) {
+    beginDrag(clientX, clientY, opts) {
       lastPinch = { x: clientX, y: clientY };
+      // additive (hand pinch-hold on empty floor, then drag) = Shift+drag: an
+      // additive marquee. Only the Select tool reads it.
+      const shift = !!opts?.additive && toolCtl.activeId() === 'select';
       const item = palette.itemAt(clientX, clientY);
       if (item) {
         toolCtl.beginPlace(item.toolId, { x: clientX, y: clientY, source: 'pinch' });
         pinchActive = true;
         return true;
       }
-      pinchActive = toolCtl.down({ x: clientX, y: clientY, source: 'pinch' });
+      pinchActive = toolCtl.down({ x: clientX, y: clientY, source: 'pinch', ...(shift ? { shift } : {}) });
       toolBusy = pinchActive;
       return pinchActive;
     },
@@ -944,7 +947,9 @@ export function createPlanRenderer(
     },
     toggleSelectAt(clientX, clientY) {
       if (toolCtl.activeId() !== 'select' || toolCtl.placing()) return false;
-      const hit = aimAt(clientX, clientY, DEFAULT_AIM_RADIUS_PX);
+      // A tight magnet (12px): a hold just off an object starts an additive
+      // marquee instead of grabbing the nearest wall.
+      const hit = aimAt(clientX, clientY, 12);
       if (!hit.id) return false;
       // Toggle directly (not via the Select tool's down): a pinch's generous
       // handle radius would grab a selected wall's endpoint instead.

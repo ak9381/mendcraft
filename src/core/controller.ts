@@ -100,7 +100,7 @@ export interface ViewportHandle {
   /** Magnet-aim: snap a pointer onto the nearest object within `radiusPx`. */
   aim?(clientX: number, clientY: number, radiusPx?: number): { clientX: number; clientY: number; id: string | null };
   /** Begin a world-space drag of the current selection; true if it grabbed. */
-  beginDrag?(clientX: number, clientY: number): boolean;
+  beginDrag?(clientX: number, clientY: number, opts?: { additive?: boolean }): boolean;
   /** Continue a world-space drag (with snap); true if handled. */
   drag?(clientX: number, clientY: number): boolean;
   endDrag?(): void;
