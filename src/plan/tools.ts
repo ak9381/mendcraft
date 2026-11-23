@@ -200,6 +200,7 @@ function createSelectTool(ctx: ToolContext): Tool {
     | { kind: 'multi'; ids: string[]; grabWorld: Point; applied: Point }
     | { kind: 'rotate'; id: string }
     | { kind: 'resizeFix'; id: string }
+    | { kind: 'resizeOpening'; id: string; edge: 'near' | 'far' }
     | { kind: 'marquee'; startWorld: Point; additive: boolean }
     | null;
   let drag: Drag = null;
@@ -240,6 +241,25 @@ function createSelectTool(ctx: ToolContext): Tool {
     return null;
   }
 
+  /** A jamb (near/far edge) of the single selected opening, for drag-to-resize
+   *  the opening width directly on canvas (B-122). Forgiving radius by source. */
+  function openingJambAt(p: ToolPointer): { id: string; edge: 'near' | 'far' } | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const o = docOf(ctx).openings.find((x) => x.id === ctx.selectedId());
+    if (!o) return null;
+    const wall = docOf(ctx).walls.find((w) => w.id === o.wallId);
+    if (!wall) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    const jambs = [
+      { edge: 'near' as const, s: ctx.toScreen(pointAlong(wall, o.offset)) },
+      { edge: 'far' as const, s: ctx.toScreen(pointAlong(wall, o.offset + o.width)) },
+    ]
+      .map((j) => ({ ...j, d: Math.hypot(j.s.x - p.x, j.s.y - p.y) }))
+      .filter((j) => j.d <= r)
+      .sort((a, b) => a.d - b.d);
+    return jambs.length ? { id: o.id, edge: jambs[0].edge } : null;
+  }
+
   function marqueeOverlay(start: Point, cur: Point): void {
     ctx.setOverlay((ov) => {
       ov.rect(ctx.toScreen(start), ctx.toScreen(cur), '#2563eb', 'rgba(37,99,235,0.06)');
@@ -268,6 +288,11 @@ function createSelectTool(ctx: ToolContext): Tool {
       const resizeId = fixtureCornerAt(p);
       if (resizeId) {
         drag = { kind: 'resizeFix', id: resizeId };
+        return true;
+      }
+      const jamb = openingJambAt(p);
+      if (jamb) {
+        drag = { kind: 'resizeOpening', ...jamb };
         return true;
       }
       const world = ctx.toWorld(p.x, p.y);
@@ -338,6 +363,36 @@ function createSelectTool(ctx: ToolContext): Tool {
         }
         return;
       }
+      if (drag.kind === 'resizeOpening') {
+        const rd = drag as { id: string; edge: 'near' | 'far' };
+        const o = d.openings.find((x) => x.id === rd.id);
+        const wall = o && d.walls.find((w) => w.id === o.wallId);
+        if (!o || !wall) return;
+        const len = wallLength(wall);
+        const t = Math.max(0, Math.min(len, projectToWall(world, wall).t));
+        const { min, max } = PLAN_LIMITS.openingWidth;
+        // Anchor the opposite jamb: dragging the far edge grows toward b (offset
+        // fixed); dragging the near edge grows toward a (far edge fixed).
+        if (rd.edge === 'far') {
+          const width = Math.max(min, Math.min(max, len - o.offset, snapValueToGrid(t - o.offset)));
+          if (Math.abs(width - o.width) >= 1) {
+            ctx.apply({ op: 'set_width', target: o.id, width });
+            ctx.setStatus(`Width ${mmToMetresLabel(width)}`);
+          }
+        } else {
+          const farEdge = o.offset + o.width;
+          const width = Math.max(min, Math.min(max, farEdge, snapValueToGrid(farEdge - t)));
+          const offset = farEdge - width;
+          if (Math.abs(width - o.width) >= 1) {
+            ctx.apply({ op: 'batch', ops: [
+              { op: 'set_width', target: o.id, width },
+              { op: 'move_opening', target: o.id, offset },
+            ] });
+            ctx.setStatus(`Width ${mmToMetresLabel(width)}`);
+          }
+        }
+        return;
+      }
       overTrash = ctx.overTrash(p.x, p.y);
       ctx.setTrashHover(overTrash);
       if (drag.kind === 'multi') {
@@ -402,7 +457,7 @@ function createSelectTool(ctx: ToolContext): Tool {
         const ids = drag.additive ? [...new Set([...selectionIds(ctx), ...hits])] : hits;
         ctx.setOverlay(null);
         setSelection(ctx, ids);
-      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && drag.kind !== 'resizeFix' && overTrash) {
+      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && drag.kind !== 'resizeFix' && drag.kind !== 'resizeOpening' && overTrash) {
         deleteSelected(ctx);
       }
       drag = null;

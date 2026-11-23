@@ -3,11 +3,17 @@
 // fake ToolContext. See tests/gestures/toolCtxFake.ts.
 import { describe, expect, it } from 'vitest';
 import { createPlanTools } from '../../src/plan/tools';
-import { emptyPlan, type Fixture } from '../../src/plan/doc';
+import { emptyPlan, type Fixture, type Opening, type Wall } from '../../src/plan/doc';
 import { makeFakeCtx, ptr } from './toolCtxFake';
 
 const fixture = (id: string, x: number, y: number, w = 400, d = 400, rotation = 0): Fixture => ({
   id, kind: 'chair', x, y, w, d, rotation,
+});
+const wall = (id: string, ax: number, ay: number, bx: number, by: number): Wall => ({
+  id, a: { x: ax, y: ay }, b: { x: bx, y: by }, thickness: 100,
+});
+const opening = (id: string, wallId: string, offset: number, width: number): Opening => ({
+  id, kind: 'door', wallId, offset, width, swing: 'left',
 });
 
 function selectToolFrom(ctx: Parameters<typeof createPlanTools>[0]) {
@@ -56,5 +62,51 @@ describe('B-123 fixture resize by dragging a footprint corner', () => {
     };
     expect(make('mouse')).toBe(false);
     expect(make('pinch')).toBe(true);
+  });
+});
+
+describe('B-122 opening width by dragging a jamb on canvas', () => {
+  // wall along +x, 1000mm; door spans offset 300 .. 700 (width 400).
+  function setup() {
+    const doc = emptyPlan();
+    doc.walls.push(wall('w1', 0, 0, 1000, 0));
+    doc.openings.push(opening('o1', 'w1', 300, 400));
+    return makeFakeCtx({ pickResult: 'o1', selectedId: 'o1', doc });
+  }
+
+  it.each(['mouse', 'pinch'] as const)('%s: dragging the far jamb widens via set_width, near edge fixed', (source) => {
+    const { ctx, state } = setup();
+    const select = selectToolFrom(ctx);
+    select.onDown!(ptr(700, 0, source)); // far jamb
+    select.onMove!(ptr(900, 0, source)); // pull toward b
+    const sw = state.applied.find((a) => a.op === 'set_width') as { width: number } | undefined;
+    expect(sw?.width).toBe(600); // 900 - offset(300)
+    // far-edge drag keeps the near edge: it's a plain set_width, not a batch
+    expect(state.applied.some((a) => a.op === 'batch')).toBe(false);
+  });
+
+  it('dragging the near jamb keeps the far edge anchored (batched set_width + move_opening)', () => {
+    const { ctx, state } = setup();
+    const select = selectToolFrom(ctx);
+    select.onDown!(ptr(300, 0, 'pinch')); // near jamb
+    select.onMove!(ptr(100, 0, 'pinch')); // pull toward a
+    const batch = state.applied.find((a) => a.op === 'batch') as { ops: Array<Record<string, unknown>> } | undefined;
+    expect(batch).toBeDefined();
+    const sw = batch!.ops.find((o) => o.op === 'set_width') as { width: number };
+    const mv = batch!.ops.find((o) => o.op === 'move_opening') as { offset: number };
+    expect(sw.width).toBe(600); // farEdge(700) - 100
+    expect(mv.offset).toBe(100); // new near edge; far edge stays at 700
+  });
+
+  it('a pinch gets a forgiving jamb grab radius a mouse does not', () => {
+    const grab = (source: 'mouse' | 'pinch') => {
+      const { ctx, state } = setup();
+      const select = selectToolFrom(ctx);
+      select.onDown!(ptr(700, 18, source)); // 18px off the far jamb — mouse miss, pinch hit
+      select.onMove!(ptr(900, 0, source));
+      return state.applied.some((a) => a.op === 'set_width' || a.op === 'batch');
+    };
+    expect(grab('mouse')).toBe(false);
+    expect(grab('pinch')).toBe(true);
   });
 });
