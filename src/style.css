@@ -4259,3 +4259,10 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 #app:has(> #layout) .mc-dir-person { background: #f8fafc; }
 #app:has(> #layout) .mc-dir-field input,
 #app:has(> #layout) .mc-dir-field select { background: #fff; color: #0f172a; border-color: #cbd5e1; }
+
+/* ---- hand list for a native <select> (C172–C175) ---- */
+.mc-hand-select { position: fixed; inset: 0; z-index: 9000; }
+.mc-hand-select-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: rgb(0 0 0 / 0.25); border: 0; border-radius: 0; padding: 0; cursor: default; }
+.mc-hand-select-list { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 8px; max-height: 60vh; overflow: auto; border-radius: 14px; background: var(--panel, #1c1c1a); border: 1px solid var(--border, #444); box-shadow: 0 12px 32px rgb(0 0 0 / 0.35); }
+.mc-hand-select-opt { min-height: 48px; text-align: left; padding: 0 14px; font-size: 16px; }
+.mc-hand-select-opt[aria-selected="true"] { font-weight: 700; }

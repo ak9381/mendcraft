@@ -8,6 +8,7 @@ import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
 import { createHandHover, magnetPull, tooltipTextFor } from './ui/handHover';
+import { openHandSelect } from './ui/handSelect';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
 import { createTwoHandGesture, incrementalZoomPan, midpoint, IDENTITY, type SimilarityTransform, type Vec } from './input/twoHandTransform';
@@ -1414,7 +1415,9 @@ function handClickable(clientX: number, clientY: number): HTMLElement | null {
   return ctl;
 }
 function activateControl(ctl: HTMLElement): void {
-  if (ctl instanceof HTMLSelectElement || (ctl instanceof HTMLInputElement && ctl.type === 'text')) ctl.focus();
+  // C172–C175: a native popup is out of the hand's reach — open the in-page list.
+  if (ctl instanceof HTMLSelectElement) { ctl.focus(); openHandSelect(ctl); }
+  else if (ctl instanceof HTMLInputElement && ctl.type === 'text') ctl.focus();
   else ctl.click();
 }
 
