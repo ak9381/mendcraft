@@ -750,3 +750,14 @@
   display: grid; grid-auto-flow: column; grid-template-rows: repeat(auto-fill, 46px);
   align-content: start; gap: 4px;
 }
+
+/* Hand keyboard (handKeyboard.ts): above sheets and dialogs; docks at the top
+   when the bottom dock would cover the field being typed into. */
+.mc-keyboard.mc-hand-kb { z-index: 1000; bottom: 10px; width: min(880px, calc(100% - 16px)); }
+.mc-keyboard.mc-hand-kb.mc-hand-kb-top { bottom: auto; top: 10px; }
+@media (max-width: 600px) {
+  .mc-keyboard.mc-hand-kb { padding: 6px; gap: 5px; border-radius: 12px; }
+  .mc-hand-kb .mc-key-row { gap: 4px; }
+  .mc-hand-kb .mc-key { height: 44px; font-size: 17px; border-radius: 7px; padding: 0; }
+  .mc-hand-kb .mc-key-ctl { font-size: 12px; }
+}

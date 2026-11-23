@@ -47,6 +47,7 @@ import { mountScanPanel } from './scanPanel';
 import { computeSignature } from '../input/faceLogic';
 import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
+import { mountHandKeyboard } from './handKeyboard';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
@@ -327,6 +328,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     reviewDialog.open(model);
   }
 
+  // Hand-only typing: a pinch-focused text field docks the on-screen keyboard.
+  mountHandKeyboard(document);
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
     sim: opts.sim,

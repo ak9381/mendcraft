@@ -179,7 +179,7 @@ export function collectControls(doc: Document = document, opts?: CollectControls
   };
   walk(doc);
   const modal = Array.from(doc.querySelectorAll<HTMLElement>('[aria-modal=true]')).find((m) => !m.hidden && m.getBoundingClientRect().height > 0);
-  const scoped = modal ? out.filter((el) => modal.contains(el)) : out;
+  const scoped = modal ? out.filter((el) => modal.contains(el) || !!el.closest('[data-hand-always]')) : out;
   // Only controls that are on top at their centre (not covered by a sheet).
   // Off-screen centres make elementFromPoint return null — skip this clip
   // when the caller asked to include below-the-fold controls.
@@ -409,6 +409,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
     if (el.matches('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable=true]')) {
       el.focus({ preventScroll: true });
+      // Tell the canvas a HAND focused this field (mouse focus never fires
+      // this) so it can dock the on-screen keyboard — see handKeyboard.ts.
+      el.dispatchEvent(new CustomEvent('mc-hand-text-focus', { bubbles: true, composed: true }));
       return;
     }
     // SVGElement (VisualTile's promoted [data-action] zones) has no .click().
@@ -493,7 +496,15 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
           }
         }, SURFACE_HOLD_MS);
       }
-      else if (!target) opts.onEmptyPinch?.();
+      else if (!target) {
+        // A mouse press on empty space blurs the focused text field; a pinch
+        // on empty space does the same (and so closes the hand keyboard).
+        if (!dryRun) {
+          const a = doc.activeElement as HTMLElement | null;
+          if (a?.matches?.('input, textarea, [contenteditable=true]')) a.blur();
+        }
+        opts.onEmptyPinch?.();
+      }
       else {
         // A pinch over a scroll container (or a control inside one) arms a
         // drag-to-scroll; a still/short pinch still taps (see press-up).
