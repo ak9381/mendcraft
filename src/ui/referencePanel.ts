@@ -7,6 +7,7 @@
 // bypass. URL normalisation is pure (input/urlLogic) and unit-tested.
 
 import { normalizeUrl, hostLabel } from '../input/urlLogic';
+import { createNavStack } from '../input/navStack';
 import { FRAME_LOAD_TIMEOUT_MS, hostBlocksFraming } from './frameHosts';
 import {
   runBrowserReplay, startTeaching, frameDoc,
@@ -88,7 +89,18 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
   go.type = 'submit';
   go.className = 'mc-ref-go';
   go.textContent = 'Go';
-  bar.append(input, go);
+  const nav = createNavStack();
+  const mkNav = (label: string, text: string, cls: string, step: () => string | null): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = `mc-ref-nav ${cls}`; b.textContent = text;
+    b.setAttribute('aria-label', label); b.title = label; b.disabled = true;
+    b.addEventListener('click', () => { const u = step(); if (u) navigate(u, false); });
+    return b;
+  };
+  const backBtn = mkNav('Back', '◀', 'mc-ref-back', () => nav.back());
+  const fwdBtn = mkNav('Forward', '▶', 'mc-ref-fwd', () => nav.forward());
+  const syncNav = (): void => { backBtn.disabled = !nav.canBack(); fwdBtn.disabled = !nav.canForward(); };
+  bar.append(backBtn, fwdBtn, input, go);
   bar.addEventListener('submit', (e) => {
     e.preventDefault();
     navigate(input.value);
@@ -181,9 +193,11 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     status.hidden = true;
   });
 
-  function navigate(raw: string): void {
+  function navigate(raw: string, record = true): void {
     const url = normalizeUrl(raw);
     if (!url) return;
+    if (record) nav.visit(url);
+    syncNav();
     currentUrl = url;
     input.value = url;
     titleEl.textContent = hostLabel(url);

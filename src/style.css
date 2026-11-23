@@ -4266,3 +4266,5 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-hand-select-list { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 8px; max-height: 60vh; overflow: auto; border-radius: 14px; background: var(--panel, #1c1c1a); border: 1px solid var(--border, #444); box-shadow: 0 12px 32px rgb(0 0 0 / 0.35); }
 .mc-hand-select-opt { min-height: 48px; text-align: left; padding: 0 14px; font-size: 16px; }
 .mc-hand-select-opt[aria-selected="true"] { font-weight: 700; }
+.mc-ref-nav { min-width: 36px; min-height: 36px; padding: 0 8px; border-radius: 7px; }
+.mc-ref-nav:disabled { opacity: 0.4; }
