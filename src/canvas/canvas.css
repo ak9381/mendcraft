@@ -411,7 +411,10 @@
   .mc-dock { top: calc(8px + env(safe-area-inset-top, 0px)); max-height: calc(100% - var(--mc-bar-h, 132px) - 16px); }
   .mc-say input { min-height: 44px; font-size: 16px; }
   .mc-canvas-status { font-size: 15px; }
-  .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
+  /* Start below the top-right mic FAB (top 12px + 64px tall) so its nano
+     terminal header never hides under the mic — the FAB floats in the clear
+     strip above. */
+  .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
   /* The bar sits in the thumb zone at the bottom, so the review must reserve
