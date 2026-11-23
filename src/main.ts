@@ -7,7 +7,7 @@ import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from 
 import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
-import { createHandHover, magnetPull } from './ui/handHover';
+import { createHandHover, magnetPull, tooltipTextFor } from './ui/handHover';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
 import { createTwoHandGesture, incrementalZoomPan, midpoint, IDENTITY, type SimilarityTransform, type Vec } from './input/twoHandTransform';
@@ -5175,17 +5175,23 @@ const handTip = document.createElement('div');
 handTip.className = 'hand-tooltip';
 handTip.hidden = true;
 viewportEl.appendChild(handTip);
-const handHover = createHandHover({
-  onTooltip(text, el) {
-    if (!text || !el) { handTip.hidden = true; return; }
-    const vr = viewportEl.getBoundingClientRect();
-    const er = el.getBoundingClientRect();
-    handTip.textContent = text;
-    handTip.hidden = false;
-    handTip.style.left = `${er.left - vr.left + er.width / 2}px`;
-    handTip.style.top = `${Math.max(0, er.top - vr.top - 8)}px`;
-  },
-});
+function showHandTip(text: string | null, el: HTMLElement | null): void {
+  if (!text || !el) { handTip.hidden = true; return; }
+  const vr = viewportEl.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  handTip.textContent = text;
+  handTip.hidden = false;
+  handTip.style.left = `${er.left - vr.left + er.width / 2}px`;
+  handTip.style.top = `${Math.max(0, er.top - vr.top - 8)}px`;
+}
+const handHover = createHandHover({ onTooltip: showHandTip });
+// C176: hint-only elements (the pinch-strength chip) carry a `title` but are
+// not controls, so a hand hovering them saw nothing a mouse user would.
+let handHintEl: HTMLElement | null = null;
+function handHintAt(clientX: number, clientY: number): HTMLElement | null {
+  const h = (document.elementFromPoint(clientX, clientY) as HTMLElement | null)?.closest<HTMLElement>('[title]') ?? null;
+  return h && h.closest(HAND_CLICK_ZONES) ? h : null;
+}
 /** How strongly the visual cursor eases toward a hovered control's centre
  *  (0 = none, 1 = snaps straight there); the real aim point used for hit
  *  testing is never touched, only where the cursor is drawn. */
@@ -5283,6 +5289,8 @@ function handleHandEvent(raw: HandEvent): void {
       // redundant dot sitting on top of the thing it's pointing at.
       const ctl = !resting ? handClickable(aimed.clientX, aimed.clientY) : null;
       handHover.setTarget(ctl);
+      const hint = ctl || resting ? null : handHintAt(aimed.clientX, aimed.clientY);
+      if (hint !== handHintEl) { handHintEl = hint; if (!ctl) showHandTip(tooltipTextFor(hint), hint); }
       const snapped = !!ctl || !!aimed.id;
       // Visual-only magnetic pull toward the hovered control's centre; the
       // aim point used for hit-testing below stays exact.
@@ -5384,6 +5392,7 @@ function handleHandEvent(raw: HandEvent): void {
       cursorFilter.reset();
       handCursor.hidden = true;
       handHover.setTarget(null);
+      handHintEl = null; handTip.hidden = true;
       keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
       viewport.endDrag?.();
       break;
