@@ -49,6 +49,37 @@ export function clampResize(layout: ItemLayout, bounds: Rect, min: Size = MIN_IT
   };
 }
 
+export type ResizeHandleDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+/** Pure: resize a tile by dragging one of the 8 handles by (dx,dy). The edge(s)
+ *  named by the handle move; the OPPOSITE edge stays anchored (so a top-left
+ *  drag pins the bottom-right, a right-edge drag pins the left, etc.). Each
+ *  moving edge is clamped so the size stays in [min,max] AND inside `bounds`,
+ *  without ever dragging the anchored edge. */
+export function resizeByHandle(layout: ItemLayout, handle: ResizeHandleDir, dx: number, dy: number, bounds: Rect, min: Size = MIN_ITEM_SIZE, max: Size = MAX_ITEM_SIZE): ItemLayout {
+  let left = layout.left, top = layout.top;
+  let right = layout.left + layout.width, bottom = layout.top + layout.height;
+  const bl = bounds.left, bt = bounds.top, br = bounds.left + bounds.width, bb = bounds.top + bounds.height;
+  const movesW = handle.includes('w'), movesE = handle.includes('e');
+  const movesN = handle.includes('n'), movesS = handle.includes('s');
+
+  if (movesW) { // anchor = right edge; width = right - left
+    const w = clampNum(right - (left + dx), Math.min(min.width, right - bl), Math.min(max.width, right - bl));
+    left = right - w;
+  } else if (movesE) { // anchor = left edge
+    const w = clampNum((right + dx) - left, Math.min(min.width, br - left), Math.min(max.width, br - left));
+    right = left + w;
+  }
+  if (movesN) { // anchor = bottom edge
+    const h = clampNum(bottom - (top + dy), Math.min(min.height, bottom - bt), Math.min(max.height, bottom - bt));
+    top = bottom - h;
+  } else if (movesS) { // anchor = top edge
+    const h = clampNum((bottom + dy) - top, Math.min(min.height, bb - top), Math.min(max.height, bb - top));
+    bottom = top + h;
+  }
+  return { left, top, width: right - left, height: bottom - top };
+}
+
 export interface XY { x: number; y: number }
 
 /** Pure: Akash's two-hand anchored resize. Each finger is assigned to the
@@ -171,14 +202,18 @@ export interface ItemHandles {
   destroy(): void;
 }
 
-/** Wires a move handle and a resize handle to one item's inline box style —
- *  the same plain-PointerEvent pattern as dragPanel.ts's title-bar drag, so
- *  hand pinch (via handPointer.ts's DRAG_HANDLE forwarding), mouse and touch
- *  all land here identically. */
+export interface DirectionedHandle { el: HandleElement; dir: ResizeHandleDir }
+
+/** Wires a move handle and one or more resize handles to one item's inline box
+ *  style — the same plain-PointerEvent pattern as dragPanel.ts's title-bar
+ *  drag, so hand pinch (via handPointer.ts's DRAG_HANDLE forwarding), mouse and
+ *  touch all land here identically. A bare `resizeHandle` is the bottom-right
+ *  ('se') corner; pass an array to wire any of the 8 corners/edges, each
+ *  anchored at its opposite edge (see {@link resizeByHandle}). */
 export function mountItemHandles(
   item: EditItemElement,
   moveHandle: HandleElement,
-  resizeHandle: HandleElement,
+  resizeHandle: HandleElement | DirectionedHandle[],
   initial: ItemLayout,
   opts: MountHandlesOptions,
 ): ItemHandles {
@@ -216,10 +251,12 @@ export function mountItemHandles(
     if (engaged) opts.onCommit?.(layout);
   }
 
-  let resizeStart: { x: number; y: number; width: number; height: number; engaged: boolean } | null = null;
-  function onResizeDown(e: PointerLikeEvent): void {
-    resizeStart = { x: e.clientX, y: e.clientY, width: layout.width, height: layout.height, engaged: false };
-    if (e.pointerId != null) resizeHandle.setPointerCapture?.(e.pointerId);
+  const resizeHandles: DirectionedHandle[] = Array.isArray(resizeHandle) ? resizeHandle : [{ el: resizeHandle, dir: 'se' }];
+  // One active resize at a time; records the grab-time box and which handle.
+  let resizeStart: { x: number; y: number; box: ItemLayout; dir: ResizeHandleDir; el: HandleElement; engaged: boolean } | null = null;
+  function onResizeDown(h: DirectionedHandle, e: PointerLikeEvent): void {
+    resizeStart = { x: e.clientX, y: e.clientY, box: { ...layout }, dir: h.dir, el: h.el, engaged: false };
+    if (e.pointerId != null) h.el.setPointerCapture?.(e.pointerId);
   }
   function onResizeMove(e: PointerLikeEvent): void {
     if (!resizeStart) return;
@@ -227,7 +264,7 @@ export function mountItemHandles(
       if (!pastSlop(e.clientX - resizeStart.x, e.clientY - resizeStart.y, slop)) return;
       resizeStart.engaged = true;
     }
-    layout = clampResize({ ...layout, width: resizeStart.width + (e.clientX - resizeStart.x), height: resizeStart.height + (e.clientY - resizeStart.y) }, opts.getBounds(), min, max);
+    layout = resizeByHandle(resizeStart.box, resizeStart.dir, e.clientX - resizeStart.x, e.clientY - resizeStart.y, opts.getBounds(), min, max);
     apply();
   }
   function onResizeEnd(): void {
@@ -241,10 +278,15 @@ export function mountItemHandles(
   moveHandle.addEventListener('pointermove', onMoveMove);
   moveHandle.addEventListener('pointerup', onMoveEnd);
   moveHandle.addEventListener('pointercancel', onMoveEnd);
-  resizeHandle.addEventListener('pointerdown', onResizeDown);
-  resizeHandle.addEventListener('pointermove', onResizeMove);
-  resizeHandle.addEventListener('pointerup', onResizeEnd);
-  resizeHandle.addEventListener('pointercancel', onResizeEnd);
+  const resizeDownFns = new Map<HandleElement, (e: PointerLikeEvent) => void>();
+  for (const h of resizeHandles) {
+    const down = (e: PointerLikeEvent): void => onResizeDown(h, e);
+    resizeDownFns.set(h.el, down);
+    h.el.addEventListener('pointerdown', down);
+    h.el.addEventListener('pointermove', onResizeMove);
+    h.el.addEventListener('pointerup', onResizeEnd);
+    h.el.addEventListener('pointercancel', onResizeEnd);
+  }
 
   let pinching = false;
   function pinchStart(): ItemLayout {
@@ -272,10 +314,13 @@ export function mountItemHandles(
       moveHandle.removeEventListener('pointermove', onMoveMove);
       moveHandle.removeEventListener('pointerup', onMoveEnd);
       moveHandle.removeEventListener('pointercancel', onMoveEnd);
-      resizeHandle.removeEventListener('pointerdown', onResizeDown);
-      resizeHandle.removeEventListener('pointermove', onResizeMove);
-      resizeHandle.removeEventListener('pointerup', onResizeEnd);
-      resizeHandle.removeEventListener('pointercancel', onResizeEnd);
+      for (const h of resizeHandles) {
+        const down = resizeDownFns.get(h.el);
+        if (down) h.el.removeEventListener('pointerdown', down);
+        h.el.removeEventListener('pointermove', onResizeMove);
+        h.el.removeEventListener('pointerup', onResizeEnd);
+        h.el.removeEventListener('pointercancel', onResizeEnd);
+      }
     },
   };
 }
@@ -417,6 +462,24 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
     return el;
   }
 
+  // Edit-mode words it as "bottom-right corner", "top edge", … for the label.
+  const RESIZE_DIRS: ResizeHandleDir[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const DIR_WORD: Record<ResizeHandleDir, string> = {
+    nw: 'top-left corner', n: 'top edge', ne: 'top-right corner', e: 'right edge',
+    se: 'bottom-right corner', s: 'bottom edge', sw: 'bottom-left corner', w: 'left edge',
+  };
+  function makeResizeHandle(dir: ResizeHandleDir, label: string): EditEl {
+    const el = opts.createElement('button');
+    el.setAttribute('type', 'button');
+    el.classList.add('mc-edit-resize');
+    el.classList.add(`mc-edit-resize-${dir}`);
+    el.setAttribute('data-mc-resize-handle', dir);
+    el.setAttribute('aria-label', `Resize the ${label} tile from the ${DIR_WORD[dir]}`);
+    // Corners keep the diagonal glyph; edges get a bar so they read as edges.
+    el.textContent = dir.length === 2 ? '⤡' : (dir === 'n' || dir === 's' ? '↕' : '↔');
+    return el;
+  }
+
   function liveBounds(canvasEl: EditEl): Rect {
     const r = canvasEl.getBoundingClientRect();
     const ai = opts.getAiPanelEl();
@@ -473,9 +536,9 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
       wrapper.style.position = 'absolute';
 
       const moveHandle = makeHandle('move', it.label);
-      const resizeHandle = makeHandle('resize', it.label);
-      wrapper.append(moveHandle, resizeHandle);
-      const handles = mountItemHandles(wrapper, moveHandle, resizeHandle, layout, {
+      const resizeEls = RESIZE_DIRS.map((dir) => ({ el: makeResizeHandle(dir, it.label), dir }));
+      wrapper.append(moveHandle, ...resizeEls.map((r) => r.el));
+      const handles = mountItemHandles(wrapper, moveHandle, resizeEls.map((r) => ({ el: r.el as unknown as HandleElement, dir: r.dir })), layout, {
         min: minSize,
         max: maxSize,
         getBounds: () => liveBounds(canvasEl),

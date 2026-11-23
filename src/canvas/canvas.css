@@ -66,9 +66,19 @@
 .mc-edit-move:focus-visible, .mc-edit-resize:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .mc-edit-canvas.mc-editing .mc-edit-item { outline: 2px dashed var(--border); outline-offset: 3px; }
 .mc-edit-canvas.mc-editing .mc-edit-move, .mc-edit-canvas.mc-editing .mc-edit-resize { display: flex; }
-.mc-edit-move { top: -22px; left: -22px; }
-.mc-edit-resize { bottom: -22px; right: -22px; cursor: nwse-resize; }
-.mc-edit-resize:active { cursor: nwse-resize; }
+/* Move grip sits in the tile centre so it never collides with the corner /
+   edge resize handles that now ring the tile. */
+.mc-edit-move { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+/* Eight resize handles: four corners + four edges, each anchored at the
+   opposite side (A4-006..A4-012). Edges are centred on their side. */
+.mc-edit-resize-nw { top: -22px; left: -22px; cursor: nwse-resize; }
+.mc-edit-resize-ne { top: -22px; right: -22px; cursor: nesw-resize; }
+.mc-edit-resize-se { bottom: -22px; right: -22px; cursor: nwse-resize; }
+.mc-edit-resize-sw { bottom: -22px; left: -22px; cursor: nesw-resize; }
+.mc-edit-resize-n { top: -22px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.mc-edit-resize-s { bottom: -22px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.mc-edit-resize-w { top: 50%; left: -22px; transform: translateY(-50%); cursor: ew-resize; }
+.mc-edit-resize-e { top: 50%; right: -22px; transform: translateY(-50%); cursor: ew-resize; }
 
 /* Edit / Done / Reset layout trio: stacked above the Tools chip, same fixed
    column (right: 24px), same shift-for-the-AI-panel pattern. Amber only for

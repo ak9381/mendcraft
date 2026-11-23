@@ -2,10 +2,54 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMove, clampResize, computeBounds, terminalCutPx,
   loadFrameLayout, saveFrameLayout, clearFrameLayout,
-  mountItemHandles, mountEditBoard, resizeToCorners,
+  mountItemHandles, mountEditBoard, resizeToCorners, resizeByHandle,
   MIN_ITEM_SIZE, MAX_ITEM_SIZE,
   type EditEl, type EditItemRef, type ItemLayout, type Rect, type PointerLikeEvent,
 } from '../../src/canvas/editBoard';
+
+// Every corner and edge resizes (not just bottom-right); each keeps the
+// OPPOSITE edge/corner anchored, same as any editor (A4-006..A4-012).
+describe('resizeByHandle (A4-006..A4-012 all 8 handles)', () => {
+  const bounds: Rect = { left: 0, top: 0, width: 1000, height: 1000 };
+  const box: ItemLayout = { left: 300, top: 300, width: 300, height: 300 }; // 300..600
+
+  it('se (bottom-right) grows width/height, top-left anchored — same as the old lone handle', () => {
+    expect(resizeByHandle(box, 'se', 40, 50, bounds)).toEqual({ left: 300, top: 300, width: 340, height: 350 });
+  });
+  it('nw (top-left) moves the top-left corner, bottom-right anchored', () => {
+    expect(resizeByHandle(box, 'nw', -40, -50, bounds)).toEqual({ left: 260, top: 250, width: 340, height: 350 });
+  });
+  it('ne (top-right) moves top + right, bottom-left anchored', () => {
+    expect(resizeByHandle(box, 'ne', 40, -50, bounds)).toEqual({ left: 300, top: 250, width: 340, height: 350 });
+  });
+  it('sw (bottom-left) moves left + bottom, top-right anchored', () => {
+    expect(resizeByHandle(box, 'sw', -40, 50, bounds)).toEqual({ left: 260, top: 300, width: 340, height: 350 });
+  });
+  it('n (top edge) moves top only, width untouched', () => {
+    expect(resizeByHandle(box, 'n', 999, -60, bounds)).toEqual({ left: 300, top: 240, width: 300, height: 360 });
+  });
+  it('e (right edge) moves right only, height untouched', () => {
+    expect(resizeByHandle(box, 'e', 60, 999, bounds)).toEqual({ left: 300, top: 300, width: 360, height: 300 });
+  });
+  it('w (left edge) moves left only, right anchored', () => {
+    expect(resizeByHandle(box, 'w', -60, 0, bounds)).toEqual({ left: 240, top: 300, width: 360, height: 300 });
+  });
+  it('s (bottom edge) moves bottom only', () => {
+    expect(resizeByHandle(box, 's', 0, 60, bounds)).toEqual({ left: 300, top: 300, width: 300, height: 360 });
+  });
+  it('a nw shrink past MIN keeps the bottom-right corner pinned (anchor respected)', () => {
+    const r = resizeByHandle({ left: 300, top: 300, width: 300, height: 300 }, 'nw', 1000, 1000, bounds);
+    expect(r.width).toBe(MIN_ITEM_SIZE.width);
+    expect(r.height).toBe(MIN_ITEM_SIZE.height);
+    expect(r.left + r.width).toBe(600); // right edge unmoved
+    expect(r.top + r.height).toBe(600); // bottom edge unmoved
+  });
+  it('an e grow is capped by the board edge from the left', () => {
+    const r = resizeByHandle({ left: 800, top: 300, width: 150, height: 150 }, 'e', 5000, 0, { left: 0, top: 0, width: 1000, height: 1000 });
+    expect(r.left).toBe(800);
+    expect(r.left + r.width).toBeLessThanOrEqual(1000);
+  });
+});
 
 // Akash's natural two-hand model: each hand grabs the NEAREST corner of the
 // tile and that corner tracks its finger. These are the pure-geometry proofs;
@@ -356,8 +400,12 @@ describe('mountEditBoard', () => {
     const lampMove = moveHandles.find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
     expect(lampMove.attrs['data-mc-drag-handle']).toBe('');
     const resizeHandles = byClass('mc-edit-resize');
-    const lampResize = resizeHandles.find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
-    expect(lampResize.attrs['data-mc-resize-handle']).toBe('');
+    // All 8 corners/edges now carry a resize handle (A4-006..A4-012), each a
+    // DRAG_HANDLE target and tagged with its direction.
+    const lampResizes = resizeHandles.filter((h) => h.attrs['aria-label']?.includes('Desk lamp'));
+    expect(lampResizes).toHaveLength(8);
+    const dirs = lampResizes.map((h) => h.attrs['data-mc-resize-handle']).sort();
+    expect(dirs).toEqual(['e', 'n', 'ne', 'nw', 's', 'se', 'sw', 'w']);
   });
 
   it('Done (Edit off) keeps the positioned layout and only hides the chrome', () => {
@@ -423,7 +471,7 @@ describe('mountEditBoard', () => {
     canvasEl.rect = { left: 0, top: 0, width: 1300, height: 900 }; // board runs right up to the AI panel
     canvasEl.clientWidth = 1300;
     aiPanel.hidden = false; // the AI panel is open and overlaps the board's right edge
-    const lampResize = byClass('mc-edit-resize').find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    const lampResize = byClass('mc-edit-resize').find((h) => h.attrs['aria-label']?.includes('Desk lamp') && h.attrs['data-mc-resize-handle'] === 'se')!;
     const lampWrapper = lampResize.parentElement!;
     lampWrapper.style.left = '12px'; lampWrapper.style.top = '12px'; lampWrapper.style.width = '300px'; lampWrapper.style.height = '200px';
     lampResize.fire('pointerdown', { clientX: 312, clientY: 212 });
