@@ -18,6 +18,7 @@
 import { createOneEuroFilter } from '../input/oneEuro';
 import { createDragVelocity, createMomentum, scrollableAncestor } from './handScroll';
 import { tooltipTextFor } from '../ui/handHover';
+import { fieldCaretAt } from '../input/caretAt';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -76,6 +77,10 @@ export function handSurfaceAt(el: Element | null): HandSurface | null {
 
 export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
+/** Sideways travel that turns a pinch on a text field into a drag-select (bigger than pinch wobble). */
+const TEXT_SELECT_PX = 14;
+/** Single-line-ish text fields a pinch-drag can select text in (C023). */
+const TEXT_SELECTABLE = 'input:not([type]), input[type=text], input[type=search], input[type=url], input[type=email], textarea';
 export const SURFACE_SNAP_PX = 12;
 /** Under the morph hold (900ms) so the add-to-selection hold wins on an object. */
 export const SURFACE_HOLD_MS = 500;
@@ -293,6 +298,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const clearSurfaceHold = () => { if (surfaceHoldTimer) { clearTimeout(surfaceHoldTimer); surfaceHoldTimer = null; } };
   let dragHandleStart: P = { x: 0, y: 0 };
   let dragHandleMoved = false;
+  // C023: a pinch that starts on a text field and drags across it selects text.
+  let textEl: HTMLInputElement | HTMLTextAreaElement | null = null;
+  let textStart: P = { x: 0, y: 0 };
+  let textSelecting = false;
   let pinched = false;
   let lastActivated: HTMLElement | null = null;
   let consumedUntil = -Infinity;
@@ -500,6 +509,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         const under = target ?? deepElementFromPoint(doc, pt.x, pt.y) ?? doc.documentElement;
         under?.dispatchEvent?.(new CustomEvent(HAND_PRESS, { bubbles: true, composed: true, detail: { x: pt.x, y: pt.y } }));
       }
+      if (target && !dryRun && target.matches(TEXT_SELECTABLE)) {
+        textEl = target as HTMLInputElement | HTMLTextAreaElement; textStart = pt; textSelecting = false;
+      }
       if (target && target.matches('input[type=range]')) { dragging = target as HTMLInputElement; dragTo(pt.x); consumedUntil = now() + 700; }
       else if (target && target.matches(DRAG_HANDLE)) {
         draggingHandle = target; dragHandleStart = pt; dragHandleMoved = false;
@@ -545,6 +557,14 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         consumedUntil = now() + 700;
       }
     } else {
+      if (textEl && textSelecting) {
+        // A drag-select ends with the range in place — no click to collapse it.
+        lastActivated = textEl; textEl = null; textSelecting = false;
+        suppressRelease = false; pressedOn = null; scrollEl = null; scrolled = false;
+        refreshControls(true); paint();
+        return;
+      }
+      const tapText = textEl; textEl = null;
       if (surface) {
         clearSurfaceHold();
         if (surfaceDragging) surface.endDrag();
@@ -571,7 +591,14 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       } else if (scrollEl && scrolled) {
         // A real drag scrolled the container — fling it, never a tap-click.
         startFling();
-      } else if (pressedOn && pressedOn === target) activate(pressedOn);
+      } else if (pressedOn && pressedOn === target) {
+        activate(pressedOn);
+        // A tap on a text field puts the caret where it landed, as a click does.
+        if (tapText && pressedOn === tapText && !dryRun) {
+          const i = fieldCaretAt(tapText, textStart.x);
+          try { tapText.setSelectionRange(i, i); } catch { /* type=number etc. */ }
+        }
+      }
       scrollEl = null; scrolled = false;
       suppressRelease = false;
       pressedOn = null;
@@ -594,6 +621,24 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (surfaceDragging) surface.drag(p.x, p.y);
       paint();
       return null;
+    }
+    if (textEl && pinched && !suppressRelease) {
+      const dx = p.x - textStart.x; const dy = p.y - textStart.y;
+      if (!textSelecting) {
+        if (Math.abs(dx) > TEXT_SELECT_PX && Math.abs(dx) >= Math.abs(dy)) {
+          textSelecting = true;
+          scrollEl = null; scrolled = false;
+          opts.onPinch?.({ phase: 'cancel', p, now: now() }); // a text drag is never a morph hold
+          if (doc.activeElement !== textEl) activate(textEl);
+        } else if (Math.abs(dy) > TEXT_SELECT_PX && scrollEl) {
+          // Mostly vertical over a field in a scroll list: that's a scroll.
+          textEl = null; scrollDrag(p); return target;
+        } else { paint(); return target; } // pinch wobble: stay a tap on the field
+      }
+      const a = fieldCaretAt(textEl, textStart.x); const b = fieldCaretAt(textEl, p.x);
+      try { textEl.setSelectionRange(Math.min(a, b), Math.max(a, b), b < a ? 'backward' : 'forward'); } catch { /* type=number etc. */ }
+      paint();
+      return textEl;
     }
     if (draggingHandle) {
       if (Math.hypot(p.x - dragHandleStart.x, p.y - dragHandleStart.y) > DRAG_MOVE_THRESHOLD_PX) dragHandleMoved = true;
@@ -620,6 +665,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (dragging && !dryRun) dragging.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
       if (surface && surfaceDragging) surface.endDrag(); // hand left mid-drag: finish, never leave it stuck
       surface = null; surfaceDragging = false; surfaceHeld = false; clearSurfaceHold();
+      textEl = null; textSelecting = false; // a hand lost mid-select keeps the range it made
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
@@ -663,7 +709,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         aim(pre, t);
         press(true);
       } else if (st.pinched) {
-        if (dragging || draggingHandle) aim(p, t);
+        if (dragging || draggingHandle || textEl) aim(p, t);
         else if (scrollEl) scrollDrag(p);
         // The cursor stays frozen, but the morph hold's slop check needs the
         // LIVE hand position — drifting past slop must cancel the hold.
@@ -676,7 +722,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     // Mirrors update(): a held pinch over a scroll list drags it (the sim /
     // audit hook used to skip this, so hand scrolling was untestable).
     pointAt(x, y) {
-      if (pinched && scrollEl && !dragging && !draggingHandle && !surface) { scrollDrag({ x, y }); return target; }
+      if (pinched && scrollEl && !dragging && !draggingHandle && !surface && !textEl) { scrollDrag({ x, y }); return target; }
       return aim({ x, y });
     },
     pinch: press,
