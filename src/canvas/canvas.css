@@ -517,8 +517,12 @@
   animation: mc-sheet-in 200ms ease-out; touch-action: pan-y; }
 .mc-menu-android { border-top-left-radius: 28px; border-top-right-radius: 28px; font-family: Roboto, system-ui, sans-serif; }
 .mc-menu-ios { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }
-.mc-menu-grabber { display: block; width: 36px; height: 5px; margin: 4px auto 8px; border-radius: 999px; background: var(--border); cursor: grab; }
-.mc-menu-android .mc-menu-grabber { width: 32px; height: 4px; margin: 16px auto 12px; }
+/* The bar stays 36×5 but the hit area is 116×25 so a pinch can grab it
+   (hand swipe-down = pinch-drag the grabber, phoneMenu.ts). */
+.mc-menu-grabber { display: flex; align-items: center; justify-content: center; width: 116px; height: 25px; margin: -6px auto -2px; cursor: grab; touch-action: none; }
+.mc-menu-grabber::before { content: ''; width: 36px; height: 5px; border-radius: 999px; background: var(--border); }
+.mc-menu-android .mc-menu-grabber { margin: 6px auto 2px; }
+.mc-menu-android .mc-menu-grabber::before { width: 32px; height: 4px; }
 .mc-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mc-menu-title { margin: 0; font-size: 22px; font-weight: 650; }
 .mc-menu-close { min-height: 44px; }

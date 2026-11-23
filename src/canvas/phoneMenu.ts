@@ -60,7 +60,7 @@ export function mountPhoneMenu(root: HTMLElement, win: Window = window): PhoneMe
   sheet.setAttribute('aria-modal', 'true');
   sheet.setAttribute('aria-labelledby', 'mc-menu-title');
   sheet.hidden = true;
-  sheet.innerHTML = `<span class="mc-menu-grabber" aria-hidden="true"></span>
+  sheet.innerHTML = `<span class="mc-menu-grabber" role="button" tabindex="-1" aria-label="Close menu (or swipe down)" data-mc-drag-handle></span>
     <div class="mc-menu-head"><h2 id="mc-menu-title" class="mc-menu-title">Tools</h2>
       <button type="button" class="mc-btn mc-menu-close" aria-label="Close menu">Close</button></div>
     ${PHONE_GROUPS.map((g, i) => `<section class="mc-menu-group" aria-labelledby="mc-menu-g${i}">
@@ -137,6 +137,8 @@ export function mountPhoneMenu(root: HTMLElement, win: Window = window): PhoneMe
     if (dy > 60) close(); else sheet.style.transform = '';
   };
   sheet.addEventListener('pointerup', endSwipe);
+  // A tap on the grabber closes too: a hand pinch-tap there (no drag) clicks it.
+  sheet.querySelector('.mc-menu-grabber')?.addEventListener('click', () => close());
   sheet.addEventListener('pointercancel', endSwipe);
 
   const mq = win.matchMedia?.(PHONE_QUERY);
