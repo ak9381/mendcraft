@@ -411,3 +411,17 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
     });
   });
 });
+
+describe('C080 a held thumbs-up keeps the pending proposal (Approve twin)', () => {
+  it('fires keep once after ~600ms of thumbs-up, never on a brief thumb', async () => {
+    const { buildHandPose } = await import('../../src/dev/trackingSim');
+    const thumb = buildHandPose('thumbs-up', { x: 0.5, y: 0.6 }, 0.22) as Pt[];
+    const events: CanvasHandEvent[] = [];
+    const a = createCanvasHandsAdapter((e) => events.push(e));
+    for (let t = 0; t <= 300; t += 33) a.update({ hands: [thumb], now: 1000 + t });
+    a.update({ hands: [], now: 1400 });
+    expect(events.filter((e) => e.type === 'keep')).toHaveLength(0); // brief thumb
+    for (let t = 0; t <= 800; t += 33) a.update({ hands: [thumb], now: 2000 + t });
+    expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
+  });
+});

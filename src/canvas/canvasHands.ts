@@ -116,6 +116,10 @@ export function createCanvasHandsAdapter(
   // the old per-frame 'palm' event toggled it every single frame the pose was
   // visible, which is the "glitches when I hover" bug.
   const palmHold = createHoldGesture(HAND_FEEL.palmHoldMs, HAND_FEEL.palmRefractoryMs);
+  // C080: a HELD thumbs-up (the catalog's "confirm") keeps the pending
+  // proposal, the same as the Approve button — held like the palm so a
+  // passing thumb can't approve anything.
+  const thumbHold = createHoldGesture(HAND_FEEL.palmHoldMs, HAND_FEEL.palmRefractoryMs);
   // 'keep' needs N consecutive pinch-pose frames, so a 1-frame tracking dip
   // over the canvas can never keep a proposal.
   let pinchFrames = 0;
@@ -160,6 +164,7 @@ export function createCanvasHandsAdapter(
 
     let anyPinch = false;
     let anyPalm = false;
+    let anyThumb = false;
     for (const h of rawHands) {
       if (!h || h.length < 21) continue;
       const gesture = classifyGesture(h as Pt[]);
@@ -170,11 +175,14 @@ export function createCanvasHandsAdapter(
         if (tip) fire({ type: 'point', point: { x: tip.x, y: tip.y } }, now);
       } else if (gesture === 'open-palm') {
         anyPalm = true;
+      } else if (gesture === 'thumbs-up') {
+        anyThumb = true;
       }
     }
     pinchFrames = anyPinch ? pinchFrames + 1 : 0;
     if (pinchFrames === HAND_FEEL.keepFrames) fire({ type: 'keep' }, now);
     if (palmHold.update(anyPalm, now)) fire({ type: 'palm' }, now);
+    if (thumbHold.update(anyThumb, now)) fire({ type: 'keep' }, now);
   }
 
   return {
@@ -184,6 +192,7 @@ export function createCanvasHandsAdapter(
       lastKeepAt = -Infinity;
       motion.reset();
       palmHold.reset();
+      thumbHold.reset();
       pinchFrames = 0;
     },
   };
