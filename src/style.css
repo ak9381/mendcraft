@@ -1275,6 +1275,11 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
   color: #475569;
 }
 .mc-props[hidden] { display: none; }
+.mc-props.is-expanded { width: min(290px, calc(100% - 28px)); }
+.mc-props .mc-props-row > span:first-child { flex: 1; }
+.mc-props .mc-props-row input[type='number'] { width: 64px; }
+.mc-props .mc-props-step { flex: none; min-width: 44px; min-height: 44px; padding: 0; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.mc-props .mc-props-step:hover { background: #f1f5f9; }
 .mc-props .mc-props-actions { display: flex; justify-content: flex-start; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .mc-props .mc-props-actions button { min-height: 44px; min-width: 44px; padding: 0 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
 .mc-props .mc-props-actions button:hover { background: #f1f5f9; }

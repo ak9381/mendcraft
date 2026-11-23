@@ -302,3 +302,21 @@ describe('B-107/B-131/B-136 on-screen twins of Ctrl+R, Delete, Ctrl+D (hand/touc
     expect(findByText(host as unknown as FakeNode, 'Delete')).toBeUndefined();
   });
 });
+
+describe('B-072/B-073 number fields get 44px − / + buttons (a hand cannot type a number)', () => {
+  it('+ on Length commits length + step through the same op as typing; − steps down', () => {
+    installFakeDom();
+    const doc = emptyPlan(); doc.walls.push(wall('w1'));
+    const { io: deps, applied } = io(doc, 'w1');
+    const host = new FakeNode('div') as unknown as HTMLElement;
+    createPropsPanel(host, deps);
+    const row = findRow(host as unknown as FakeNode, 'Length (mm)')!;
+    const [, input, minus, plus] = row.children;
+    expect(input.tagName).toBe('INPUT');
+    expect(plus.textContent).toBe('+');
+    plus.fire('click');
+    expect(applied.at(-1)).toEqual({ op: 'set_length', target: 'w1', length: 1100 });
+    minus.fire('click'); minus.fire('click');
+    expect(applied.at(-1)).toEqual({ op: 'set_length', target: 'w1', length: 900 });
+  });
+});

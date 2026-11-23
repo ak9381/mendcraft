@@ -48,9 +48,15 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       r.appendChild(v);
     } else {
       r.appendChild(control);
+      for (const b of stepButtons.get(control) ?? []) r.appendChild(b);
     }
     return r;
   }
+
+  // − / + beside every number field: a hand (or touch) can't type a number
+  // and the native spinner arrows are a few px tall. Each press nudges by the
+  // field's step and commits through the same path as typing (B-072..074).
+  const stepButtons = new WeakMap<HTMLElement, HTMLElement[]>();
 
   function numInput(value: number, step: number, onCommit: (v: number) => void): HTMLInputElement {
     const inp = document.createElement('input');
@@ -61,6 +67,22 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       const v = Number(inp.value);
       if (Number.isFinite(v)) onCommit(v);
     });
+    const mk = (dir: -1 | 1): HTMLElement => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mc-props-step';
+      b.textContent = dir < 0 ? '−' : '+';
+      b.setAttribute('aria-label', `${dir < 0 ? 'Decrease' : 'Increase'} by ${step}`);
+      b.addEventListener('click', () => {
+        const cur = Number(inp.value);
+        if (!Number.isFinite(cur)) return;
+        const v = Math.max(0, cur + dir * step);
+        inp.value = String(v);
+        onCommit(v);
+      });
+      return b;
+    };
+    stepButtons.set(inp, [mk(-1), mk(1)]);
     return inp;
   }
 
