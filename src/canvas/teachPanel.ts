@@ -109,6 +109,8 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
 
   async function captureSample(my: number): Promise<Pt[][]> {
     if (opts.sim) {
+      // Sim probe hook: rehearse the camera-lost failure without a camera.
+      if ((globalThis as { __mcTeachFail?: string }).__mcTeachFail === 'lost') throw new CameraLost();
       // Deterministic synthetic recording: a held thumbs-up with a tiny,
       // repeatable wobble so screenshots/tests never need a camera.
       return Array.from({ length: 15 }, (_, i) => {
@@ -239,6 +241,14 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     actions.innerHTML = '';
   }
 
+  /** A7-010: a failed recording offers Try again (a fresh session, pinch- or
+   *  click-reachable) next to Close, instead of a dead end. */
+  function failActions(): void {
+    actions.innerHTML = '<button class="mc-btn primary" data-act="retry">Try again</button><button class="mc-btn" data-act="close">Close</button>';
+    actions.querySelector('[data-act=retry]')!.addEventListener('click', () => { void open(); });
+    actions.querySelector('[data-act=close]')!.addEventListener('click', close);
+  }
+
   async function open(): Promise<void> {
     const my = ++session;
     panel.hidden = false;
@@ -253,15 +263,13 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       if (e instanceof Cancelled) return;
       const lost = e instanceof CameraLost || (e instanceof Error && e.name === 'CameraLost');
       show(`<p>${lost ? CAMERA_LOST_TEACH : 'Couldn’t get a clean reading — try again with your whole hand in view.'}</p>`);
-      actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
-      panel.querySelector('[data-act=close]')!.addEventListener('click', close);
+      failActions();
       if (lost) opts.say(CAMERA_LOST_TEACH);
       return;
     }
     if (result?.status !== 'done') {
       show('<p>Couldn’t get a clean reading — try again with your whole hand in view.</p>');
-      actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
-      panel.querySelector('[data-act=close]')!.addEventListener('click', close);
+      failActions();
       return;
     }
     try { await describeAndPropose(my, frames, result); } catch (e) { if (!(e instanceof Cancelled)) throw e; }
