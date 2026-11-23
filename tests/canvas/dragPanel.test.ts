@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampToViewport, loadPanelPos, savePanelPos, clearPanelPos, mountDraggablePanel, type DragPanelElement, type DragHandleElement, type PointerLikeEvent } from '../../src/canvas/dragPanel';
+import { clampToViewport, loadPanelPos, savePanelPos, clearPanelPos, mountDraggablePanel, clampSize, loadPanelSize, savePanelSize, clearPanelSize, mountResizablePanel, MIN_PANEL, MAX_PANEL, type DragPanelElement, type DragHandleElement, type PointerLikeEvent } from '../../src/canvas/dragPanel';
 
 describe('clampToViewport', () => {
   it('leaves an on-screen panel alone', () => {
@@ -163,5 +163,94 @@ describe('mountDraggablePanel', () => {
     const before = style.left;
     handle.fire('pointermove', { clientX: 900, clientY: 900 } as never); // ignored: no drag in progress
     expect(style.left).toBe(before);
+  });
+});
+
+describe('mountResizablePanel — corner-handle resize (A6-008)', () => {
+  function memoryStorage(): Storage {
+    const m = new Map<string, string>();
+    return {
+      getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v), removeItem: (k) => void m.delete(k),
+      clear: () => m.clear(), key: () => null, length: 0,
+    } as Storage;
+  }
+  // A panel whose measured rect reflects the inline width/height we set (so the
+  // persisted size is the one the drag produced).
+  function makeSizingPanel(w = 400, h = 240) {
+    const style = { left: '', top: '', width: '', height: '' };
+    const panel: DragPanelElement = {
+      classList: { add() {}, remove() {} },
+      style,
+      getBoundingClientRect: () => ({
+        left: 0, top: 0,
+        width: style.width ? parseFloat(style.width) : w,
+        height: style.height ? parseFloat(style.height) : h,
+      }),
+    };
+    return { panel, style };
+  }
+  function makeHandle(): DragHandleElement & { fire(type: string, e: PointerLikeEvent): void } {
+    const listeners: Record<string, ((e: PointerLikeEvent) => void)[]> = {};
+    return {
+      addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
+      removeEventListener(type, fn) { listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn); },
+      setPointerCapture() {},
+      fire(type, e) { (listeners[type] ?? []).forEach((fn) => fn(e)); },
+    };
+  }
+
+  it('clampSize keeps a size within [min, max] and inside the viewport', () => {
+    expect(clampSize({ width: 10, height: 10 })).toEqual(MIN_PANEL); // floored
+    expect(clampSize({ width: 5000, height: 5000 })).toEqual(MAX_PANEL); // capped
+    // viewport cap wins when tighter than MAX_PANEL
+    expect(clampSize({ width: 800, height: 800 }, MIN_PANEL, MAX_PANEL, { width: 500, height: 400 }))
+      .toEqual({ width: 484, height: 384 }); // vp - 16
+  });
+
+  it('round-trips a saved size under its own key, separate from position', () => {
+    const s = memoryStorage();
+    expect(loadPanelSize(s, 'nano')).toBeNull();
+    savePanelSize(s, 'nano', { width: 420, height: 300 });
+    expect(loadPanelSize(s, 'nano')).toEqual({ width: 420, height: 300 });
+    expect(loadPanelPos(s, 'nano')).toBeNull(); // position key is untouched
+    clearPanelSize(s, 'nano');
+    expect(loadPanelSize(s, 'nano')).toBeNull();
+  });
+
+  it('drag on the corner grows the panel by the delta, clamped, and persists it', () => {
+    const storage = memoryStorage();
+    const { panel, style } = makeSizingPanel(400, 240);
+    const handle = makeHandle();
+    mountResizablePanel(panel, handle, { id: 'nano', storage, win: { innerWidth: 1280, innerHeight: 800 } });
+    handle.fire('pointerdown', { clientX: 400, clientY: 240 } as never);
+    handle.fire('pointermove', { clientX: 460, clientY: 330 } as never); // +60, +90
+    expect(style.width).toBe('460px');
+    expect(style.height).toBe('330px');
+    handle.fire('pointerup', { clientX: 460, clientY: 330 } as never);
+    expect(loadPanelSize(storage, 'nano')).toEqual({ width: 460, height: 330 });
+  });
+
+  it('a corner drag cannot shrink below MIN_PANEL', () => {
+    const { panel, style } = makeSizingPanel(300, 200);
+    const handle = makeHandle();
+    mountResizablePanel(panel, handle, { id: 'nano', storage: memoryStorage(), win: { innerWidth: 1280, innerHeight: 800 } });
+    handle.fire('pointerdown', { clientX: 300, clientY: 200 } as never);
+    handle.fire('pointermove', { clientX: -500, clientY: -500 } as never); // drag far up-left
+    expect(parseFloat(style.width)).toBe(MIN_PANEL.width);
+    expect(parseFloat(style.height)).toBe(MIN_PANEL.height);
+  });
+
+  it('restores a saved size on mount and resetSize clears it back to the CSS default', () => {
+    const storage = memoryStorage();
+    savePanelSize(storage, 'gemini', { width: 500, height: 360 });
+    const { panel, style } = makeSizingPanel(400, 240);
+    const handle = makeHandle();
+    const r = mountResizablePanel(panel, handle, { id: 'gemini', storage, win: { innerWidth: 1280, innerHeight: 800 } });
+    expect(style.width).toBe('500px');
+    expect(style.height).toBe('360px');
+    r.resetSize();
+    expect(style.width).toBe('');
+    expect(style.height).toBe('');
+    expect(loadPanelSize(storage, 'gemini')).toBeNull();
   });
 });

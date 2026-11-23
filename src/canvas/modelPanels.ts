@@ -130,6 +130,7 @@ export const MODEL_PANELS_HTML = `
           <div class="mc-term-lines"></div>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
+        <span class="mc-term-resize" data-mc-resize-handle data-engine="nano" role="button" tabindex="0" aria-label="Resize the Nano terminal"></span>
       </section>
       <div class="mc-term-dock" data-engine="nano" aria-label="Nano agents">
         <div class="mc-term-dock-chips"></div>
@@ -151,6 +152,7 @@ export const MODEL_PANELS_HTML = `
           <div class="mc-term-lines"></div>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
+        <span class="mc-term-resize" data-mc-resize-handle data-engine="gemini" role="button" tabindex="0" aria-label="Resize the Gemini terminal"></span>
       </section>
       <div class="mc-term-dock" data-engine="gemini" aria-label="Gemini agents">
         <div class="mc-term-dock-chips"></div>

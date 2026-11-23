@@ -59,7 +59,7 @@ import { createToggleLatch } from './handFeel';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
-import { mountDraggablePanel } from './dragPanel';
+import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
@@ -286,6 +286,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   (['nano', 'gemini'] as const).forEach((engine) => {
     const panel = aiPanel.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
     const handle = panel.querySelector<HTMLElement>('.mc-term-drag')!;
+    const resizeHandle = panel.querySelector<HTMLElement>('.mc-term-resize')!;
     const resetBtn = aiPanel.querySelector<HTMLElement>(`.mc-term-reset-pos[data-engine="${engine}"]`)!;
     const drag = mountDraggablePanel(panel, handle, { id: engine }, () => {
       const spacer = document.createElement('div');
@@ -293,7 +294,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       spacer.setAttribute('aria-hidden', 'true');
       return spacer;
     });
-    resetBtn.addEventListener('click', () => drag.resetPosition());
+    const resize = mountResizablePanel(panel, resizeHandle, { id: engine });
+    resetBtn.addEventListener('click', () => { drag.resetPosition(); resize.resetSize(); });
   });
   // Dock chips (one per swarm agent, under its engine's terminal) stay in
   // lockstep with the canvas cursors: tapping a chip rings the matching
