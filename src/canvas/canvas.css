@@ -738,3 +738,13 @@
 }
 .mc-hand-tooltip.below { transform: translate(-50%, 0); }
 .mc-hand-tooltip[hidden] { display: none; }
+
+/* Floor-plan board: the tool palette (13 tools, ~610px tall) was centred in a
+   ~420px board with overflow hidden, so Select, Wall, Column and Furniture were
+   clipped — unreachable by mouse, touch or hand. Pin it to the board's top and
+   bottom and let it flow into a second column instead of overflowing. */
+.mc-plan-board .mc-palette {
+  top: 8px; bottom: 8px; transform: none;
+  display: grid; grid-auto-flow: column; grid-template-rows: repeat(auto-fill, 46px);
+  align-content: start; gap: 4px;
+}
