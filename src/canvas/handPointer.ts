@@ -287,8 +287,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     return dismiss ?? null;
   }
 
+  // A dismiss scrim is a target but not a "thing": keep the plain cursor ring
+  // at the fingertip instead of framing the whole screen.
+  const isDismiss = (el: HTMLElement | null) => !!el && el.getAttribute?.('data-hand-dismiss') != null;
   function paint() {
-    if (target) {
+    if (target && !isDismiss(target)) {
       const r = target.getBoundingClientRect();
       frame.hidden = false; shadow.hidden = true;
       frame.style.transform = `translate(${r.left - 4}px, ${r.top - 4}px)`;
@@ -304,7 +307,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
     ring.hidden = !pinched;
     if (pinched) {
-      const c = target ? (() => { const r = target!.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })() : pt;
+      const c = target && !isDismiss(target) ? (() => { const r = target!.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })() : pt;
       ring.style.transform = `translate(${c.x - 14}px, ${c.y - 14}px)`;
     }
   }
