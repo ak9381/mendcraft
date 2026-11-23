@@ -898,6 +898,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // the Proposal card that waits on her keep/drop afterwards.
   const withBuildGimbal = <T>(run: () => Promise<T>): Promise<T> => followWhileBuilding(inputs.gimbal, run);
 
+  // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
+  const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
   async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
@@ -990,7 +992,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
   }
 
-  const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
