@@ -1852,8 +1852,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // path the camera's presence stream uses, so headless verification can drive
   // the anchored two-hand pinch (canvas zoom/pan) without a camera.
   if (opts.sim && typeof window !== 'undefined') {
-    (window as unknown as { __mcHand2?: { feedFrame(hands: readonly (readonly { x: number; y: number }[])[], now: number): void } }).__mcHand2 = {
+    (window as unknown as { __mcHand2?: { feedFrame(hands: readonly (readonly { x: number; y: number }[])[], now: number): void; event(ev: Parameters<typeof inputs.handEvent>[0]): void } }).__mcHand2 = {
       feedFrame: (hands, now) => { handleTwoHand(hands, now); },
+      // A recognised hand event (palm hold, thumbs-up keep, brush drop) as the
+      // camera path delivers it after canvasHands' hold/debounce logic.
+      event: (ev) => { inputs.handEvent(ev); },
     };
   }
 

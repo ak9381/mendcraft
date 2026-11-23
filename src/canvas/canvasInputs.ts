@@ -44,6 +44,7 @@ export interface CanvasInputs {
   start(root?: HTMLElement): Promise<void>;
   stop(): void;
   handleSpeech(text: string): boolean;
+  handEvent(ev: CanvasHandEvent): void;
   readonly gimbal: GimbalCanvasController;
 }
 
@@ -131,6 +132,9 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     start,
     stop,
     handleSpeech,
+    /** The same dispatcher camera hands feed — the sim hook drives it so a
+     *  headless walk can fire keep/drop/palm exactly as a real hand would. */
+    handEvent: onHandEvent,
     get gimbal() {
       return gimbal;
     },
