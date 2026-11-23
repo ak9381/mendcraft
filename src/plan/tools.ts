@@ -769,9 +769,15 @@ function createMeasureTool(ctx: ToolContext): Tool {
     label: 'Measure',
     icon: '⟼',
     shortcut: 'shift+m',
-    hint: 'Click points to measure (snaps to endpoints, midpoints and BOTH wall faces, with a marker). Enter turns the chain into a permanent dimension; Esc clears.',
+    hint: 'Click points to measure (snaps to endpoints, midpoints and BOTH wall faces, with a marker). Enter — or tapping the last point again — turns the chain into a permanent dimension; Esc clears.',
     onDown(p) {
       const s = snap(ctx.toWorld(p.x, p.y));
+      // Re-tapping the last point = Enter (a hand or touch has no Enter key).
+      const last = pts[pts.length - 1];
+      if (last && pts.length >= 2 && Math.hypot(s.point.x - last.x, s.point.y - last.y) * ctx.scale() <= 12) {
+        makeDimension();
+        return true;
+      }
       pts = [...pts, s.point];
       updateOverlay();
       return true;

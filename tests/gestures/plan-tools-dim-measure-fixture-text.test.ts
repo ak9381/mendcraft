@@ -174,3 +174,23 @@ describe('B-130 snap feedback: the measure tool colours its hover marker by snap
     expect(dots).toContain('#16a34a');
   });
 });
+
+describe('B-053 measure tool: re-tapping the last point commits the chain, same as Enter (hand/touch twin)', () => {
+  it.each(['mouse', 'pinch'] as const)('%s: tap A, tap B, tap B again == tap A, tap B, Enter', (source) => {
+    const a = makeFakeCtx({ doc: emptyPlan() });
+    const m1 = toolOf(a.ctx, 'measure');
+    m1.onDown!(ptr(0, 0, source)); m1.onDown!(ptr(3000, 0, source));
+    m1.onKey!({ key: 'Enter' } as KeyboardEvent);
+    const b = makeFakeCtx({ doc: emptyPlan() });
+    const m2 = toolOf(b.ctx, 'measure');
+    m2.onDown!(ptr(0, 0, source)); m2.onDown!(ptr(3000, 0, source)); m2.onDown!(ptr(3000, 0, source));
+    expect(a.state.applied.length).toBeGreaterThan(0);
+    expect(b.state.applied).toEqual(a.state.applied);
+  });
+  it('a single point re-tapped does not commit (needs two points)', () => {
+    const { ctx, state } = makeFakeCtx({ doc: emptyPlan() });
+    const m = toolOf(ctx, 'measure');
+    m.onDown!(ptr(0, 0, 'pinch')); m.onDown!(ptr(0, 0, 'pinch'));
+    expect(state.applied).toHaveLength(0);
+  });
+});
