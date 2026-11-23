@@ -121,3 +121,24 @@ describe('Hand surface drag keeps the canvas from panning underneath it', () => 
     } finally { (performance as any).now = realNow; }
   });
 });
+
+describe('Over the floor plan, drawing near a control draws (tight snap), like a mouse click there', () => {
+  it('a pinch 30px from a palette button lands on the plan; 8px away still snaps to the button', () => {
+    const calls: string[] = [];
+    const surfEl = fakeEl('div', { left: 0, top: 0, width: 800, height: 600 });
+    const api = { beginDrag: () => true, drag: () => {}, endDrag: () => {}, tap: (x: number) => { calls.push(`tap ${x}`); } };
+    surfEl.closest = (sel: string) => (sel === '[data-hand-surface]' ? Object.assign(surfEl, { __mcHandSurface: api }) : null);
+    const btn = fakeEl('button', { left: 100, top: 100, width: 40, height: 40 }, { 'aria-label': 'Wall' });
+    let clicks = 0; btn.addEventListener('click', () => { clicks++; });
+    const doc = fakeDoc([btn]);
+    doc.elementFromPoint = (x: number, y: number) => (x >= 100 && x <= 140 && y >= 100 && y <= 140 ? btn : surfEl);
+    const hp = createHandPointer(doc, {});
+    expect(hp.pointAt(170, 120)).toBe(null);
+    hp.pinch(true); hp.pinch(false);
+    expect(calls).toEqual(['tap 170']);
+    expect(hp.pointAt(148, 120)).toBe(btn);
+    hp.pinch(true); hp.pinch(false);
+    expect(clicks).toBe(1);
+    hp.destroy();
+  });
+});

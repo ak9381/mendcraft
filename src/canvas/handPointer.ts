@@ -64,6 +64,7 @@ export function handSurfaceAt(el: Element | null): HandSurface | null {
 
 export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
+export const SURFACE_SNAP_PX = 12;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the
  *  edges of the UI (top toolbar included) don't need an arm at full stretch.
@@ -301,7 +302,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     const raw = deepElementFromPoint(doc, p.x, p.y);
     const direct = interactiveAncestor(raw);
     if (direct && controls.includes(direct)) return direct;
-    const near = pickNearest(p, controls.map((el) => ({ item: el, rect: el.getBoundingClientRect() })), snapPx);
+    // Over a drawing surface (floor plan) the empty spot IS the target — a
+    // mouse click there draws — so only a tight snap may pull the pinch onto a
+    // control beside it (palette edge, trash, props), never the full radius.
+    const r = raw && handSurfaceAt(raw) ? Math.min(snapPx, SURFACE_SNAP_PX) : snapPx;
+    const near = pickNearest(p, controls.map((el) => ({ item: el, rect: el.getBoundingClientRect() })), r);
     if (near) return near;
     // C114: a dismiss scrim (tap-away-to-close) is not a control, so a hand
     // could never close a sheet the way a finger does. Target it only on a
