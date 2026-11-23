@@ -49,6 +49,10 @@ export interface TeachPanel {
   rename(id: string, name: string): Promise<void>;
   remove(id: string): Promise<void>;
   openList(): void;
+  /** Open (teach or list view)? The canvas routes Escape here first. */
+  isOpen(): boolean;
+  /** Same as the × button. */
+  close(): void;
   /** Always-on tracking loop: feed one live frame. Matches it against every
    *  saved gesture (threshold/cooldown/conflict rules in customGestures.ts)
    *  and fires onTriggered — a no-op while this panel is open (recording or
@@ -305,6 +309,8 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     rename,
     remove,
     openList,
+    isOpen: () => !panel.hidden,
+    close,
     matchFrame,
   };
 }

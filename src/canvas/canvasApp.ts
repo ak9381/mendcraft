@@ -1744,6 +1744,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0);
   };
   const onWindowKeydown = (e: KeyboardEvent) => {
+    // The teach dialog is aria-modal: Escape closes it (like its ×) even from
+    // its own text box, and never also zooms the canvas out.
+    if (e.key === 'Escape' && teachPanel.isOpen()) { e.preventDefault(); teachPanel.close(); return; }
+    // The Register scan is aria-modal too: Escape = its Cancel button.
+    if (e.key === 'Escape' && scanPanel?.isOpen()) { e.preventDefault(); document.querySelector<HTMLButtonElement>('.mc-scan-cancel')?.click(); return; }
     if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
     if (e.key !== 'Escape') return;
