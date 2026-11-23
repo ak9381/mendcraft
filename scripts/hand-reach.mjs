@@ -143,6 +143,14 @@ try {
     }
     await sleep(300);
     all.push(...await audit(page, S('tools-open')));
+    if (d.mobile) {
+      // On phones New board is a primary bar action (phoneMenu PHONE_PRIMARY),
+      // not inside the Menu sheet. The sheet is aria-modal, so while it's open
+      // the hand is scoped to the sheet's own controls — close it (by hand)
+      // to reach the bar's New board button, exactly as a user would.
+      real.push({ device: d.name, step: 'Menu close (to reach board)', ...await handPress(page, (el) => el.classList.contains('mc-menu-close')) });
+      await sleep(300);
+    }
     real.push({ device: d.name, step: 'New board (hand)', ...await handPress(page, (el) => el.dataset?.cmd === 'new') });
     await sleep(300);
 
@@ -240,10 +248,19 @@ try {
       await page.screenshot({ path: join(OUT, `${d.name}-menu-by-hand.png`) });
       real.push({ device: d.name, step: 'Menu close (hand)', ...await handPress(page, (el) => el.classList.contains('mc-menu-close')) });
       await sleep(300);
+    } else {
+      // On desktop the AI activity button lives in the collapsible toolbar
+      // (.mc-bar-btns starts hidden until the Tools palette opens — toolPalette.ts),
+      // so open Tools by hand first, exactly as a user would, before reaching it.
+      real.push({ device: d.name, step: 'Tools (for AI activity)', ...await handPress(page, (el) => el.classList.contains('mc-tools-chip')) });
+      await sleep(300);
     }
     real.push({ device: d.name, step: 'AI activity', ...await handPress(page, (el) => el.dataset?.cmd === 'ai') });
     await sleep(500);
     all.push(...await audit(page, S('ai-activity')));
+    // Close the AI panel again. The data-cmd click auto-closed the Tools
+    // palette on desktop, so re-open it by hand before the toggle-off press.
+    if (!d.mobile) await handPress(page, (el) => el.classList.contains('mc-tools-chip'));
     await handPress(page, (el) => el.dataset?.cmd === 'ai');
     await sleep(300);
 
