@@ -53,6 +53,9 @@ export interface HandSurface {
   drag(x: number, y: number): void;
   endDrag(): void;
   tap(x: number, y: number): void;
+  /** A still pinch held SURFACE_HOLD_MS (the Shift+click twin: add to the
+   *  selection). true = consumed — the release then does not tap. */
+  hold?(x: number, y: number): boolean;
   /** Two-hand pinch over the surface (client px): anchored zoom + pan, so the
    *  plan under each finger follows that finger. */
   pinch2?(phase: 'start' | 'move' | 'end', a?: { x: number; y: number }, b?: { x: number; y: number }): void;
@@ -65,6 +68,8 @@ export function handSurfaceAt(el: Element | null): HandSurface | null {
 export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
 export const SURFACE_SNAP_PX = 12;
+/** Under the morph hold (900ms) so the add-to-selection hold wins on an object. */
+export const SURFACE_HOLD_MS = 500;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the
  *  edges of the UI (top toolbar included) don't need an arm at full stretch.
@@ -225,6 +230,9 @@ export interface HandPointer {
   readonly lastActivated: HTMLElement | null;
   /** True briefly after a pinch was used on a control (so it isn't also "keep"). */
   consumedPinch(): boolean;
+  /** This pinch is doing plan work (an add-to-selection hold fired, or a
+   *  drag): the 1200ms pinch-hold-still (Talk) must not also fire. */
+  surfaceBusy(): boolean;
   /** The current pinch's release must NOT activate what it pressed on — a
    *  morph hold fired mid-pinch, so letting go is "done holding", not a tap
    *  on the control under the finger. One-shot; cleared on release. */
@@ -261,6 +269,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let surface: HandSurface | null = null;
   let surfaceStart: P = { x: 0, y: 0 };
   let surfaceDragging = false;
+  let surfaceHeld = false;
+  let surfaceHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearSurfaceHold = () => { if (surfaceHoldTimer) { clearTimeout(surfaceHoldTimer); surfaceHoldTimer = null; } };
   let dragHandleStart: P = { x: 0, y: 0 };
   let dragHandleMoved = false;
   let pinched = false;
@@ -466,8 +477,21 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         consumedUntil = now() + 700;
       }
       else if (!target && !dryRun && (surface = handSurfaceAt(deepElementFromPoint(doc, pt.x, pt.y)))) {
-        surfaceStart = pt; surfaceDragging = false;
+        surfaceStart = pt; surfaceDragging = false; surfaceHeld = false;
         consumedUntil = now() + 700;
+        clearSurfaceHold();
+        const s0 = surface;
+        if (s0.hold) surfaceHoldTimer = setTimeout(() => {
+          surfaceHoldTimer = null;
+          if (surface !== s0 || !pinched || surfaceDragging) return;
+          if (s0.hold?.(surfaceStart.x, surfaceStart.y)) {
+            surfaceHeld = true;
+            // The hold was ours: stop the morph hold arming on the same pinch.
+            opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
+            ring.classList.add('mc-hand-ring-held');
+            setTimeout(() => ring.classList.remove('mc-hand-ring-held'), 300);
+          }
+        }, SURFACE_HOLD_MS);
       }
       else if (!target) opts.onEmptyPinch?.();
       else {
@@ -484,9 +508,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       }
     } else {
       if (surface) {
-        if (!suppressRelease) { if (surfaceDragging) surface.endDrag(); else surface.tap(surfaceStart.x, surfaceStart.y); }
-        else if (surfaceDragging) surface.endDrag();
-        surface = null; surfaceDragging = false;
+        clearSurfaceHold();
+        if (surfaceDragging) surface.endDrag();
+        else if (!suppressRelease && !surfaceHeld) surface.tap(surfaceStart.x, surfaceStart.y);
+        surface = null; surfaceDragging = false; surfaceHeld = false;
         suppressRelease = false; pressedOn = null;
         paint();
         return;
@@ -521,7 +546,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
     if (surface) {
-      if (!surfaceDragging && Math.hypot(p.x - surfaceStart.x, p.y - surfaceStart.y) > DRAG_MOVE_THRESHOLD_PX) {
+      if (!surfaceDragging && !surfaceHeld && Math.hypot(p.x - surfaceStart.x, p.y - surfaceStart.y) > DRAG_MOVE_THRESHOLD_PX) {
+        clearSurfaceHold();
         surfaceDragging = true;
         surface.beginDrag(surfaceStart.x, surfaceStart.y);
       }
@@ -550,7 +576,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (pinched) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
       if (surface && surfaceDragging) surface.endDrag(); // hand left mid-drag: finish, never leave it stuck
-      surface = null; surfaceDragging = false;
+      surface = null; surfaceDragging = false; surfaceHeld = false; clearSurfaceHold();
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
@@ -608,6 +634,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     get target() { return target; },
     get lastActivated() { return lastActivated; },
     consumedPinch: () => now() < consumedUntil || !!target || !!surface,
+    surfaceBusy: () => !!surface && (surfaceHeld || surfaceDragging),
     suppressNextRelease() { if (pinched) suppressRelease = true; },
     setDryRun(on) { dryRun = on; },
     lost,

@@ -297,7 +297,7 @@ function createSelectTool(ctx: ToolContext): Tool {
     label: 'Select',
     icon: '⬚',
     shortcut: 'v',
-    hint: 'Click to select (Shift toggles, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
+    hint: 'Click to select (Shift-click or pinch-hold adds, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
     onDown(p) {
       const handle = endpointAt(p) ?? roomCornerAt(p);
       if (handle) {

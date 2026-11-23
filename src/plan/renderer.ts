@@ -22,7 +22,7 @@ import {
   rotateSelected,
 } from './tools';
 import { createPropsPanel } from './propsPanel';
-import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp } from './editing';
+import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp, toggleSelection } from './editing';
 import { pickPlan, DEFAULT_AIM_RADIUS_PX } from './hitTest';
 import { fixtureSpec, fixtureSymbol, fixtureLocalToWorld } from './fixtures';
 import { setPlanCursor } from './ruleParser';
@@ -941,6 +941,16 @@ export function createPlanRenderer(
       const handled = toolCtl.down(p);
       toolCtl.up(p);
       return handled;
+    },
+    toggleSelectAt(clientX, clientY) {
+      if (toolCtl.activeId() !== 'select' || toolCtl.placing()) return false;
+      const hit = aimAt(clientX, clientY, DEFAULT_AIM_RADIUS_PX);
+      if (!hit.id) return false;
+      // Toggle directly (not via the Select tool's down): a pinch's generous
+      // handle radius would grab a selected wall's endpoint instead.
+      const d = doc();
+      const cur = d.selectedIds?.length ? [...d.selectedIds] : controller.selectedId() ? [controller.selectedId()!] : [];
+      return ctx.apply({ op: 'select_set', ids: toggleSelection(cur, hit.id) }).ok;
     },
     hover(clientX, clientY) {
       setPlanCursor(toWorld(clientX, clientY));

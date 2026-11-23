@@ -107,6 +107,9 @@ export interface ViewportHandle {
   /** A pinch-tap (click equivalent) routed to the mode's tool framework;
    *  true when a tool consumed it (then the shell skips its pick+select). */
   tap?(clientX: number, clientY: number): boolean;
+  /** Shift+click twin for hands/touch: with the Select tool, add/remove the
+   *  object under the point to/from the selection. True if it toggled. */
+  toggleSelectAt?(clientX: number, clientY: number): boolean;
   /** Pointer travelling with no pinch held — tools draw ghost previews. */
   hover?(clientX: number, clientY: number): void;
   /** Toggle a secondary view (plan: extrude walls to 3D). */

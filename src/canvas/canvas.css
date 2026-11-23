@@ -583,6 +583,8 @@
   box-shadow: 0 1px 8px rgb(43 43 43 / 0.06); scale: 1; transition: scale 120ms ease, border-color 120ms ease; }
 .mc-hand-shadow.is-pinched { scale: 0.55; border-color: rgb(107 143 113 / 0.85); }
 .mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgb(107 143 113 / 0.9); animation: mc-ring-press 260ms ease-out forwards; }
+/* Pinch-hold on a plan object added it to the selection: a brief amber bloom. */
+.mc-hand-ring.mc-hand-ring-held { border-color: var(--action, #C98B3C); box-shadow: 0 0 0 6px rgb(201 139 60 / 0.25); }
 @keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
 /* Text fields are wide: a 3% grow on a 1200px input spills ~18px over the
    Go button beside it, so the hand (and mouse) then hit the input instead. */

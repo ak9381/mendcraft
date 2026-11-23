@@ -1,7 +1,7 @@
 // A1-047 / A5-017: a hand user has no mouseover, so the canvas mirrors native
 // `title` tooltips through handPointer's onTooltip as the cursor dwells.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createHandPointer } from '../../src/canvas/handPointer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHandPointer, SURFACE_HOLD_MS } from '../../src/canvas/handPointer';
 import { fakeDoc, fakeEl, installSelfCheckGlobals } from '../helpers/selfCheckDom';
 
 beforeEach(() => { installSelfCheckGlobals(); });
@@ -140,5 +140,57 @@ describe('Over the floor plan, drawing near a control draws (tight snap), like a
     hp.pinch(true); hp.pinch(false);
     expect(clicks).toBe(1);
     hp.destroy();
+  });
+});
+
+describe('B-079 pinch-hold on a plan object = Shift+click (add to selection)', () => {
+  function setup(holdResult = true) {
+    const calls: string[] = [];
+    const surfEl = fakeEl('div', { left: 0, top: 0, width: 800, height: 600 });
+    const api = {
+      beginDrag: () => { calls.push('begin'); return true; }, drag: () => {}, endDrag: () => { calls.push('end'); },
+      tap: (x: number, y: number) => { calls.push(`tap ${x},${y}`); },
+      hold: (x: number, y: number) => { calls.push(`hold ${x},${y}`); return holdResult; },
+    };
+    surfEl.closest = (sel: string) => (sel === '[data-hand-surface]' ? Object.assign(surfEl, { __mcHandSurface: api }) : null);
+    const doc = fakeDoc([]);
+    doc.elementFromPoint = () => surfEl;
+    const pinches: string[] = [];
+    return { calls, pinches, hp: createHandPointer(doc, { onPinch: (e) => pinches.push(e.phase) }) };
+  }
+  it('a still pinch held 500ms toggles once, cancels the morph hold, and the release does not tap', async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, pinches, hp } = setup();
+      hp.pointAt(100, 100); hp.pinch(true);
+      expect(hp.surfaceBusy()).toBe(false);
+      vi.advanceTimersByTime(SURFACE_HOLD_MS + 10);
+      expect(hp.surfaceBusy()).toBe(true); // the 1200ms Talk hold must not also fire
+      hp.pinch(false);
+      expect(hp.surfaceBusy()).toBe(false);
+      expect(calls).toEqual(['hold 100,100']);
+      expect(pinches).toContain('cancel');
+      hp.destroy();
+    } finally { vi.useRealTimers(); }
+  });
+  it('a quick pinch taps (no hold); a moving pinch drags (no hold)', () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, hp } = setup();
+      hp.pointAt(100, 100); hp.pinch(true); vi.advanceTimersByTime(200); hp.pinch(false);
+      hp.pointAt(100, 100); hp.pinch(true); hp.pointAt(140, 100); vi.advanceTimersByTime(SURFACE_HOLD_MS + 10); hp.pinch(false);
+      expect(calls).toEqual(['tap 100,100', 'begin', 'end']);
+      hp.destroy();
+    } finally { vi.useRealTimers(); }
+  });
+  it('a hold over nothing (hold returns false) falls back to a tap on release', () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, pinches, hp } = setup(false);
+      hp.pointAt(100, 100); hp.pinch(true); vi.advanceTimersByTime(SURFACE_HOLD_MS + 10); hp.pinch(false);
+      expect(calls).toEqual(['hold 100,100', 'tap 100,100']);
+      expect(pinches).not.toContain('cancel');
+      hp.destroy();
+    } finally { vi.useRealTimers(); }
   });
 });

@@ -130,6 +130,12 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         view.panByPx?.(mid.x - two.mid.x, mid.y - two.mid.y);
         two = { mid, span };
       },
+      // Pinch-HOLD on an object = Shift+click: add it to / drop it from the
+      // selection (the hand has no Shift key).
+      hold: (x, y) => {
+        host.focus({ preventScroll: true });
+        return view.toggleSelectAt?.(x, y) ?? false;
+      },
       tap: (x, y) => {
         host.focus({ preventScroll: true }); // like a mouse press: plan keys (Esc, Delete) work next
         if (view.tap?.(x, y)) return;
