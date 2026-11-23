@@ -113,6 +113,29 @@ export function assertControlCount(dump: TileDump, spec: TileSpec): SelfCheckFai
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** True when the topmost element at a point is app chrome (the phone AI
+ *  panel, bars, menus) rather than the board itself. A control under chrome
+ *  is "not visible right now", like an off-viewport one — the user can close
+ *  the panel or pan — not a broken tile. Only applies on the real canvas page
+ *  (a .mc-world exists); another tile covering it still fails. */
+function coveredByChrome(doc: Document, hitEl: Element | null): boolean {
+  const world = typeof doc.querySelector === 'function' ? doc.querySelector('.mc-world') : null;
+  if (!world || !hitEl) return false;
+  let n: Node | null = hitEl;
+  while (n) {
+    if (n === world) return false;
+    n = n.parentNode ?? ((n as ShadowRoot).host ?? null);
+  }
+  return true;
+}
+
+/** Centre point of a control, clamped to the viewport, for hit-tests. */
+function rawHitAt(doc: Document, cx: number, cy: number): Element | null {
+  const vw = typeof innerWidth !== 'undefined' ? innerWidth : Infinity;
+  const vh = typeof innerHeight !== 'undefined' ? innerHeight : Infinity;
+  return deepElementFromPoint(doc, clamp(cx, 0, Math.max(0, vw - 1)), clamp(cy, 0, Math.max(0, vh - 1)));
+}
+
 /** Reachable = its centre sits inside both the tile's own bounds and the
  *  viewport, AND a hit-test there (the same deep-shadow walk collectControls
  *  uses) resolves back to this same control. */
@@ -132,7 +155,7 @@ export function assertReachable(dump: TileDump, doc: Document = document): SelfC
     const hit = !!(hitEl && (hitEl === c.el || c.el.contains(hitEl) || hitEl.contains(c.el) || hostContains(c.el, hitEl) || hostContains(hitEl, c.el)));
     // Off-viewport but still inside the tile: the board is taller than the
     // window, not a broken control. Only demand a hit-test when on screen.
-    if (!insideTile || (insideViewport && !hit)) out.push({ kind: 'unreachable', id: c.id });
+    if (!insideTile || (insideViewport && !hit && !coveredByChrome(doc, rawHitAt(doc, cx, cy)))) out.push({ kind: 'unreachable', id: c.id });
   }
   return out;
 }
@@ -180,6 +203,7 @@ export function replayTaps(pointer: HandPointer, dump: TileDump): ReplayResult[]
     // is on screen). Structural checks (count/label/overlap) still cover them.
     const onScreen = cx >= 0 && cx <= vw && cy >= 0 && cy <= vh;
     if (!onScreen) return { id: c.id, activated: false, offScreen: true };
+    if (typeof document !== 'undefined' && coveredByChrome(document, rawHitAt(document, cx, cy))) return { id: c.id, activated: false, offScreen: true };
     pointer.pointAt(cx, cy);
     pointer.pinch(true);
     pointer.pinch(false);

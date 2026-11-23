@@ -22,6 +22,15 @@ describe('focusOnInsets', () => {
     expect(topLeft.y).toBeCloseTo(96 + 16, 6); // top edge just below the bar
   });
 
+  it('keeps centring an oversized EMPTY board (pinLarge=false) so its centred call-to-action stays on screen', () => {
+    const rect = { x: 0, y: 0, w: 1000, h: 680 };
+    const vp = { w: 393, h: 852 }; // iPhone 15
+    const c = focusOnInsets(rect, vp, { top: 0 }, 16, false);
+    const centre = worldToScreen(c, { x: 500, y: 340 });
+    expect(Math.abs(centre.x - 393 / 2)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centre.y - 852 / 2)).toBeLessThanOrEqual(1);
+  });
+
   it('with no insets it centres like a plain focus', () => {
     const rect = { x: 50, y: 50, w: 800, h: 500 };
     const vp = { w: 1200, h: 800 };

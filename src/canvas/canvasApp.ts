@@ -597,10 +597,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- navigation ----
+  /** 1:1 focus camera. A board with content that is wider/taller than the screen
+   *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
+   *  so its "Connect this room" call-to-action is on screen. */
+  function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
     const f = reg.get(id); if (!f) return;
     focusId = id; lastFocus = id; sync(); updateDock();
-    await flyTo(focusOnInsets(f.rect, vp(), insets()));
+    await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
@@ -645,7 +649,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       sync();
       updateDock();
       persist();
-      void flyTo(focusOnInsets(next.rect, vp(), insets()));
+      void flyTo(focusCam(next));
       window.dispatchEvent(new Event('resize'));
       say(msg);
       return;
@@ -712,7 +716,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const changed = aiPanel.hidden === on;
     aiPanel.hidden = !on;
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
-    if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusOnInsets(f.rect, vp(), insets())); }
+    if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(f)); }
   }
   // sim's scripted engines can resolve near-instantly, which would settle
   // the swarm (and open the review) before a screenshot — or a person — ever
@@ -909,6 +913,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           if (!renderSurface(frameId)) throw new Error('Could not render the board');
           history.push({ frameId, before, after: plan, by: ranId, summary });
           sync(); updateDock(); persist(); historyRender();
+          // First build on an empty focused board: re-place it (no animation, before the
+          // self-check measures) so a wide dashboard opens at its top-left on a phone.
+          if (!before && focusId === frameId) { const ff = reg.get(frameId); if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
@@ -1724,7 +1731,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId) { e.preventDefault(); void overview(); return; }
     if (!aiPanel.hidden) { e.preventDefault(); aiManual = false; showAi(false); }
   };
-  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusOnInsets(f.rect, vp(), insets()); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.

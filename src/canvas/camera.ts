@@ -98,11 +98,12 @@ export function focusOnInset(r: Rect, vp: Viewport, insetTop: number): Camera {
  *  that space (a wide dashboard on a narrow phone) is pinned top-left just inside
  *  the inset with `margin` px instead of centred, so its title and first tiles
  *  are visible and the user can one-finger-pan to the rest. */
-export function focusOnInsets(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number }, margin = 16): Camera {
+export function focusOnInsets(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number }, margin = 16, pinLarge = true): Camera {
   const top = insets.top ?? 0, left = insets.left ?? 0, right = insets.right ?? 0;
   const availW = Math.max(1, vp.w - left - right);
   const availH = Math.max(1, vp.h - top);
-  const x = r.w > availW ? r.x - left - margin : r.x + r.w / 2 - (left + availW / 2);
-  const y = r.h > availH ? r.y - top - margin : r.y + r.h / 2 - (top + availH / 2);
+  // pinLarge=false (an empty board: its call-to-action sits in the middle) keeps centring.
+  const x = pinLarge && r.w > availW ? r.x - left - margin : r.x + r.w / 2 - (left + availW / 2);
+  const y = pinLarge && r.h > availH ? r.y - top - margin : r.y + r.h / 2 - (top + availH / 2);
   return { x: Math.round(x), y: Math.round(y), z: 1 };
 }

@@ -493,3 +493,30 @@ describe('runSelfCheck', () => {
     expect(liveMark.style.top).toBe(`${300 - 2}px`);
   });
 });
+
+describe('assertReachable under app chrome (R4 phone)', () => {
+  const tileRect = { left: 0, top: 0, width: 200, height: 200 };
+  it('does not flag a board control hidden under the AI panel (chrome outside .mc-world)', () => {
+    const world: any = { parentNode: null };
+    const el = fakeEl('button', { left: 10, top: 10, width: 20, height: 20 });
+    el.parentNode = world;
+    const panel = fakeEl('aside', { left: 0, top: 0, width: 400, height: 400 });
+    panel.parentNode = null;
+    const doc = fakeDoc([el]);
+    doc.querySelector = (sel: string) => (sel === '.mc-world' ? world : null);
+    doc.elementFromPoint = () => panel;
+    const dump: TileDump = { role: 'row', label: 'Row', rect: tileRect, controls: [{ id: 'a', kind: 'button', label: 'A', rect: el.getBoundingClientRect(), el }] };
+    expect(assertReachable(dump, doc)).toEqual([]);
+  });
+  it('still flags a control covered by another board element inside .mc-world', () => {
+    const world: any = { parentNode: null };
+    const el = fakeEl('button', { left: 10, top: 10, width: 20, height: 20 });
+    const other = fakeEl('div', { left: 0, top: 0, width: 400, height: 400 });
+    el.parentNode = world; other.parentNode = world;
+    const doc = fakeDoc([el]);
+    doc.querySelector = (sel: string) => (sel === '.mc-world' ? world : null);
+    doc.elementFromPoint = () => other;
+    const dump: TileDump = { role: 'row', label: 'Row', rect: tileRect, controls: [{ id: 'a', kind: 'button', label: 'A', rect: el.getBoundingClientRect(), el }] };
+    expect(assertReachable(dump, doc)).toEqual([{ kind: 'unreachable', id: 'a' }]);
+  });
+});
