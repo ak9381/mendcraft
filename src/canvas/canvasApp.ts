@@ -281,6 +281,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const entry = plan ? enumerateMorphTiles(plan).find((e) => e.id === key) : undefined;
       if (entry) selfCheckTiles(frameId, entry.path);
     },
+    // Self-check overlap (Akash, 23 Nov): a move/resize that landed on other
+    // tiles was nudged clear — say so, and make the whole move one undo step.
+    onItemNudged: (frameId, key, before, after) => {
+      const plan = surfaces[frameId];
+      const label = plan ? enumerateMorphTiles(plan).find((e) => e.id === key)?.label : undefined;
+      history.push({ frameId, before: null, after: null, by: 'her', summary: `Moved ${label ?? 'tile'} (nudged clear of other tiles)`, kind: 'layout', layoutBefore: before, layoutAfter: after });
+      historyRender();
+      say(`Moved ${label ?? 'the tile'} to the nearest free spot so it doesn't cover other tiles. Say "undo" to put it back.`);
+    },
   });
   // Nano/Gemini terminals: pinch-hold the title bar (or mouse/touch-drag it)
   // to float the terminal anywhere on screen; the reset button puts it back
@@ -1166,6 +1175,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
+    if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`); return; }
     if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); deviceSurfaces.untrack(h.frameId); }
     const el = world.querySelector<HTMLElement>(`[data-frame="${h.frameId}"] .mc-surface`);
     if (el && !h.before) el.innerHTML = '';

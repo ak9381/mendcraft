@@ -3,7 +3,7 @@ import {
   clampMove, clampResize, computeBounds, terminalCutPx,
   loadFrameLayout, saveFrameLayout, clearFrameLayout,
   mountItemHandles, mountEditBoard, resizeToCorners, resizeByHandle,
-  MIN_ITEM_SIZE, MAX_ITEM_SIZE,
+  MIN_ITEM_SIZE, MAX_ITEM_SIZE, nearestFreeSpot, NUDGE_GAP_PX, type EditBoardOptions,
   type EditEl, type EditItemRef, type ItemLayout, type Rect, type PointerLikeEvent,
 } from '../../src/canvas/editBoard';
 
@@ -367,7 +367,7 @@ function memoryStorage(): Storage {
   } as Storage;
 }
 
-function setup(onItemCommit?: (frameId: string, key: string) => void) {
+function setup(onItemCommit?: (frameId: string, key: string) => void, onItemNudged?: EditBoardOptions['onItemNudged']) {
   const created: FakeEl[] = [];
   const createElement = (tag: string): EditEl => { const el = new FakeEl(tag); created.push(el); return el; };
   const root = new FakeEl('div');
@@ -388,7 +388,7 @@ function setup(onItemCommit?: (frameId: string, key: string) => void) {
   const ctl = mountEditBoard(root as unknown as EditEl, {
     storage, createElement, getAiPanelEl: () => aiPanel,
     getItems: (frameId) => itemsByFrame[frameId] ?? [],
-    onItemCommit,
+    onItemCommit, onItemNudged,
   });
   const byClass = (cls: string) => created.filter((e) => e.classes.has(cls));
   const editBtn = byClass('mc-edit-toggle')[0];
@@ -613,5 +613,66 @@ describe('Edit chrome survives a board re-render (A3-006 follow-up)', () => {
     const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     const body = src.slice(src.indexOf('function renderSurface('), src.indexOf('// ---- pinned-board dock'));
     expect(body).toMatch(/if \(id === focusId\) waitForLayout\(\(\) => \{ if \(focusId === id && surfaces\[id\]\) editBoard\.setFocus\(id/);
+  });
+});
+
+describe('self-check overlap: nudge a manually moved tile clear (Akash, 23 Nov)', () => {
+  const bounds = { left: 12, top: 12, width: 1000, height: 100000 };
+  it('nearestFreeSpot: no overlap -> null (nothing to do)', () => {
+    expect(nearestFreeSpot({ left: 12, top: 12, width: 100, height: 100 }, [{ left: 200, top: 12, width: 100, height: 100 }], bounds)).toBeNull();
+  });
+  it('nearestFreeSpot: a slight overlap moves the tile the short way, same size', () => {
+    const r = nearestFreeSpot({ left: 12, top: 100, width: 300, height: 180 }, [{ left: 12, top: 12, width: 300, height: 180 }], bounds)!;
+    expect(r).toEqual({ left: 12, top: 12 + 180 + NUDGE_GAP_PX, width: 300, height: 180 });
+  });
+  it('nearestFreeSpot: dropped mostly to the right -> goes beside, not below', () => {
+    const r = nearestFreeSpot({ left: 250, top: 20, width: 300, height: 180 }, [{ left: 12, top: 12, width: 300, height: 180 }], bounds)!;
+    expect(r.left).toBe(12 + 300 + NUDGE_GAP_PX); expect(r.top).toBe(20); expect(r.width).toBe(300);
+  });
+  it('nearestFreeSpot: never leaves the board bounds; falls below everything when boxed in', () => {
+    const narrow = { left: 12, top: 12, width: 320, height: 100000 };
+    const r = nearestFreeSpot({ left: 12, top: 50, width: 300, height: 100 }, [{ left: 12, top: 12, width: 300, height: 100 }, { left: 12, top: 120, width: 300, height: 100 }], narrow)!;
+    expect(r.left).toBe(12);
+    expect(r.top).toBeGreaterThanOrEqual(220 + NUDGE_GAP_PX - 1);
+  });
+  it('a move that lands on another tile is nudged clear, reported once (one undo step), and restoreLayout puts it back', () => {
+    const nudges: Array<{ key: string; before: Record<string, { top: number }>; after: Record<string, { top: number }> }> = [];
+    const commits: string[] = [];
+    const { ctl, editBtn, byClass, music: musicEl } = setup((_f, key) => commits.push(key), (_f, key, before, after) => nudges.push({ key, before, after }));
+    musicEl.rect = { left: 20, top: 400, width: 300, height: 200 }; // clear of the lamp to start with
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const lampMove = byClass('mc-edit-move').find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    const lampWrap = lampMove.parentElement as unknown as { style: Record<string, string> };
+    const top0 = Number.parseFloat(lampWrap.style.top);
+    // drag the lamp straight down onto the speaker (which sits 200px lower)
+    lampMove.fire('pointerdown', { clientX: 100, clientY: 100 });
+    lampMove.fire('pointermove', { clientX: 100, clientY: 350 });
+    lampMove.fire('pointerup');
+    expect(nudges).toHaveLength(1);
+    expect(nudges[0].key).toBe('lamp-wiz-desk');
+    expect(nudges[0].before['lamp-wiz-desk'].top).toBe(top0);
+    const music = nudges[0].after['music-speaker-1'] as unknown as { left: number; top: number; width: number; height: number };
+    const lamp = nudges[0].after['lamp-wiz-desk'] as unknown as { left: number; top: number; width: number; height: number };
+    const overlapY = Math.min(lamp.top + lamp.height, music.top + music.height) - Math.max(lamp.top, music.top);
+    const overlapX = Math.min(lamp.left + lamp.width, music.left + music.width) - Math.max(lamp.left, music.left);
+    expect(overlapX <= 2 || overlapY <= 2).toBe(true); // clear of the speaker
+    expect(Number.parseFloat(lampWrap.style.top)).toBe(lamp.top); // the tile shows where it was nudged
+    expect(commits).toEqual(['lamp-wiz-desk']); // the self-check still re-runs, once
+    // undo: the pre-move layout comes back
+    ctl.restoreLayout('f1', nudges[0].before as never);
+    const lampMove2 = byClass('mc-edit-move').filter((h) => h.attrs['aria-label']?.includes('Desk lamp')).pop()!;
+    expect(Number.parseFloat((lampMove2.parentElement as unknown as { style: Record<string, string> }).style.top)).toBe(top0);
+  });
+  it('a move into free space is not nudged', () => {
+    const nudges: string[] = [];
+    const { ctl, editBtn, byClass } = setup(undefined, (_f, key) => nudges.push(key));
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const lampMove = byClass('mc-edit-move').find((h) => h.attrs['aria-label']?.includes('Desk lamp'))!;
+    lampMove.fire('pointerdown', { clientX: 100, clientY: 100 });
+    lampMove.fire('pointermove', { clientX: 100, clientY: 90 }); // nudged up a little: still clear of the speaker
+    lampMove.fire('pointerup');
+    expect(nudges).toEqual([]);
   });
 });

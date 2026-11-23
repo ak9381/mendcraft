@@ -244,8 +244,11 @@ export interface HistoryEntry {
   at: number;
   undone: boolean;
   /** 'surface' (default) edits a board; 'lang' swaps the UI language pack. */
-  kind?: 'surface' | 'lang';
+  kind?: 'surface' | 'lang' | 'layout';
   packBefore?: LanguagePack | null;
+  /** kind 'layout': the board's tile layout before / after a nudged move. */
+  layoutBefore?: Record<string, { left: number; top: number; width: number; height: number }>;
+  layoutAfter?: Record<string, { left: number; top: number; width: number; height: number }>;
   packAfter?: LanguagePack | null;
 }
 

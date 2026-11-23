@@ -90,6 +90,51 @@ export interface XY { x: number; y: number }
  *  are frame-invariant, so callers can assign corners in client space and apply
  *  the result to a tile's own local layout. No clamping here — pure geometry;
  *  bounds/min/max are enforced by the caller via {@link clampResize}. */
+/** Gap kept between a nudged tile and the tile it was pushed clear of. */
+export const NUDGE_GAP_PX = 8;
+/** Edge overlap between neighbouring tiles that still counts as side by side. */
+const SEAM_PX = 6;
+
+function boxesOverlap(a: ItemLayout, b: ItemLayout, tol = 2): boolean {
+  return Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left) > tol &&
+    Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top) > tol;
+}
+
+/** Self-check overlap decision (Akash, 23 Nov): a manual move/resize that lands
+ *  a tile on top of others is nudged to the NEAREST free spot (same size)
+ *  instead of having its contents rewritten. Returns null when `box` already
+ *  overlaps nothing. Candidates hug each other tile's edges (and keep the
+ *  dropped x or y), stay inside `bounds`, and the one closest to where the
+ *  tile was dropped wins; failing all, the tile goes below everything. */
+export function nearestFreeSpot(box: ItemLayout, others: readonly ItemLayout[], bounds: Rect, gap = NUDGE_GAP_PX, also: readonly { left: number; top: number }[] = []): ItemLayout | null {
+  if (!others.some((o) => boxesOverlap(box, o))) return null;
+  // Neighbouring tiles in the default flow can share an edge by a few px;
+  // that seam is not a covered control, so a candidate may sit in it.
+  const clash = (c: ItemLayout): boolean => others.some((o) => boxesOverlap(c, o, SEAM_PX));
+  const xs = new Set<number>([box.left, ...also.map((a) => a.left)]);
+  const ys = new Set<number>([box.top, ...also.map((a) => a.top)]);
+  for (const o of others) {
+    xs.add(o.left - box.width - gap); xs.add(o.left + o.width + gap); xs.add(o.left);
+    ys.add(o.top - box.height - gap); ys.add(o.top + o.height + gap); ys.add(o.top);
+  }
+  const maxLeft = bounds.left + Math.max(0, bounds.width - box.width);
+  const maxTop = bounds.top + Math.max(0, bounds.height - box.height);
+  let best: ItemLayout | null = null; let bestD = Infinity;
+  for (const x of xs) {
+    if (x < bounds.left || x > maxLeft) continue;
+    for (const y of ys) {
+      if (y < bounds.top || y > maxTop) continue;
+      const cand = { ...box, left: x, top: y };
+      if (clash(cand)) continue;
+      const d = Math.hypot(x - box.left, y - box.top);
+      if (d < bestD) { bestD = d; best = cand; }
+    }
+  }
+  if (best) return best;
+  const bottom = Math.max(...others.map((o) => o.top + o.height));
+  return { ...box, left: Math.min(Math.max(box.left, bounds.left), maxLeft), top: bottom + gap };
+}
+
 /** A two-hand grab this close to a tile corner takes hold of that corner. */
 export const CORNER_GRAB_PX = 60;
 
@@ -210,6 +255,8 @@ export interface ItemHandles {
   pinchStart(): ItemLayout;
   pinchApply(next: ItemLayout): void;
   pinchEnd(): void;
+  /** Place the item without committing (used by the overlap nudge). */
+  setLayout(next: ItemLayout): void;
   destroy(): void;
 }
 
@@ -354,6 +401,7 @@ export function mountItemHandles(
 
   return {
     getLayout: () => layout,
+    setLayout(next) { layout = { ...next }; apply(); },
     pinchStart,
     pinchApply,
     pinchEnd,
@@ -433,6 +481,9 @@ export interface EditBoardOptions {
    *  re-check a tile after it's been dragged or resized, not only after it
    *  was first built. */
   onItemCommit?(frameId: string, key: string): void;
+  /** A committed move/resize overlapped other tiles and was nudged clear;
+   *  `before` is the board's layout from before that move — one undo step. */
+  onItemNudged?(frameId: string, key: string, before: FrameLayoutMap, after: FrameLayoutMap): void;
 }
 
 export interface EditBoardController {
@@ -446,6 +497,8 @@ export interface EditBoardController {
    *  commits. `a`/`b` are the two pinch points in client coords. One tile per
    *  gesture; returns whether a tile is engaged. */
   pinchResize(phase: 'start' | 'move' | 'end', a?: XY, b?: XY): boolean;
+  /** Put a board's saved tile layout back (undo of a nudged move). */
+  restoreLayout(frameId: string, map: FrameLayoutMap): void;
   destroy(): void;
 }
 
@@ -591,12 +644,22 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
         min: minSize,
         max: maxSize,
         getBounds: () => liveBounds(canvasEl),
-        onCommit: (l) => {
+        onCommit: (l0) => {
+          const before: FrameLayoutMap = { ...saved };
+          const others = items.filter((o) => o.key !== it.key).map((o) => saved[o.key]).filter((o): o is ItemLayout => !!o);
+          // Only an overlap this move/resize CREATED is nudged away — a board
+          // whose tiles already touched (min sizes) isn't reshuffled by a tweak.
+          const prev = before[it.key];
+          const created = others.some((o) => boxesOverlap(l0, o) && !(prev && boxesOverlap(prev, o)));
+          const nudged = created ? nearestFreeSpot(l0, others, liveBounds(canvasEl), NUDGE_GAP_PX, prev ? [prev] : []) : null;
+          const l = nudged ?? l0;
+          if (nudged) handles.setLayout(nudged);
           saved[it.key] = l;
           let bottom = 0;
           for (const other of items) { const ol = saved[other.key]; if (ol) bottom = Math.max(bottom, ol.top + ol.height); }
           canvasEl.style.minHeight = `${bottom + PAD}px`;
           if (storage) saveFrameLayout(storage, frameId, saved);
+          if (nudged) opts.onItemNudged?.(frameId, it.key, before, { ...saved });
           opts.onItemCommit?.(frameId, it.key);
         },
       });
@@ -670,6 +733,10 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
       pinchTarget.handles.pinchEnd();
       pinchTarget = null;
       return true;
+    },
+    restoreLayout(frameId, map) {
+      if (storage) saveFrameLayout(storage, frameId, map);
+      if (frameId === currentFrameId) applyFrame();
     },
     destroy() {
       editBtn.remove();
