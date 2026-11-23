@@ -88,14 +88,20 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
   const actions = panel.querySelector<HTMLElement>('.mc-teach-actions')!;
   panel.querySelector('.mc-teach-close')!.addEventListener('click', () => close());
 
-  function close(): void { panel.hidden = true; body.innerHTML = ''; actions.innerHTML = ''; }
+  // Each open() is one teach session. Closing (×, Escape, Close) ends it, so a
+  // recording still running in the background can't later write into — or
+  // propose over — a newer session the user opened.
+  let session = 0;
+  class Cancelled extends Error { constructor() { super('teach closed'); this.name = 'Cancelled'; } }
+  function close(): void { session++; panel.hidden = true; body.innerHTML = ''; actions.innerHTML = ''; }
   function show(html: string): void { body.innerHTML = html; }
+  function alive(my: number): void { if (my !== session) throw new Cancelled(); }
 
   class CameraLost extends Error {
     constructor() { super(CAMERA_LOST_TEACH); this.name = 'CameraLost'; }
   }
 
-  async function captureSample(): Promise<Pt[][]> {
+  async function captureSample(my: number): Promise<Pt[][]> {
     if (opts.sim) {
       // Deterministic synthetic recording: a held thumbs-up with a tiny,
       // repeatable wobble so screenshots/tests never need a camera.
@@ -115,6 +121,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       const t0 = Date.now();
       while (Date.now() - t0 < SAMPLE_MS) {
         if (lost) throw new CameraLost();
+        if (my !== session) break; // closed mid-sample: stop the camera now
         await wait(50);
       }
       if (lost) throw new CameraLost();
@@ -127,14 +134,16 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     return frames;
   }
 
-  async function recordSamples(): Promise<{ frames: Pt[][]; result: ReturnType<ReturnType<typeof createGestureRecorder>['finishEarly']> }> {
+  async function recordSamples(my: number): Promise<{ frames: Pt[][]; result: ReturnType<ReturnType<typeof createGestureRecorder>['finishEarly']> }> {
     const recorder = createGestureRecorder();
     let lastFrames: Pt[][] = [];
     for (let n = 1; n <= SAMPLES_NEEDED; n++) {
       let retries = 0;
       for (;;) {
+        alive(my);
         show(`<p>Sample ${n} of ${SAMPLES_NEEDED} — hold your gesture…</p><p class="mc-teach-count">${SAMPLE_MS / 1000}s</p>`);
-        const frames = await captureSample();
+        const frames = await captureSample(my);
+        alive(my);
         lastFrames = frames;
         const result = recorder.addSample(frames);
         if (result.status === 'retry' && result.reason) {
@@ -142,6 +151,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
           retries++;
           show(`<p>${result.reason}</p>`);
           await wait(1200);
+          alive(my);
           continue;
         }
         if (result.status === 'ready' && n < SAMPLES_MIN) break; // shouldn't happen, but stay safe
@@ -153,7 +163,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     return { frames: lastFrames, result: done };
   }
 
-  async function describeAndPropose(frames: Pt[][], result: { kind: 'pose' | 'motion'; pose?: CustomGesture['pose']; motion?: CustomGesture['motion'] }): Promise<void> {
+  async function describeAndPropose(my: number, frames: Pt[][], result: { kind: 'pose' | 'motion'; pose?: CustomGesture['pose']; motion?: CustomGesture['motion'] }): Promise<void> {
     show(`
       <p>What should it do?</p>
       <form class="mc-teach-describe">
@@ -166,8 +176,10 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
         resolve(panel.querySelector<HTMLInputElement>('.mc-teach-describe input')!.value.trim());
       });
     });
+    alive(my);
     show('<p>Thinking…</p>');
     const parsed = await resolveGestureAction(text, opts.devices(), opts.engines);
+    alive(my);
     if (!parsed) {
       show(`<p>I couldn't turn “${text}” into a canvas action. Try something like “save the canvas”.</p>`);
       actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
@@ -222,15 +234,17 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
   }
 
   async function open(): Promise<void> {
+    const my = ++session;
     panel.hidden = false;
     actions.innerHTML = '';
     let frames: Pt[][] = [];
     let result: Awaited<ReturnType<typeof recordSamples>>['result'] | undefined;
     try {
-      const rec = await recordSamples();
+      const rec = await recordSamples(my);
       frames = rec.frames;
       result = rec.result;
     } catch (e) {
+      if (e instanceof Cancelled) return;
       const lost = e instanceof CameraLost || (e instanceof Error && e.name === 'CameraLost');
       show(`<p>${lost ? CAMERA_LOST_TEACH : 'Couldn’t get a clean reading — try again with your whole hand in view.'}</p>`);
       actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
@@ -244,10 +258,11 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       panel.querySelector('[data-act=close]')!.addEventListener('click', close);
       return;
     }
-    await describeAndPropose(frames, result);
+    try { await describeAndPropose(my, frames, result); } catch (e) { if (!(e instanceof Cancelled)) throw e; }
   }
 
   function openList(): void {
+    session++;
     panel.hidden = false;
     actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
     actions.querySelector('[data-act=close]')!.addEventListener('click', close);
@@ -278,7 +293,9 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     if (!gesture) return;
     const meter = panel.querySelector<HTMLElement>(`[data-meter="${id}"]`);
     if (meter) meter.textContent = 'reading…';
-    const frames = await captureSample();
+    const my = session;
+    const frames = await captureSample(my);
+    if (my !== session) return; // list closed mid-test: never fire the action afterwards
     const match = matchCustomGestures(frames, [gesture]);
     if (meter) meter.textContent = match ? `match · ${(1 - match.distance).toFixed(2)}` : 'no match';
     if (match) opts.onTriggered(gesture);
