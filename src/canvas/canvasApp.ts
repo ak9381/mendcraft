@@ -1771,6 +1771,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             const parsed = parseMorphTile(raw, original, deviceIdSession);
             if (!parsed.ok) return false;
             if (JSON.stringify(parsed.value) === JSON.stringify(original)) return true;
+            // Two top-level tiles can fail self-check in the same tick; their
+            // fix passes run concurrently. The check→showReview below is
+            // synchronous, so if a sibling's fix review already owns the single
+            // full-screen slot, don't overwrite its card (which would orphan
+            // its Promise). Decline this one — runSelfCheck rolls the fix back
+            // and leaves the original tile with its warning mark, as designed.
+            if (reviewDialog.isOpen()) return false;
             return new Promise((done) => {
               const card = renderProposalCard(document, {
                 id: `p-fix-${target.id}`, title: `Fix ${target.label}`, youAsked: 'self-check fix', status: 'changed',
