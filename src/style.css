@@ -3373,6 +3373,9 @@ button.mc-ref-open {
   z-index: 36;
 }
 #app:has(> #layout) .mc-trash { z-index: 37; }
+/* A pending choice (Revert / Did you mean) is a question waiting for an answer:
+   keep it above the tool dock and the "Try:" hint so hand and mouse can reach it. */
+#app:has(> #layout) .choice-bar { z-index: 39; bottom: 184px; }
 @media (max-width: 1100px) {
   #app:has(> #layout) .mc-palette-btn .mc-lbl { display: none; }
   #app:has(> #layout) .mc-palette-btn { min-width: 48px; padding: 4px; }
