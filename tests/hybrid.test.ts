@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   askCopilot,
+  draftClientEmail,
+  explainAccessibility,
   compileCommand,
   detectLanguageCloud,
   fuseIntent,
@@ -714,5 +716,56 @@ describe('on-device warm-up', () => {
   it('no-ops under test overrides (does not call a model)', async () => {
     setModelsForTest({ enabled: true, appCheck: 'ready', cadTool: model('{"tool":"zoom","args":{"to":"fit"},"confidence":1}') });
     expect(await warmOnDevice()).toBe(false);
+  });
+});
+
+describe('cloud copilot calls redact the plan summary (room-label names)', () => {
+  // generateContent runs before coercion, so a capturing model records the
+  // exact prompt string sent to the cloud even if the (junk) reply fails to
+  // coerce. The summary carries plan room names; a room renamed to a person's
+  // name must not reach the cloud. Regression for commit 64a993a.
+  const capture = () => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => { prompts.push(p); return { response: { text: () => '{}' } }; },
+    };
+    return { m, prompts };
+  };
+
+  it('askCopilot redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotAnswer: cap.m });
+    await askCopilot('what is the minimum door width here', 'rooms: Lakshmi bedroom 4000x3000', 'IN', undefined, ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+    expect(cap.prompts.some((p) => p.includes('4000x3000'))).toBe(true); // dimensions survive
+  });
+
+  it('proposeMaterials redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotMaterials: cap.m });
+    await proposeMaterials('warm oak look', 'rooms: Lakshmi bedroom', ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+  });
+
+  it('draftClientEmail redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotEmail: cap.m });
+    await draftClientEmail([{ question: 'ramp?', answer: 'yes' }], 'rooms: Lakshmi bedroom', ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+  });
+
+  it('explainAccessibility redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, a11yExplain: cap.m });
+    await explainAccessibility(
+      [{ id: 'x1', rule: 'ramp', message: 'steep', citation: 'IS' }],
+      'rooms: Lakshmi bedroom',
+      ['Lakshmi'],
+    );
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
   });
 });
