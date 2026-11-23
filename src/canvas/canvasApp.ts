@@ -436,6 +436,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     host.append(el);
     live.add(sid);
     type WidgetAction = { name: string; context?: Record<string, unknown>; metadata?: Record<string, unknown> };
+    // A2UI only allows `metadata.extensions` (anything else throws in
+    // validateMetadata), so the live Lit widgets carry per-click data there.
+    const ext = (a: WidgetAction) => (a.metadata?.extensions as Record<string, unknown> | undefined) ?? a.metadata;
     (s as { onAction: { subscribe(f: (a: WidgetAction) => void): void } }).onAction.subscribe((a) => {
       if (a.name === 'connect.start') { openConnectSheet(sid); return; }
       // New general-purpose widgets: wired through the same onAction bus as
@@ -444,7 +447,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // controller's calling convention for dynamic action data), the
       // fallback (plain-DOM) path puts the same thing straight in `context`.
       if (a.name === 'table.rowAction') {
-        const row = (a.context?.row ?? a.metadata?.row) as string[] | undefined;
+        const row = (a.context?.row ?? ext(a)?.row) as string[] | undefined;
         say(row ? `Opened ${row[0]}.` : 'Opened row.');
         return;
       }
@@ -453,8 +456,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (a.name === 'visual.action') {
-        const label = (a.context?.label ?? a.metadata?.label) as string | undefined;
-        const action = (a.context?.action ?? a.metadata?.action) as string | undefined;
+        const label = (a.context?.label ?? ext(a)?.label) as string | undefined;
+        const action = (a.context?.action ?? ext(a)?.action) as string | undefined;
         say(label ? `${label}.` : action ? `${action}.` : 'Activated.');
         return;
       }

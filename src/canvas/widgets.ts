@@ -523,7 +523,7 @@ export class TableTileElement extends A2uiLitElement<typeof TableTileApi> {
         <tbody>
           ${rows.map((row) => html`<tr>
             ${row.map((cell) => html`<td>${cell}</td>`)}
-            ${p.rowActionLabel ? html`<td><button type="button" @click=${() => p.onRowAction?.({ metadata: { row } } as never)}>${p.rowActionLabel}</button></td>` : nothing}
+            ${p.rowActionLabel ? html`<td><button type="button" @click=${() => p.onRowAction?.({ metadata: { extensions: { row } } } as never)}>${p.rowActionLabel}</button></td>` : nothing}
           </tr>`)}
         </tbody>
       </table>
@@ -574,7 +574,7 @@ export class FormTileElement extends A2uiLitElement<typeof FormTileApi> {
         ${this.renderControl(f)}
       </div>`)}
       <div class="row">
-        <button type="button" class="primary" @click=${() => p.onSubmit?.({ metadata: { values: { ...this.values } } } as never)}>${p.submitLabel || 'Submit'}</button>
+        <button type="button" class="primary" @click=${() => p.onSubmit?.({ metadata: { extensions: { values: { ...this.values } } } } as never)}>${p.submitLabel || 'Submit'}</button>
       </div>
     </div>`;
   }
@@ -610,7 +610,7 @@ export class VisualTileElement extends A2uiLitElement<typeof VisualTileApi> {
       createElementNS: (ns: string, tag: string) => document.createElementNS(ns, tag),
       createTextNode: (text: string) => document.createTextNode(text),
     };
-    const built = buildVisualDom(nodes, doc, ({ action, label }) => p.onAction?.({ metadata: { action, label } } as never));
+    const built = buildVisualDom(nodes, doc, ({ action, label }) => p.onAction?.({ metadata: { extensions: { action, label } } } as never));
     for (const n of built) frame.appendChild(n as Node);
   }
 }
