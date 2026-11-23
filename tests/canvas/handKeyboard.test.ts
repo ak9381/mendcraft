@@ -53,3 +53,12 @@ describe('hand keyboard follows app focus after a hand pinch', () => {
     expect(kb2).toMatch(/const FOLLOW_FOCUS_MS = \d+;/);
   });
 });
+
+describe('hand keyboard commits like native typing', () => {
+  const kb3 = readFileSync('src/canvas/handKeyboard.ts', 'utf8');
+  it("fires 'change' on Enter (no form) and when the keys close", () => {
+    expect(kb3).toContain("field.dispatchEvent(new Event('change', { bubbles: true }))");
+    expect(kb3).toMatch(/key === 'Enter' && field && !field\.form\) commit\(\)/);
+    expect(kb3).toMatch(/function close\(\): void \{\n\s+commit\(\);/);
+  });
+});

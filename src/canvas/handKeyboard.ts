@@ -40,7 +40,16 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
 
   const inside = (n: EventTarget | null) => n instanceof Node && (root.contains(n) || n === field);
 
+  // Native typing commits with 'change' (on Enter or blur); keys that set
+  // .value don't, so a field that saves on change (the plan props panel)
+  // never saw the edit. Fire it the same two ways.
+  let committed = '';
+  function commit(): void {
+    if (field && field.value !== committed) { committed = field.value; field.dispatchEvent(new Event('change', { bubbles: true })); }
+  }
+
   function close(): void {
+    commit();
     form?.removeEventListener('submit', close);
     form = null;
     field = null;
@@ -62,6 +71,7 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
     if (!isField(t)) return;
     if (field !== t) close();
     field = t;
+    committed = t.value;
     form = t.form;
     form?.addEventListener('submit', close);
     kb.open(t);
@@ -103,7 +113,9 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
 
   function onKeysClick(e: Event): void {
     // The Close key closes the inner keyboard; drop our field binding with it.
-    if ((e.target as HTMLElement | null)?.closest?.('[data-key=Close]')) close();
+    const key = (e.target as HTMLElement | null)?.closest?.('[data-key]')?.getAttribute('data-key');
+    if (key === 'Close') close();
+    else if (key === 'Enter' && field && !field.form) commit();
   }
 
   doc.addEventListener(HAND_TEXT_FOCUS, onHandFocus);
