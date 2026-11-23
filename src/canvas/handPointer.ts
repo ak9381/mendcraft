@@ -16,6 +16,7 @@
 // a control activates it (click / focus); pinch on a range slider drags it.
 
 import { createOneEuroFilter } from '../input/oneEuro';
+import { createDragVelocity, createMomentum, scrollableAncestor } from './handScroll';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -238,6 +239,17 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let pt: P = { x: -1, y: -1 };
   let lostTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Hand scroll + fling (A2-025 / C156): a pinch-drag inside a scrollable
+  // container scrolls it with release momentum; a still/short pinch stays a tap.
+  const dragVel = createDragVelocity();
+  const momentum = createMomentum();
+  let scrollEl: HTMLElement | null = null;
+  let scrollAxes = { x: false, y: false };
+  let scrollStart: P = { x: 0, y: 0 };
+  let scrollLast: P = { x: 0, y: 0 };
+  let scrolled = false;
+  let flingRaf = 0;
+
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const createDragEvent = opts.createDragEvent ?? ((type: string, p: P) =>
     new PointerEvent(type, { bubbles: true, composed: true, cancelable: true, clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'pen' }));
@@ -329,6 +341,42 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
   }
 
+  const rafAvailable = typeof requestAnimationFrame === 'function';
+  function cancelFling() {
+    if (flingRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(flingRaf);
+    flingRaf = 0;
+    momentum.stop();
+  }
+  /** Live pinch-drag over a scroll container: once past the move threshold,
+   *  translate the drag into scrollTop/scrollLeft and feed the fling tracker. */
+  function scrollDrag(p: P) {
+    if (!scrollEl) return;
+    dragVel.push(p.x, p.y, now());
+    if (!scrolled && Math.hypot(p.x - scrollStart.x, p.y - scrollStart.y) <= DRAG_MOVE_THRESHOLD_PX) { scrollLast = p; return; }
+    scrolled = true;
+    const dx = p.x - scrollLast.x, dy = p.y - scrollLast.y;
+    if (!dryRun) {
+      if (scrollAxes.y) scrollEl.scrollTop -= dy;
+      if (scrollAxes.x) scrollEl.scrollLeft -= dx;
+    }
+    scrollLast = p;
+  }
+  function startFling() {
+    const el = scrollEl;
+    const { vx, vy } = dragVel.velocity(now());
+    momentum.start(scrollAxes.x ? vx : 0, scrollAxes.y ? vy : 0);
+    if (!el || dryRun || !rafAvailable || !momentum.active) return;
+    let last = now();
+    const step = () => {
+      const t = now(); const dt = t - last; last = t;
+      const { dx, dy } = momentum.tick(dt);
+      if (scrollAxes.y) el.scrollTop -= dy;
+      if (scrollAxes.x) el.scrollLeft -= dx;
+      flingRaf = momentum.active ? requestAnimationFrame(step) : 0;
+    };
+    flingRaf = requestAnimationFrame(step);
+  }
+
   function press(down: boolean) {
     if (down === pinched) return;
     pinched = down;
@@ -342,7 +390,18 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         consumedUntil = now() + 700;
       }
       else if (!target) opts.onEmptyPinch?.();
-      else consumedUntil = now() + 700;
+      else {
+        // A pinch over a scroll container (or a control inside one) arms a
+        // drag-to-scroll; a still/short pinch still taps (see press-up).
+        const hit = scrollableAncestor(target);
+        if (hit) {
+          cancelFling(); dragVel.reset();
+          scrollEl = hit.el; scrollAxes = { x: hit.x, y: hit.y };
+          scrollStart = pt; scrollLast = pt; scrolled = false;
+          dragVel.push(pt.x, pt.y, now());
+        }
+        consumedUntil = now() + 700;
+      }
     } else {
       if (suppressRelease) {
         // A morph hold fired during this pinch: tear the press down without
@@ -358,7 +417,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         // control — only a genuine drag skips the click.
         if (!dragHandleMoved) activate(draggingHandle); else lastActivated = draggingHandle;
         draggingHandle = null;
+      } else if (scrollEl && scrolled) {
+        // A real drag scrolled the container — fling it, never a tap-click.
+        startFling();
       } else if (pressedOn && pressedOn === target) activate(pressedOn);
+      scrollEl = null; scrolled = false;
       suppressRelease = false;
       pressedOn = null;
       refreshControls(true);
@@ -388,6 +451,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (pinched) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
+      scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
     }
@@ -428,6 +492,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         press(true);
       } else if (st.pinched) {
         if (dragging || draggingHandle) aim(p, t);
+        else if (scrollEl) scrollDrag(p);
         // The cursor stays frozen, but the morph hold's slop check needs the
         // LIVE hand position — drifting past slop must cancel the hold.
         opts.onPinch?.({ phase: 'move', p, now: t });
