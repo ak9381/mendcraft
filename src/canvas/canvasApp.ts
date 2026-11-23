@@ -222,7 +222,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
         <button class="mc-btn primary" type="submit" data-i18n="go">Go</button></form>
       </div>
-      <p class="mc-canvas-status" role="status" aria-live="polite"></p>
+      <div class="mc-status-row"><p class="mc-canvas-status" role="status" aria-live="polite"></p>
+        <button class="mc-btn mc-retry" type="button" hidden aria-label="Retry the request that failed">Retry</button></div>
     </header>
     <aside class="mc-dock" aria-label="Pinned board" hidden>
       <div class="mc-dock-head"><span class="mc-dock-title"></span>
@@ -310,7 +311,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
   const history = createCanvasHistory();
   const ledger = createCanvasLedger();
-  const say = (t: string) => { statusEl.textContent = t; };
+  // A7-024: a request that failed mid-flight offers Retry (re-sends the same
+  // request). Any later status line means the moment has passed — hide it.
+  const retryBtn = root.querySelector<HTMLButtonElement>('.mc-retry')!;
+  let retryFn: (() => void) | null = null;
+  const hideRetry = () => { retryFn = null; retryBtn.hidden = true; };
+  const offerRetry = (fn: () => void) => { retryFn = fn; retryBtn.hidden = false; };
+  retryBtn.addEventListener('click', () => { const f = retryFn; hideRetry(); f?.(); });
+  const say = (t: string) => { statusEl.textContent = t; hideRetry(); };
   // The floating mic is mounted later; "ask for something else" starts it.
   let micFabRef: MicFab | null = null;
   const reviewDialog = mountReviewDialog(root, {
@@ -892,6 +900,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           settleSwarm();
           panels.forEngine(engineId).fail(why);
           aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+          offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task); });
         },
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
