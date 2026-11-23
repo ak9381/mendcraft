@@ -96,6 +96,9 @@ export interface MorphFlow {
   /** 'tap' = released before the fire: the normal tap path runs unchanged. */
   endHold(): MorphRelease;
   cancelHold(): void;
+  /** Tracking dropout (pointercancel): keep the armed hold alive for the grace
+   *  window so a quick re-entry resumes it rather than restarting (A4-029). */
+  pauseHold(): void;
   /** True while a pinch/press the classifier armed on is still down — the
    *  host uses this to suppress `pinch-hold-still` for that pinch. */
   holdActive(): boolean;
@@ -220,6 +223,12 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
   }
 
   function beginHold(p: { x: number; y: number }, type: MorphPointerType): boolean {
+    // Hand re-entered after a brief tracking dropout: resume the same hold
+    // (the grace window is still open) instead of starting a fresh ~900ms one.
+    if (hold.paused) {
+      if (hold.arm(p, type, now())) { lastP = { x: p.x, y: p.y }; if (ticker === null) startTicker(); return true; }
+      return false;
+    }
     if (phase !== 'idle' || hold.armed || deps.disabled()) return false;
     const resolved = deps.resolveTarget(p);
     if (!resolved) return false;
@@ -250,6 +259,12 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
   function cancelHold(): void {
     hold.cancel();
     dropHold();
+  }
+
+  function pauseHold(): void {
+    hold.pause(now());
+    // The ticker keeps running (hold stays armed) and will emit 'cancelled'
+    // once the grace window lapses, tearing down through handleHoldEvent.
   }
 
   function cancel(): void {
@@ -419,6 +434,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     moveHold,
     endHold,
     cancelHold,
+    pauseHold,
     holdActive: () => hold.armed,
     isOpen: () => deps.card.isOpen(),
     phase: () => phase,
@@ -465,7 +481,7 @@ export function attachMorphPointers(el: HTMLElement, flow: MorphFlow, doc: Docum
   const onPointerCancel = (e: PointerEvent): void => {
     if (e.pointerId !== activePointer) return;
     activePointer = null;
-    flow.cancelHold();
+    flow.pauseHold(); // keep the hold alive through a brief tracking dropout (grace window)
   };
   const onClick = (e: MouseEvent): void => {
     if (Date.now() < suppressClickUntil) {

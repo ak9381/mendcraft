@@ -26,6 +26,36 @@ describe('createMorphHold — tap vs hold', () => {
   });
 });
 
+describe('A4-029 — grace period on a brief tracking dropout mid-hold', () => {
+  it('pause within the grace window resumes the SAME hold (dropout time credited, not restarted)', () => {
+    const hold = createMorphHold(); // graceMs default, holdMs 900
+    hold.arm(ORIGIN, 'hand', 0);
+    expect(hold.update(ORIGIN, 500)).toBe('none');
+    hold.pause(600);                       // MediaPipe loses the hand at 600ms
+    expect(hold.update(ORIGIN, 700)).toBe('none'); // still within grace: held, not cancelled
+    expect(hold.arm(ORIGIN, 'hand', 750)).toBe(true); // hand re-enters at 750 (150ms gap)
+    // The 150ms dropout is credited: fire lands at 900 + 150 = 1050, NOT 900
+    // (would-be if the gap were ignored) and NOT 1650 (would-be if restarted).
+    expect(hold.update(ORIGIN, 1040)).toBe('none');
+    expect(hold.update(ORIGIN, 1060)).toBe('fired');
+  });
+
+  it('a dropout longer than the grace window cancels the hold', () => {
+    const hold = createMorphHold();
+    hold.arm(ORIGIN, 'hand', 0);
+    expect(hold.update(ORIGIN, 500)).toBe('none');
+    hold.pause(600);
+    expect(hold.update(ORIGIN, 900)).toBe('cancelled'); // 300ms > grace
+    expect(hold.armed).toBe(false);
+  });
+
+  it('pause is a no-op when nothing is armed', () => {
+    const hold = createMorphHold();
+    expect(() => hold.pause(100)).not.toThrow();
+    expect(hold.armed).toBe(false);
+  });
+});
+
 describe('createMorphHold — movement past slop cancels', () => {
   const CASES: Array<{ type: 'hand' | 'mouse' | 'touch'; slop: number }> = [
     { type: 'hand', slop: 28 },
