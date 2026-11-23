@@ -1397,11 +1397,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // see a board wider than the screen. One-hand behaviour is untouched.
   const twoHand = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
   let twoHandGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
+  let twoHandResizing = false; // Edit mode: a tile is being two-hand resized.
   function handleTwoHand(hands: readonly (readonly { x: number; y: number }[])[], now: number): void {
     const w = viewport.clientWidth || innerWidth;
     const h = viewport.clientHeight || innerHeight;
     const pts = twoHandPinchPoints(hands, w, h);
     const r = twoHand.update({ p: pts?.p ?? null, q: pts?.q ?? null, now });
+
+    // Edit mode: two-hand pinch RESIZES the tile under the pinch midpoint
+    // (anchored, span ratio = scale), never zooms the canvas — zooming would
+    // drop focus and break editing. The resize goes through editBoard's commit
+    // path so the self-check re-runs on release. Nothing happens over blank space.
+    if (editBoard.editing) {
+      if (r.started && pts) {
+        const vpRect = viewport.getBoundingClientRect();
+        const midX = (pts.p.x + pts.q.x) / 2 + vpRect.left;
+        const midY = (pts.p.y + pts.q.y) / 2 + vpRect.top;
+        twoHandResizing = editBoard.pinchResize('start', 1, midX, midY);
+        return;
+      }
+      if (r.active && twoHandResizing) editBoard.pinchResize('move', r.transform.scale);
+      if (r.ended) { if (twoHandResizing) editBoard.pinchResize('end', r.transform.scale); twoHandResizing = false; }
+      return;
+    }
+
     if (r.started && pts) {
       if (focusId) { focusId = null; sync(); } // match the wheel: zoom happens in overview
       twoHandGrab = { p0: pts.p, q0: pts.q, cam0: camera };
