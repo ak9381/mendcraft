@@ -177,6 +177,7 @@ import { matchTemplate } from './input/gestureTemplates';
 import { createFaceCueDetector, faceRatios } from './input/faceCues';
 import { createDwellClicker } from './input/dwell';
 import { createOneEuroFilter } from './input/oneEuro';
+import { queueApplyBlocked } from './offline/queueGate';
 import { createClickCooldown } from './input/clickCooldown';
 import { parseListenPhrase } from './input/listening';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
@@ -3619,6 +3620,8 @@ async function acceptJob(id: string): Promise<void> {
     say('Accessibility explanations applied.');
   } else {
     if (job.mode !== mode.id) { say(`Switch to ${job.mode} mode to apply this.`); return; }
+    const blocked = queueApplyBlocked(result.kind, changeLog.pending().length);
+    if (blocked) { verifierEl.textContent = blocked; say(blocked); copilotPanel.open('review'); toggleButton(btnCopilot, true); return; }
     const step = controller.applyGenerated?.(result.payload)
       ?? { ok: false, error: 'This mode cannot apply generated designs.', warnings: [] };
     if (!step.ok) {
