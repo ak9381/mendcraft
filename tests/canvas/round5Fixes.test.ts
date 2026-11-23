@@ -36,7 +36,7 @@ describe('C093/C095/C097 teach list: no native prompt, escaped names, confirm-be
     expect(src).not.toMatch(/\bprompt\(['"`]/);
     expect(src).toMatch(/\$\{esc\(g\.name\)\}/);
     expect(src).toMatch(/\$\{esc\(parsed\.summary\)\}/);
-    expect(src).not.toMatch(/\$\{parsed\.summary\}/);
+    expect(src).not.toMatch(/<[^`]*\$\{parsed\.summary\}/); // the review title is textContent (safe)
     expect(src).toContain("'Confirm delete'");
   });
 });
