@@ -1398,6 +1398,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const twoHand = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
   let twoHandGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
   let twoHandResizing = false; // Edit mode: a tile is being two-hand resized.
+  let twoHandResizeGrab: { p0: Vec; q0: Vec; off: Vec } | null = null;
   function handleTwoHand(hands: readonly (readonly { x: number; y: number }[])[], now: number): void {
     const w = viewport.clientWidth || innerWidth;
     const h = viewport.clientHeight || innerHeight;
@@ -1411,13 +1412,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (editBoard.editing) {
       if (r.started && pts) {
         const vpRect = viewport.getBoundingClientRect();
-        const midX = (pts.p.x + pts.q.x) / 2 + vpRect.left;
-        const midY = (pts.p.y + pts.q.y) / 2 + vpRect.top;
-        twoHandResizing = editBoard.pinchResize('start', 1, midX, midY);
+        const off = { x: vpRect.left, y: vpRect.top };
+        const a = { x: pts.p.x + off.x, y: pts.p.y + off.y };
+        const b = { x: pts.q.x + off.x, y: pts.q.y + off.y };
+        twoHandResizing = editBoard.pinchResize('start', a, b);
+        twoHandResizeGrab = twoHandResizing ? { p0: pts.p, q0: pts.q, off } : null;
         return;
       }
-      if (r.active && twoHandResizing) editBoard.pinchResize('move', r.transform.scale);
-      if (r.ended) { if (twoHandResizing) editBoard.pinchResize('end', r.transform.scale); twoHandResizing = false; }
+      if (r.active && twoHandResizing && twoHandResizeGrab) {
+        // Smoothed/clamped/dead-zoned current points: map the grab-time pinch
+        // points through the gesture transform, in the same client coords used
+        // at grab, so each grabbed corner tracks its finger.
+        const g = twoHandResizeGrab;
+        const p1 = applyTransform(r.transform, g.p0);
+        const q1 = applyTransform(r.transform, g.q0);
+        editBoard.pinchResize('move',
+          { x: p1.x + g.off.x, y: p1.y + g.off.y },
+          { x: q1.x + g.off.x, y: q1.y + g.off.y });
+      }
+      if (r.ended) { if (twoHandResizing) editBoard.pinchResize('end'); twoHandResizing = false; twoHandResizeGrab = null; }
       return;
     }
 

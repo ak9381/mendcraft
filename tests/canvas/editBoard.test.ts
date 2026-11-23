@@ -2,10 +2,55 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMove, clampResize, computeBounds, terminalCutPx,
   loadFrameLayout, saveFrameLayout, clearFrameLayout,
-  mountItemHandles, mountEditBoard,
+  mountItemHandles, mountEditBoard, resizeToCorners,
   MIN_ITEM_SIZE, MAX_ITEM_SIZE,
   type EditEl, type EditItemRef, type ItemLayout, type Rect, type PointerLikeEvent,
 } from '../../src/canvas/editBoard';
+
+// Akash's natural two-hand model: each hand grabs the NEAREST corner of the
+// tile and that corner tracks its finger. These are the pure-geometry proofs;
+// the stateful hit-test/commit path is exercised under mountEditBoard below.
+describe('resizeToCorners (A4-013/A4-014 two-hand anchored resize)', () => {
+  const box: Rect = { left: 100, top: 100, width: 200, height: 200 }; // corners (100,100)..(300,300)
+  const near = (a: number, b: number) => Math.abs(a - b) <= 2; // within 2px of the finger
+
+  it('grab top-left + bottom-right, pull apart → both grabbed corners follow the fingers', () => {
+    const r = resizeToCorners(box, { x: 100, y: 100 }, { x: 300, y: 300 }, { x: 80, y: 80 }, { x: 320, y: 320 });
+    expect(near(r.left, 80)).toBe(true);
+    expect(near(r.top, 80)).toBe(true);
+    expect(near(r.left + r.width, 320)).toBe(true);
+    expect(near(r.top + r.height, 320)).toBe(true);
+  });
+
+  it('grab top-right + bottom-left → the other diagonal tracks the fingers', () => {
+    const r = resizeToCorners(box, { x: 300, y: 100 }, { x: 100, y: 300 }, { x: 320, y: 80 }, { x: 80, y: 320 });
+    expect(near(r.left + r.width, 320)).toBe(true); // TR x
+    expect(near(r.top, 80)).toBe(true);             // TR y
+    expect(near(r.left, 80)).toBe(true);            // BL x
+    expect(near(r.top + r.height, 320)).toBe(true); // BL y
+  });
+
+  it('one hand still → only the moving corner moves, the still corner stays pinned', () => {
+    const r = resizeToCorners(box, { x: 100, y: 100 }, { x: 300, y: 300 }, { x: 70, y: 70 }, { x: 300, y: 300 });
+    expect(near(r.left, 70)).toBe(true);
+    expect(near(r.top, 70)).toBe(true);
+    expect(near(r.left + r.width, 300)).toBe(true); // bottom-right unchanged
+    expect(near(r.top + r.height, 300)).toBe(true);
+  });
+
+  it('both hands on the same (top) edge → that edge pair moves, width held', () => {
+    const r = resizeToCorners(box, { x: 100, y: 100 }, { x: 300, y: 100 }, { x: 100, y: 70 }, { x: 300, y: 70 });
+    expect(near(r.top, 70)).toBe(true);
+    expect(near(r.left, 100)).toBe(true);
+    expect(near(r.width, 200)).toBe(true);
+    expect(near(r.top + r.height, 300)).toBe(true); // bottom unchanged
+  });
+
+  it('no finger movement → the box is unchanged (a resting two-hand hold does nothing)', () => {
+    const r = resizeToCorners(box, { x: 100, y: 100 }, { x: 300, y: 300 }, { x: 100, y: 100 }, { x: 300, y: 300 });
+    expect(r).toEqual(box);
+  });
+});
 
 describe('clampMove', () => {
   const bounds: Rect = { left: 12, top: 12, width: 776, height: 576 };
@@ -401,27 +446,47 @@ describe('mountEditBoard', () => {
     expect(commits).toEqual([['f1', 'lamp-wiz-desk']]);
   });
 
-  it('pinchResize grabs the tile under the pinch, scales it, and commits via onItemCommit', () => {
+  it('A4-013: two-hand pinch grabs the tile under the midpoint, tracks corners, commits once', () => {
     const commits: Array<[string, string]> = [];
     const { ctl, editBtn, lamp, music } = setup((frameId, key) => commits.push([frameId, key]));
     ctl.setFocus('f1', true);
     // not editing yet -> refuses to grab
-    expect(ctl.pinchResize('start', 1, 100, 100)).toBe(false);
+    expect(ctl.pinchResize('start', { x: 100, y: 100 }, { x: 110, y: 110 })).toBe(false);
     editBtn.click();
     // give the two wrappers distinct screen rects to hit-test against
     const lampWrapper = lamp.parentElement!; lampWrapper.rect = { left: 0, top: 0, width: 300, height: 200 };
     const musicWrapper = music.parentElement!; musicWrapper.rect = { left: 0, top: 400, width: 300, height: 200 };
 
-    // a pinch over empty space (between the tiles) grabs nothing
-    expect(ctl.pinchResize('start', 1, 150, 320)).toBe(false);
+    // a pinch whose MIDPOINT lands over empty space (between the tiles) grabs nothing
+    expect(ctl.pinchResize('start', { x: 150, y: 300 }, { x: 150, y: 340 })).toBe(false);
 
-    // a pinch over the music tile grabs it and scales from its start size
-    expect(ctl.pinchResize('start', 1, 150, 500)).toBe(true);
+    // grab the music tile at its top-left (0,400) and bottom-right (300,600)
+    // corners, then pull them apart by 40px on each axis.
+    expect(ctl.pinchResize('start', { x: 0, y: 400 }, { x: 300, y: 600 })).toBe(true);
     const w0 = Number.parseFloat(musicWrapper.style.width!);
-    ctl.pinchResize('move', 1.3);
-    expect(Number.parseFloat(musicWrapper.style.width!)).toBeCloseTo(w0 * 1.3, 5);
+    const h0 = Number.parseFloat(musicWrapper.style.height!);
+    ctl.pinchResize('move', { x: -40, y: 360 }, { x: 340, y: 640 });
+    // both corners moved out 40px → width/height grow by 80 each (clamped to MAX).
+    expect(Number.parseFloat(musicWrapper.style.width!)).toBeCloseTo(Math.min(MAX_ITEM_SIZE.width, w0 + 80), 3);
+    expect(Number.parseFloat(musicWrapper.style.height!)).toBeCloseTo(Math.min(MAX_ITEM_SIZE.height, h0 + 80), 3);
     expect(commits).toHaveLength(0); // no commit mid-gesture
-    ctl.pinchResize('end', 1.3);
+    ctl.pinchResize('end');
     expect(commits).toEqual([['f1', 'music-speaker-1']]);
+  });
+
+  it('A4-013: one still hand holds its corner while the other corner tracks its finger', () => {
+    const { ctl, editBtn, music } = setup();
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const musicWrapper = music.parentElement!; musicWrapper.rect = { left: 0, top: 400, width: 300, height: 200 };
+    // grab TL(0,400) and BR(300,600); keep TL still, drag BR out to (340,640)
+    expect(ctl.pinchResize('start', { x: 0, y: 400 }, { x: 300, y: 600 })).toBe(true);
+    const w0 = Number.parseFloat(musicWrapper.style.width!);
+    const left0 = musicWrapper.style.left, top0 = musicWrapper.style.top;
+    ctl.pinchResize('move', { x: 0, y: 400 }, { x: 340, y: 640 });
+    // only the bottom-right corner moved out → grows by 40 on each axis from that corner
+    expect(Number.parseFloat(musicWrapper.style.width!)).toBeCloseTo(w0 + 40, 3);
+    expect(musicWrapper.style.left).toBe(left0); // top-left corner stayed pinned
+    expect(musicWrapper.style.top).toBe(top0);
   });
 });

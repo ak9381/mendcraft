@@ -49,11 +49,39 @@ export function clampResize(layout: ItemLayout, bounds: Rect, min: Size = MIN_IT
   };
 }
 
-/** Pure: resize a tile by a two-hand-pinch SPAN RATIO, anchored at its
- *  top-left corner (same corner the resize handle grows from), then clamped to
- *  [min,max] and within `bounds`. factor > 1 grows, < 1 shrinks. */
-export function resizeByScale(layout: ItemLayout, factor: number, bounds: Rect, min: Size = MIN_ITEM_SIZE, max: Size = MAX_ITEM_SIZE): ItemLayout {
-  return clampResize({ ...layout, width: layout.width * factor, height: layout.height * factor }, bounds, min, max);
+export interface XY { x: number; y: number }
+
+/** Pure: Akash's two-hand anchored resize. Each finger is assigned to the
+ *  NEAREST corner of the grab-time `box`; that corner then tracks its finger's
+ *  delta. Opposite corners → the box spans between the two fingers; same-side
+ *  corners → that shared edge moves (the other axis of each corner still
+ *  tracks its own finger); a still hand → only the other corner moves. Deltas
+ *  are frame-invariant, so callers can assign corners in client space and apply
+ *  the result to a tile's own local layout. No clamping here — pure geometry;
+ *  bounds/min/max are enforced by the caller via {@link clampResize}. */
+export function resizeToCorners(box: Rect, grabA: XY, grabB: XY, curA: XY, curB: XY): Rect {
+  const l = box.left, t = box.top, r = box.left + box.width, b = box.top + box.height;
+  const corners = { TL: { x: l, y: t }, TR: { x: r, y: t }, BL: { x: l, y: b }, BR: { x: r, y: b } } as const;
+  type Corner = keyof typeof corners;
+  const nearest = (p: XY): Corner => {
+    let best: Corner = 'TL', bd = Infinity;
+    for (const k of Object.keys(corners) as Corner[]) {
+      const c = corners[k], d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  };
+  const leftDx: number[] = [], rightDx: number[] = [], topDy: number[] = [], botDy: number[] = [];
+  const contribute = (k: Corner, dx: number, dy: number): void => {
+    (k === 'TL' || k === 'BL' ? leftDx : rightDx).push(dx);
+    (k === 'TL' || k === 'TR' ? topDy : botDy).push(dy);
+  };
+  contribute(nearest(grabA), curA.x - grabA.x, curA.y - grabA.y);
+  contribute(nearest(grabB), curB.x - grabB.x, curB.y - grabB.y);
+  const avg = (a: number[]): number => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+  const nl = l + avg(leftDx), nr = r + avg(rightDx), nt = t + avg(topDy), nb = b + avg(botDy);
+  const left = Math.min(nl, nr), right = Math.max(nl, nr), top = Math.min(nt, nb), bottom = Math.max(nt, nb);
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 /** Pure: how many px of a board's right edge the reserved terminal column
@@ -130,11 +158,16 @@ const pastSlop = (dx: number, dy: number, slop: number): boolean => Math.hypot(d
 
 export interface ItemHandles {
   getLayout(): ItemLayout;
-  /** Two-hand anchored resize: 'start' snapshots the current size, 'move'
-   *  scales it by the pinch span ratio (clamped, anchored top-left), 'end'
-   *  commits through the SAME onCommit path as the resize handle — so the
-   *  self-check re-runs on commit. Mouse/touch/hand handle drags are untouched. */
-  pinchResize(phase: 'start' | 'move' | 'end', factor: number): void;
+  /** Two-hand anchored corner resize. `pinchStart` freezes the current layout
+   *  as the grab box (and returns it); `pinchApply` sets a caller-computed
+   *  layout (clamped to bounds/min/max); `pinchEnd` commits it through the SAME
+   *  onCommit path as the resize handle — so the self-check re-runs on commit.
+   *  The controller does the corner geometry (see {@link resizeToCorners}) so
+   *  it can anchor corners in client space; these only apply/clamp/commit.
+   *  Mouse/touch/hand single-handle drags are untouched. */
+  pinchStart(): ItemLayout;
+  pinchApply(next: ItemLayout): void;
+  pinchEnd(): void;
   destroy(): void;
 }
 
@@ -213,22 +246,27 @@ export function mountItemHandles(
   resizeHandle.addEventListener('pointerup', onResizeEnd);
   resizeHandle.addEventListener('pointercancel', onResizeEnd);
 
-  let pinchStart: Size | null = null;
-  function pinchResize(phase: 'start' | 'move' | 'end', factor: number): void {
-    if (phase === 'start') {
-      pinchStart = { width: layout.width, height: layout.height };
-    } else if (phase === 'move' && pinchStart) {
-      layout = resizeByScale({ ...layout, width: pinchStart.width, height: pinchStart.height }, factor, opts.getBounds(), min, max);
-      apply();
-    } else if (phase === 'end' && pinchStart) {
-      pinchStart = null;
-      opts.onCommit?.(layout);
-    }
+  let pinching = false;
+  function pinchStart(): ItemLayout {
+    pinching = true;
+    return { ...layout };
+  }
+  function pinchApply(next: ItemLayout): void {
+    if (!pinching) return;
+    layout = clampResize(clampMove(next, opts.getBounds()), opts.getBounds(), min, max);
+    apply();
+  }
+  function pinchEnd(): void {
+    if (!pinching) return;
+    pinching = false;
+    opts.onCommit?.(layout);
   }
 
   return {
     getLayout: () => layout,
-    pinchResize,
+    pinchStart,
+    pinchApply,
+    pinchEnd,
     destroy() {
       moveHandle.removeEventListener('pointerdown', onMoveDown);
       moveHandle.removeEventListener('pointermove', onMoveMove);
@@ -307,11 +345,13 @@ export interface EditBoardController {
   readonly editing: boolean;
   /** Call whenever the focused frame (or its availability) changes. */
   setFocus(frameId: string | null, available: boolean): void;
-  /** Two-hand anchored tile resize while editing. 'start' hit-tests the tile
-   *  under (clientX,clientY) and grabs it (returns false if none / not
-   *  editing); 'move' scales that tile by the pinch span `factor`; 'end'
-   *  commits. One tile per gesture; returns whether a tile is engaged. */
-  pinchResize(phase: 'start' | 'move' | 'end', factor: number, clientX?: number, clientY?: number): boolean;
+  /** Two-hand anchored tile resize while editing, in Akash's corner-tracking
+   *  model. 'start' hit-tests the tile under the pinch midpoint and grabs it
+   *  (returns false if none / not editing); 'move' moves whichever corner(s)
+   *  each finger grabbed to follow the fingers ({@link resizeToCorners}); 'end'
+   *  commits. `a`/`b` are the two pinch points in client coords. One tile per
+   *  gesture; returns whether a tile is engaged. */
+  pinchResize(phase: 'start' | 'move' | 'end', a?: XY, b?: XY): boolean;
   destroy(): void;
 }
 
@@ -342,7 +382,10 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
   let editing = false;
   // The tiles mounted in the current edit canvas, for two-hand pinch hit-test.
   let mounted: Array<{ wrapper: EditEl; handles: ItemHandles }> = [];
-  let pinchTarget: ItemHandles | null = null;
+  // The tile grabbed by a two-hand pinch, with its grab-time client box, the
+  // two grab points, and the frozen local layout — so each finger's corner can
+  // track in client space and apply to the tile's own local coordinates.
+  let pinchTarget: { handles: ItemHandles; grabBox: Rect; grabA: XY; grabB: XY; local0: ItemLayout } | null = null;
 
   const editBtn = opts.createElement('button');
   editBtn.setAttribute('type', 'button');
@@ -483,24 +526,37 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
       applyFrame();
       renderButtons();
     },
-    pinchResize(phase, factor, clientX, clientY) {
+    pinchResize(phase, a, b) {
       if (phase === 'start') {
         pinchTarget = null;
-        if (!editing || clientX === undefined || clientY === undefined) return false;
+        if (!editing || !a || !b) return false;
+        const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
         for (const m of mounted) {
           const r = m.wrapper.getBoundingClientRect();
-          if (clientX >= r.left && clientX <= r.left + r.width && clientY >= r.top && clientY <= r.top + r.height) {
-            pinchTarget = m.handles;
+          if (midX >= r.left && midX <= r.left + r.width && midY >= r.top && midY <= r.top + r.height) {
+            pinchTarget = { handles: m.handles, grabBox: r, grabA: { ...a }, grabB: { ...b }, local0: m.handles.pinchStart() };
             break;
           }
         }
-        if (!pinchTarget) return false;
-        pinchTarget.pinchResize('start', factor);
-        return true;
+        return !!pinchTarget;
       }
       if (!pinchTarget) return false;
-      pinchTarget.pinchResize(phase, factor);
-      if (phase === 'end') pinchTarget = null;
+      if (phase === 'move') {
+        if (!a || !b) return true;
+        // Corner geometry in client space, applied as frame-invariant edge
+        // deltas to the tile's own (local) grab-time layout.
+        const nc = resizeToCorners(pinchTarget.grabBox, pinchTarget.grabA, pinchTarget.grabB, a, b);
+        const gb = pinchTarget.grabBox, l0 = pinchTarget.local0;
+        const nl = l0.left + (nc.left - gb.left);
+        const nr = l0.left + l0.width + (nc.left + nc.width - (gb.left + gb.width));
+        const nt = l0.top + (nc.top - gb.top);
+        const nb = l0.top + l0.height + (nc.top + nc.height - (gb.top + gb.height));
+        pinchTarget.handles.pinchApply({ left: Math.min(nl, nr), top: Math.min(nt, nb), width: Math.abs(nr - nl), height: Math.abs(nb - nt) });
+        return true;
+      }
+      // end
+      pinchTarget.handles.pinchEnd();
+      pinchTarget = null;
       return true;
     },
     destroy() {
