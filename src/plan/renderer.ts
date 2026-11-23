@@ -408,7 +408,7 @@ export function createPlanRenderer(
     if (!fitted) {
       fitView();
       fitted = true;
-    } else if (!toolBusy && !panning && boundsSig() !== fitSig) {
+    } else if (!toolBusy && !liveGesture && !panning && boundsSig() !== fitSig) {
       // A discrete edit (voice/text/keyboard) changed the overall size — reframe
       // so the result stays fully visible (e.g. stretching the shared wall to
       // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
@@ -743,6 +743,8 @@ export function createPlanRenderer(
   let panning: { x: number; y: number } | null = null;
   // A tool gesture (drag/draw) is in flight — suppress auto re-fit meanwhile.
   let toolBusy = false;
+  /** A two-hand edit is live (canvas plan board): hold the framing still. */
+  let liveGesture = false;
 
   svg.addEventListener('mousedown', (e) => {
     // SVG isn't focusable, so a canvas click's default action blurs to <body>
@@ -991,6 +993,9 @@ export function createPlanRenderer(
       fitted = true;
       render();
     },
+    // A two-hand edit is live: like a tool drag, never reframe under the hands
+    // (the hands' world points would drift and the edit would run away).
+    setLiveGesture(on) { liveGesture = on; if (!on) render(); },
     // Pan by a screen-pixel delta — the translation leg of the two-hand pinch.
     panByPx(dx, dy) {
       originX += dx;

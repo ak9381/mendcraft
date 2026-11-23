@@ -24,7 +24,8 @@ import {
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
 import { createPlanRenderer } from '../plan/renderer';
-import { beginTwoHandSession, type TwoHandSession } from '../plan/twoHandSession';
+import { beginTwoHandDraw, beginTwoHandSession, type TwoHandSession } from '../plan/twoHandSession';
+import { snapToGrid } from '../plan/snap';
 import type { ViewportHandle } from '../core/controller';
 import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
@@ -127,13 +128,15 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         // Both hands on the selected object's handles = a two-hand EDIT (wall
         // or room stretch, fixture resize or twist), one undo step on release
         // and rolled back if a hand is lost. Anything else zooms/pans.
-        if (phase === 'start' && a && b) { edit = beginTwoHandSession(controller, view, a, b); if (edit) { two = null; host.dataset.twoHandEdit = edit.kind; return; } }
+        if (phase === 'start' && a && b) {
+          const tool = host.querySelector<HTMLElement>('.mc-palette .active[data-tool]')?.dataset.tool;
+          edit = tool === 'wall' || tool === 'room' ? beginTwoHandDraw(controller, view, tool, (p) => snapToGrid(p)) : beginTwoHandSession(controller, view, a, b); if (edit) { two = null; view.setLiveGesture?.(true); host.dataset.twoHandEdit = edit.kind; return; } }
         if (edit) {
           // Edits follow the RAW hands only: the smoothed points carry no rotation
           // and keep coasting through the release grace frames, which would
           // un-twist the fixture just before it commits.
           if (phase === 'move' && raw) { edit.move(raw.a, raw.b); host.dataset.twoHandEdit = edit.kind; }
-          else if (phase === 'end' || phase === 'cancel') { if (phase === 'end') edit.end(); else edit.cancel();  edit = null; delete host.dataset.twoHandEdit; }
+          else if (phase === 'end' || phase === 'cancel') { if (phase === 'end') edit.end(); else edit.cancel(); view.setLiveGesture?.(false); edit = null; delete host.dataset.twoHandEdit; }
           return;
         }
         if (phase === 'end' || phase === 'cancel' || !a || !b) { two = null; return; }

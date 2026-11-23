@@ -122,6 +122,8 @@ export interface ViewportHandle {
   zoomAt?(factor: number, clientX: number, clientY: number): void;
   /** Pan the 2D view by a screen-pixel delta (two-hand pinch translation). */
   panByPx?(dx: number, dy: number): void;
+  /** Hold the auto-framing still while a live two-hand edit runs. */
+  setLiveGesture?(on: boolean): void;
   /** Client (CSS px) → world coordinates, for the two-hand edit planner. */
   toWorld?(clientX: number, clientY: number): { x: number; y: number };
   /** Current px-per-world-unit of the 2D view (grab radius in mm = px/scale). */

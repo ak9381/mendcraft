@@ -53,7 +53,7 @@ export function bothOnFixture(doc: PlanDoc, id: string, p: Point, q: Point, slac
 }
 
 export interface TwoHandSession {
-  readonly kind: Mode['kind'] | 'twist-or-resize';
+  readonly kind: Mode['kind'] | 'twist-or-resize' | 'draw-wall' | 'draw-room';
   move(a: Point, b: Point): void;
   /** Release: the live steps become one undoable op. */
   end(): void;
@@ -126,5 +126,60 @@ export function beginTwoHandSession(ctl: SessionCtl, view: SessionView, a: Point
       rollback();
       view.render();
     },
+  };
+}
+
+// ---- two-hand DRAW (B-030 wall, B-035 room): with the Wall or Room tool
+// active, two pinches on the floor stretch a new wall / room between the
+// hands, live, committed as ONE add op on release (nothing on a lost hand).
+
+const MIN_DRAW_MM = 100;
+const SNAP_45_DEG = 8;
+
+/** Grid-snap both ends; then if the wall is within 8° of a multiple of 45°,
+ *  lock it there (the wall tool's ortho/45 feel). */
+export function wallBetween(p: Point, q: Point, grid = (v: Point) => v): { a: Point; b: Point } {
+  const a = grid(p);
+  let b = grid(q);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  const step = Math.PI / 4;
+  const snapped = Math.round(ang / step) * step;
+  if (len > 0 && Math.abs(ang - snapped) <= (SNAP_45_DEG * Math.PI) / 180) {
+    b = { x: Math.round(a.x + len * Math.cos(snapped)), y: Math.round(a.y + len * Math.sin(snapped)) };
+  }
+  return { a, b };
+}
+
+/** The axis-aligned room whose opposite corners are the two hands. */
+export function roomBetween(p: Point, q: Point, grid = (v: Point) => v): { x: number; y: number; w: number; h: number } {
+  const a = grid(p), b = grid(q);
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+}
+
+export function beginTwoHandDraw(
+  ctl: SessionCtl, view: SessionView, tool: 'wall' | 'room', grid: (p: Point) => Point = (v) => v,
+): TwoHandSession | null {
+  if (!view.toWorld) return null;
+  let applied = 0;
+  let done = false;
+  const rollback = (): void => { for (; applied > 0; applied--) ctl.applyOp({ op: 'undo' }); };
+  return {
+    kind: tool === 'wall' ? 'draw-wall' : 'draw-room',
+    move(pa, pb) {
+      if (done) return;
+      const p = view.toWorld!(pa.x, pa.y), q = view.toWorld!(pb.x, pb.y);
+      rollback(); // the previous frame's preview: one live op at a time
+      if (tool === 'wall') {
+        const w = wallBetween(p, q, grid);
+        if (Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y) >= MIN_DRAW_MM && ctl.applyOp({ op: 'add_wall', x1: w.a.x, y1: w.a.y, x2: w.b.x, y2: w.b.y }).ok) applied++;
+      } else {
+        const r = roomBetween(p, q, grid);
+        if (r.w >= MIN_DRAW_MM && r.h >= MIN_DRAW_MM && ctl.applyOp({ op: 'add_room', ...r }).ok) applied++;
+      }
+      view.render();
+    },
+    end() { done = true; view.render(); }, // the live op IS the one undo step
+    cancel() { if (done) return; done = true; rollback(); view.render(); },
   };
 }
