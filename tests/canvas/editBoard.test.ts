@@ -281,6 +281,48 @@ describe('mountItemHandles', () => {
     move.fire('pointermove', { clientX: 900, clientY: 900 }); // ignored: no drag in progress
     expect(item.style.left).toBe(before);
   });
+
+  it('A3-006: a pointercancel (hand lost mid-drag) puts the tile back and commits nothing', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    const commits: ItemLayout[] = [];
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds, onCommit: (l) => commits.push(l) });
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 300, clientY: 250 });
+    expect(item.style.left).toBe('300px');
+    move.fire('pointercancel', { clientX: 300, clientY: 250 });
+    expect(item.style.left).toBe('100px');
+    expect(item.style.top).toBe('100px');
+    resize.fire('pointerdown', { clientX: 400, clientY: 320 });
+    resize.fire('pointermove', { clientX: 500, clientY: 420 });
+    expect(item.style.width).toBe('400px');
+    resize.fire('pointercancel', { clientX: 500, clientY: 420 });
+    expect(item.style.width).toBe('300px');
+    expect(item.style.height).toBe('220px');
+    expect(commits).toHaveLength(0);
+  });
+
+  it('A3-006: Escape mid-drag aborts the same way (mouse/keyboard parity)', () => {
+    const keyListeners: Array<(e: { key: string; preventDefault(): void; stopPropagation(): void }) => void> = [];
+    const g = globalThis as unknown as Record<string, unknown>;
+    const had = { add: g.addEventListener, rm: g.removeEventListener };
+    g.addEventListener = (_t: string, fn: (typeof keyListeners)[number]) => keyListeners.push(fn);
+    g.removeEventListener = (_t: string, fn: (typeof keyListeners)[number]) => { const i = keyListeners.indexOf(fn); if (i >= 0) keyListeners.splice(i, 1); };
+    try {
+      const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+      const move = makeHandle(); const resize = makeHandle();
+      const commits: ItemLayout[] = [];
+      mountItemHandles(item, move, resize, initial, { getBounds: () => bounds, onCommit: (l) => commits.push(l) });
+      move.fire('pointerdown', { clientX: 100, clientY: 100 });
+      move.fire('pointermove', { clientX: 300, clientY: 250 });
+      expect(keyListeners).toHaveLength(1);
+      keyListeners[0]({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+      expect(item.style.left).toBe('100px');
+      expect(keyListeners).toHaveLength(0);
+      move.fire('pointerup', { clientX: 300, clientY: 250 });
+      expect(commits).toHaveLength(0);
+    } finally { g.addEventListener = had.add; g.removeEventListener = had.rm; }
+  });
 });
 
 // ---------------------------------------------------------- mountEditBoard

@@ -233,6 +233,7 @@ export function mountItemHandles(
   let moveStart: { x: number; y: number; left: number; top: number; engaged: boolean } | null = null;
   function onMoveDown(e: PointerLikeEvent): void {
     moveStart = { x: e.clientX, y: e.clientY, left: layout.left, top: layout.top, engaged: false };
+    armEscape();
     if (e.pointerId != null) moveHandle.setPointerCapture?.(e.pointerId);
   }
   function onMoveMove(e: PointerLikeEvent): void {
@@ -248,7 +249,17 @@ export function mountItemHandles(
     if (!moveStart) return;
     const engaged = moveStart.engaged;
     moveStart = null;
+    disarmEscape();
     if (engaged) opts.onCommit?.(layout);
+  }
+  /** A3-006: pointercancel (hand lost mid-drag, Hands off) or Escape aborts —
+   *  the tile goes back to where it was grabbed and nothing is committed. */
+  function onMoveCancel(): void {
+    if (!moveStart) return;
+    layout = { ...layout, left: moveStart.left, top: moveStart.top };
+    moveStart = null;
+    disarmEscape();
+    apply();
   }
 
   const resizeHandles: DirectionedHandle[] = Array.isArray(resizeHandle) ? resizeHandle : [{ el: resizeHandle, dir: 'se' }];
@@ -256,6 +267,7 @@ export function mountItemHandles(
   let resizeStart: { x: number; y: number; box: ItemLayout; dir: ResizeHandleDir; el: HandleElement; engaged: boolean } | null = null;
   function onResizeDown(h: DirectionedHandle, e: PointerLikeEvent): void {
     resizeStart = { x: e.clientX, y: e.clientY, box: { ...layout }, dir: h.dir, el: h.el, engaged: false };
+    armEscape();
     if (e.pointerId != null) h.el.setPointerCapture?.(e.pointerId);
   }
   function onResizeMove(e: PointerLikeEvent): void {
@@ -271,13 +283,38 @@ export function mountItemHandles(
     if (!resizeStart) return;
     const engaged = resizeStart.engaged;
     resizeStart = null;
+    disarmEscape();
     if (engaged) opts.onCommit?.(layout);
+  }
+  function onResizeCancel(): void {
+    if (!resizeStart) return;
+    layout = { ...resizeStart.box };
+    resizeStart = null;
+    disarmEscape();
+    apply();
+  }
+
+  // Escape mid-drag = the mouse/keyboard way to abort (same as losing the hand).
+  const keyHost = (globalThis as { addEventListener?: typeof addEventListener; removeEventListener?: typeof removeEventListener });
+  let escArmed = false;
+  function onEscape(e: KeyboardEvent): void {
+    if (e.key !== 'Escape' || (!moveStart && !resizeStart)) return;
+    e.preventDefault(); e.stopPropagation();
+    onMoveCancel(); onResizeCancel();
+  }
+  function armEscape(): void {
+    if (escArmed || !keyHost.addEventListener) return;
+    keyHost.addEventListener('keydown', onEscape, true); escArmed = true;
+  }
+  function disarmEscape(): void {
+    if (!escArmed) return;
+    keyHost.removeEventListener?.('keydown', onEscape, true); escArmed = false;
   }
 
   moveHandle.addEventListener('pointerdown', onMoveDown);
   moveHandle.addEventListener('pointermove', onMoveMove);
   moveHandle.addEventListener('pointerup', onMoveEnd);
-  moveHandle.addEventListener('pointercancel', onMoveEnd);
+  moveHandle.addEventListener('pointercancel', onMoveCancel);
   const resizeDownFns = new Map<HandleElement, (e: PointerLikeEvent) => void>();
   for (const h of resizeHandles) {
     const down = (e: PointerLikeEvent): void => onResizeDown(h, e);
@@ -285,7 +322,7 @@ export function mountItemHandles(
     h.el.addEventListener('pointerdown', down);
     h.el.addEventListener('pointermove', onResizeMove);
     h.el.addEventListener('pointerup', onResizeEnd);
-    h.el.addEventListener('pointercancel', onResizeEnd);
+    h.el.addEventListener('pointercancel', onResizeCancel);
   }
 
   let pinching = false;
@@ -313,13 +350,14 @@ export function mountItemHandles(
       moveHandle.removeEventListener('pointerdown', onMoveDown);
       moveHandle.removeEventListener('pointermove', onMoveMove);
       moveHandle.removeEventListener('pointerup', onMoveEnd);
-      moveHandle.removeEventListener('pointercancel', onMoveEnd);
+      moveHandle.removeEventListener('pointercancel', onMoveCancel);
+      disarmEscape();
       for (const h of resizeHandles) {
         const down = resizeDownFns.get(h.el);
         if (down) h.el.removeEventListener('pointerdown', down);
         h.el.removeEventListener('pointermove', onResizeMove);
         h.el.removeEventListener('pointerup', onResizeEnd);
-        h.el.removeEventListener('pointercancel', onResizeEnd);
+        h.el.removeEventListener('pointercancel', onResizeCancel);
       }
     },
   };
