@@ -54,6 +54,7 @@ class FakeNode {
     return true;
   }
   click() { this.dispatchEvent({ type: 'click' }); }
+  contains(n: unknown): boolean { return n === this || this.children.some((c) => c.contains(n)); }
   focus() { this.focused = true; }
   focused = false;
   remove() { /* no-op */ }
@@ -71,9 +72,13 @@ function installFakeDom() {
     body: null, activeElement: null,
     addEventListener: (t: string, fn: (e: unknown) => void) => { if (t === 'keydown') docKeys.push(fn); },
     removeEventListener: (t: string, fn: (e: unknown) => void) => { const i = docKeys.indexOf(fn); if (i >= 0) docKeys.splice(i, 1); },
-    pressKey(key: string) { let prevented = false; const e = { key, get defaultPrevented() { return prevented; }, preventDefault() { prevented = true; } }; for (const fn of [...docKeys]) fn(e); return prevented; },
+    layers: [] as unknown[],
+    querySelectorAll() { return (g.document as { layers: unknown[] }).layers; },
+    pressKey(key: string) { let prevented = false; let stopped = false; const e = { key, get defaultPrevented() { return prevented; }, preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; } }; for (const fn of [...docKeys]) { fn(e); if (stopped) break; } return prevented; },
   };
   g.window = globalThis;
+  const d = g.document as { addEventListener: unknown; removeEventListener: unknown };
+  g.addEventListener = d.addEventListener; g.removeEventListener = d.removeEventListener;
 }
 
 function panelParts(panel: ReferencePanel) {
@@ -111,6 +116,23 @@ describe('browser reference panel hand path', () => {
     panel.open();
     expect(doc.pressKey('Enter')).toBe(false);
     expect(panel.isOpen()).toBe(true);
+    expect(doc.pressKey('Escape')).toBe(true);
+    expect(panel.isOpen()).toBe(false);
+    panel.dispose();
+  });
+
+  it('Escape yields to a text field elsewhere and to a layer drawn above the panel', () => {
+    const panel = createReferencePanel();
+    const doc = (globalThis as unknown as { document: { pressKey(k: string): boolean; activeElement: unknown; layers: unknown[] } }).document;
+    panel.open();
+    doc.activeElement = { closest: (sel: string) => (sel.includes('input') ? {} : null) }; // the command box, outside the panel
+    expect(doc.pressKey('Escape')).toBe(false);
+    expect(panel.isOpen()).toBe(true);
+    doc.activeElement = null;
+    doc.layers = [{ hidden: false, getClientRects: () => [1] }]; // an open menu above
+    expect(doc.pressKey('Escape')).toBe(false);
+    expect(panel.isOpen()).toBe(true);
+    doc.layers = [];
     expect(doc.pressKey('Escape')).toBe(true);
     expect(panel.isOpen()).toBe(false);
     panel.dispose();

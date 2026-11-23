@@ -341,15 +341,24 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     currentUrl = '';
   }
 
-  // Escape closes the panel when focus is in it or nowhere in particular (keyboard parity with ✕).
+  // Escape closes the panel — the topmost layer — and nothing else: it runs in
+  // the capture phase so the plan underneath never also sees it (a wall being
+  // drawn stays in progress). It yields to layers drawn above it (menus, the
+  // hand picker, modal dialogs) and to a text field elsewhere that owns Escape.
+  const LAYERS_ABOVE = '[role="menu"], .mc-hand-select, [aria-modal="true"]';
   const onKey = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || root.hidden || e.defaultPrevented) return;
-    const a = document.activeElement;
-    if (a && a !== document.body && !root.contains(a)) return;
+    const a = document.activeElement as HTMLElement | null;
+    if (a && !root.contains(a) && a.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    const above = typeof document.querySelectorAll === 'function'
+      ? [...document.querySelectorAll<HTMLElement>(LAYERS_ABOVE)].some((el) => !root.contains(el) && !el.hidden && el.getClientRects?.().length > 0)
+      : false;
+    if (above) return;
     e.preventDefault();
+    e.stopImmediatePropagation();
     close();
   };
-  document.addEventListener('keydown', onKey);
+  window.addEventListener('keydown', onKey, true);
 
   return {
     element: root,
@@ -358,6 +367,6 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
     toggle() { root.hidden ? open() : close(); },
     isOpen: () => !root.hidden,
     runRecipe,
-    dispose() { clearTimer(); if (teacher) teacher.stop(); document.removeEventListener('keydown', onKey); root.remove(); },
+    dispose() { clearTimer(); if (teacher) teacher.stop(); window.removeEventListener('keydown', onKey, true); root.remove(); },
   };
 }
