@@ -23,6 +23,12 @@ import { CAMERA_LOST_TEACH } from './failLines';
 import type { DeviceRef } from './deviceCommands';
 import type { Pt } from '../input/handLogic';
 
+/** Model output (Gemini/Nano summary) and user text land in innerHTML here —
+ *  escape them so a summary can never inject markup or handlers. */
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
 export interface TeachPanelOptions {
   devices(): DeviceRef[];
   engines?: GestureActionEngines;
@@ -149,7 +155,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
         if (result.status === 'retry' && result.reason) {
           if (retries >= RETRY_CAP) break; // stop fighting it — move on with what we have
           retries++;
-          show(`<p>${result.reason}</p>`);
+          show(`<p>${esc(result.reason)}</p>`);
           await wait(1200);
           alive(my);
           continue;
@@ -181,22 +187,22 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     const parsed = await resolveGestureAction(text, opts.devices(), opts.engines);
     alive(my);
     if (!parsed) {
-      show(`<p>I couldn't turn “${text}” into a canvas action. Try something like “save the canvas”.</p>`);
+      show(`<p>I couldn't turn “${esc(text)}” into a canvas action. Try something like “save the canvas”.</p>`);
       actions.innerHTML = '<button class="mc-btn" data-act="close">Close</button>';
       panel.querySelector('[data-act=close]')!.addEventListener('click', close);
       return;
     }
     const conflict = builtinConflict(frames, result.kind);
     const conflictLine = conflict
-      ? `<p class="mc-teach-conflict">This looks like the built-in “${conflict.label}” (${conflict.does}). Saving will use yours instead when it matches confidently.</p>`
+      ? `<p class="mc-teach-conflict">This looks like the built-in “${esc(conflict.label)}” (${esc(conflict.does)}). Saving will use yours instead when it matches confidently.</p>`
       : '';
     const engineLabel = parsed.engine === 'rules' ? 'Rules · on device' : parsed.engine === 'nano' ? 'Nano · on device' : 'Gemini · cloud';
     const proposal = createSurfaceProposal(`teach-${Date.now()}`, parsed.engine === 'rules' ? 'rules' : parsed.engine, parsed.summary, [], () => {});
     const card = document.createElement('article');
     card.className = 'mc-proposal is-waiting mc-teach-proposal';
     card.innerHTML = `
-      <header><strong>Teach: ${parsed.summary}</strong><span class="mc-proposal-engine">${engineLabel}</span></header>
-      <p>Your gesture → <strong>${parsed.summary}</strong></p>
+      <header><strong>Teach: ${esc(parsed.summary)}</strong><span class="mc-proposal-engine">${engineLabel}</span></header>
+      <p>Your gesture → <strong>${esc(parsed.summary)}</strong></p>
       ${conflictLine}
       <div class="mc-proposal-actions">
         <button class="mc-btn mc-proposal-drop" type="button">Reject</button>
@@ -269,17 +275,48 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     const render = (): void => {
       show(gestures.length
         ? `<ul class="mc-teach-list">${gestures.map((g) => `
-            <li data-id="${g.id}"><strong>${g.name}</strong> → ${g.actionSummary}
-              <span class="mc-teach-meter" data-meter="${g.id}"></span>
-              <button class="mc-btn" data-act="test" data-id="${g.id}">Test</button>
-              <button class="mc-btn" data-act="rename" data-id="${g.id}">Rename</button>
-              <button class="mc-btn" data-act="delete" data-id="${g.id}">Delete</button>
+            <li data-id="${esc(g.id)}"><strong class="mc-teach-name">${esc(g.name)}</strong> → ${esc(g.actionSummary)}
+              <span class="mc-teach-meter" data-meter="${esc(g.id)}"></span>
+              <button class="mc-btn" data-act="test" data-id="${esc(g.id)}">Test</button>
+              <button class="mc-btn" data-act="rename" data-id="${esc(g.id)}">Rename</button>
+              <button class="mc-btn" data-act="delete" data-id="${esc(g.id)}">Delete</button>
             </li>`).join('')}</ul>`
         : '<p>No custom gestures yet.</p>');
-      body.querySelectorAll<HTMLButtonElement>('[data-act=delete]').forEach((btn) => btn.addEventListener('click', () => void remove(btn.dataset.id!).then(render)));
+      // Delete asks once (a stray pinch must not wipe a taught gesture):
+      // the first press arms "Confirm delete" for 3s, the second deletes.
+      body.querySelectorAll<HTMLButtonElement>('[data-act=delete]').forEach((btn) => {
+        let armedTimer: ReturnType<typeof setTimeout> | null = null;
+        btn.addEventListener('click', () => {
+          if (!armedTimer) {
+            btn.textContent = 'Confirm delete';
+            btn.classList.add('is-armed');
+            armedTimer = setTimeout(() => { armedTimer = null; btn.textContent = 'Delete'; btn.classList.remove('is-armed'); }, 3000);
+            return;
+          }
+          clearTimeout(armedTimer); armedTimer = null;
+          void remove(btn.dataset.id!).then(render);
+        });
+      });
+      // Inline rename (no native prompt(): a modal a hand can't reach or close).
       body.querySelectorAll<HTMLButtonElement>('[data-act=rename]').forEach((btn) => btn.addEventListener('click', () => {
-        const name = prompt('Rename gesture', gestures.find((g) => g.id === btn.dataset.id)?.name);
-        if (name) void rename(btn.dataset.id!, name).then(render);
+        const id = btn.dataset.id!;
+        const li = btn.closest('li');
+        const nameEl = li?.querySelector('.mc-teach-name');
+        if (!li || !nameEl || li.querySelector('.mc-teach-rename')) return;
+        const form = document.createElement('form');
+        form.className = 'mc-teach-rename';
+        form.innerHTML = `<input type="text" aria-label="New gesture name" /><button class="mc-btn primary" type="submit">Save</button><button class="mc-btn" type="button" data-act="rename-cancel">Cancel</button>`;
+        const input = form.querySelector('input')!;
+        input.value = gestures.find((g) => g.id === id)?.name ?? '';
+        nameEl.replaceWith(form);
+        input.focus();
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const name = input.value.trim();
+          if (name) void rename(id, name).then(render); else render();
+        });
+        form.querySelector('[data-act=rename-cancel]')!.addEventListener('click', () => render());
+        input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); render(); } });
       }));
       body.querySelectorAll<HTMLButtonElement>('[data-act=test]').forEach((btn) => btn.addEventListener('click', () => void testGesture(btn.dataset.id!)));
     };

@@ -28,3 +28,15 @@ describe('A7-008/A7-011/A7-007 Escape closes the aria-modal teach dialog and Reg
     expect(scan).toBeLessThan(guard);
   });
 });
+
+describe('C093/C095/C097 teach list: no native prompt, escaped names, confirm-before-delete', () => {
+  it('source guards (walked in the browser: hand rename inline, <img onerror> name stays text, delete needs two presses)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/teachPanel.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/\bprompt\(/);
+    expect(src).toMatch(/\$\{esc\(g\.name\)\}/);
+    expect(src).toMatch(/\$\{esc\(parsed\.summary\)\}/);
+    expect(src).not.toMatch(/\$\{parsed\.summary\}/);
+    expect(src).toContain("'Confirm delete'");
+  });
+});
