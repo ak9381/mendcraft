@@ -118,7 +118,15 @@ export interface MountHandlesOptions {
    *  since the terminal column can open/close mid-session. */
   getBounds(): Rect;
   onCommit?(layout: ItemLayout): void;
+  /** Accidental-touch guard: a move/resize does nothing (and never commits)
+   *  until the pointer has travelled past this many px from the pointerdown —
+   *  so a tremor or a brush against a tile in Edit mode can't nudge it. Kept in
+   *  step with handPointer's 6px drag threshold (see A4-018). */
+  engageSlopPx?: number;
 }
+
+/** True once a pointer has moved past the engage slop from its down point. */
+const pastSlop = (dx: number, dy: number, slop: number): boolean => Math.hypot(dx, dy) > slop;
 
 export interface ItemHandles {
   getLayout(): ItemLayout;
@@ -144,6 +152,7 @@ export function mountItemHandles(
   let layout: ItemLayout = { ...initial };
   const min = opts.min ?? MIN_ITEM_SIZE;
   const max = opts.max ?? MAX_ITEM_SIZE;
+  const slop = opts.engageSlopPx ?? 6;
 
   function apply(): void {
     item.style.left = `${layout.left}px`;
@@ -153,36 +162,46 @@ export function mountItemHandles(
   }
   apply();
 
-  let moveStart: { x: number; y: number; left: number; top: number } | null = null;
+  let moveStart: { x: number; y: number; left: number; top: number; engaged: boolean } | null = null;
   function onMoveDown(e: PointerLikeEvent): void {
-    moveStart = { x: e.clientX, y: e.clientY, left: layout.left, top: layout.top };
+    moveStart = { x: e.clientX, y: e.clientY, left: layout.left, top: layout.top, engaged: false };
     if (e.pointerId != null) moveHandle.setPointerCapture?.(e.pointerId);
   }
   function onMoveMove(e: PointerLikeEvent): void {
     if (!moveStart) return;
+    if (!moveStart.engaged) {
+      if (!pastSlop(e.clientX - moveStart.x, e.clientY - moveStart.y, slop)) return;
+      moveStart.engaged = true;
+    }
     layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x), top: moveStart.top + (e.clientY - moveStart.y) }, opts.getBounds());
     apply();
   }
   function onMoveEnd(): void {
     if (!moveStart) return;
+    const engaged = moveStart.engaged;
     moveStart = null;
-    opts.onCommit?.(layout);
+    if (engaged) opts.onCommit?.(layout);
   }
 
-  let resizeStart: { x: number; y: number; width: number; height: number } | null = null;
+  let resizeStart: { x: number; y: number; width: number; height: number; engaged: boolean } | null = null;
   function onResizeDown(e: PointerLikeEvent): void {
-    resizeStart = { x: e.clientX, y: e.clientY, width: layout.width, height: layout.height };
+    resizeStart = { x: e.clientX, y: e.clientY, width: layout.width, height: layout.height, engaged: false };
     if (e.pointerId != null) resizeHandle.setPointerCapture?.(e.pointerId);
   }
   function onResizeMove(e: PointerLikeEvent): void {
     if (!resizeStart) return;
+    if (!resizeStart.engaged) {
+      if (!pastSlop(e.clientX - resizeStart.x, e.clientY - resizeStart.y, slop)) return;
+      resizeStart.engaged = true;
+    }
     layout = clampResize({ ...layout, width: resizeStart.width + (e.clientX - resizeStart.x), height: resizeStart.height + (e.clientY - resizeStart.y) }, opts.getBounds(), min, max);
     apply();
   }
   function onResizeEnd(): void {
     if (!resizeStart) return;
+    const engaged = resizeStart.engaged;
     resizeStart = null;
-    opts.onCommit?.(layout);
+    if (engaged) opts.onCommit?.(layout);
   }
 
   moveHandle.addEventListener('pointerdown', onMoveDown);

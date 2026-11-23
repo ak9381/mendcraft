@@ -148,6 +148,39 @@ describe('mountItemHandles', () => {
     expect(commits).toEqual([{ left: 140, top: 100, width: 300, height: 220 }]);
   });
 
+  it('A4-018: a sub-slop brush/tremor never moves or commits the tile (accidental-touch guard)', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    const commits: ItemLayout[] = [];
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds, onCommit: (l) => commits.push(l) });
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 103, clientY: 102 }); // 3.6px — below the engage slop
+    expect(item.style.left).toBe('100px'); // unchanged: a tremor/brush is ignored
+    expect(item.style.top).toBe('100px');
+    move.fire('pointerup', { clientX: 103, clientY: 102 });
+    expect(commits).toHaveLength(0); // never engaged → nothing to commit
+
+    // a deliberate move past the slop engages and then tracks the full delta
+    move.fire('pointerdown', { clientX: 100, clientY: 100 });
+    move.fire('pointermove', { clientX: 120, clientY: 100 }); // 20px — past slop
+    expect(item.style.left).toBe('120px');
+    move.fire('pointerup', { clientX: 120, clientY: 100 });
+    expect(commits).toEqual([{ left: 120, top: 100, width: 300, height: 220 }]);
+  });
+
+  it('A4-018: a sub-slop resize nudge never changes the size', () => {
+    const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
+    const move = makeHandle(); const resize = makeHandle();
+    mountItemHandles(item, move, resize, initial, { getBounds: () => bounds });
+    resize.fire('pointerdown', { clientX: 400, clientY: 320 });
+    resize.fire('pointermove', { clientX: 404, clientY: 322 }); // ~4.5px — below slop
+    expect(item.style.width).toBe('300px');
+    expect(item.style.height).toBe('220px');
+    resize.fire('pointermove', { clientX: 450, clientY: 370 }); // past slop → full delta
+    expect(item.style.width).toBe('350px');
+    expect(item.style.height).toBe('270px');
+  });
+
   it('a pointercancel ends the drag like pointerup (no stuck drag state)', () => {
     const item = { style: {} as { left?: string; top?: string; width?: string; height?: string } };
     const move = makeHandle(); const resize = makeHandle();

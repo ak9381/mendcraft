@@ -59,15 +59,15 @@
    var(--target)}` (60px touch target) is a different property than `width`/
    `height`, so it would otherwise stack as a floor underneath these and
    force the corner grips up to 60px regardless of the size set below. */
-.mc-edit-move, .mc-edit-resize { display: none; position: absolute; width: 40px; height: 40px; min-width: 40px; min-height: 40px; align-items: center; justify-content: center;
+.mc-edit-move, .mc-edit-resize { display: none; position: absolute; width: 44px; height: 44px; min-width: 44px; min-height: 44px; align-items: center; justify-content: center;
   border-radius: 50%; border: 2px solid var(--border); background: #FFFFFF; color: var(--text); font-size: 18px; line-height: 1; padding: 0;
   cursor: grab; touch-action: none; z-index: 2; box-shadow: 0 2px 8px rgb(0 0 0 / 0.1); }
 .mc-edit-move:active, .mc-edit-resize:active { cursor: grabbing; }
 .mc-edit-move:focus-visible, .mc-edit-resize:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .mc-edit-canvas.mc-editing .mc-edit-item { outline: 2px dashed var(--border); outline-offset: 3px; }
 .mc-edit-canvas.mc-editing .mc-edit-move, .mc-edit-canvas.mc-editing .mc-edit-resize { display: flex; }
-.mc-edit-move { top: -18px; left: -18px; }
-.mc-edit-resize { bottom: -18px; right: -18px; cursor: nwse-resize; }
+.mc-edit-move { top: -22px; left: -22px; }
+.mc-edit-resize { bottom: -22px; right: -22px; cursor: nwse-resize; }
 .mc-edit-resize:active { cursor: nwse-resize; }
 
 /* Edit / Done / Reset layout trio: stacked above the Tools chip, same fixed
