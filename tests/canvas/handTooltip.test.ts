@@ -194,3 +194,18 @@ describe('B-079 pinch-hold on a plan object = Shift+click (add to selection)', (
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe('A2-030 overlapping tiles: the visible part of a covered control is still hand-tappable', () => {
+  it('a pinch over the uncovered edge of A hits A (as a mouse does), not the tile on top of its centre', () => {
+    const b = fakeEl('button', { left: 40, top: 10, width: 100, height: 40 }, { 'aria-label': 'B on top' });
+    const a = fakeEl('button', { left: 0, top: 10, width: 100, height: 40 }, { 'aria-label': 'A underneath' });
+    const doc = fakeDoc([b, a]); // elementFromPoint returns B first: B covers A's centre
+    const seen: Array<string | null> = [];
+    const hp = createHandPointer(doc, { onTooltip: (t) => seen.push(t) });
+    hp.pointAt(15, 30);
+    expect(seen.at(-1)).toBe('A underneath');
+    hp.pointAt(90, 30);
+    expect(seen.at(-1)).toBe('B on top');
+    hp.destroy();
+  });
+});

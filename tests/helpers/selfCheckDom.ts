@@ -36,7 +36,19 @@ export function fakeEl(tag: string, rect: FakeRect, attrs: Record<string, string
     ownerDocument: null as any,
     getAttribute: (n: string) => attrs[n] ?? null,
     setAttribute: (n: string, v: string) => { attrs[n] = v; },
-    matches: (sel: string) => sel.split(',').some((s) => s.trim().startsWith('button')),
+    // Honest enough for INTERACTIVE: a bare tag, `tag[...]`/`tag:...`, or a
+    // bare `[attr]` / `[attr=value]` — so a <main aria-label> region or a
+    // plain <div> surface is NOT a control (A2-030's direct-hit rule).
+    matches: (sel: string) => sel.split(',').some((raw) => {
+      const s = raw.trim();
+      const m = /^([a-z]*)(?:\[([\w-]+)(?:=([^\]]+))?\])?/i.exec(s);
+      if (!m) return false;
+      const [, t, a, v] = m;
+      if (t && t.toLowerCase() !== tag.toLowerCase()) return false;
+      if (!t && !a) return false;
+      if (a && t !== 'a' && t !== 'input') return v === undefined ? attrs[a] != null : attrs[a] === v.replace(/^['"]|['"]$/g, '');
+      return !!t;
+    }),
     closest: () => null,
     contains: (other: unknown) => other === el,
     getBoundingClientRect: () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height }),

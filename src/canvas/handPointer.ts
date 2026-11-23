@@ -199,6 +199,16 @@ export function collectControls(doc: Document = document, opts?: CollectControls
   });
 }
 
+/** A2-030: a control the pointer is directly over is on top at THIS point
+ *  (the hit test proved it), even when another tile covers its centre — the
+ *  mouse can click its visible part, so the hand must too. Same usability and
+ *  modal scoping as {@link collectControls}, minus the centre-occlusion clip. */
+export function usableDirectHit(doc: Document, el: HTMLElement): boolean {
+  if (!isUsable(el)) return false;
+  const modal = Array.from(doc.querySelectorAll<HTMLElement>('[aria-modal=true]')).find((m) => !m.hidden && m.getBoundingClientRect().height > 0);
+  return !modal || modal.contains(el) || !!el.closest('[data-hand-always]');
+}
+
 export function controlLabel(el: HTMLElement): string {
   return (el.getAttribute('aria-label') || el.textContent || (el as HTMLInputElement).placeholder || el.tagName).trim().replace(/\s+/g, ' ').slice(0, 60);
 }
@@ -319,7 +329,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     refreshControls();
     const raw = deepElementFromPoint(doc, p.x, p.y);
     const direct = interactiveAncestor(raw);
-    if (direct && controls.includes(direct)) return direct;
+    if (direct && (controls.includes(direct) || usableDirectHit(doc, direct))) return direct;
     // Over a drawing surface (floor plan) the empty spot IS the target — a
     // mouse click there draws — so only a tight snap may pull the pinch onto a
     // control beside it (palette edge, trash, props), never the full radius.
