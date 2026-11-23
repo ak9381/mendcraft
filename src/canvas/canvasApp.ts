@@ -1750,6 +1750,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // The Register scan is aria-modal too: Escape = its Cancel button.
     if (e.key === 'Escape' && scanPanel?.isOpen()) { e.preventDefault(); document.querySelector<HTMLButtonElement>('.mc-scan-cancel')?.click(); return; }
     if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
+    // A board widget already used this key (the floor plan's Escape ends the
+    // wall being drawn) — don't also zoom the canvas out from under it.
+    if (e.defaultPrevented) return;
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
