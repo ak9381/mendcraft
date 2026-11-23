@@ -44,3 +44,12 @@ describe('hand keyboard seams', () => {
     expect(app).toContain('mountHandKeyboard(document)');
   });
 });
+
+describe('hand keyboard follows app focus after a hand pinch', () => {
+  const kb2 = readFileSync('src/canvas/handKeyboard.ts', 'utf8');
+  it('a field the app focuses within the follow window after a hand press opens the keys', () => {
+    expect(kb2).toContain("doc.addEventListener('mc-hand-press', onHandPress, true)");
+    expect(kb2).toMatch(/clock\(\) - lastHandPress < FOLLOW_FOCUS_MS/);
+    expect(kb2).toMatch(/const FOLLOW_FOCUS_MS = \d+;/);
+  });
+});

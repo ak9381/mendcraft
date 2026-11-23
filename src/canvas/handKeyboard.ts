@@ -10,6 +10,8 @@
 import { createOnScreenKeyboard, type OnScreenKeyboard } from '../ui/onscreenKeyboard';
 
 export const HAND_TEXT_FOCUS = 'mc-hand-text-focus';
+/** A field focused this soon after a hand pinch counts as hand-focused. */
+const FOLLOW_FOCUS_MS = 800;
 
 type EditableField = HTMLInputElement | HTMLTextAreaElement;
 
@@ -75,6 +77,19 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
     e.stopPropagation();
   }
 
+  // A field the APP focuses right after a hand pinch (Rename's inline input,
+  // the plan's text-label editor, a dimension editor) is the hand's field too:
+  // open the keys for it as if the hand had pinched it directly.
+  let lastHandPress = -Infinity;
+  const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  function onHandPress(): void { lastHandPress = clock(); }
+  function onFocusIn(e: FocusEvent): void {
+    const t = (e.composedPath?.()[0] ?? e.target) as unknown;
+    if (root.contains(t as Node)) return;
+    if (isField(t) && clock() - lastHandPress < FOLLOW_FOCUS_MS) { onHandFocus(e); return; }
+    onOutside(e);
+  }
+
   function onOutside(e: Event): void {
     if (!kb.isOpen()) return;
     const t = e.composedPath?.()[0] ?? e.target;
@@ -94,7 +109,8 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
   doc.addEventListener(HAND_TEXT_FOCUS, onHandFocus);
   doc.addEventListener('keydown', onKey, true);
   doc.addEventListener('click', onOutside, true);
-  doc.addEventListener('focusin', onOutside, true);
+  doc.addEventListener('focusin', onFocusIn, true);
+  doc.addEventListener('mc-hand-press', onHandPress, true);
   doc.addEventListener('focusout', onFieldBlur, true);
   root.addEventListener('click', onKeysClick);
 
@@ -106,7 +122,8 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
       doc.removeEventListener(HAND_TEXT_FOCUS, onHandFocus);
       doc.removeEventListener('keydown', onKey, true);
       doc.removeEventListener('click', onOutside, true);
-      doc.removeEventListener('focusin', onOutside, true);
+      doc.removeEventListener('focusin', onFocusIn, true);
+      doc.removeEventListener('mc-hand-press', onHandPress, true);
       doc.removeEventListener('focusout', onFieldBlur, true);
       kb.dispose();
     },
