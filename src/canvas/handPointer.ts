@@ -43,6 +43,22 @@ export const INTERACTIVE =
  *  A pinch-hold that moves drags it (see dragPanel.ts and editBoard.ts,
  *  which listen for the pointerdown/move/up this dispatches); a
  *  pinch-release with no real movement activates it like a tap instead. */
+/** A drawing area that takes the hand directly (the floor-plan board): no
+ *  controls inside, so the pointer hands it hover, tap and drag in client px.
+ *  Found via `[data-hand-surface]` + the element's `__mcHandSurface`. */
+export interface HandSurface {
+  hover?(x: number, y: number): void;
+  /** true if something was grabbed (a tool started, a selection moves). */
+  beginDrag(x: number, y: number): boolean;
+  drag(x: number, y: number): void;
+  endDrag(): void;
+  tap(x: number, y: number): void;
+}
+export function handSurfaceAt(el: Element | null): HandSurface | null {
+  const host = (el as HTMLElement | null)?.closest?.('[data-hand-surface]') as (HTMLElement & { __mcHandSurface?: HandSurface }) | null;
+  return host?.__mcHandSurface ?? null;
+}
+
 export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
 
@@ -237,6 +253,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let pressedOn: HTMLElement | null = null;
   let dragging: HTMLInputElement | null = null;
   let draggingHandle: HTMLElement | null = null;
+  // Pinch on a hand surface (floor plan): tap if still, drag once it moves.
+  let surface: HandSurface | null = null;
+  let surfaceStart: P = { x: 0, y: 0 };
+  let surfaceDragging = false;
   let dragHandleStart: P = { x: 0, y: 0 };
   let dragHandleMoved = false;
   let pinched = false;
@@ -437,6 +457,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         dispatchDragEvent(target, 'pointerdown', pt);
         consumedUntil = now() + 700;
       }
+      else if (!target && !dryRun && (surface = handSurfaceAt(deepElementFromPoint(doc, pt.x, pt.y)))) {
+        surfaceStart = pt; surfaceDragging = false;
+        consumedUntil = now() + 700;
+      }
       else if (!target) opts.onEmptyPinch?.();
       else {
         // A pinch over a scroll container (or a control inside one) arms a
@@ -451,6 +475,14 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         consumedUntil = now() + 700;
       }
     } else {
+      if (surface) {
+        if (!suppressRelease) { if (surfaceDragging) surface.endDrag(); else surface.tap(surfaceStart.x, surfaceStart.y); }
+        else if (surfaceDragging) surface.endDrag();
+        surface = null; surfaceDragging = false;
+        suppressRelease = false; pressedOn = null;
+        paint();
+        return;
+      }
       if (suppressRelease) {
         // A morph hold fired during this pinch: tear the press down without
         // activating anything — no click, no slider change, no handle tap.
@@ -480,6 +512,15 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function aim(p: P, stickyNow?: number): HTMLElement | null {
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
+    if (surface) {
+      if (!surfaceDragging && Math.hypot(p.x - surfaceStart.x, p.y - surfaceStart.y) > DRAG_MOVE_THRESHOLD_PX) {
+        surfaceDragging = true;
+        surface.beginDrag(surfaceStart.x, surfaceStart.y);
+      }
+      if (surfaceDragging) surface.drag(p.x, p.y);
+      paint();
+      return null;
+    }
     if (draggingHandle) {
       if (Math.hypot(p.x - dragHandleStart.x, p.y - dragHandleStart.y) > DRAG_MOVE_THRESHOLD_PX) dragHandleMoved = true;
       dispatchDragEvent(draggingHandle, 'pointermove', p);
@@ -491,6 +532,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     // camera loop feeds update()), never the wall clock — pointAt() (sim /
     // audits) bypasses it entirely for determinism.
     setTarget(stickyNow !== undefined ? sticky.update(resolved, p, stickyNow) : resolved);
+    if (!target && !pinched && !dryRun) handSurfaceAt(deepElementFromPoint(doc, p.x, p.y))?.hover?.(p.x, p.y);
     emitTooltip(target);
     paint();
     return target;
@@ -499,6 +541,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function lost() {
     if (pinched) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
+      if (surface && surfaceDragging) surface.endDrag(); // hand left mid-drag: finish, never leave it stuck
+      surface = null; surfaceDragging = false;
       pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;

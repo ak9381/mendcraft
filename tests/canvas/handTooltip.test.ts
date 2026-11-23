@@ -62,3 +62,39 @@ describe('C114 a hand can tap a dismiss scrim (phone menu tap-away)', () => {
     hp.destroy();
   });
 });
+
+describe('Hand surface (floor-plan board): tap when still, drag once moved, finish on hand loss', () => {
+  function setup() {
+    const calls: string[] = [];
+    const surfEl = fakeEl('div', { left: 0, top: 0, width: 800, height: 600 });
+    const api = {
+      hover: () => {},
+      beginDrag: (x: number, y: number) => { calls.push(`begin ${x},${y}`); return true; },
+      drag: (x: number, y: number) => { calls.push(`drag ${x},${y}`); },
+      endDrag: () => { calls.push('end'); },
+      tap: (x: number, y: number) => { calls.push(`tap ${x},${y}`); },
+    };
+    surfEl.closest = (sel: string) => (sel === '[data-hand-surface]' ? Object.assign(surfEl, { __mcHandSurface: api }) : null);
+    const doc = fakeDoc([]);
+    doc.elementFromPoint = () => surfEl;
+    return { calls, hp: createHandPointer(doc, {}) };
+  }
+  it('a still pinch taps at the press point', () => {
+    const { calls, hp } = setup();
+    hp.pointAt(100, 100); hp.pinch(true); hp.pinch(false);
+    expect(calls).toEqual(['tap 100,100']);
+    hp.destroy();
+  });
+  it('a moving pinch begins at the press point, drags, then ends (no tap)', () => {
+    const { calls, hp } = setup();
+    hp.pointAt(100, 100); hp.pinch(true); hp.pointAt(103, 100); hp.pointAt(130, 100); hp.pinch(false);
+    expect(calls).toEqual(['begin 100,100', 'drag 130,100', 'end']);
+    hp.destroy();
+  });
+  it('losing the hand mid-drag ends the drag', () => {
+    const { calls, hp } = setup();
+    hp.pointAt(100, 100); hp.pinch(true); hp.pointAt(140, 100); hp.lost();
+    expect(calls).toEqual(['begin 100,100', 'drag 140,100', 'end']);
+    hp.destroy();
+  });
+});

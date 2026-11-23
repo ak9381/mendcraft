@@ -25,6 +25,7 @@ import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
 import { createPlanRenderer } from '../plan/renderer';
 import type { ViewportHandle } from '../core/controller';
+import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
@@ -77,7 +78,9 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
   override render() {
     const p = this.controller?.props;
     if (!p) return nothing;
-    return html`<div class="mc-plan-board" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
+    // tabindex: the plan's own keys (Esc ends a wall, Delete, V/W/R tool
+    // shortcuts, arrows) listen on this element, which could never take focus.
+    return html`<div class="mc-plan-board" tabindex="0" aria-label="Floor plan drawing area" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
   }
   override updated() {
     const p = this.controller?.props;
@@ -92,6 +95,36 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     controller.applyGenerated?.({ ops: buildPlanTemplate(p.template) });
     const view = createPlanRenderer(host, controller, () => {});
     this.view = view;
+    // Hand parity: the canvas hand pointer only clicks controls, so a pinch on
+    // the drawing area itself did nothing (no walls, no select, no move). Expose
+    // the plan's own pinch API (the one the old studio fed) as a hand surface.
+    let handPan: { x: number; y: number } | null = null;
+    host.dataset.handSurface = '';
+    // Read-only seam for walks/tests: the board's plan document.
+    (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
+    (host as HTMLElement & { __mcHandSurface?: HandSurface }).__mcHandSurface = {
+      hover: (x, y) => view.hover?.(x, y),
+      // Nothing grabbed (Select tool on empty floor) pans the plan, the same
+      // as a mouse drag on empty floor.
+      beginDrag: (x, y) => {
+        host.focus({ preventScroll: true });
+        const grabbed = view.beginDrag?.(x, y) ?? false;
+        handPan = grabbed ? null : { x, y };
+        return grabbed;
+      },
+      drag: (x, y) => {
+        if (handPan) { view.panByPx?.(x - handPan.x, y - handPan.y); handPan = { x, y }; return; }
+        view.drag?.(x, y);
+      },
+      endDrag: () => { if (handPan) { handPan = null; return; } view.endDrag?.(); },
+      tap: (x, y) => {
+        host.focus({ preventScroll: true }); // like a mouse press: plan keys (Esc, Delete) work next
+        if (view.tap?.(x, y)) return;
+        // Same as the old studio's pinch-tap: magnet-aim, then select what's there.
+        const id = view.aim?.(x, y)?.id ?? view.pick(x, y);
+        if (id) { controller.selectId(id); view.render(); }
+      },
+    };
     view.render();
     requestAnimationFrame(() => { view.fit?.(); view.render(); });
   }
