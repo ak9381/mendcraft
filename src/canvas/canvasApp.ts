@@ -465,6 +465,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     live.delete(id);
     processor.processMessages(g.messages as never);
     deviceSurfaces.track(id, plan);
+    // The re-render replaces the tile DOM, and with it Edit mode's wrapper
+    // (handles, saved layout). sync()'s setFocus runs before the new tiles
+    // exist, so re-apply once they have laid out — otherwise a self-check fix
+    // after a tile move left "Done" showing with no handles and the saved
+    // layout gone.
+    if (id === focusId) waitForLayout(() => { if (focusId === id && surfaces[id]) editBoard.setFocus(id, !!surfaces[id]?.tiles.length); });
     return true;
   }
 

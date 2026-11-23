@@ -580,3 +580,12 @@ describe('mountEditBoard', () => {
     expect(musicWrapper.style.top).toBe(top0);
   });
 });
+
+describe('Edit chrome survives a board re-render (A3-006 follow-up)', () => {
+  it('renderSurface re-applies Edit mode once the new tiles have laid out', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    const body = src.slice(src.indexOf('function renderSurface('), src.indexOf('// ---- pinned-board dock'));
+    expect(body).toMatch(/if \(id === focusId\) waitForLayout\(\(\) => \{ if \(focusId === id && surfaces\[id\]\) editBoard\.setFocus\(id/);
+  });
+});
