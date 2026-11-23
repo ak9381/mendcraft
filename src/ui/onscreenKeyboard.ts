@@ -81,9 +81,10 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
     }
   }
 
-  // Bottom control row.
+  // Caret-navigation row (move the caret without retyping) + bottom control row.
+  const nav = row();
   const ctl = row();
-  const mkCtl = (label: string, data: SpecialKey, cls: string, grow: number) => {
+  const mkCtl = (label: string, data: SpecialKey, cls: string, grow: number, parent: HTMLDivElement = ctl) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `mc-key mc-key-ctl ${cls}`;
@@ -93,9 +94,13 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
     b.setAttribute('aria-label', data);
     b.addEventListener('mousedown', (e) => e.preventDefault());
     b.addEventListener('click', () => press(data));
-    ctl.appendChild(b);
+    parent.appendChild(b);
     return b;
   };
+  mkCtl('⇤ Home', 'Home', 'mc-key-nav', 1, nav);
+  mkCtl('◀', 'ArrowLeft', 'mc-key-nav', 1, nav);
+  mkCtl('▶', 'ArrowRight', 'mc-key-nav', 1, nav);
+  mkCtl('⇥ End', 'End', 'mc-key-nav', 1, nav);
   const shiftBtn = mkCtl('⇧ Shift', 'Shift', 'mc-key-shift', 2);
   mkCtl('␣ Space', 'Space', 'mc-key-space', 5);
   mkCtl('⌫', 'Backspace', 'mc-key-back', 2);
@@ -132,10 +137,13 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
       return;
     }
 
-    // Insert at the caret and fire a real input event so existing handlers run.
+    // Apply the result. A caret move (Arrow/Home/End, or a no-op) leaves the
+    // text unchanged — just move the caret and skip the input event so text
+    // handlers don't see a phantom edit.
+    const changed = r.value !== field.value;
     field.value = r.value;
-    try { field.setSelectionRange(r.start, r.start); } catch { /* number inputs reject this */ }
-    field.dispatchEvent(new InputEvent('input', { bubbles: true, data: key }));
+    try { field.setSelectionRange(r.start, r.end); } catch { /* number inputs reject this */ }
+    if (changed) field.dispatchEvent(new InputEvent('input', { bubbles: true, data: key }));
     field.focus();
   }
 

@@ -249,6 +249,22 @@ describe('on-screen keyboard hand path (pressAt / hoverAt)', () => {
     expect(field.value).toBe('A');
   });
 
+  it('C022 Arrow/Home/End keys move the caret so you can edit mid-text without retyping', () => {
+    const root = kb.element as unknown as FakeNode;
+    // type "ac", then move the caret left one and insert "b" → "abc"
+    for (const ch of ['a', 'c']) { dom.setHit(findKey(root, ch)); kb.pressAt(1, 1); }
+    expect(field.value).toBe('ac');
+    dom.setHit(findKey(root, 'ArrowLeft')); kb.pressAt(1, 1);
+    expect(field.selectionStart).toBe(1);
+    dom.setHit(findKey(root, 'b')); kb.pressAt(1, 1);
+    expect(field.value).toBe('abc');
+    // Home jumps to the start, End to the very end.
+    dom.setHit(findKey(root, 'Home')); kb.pressAt(1, 1);
+    expect(field.selectionStart).toBe(0);
+    dom.setHit(findKey(root, 'End')); kb.pressAt(1, 1);
+    expect(field.selectionStart).toBe(3);
+  });
+
   it('C021 pinch-release on Close dismisses the keyboard', () => {
     expect(kb.isOpen()).toBe(true);
     dom.setHit(findKey(kb.element as unknown as FakeNode, 'Close'));

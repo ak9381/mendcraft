@@ -3,7 +3,9 @@
 // the DOM component (onscreenKeyboard.ts) just applies the result to the field.
 
 /** Special non-character keys. Character keys are their own single-char string. */
-export type SpecialKey = 'Backspace' | 'Enter' | 'Shift' | 'Space' | 'Close';
+export type SpecialKey =
+  | 'Backspace' | 'Enter' | 'Shift' | 'Space' | 'Close'
+  | 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End';
 
 export interface FieldState {
   value: string;
@@ -68,11 +70,27 @@ export function pressKey(
     return { value, start: caret, end: caret, shift: false, submit: false, close: false };
   };
 
+  // Move the caret without changing the text; collapse any selection first.
+  // Arrow/Home/End keep the shift latch (they aren't a character press).
+  const caretTo = (caret: number): KeyResult => {
+    const c = clamp(caret, 0, len);
+    return { value: state.value, start: c, end: c, shift, submit: false, close: false };
+  };
+
   switch (key) {
     case 'Shift':
       return { ...base, shift: !shift };
     case 'Close':
       return { ...base, close: true };
+    case 'ArrowLeft':
+      // With a selection, collapse to its left edge; else step one left.
+      return caretTo(end > start ? start : start - 1);
+    case 'ArrowRight':
+      return caretTo(end > start ? end : end + 1);
+    case 'Home':
+      return caretTo(0);
+    case 'End':
+      return caretTo(len);
     case 'Enter':
       return { ...base, submit: true };
     case 'Space':
