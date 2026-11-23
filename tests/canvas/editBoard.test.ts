@@ -564,6 +564,32 @@ describe('mountEditBoard', () => {
     expect(commits).toEqual([['f1', 'music-speaker-1']]);
   });
 
+  it('A4-004: both hands grabbing a tile and moving together carry it (same size), one commit', () => {
+    const commits: Array<[string, string]> = [];
+    const { ctl, editBtn, music } = setup((frameId, key) => commits.push([frameId, key]));
+    ctl.setFocus('f1', true);
+    editBtn.click();
+    const musicWrapper = music.parentElement!; musicWrapper.rect = { left: 0, top: 400, width: 300, height: 200 };
+    expect(ctl.pinchResize('start', { x: 0, y: 400 }, { x: 300, y: 600 })).toBe(true);
+    const l0 = Number.parseFloat(musicWrapper.style.left!), t0 = Number.parseFloat(musicWrapper.style.top!);
+    const w0 = Number.parseFloat(musicWrapper.style.width!), h0 = Number.parseFloat(musicWrapper.style.height!);
+    ctl.pinchResize('move', { x: 50, y: 430 }, { x: 350, y: 630 });
+    expect(Number.parseFloat(musicWrapper.style.left!)).toBeCloseTo(l0 + 50, 3);
+    expect(Number.parseFloat(musicWrapper.style.top!)).toBeCloseTo(t0 + 30, 3);
+    expect(Number.parseFloat(musicWrapper.style.width!)).toBeCloseTo(w0, 3);
+    expect(Number.parseFloat(musicWrapper.style.height!)).toBeCloseTo(h0, 3);
+    ctl.pinchResize('end');
+    expect(commits).toEqual([['f1', 'music-speaker-1']]);
+  });
+
+  it('A4-004: two hands on the SAME side of a tile moving together move it, not squash it', () => {
+    const box = { left: 0, top: 0, width: 600, height: 200 };
+    // both grabs nearest the left corners (TL, BL); both hands move +40,+20
+    expect(resizeToCorners(box, { x: 10, y: 10 }, { x: 250, y: 190 }, { x: 50, y: 30 }, { x: 290, y: 210 })).toEqual({ left: 40, top: 20, width: 600, height: 200 });
+    // same side, hands spread vertically: moves by the shared part, stretches height by the rest
+    expect(resizeToCorners(box, { x: 10, y: 10 }, { x: 10, y: 190 }, { x: 10, y: 0 }, { x: 10, y: 200 })).toEqual({ left: 0, top: -10, width: 600, height: 220 });
+  });
+
   it('A4-013: one still hand holds its corner while the other corner tracks its finger', () => {
     const { ctl, editBtn, music } = setup();
     ctl.setFocus('f1', true);

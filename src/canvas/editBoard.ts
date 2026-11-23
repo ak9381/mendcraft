@@ -90,6 +90,9 @@ export interface XY { x: number; y: number }
  *  are frame-invariant, so callers can assign corners in client space and apply
  *  the result to a tile's own local layout. No clamping here — pure geometry;
  *  bounds/min/max are enforced by the caller via {@link clampResize}. */
+/** A two-hand grab this close to a tile corner takes hold of that corner. */
+export const CORNER_GRAB_PX = 60;
+
 export function resizeToCorners(box: Rect, grabA: XY, grabB: XY, curA: XY, curB: XY): Rect {
   const l = box.left, t = box.top, r = box.left + box.width, b = box.top + box.height;
   const corners = { TL: { x: l, y: t }, TR: { x: r, y: t }, BL: { x: l, y: b }, BR: { x: r, y: b } } as const;
@@ -107,10 +110,18 @@ export function resizeToCorners(box: Rect, grabA: XY, grabB: XY, curA: XY, curB:
     (k === 'TL' || k === 'BL' ? leftDx : rightDx).push(dx);
     (k === 'TL' || k === 'TR' ? topDy : botDy).push(dy);
   };
-  contribute(nearest(grabA), curA.x - grabA.x, curA.y - grabA.y);
-  contribute(nearest(grabB), curB.x - grabB.x, curB.y - grabB.y);
+  // A4-004: a hand on a corner drags that corner (A4-013/014). But hands that
+  // grabbed the tile's BODY (away from its corners) carry it: their shared
+  // motion moves the whole box, and only the motion that differs between them
+  // stretches the edges nearest each hand — so two hands moving together move
+  // the tile wherever they took hold of it.
+  const dA = { x: curA.x - grabA.x, y: curA.y - grabA.y }, dB = { x: curB.x - grabB.x, y: curB.y - grabB.y };
+  const offCorner = (p: XY): boolean => { const k = corners[nearest(p)]; return Math.hypot(p.x - k.x, p.y - k.y) > CORNER_GRAB_PX; };
+  const c = offCorner(grabA) || offCorner(grabB) ? { x: (dA.x + dB.x) / 2, y: (dA.y + dB.y) / 2 } : { x: 0, y: 0 };
+  contribute(nearest(grabA), dA.x - c.x, dA.y - c.y);
+  contribute(nearest(grabB), dB.x - c.x, dB.y - c.y);
   const avg = (a: number[]): number => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
-  const nl = l + avg(leftDx), nr = r + avg(rightDx), nt = t + avg(topDy), nb = b + avg(botDy);
+  const nl = l + c.x + avg(leftDx), nr = r + c.x + avg(rightDx), nt = t + c.y + avg(topDy), nb = b + c.y + avg(botDy);
   const left = Math.min(nl, nr), right = Math.max(nl, nr), top = Math.min(nt, nb), bottom = Math.max(nt, nb);
   return { left, top, width: right - left, height: bottom - top };
 }
