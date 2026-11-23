@@ -49,6 +49,13 @@ export function clampResize(layout: ItemLayout, bounds: Rect, min: Size = MIN_IT
   };
 }
 
+/** Pure: resize a tile by a two-hand-pinch SPAN RATIO, anchored at its
+ *  top-left corner (same corner the resize handle grows from), then clamped to
+ *  [min,max] and within `bounds`. factor > 1 grows, < 1 shrinks. */
+export function resizeByScale(layout: ItemLayout, factor: number, bounds: Rect, min: Size = MIN_ITEM_SIZE, max: Size = MAX_ITEM_SIZE): ItemLayout {
+  return clampResize({ ...layout, width: layout.width * factor, height: layout.height * factor }, bounds, min, max);
+}
+
 /** Pure: how many px of a board's right edge the reserved terminal column
  *  (`.mc-ai`, when open) eats into — 0 when they don't overlap or it's closed. */
 export function terminalCutPx(boardRect: Rect, aiPanelRect: Rect | null): number {
@@ -115,6 +122,11 @@ export interface MountHandlesOptions {
 
 export interface ItemHandles {
   getLayout(): ItemLayout;
+  /** Two-hand anchored resize: 'start' snapshots the current size, 'move'
+   *  scales it by the pinch span ratio (clamped, anchored top-left), 'end'
+   *  commits through the SAME onCommit path as the resize handle — so the
+   *  self-check re-runs on commit. Mouse/touch/hand handle drags are untouched. */
+  pinchResize(phase: 'start' | 'move' | 'end', factor: number): void;
   destroy(): void;
 }
 
@@ -182,8 +194,22 @@ export function mountItemHandles(
   resizeHandle.addEventListener('pointerup', onResizeEnd);
   resizeHandle.addEventListener('pointercancel', onResizeEnd);
 
+  let pinchStart: Size | null = null;
+  function pinchResize(phase: 'start' | 'move' | 'end', factor: number): void {
+    if (phase === 'start') {
+      pinchStart = { width: layout.width, height: layout.height };
+    } else if (phase === 'move' && pinchStart) {
+      layout = resizeByScale({ ...layout, width: pinchStart.width, height: pinchStart.height }, factor, opts.getBounds(), min, max);
+      apply();
+    } else if (phase === 'end' && pinchStart) {
+      pinchStart = null;
+      opts.onCommit?.(layout);
+    }
+  }
+
   return {
     getLayout: () => layout,
+    pinchResize,
     destroy() {
       moveHandle.removeEventListener('pointerdown', onMoveDown);
       moveHandle.removeEventListener('pointermove', onMoveMove);
@@ -262,6 +288,11 @@ export interface EditBoardController {
   readonly editing: boolean;
   /** Call whenever the focused frame (or its availability) changes. */
   setFocus(frameId: string | null, available: boolean): void;
+  /** Two-hand anchored tile resize while editing. 'start' hit-tests the tile
+   *  under (clientX,clientY) and grabs it (returns false if none / not
+   *  editing); 'move' scales that tile by the pinch span `factor`; 'end'
+   *  commits. One tile per gesture; returns whether a tile is engaged. */
+  pinchResize(phase: 'start' | 'move' | 'end', factor: number, clientX?: number, clientY?: number): boolean;
   destroy(): void;
 }
 
@@ -290,6 +321,9 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
   let currentFrameId: string | null = null;
   let available = false;
   let editing = false;
+  // The tiles mounted in the current edit canvas, for two-hand pinch hit-test.
+  let mounted: Array<{ wrapper: EditEl; handles: ItemHandles }> = [];
+  let pinchTarget: ItemHandles | null = null;
 
   const editBtn = opts.createElement('button');
   editBtn.setAttribute('type', 'button');
@@ -330,6 +364,8 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
   }
 
   function applyFrame(): void {
+    mounted = [];
+    pinchTarget = null;
     if (!currentFrameId) return;
     const frameId = currentFrameId;
     const items = opts.getItems(frameId);
@@ -377,7 +413,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
       const moveHandle = makeHandle('move', it.label);
       const resizeHandle = makeHandle('resize', it.label);
       wrapper.append(moveHandle, resizeHandle);
-      mountItemHandles(wrapper, moveHandle, resizeHandle, layout, {
+      const handles = mountItemHandles(wrapper, moveHandle, resizeHandle, layout, {
         min: minSize,
         max: maxSize,
         getBounds: () => liveBounds(canvasEl),
@@ -390,6 +426,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
           opts.onItemCommit?.(frameId, it.key);
         },
       });
+      mounted.push({ wrapper, handles });
 
       maxBottom = Math.max(maxBottom, layout.top + layout.height);
     }
@@ -426,6 +463,26 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
       if (!available) editing = false;
       applyFrame();
       renderButtons();
+    },
+    pinchResize(phase, factor, clientX, clientY) {
+      if (phase === 'start') {
+        pinchTarget = null;
+        if (!editing || clientX === undefined || clientY === undefined) return false;
+        for (const m of mounted) {
+          const r = m.wrapper.getBoundingClientRect();
+          if (clientX >= r.left && clientX <= r.left + r.width && clientY >= r.top && clientY <= r.top + r.height) {
+            pinchTarget = m.handles;
+            break;
+          }
+        }
+        if (!pinchTarget) return false;
+        pinchTarget.pinchResize('start', factor);
+        return true;
+      }
+      if (!pinchTarget) return false;
+      pinchTarget.pinchResize(phase, factor);
+      if (phase === 'end') pinchTarget = null;
+      return true;
     },
     destroy() {
       editBtn.remove();

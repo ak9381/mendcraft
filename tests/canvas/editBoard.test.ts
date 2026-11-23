@@ -367,4 +367,28 @@ describe('mountEditBoard', () => {
     lampMove.fire('pointerup');
     expect(commits).toEqual([['f1', 'lamp-wiz-desk']]);
   });
+
+  it('pinchResize grabs the tile under the pinch, scales it, and commits via onItemCommit', () => {
+    const commits: Array<[string, string]> = [];
+    const { ctl, editBtn, lamp, music } = setup((frameId, key) => commits.push([frameId, key]));
+    ctl.setFocus('f1', true);
+    // not editing yet -> refuses to grab
+    expect(ctl.pinchResize('start', 1, 100, 100)).toBe(false);
+    editBtn.click();
+    // give the two wrappers distinct screen rects to hit-test against
+    const lampWrapper = lamp.parentElement!; lampWrapper.rect = { left: 0, top: 0, width: 300, height: 200 };
+    const musicWrapper = music.parentElement!; musicWrapper.rect = { left: 0, top: 400, width: 300, height: 200 };
+
+    // a pinch over empty space (between the tiles) grabs nothing
+    expect(ctl.pinchResize('start', 1, 150, 320)).toBe(false);
+
+    // a pinch over the music tile grabs it and scales from its start size
+    expect(ctl.pinchResize('start', 1, 150, 500)).toBe(true);
+    const w0 = Number.parseFloat(musicWrapper.style.width!);
+    ctl.pinchResize('move', 1.3);
+    expect(Number.parseFloat(musicWrapper.style.width!)).toBeCloseTo(w0 * 1.3, 5);
+    expect(commits).toHaveLength(0); // no commit mid-gesture
+    ctl.pinchResize('end', 1.3);
+    expect(commits).toEqual([['f1', 'music-speaker-1']]);
+  });
 });
