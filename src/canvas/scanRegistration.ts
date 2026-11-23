@@ -13,7 +13,9 @@ import { classifyGesture } from '../input/gestures';
 import type { Pt } from '../input/handLogic';
 import {
   averageRatios,
+  handSignatureDistance,
   handSignatureRatios,
+  HAND_MATCH_TOLERANCE,
   type HandSignature,
   type OwnerHands,
 } from '../input/handSignature';
@@ -82,6 +84,10 @@ export function createScanFlow(cfg: ScanConfig = SCAN_DEFAULTS): ScanFlow {
 
   let faceSamples: FaceSignature[] = [];
   let handSamples: number[][] = [];
+  /** Signature of the hand that STARTED the current palm hold, so a second
+   *  person's hand (same pose + handedness) that drifts into frame mid-hold
+   *  cannot donate samples to someone else's capture. */
+  let handRef: number[] | null = null;
   let face: FaceSignature | null = null;
   let left: HandSignature | null = null;
   let right: HandSignature | null = null;
@@ -91,6 +97,7 @@ export function createScanFlow(cfg: ScanConfig = SCAN_DEFAULTS): ScanFlow {
     lastCenter = null;
     faceSamples = [];
     handSamples = [];
+    handRef = null;
   }
 
   function advance(): void {
@@ -134,7 +141,18 @@ export function createScanFlow(cfg: ScanConfig = SCAN_DEFAULTS): ScanFlow {
       );
       if (match) {
         heldMs += dt;
-        handSamples.push(handSignatureRatios(match.points));
+        const sig = handSignatureRatios(match.points);
+        if (handRef === null) {
+          // First matching frame defines whose hold this is.
+          handRef = sig;
+          handSamples.push(sig);
+        } else if (handSignatureDistance(sig, handRef) <= HAND_MATCH_TOLERANCE) {
+          // Same hand as started the hold — fold it into the capture.
+          handSamples.push(sig);
+        }
+        // else: a different hand with the right pose/label drifted in. A brief
+        // intrusion shouldn't restart the registrant's hold, but it must never
+        // contaminate the signature — so the hold time ticks on, sample skipped.
         if (heldMs >= cfg.holdMs) {
           const sig: HandSignature = { ratios: averageRatios(handSamples), label: want! };
           if (step === 'left') left = sig; else right = sig;
@@ -144,6 +162,7 @@ export function createScanFlow(cfg: ScanConfig = SCAN_DEFAULTS): ScanFlow {
       } else {
         heldMs = 0;
         handSamples = [];
+        handRef = null;
       }
     }
 

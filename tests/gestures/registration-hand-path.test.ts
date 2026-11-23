@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createScanFlow, openPalmLandmarks, SCAN_DEFAULTS, SCAN_SIM, type ScanFrameInput,
 } from '../../src/canvas/scanRegistration';
-import { handSignatureRatios } from '../../src/input/handSignature';
+import { handSignatureDistance, handSignatureRatios } from '../../src/input/handSignature';
 import type { Pt } from '../../src/input/handLogic';
 import type { FaceSignature } from '../../src/input/faceLogic';
 
@@ -83,13 +83,12 @@ describe('C067 registration\'s hold time is fixed, with no tremor/low-effort rel
   });
 });
 
-describe('C068 a stranger\'s hand mid-hold contaminates the capture instead of being rejected', () => {
-  // BUG: the per-frame match only checks pose + handedness label, never hand
-  // identity (handSignature.ts isn't consulted until the *end* of the hold,
-  // to build the result — not during it). A second person's hand with the
-  // right pose and label silently donates samples to someone else's in-
-  // progress registration instead of being ignored or resetting the hold.
-  it.fails('frames from a second hand during an in-progress hold should not be folded into the captured signature', () => {
+describe('C068 a stranger\'s hand mid-hold is rejected from the capture', () => {
+  // FIXED (F4): the first matching frame of a palm hold locks the hold to that
+  // hand's signature (handRef). A later frame with the right pose + handedness
+  // but a different hand signature keeps the hold ticking (a passerby shouldn't
+  // restart the registrant's 1.5s hold) yet is never folded into the capture.
+  it('frames from a second hand during an in-progress hold are not folded into the captured signature', () => {
     const flow = createScanFlow(SCAN_SIM); // 600ms hold
     feedFace(flow, 0, 600); // advance to 'left'
 
@@ -101,13 +100,20 @@ describe('C068 a stranger\'s hand mid-hold contaminates the capture instead of b
     upd(owner); upd(owner);     // 200ms of the real registrant holding still
     upd(stranger);               // +100ms — a passerby's hand, same pose/label
     upd(owner); upd(owner);
-    const r = upd(owner);        // crosses 600ms total → completes
+    const rl = upd(owner);       // crosses 600ms total → the LEFT step completes
+    // The stranger's single frame kept the hold ticking (it didn't restart the
+    // registrant's hold), so the left step still finished and advanced.
+    expect(rl.step).toBe('right');
 
-    expect(r.step).toBe('done');
-    const captured = flow.result()!.left.ratios;
+    // Finish the right step cleanly to reach 'done' and read the captured owner.
+    feedPalm(flow, 'Right', owner, 20_000, 600);
+    const left = flow.result()!.left.ratios;
     const ownerOnly = handSignatureRatios(owner);
-    // Desired: the captured signature should match the owner's hand alone.
-    // Actual: it is an average contaminated by the stranger's one frame.
-    expect(captured).toEqual(ownerOnly);
+    // The captured left signature is the registrant's hand alone — the
+    // stranger's frame was never folded in (it would have skewed every ratio).
+    expect(handSignatureDistance(left, ownerOnly)).toBeLessThan(1e-9);
+    // Sanity: the stranger really was a different hand (far outside tolerance),
+    // so this is a real rejection, not a no-op.
+    expect(handSignatureDistance(handSignatureRatios(stranger), ownerOnly)).toBeGreaterThan(0.1);
   });
 });
