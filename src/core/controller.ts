@@ -79,6 +79,9 @@ export interface ModeController {
   /** Replace the document with an earlier snapshot() (change-log revert), as
    *  one undoable step. Omitted by modes without snapshots. */
   restoreSnapshot?(snapshot: unknown): StepResult;
+  /** Drop the newest `n` redo entries (a live gesture's own rolled-back
+   *  frames) so Redo can't replay a cancelled edit. */
+  dropRedo?(n: number): void;
 
   /** Download the current document (STL for part; DXF + JSON for plan). */
   export(): void;

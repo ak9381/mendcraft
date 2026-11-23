@@ -21,6 +21,7 @@ const GRAB_PX = 36;
 export interface SessionCtl {
   snapshot(): unknown;
   applyOp(raw: unknown): { ok: boolean };
+  dropRedo?(n: number): void;
 }
 export interface SessionView {
   toWorld?(clientX: number, clientY: number): Point;
@@ -89,7 +90,10 @@ export function beginTwoHandSession(ctl: SessionCtl, view: SessionView, a: Point
   let done = false;
 
   const apply = (op: PlanOp): void => { if (ctl.applyOp(op).ok) steps++; };
-  const rollback = (): void => { for (; steps > 0; steps--) ctl.applyOp({ op: 'undo' }); };
+  // Undo the live frames AND forget them from the redo stack: a cancelled (or
+  // net-zero) gesture must leave no Redo behind. Release re-applies the final
+  // op, which clears redo anyway.
+  const rollback = (): void => { const n = steps; for (; steps > 0; steps--) ctl.applyOp({ op: 'undo' }); ctl.dropRedo?.(n); };
 
   return {
     get kind() { return undecided ? 'twist-or-resize' : m.kind; },
@@ -163,7 +167,7 @@ export function beginTwoHandDraw(
   if (!view.toWorld) return null;
   let applied = 0;
   let done = false;
-  const rollback = (): void => { for (; applied > 0; applied--) ctl.applyOp({ op: 'undo' }); };
+  const rollback = (): void => { const n = applied; for (; applied > 0; applied--) ctl.applyOp({ op: 'undo' }); ctl.dropRedo?.(n); };
   return {
     kind: tool === 'wall' ? 'draw-wall' : 'draw-room',
     move(pa, pb) {

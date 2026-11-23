@@ -193,6 +193,12 @@ export class PlanEngine {
 
   /** Replace the whole document with an earlier snapshot (change-log revert).
    *  Itself one undoable step. Ids keep counting up, so nothing collides. */
+  /** Forget the newest `n` redo entries — the frames a live gesture undid
+   *  when it rolled itself back, which must never come back with Redo. */
+  dropRedo(n: number): void {
+    if (n > 0) this.redoStack.splice(Math.max(0, this.redoStack.length - n), n);
+  }
+
   restore(doc: PlanDoc): PlanApplyResult {
     this.undoStack.push(this.state);
     this.redoStack = [];

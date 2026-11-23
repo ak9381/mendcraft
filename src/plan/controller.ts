@@ -135,6 +135,8 @@ export function createPlanController(): ModeController {
       return { ok: true, message: 'Plan created.', warnings: applied.warnings };
     },
 
+    dropRedo(n) { engine.dropRedo(n); },
+
     restoreSnapshot(snapshot): StepResult {
       const d = snapshot as Partial<PlanDoc> | null;
       if (!d || !Array.isArray(d.walls) || !Array.isArray(d.openings)) {
