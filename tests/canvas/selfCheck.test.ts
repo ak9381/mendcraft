@@ -205,6 +205,21 @@ describe('replayTaps / assertWired ("unwired action")', () => {
     expect(replay).toEqual([{ id: 'stray', activated: false }]);
     expect(assertWired(replay)).toEqual([{ kind: 'unwired', id: 'stray' }]);
   });
+  it('does NOT flag a control panned off the viewport as unwired — a dashboard ' +
+    'wider/taller than a phone screen leaves tiles off-screen; a tap cannot land ' +
+    'there, but that is not a broken wire (same off-viewport rule assertReachable uses)', () => {
+    const off = fakeEl('button', { left: -400, top: 300, width: 40, height: 20 }, { 'aria-label': 'Off' });
+    const doc = fakeDoc([off]);
+    const dump: TileDump = {
+      role: 'row', label: 'Row', rect: { left: -500, top: 280, width: 200, height: 60 },
+      controls: [{ id: 'off', kind: 'button', label: 'Off', rect: off.getBoundingClientRect(), el: off }],
+    };
+    const pointer = createHandPointer(doc, { dryRun: true });
+    const replay = replayTaps(pointer, dump);
+    pointer.destroy();
+    expect(replay).toEqual([{ id: 'off', activated: false, offScreen: true }]);
+    expect(assertWired(replay)).toEqual([]);
+  });
 });
 
 describe('checkTile', () => {

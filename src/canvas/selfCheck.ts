@@ -160,15 +160,26 @@ export function assertLabels(dump: TileDump): SelfCheckFailure[] {
   return dump.controls.filter((c) => !c.label.trim()).map((c) => ({ kind: 'empty-label' as const, id: c.id }));
 }
 
-export interface ReplayResult { id: string; activated: boolean }
+export interface ReplayResult { id: string; activated: boolean; offScreen?: boolean }
 
 /** Replays a tap/pinch on every control through handPointer's real
  *  pointAt/pinch dispatch, with its dry-run flag on so the click reaches the
  *  control and stops there — no real side effects. */
 export function replayTaps(pointer: HandPointer, dump: TileDump): ReplayResult[] {
+  const vw = typeof innerWidth !== 'undefined' ? innerWidth : Infinity;
+  const vh = typeof innerHeight !== 'undefined' ? innerHeight : Infinity;
   return dump.controls.map((c) => {
     const cx = c.rect.left + c.rect.width / 2;
     const cy = c.rect.top + c.rect.height / 2;
+    // A tap can only physically land on a control whose centre is on screen.
+    // A dashboard built taller/wider than a phone screen leaves top-level
+    // tiles panned off the viewport (the transform-based world pan, which
+    // scrollIntoView can't bring back) — their controls then fail elementFromPoint
+    // and looked "unwired", a false failure on phone only. Off-viewport is not a
+    // broken wire: the SAME rule assertReachable already uses (only hit-test what
+    // is on screen). Structural checks (count/label/overlap) still cover them.
+    const onScreen = cx >= 0 && cx <= vw && cy >= 0 && cy <= vh;
+    if (!onScreen) return { id: c.id, activated: false, offScreen: true };
     pointer.pointAt(cx, cy);
     pointer.pinch(true);
     pointer.pinch(false);
@@ -177,7 +188,7 @@ export function replayTaps(pointer: HandPointer, dump: TileDump): ReplayResult[]
 }
 
 export function assertWired(replay: readonly ReplayResult[]): SelfCheckFailure[] {
-  return replay.filter((r) => !r.activated).map((r) => ({ kind: 'unwired' as const, id: r.id }));
+  return replay.filter((r) => !r.activated && !r.offScreen).map((r) => ({ kind: 'unwired' as const, id: r.id }));
 }
 
 export interface CheckOutcome { ok: boolean; failures: SelfCheckFailure[]; dump: TileDump; replay: ReplayResult[] }
