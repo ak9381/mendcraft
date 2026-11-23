@@ -542,6 +542,7 @@ function createWallTool(ctx: ToolContext): Tool {
     icon: '─',
     shortcut: 'w',
     hint: 'Click to place wall points (ortho/45° + snap). Click the last point again, double-click, Enter or Esc to finish.',
+    busy: () => chain.pts.length > 0,
     onDown(p) {
       const pt = nextPoint(ctx.toWorld(p.x, p.y));
       const res = chainClick(chain, pt, 150);

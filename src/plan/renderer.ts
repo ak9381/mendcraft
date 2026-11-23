@@ -404,11 +404,17 @@ export function createPlanRenderer(
   ctx.editText = openTextEditor;
 
   // ---- rendering ----
+  /** B-028: a wall chain mid-way must not be reframed under the next click
+   *  (the add_wall of each segment changes the bounds). toolCtl is created
+   *  above, but guard the very first renders anyway. */
+  function toolChainBusy(): boolean {
+    try { return toolCtl.active().busy?.() ?? false; } catch { return false; }
+  }
   function render(): void {
     if (!fitted) {
       fitView();
       fitted = true;
-    } else if (!toolBusy && !liveGesture && !panning && boundsSig() !== fitSig) {
+    } else if (!toolBusy && !liveGesture && !panning && !toolChainBusy() && boundsSig() !== fitSig) {
       // A discrete edit (voice/text/keyboard) changed the overall size — reframe
       // so the result stays fully visible (e.g. stretching the shared wall to
       // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
