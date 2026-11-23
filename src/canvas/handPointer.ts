@@ -49,6 +49,8 @@ export const INTERACTIVE =
 /** Fired (bubbling, composed) where a real hand pinch lands — the hand's
  *  stand-in for the pointerdown a mouse press would fire there. */
 export const HAND_PRESS = 'mc-hand-press';
+/** The pinch that a HAND_PRESS started has ended (released or hand lost). */
+export const HAND_RELEASE = 'mc-hand-release';
 
 export interface HandSurface {
   hover?(x: number, y: number): void;
@@ -488,6 +490,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (down === pinched) return;
     pinched = down;
     opts.onPinch?.({ phase: down ? 'down' : 'up', p: pt, now: now() });
+    if (!down && !dryRun) (doc as Document & { dispatchEvent?: (e: Event) => boolean }).dispatchEvent?.(new CustomEvent(HAND_RELEASE));
     if (down) {
       pressedOn = target;
       // A mouse press fires pointerdown wherever it lands, which "click away"
@@ -621,6 +624,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
+      if (!dryRun) (doc as Document & { dispatchEvent?: (e: Event) => boolean }).dispatchEvent?.(new CustomEvent(HAND_RELEASE));
     }
     setTarget(null); pt = { x: -1, y: -1 };
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }

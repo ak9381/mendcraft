@@ -12,6 +12,8 @@ import { createOnScreenKeyboard, type OnScreenKeyboard } from '../ui/onscreenKey
 export const HAND_TEXT_FOCUS = 'mc-hand-text-focus';
 /** A field focused this soon after a hand pinch counts as hand-focused. */
 const FOLLOW_FOCUS_MS = 800;
+/** Safety cap on a held pinch (a lost release event never sticks it open). */
+const HELD_MAX_MS = 5000;
 
 type EditableField = HTMLInputElement | HTMLTextAreaElement;
 
@@ -90,13 +92,18 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
   // A field the APP focuses right after a hand pinch (Rename's inline input,
   // the plan's text-label editor, a dimension editor) is the hand's field too:
   // open the keys for it as if the hand had pinched it directly.
+  // A4-027: the window stays open for the WHOLE pinch, not just 800ms from its
+  // start — a pinch-hold (the morph card fires at ~900ms) that makes the app
+  // focus the say box is still the hand's doing.
   let lastHandPress = -Infinity;
+  let handHeld = false;
   const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  function onHandPress(): void { lastHandPress = clock(); }
+  function onHandPress(): void { lastHandPress = clock(); handHeld = true; }
+  function onHandRelease(): void { if (handHeld) lastHandPress = clock(); handHeld = false; }
   function onFocusIn(e: FocusEvent): void {
     const t = (e.composedPath?.()[0] ?? e.target) as unknown;
     if (root.contains(t as Node)) return;
-    if (isField(t) && clock() - lastHandPress < FOLLOW_FOCUS_MS) { onHandFocus(e); return; }
+    if (isField(t) && ((handHeld && clock() - lastHandPress < HELD_MAX_MS) || clock() - lastHandPress < FOLLOW_FOCUS_MS)) { onHandFocus(e); return; }
     onOutside(e);
   }
 
@@ -123,6 +130,7 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
   doc.addEventListener('click', onOutside, true);
   doc.addEventListener('focusin', onFocusIn, true);
   doc.addEventListener('mc-hand-press', onHandPress, true);
+  doc.addEventListener('mc-hand-release', onHandRelease);
   doc.addEventListener('focusout', onFieldBlur, true);
   root.addEventListener('click', onKeysClick);
 
@@ -136,6 +144,7 @@ export function mountHandKeyboard(doc: Document = document): HandKeyboard {
       doc.removeEventListener('click', onOutside, true);
       doc.removeEventListener('focusin', onFocusIn, true);
       doc.removeEventListener('mc-hand-press', onHandPress, true);
+      doc.removeEventListener('mc-hand-release', onHandRelease);
       doc.removeEventListener('focusout', onFieldBlur, true);
       kb.dispose();
     },

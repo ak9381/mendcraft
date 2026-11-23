@@ -62,3 +62,18 @@ describe('hand keyboard commits like native typing', () => {
     expect(kb3).toMatch(/function close\(\): void \{\n\s+commit\(\);/);
   });
 });
+
+describe('morph card typed by hand (A4-027)', () => {
+  const kb = readFileSync('src/canvas/handKeyboard.ts', 'utf8');
+  const hp = readFileSync('src/canvas/handPointer.ts', 'utf8');
+  const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+  it('a field the app focuses while the pinch is still held opens the keys (hold fires at ~900ms)', () => {
+    expect(kb).toContain("doc.addEventListener('mc-hand-release', onHandRelease)");
+    expect(kb).toMatch(/handHeld && clock\(\) - lastHandPress < HELD_MAX_MS/);
+    expect(hp).toContain('new CustomEvent(HAND_RELEASE)');
+  });
+  it('typing on the hand keyboard is not a press outside the morph card', () => {
+    const body = app.slice(app.indexOf('protectedPoint: (p) =>'), app.indexOf('protectedPoint: (p) =>') + 900);
+    expect(body).toContain("document.querySelector<HTMLElement>('.mc-hand-kb')");
+  });
+});

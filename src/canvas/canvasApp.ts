@@ -2136,6 +2136,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         root.querySelector<HTMLElement>('.mc-say'),
         micFab?.el ?? null,
         document.querySelector<HTMLElement>('.mc-review-dialog:not([hidden])'),
+        // A4-027: typing the edit on the hand keyboard is not "outside".
+        document.querySelector<HTMLElement>('.mc-hand-kb'),
       ];
       for (const el of extra) {
         if (!el) continue;
