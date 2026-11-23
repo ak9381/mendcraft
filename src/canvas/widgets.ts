@@ -24,6 +24,7 @@ import {
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
 import { createPlanRenderer } from '../plan/renderer';
+import { beginTwoHandSession, type TwoHandSession } from '../plan/twoHandSession';
 import type { ViewportHandle } from '../core/controller';
 import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
@@ -101,6 +102,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     let handPan: { x: number; y: number } | null = null;
     let two: { mid: { x: number; y: number }; span: number } | null = null;
     let additiveNext = false;
+    let edit: TwoHandSession | null = null;
     host.dataset.handSurface = '';
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
@@ -121,8 +123,20 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         view.drag?.(x, y);
       },
       endDrag: () => { if (handPan) { handPan = null; return; } view.endDrag?.(); },
-      pinch2: (phase, a, b) => {
-        if (phase === 'end' || !a || !b) { two = null; return; }
+      pinch2: (phase, a, b, raw) => {
+        // Both hands on the selected object's handles = a two-hand EDIT (wall
+        // or room stretch, fixture resize or twist), one undo step on release
+        // and rolled back if a hand is lost. Anything else zooms/pans.
+        if (phase === 'start' && a && b) { edit = beginTwoHandSession(controller, view, a, b); if (edit) { two = null; host.dataset.twoHandEdit = edit.kind; return; } }
+        if (edit) {
+          // Edits follow the RAW hands only: the smoothed points carry no rotation
+          // and keep coasting through the release grace frames, which would
+          // un-twist the fixture just before it commits.
+          if (phase === 'move' && raw) { edit.move(raw.a, raw.b); host.dataset.twoHandEdit = edit.kind; }
+          else if (phase === 'end' || phase === 'cancel') { if (phase === 'end') edit.end(); else edit.cancel();  edit = null; delete host.dataset.twoHandEdit; }
+          return;
+        }
+        if (phase === 'end' || phase === 'cancel' || !a || !b) { two = null; return; }
         const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         const span = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
         if (phase === 'start' || !two) { two = { mid, span }; return; }

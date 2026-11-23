@@ -1429,7 +1429,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // see a board wider than the screen. One-hand behaviour is untouched.
   const twoHand = createTwoHandGesture({ rotate: false, minScale: MIN_Z, maxScale: 12 });
   let twoHandGrab: { p0: Vec; q0: Vec; cam0: Camera } | null = null;
-  let twoHandSurface: { surf: HandSurface; p0: Vec; q0: Vec; off: Vec } | null = null;
+  let twoHandSurface: { surf: HandSurface; p0: Vec; q0: Vec; off: Vec; why?: 'end' | 'cancel' } | null = null;
   let twoHandResizing = false; // Edit mode: a tile is being two-hand resized.
   let twoHandResizeGrab: { p0: Vec; q0: Vec; off: Vec } | null = null;
   function handleTwoHand(hands: readonly (readonly { x: number; y: number }[])[], now: number): void {
@@ -1480,9 +1480,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const g = twoHandSurface;
       if (r.active) {
         const p1 = applyTransform(r.transform, g.p0), q1 = applyTransform(r.transform, g.q0);
-        g.surf.pinch2?.('move', { x: p1.x + g.off.x, y: p1.y + g.off.y }, { x: q1.x + g.off.x, y: q1.y + g.off.y });
+        const raw = pts ? { a: { x: pts.p.x + g.off.x, y: pts.p.y + g.off.y }, b: { x: pts.q.x + g.off.x, y: pts.q.y + g.off.y } } : undefined;
+        g.surf.pinch2?.('move', { x: p1.x + g.off.x, y: p1.y + g.off.y }, { x: q1.x + g.off.x, y: q1.y + g.off.y }, raw);
       }
-      if (r.ended) { g.surf.pinch2?.('end'); twoHandSurface = null; }
+      // How the pinch stopped, judged on the FIRST frame without it (the
+      // gesture ends a few grace frames later): both hands still in view = a
+      // release; fewer = a hand was lost (cancel: the edit rolls back).
+      if (!pts && !g.why) g.why = hands.length >= 2 ? 'end' : 'cancel';
+      if (pts) g.why = undefined;
+      if (r.ended) { g.surf.pinch2?.(g.why ?? (hands.length >= 2 ? 'end' : 'cancel')); twoHandSurface = null; }
       return;
     }
     if (r.started && pts) {

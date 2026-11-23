@@ -58,7 +58,10 @@ export interface HandSurface {
   hold?(x: number, y: number): boolean;
   /** Two-hand pinch over the surface (client px): anchored zoom + pan, so the
    *  plan under each finger follows that finger. */
-  pinch2?(phase: 'start' | 'move' | 'end', a?: { x: number; y: number }, b?: { x: number; y: number }): void;
+  /** Two-hand pinch over the surface. 'move' may carry the RAW pinch points
+   *  (`raw`, un-smoothed, rotation kept) for edits that must follow each hand;
+   *  'cancel' = a hand was lost mid-gesture (roll back, apply nothing). */
+  pinch2?(phase: 'start' | 'move' | 'end' | 'cancel', a?: { x: number; y: number }, b?: { x: number; y: number }, raw?: { a: { x: number; y: number }; b: { x: number; y: number } }): void;
 }
 export function handSurfaceAt(el: Element | null): HandSurface | null {
   const host = (el as HTMLElement | null)?.closest?.('[data-hand-surface]') as (HTMLElement & { __mcHandSurface?: HandSurface }) | null;
