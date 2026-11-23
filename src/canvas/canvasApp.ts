@@ -677,6 +677,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: kindOf(id) }));
   const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume }));
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
+  // Set synchronously the instant a build/connect turn starts — before any
+  // await, so a second trigger during the swarm build (double-click, run while
+  // building) can't start a parallel turn that overwrites `pending` and orphans
+  // the first review's Promise. `pending` alone isn't enough: it's assigned
+  // late, only once the plan is ready and the review opens.
+  let turnBusy = false;
 
   // The panel opens for each AI turn and tucks itself away ~2 s after the
   // last keep / drop, so the board gets its full width back (unless she opened it).
@@ -841,20 +847,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const withBuildGimbal = <T>(run: () => Promise<T>): Promise<T> => followWhileBuilding(inputs.gimbal, run);
 
   async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard'): Promise<boolean> {
-    const f = reg.get(frameId); if (!f) return false;
-    const engine = engineFor(engineId, script.replace('BOARD', frameId));
-    let sentInfo: SentInfo | null = null;
-    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
-      onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
-      onGhost: (g) => ghost(frameId, g),
-      onError: (why) => {
-        settleSwarm();
-        panels.forEngine(engineId).fail(why);
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
-      },
-    }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
-    if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
-    return proposePlan(frameId, utterance, plan, sentInfo, summary, status);
+    if (turnBusy) return false; // a turn is already streaming/awaiting its review
+    turnBusy = true;
+    try {
+      const f = reg.get(frameId); if (!f) return false;
+      const engine = engineFor(engineId, script.replace('BOARD', frameId));
+      let sentInfo: SentInfo | null = null;
+      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
+        onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
+        onGhost: (g) => ghost(frameId, g),
+        onError: (why) => {
+          settleSwarm();
+          panels.forEngine(engineId).fail(why);
+          aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+        },
+      }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
+      if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
+      return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
+    } finally { turnBusy = false; }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -935,47 +945,51 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
   async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean } = {}): Promise<boolean> {
-    const f = reg.get(frameId); if (!f) return false;
-    const engine = engineFor(turn.sent.engine, turn.json);
-    if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
-    turn.sent.sim = engine.sim;
-    aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
-    if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
-    const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
-      ghost(frameId, parsePartialPlan(chunk));
-    });
-    let full = '';
+    if (turnBusy) return false; // a turn is already streaming/awaiting its review
+    turnBusy = true;
     try {
-      full = await withBuildGimbal(() => streamOne(engine));
-    } catch (e) {
-      const fallbackEngine = engine.fallback;
-      if (!fallbackEngine) {
-        const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
-        settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
-      }
-      turn.sent.sim = true;
-      turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
+      const f = reg.get(frameId); if (!f) return false;
+      const engine = engineFor(turn.sent.engine, turn.json);
+      if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
+      turn.sent.sim = engine.sim;
       aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
+      if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
+      const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
+        ghost(frameId, parsePartialPlan(chunk));
+      });
+      let full = '';
       try {
-        full = await withBuildGimbal(() => streamOne(fallbackEngine));
-      } catch (e2) {
-        const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
-        settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        full = await withBuildGimbal(() => streamOne(engine));
+      } catch (e) {
+        const fallbackEngine = engine.fallback;
+        if (!fallbackEngine) {
+          const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e instanceof Error ? e.message : String(e)}`;
+          settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        }
+        turn.sent.sim = true;
+        turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
+        aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
+        try {
+          full = await withBuildGimbal(() => streamOne(fallbackEngine));
+        } catch (e2) {
+          const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
+          settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+        }
       }
-    }
-    const parsed = parseModelPlan(full);
-    if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
-    const plan = parsed;
-    const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
-    const merged = mergeTiles(before, plan.value.tiles);
-    if (merged.tiles.length === before.tiles.length) {
-      settleSwarm();
-      ghost(frameId, null);
-      aiPanel.querySelector('.mc-ai-state')!.textContent = 'Already on this board — nothing new to add.';
-      say('That device is already on this board.');
-      return false;
-    }
-    return proposePlan(frameId, utterance, merged, turn.sent, summary, status);
+      const parsed = parseModelPlan(full);
+      if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+      const plan = parsed;
+      const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
+      const merged = mergeTiles(before, plan.value.tiles);
+      if (merged.tiles.length === before.tiles.length) {
+        settleSwarm();
+        ghost(frameId, null);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = 'Already on this board — nothing new to add.';
+        say('That device is already on this board.');
+        return false;
+      }
+      return await proposePlan(frameId, utterance, merged, turn.sent, summary, status);
+    } finally { turnBusy = false; }
   }
 
   async function pointTurn(frameId: string): Promise<void> {
@@ -1046,6 +1060,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onState: (st) => {
         if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
         else if (st === 'disconnected' || st === 'gone') {
+          // If the phone left a proposal waiting (pre-Approve, nothing applied
+          // yet), drop it so the canvas doesn't keep a review the absent phone
+          // can no longer act on.
+          if (pending) drop();
           const line = phoneDropLine(false);
           pairing?.setStatus(line);
           say(line);
@@ -1289,6 +1307,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say('Registered. Tracking is locked to you.');
     setTimeout(() => closeScan(), 900); // leave the ✓ on screen for a beat
   }
+  // Teach / custom-gestures share the same full-screen z-index tier as the
+  // review dialog and mount after it, so opening one on top of an open review
+  // would cover Approve/Reject. Keep the review the single gate (same guard the
+  // morph flow uses) and tell the user to finish it first.
+  function openTeach(): void {
+    if (reviewDialog.isOpen()) { say('Finish the review first — keep or drop, then teach a gesture.'); return; }
+    teachPanel.open();
+  }
+  function openTeachList(): void {
+    if (reviewDialog.isOpen()) { say('Finish the review first — keep or drop.'); return; }
+    teachPanel.openList();
+  }
   function openScan(): void {
     if (!scanPanel || scanPanel.isOpen()) return;
     scanFlow.reset();
@@ -1404,8 +1434,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const paletteCmd = matchPaletteCommand(text);
     if (paletteCmd === 'open') { openTools(); return true; }
     if (paletteCmd === 'close') { closeTools(); return true; }
-    if (/^\s*teach a gesture\s*$/i.test(text)) { teachPanel.open(); return true; }
-    if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { teachPanel.openList(); return true; }
+    if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
+    if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
     if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { aiManual = true; showAi(true); return true; }
     if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiManual = false; showAi(false); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
@@ -1486,7 +1516,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: () => teachPanel.open(), gestures: () => teachPanel.openList() } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
@@ -1567,6 +1597,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     morphCard.destroy();
     handPointer?.destroy();
     stopReplay();
+    reviewDialog.destroy();
+    swarm.destroy();
+    swarmDock.destroy();
     scanPanel?.destroy();
     registerChip?.remove();
     regChip?.remove();
@@ -1768,11 +1801,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!check.ok) { say(`Blocked a tile that did not pass the check: ${check.errors[0]}`); return false; }
     const before = surfaces[frameId] ?? null;
     surfaces[frameId] = patched;
-    history.push({ frameId, before, after: patched, by: 'gemini', summary });
+    const entry = history.push({ frameId, before, after: patched, by: 'gemini', summary });
     renderSurface(frameId); sync(); updateDock(); persist(); historyRender();
     if (path) {
       selfCheckTiles(frameId, path, () => {
-        undo();
+        // Roll back THIS morph specifically, not whatever happens to be newest
+        // on the history stack — an unrelated build could have been kept while
+        // the async self-check (layout wait + fix pass) was in flight.
+        if (!entry.undone) {
+          entry.undone = true;
+          if (before) { surfaces[frameId] = before; reg.rename(frameId, before.title); renderSurface(frameId); }
+          else { delete surfaces[frameId]; }
+          sync(); updateDock(); persist(); historyRender();
+        }
         panels.forEngine('gemini').fail(MORPH_UNVERIFIED_LINE);
         say(MORPH_UNVERIFIED_LINE);
       });
