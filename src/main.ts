@@ -182,6 +182,7 @@ import { parseListenPhrase } from './input/listening';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
+import { sliderValueAt } from './canvas/handPointer';
 import { parseMusicIntent } from './music/musicIntent';
 import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch, searchPageUrl, type RefHit, type SearchEngine } from './references';
 import { refineSearchQuery, generateReferenceOptions } from './ai/hybrid';
@@ -1419,6 +1420,25 @@ function handDragHandleAt(clientX: number, clientY: number): HTMLElement | null 
   const hit = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
   if (!hit || hit.closest('button, a[href], input, select')) return null;
   return hit.closest<HTMLElement>(HAND_DRAG_HANDLES);
+}
+/** C162–C166: a native range input ignores synthetic pointer events, so a
+ *  hand pinch on a slider sets its value directly (the canvas hand pointer
+ *  does the same): press jumps to the spot, drag follows, release commits. */
+let handRangeEl: HTMLInputElement | null = null;
+function handRangeAt(clientX: number, clientY: number): HTMLInputElement | null {
+  const ctl = handClickable(clientX, clientY);
+  return ctl instanceof HTMLInputElement && ctl.type === 'range' ? ctl : null;
+}
+function handRangeTo(el: HTMLInputElement, clientX: number): void {
+  const v = sliderValueAt(clientX, el.getBoundingClientRect(), Number(el.min || 0), Number(el.max || 100), Number(el.step || 1));
+  if (String(v) === el.value) return;
+  el.value = String(v);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function handRangeEnd(): void {
+  if (!handRangeEl) return;
+  const el = handRangeEl; handRangeEl = null;
+  el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
@@ -5360,6 +5380,8 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      handRangeEl = handRangeAt(aimed.clientX, aimed.clientY);
+      if (handRangeEl) { handRangeTo(handRangeEl, aimed.clientX); break; }
       handDragEl = handDragHandleAt(aimed.clientX, aimed.clientY);
       if (handDragEl) { handDragPointer('pointerdown', handDragEl, aimed.clientX, aimed.clientY); break; }
       viewport.beginDrag?.(aimed.clientX, aimed.clientY);
@@ -5382,6 +5404,7 @@ function handleHandEvent(raw: HandEvent): void {
       if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) { consumed(); break; }
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
       const ctl = handClickable(aimed.clientX, aimed.clientY);
+      if (ctl instanceof HTMLInputElement && ctl.type === 'range') { handRangeTo(ctl, aimed.clientX); ctl.dispatchEvent(new Event('change', { bubbles: true })); consumed(); break; }
       if (ctl) { activateControl(ctl); consumed(); break; }
       if (viewport.tap?.(aimed.clientX, aimed.clientY)) {
         renderAll(); // a palette/tool consumed the tap
@@ -5400,6 +5423,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Follow the hand during a drag — don't remagnet mid-gesture.
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
+      if (handRangeEl) { handRangeTo(handRangeEl, clientX); break; }
       if (handDragEl) { handDragPointer('pointermove', handDragEl, clientX, clientY); break; }
       if (refBoard.handleHand(e, { x: clientX, y: clientY })) break;
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
@@ -5411,6 +5435,7 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      if (handRangeEl) { handRangeEnd(); break; }
       if (handDragEl) { const el = handDragEl; handDragEl = null; const c = lastPointer ?? { clientX: 0, clientY: 0 }; handDragPointer('pointerup', el, c.clientX, c.clientY); break; }
       if (lastPointer && refBoard.handleHand(e, { x: lastPointer.clientX, y: lastPointer.clientY })) break;
       viewport.endDrag?.();
@@ -5420,6 +5445,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.hidden = true;
       handHover.setTarget(null);
       handHintEl = null; handTip.hidden = true;
+      handRangeEnd(); // C169 parity: a slider keeps the value it reached
       if (handDragEl) { const el = handDragEl; handDragEl = null; handDragPointer('pointercancel', el, 0, 0); }
       keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
       viewport.endDrag?.();
