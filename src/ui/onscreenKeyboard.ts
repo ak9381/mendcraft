@@ -21,10 +21,16 @@ export interface OnScreenKeyboard {
   hoverAt(clientX: number, clientY: number): boolean;
   /** Pinch tap at a client point — presses immediately. True if consumed. */
   pressAt(clientX: number, clientY: number): boolean;
+  /** Cancel any in-progress hover-dwell (e.g. the hand left the frame) so the
+   *  pending key never fires. Called from the hand pointer's 'lost' handler. */
+  cancelDwell(): void;
+  /** Set the hover-dwell time (ms) from the active hand profile — assist 900,
+   *  standard 700, precise 600. Applies to dwells started after this call. */
+  setDwellMs(ms: number): void;
   dispose(): void;
 }
 
-const DWELL_MS = 600;
+const DEFAULT_DWELL_MS = 600;
 
 function isEditable(el: EventTarget | null): el is EditableField {
   if (!(el instanceof HTMLElement)) return false;
@@ -48,6 +54,7 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
   let autoOpen = false;
   let dwellKey: HTMLButtonElement | null = null;
   let dwellTimer: number | null = null;
+  let dwellMs = DEFAULT_DWELL_MS;
   const letterKeys: HTMLButtonElement[] = [];
 
   // ─── build keys ───────────────────────────────────────────────────────────
@@ -161,7 +168,7 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
       dwellKey = null;
       dwellTimer = null;
       btn.click();
-    }, DWELL_MS);
+    }, dwellMs);
   }
 
   function hoverAt(clientX: number, clientY: number): boolean {
@@ -217,6 +224,8 @@ export function createOnScreenKeyboard(): OnScreenKeyboard {
     setAutoOpen(on) { autoOpen = on; },
     hoverAt,
     pressAt,
+    cancelDwell: clearDwell,
+    setDwellMs(ms) { if (Number.isFinite(ms) && ms > 0) dwellMs = ms; },
     dispose() {
       clearDwell();
       document.removeEventListener('focusin', onFocusIn);

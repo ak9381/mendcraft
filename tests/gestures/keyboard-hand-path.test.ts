@@ -177,18 +177,15 @@ describe('on-screen keyboard hand path (pressAt / hoverAt)', () => {
     expect(field.value).toBe('aa');
   });
 
-  // BUG: the dwell timer started by hoverAt is a bare setTimeout with no
-  // cancel hook reachable from outside (main.ts's 'lost' case resets the
-  // cursor/hover class but never touches the keyboard — see main.ts's
-  // `case 'lost':` block). Once dwell starts, losing the hand cannot stop it.
-  it.fails('C006 losing the hand mid-dwell should not fire the key', () => {
+  // FIXED (F4): cancelDwell() lets the hand pointer's 'lost' handler abort a
+  // pending hover-dwell, so losing the hand mid-dwell never fires the key.
+  it('C006 losing the hand mid-dwell (cancelDwell) does not fire the key', () => {
     vi.useFakeTimers();
     dom.setHit(findKey(kb.element as unknown as FakeNode, 'c'));
     kb.hoverAt(10, 10); // dwell starts
-    // hand lost here — nothing in this module's public API lets a caller
-    // cancel the pending dwell (no onLost/cancelDwell on OnScreenKeyboard).
+    kb.cancelDwell();   // hand lost — main.ts's 'lost' case calls this
     vi.advanceTimersByTime(600);
-    expect(field.value).toBe(''); // desired: the key should not have fired
+    expect(field.value).toBe(''); // the key must not have fired
   });
 
   it('C008 hoverAt (a "point", not a pinch) never presses immediately — only a completed dwell or pressAt do', () => {
@@ -197,20 +194,26 @@ describe('on-screen keyboard hand path (pressAt / hoverAt)', () => {
     expect(field.value).toBe('');
   });
 
-  // BUG: DWELL_MS is a hardcoded module constant (onscreenKeyboard.ts:27);
-  // there is no API to raise it for the 'assist' hand profile (900ms per
-  // handProfile.ts) or lower it for 'precise' (600ms, coincidentally the
-  // same as the hardcoded value) — every profile gets exactly 600ms here.
-  it('C009 the keyboard\'s dwell time is fixed at 600ms regardless of hand profile (not profile-tunable)', () => {
+  // FIXED (F4): the dwell time is now profile-tunable via setDwellMs — assist
+  // 900ms / standard 700ms / precise 600ms (handProfile.ts). Default is 600ms.
+  it('C009 the keyboard\'s dwell time follows the active hand profile (setDwellMs)', () => {
     vi.useFakeTimers();
+    // Default (precise) is 600ms.
     dom.setHit(findKey(kb.element as unknown as FakeNode, 'd'));
     kb.hoverAt(10, 10);
     vi.advanceTimersByTime(599);
     expect(field.value).toBe(''); // not yet
     vi.advanceTimersByTime(1);
-    expect(field.value).toBe('d'); // fires at exactly 600ms — an assist-profile
-    // user who needs the documented 900ms gets no extra time on this control.
-    expect((kb as unknown as Record<string, unknown>).setDwellMs).toBeUndefined();
+    expect(field.value).toBe('d'); // fires at exactly 600ms by default
+
+    // Switch to the assist profile's longer 900ms dwell.
+    kb.setDwellMs(900);
+    dom.setHit(findKey(kb.element as unknown as FakeNode, 'e'));
+    kb.hoverAt(20, 20);
+    vi.advanceTimersByTime(600);
+    expect(field.value).toBe('d'); // still waiting — 600ms is no longer enough
+    vi.advanceTimersByTime(300);
+    expect(field.value).toBe('de'); // fires at the profile's 900ms
   });
 
   it('C010 a very slow, deliberate dwell still registers exactly once', () => {

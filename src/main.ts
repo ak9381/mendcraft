@@ -1012,6 +1012,10 @@ function applyActiveProfile(adaptation: ProfileAdaptation): void {
   const cal = setupData.calibration;
   tracker?.setPinchThreshold(cal ? cal.pinchOn : activeProfile.pinchOn, cal ? cal.pinchOff : activeProfile.pinchOff);
   document.documentElement.style.setProperty('--mc-target-scale', String(activeProfile.targetScale));
+  // The on-screen keyboard's hover-dwell follows the same per-profile dwell as
+  // the canvas dwell (assist 900 / standard 700 / precise 600), honouring a
+  // calibrated dwell when one exists.
+  keyboard.setDwellMs(cal ? cal.dwellMs : activeProfile.dwellMs);
   handsPanel.setAdaptation(resolved);
 }
 
@@ -5316,6 +5320,7 @@ function handleHandEvent(raw: HandEvent): void {
       cursorFilter.reset();
       handCursor.hidden = true;
       handHover.setTarget(null);
+      keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
       viewport.endDrag?.();
       break;
   }
