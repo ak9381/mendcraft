@@ -690,6 +690,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // the first review's Promise. `pending` alone isn't enough: it's assigned
   // late, only once the plan is ready and the review opens.
   let turnBusy = false;
+  // True whenever a review is in progress and a new build/connect/kannada/morph
+  // turn must NOT start — it would call showReview() and overwrite the open
+  // card, orphaning the first review's Promise (and leaving turnBusy stuck
+  // true). Each signal alone is incomplete: `turnBusy` covers the streaming
+  // window before the card opens, `pending` covers a build proposal still
+  // waiting after Esc (dialog hidden), and `reviewDialog.isOpen()` covers the
+  // morph / Kannada / self-check-fix / teach reviews that never set `pending`.
+  const reviewBusy = (): boolean => turnBusy || !!pending || reviewDialog.isOpen();
 
   // The panel opens for each AI turn and tucks itself away ~2 s after the
   // last keep / drop, so the board gets its full width back (unless she opened it).
@@ -929,7 +937,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
-    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
     if (!kept) return;
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
@@ -942,7 +950,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
   }
   function floorPlan(frameId: string, utterance = 'start a floor plan'): void {
-    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     void aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoPlan, 'Floor plan: two bedrooms', 'waiting', 'floorplan');
   }
 
@@ -1000,20 +1008,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   async function pointTurn(frameId: string): Promise<void> {
-    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
     const turn = pointConnect('speaker', { frameTitle: f.title, sim: simEnv() });
     await connectTurn(frameId, 'connect what I am pointing at', turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess', { photoNote: true });
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {
-    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
     const turn = byName(name, { frameTitle: f.title, sim: simEnv(), devices: deviceHints() });
     if (!turn) { say(`Didn’t catch a device in “${name}” — try “lamp”, “speaker” or “fan”.`); return; }
     await connectTurn(frameId, name, turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess');
   }
   async function scanRoom(utterance: string): Promise<void> {
-    if (pending) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const id = focusId ?? lastFocus;
     if (!id || !reg.get(id)) { say('Open a room board first, then scan.'); return; }
     const f = reg.get(id)!;
@@ -1137,6 +1145,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     persist();
   }
   function addKannada(): void {
+    // A review on screen (build, floor plan, morph, self-check fix or teach)
+    // owns the single full-screen slot; opening the Kannada review on top would
+    // overwrite its card and orphan that turn. Make the user finish it first.
+    if (reviewBusy()) { say('Finish the review first — keep or drop, then add Kannada.'); return; }
     if (pack?.lang === 'kn') { say('Kannada is already on. Say “undo” for English.'); return; }
     if (!net.isOnline()) {
       net.queueLater('add kannada');
@@ -1770,7 +1782,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
   }
   const morphDisabled = (): boolean =>
-    !focusId || editBoard.editing || reviewDialog.isOpen() || !!pending || (scanPanel?.isOpen() ?? false);
+    !focusId || editBoard.editing || reviewBusy() || (scanPanel?.isOpen() ?? false);
   const morphResolve = (pt: { x: number; y: number }): MorphTargetRef | null => {
     const fid = focusId;
     const plan = fid ? surfaces[fid] : null;
