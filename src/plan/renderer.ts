@@ -978,6 +978,10 @@ export function createPlanRenderer(
       fitted = true;
       render();
     },
+    // Client px → world mm and the current px-per-mm, for the two-hand edit
+    // planner (src/plan/twoHandEdit.ts), which reasons in world space.
+    toWorld: (clientX, clientY) => toWorld(clientX, clientY),
+    screenScale: () => scale,
     setLayerHidden(layer, isHidden) {
       if (!isLayerId(layer)) return;
       if (isHidden) hidden.add(layer); else hidden.delete(layer);

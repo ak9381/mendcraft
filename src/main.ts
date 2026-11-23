@@ -11,6 +11,7 @@ import { createHandHover, magnetPull } from './ui/handHover';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
 import { createTwoHandGesture, incrementalZoomPan, midpoint, IDENTITY, type SimilarityTransform, type Vec } from './input/twoHandTransform';
+import { detectTwoHandStretch, twoHandStretchOps, detectTwoHandFixture, twoHandFixtureOp, type TwoHandStretch, type TwoHandFixture } from './plan/twoHandEdit';
 import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
 import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
@@ -963,6 +964,13 @@ const gestureRecognizer = createGestureRecognizer();
 const cadTwoHand = createTwoHandGesture({ rotate: false, minScale: 0.2, maxScale: 8 });
 let cadGrabMid: Vec | null = null;
 let cadLastT: SimilarityTransform = { ...IDENTITY };
+// When a two-hand pinch GRABS the selected object's handles (both ends of a
+// wall, two room corners, or two fixture corners) it edits instead of zooming —
+// the anchors track the fingers (B-117/B-118/B-121/B-066). Null ⇒ plain zoom.
+type CadEdit = { kind: 'stretch'; stretch: TwoHandStretch } | { kind: 'fixture'; fx: TwoHandFixture };
+let cadEdit: CadEdit | null = null;
+// mm bounds for a fixture footprint (mirrors PLAN_LIMITS.fixtureSize in ops.ts).
+const CAD_FIXTURE_LIMIT = { min: 100, max: 10_000 };
 /** A hand's pinch midpoint (thumb+index tips) mapped to client px, through the
  *  same mirror + calibrated reach + viewport mapping the hand cursor uses. */
 function handPinchClient(h: ReadonlyArray<{ x: number; y: number }>): Vec {
@@ -1906,16 +1914,50 @@ function processGestureFrame(f: PresenceFrame): void {
     const q = bothPinch ? handPinchClient(hands[1]) : null;
     const r = cadTwoHand.update({ p, q, now });
     if (r.started && p && q) {
-      cadGrabMid = midpoint(p, q);
-      cadLastT = { ...IDENTITY };
+      cadGrabMid = null;
+      cadEdit = beginCadTwoHandEdit(p, q);
+      if (!cadEdit) { cadGrabMid = midpoint(p, q); cadLastT = { ...IDENTITY }; }
+    } else if (r.active && cadEdit && p && q) {
+      applyCadTwoHandEdit(cadEdit, p, q);
     } else if (r.active && cadGrabMid) {
       const step = incrementalZoomPan(cadLastT, r.transform, cadGrabMid);
       viewport.zoomAt?.(step.factor, step.anchor.x, step.anchor.y);
       if (step.pan.x || step.pan.y) viewport.panByPx?.(step.pan.x, step.pan.y);
       cadLastT = r.transform;
     }
-    if (r.ended) cadGrabMid = null;
+    if (r.ended) { cadGrabMid = null; cadEdit = null; }
   }
+}
+
+/** At two-hand grab time, decide if the pinches grabbed the selected object's
+ *  handles (→ edit) rather than empty space (→ zoom). Returns null for zoom. */
+function beginCadTwoHandEdit(p: Vec, q: Vec): CadEdit | null {
+  if (!viewport.toWorld) return null;
+  const doc = planDoc();
+  const selIds = doc.selectedIds?.length ? doc.selectedIds : (controller.selectedId() ? [controller.selectedId()!] : []);
+  if (!selIds.length) return null;
+  const w0 = viewport.toWorld(p.x, p.y);
+  const w1 = viewport.toWorld(q.x, q.y);
+  const grabMm = 36 / (viewport.screenScale?.() ?? 1);
+  const stretch = detectTwoHandStretch(doc, selIds, w0, w1, grabMm);
+  if (stretch) return { kind: 'stretch', stretch };
+  const fx = detectTwoHandFixture(doc, selIds, w0, w1, grabMm);
+  if (fx) return { kind: 'fixture', fx };
+  return null;
+}
+
+/** Per-frame: move the grabbed anchors to the fingers' current world points. */
+function applyCadTwoHandEdit(edit: CadEdit, p: Vec, q: Vec): void {
+  if (!viewport.toWorld) return;
+  const w0 = viewport.toWorld(p.x, p.y);
+  const w1 = viewport.toWorld(q.x, q.y);
+  if (edit.kind === 'stretch') {
+    for (const op of twoHandStretchOps(edit.stretch, w0, w1)) controller.applyOp(op);
+  } else {
+    const op = twoHandFixtureOp(planDoc(), edit.fx, w0, w1, CAD_FIXTURE_LIMIT);
+    if (op) controller.applyOp(op);
+  }
+  viewport.render();
 }
 
 // ---- command pipeline (shared by voice, text, and sim) ----
