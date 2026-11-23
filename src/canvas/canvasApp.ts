@@ -315,12 +315,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       say('What would you like instead?');
     },
   });
+  // Every review opens through here so the phone menu sheet (z-index 61, above
+  // the review's 50) can never cover Approve/Reject/Ask-else. No-op on desktop
+  // (phoneMenu is null there). Keeps the human-in-the-loop gate reachable.
+  function showReview(model: Parameters<typeof reviewDialog.open>[0]): void {
+    phoneMenu?.close();
+    reviewDialog.open(model);
+  }
 
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
     sim: opts.sim,
     say,
-    openReview: (title, card) => reviewDialog.open({ title, card }),
+    openReview: (title, card) => showReview({ title, card }),
     onSaved: () => {},
     onTriggered: (gesture) => {
       const text = typeof gesture.action.text === 'string' ? gesture.action.text : '';
@@ -916,7 +923,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
-      reviewDialog.open({ title: summary, card, extra: buildReviewExtra() });
+      showReview({ title: summary, card, extra: buildReviewExtra() });
       say(`${summary}. Pinch or say “keep”; brush or say “drop”.`);
     });
   }
@@ -1190,7 +1197,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onKeep: () => { reviewDialog.close(); applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
       onDrop: () => { reviewDialog.close(); say('Kept English.'); autoHideAi(); },
     });
-    reviewDialog.open({ title: 'Add Kannada', card, extra: buildReviewExtra() });
+    showReview({ title: 'Add Kannada', card, extra: buildReviewExtra() });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
@@ -1755,7 +1762,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
                 onKeep: () => { reviewDialog.close(); done(true); },
                 onDrop: () => { reviewDialog.close(); done(false); },
               });
-              reviewDialog.open({ title: `Fix ${target.label}`, card, extra: buildReviewExtra() });
+              showReview({ title: `Fix ${target.label}`, card, extra: buildReviewExtra() });
             });
           },
         }).then((stat) => { if (!stat.passed) onUnverified?.(); });
@@ -1852,7 +1859,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onKeep: () => { reviewDialog.close(); done(applyMorph(fid, patched, summary, path)); },
         onDrop: () => { reviewDialog.close(); done(false); },
       });
-      reviewDialog.open({ title: summary, card, extra: buildReviewExtra() });
+      showReview({ title: summary, card, extra: buildReviewExtra() });
     }),
     undo,
     ui: {
