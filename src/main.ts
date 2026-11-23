@@ -1407,7 +1407,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, .mc-session-cluster, .mc-hint-strip, .mc-walk, .mc-copilot, .mc-router-panel, .mc-ledger-panel, .mc-a11y-panel, .mc-pair-panel, .mc-fsctl, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, .mc-session-cluster, .mc-studio-chrome, .mc-walk, .mc-copilot, .mc-router-panel, .mc-ledger-panel, .mc-a11y-panel, .mc-pair-panel, .mc-fsctl, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 /** C044/C045: pointer-driven panel handles (the reference browser's title bar
  *  and corner grip) — a hand pinch-drag on one is forwarded as the same
  *  pointerdown/move/up a mouse sends, instead of panning the canvas under it. */
@@ -1416,8 +1416,13 @@ let handDragEl: HTMLElement | null = null;
 function handDragPointer(type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel', el: HTMLElement, clientX: number, clientY: number): void {
   el.dispatchEvent(new PointerEvent(type, { clientX, clientY, pointerId: 9001, pointerType: 'pen', isPrimary: false, bubbles: true, cancelable: true, buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1 }));
 }
+/** Press-and-hold buttons (the leave card's "PINCH AND HOLD send") listen
+ *  for pointerdown/up; a hand pinch on one is forwarded the same way. */
+const HAND_HOLD_BUTTONS = '.mc-proposal-hold';
 function handDragHandleAt(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+  const hold = hit?.closest<HTMLElement>(HAND_HOLD_BUTTONS);
+  if (hold && hold.closest(HAND_CLICK_ZONES) && !(hold as HTMLButtonElement).disabled) return hold;
   if (!hit || hit.closest('button, a[href], input, select')) return null;
   return hit.closest<HTMLElement>(HAND_DRAG_HANDLES);
 }
@@ -1425,6 +1430,8 @@ function handDragHandleAt(clientX: number, clientY: number): HTMLElement | null 
  *  hand pinch on a slider sets its value directly (the canvas hand pointer
  *  does the same): press jumps to the spot, drag follows, release commits. */
 let handRangeEl: HTMLInputElement | null = null;
+/** The control under the hand when the pinch began (null = none / not yet). */
+let handPressEl: HTMLElement | null = null;
 function handRangeAt(clientX: number, clientY: number): HTMLInputElement | null {
   const ctl = handClickable(clientX, clientY);
   return ctl instanceof HTMLInputElement && ctl.type === 'range' ? ctl : null;
@@ -5373,6 +5380,7 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-start': {
       cursorFilter.reset(); // commit on raw coordinates
+      handPressEl = null;
       const raw = toClient(e.x, e.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
@@ -5380,6 +5388,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
       if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
+      handPressEl = handClickable(aimed.clientX, aimed.clientY);
       handRangeEl = handRangeAt(aimed.clientX, aimed.clientY);
       if (handRangeEl) { handRangeTo(handRangeEl, aimed.clientX); break; }
       handDragEl = handDragHandleAt(aimed.clientX, aimed.clientY);
@@ -5404,6 +5413,10 @@ function handleHandEvent(raw: HandEvent): void {
       if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) { consumed(); break; }
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
       const ctl = handClickable(aimed.clientX, aimed.clientY);
+      // A click lands only where the press began (mouse semantics): a hold that
+      // swapped the control under the hand (leave card → Undo) must not fire it.
+      if (ctl && handPressEl && ctl !== handPressEl) { handPressEl = null; consumed(); break; }
+      if (ctl instanceof HTMLInputElement && ctl.type === 'range' && handRangeEl === ctl) { consumed(); break; } // pinch-end commits
       if (ctl instanceof HTMLInputElement && ctl.type === 'range') { handRangeTo(ctl, aimed.clientX); ctl.dispatchEvent(new Event('change', { bubbles: true })); consumed(); break; }
       if (ctl) { activateControl(ctl); consumed(); break; }
       if (viewport.tap?.(aimed.clientX, aimed.clientY)) {
@@ -5435,6 +5448,7 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      handPressEl = null;
       if (handRangeEl) { handRangeEnd(); break; }
       if (handDragEl) { const el = handDragEl; handDragEl = null; const c = lastPointer ?? { clientX: 0, clientY: 0 }; handDragPointer('pointerup', el, c.clientX, c.clientY); break; }
       if (lastPointer && refBoard.handleHand(e, { x: lastPointer.clientX, y: lastPointer.clientY })) break;
@@ -5445,6 +5459,7 @@ function handleHandEvent(raw: HandEvent): void {
       handCursor.hidden = true;
       handHover.setTarget(null);
       handHintEl = null; handTip.hidden = true;
+      handPressEl = null;
       handRangeEnd(); // C169 parity: a slider keeps the value it reached
       if (handDragEl) { const el = handDragEl; handDragEl = null; handDragPointer('pointercancel', el, 0, 0); }
       keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
@@ -5823,6 +5838,8 @@ if (SIM_ACTIVE) {
   // A tiny judge-path seam the screenshot walk uses to drive a camera-less beat
   // (the hand-adapt pick) through the real on-device path.
   (window as unknown as { mcSim?: Record<string, () => void> }).mcSim = {
+    // Hand-parity probes: put the leave card (pinch-and-hold to open a mail draft) on screen.
+    leave: () => confirmOpenDraft({ to: '', subject: 'Site questions', body: 'Sim draft.' }),
     adapt: () => {
       void runAdaptation(true, SIM_HAND_METRICS);
       // Open the hand-profile panel showing the SAME simulated numbers the pick
