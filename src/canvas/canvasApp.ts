@@ -1680,7 +1680,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       touchPts.set(e.pointerId, vpPoint(e));
       if (touchPts.size >= 2) { driveTouchPinch(e.timeStamp); return; }
     }
-    if (!drag || focusId) return;
+    // `drag` is only set for a pointerdown on empty canvas (a down on the
+    // focused frame returns early), so panning in FOCUS stays translation-only
+    // at z=1 — a phone can reach every tile of a board wider than the screen.
+    // elementFromPoint / native clicks hit-test in screen space, so the pan
+    // never shifts what a pinch or tap lands on (P2-4).
+    if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
     dragged = true; camera = panBy(camera, dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
