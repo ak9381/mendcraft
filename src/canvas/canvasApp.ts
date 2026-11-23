@@ -898,21 +898,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // the Proposal card that waits on her keep/drop afterwards.
   const withBuildGimbal = <T>(run: () => Promise<T>): Promise<T> => followWhileBuilding(inputs.gimbal, run);
 
-  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard'): Promise<boolean> {
+  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
       const f = reg.get(frameId); if (!f) return false;
       const engine = engineFor(engineId, script.replace('BOARD', frameId));
       let sentInfo: SentInfo | null = null;
-      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
+      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
         onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
         onGhost: (g) => ghost(frameId, g),
         onError: (why) => {
           settleSwarm();
           panels.forEngine(engineId).fail(why);
           aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
-          offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task); });
+          offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });
         },
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
@@ -986,10 +986,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue; // board deleted meanwhile
       panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
       panels.showHandoff('nano', 'group the lights and add a room plan');
-      await aiTurn(next.frameId, 'gemini', next.utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
+      await aiTurn(next.frameId, 'gemini', next.utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed', 'dashboard', DEEP_ROOM_GOAL);
     }
   }
 
+  const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
@@ -1005,7 +1006,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     panels.showHandoff('nano', 'group the lights and add a room plan');
-    await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed');
+    // Tell Deep what the handoff line promises (only in the prompt; her card
+    // still shows her own words) — without it the live model never added the
+    // room plan: 0/3 → 7/7 boards with it (live-build study).
+    await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Better: grouped lights + a room plan', 'changed', 'dashboard', DEEP_ROOM_GOAL);
   }
   function floorPlan(frameId: string, utterance = 'start a floor plan'): void {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
