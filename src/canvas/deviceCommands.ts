@@ -4,6 +4,7 @@
 // Returns null when nothing device-like is recognised (canvas and CAD parsers
 // get their turn).
 import type { DeviceIntent } from './deviceActions';
+import { lampStep } from './deviceGuard';
 import type { StatusKey } from './languagePack';
 
 export type DeviceKind = 'lamp' | 'music' | 'switch';
@@ -120,7 +121,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     const delta = warmer ? -BRIGHTNESS_STEP : BRIGHTNESS_STEP;
     const verb = warmer ? 'dimmed' : 'brightened';
     const intents = targets.map((d) => {
-      const brightness = clamp(curBright(d) + delta);
+      const brightness = lampStep(curBright(d) + delta);
       return cooler ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const word = warmer ? 'Warmer' : 'Cooler';
@@ -130,7 +131,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   if (dimmer || brighter) {
     const delta = brighter ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP;
     const intents = targets.map((d) => {
-      const brightness = clamp(curBright(d) + delta);
+      const brightness = lampStep(curBright(d) + delta);
       return brighter ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const verb = brighter ? 'Brightened' : 'Dimmed';

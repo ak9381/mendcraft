@@ -178,6 +178,9 @@ export interface ControlSnapshot {
   /** The shared board the phones mirror/pick tiles from. Re-validated through
    *  coerceSurfacePlan (bounded, no media). Optional + backward compatible. */
   board?: SurfacePlan;
+  /** When set, `board` was sent to ONE phone (a whole-board edge drag): only
+   *  the phone of this platform shows it; the other phone ignores it. */
+  boardFor?: 'ios' | 'android';
   /** The most recent committed tile transfer (for the enter-from-edge animation). */
   transfer?: TransferMarker;
   omitted: SnapshotOmissions;
@@ -216,6 +219,8 @@ export interface ControlSnapshotInput {
   layout?: ScreenLayout | null;
   /** Shared board (re-coerced via coerceSurfacePlan; dropped if invalid). */
   board?: unknown;
+  /** Target phone for `board` (validated; anything else is dropped). */
+  boardFor?: unknown;
   /** Last committed transfer marker. */
   transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
@@ -353,6 +358,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     if (c.ok) board = c.value;
   }
   const transfer = coerceTransferMarker(input.transfer);
+  const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
 
   return {
     v: SNAPSHOT_VERSION,
@@ -369,6 +375,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(checklist.length ? { checklist } : {}),
     ...(layout ? { layout } : {}),
     ...(board ? { board } : {}),
+    ...(boardFor ? { boardFor } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
@@ -565,6 +572,7 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     // coerceLayout / coerceTransferMarker re-validate the untrusted wire data.
     layout: r.layout ? coerceLayout(r.layout) : null,
     board: r.board,
+    boardFor: r.boardFor,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }

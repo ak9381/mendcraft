@@ -1,6 +1,7 @@
 // A2UI spike page (sim-main only, /spike.html). Throwaway harness: Nano-style
 // draft -> gate -> Proposal -> render; Gemini-style upgrade -> Proposal; a
 // forged message rejected by the gate; lamp tiles through a stub connector.
+import { lampStep } from './deviceGuard';
 import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { coerceSurfacePlan, expandPlan, PROTOCOL, type A2uiMessage, type DeviceState } from './surfacePlan';
@@ -42,8 +43,8 @@ processor.onSurfaceCreated((s: unknown) => {
     const cur = store.get(id);
     if (!cur) return;
     if (a.name === 'lamp.toggle') void store.act({ deviceId: id, on: !cur.on });
-    if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
-    if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
+    if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: lampStep(cur.brightness + 20) });
+    if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: lampStep(cur.brightness - 20) });
     log(`Tile action ${a.name} → lamp connector (stub, on this device)`);
   });
 });

@@ -21,12 +21,14 @@ import { createSteadyHold, cropAlongRay, cropAroundPoint, pointerInCrop, rayTarg
 import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
+import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
+import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
-import { createEdgeTransferController } from './edgeTransfer';
+import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
 import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
@@ -395,7 +397,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setScreenLayout(next: ScreenLayout): void {
     screenLayout = next;
     saveLayout(storage, next);
-    publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+    republishCurrentBoard();
+  }
+
+  // A board sent to one phone stays on that phone across routine republishes
+  // (announce, layout swap, rejoin) until the laptop's focused board changes.
+  const sentBoard = createSentBoardMemo();
+  function republishCurrentBoard(): void {
+    const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
+    publishBoardTransfer(focusId ?? '', cur.board, null, cur.boardFor);
   }
 
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
@@ -403,13 +413,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
   }
 
-  function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null): void {
+  function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
     if (!hostSession) return;
     try {
       const snap = buildControlSnapshot({
         rev: ++snapshotRev,
         layout: screenLayout,
         ...(board ? { board } : {}),
+        ...(board && boardFor ? { boardFor } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
       void hostSession.publishState(snap).catch(() => undefined);
@@ -460,7 +471,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (side) say(`${platform === 'android' ? 'The Nothing phone' : 'The iPhone'} is on the ${side}.`);
       } else {
         // Already placed — still republish so the phone gets the current board.
-        publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+        republishCurrentBoard();
       }
       return;
     }
@@ -492,6 +503,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     getBoard: () => (dragFrame ? surfaces[dragFrame] ?? null : null),
     onGlow: (g) => setEdgeGlow(g.side, g.glow),
     onCommit: (t) => { if (dragFrame) commitLaptopTransfer(dragFrame, t); },
+    now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+  });
+
+  // Whole board → phone: a board dragged (held fist or mouse title) to a PAIRED
+  // phone's edge and held for the dwell goes to that phone over the same `state`
+  // snapshot; the laptop board snaps back. SIM phones: same glow, no network.
+  // Not an AI action, so it never reaches the AI feed — status line only.
+  const boardEdge = createBoardEdgeTransferController({
+    getViewportWidth: () => viewport.getBoundingClientRect().width || (typeof window !== 'undefined' ? window.innerWidth : 0),
+    getLayout: () => pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession }),
+    getRect: (id) => { const f = reg.get(id); return f ? { ...f.rect } : null; },
+    restoreRect: (id, rect) => { reg.setRect(id, rect); sync(); persist(); },
+    getBoard: (id) => surfaces[id] ?? null,
+    onGlow: (g) => setEdgeGlow(g.side, g.glow),
+    onCommit: (s) => {
+      if (hostSession) {
+        // Only the phone on that side shows it (boardFor); the other ignores it.
+        sentBoard.remember({ boardFor: s.target, board: s.board }, focusId, focusId ? surfaces[focusId] ?? null : null);
+        publishBoardTransfer(s.frameId, s.board, null, s.target);
+      }
+      say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
+    },
     now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
   });
 
@@ -833,8 +866,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
       if (!cur || !id) return;
       if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
-      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
-      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
+      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: lampStep(cur.brightness + 20) });
+      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: lampStep(cur.brightness - 20) });
       if (a.name === 'music.playPause') void store.act({ deviceId: id, playing: !cur.playing });
       if (a.name === 'music.next') void store.act({ deviceId: id, next: true });
       if (a.name === 'music.louder') void store.act({ deviceId: id, volume: Math.min(100, (cur.volume ?? 50) + 10) });
@@ -934,13 +967,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
         frameId: f.id,
         getZoom: () => camera.z,
-        onMove: (id, dx, dy) => {
+        onMove: (id, dx, dy, clientX, clientY) => {
+          if (!boardEdge.handleBoardDrag({ frameId: id, phase: 'move', clientX, clientY })) return;
           const cur = reg.get(id); if (!cur) return;
           reg.setRect(id, { ...cur.rect, x: cur.rect.x + dx, y: cur.rect.y + dy });
           const moved = reg.get(id); if (!moved) return;
           el!.style.left = `${moved.rect.x}px`; el!.style.top = `${moved.rect.y}px`;
         },
-        onEnd: () => { sync(); persist(); },
+        onEnd: (id, cancelled) => {
+          boardEdge.handleBoardDrag({ frameId: id, phase: cancelled ? 'cancel' : 'end', clientX: NaN, clientY: NaN });
+          sync(); persist();
+        },
       });
       if (surfaces[f.id]) queueMicrotask(() => {
         renderSurface(f.id);
@@ -1784,7 +1821,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
     // remembered one that just reconnected) populates its side immediately.
-    publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+    republishCurrentBoard();
     if (opts.privacyGemini) attachPrivacyHub(res.session, () => activePeople(), opts.privacyGemini);
     sheetOpen = null; // the pairing card replaces the sheet in the same host
     pairing = showPairing(open.host, {
@@ -1854,7 +1891,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     void languageTurn('add kannada');
   }
+  // Like aiTurn: whatever way the turn ends, the cards stop saying Working
+  // (the Nano card was left on Working after the Kannada handoff).
   async function languageTurn(utterance: string): Promise<void> {
+    try { await languageTurnRun(utterance); } finally { engineBar?.settle(); }
+  }
+  async function languageTurnRun(utterance: string): Promise<void> {
     const engine = engineFor('gemini', JSON.stringify(SCRIPTED_KN_PACK));
     const prompt = [
       'Translate the smart-canvas UI into Kannada. Reply with JSON only:',
@@ -1922,8 +1964,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           const cur = d.brightness ?? 50;
           if (intent === 'lampOn') void store.act({ deviceId: d.id, on: true });
           else if (intent === 'lampOff') void store.act({ deviceId: d.id, on: false });
-          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: Math.min(100, cur + 20) });
-          else void store.act({ deviceId: d.id, brightness: Math.max(0, cur - 20) });
+          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
+          else void store.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
         say(statusText(sk, pack));
@@ -1970,9 +2012,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // One-fist board move: a fist held over a board drags it (screen px)
         // until the hand opens. Frame rects are world-space, so the screen
         // delta scales by 1/camera.z. Persisted on 'end'.
+        // Held at a paired phone's edge, the board is sent there (boardEdge).
         onBoardMove: (ev) => {
-          if (ev.phase === 'end') { persist(); return; }
-          if (ev.phase !== 'move' || (!ev.dx && !ev.dy)) return;
+          const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
+          if (ev.phase === 'start') { boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return; }
+          if (ev.phase === 'end') { boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
+          if (ev.phase !== 'move') return;
+          // The edge check runs even on a zero delta (a palm clamped at the edge);
+          // a fist held perfectly still is covered by boardEdge's own hold timer.
+          if (!boardEdge.handleBoardDrag({ ...at, phase: 'move' }) || (!ev.dx && !ev.dy)) return;
           const f = reg.get(ev.frameId);
           if (!f) return;
           reg.setRect(ev.frameId, { ...f.rect, x: f.rect.x + ev.dx / camera.z, y: f.rect.y + ev.dy / camera.z });
@@ -2275,6 +2323,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     autoHideAi();
   }
 
+  /** An impossible request: Nano proposes (scripted + SIM in ?sim=1), real
+   *  validation refuses, Nano's terminal fails red, and nothing is applied. */
+  async function breakTurn(text: string, attempt: Attempt, frameId: string | null): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const engine = engineFor('nano', scriptedReply(attempt));
+    aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Checked on this device. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
+    try {
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
+    } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
+  }
+
   // ---- commands ----
   /** Kannada heard line + English on the Talk caption. The English comes only
    *  from the active pack's own intent map (local); no translation → heard only. */
@@ -2360,6 +2420,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       case 'device': {
         const dc = r.result;
+        // An impossible level is refused by validation, never clamped.
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
@@ -2400,7 +2463,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         void nameTurn(id, text);
         return true;
       }
-      case 'openEnded': break;
+      case 'openEnded': {
+        // "add a control for the oven" with no oven connected: refused, not chatted about.
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        break;
+      }
     }
     void openEndedTurn(text);
     return true;
@@ -3079,6 +3147,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ctx: () => ({
       lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
       pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      lampLabel: deviceRefs().find((d) => d.kind === 'lamp')?.label,
       savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
     }),
     nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
@@ -3118,6 +3187,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, destroy };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;
