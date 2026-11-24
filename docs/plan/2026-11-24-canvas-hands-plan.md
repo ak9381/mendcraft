@@ -159,3 +159,39 @@
 ## Finish
 
 - [ ] Full `npx tsc --noEmit` + `npx vitest run` (baseline only), `npm run build`, push `sim-main`, deploy preview channel `sim-main`, update `docs/HANDOFF-NOTES.md` with what changed and the live-check list.
+
+---
+
+## Amendments after plan validation (binding — they override the tasks above)
+
+Line numbers in the tasks are ~70 lines stale; find code by name.
+
+**Stream A (camera)**
+- A1. "zoom out" currently maps to `showEverything` in `parseCanvasCommand` (`canvasCommands.ts:27`, pinned by `canvasCommands.test.ts:16`). Add command variants `{ type: 'zoom'; dir: 1 | -1 }` and `{ type: 'zoomReset' }`; "zoom out" → zoom -1; "fit"/"show everything" stay `showEverything`; `normalise` strips "%", so match "100" / "reset zoom". Update the test.
+- A2. Every zoom path (keys, HUD, voice, Safari gestures) drops focus first (`if (focusId) { focusId = null; sync(); }`), like wheel/touch do — focused boards are 1:1 only. The wheel must still return untouched over `.mc-frame.focused` (plan renderer owns wheel there, `src/plan/renderer.ts`) and must check `e.defaultPrevented` before panning. Wheel-pan elsewhere may keep focus. Also skip pan when the target is inside a scrollable element that can scroll that way (AI panel, terminals, board content). Add `overscroll-behavior: none` on the viewport/body so horizontal swipe doesn't trigger browser back.
+- A3. Keys go after the existing `defaultPrevented` guard in the keydown handler (plan renderer handles `=`/`-` itself); `preventDefault` on Cmd/Ctrl `=`/`+`/`-`/`0`; Shift+1 via `e.code === 'Digit1'`; Space-pan uses a capture-phase pointerdown so it doesn't draw walls on a focused plan board, and Space keyup must not click a focused button (preventDefault on Space keydown only when not typing).
+- A4. Declare `let zoomHud: ReturnType<typeof mountZoomHud> | null = null` before `applyCamera`; call `zoomHud?.setZoom(camera.z)`.
+- A5. `attachBoardDrag` must `stopPropagation()` on pointerdown (otherwise the viewport pointerdown starts a canvas pan too). The world click handler uses a closure `dragged`; make it also respect `title.dataset.dragged`.
+- A6. HUD CSS goes in a new file `src/canvas/zoomHud.css` imported by `zoomHud.ts` (Stream C owns the end of `canvas.css`). HUD sits bottom-left; set `.mc-dock` `max-height` so it stops 84px above the bottom (edit that one rule in place).
+- A7. Ownership in `canvasApp.ts`: imports right after the `./camera` import line; `applyCamera`; the frame-title template; world click handler; pointer/keydown/wheel handlers; the `parseCanvasCommand` switch. Nothing else.
+
+**Stream B (hands)**
+- B1. `onBoardMove` is `(ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number })` (handPointer.ts ~282) and canvasApp persists on `'end'`. Keep it. New hooks use the same phase-object style: `onWorldPan(ev: { phase; dx; dy })`, `onWorldZoom(ev: { phase; a; b })`.
+- B2. Reuse existing `palmCenter` (handFeel.ts ~97, landmarks 0/5/9/13/17) — do not add `palmPoint`. One-Euro currently runs on normalised camera coords before `mapToScreen`; either move filtering after mapping (then `minCutoff 1.0, beta 0.01` in px applies) or keep it before and retune in camera units — pick one, state it in the commit.
+- B3. Edge guard: pass the palm point (not landmark 8) to `isEdgeFrame` / `edge.observe`; reach box for the palm ≈ `{ x0: 0.2, x1: 0.8, y0: 0.3, y1: 0.85 }`; update `tests/canvas/handEdge.test.ts`.
+- B4. Point `MAGNET_SNAP_PX` at `HAND_FEEL.magnetCapturePx`; the new target lock replaces `createStickyTarget` for a locked target (don't run both). Dead zone 3px.
+- B5. Boards: only the board **title** is a dwell target (resting on a board body must not fly into focus).
+- B6. Grab start order: `rawInteractiveHit` (control → do nothing) → frame rects (board → move) → empty viewport (pan). Hit-tests are ignored only while a grab is running. In focus mode, one fist on the focused board pans instead of moving it. A second fist arriving ends the board move (`'end'`) before the two-fist zoom starts. Total fist latency = existing 120 ms point/fist gate + 150 ms hold — acceptable; document it.
+- B7. `noUnusedLocals`: removing `handleTwoHand`/`handleHandPan` also removes `createHandPan`, `twoHandPinchPoints`, `oneHandPinchPoint`, the `handPan.panning` check in `keep`, and updates `window.__mcHand2.feedFrame` (used by `scripts/hand-reach.mjs`, `hand-arc.mjs`). Edit-mode two-hand resize goes away (it was pinch-only); say so in the commit.
+- B8. Tests to update beyond the list: `handPointerPipeline.test.ts` synth-hand helpers (landmark 8 is placed on the target — rewrite so the palm lands there), its cases asserting dwell/landmark-8/"one fist never grabs"; `gestureTrace.test.ts` (1500); `handEdge.test.ts`.
+- B9. Stale pinch copy: `toggleHands` message in canvasApp and the `handPointer.ts` header comment.
+- B10. Ownership in `canvasApp.ts`: hand imports, `handPointer` creation/options (onBoardMove etc.), the hand frame handler and everything it calls (`handleTwoHand`, `handleHandPan`, `keep` hand bits), `toggleHands`, `__mcHand2`. Nothing else.
+
+**Stream C (screen, engines, Kannada)**
+- C1. Use `formatFooterBytes()` (modelPanels.ts) for the bytes line (it already appends "sent to cloud"); import `EngineId` from `aiTurn.ts`, don't redeclare.
+- C2. Layout: engine bar bottom-centre; it **replaces** the swarm pill on desktop (hide `.mc-swarm-pill` when the bar is mounted, show the agent count inside the bar instead); `.mc-arrange` phones strip sits directly above the bar; the bar hides while the hand keyboard is open. Face preview + "Facing" pill → small chip bottom-right (not top-right; AI panel is there). Update `talkReachable.test.ts` banner position assertion.
+- C3. AI panel auto-open must **overlay**: `vp()` must not subtract the panel width while it is auto-opened, and opening/closing must not re-fly the camera or call `fitBoardWidth` (which permanently narrows boards). The hide timer re-checks `reviewBusy()` and pending/failed state when it fires. Give `autoHideAi` a real body. Update the "hide ai" voice reply.
+- C4. Task 7 adds to the existing `tests/canvas/languagePackExtras.test.ts`.
+- C5. Ownership: `canvasApp.ts` template block (the big `root.innerHTML`), `applyStrings`, `showAi`/`autoHideAi`/ledger footer wiring, the "hide ai" reply, `vp()`; `canvas.css` end of file and the cluster/arrange rules; `activityLog.ts`, `modelPanels.ts`, `languagePack.ts`, `toolPalette.ts`, `reviewDialog.ts`, new `engineBar.ts`.
+
+**Later (not in this plan):** DEMO.md build list (point-to-connect, connect→pair phones first, Spotify tile, board-to-phone transfer on grab) — next plan, after this lands. DEMO.md gesture lines get updated when Stream B merges (one fist moves a board, two fists zoom, 0.8 s hover).
