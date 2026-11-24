@@ -112,17 +112,17 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
 });
 
 describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
-  it('the cluster is a vertically-centred inset column with 120px+ equal-width targets', () => {
+  it('the cluster is a vertically-centred inset column with 140×60px equal-width targets', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
-    expect(rule).toContain('right: max(120px, 9vw)');
+    expect(rule).toContain('right: max(180px, 13vw)');
     expect(rule).toContain('flex-direction: column');
-    expect(rule).toContain('gap: 32px');
+    expect(rule).toContain('gap: 48px');
     expect(rule).toContain('align-items: stretch');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 120px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 60px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 140px');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
@@ -224,5 +224,17 @@ describe('empty board offers a Talk button on the frame', () => {
     const talk = ruleFor(canvasCss, '.mc-empty-talk');
     expect(talk).toContain('min-height: 56px');
     expect(talk).toContain('min-width: 180px');
+  });
+});
+
+describe('review Approve/Reject sit high enough to reach, off the edges', () => {
+  it('raises the action row ~18vh, with 48px gaps and 140×60 targets', () => {
+    const actions = ruleFor(canvasCss, '.mc-review-actions');
+    expect(actions).toContain('bottom: 18vh');
+    expect(actions).toContain('gap: 48px');
+    expect(actions).toMatch(/padding:[^;]*max\(32px, 5vw\)/);
+    const approve = ruleFor(canvasCss, '.mc-review-approve');
+    expect(approve).toContain('min-height: 60px');
+    expect(approve).toContain('min-width: 140px');
   });
 });

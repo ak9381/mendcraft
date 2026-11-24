@@ -20,13 +20,15 @@
 // a control activates it (click / focus); pinch on a range slider drags it.
 
 import { createOneEuroFilter } from '../input/oneEuro';
-import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, PALM_HOLD_MS, palmCentroid, createPalmScroll } from './handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, SCROLL_ENTER_MS, SCROLL_EXIT_MS, palmCentroid, createPalmScroll } from './handScroll';
 import { magnetPull, tooltipTextFor } from '../ui/handHover';
 import { getGestureTrace, targetIdOf } from './gestureTrace';
+import { createEdgeGuard, isEdgeFrame, SCREEN_MARGIN_PX } from './handEdge';
+import { handLabelOf } from './handSpace';
 import { fieldCaretAt } from '../input/caretAt';
 import { INDEX_TIP, PINCH_LIVE } from '../input/handLogic';
 import { createPinchBaseline } from '../input/pinchBaseline';
-import { classifyGesture, isClosingToFist, isOpenPalmPose, isRelaxedOpenPalm, type Pt as GesturePt } from '../input/gestures';
+import { classifyGesture, isClosingToFist, isTwoFingerScrollPose, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -96,10 +98,9 @@ export const SURFACE_HOLD_MS = 500;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the
  *  edges of the UI (top toolbar included) don't need an arm at full stretch.
- *  Single source of truth: HAND_FEEL.reach (central ~80% → full screen). */
+ *  Single source of truth: HAND_FEEL.reach (central ~70% → full screen). */
 export const REACH = HAND_FEEL.reach;
-/** Cursor and mesh drawing stay this far inside the screen edge (CSS px). */
-export const SCREEN_MARGIN_PX = 24;
+export { SCREEN_MARGIN_PX, EDGE_CLICK_COOLDOWN_MS } from './handEdge';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -310,6 +311,7 @@ interface SlotPointer extends HandPointer {
     eased: P;
     focusedTargetId: string | null;
     clickTarget: string | null;
+    handedness?: string | null;
   };
 }
 
@@ -344,6 +346,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   const ratioEuro = createScalarEuro(HAND_FEEL.pinchFilter);
   const deadZone = createDeadZone(HAND_FEEL.deadZonePx);
   const pinchFsm = createPinchMachine(HAND_FEEL);
+  const edge = createEdgeGuard();
   const pinchBase = createPinchBaseline();
   const history = createPositionHistory(HAND_FEEL.freezeLookbackMs + 300);
   const sticky = createStickyTarget<HTMLElement>((el) => el.getBoundingClientRect(), HAND_FEEL);
@@ -413,8 +416,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let dwellProgress = 0;
   let pinchHeld = false;
   let pinchDownTs: number | null = null;
-  let palmSince = 0;
+  let palmSince = -1;
+  let palmExitSince = -1;
   let palmScrolling = false;
+  let lastHandedness: string | null = null;
   const palmMotion = createPalmScroll();
   let pinchFocus: HTMLElement | null = null;
   let confirmStarted = 0;
@@ -560,6 +565,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   }
 
   function activate(el: HTMLElement) {
+    if (edge.blockClicks(clock || now())) return;
     lastActivated = el;
     clickTraceId = targetIdOf(el);
     consumedUntil = now() + 700;
@@ -658,8 +664,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     if (!palmScrolling) return;
     const vy = palmMotion.release();
     palmScrolling = false;
-   
-    palmSince = 0;
+    palmSince = -1;
+    palmExitSince = -1;
     if (flingRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(flingRaf); flingRaf = 0; }
     startFling({ vx: 0, vy });
   }
@@ -865,7 +871,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
    *  within dwellSlopPx, fills a ring then clicks once. Disabled during a
    *  fist or any drag. Does not re-fire until the cursor leaves the control. */
   function tickDwell(p: P, t: number, allowed: boolean): void {
-    const busy = pinched || fisted || !!dragging || !!draggingHandle || surfaceDragging || textSelecting || scrolled;
+    const busy = pinched || fisted || !!dragging || !!draggingHandle || surfaceDragging || textSelecting || scrolled || edge.blockClicks(t);
     const el = target;
     if (!allowed || busy || !el || isDismiss(el)) {
       if (!el || el !== dwellFiredFor) dwellFiredFor = el ? dwellFiredFor : null;
@@ -975,7 +981,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       pinchHeld = false; pinchDownTs = null;
-      palmScrolling = false; palmSince = 0; palmMotion.reset(); palmMotion.reset();
+      palmScrolling = false; palmSince = -1; palmExitSince = -1; palmMotion.reset(); palmMotion.reset();
       pinchFocus = null; confirmStarted = 0; fistScrolling = false;
       paintConfirm(null, false);
       liftTile(null, false);
@@ -987,8 +993,9 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     dwellStart = 0; dwellOrigin = null; dwellTarget = null; dwellFiredFor = null; dwellProgress = 0;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
     euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); pinchBase.reset(); history.reset(); sticky.reset(); clickTraceId = null;
+    edge.markLeave(clock || now(), pt.x >= 0 ? pt : null);
     pinchHeld = false; pinchDownTs = null;
-    palmScrolling = false; palmSince = 0; palmMotion.reset();
+    palmScrolling = false; palmSince = -1; palmExitSince = -1; palmMotion.reset();
     paint();
     opts.onLost?.();
   }
@@ -1030,13 +1037,31 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // read as a low thumb/index ratio, so it must never reach pinchFsm (it
       // would otherwise fire a click on every fist). It drags live — no
       // freeze — and never taps on release.
-      const pose = classifyGesture(h as unknown as GesturePt[]);
-      lastClass = pose;
+      lastHandedness = handLabelOf(h) ?? lastHandedness;
+      const rawPose = classifyGesture(h as unknown as GesturePt[], lastHandedness);
       lastRatio = pinchRatio(h);
-      const isFist = pose === 'fist';
-      const closingToFist = isFist || isClosingToFist(h as unknown as GesturePt[]);
       const rawRatio = pinchRatio(h);
       if (rawRatio < PINCH_LIVE.off) pinchAnchor = { x: h[INDEX_TIP].x, y: h[INDEX_TIP].y };
+
+      // Provisional screen point (may be held/eased by the edge guard below).
+      const mappedLive = deadZone.apply(mapToScreen(tip, innerWidth, innerHeight));
+      const nearEdge = isEdgeFrame(h, tip, innerWidth, innerHeight, true);
+      const wasEdge = edge.atEdge;
+      edge.observe(nearEdge, rawPose, mappedLive, t);
+      const pose = edge.pose(rawPose);
+      lastClass = pose;
+      if (nearEdge && !wasEdge) {
+        // Entering the edge: drop any in-flight pinch/scroll/dwell so a
+        // distorted landmark cannot click, grab, or start a palm swipe.
+        cancelPressWithoutClick();
+        pinchFsm.reset();
+        pinchHeld = false; pinchDownTs = null;
+        if (palmScrolling) endPalmScroll();
+        resetDwell();
+      }
+
+      const isFist = pose === 'fist' && !edge.atEdge;
+      const closingToFist = !edge.atEdge && (isFist || isClosingToFist(h as unknown as GesturePt[]));
       const fsmRatio = (frozen || pinchHeld) && pinchAnchor
         ? Math.min(rawRatio, pinchRatioTo(h, pinchAnchor))
         : rawRatio;
@@ -1046,11 +1071,14 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // (middle) mid-pinch, which would drag the cursor and the click.
       const feedFilter = isFist || (!closing && !frozen);
       let live: P;
-      if (feedFilter) {
+      if (edge.atEdge || edge.blockClicks(t) && wasEdge) {
+        // Hold the clamped cursor; do not track mangled edge landmarks.
+        live = edge.applyCursor(mappedLive, t);
+      } else if (feedFilter) {
         const s = euro.filter(tip.x, tip.y, t);
-        live = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
+        live = edge.applyCursor(deadZone.apply(mapToScreen(s, innerWidth, innerHeight)), t);
       } else {
-        live = frozen ?? lastOpenTip ?? deadZone.apply(mapToScreen(tip, innerWidth, innerHeight));
+        live = edge.applyCursor(frozen ?? lastOpenTip ?? mappedLive, t);
       }
 
       // A fist (or a hand mid-curl into one) must never start or finish a
@@ -1069,7 +1097,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         history.push(live, t);
         pinchHeld = false; pinchDownTs = null;
         if (palmScrolling) endPalmScroll();
-        palmSince = 0;
+        palmSince = -1;
+        palmExitSince = -1;
         cancelPinchWithoutClick();
         if (interact) {
           if (!fisted) {
@@ -1085,27 +1114,29 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         return;
       }
 
-      // Relaxed open-palm swipe: ~100 ms hold on 3+ loosely extended fingers,
-      // then the wrist+MCP centroid drives a 3×-gained, spring-smoothed scroll
-      // applied on animation frames (not camera frames). Fist already returned
-      // above so it always wins.
+      // Two-finger SCROLL (index + middle out, ring + pinky in, thumb tucked):
+      // ~100 ms enter and ~100 ms exit debounce, then the wrist+MCP centroid
+      // drives a 3×-gained, slightly tighter spring-smoothed scroll on
+      // animation frames. Open palm no longer scrolls. Fist already returned
+      // above so it always wins. Cursor keeps tracking landmark 8 (never
+      // latches `frozen`). No pinch or dwell clicks while in this pose.
       const gp = h as unknown as GesturePt[];
-      const openPalm = pose === 'open-palm' || isRelaxedOpenPalm(gp) || isOpenPalmPose(gp);
-      if (openPalm) {
-        if (!palmSince) palmSince = t;
-        if (t - palmSince >= PALM_HOLD_MS) {
-          cancelPressWithoutClick();
-          if (fisted) { fisted = false; fistUp(live); }
-          pinchHeld = false; pinchDownTs = null;
-          frozen = frozen ?? lastOpenTip ?? live;
-          lastOpenTip = frozen;
+      const scrollPose = (pose === 'scroll' || isTwoFingerScrollPose(gp, lastHandedness)) && !edge.atEdge;
+      if (scrollPose) {
+        palmExitSince = -1;
+        if (palmSince < 0) palmSince = t;
+        cancelPressWithoutClick();
+        if (fisted) { fisted = false; fistUp(live); }
+        pinchHeld = false; pinchDownTs = null;
+        lastOpenTip = live;
+        if (t - palmSince >= SCROLL_ENTER_MS) {
           const c = mapToScreen(palmCentroid(h), innerWidth, innerHeight);
           if (!palmScrolling) {
             palmScrolling = true;
             cancelFling();
             palmMotion.reset();
             {
-              const hit = deepElementFromPoint(doc, frozen.x, frozen.y);
+              const hit = deepElementFromPoint(doc, live.x, live.y);
               scrollEl = pickPalmScroller(hit, [
                 (hit as HTMLElement | null)?.closest?.('.mc-review-body'),
                 (hit as HTMLElement | null)?.closest?.('.mc-ai-body'),
@@ -1123,13 +1154,21 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
               scrollEl.scrollTop -= palmMotion.tick(33);
             }
           }
-          aim(frozen, t, t, false);
+        }
+        aim(live, t, t, false);
+        return;
+      } else if (palmScrolling) {
+        if (palmExitSince < 0) palmExitSince = t;
+        if (t - palmExitSince >= SCROLL_EXIT_MS) {
+          endPalmScroll();
+        } else {
+          lastOpenTip = live;
+          aim(live, t, t, false);
           return;
         }
-      } else if (palmScrolling) {
-        endPalmScroll();
       } else {
-        palmSince = 0;
+        palmSince = -1;
+        palmExitSince = -1;
       }
 
       // Only a confirmed curl (and only when the thumb–index gap is not already
@@ -1172,6 +1211,11 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       const locked = (): P => lastOpenTip ?? history.at(t - HAND_FEEL.freezeLookbackMs) ?? live;
 
       if (st.justDown) {
+        if (edge.blockClicks(t)) {
+          pinchFsm.reset();
+          pinchHeld = false; pinchDownTs = null;
+          frozen = null;
+        } else {
         frozen = locked();
         // Click the target under the RAW locked fingertip when one is there;
         // snap only if that point is empty. Freeze for the whole pinch.
@@ -1179,6 +1223,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         setTarget(pinchFocus);
         aim(frozen, t, t, false); // pinch down: no dwell (pinch is the click)
         if (interact) press(true);
+        }
       } else if (st.pinched) {
         const hold = frozen ?? locked();
         if (!interact) {
@@ -1231,6 +1276,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         eased: displayPoint(pt),
         focusedTargetId: targetIdOf(target ?? pinchFocus),
         clickTarget,
+        handedness: lastHandedness,
       };
     },
   } as SlotPointer;

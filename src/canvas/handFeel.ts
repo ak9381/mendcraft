@@ -63,7 +63,7 @@ export interface HandFeelConfig {
 }
 
 export const HAND_FEEL: HandFeelConfig = {
-  reach: { x0: 0.10, x1: 0.90, y0: 0.10, y1: 0.90 },
+  reach: { x0: 0.15, x1: 0.85, y0: 0.15, y1: 0.85 },
   cursorFilter: { minCutoff: 0.9, beta: 5, dCutoff: 1 },
   pinchFilter: { minCutoff: 2.5, beta: 8, dCutoff: 1 },
   deadZonePx: 2.5,

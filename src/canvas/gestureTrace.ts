@@ -5,6 +5,8 @@
 export interface GestureTraceFrame {
   t: number;
   hand: number;
+  /** MediaPipe "Left"/"Right" when the frame carried a handedness label. */
+  handedness?: string | null;
   classification: string;
   pinchDistance: number;
   focusedTargetId: string | null;

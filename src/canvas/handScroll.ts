@@ -94,16 +94,21 @@ export function createMomentum(opts: { friction?: number; minSpeed?: number } = 
   };
 }
 
-/** Open-palm swipe: short hold so a relaxed hand engages without strain. */
-export const PALM_HOLD_MS = 100;
+/** Two-finger scroll: short hold so a brief V doesn't engage. */
+export const SCROLL_ENTER_MS = 100;
+/** Keep the spring running this long after the pose drops, to kill flap. */
+export const SCROLL_EXIT_MS = 100;
+/** Back-compat alias for the enter debounce (was open-palm hold). */
+export const PALM_HOLD_MS = SCROLL_ENTER_MS;
 /** Ignore small wrist jitter on the palm centroid (screen px). */
 export const PALM_DEADZONE_PX = 2;
 /** Ignore wrist velocity under this (px/ms) — ~2 px per 50 ms. */
 export const PALM_DEADZONE_VY = 0.04;
 /** Small wrist motion maps to a larger scroll. */
 export const PALM_GAIN = 3;
-/** Critically-damped spring frequency for scroll velocity (Hz). */
-export const PALM_SPRING_HZ = 7;
+/** Critically-damped spring frequency for scroll velocity (Hz).
+ *  Slightly tighter than the original 7 Hz open-palm spring. */
+export const PALM_SPRING_HZ = 9;
 
 /** Wrist + middle-MCP centroid (the palm), in the same space as the landmarks. */
 export function palmCentroid(h: readonly { x: number; y: number }[]): { x: number; y: number } {

@@ -5,6 +5,7 @@ import {
   isFistPose,
   isClosingToFist,
   isOpenPalmPose,
+  isTwoFingerScrollPose,
   pinchRatio,
   twoHandSpan,
   createGestureRecognizer,
@@ -78,8 +79,8 @@ describe('classifyGesture', () => {
     expect(classifyGesture(makeHand({ index: true, thumb: 'pinch' }))).toBe('pinch');
   });
 
-  it('none: two fingers up, not a known pose', () => {
-    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'curled' }))).toBe('none');
+  it('scroll: index + middle extended, ring + pinky curled, thumb tucked', () => {
+    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'curled' }))).toBe('scroll');
   });
 
   it('none: too few landmarks', () => {
@@ -241,5 +242,36 @@ describe('live-style poses (moderate MediaPipe reaches)', () => {
 
   it('treats a relaxed hand with loosely extended fingers as an open palm', () => {
     expect(classifyGesture(handAt({ index: 0.90, middle: 0.85, ring: 0.80, pinky: 0.62, thumb: 0.50 }))).toBe('open-palm');
+  });
+});
+
+describe('two-finger scroll pose', () => {
+  const scroll = () => makeHand({ index: true, middle: true, thumb: 'curled' });
+  const flip = (p: Pt[]): Pt[] => p.map((q) => ({ x: 1 - q.x, y: q.y }));
+
+  it('classifies as scroll for a right hand and a mirrored left hand', () => {
+    expect(classifyGesture(scroll(), 'Right')).toBe('scroll');
+    expect(classifyGesture(flip(scroll()), 'Left')).toBe('scroll');
+    expect(isTwoFingerScrollPose(scroll(), 'Right')).toBe(true);
+    expect(isTwoFingerScrollPose(flip(scroll()), 'Left')).toBe(true);
+  });
+
+  it('never classifies as point or pinch', () => {
+    expect(classifyGesture(scroll())).not.toBe('point');
+    expect(classifyGesture(scroll())).not.toBe('pinch');
+    // Point (index only) and pinch stay themselves.
+    expect(classifyGesture(makeHand({ index: true, thumb: 'curled' }))).toBe('point');
+    expect(classifyGesture(makeHand({ index: true, thumb: 'pinch' }))).toBe('pinch');
+  });
+
+  it('does not fire when the thumb is out (that is a V, not a scroll)', () => {
+    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'up' }))).not.toBe('scroll');
+    expect(isTwoFingerScrollPose(makeHand({ index: true, middle: true, thumb: 'up' }))).toBe(false);
+  });
+
+  it('does not fire for an open palm (ring + pinky also out)', () => {
+    const palm = makeHand({ index: true, middle: true, ring: true, pinky: true, thumb: 'up' });
+    expect(classifyGesture(palm)).toBe('open-palm');
+    expect(isTwoFingerScrollPose(palm)).toBe(false);
   });
 });

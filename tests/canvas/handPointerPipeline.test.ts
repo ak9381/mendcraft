@@ -712,4 +712,46 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hits).toHaveLength(1);
     tr.clear();
   });
+
+  it('at the camera edge, pose stays frozen, the cursor holds, and a pinch does not click until after the cooldown', () => {
+    const tr = getGestureTrace();
+    tr.enable();
+    tr.clear();
+    feed(160, 50, false, 10);
+    expect(tr.dump().at(-1)?.classification).toBe('point');
+    const cursor = cursorElOf(doc);
+    const held = cursorPos(cursor);
+
+    // Same tip, but a landmark clips the camera frame and the fingers curl
+    // into a fist — must not become a fist or fire a click.
+    for (let i = 0; i < 8; i++) {
+      t += 33;
+      const h = synthFist(160, 50);
+      h[16] = { x: 0.01, y: 0.5 };
+      hp.update([h], t);
+    }
+    const mid = tr.dump().slice(-8);
+    expect(mid.every((f) => f.classification === 'point')).toBe(true);
+    const atEdge = cursorPos(cursor);
+    expect(Math.abs(atEdge.x - held.x)).toBeLessThan(6);
+    expect(Math.abs(atEdge.y - held.y)).toBeLessThan(6);
+
+    // Immediate pinch at the edge, then release: no click.
+    for (let i = 0; i < 6; i++) {
+      t += 33;
+      const h = synthHand(160, 50, true);
+      h[16] = { x: 0.01, y: 0.5 };
+      hp.update([h], t);
+    }
+    feed(160, 50, false, 3);
+    expect(btn.click).not.toHaveBeenCalled();
+
+    // After leaving the edge and waiting out the 300 ms cooldown, a pinch still clicks.
+    t += 400;
+    feed(160, 50, false, 8);
+    feed(160, 50, true, 6);
+    feed(160, 50, false, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    tr.clear();
+  });
 });

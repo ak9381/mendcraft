@@ -33,7 +33,9 @@ export function makeHand(spec: HandSpec): Pt[] {
 export const OPEN = (): Pt[] => makeHand({ index: true, middle: true, ring: true, pinky: true, thumb: 'up' });
 export const POINT = (): Pt[] => makeHand({ index: true, thumb: 'curled' });
 export const PINCH = (): Pt[] => makeHand({ index: true, thumb: 'pinch' });
-export const VSIGN = (): Pt[] => makeHand({ index: true, middle: true, thumb: 'curled' });
+export const VSIGN = (): Pt[] => makeHand({ index: true, middle: true, thumb: 'up' });
+/** Index + middle out, ring + pinky in, thumb tucked — the scroll pose. */
+export const SCROLL = (): Pt[] => makeHand({ index: true, middle: true, thumb: 'curled' });
 export const THREE = (): Pt[] => makeHand({ index: true, middle: true, ring: true, thumb: 'curled' });
 export const FIST = (): Pt[] => makeHand({ thumb: 'curled' });
 

@@ -8,6 +8,8 @@
 import { HAND_CONNECTIONS, INDEX_TIP, THUMB_TIP, type HandFrame, type Pt } from '../input/handLogic';
 import { createOneEuroFilter, type OneEuroFilter } from '../input/oneEuro';
 import { mapToScreen, REACH, SCREEN_MARGIN_PX } from '../canvas/handPointer';
+import { isHandClipped } from '../canvas/handEdge';
+export { isHandClipped, CAMERA_EDGE_EPS } from '../canvas/handEdge';
 import { buildLowpolyHand, createLowpolyMesh, drawLowpolyHand, LOWPOLY_FILL_ALPHA, type LowpolyMesh } from './handLowpoly';
 
 export interface HandOverlay {
@@ -65,20 +67,6 @@ function readSkeletonFlag(): boolean {
 /** Scale a 21-landmark screen-space hand around the index tip so its
  *  bounding-box height does not exceed `maxH`. Mutates `pts` in place.
  *  The tip (landmark 8, or `tipIndex`) is unchanged. */
-/** A landmark this close to 0 or 1 (camera-normalised) counts as clipped. */
-export const CAMERA_EDGE_EPS = 0.04;
-
-/** True when any landmark sits on or near the camera frame edge — the usual
- *  cause of a squashed / stretched mesh as MediaPipe loses the finger. */
-export function isHandClipped(
-  points: readonly { x: number; y: number }[],
-  eps = CAMERA_EDGE_EPS,
-): boolean {
-  for (const p of points) {
-    if (p.x <= eps || p.x >= 1 - eps || p.y <= eps || p.y >= 1 - eps) return true;
-  }
-  return false;
-}
 
 /** Offsets of every landmark from the index tip (screen or camera px). */
 export function shapeRelativeToTip<T extends { x: number; y: number }>(

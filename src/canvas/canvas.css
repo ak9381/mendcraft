@@ -469,9 +469,9 @@
   .mc-review-card-host .mc-proposal { padding: 10px 12px; }
   .mc-review-card-host .mc-proposal-title { font-size: 22px; }
   .mc-review-card-host .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
-  .mc-review-actions { position: sticky; bottom: 0; z-index: 1; background: var(--panel); padding: 8px 0 2px;
-    box-shadow: 0 -12px 12px -8px var(--panel); }
-  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 52px; font-size: 18px; }
+  .mc-review-actions { position: sticky; bottom: 0; z-index: 1; background: var(--panel); padding: 8px max(16px, 4vw) 2px;
+    box-shadow: 0 -12px 12px -8px var(--panel); gap: 48px; }
+  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 60px; min-width: 140px; font-size: 18px; }
 }
 @media (max-width: 420px) {
   .mc-ai { padding: 10px 12px; }
@@ -619,8 +619,9 @@
 /* Full-screen review: every Proposal that needs a decision opens here —
    desktop and phone alike — instead of a cramped inline card or sheet. The
    body fills the viewport (not a centred card) so the plan/diff, what each
-   model did, prompts and the stayed-local strip all have room; the three
-   hand-reachable decision buttons sit at the bottom, always in view. */
+   model did, prompts and the stayed-local strip all have room; the
+   hand-reachable decision buttons sit raised ~18vh from the bottom, always
+   in view and clear of the screen edge. */
 .mc-review-dialog { position: fixed; z-index: 50; inset: 0; background: var(--bg);
   display: flex; flex-direction: column;
   /* Leaves the Tools bar's own strip clear (it renders above this dialog)
@@ -636,9 +637,13 @@
    here; the review's own Approve/Reject/Ask buttons are the only visible
    decision controls. */
 .mc-review-card-host .mc-proposal-actions { display: none; }
-.mc-review-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px;
-  padding: 16px 0 4px; background: var(--panel); }
-.mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 56px; font-size: 18px; flex: 1 1 180px; }
+.mc-review-actions { position: sticky; bottom: 18vh; display: flex; flex-wrap: wrap; gap: 48px;
+  justify-content: center; margin-top: 20px;
+  padding: 16px max(32px, 5vw) 8px; background: var(--panel); }
+.mc-review-approve, .mc-review-reject, .mc-review-ask-else {
+  min-height: 60px; min-width: 140px; font-size: 18px; flex: 0 1 auto;
+  padding: 0 24px; box-sizing: border-box;
+}
 .mc-review-approve { background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
 /* Pinch-sized ✕ in the dialog's top-right. Anchored to the dialog (not the
    scrolling body) and clear of the bottom action row, so it never overlaps
@@ -829,27 +834,27 @@
 }
 
 /* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
-   Vertically centred, inset ~9vw (min 120px) from the right edge so a hand
-   cursor does not have to graze the screen edge. Equal-width 120px+ targets,
-   32px gaps. Shifts left of the AI drawer when that is open. */
+   Vertically centred, inset ~13vw (min 180px) from the right edge so a hand
+   cursor does not have to graze the screen edge. Equal-width 140×60px targets,
+   48px gaps. Shifts left of the AI drawer when that is open. */
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
-  right: max(120px, 9vw);
+  right: max(180px, 13vw);
   transform: translateY(-50%);
   z-index: 72;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 32px;
+  gap: 48px;
   pointer-events: none;
   width: max-content;
-  min-width: 120px;
-  max-width: min(200px, calc(100vw - 32px));
+  min-width: 140px;
+  max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
 .mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster {
-  right: max(max(120px, 9vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 140px)));
+  right: max(max(180px, 13vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 160px)));
 }
 /* Old per-chip `right` offsets are more specific when the AI panel is open
    and would shove relatively-positioned cluster children off the left edge. */
@@ -883,15 +888,15 @@
 .mc-hand-cluster .mc-edit-toggle,
 .mc-hand-cluster .mc-register-chip,
 .mc-hand-cluster .mc-edit-reset {
-  min-height: 52px;
-  min-width: 120px;
+  min-height: 60px;
+  min-width: 140px;
   width: 100%;
   justify-content: center;
   box-sizing: border-box;
 }
 .mc-hand-cluster .mc-talk-control { align-items: stretch; width: 100%; }
-.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 120px; min-height: 52px; }
-.mc-hand-cluster .mc-edit-reset { min-height: 52px; min-width: 120px; }
+.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 140px; min-height: 60px; }
+.mc-hand-cluster .mc-edit-reset { min-height: 60px; min-width: 140px; }
 
 /* Dwell-click ring: fills around the arrow tip, then the click fires. */
 .mc-hand-dwell {
