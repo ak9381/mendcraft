@@ -71,11 +71,12 @@ describe('modelPanels publishes to the feed', () => {
     const doc = { createElement: () => stub() } as unknown as Document;
     const panels = mountModelPanels(aiPanel, doc, undefined, feed);
     panels.forEngine('nano').log('plan', 'hello');
+    panels.forEngine('nano').log('build', 'again');
     panels.showHandoff('nano', 'because');
     panels.setFooterBytes(42);
     const kinds = published.map((p) => (p as { kind: string }).kind);
     expect(kinds).toContain('log');
-    expect(kinds).toContain('state');
+    expect(kinds.filter((k) => k === 'state')).toHaveLength(1);
     expect(published).toContainEqual({ kind: 'handoff', from: 'nano', to: 'gemini', text: 'because' });
     expect(published).toContainEqual({ kind: 'bytes', total: 42 });
   });

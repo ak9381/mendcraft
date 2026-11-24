@@ -95,10 +95,11 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null): Mo
     return i < 0 ? ['note', s] : [s.slice(0, i), s.slice(i + 1)];
   };
 
-  // Follow the newest tab: a tab we've moved on from stays ignored.
+  // Follow the newest tab: a different sender takes over only if its message
+  // is not older than the current one. Any tab can win again later.
   let currentSid: string | null = null;
   let currentT = 0;
-  const retired = new Set<string>();
+  const hello = () => { try { channel?.postMessage({ v: 1, sid: 'monitor', t: Date.now(), kind: 'hello' }); } catch { /* best effort */ } };
 
   const apply = (m: AiFeedMsg) => {
     switch (m.kind) {
@@ -124,21 +125,19 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null): Mo
     if (!isAiFeedMsg(e.data)) return;
     const m = e.data;
     if (m.kind === 'hello') return;
-    if (retired.has(m.sid)) return;
     if (currentSid !== m.sid) {
-      if (currentSid !== null) {
-        if (m.t < currentT) { retired.add(m.sid); return; }
-        retired.add(currentSid);
-        clear();
-      }
+      if (currentSid !== null && m.t < currentT) return;
+      const had = currentSid !== null;
       currentSid = m.sid;
+      currentT = 0;
+      if (had) { clear(); if (m.kind !== 'snapshot') hello(); }
     }
     currentT = Math.max(currentT, m.t);
     empty.hidden = true;
     apply(m);
   });
 
-  try { channel?.postMessage({ v: 1, sid: 'monitor', t: Date.now(), kind: 'hello' }); } catch { /* best effort */ }
+  hello();
   return { el: wrap };
 }
 

@@ -218,6 +218,7 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
   const empty = panel.querySelector<HTMLElement>('.mc-term-empty');
   const cursor = panel.querySelector<HTMLElement>('.mc-term-cursor')!;
   const queuedBadge = panel.querySelector<HTMLElement>('.mc-term-queued');
+  let lastFed: EngineState | null = null;
   const syncEmpty = () => { if (empty) empty.hidden = lines.childElementCount > 0; };
   syncEmpty();
   const api: EnginePanelUi = {
@@ -236,7 +237,7 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       const st = verbState(verb);
       if (st) bar?.set(engine, st, detail);
       feed?.publish({ kind: 'log', engine, verb, text: detail });
-      if (st) feed?.publish({ kind: 'state', engine, state: st, line: detail });
+      if (st && st !== lastFed) { lastFed = st; feed?.publish({ kind: 'state', engine, state: st, line: detail }); }
     },
     fail(detail) { api.log('fail', detail); },
     setWorking(working) {

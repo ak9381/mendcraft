@@ -4,7 +4,9 @@ import { PHONE_GROUPS, PHONE_PRIMARY, sheetStyle } from '../../src/canvas/phoneM
 
 const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
 const barMarkup = app.slice(app.indexOf('<div class="mc-bar-btns">'), app.indexOf('<form class="mc-say">'));
-const toolbarCmds = [...barMarkup.matchAll(/data-cmd="([a-z]+)"/g)].map((m) => m[1]);
+// Desktop-only tools (they open a second window) are deliberately absent on phones.
+const DESKTOP_ONLY = new Set(['monitor']);
+const toolbarCmds = [...barMarkup.matchAll(/data-cmd="([a-z]+)"/g)].map((m) => m[1]).filter((c) => !DESKTOP_ONLY.has(c!));
 
 describe('phone tools menu', () => {
   it('puts every desktop tool in exactly one place on phones', () => {

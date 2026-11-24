@@ -1271,3 +1271,6 @@ body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-arrange { display: none; }
   max-width: 200px; padding: 5px 6px 5px 12px; gap: 4px; font-size: 13px; z-index: 71;
 }
 .mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
+
+/* The AI monitor is a second-display tool: never offered on a phone. */
+.mc-phone [data-cmd="monitor"] { display: none; }

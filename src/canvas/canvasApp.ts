@@ -294,6 +294,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // review window — the board stays visible behind it.
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   if (phoneShell) {
+    root.querySelector('[data-cmd=monitor]')?.remove();
     const badge = document.createElement('div');
     badge.className = 'mc-route-badge';
     badge.setAttribute('role', 'status');
@@ -1220,7 +1221,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     ghostTimers.set(frameId, timers);
   }
-  function openMonitor(): void { window.open('/monitor.html', 'mendcraft-monitor'); }
+  function openMonitor(): void {
+    if (phoneShell) return;
+    const w = window.open('/monitor.html', 'mendcraft-monitor');
+    if (!w) say('Allow pop-ups to open the AI monitor.');
+  }
   function ledgerTotalRender(): void {
     const t = ledger.totals();
     aiPanel.querySelector('.mc-ai-ledger-total')!.textContent =

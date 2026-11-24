@@ -111,16 +111,27 @@ describe('AI monitor', () => {
     expect(hellos).toBe(1);
   });
 
-  it('follows the newest tab and ignores an older sid afterwards', () => {
+  it('follows the newest tab, and a tab can win again later (A, B, A)', () => {
     const { ch, col } = setup(false);
     const m = (sid: string, t: number, text: string) => ({ v: 1, sid, t, kind: 'log', engine: 'nano', verb: 'note', text });
     ch.toMonitor(m('A', 100, 'from A'));
     ch.toMonitor(m('B', 200, 'from B'));
+    expect(col('nano').text()).toContain('from B');
+    expect(col('nano').text()).not.toContain('from A');
     ch.toMonitor(m('A', 300, 'A again'));
-    const t = col('nano').text();
-    expect(t).toContain('from B');
-    expect(t).not.toContain('from A');
-    expect(t).not.toContain('A again');
+    expect(col('nano').text()).toContain('A again');
+    expect(col('nano').text()).not.toContain('from B');
+  });
+
+  it('asks the new sender for a snapshot when it switches tabs', () => {
+    const ch = bus();
+    const root = new FakeEl('main', doc);
+    mountMonitor(root as unknown as HTMLElement, ch.monitor);
+    const hellos: unknown[] = [];
+    ch.canvas.addEventListener('message', (e) => { if ((e.data as { kind?: string }).kind === 'hello') hellos.push(e.data); });
+    const m = (sid: string, t: number) => ({ v: 1, sid, t, kind: 'bytes', total: 1 });
+    ch.toMonitor(m('A', 1)); ch.toMonitor(m('B', 2));
+    expect(hellos).toHaveLength(1);
   });
 
   it('ignores a different sid whose message is older than the current tab', () => {
