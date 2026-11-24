@@ -227,6 +227,15 @@ export function seedDoc(): CanvasDoc {
   };
 }
 
+/** The size a focused board is SHOWN at so it clears the chrome: narrower
+ *  than `free` only when it fits ≥480 px, shorter than `freeH` (not on a
+ *  phone). null = its own size fits. Pure; never persisted. */
+export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number; freeH: number; phone: boolean }): { w: number; h: number } | null {
+  const w = o.free >= 480 && rect.w > o.free ? o.free : rect.w;
+  const h = !o.phone && rect.h > o.freeH ? o.freeH : rect.h;
+  return w === rect.w && h === rect.h ? null : { w, h };
+}
+
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   for (const El of [
     LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement,
@@ -251,6 +260,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let savedAt: string | null = null;
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  /** Display-only fitted size of the focused board (fitBoardWidth). */
+  const focusFit = new Map<string, { w: number; h: number }>();
   let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
 
   const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
@@ -1056,7 +1067,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); deviceSurfaces.untrack(el.dataset.frame!); el.remove(); } });
     for (const f of frames) {
       const el = frameEl(f);
-      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${f.rect.w}px`, height: `${f.rect.h}px` });
+      // The focused board may show narrower/shorter than its own size (see
+      // fitBoardWidth); that fit is display-only, never stored.
+      const fit = focusId === f.id ? focusFit.get(f.id) : undefined;
+      const w = fit?.w ?? f.rect.w, h = fit?.h ?? f.rect.h;
+      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: `${h}px` });
       el.querySelector('.mc-frame-title')!.textContent = f.title;
       el.querySelector('.mc-chip')!.textContent = f.pinned ? `${labelFor(f)} · pinned` : labelFor(f);
       const focused = focusId === f.id;
@@ -1146,19 +1161,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
    *  so its "Connect this room" call-to-action is on screen. */
   /** Narrow a focused board to the free width between the dock and the hand
-   *  cluster, so nothing on it sits under chrome. Never below 480px. */
+   *  cluster, so nothing on it sits under chrome. Never below 480px.
+   *  Display-only: the board's own size (registry + storage) is never
+   *  changed, so it grows back when the space returns, in overview, and
+   *  across reloads. Returns the board as it is shown (for the camera). */
   function fitBoardWidth(f: Frame): Frame {
     const ins = insets();
     const free = Math.floor(vp().w - ins.left - ins.right - 32);
     // Also clamp height to the space above the phones strip + engine bar (the
     // board scrolls inside), so its bottom stays reachable.
     const freeH = Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32));
-    const w = free >= 480 && f.rect.w > free ? free : f.rect.w;
-    const h = !phoneShell && f.rect.h > freeH ? freeH : f.rect.h;
-    if (w === f.rect.w && h === f.rect.h) return f;
-    reg.setRect(f.id, { ...f.rect, w, h });
-    sync(); persist();
-    return reg.get(f.id) ?? f;
+    const fit = fitFocusedSize(f.rect, { free, freeH, phone: phoneShell });
+    const had = focusFit.get(f.id);
+    if (fit) focusFit.set(f.id, fit); else focusFit.delete(f.id);
+    if (had?.w !== fit?.w || had?.h !== fit?.h) sync();
+    return fit ? { ...f, rect: { ...f.rect, ...fit } } : f;
   }
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
@@ -2918,6 +2935,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
+    // Pending writes and timers go first, so nothing fires into a torn-down canvas.
+    clearTimeout(persistTimer);
+    clearTimeout(wheelPersistTimer);
+    boardEdge.reset();
+    if (pairingStop) { void pairingStop(); pairingStop = null; }
+    hostSession = null;
+    nextChips?.destroy();
+    nextChips = null;
+    takePointChoice(); // clears its 20 s expiry timer
     pairFirst.cancel();
     if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
     phoneMenu?.destroy();
@@ -3485,9 +3511,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // focused board at a paired phone's edge. Nothing here bypasses a review.
   const replay: ReplayHost = {
     run,
-    // The pair-first flow claims "build the dashboard" before routeLine does.
-    routeOf: (text) => ((pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking') && isBuildDashboard(text)
-      ? 'pairFirst' : routeLine(text, routeWorld(routePlanBoard())).name),
+    // The same claim order as run(): an open morph card, then the pair-first
+    // flow ("build the dashboard"), then a pending point-choice answer, and
+    // only then routeLine.
+    routeOf: (text) => {
+      if (morphFlow?.claimsSpeech(text)) return 'morph';
+      if ((pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking') && isBuildDashboard(text)) return 'pairFirst';
+      if (pointChoice && pickPointChoice(text, pointChoice.choices)) return 'pointChoice';
+      return routeLine(text, routeWorld(routePlanBoard())).name;
+    },
     isReviewOpen: () => !!pending || reviewDialog.isOpen(),
     reviewTitle: () => root.querySelector('.mc-review-title')?.textContent ?? '',
     reviewApprove: keep,
