@@ -62,8 +62,14 @@ camera that is already running — check that in the on-device test
 `NSCameraUsageDescription`.
 
 Room scan by gimbal is **not** implemented on live runs (the app says so);
-`?sim=1` keeps the scripted, SIM-labelled scan. Pointing via the gimbal is not
-available on the iPhone: point-to-connect uses the laptop camera with Hands on.
+`?sim=1` keeps the scripted, SIM-labelled scan.
+
+**iPhone hand sensing** (`src/canvas/phoneSensor.ts`) runs hands + face on the
+one shared WebView camera (`phoneCamera.ts`) while the stand is docked, the
+Track pill is on, or a "follow my hands" / point request is active. It feeds
+the gimbal's hands mode and point-to-connect (the photo is cut from the same
+stream), never the UI. Hand **control** (Hands pill) is separate, off by
+default, and facing-gated. Both are untested on the device.
 
 ## Apple on-device AI (`MendcraftAppleAIPlugin.swift`)
 
