@@ -12,7 +12,7 @@ export interface ReplayBanner {
 }
 
 const CSS = `
-.mc-replay { position: fixed; z-index: 70; top: 8px; left: 50%; translate: -50% 0; max-width: calc(100vw - 32px);
+.mc-replay { position: fixed; z-index: 70; top: 72px; left: 50%; translate: -50% 0; max-width: calc(100vw - 32px);
   display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px;
   background: #2B2B2B; color: #F7F5F0; font-size: 14px; line-height: 1.3; box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
 .mc-replay-text { display: flex; flex-direction: column; min-width: 0; }

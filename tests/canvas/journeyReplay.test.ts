@@ -108,6 +108,19 @@ describe('journey replay player', () => {
     expect(g.approved).toEqual(['Connect: Lamp']);
   });
 
+  it('answers a clarifying question once, then approves the review it leads to', async () => {
+    const step: ReplayStep = { id: 'point', label: 'Point', action: { kind: 'say', text: "connect to what I'm pointing at" }, needsRoute: 'pointConnect', reviews: 1, answer: { when: /^Which one/, say: 'the reading lamp' } };
+    const f = fakeApp({ "connect to what I'm pointing at": { lines: ['Which one — Reading lamp or Main light?'] }, 'the reading lamp': { reviews: ['Connect: Reading lamp'] } }, { pointRoute: true });
+    const r = await createReplayPlayer(f.app, [step], { ...quick, sleep: f.sleep, now: f.now }).start();
+    expect(r.steps[0].outcome).toBe('done');
+    expect(f.ran).toEqual(["connect to what I'm pointing at", 'the reading lamp']);
+    expect(f.approved).toEqual(['Connect: Reading lamp']);
+    // No question asked: nothing extra is said.
+    const g = fakeApp({ "connect to what I'm pointing at": { reviews: ['Connect: Lamp'] } }, { pointRoute: true });
+    await createReplayPlayer(g.app, [step], { ...quick, sleep: g.sleep, now: g.now }).start();
+    expect(g.ran).toEqual(["connect to what I'm pointing at"]);
+  });
+
   it('fails on an unexpected review and on a review that never opens', async () => {
     const f = fakeApp({ save: { reviews: ['Surprise'] } });
     const r = await createReplayPlayer(f.app, [{ id: 's', label: 'S', action: { kind: 'say', text: 'save' } }], { ...quick, sleep: f.sleep, now: f.now }).start();
@@ -179,7 +192,6 @@ describe('the demo journey', () => {
     for (const step of DEMO_JOURNEY) {
       if (step.action.kind !== 'say' || step.id === 'build') continue; // "build the dashboard" belongs to the pair-first flow
       const r = routeLine(step.action.text, world).name;
-      if (step.needsRoute === 'pointConnect') continue; // skipped until that route lands
       expect(r, step.action.text).not.toBe('openEnded');
       if (step.needsRoute) expect(r, step.action.text).toBe(step.needsRoute);
     }

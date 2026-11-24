@@ -79,7 +79,9 @@ async function main() {
     // Every step lands; only a step whose route isn't in this build may skip.
     for (const s of result.steps) {
       const tag = `${s.outcome.padEnd(7)} ${s.id} (${(s.ms / 1000).toFixed(1)} s)${s.note ? ` — ${s.note}` : ''}`;
-      check(s.outcome === 'done' || (s.outcome === 'skipped' && s.id === 'point'), `step ${tag}`);
+      const fine = s.outcome === 'done' || (s.outcome === 'skipped' && s.id === 'point');
+      check(fine, `step ${tag}`);
+      if (!fine) for (const l of s.lines.slice(-6)) console.log(`       said: ${l}`);
     }
     check(result.ok, 'the whole journey played');
 

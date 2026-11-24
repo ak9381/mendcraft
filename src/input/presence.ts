@@ -145,6 +145,8 @@ export function createPresenceTracker(
   video.playsInline = true;
   video.muted = true;
   video.style.display = 'none';
+  // Tagged so point-to-connect grabs the very frame the landmarks came from.
+  video.setAttribute?.('data-mc-hand-tracker', '1');
   document.body.appendChild(video);
 
   const wantFaces = opts?.detectFaces !== false;

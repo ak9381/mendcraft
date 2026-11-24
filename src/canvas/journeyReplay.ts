@@ -44,6 +44,9 @@ export interface ReplayStep {
   needsRoute?: string;
   /** A status line said during the step must match. */
   expect?: RegExp;
+  /** The app asks a clarifying question (a line matching `when`): answer it
+   *  once, through run(), as she would. No question → nothing is said. */
+  answer?: { when: RegExp; say: string };
 }
 
 export const DEMO_JOURNEY: readonly ReplayStep[] = [
@@ -63,7 +66,9 @@ export const DEMO_JOURNEY: readonly ReplayStep[] = [
   { id: 'goto-room', label: 'Go to the Living room', action: { kind: 'say', text: 'go to living room' }, needsRoute: 'canvas' },
   { id: 'send', label: 'Send the board to the iPhone', action: { kind: 'sendBoard', to: 'ios' }, expect: /^Sent/ },
   { id: 'new-board', label: 'New board', chip: 'new-board', action: { kind: 'say', text: 'new board' } },
-  { id: 'point', label: 'Connect to what I’m pointing at', action: { kind: 'say', text: "connect to what I'm pointing at" }, needsRoute: 'pointConnect', reviews: 1 },
+  { id: 'point', label: 'Connect to what I’m pointing at', action: { kind: 'say', text: "connect to what I'm pointing at" }, needsRoute: 'pointConnect', reviews: 1,
+    // Two lamps are connected, so the app asks which one; she names the desk lamp.
+    answer: { when: /^Which one\b/, say: 'the reading lamp' } },
   { id: 'everything', label: 'Show everything', chip: 'everything', action: { kind: 'say', text: 'show everything' } },
 ];
 
@@ -151,6 +156,7 @@ export function createReplayPlayer(app: ReplayHost, steps: readonly ReplayStep[]
     let approved = 0;
     const start = now();
     let idleSince: number | null = null;
+    let answered = false;
     while (!stopped) {
       if (now() - start > timeout) {
         return { outcome: 'failed', note: `timed out (${approved}/${want} reviews approved${app.isReviewOpen() ? ', a review is waiting' : ''})`, mark };
@@ -165,6 +171,13 @@ export function createReplayPlayer(app: ReplayHost, steps: readonly ReplayStep[]
         app.reviewApprove();
         approved++;
         o.onNote?.('');
+      } else if (step.answer && !answered && app.statusSince(mark).some((l) => step.answer!.when.test(l))) {
+        answered = true;
+        idleSince = null;
+        o.onNote?.(`Replay · answering “${step.answer.say}”`);
+        await sleep(approveDelay);
+        if (stopped) break;
+        app.run(step.answer.say);
       } else if (app.isIdle() && approved >= want) {
         if (idleSince === null) idleSince = now();
         else if (now() - idleSince >= settle) return { outcome: 'done', mark };
