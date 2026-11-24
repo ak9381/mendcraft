@@ -91,15 +91,20 @@ export interface HandFeelConfig {
    *  fist frame to the first open frame) — a 1–2 frame relaxed-hand
    *  flicker is never a click. */
   tapMinClosedMs: number;
-  /** A tap only arms if the hand was open this long / this many frames
-   *  right before it closed… */
+  /** A tap only arms if the hand was not closed (geometrically) for this
+   *  long right before it closed… */
   tapMinOpenBeforeMs: number;
-  tapMinOpenBeforeFrames: number;
-  /** …the palm was moving slower than this (px/ms, unfiltered) as it
-   *  closed, and the target had been locked at least tapMinLockMs. */
+  /** …the palm's average speed over the last 3 frames (px/ms, unfiltered)
+   *  was below this as it closed, and the target had been locked at least
+   *  tapMinLockMs. */
   tapMaxPalmSpeed: number;
   tapMinLockMs: number;
-  /** Consecutive fist frames before a hand counts as closed (no time wait). */
+  /** Finger curl ratio (tip→wrist ÷ PIP→wrist; scale-free): below
+   *  curlOn a finger is curled, above extendOn it is extended, in between
+   *  it is neither — so a loose hand sits in the hysteresis band. */
+  curlOn: number;
+  extendOn: number;
+  /** Consecutive geometric-closed frames before a hand counts as closed (no time wait). */
   fistCloseFrames: number;
   /** Consecutive non-fist frames before a (non-grabbing) fist counts as open. */
   fistOpenFrames: number;
@@ -136,16 +141,43 @@ export const HAND_FEEL: HandFeelConfig = {
   fistTapMs: 300,
   fistMovePx: 20,
   tapCooldownMs: 400,
-  fistCloseFrames: 3,
+  fistCloseFrames: 2,
   fistOpenFrames: 3,
-  tapMinClosedMs: 80,
-  tapMinOpenBeforeMs: 150,
-  tapMinOpenBeforeFrames: 4,
-  tapMaxPalmSpeed: 0.5,
-  tapMinLockMs: 150,
+  tapMinClosedMs: 60,
+  tapMinOpenBeforeMs: 100,
+  tapMaxPalmSpeed: 0.8,
+  tapMinLockMs: 100,
+  curlOn: 1.0,
+  extendOn: 1.15,
   releaseGraceMs: 120,
   releaseGraceFrames: 3,
 };
+
+// ---------------------------------------------------------------- curl
+
+/** [PIP, TIP] for index, middle, ring, pinky. The thumb is ignored: a
+ *  natural quick fist often leaves it out (thumbs-up / pinch labels). */
+const FINGER_JOINTS = [[6, 8], [10, 12], [14, 16], [18, 20]] as const;
+
+/** Geometric hand state from finger curl alone (no classifier label):
+ *  'closed' = all four fingers curled (tip nearer the wrist than its PIP);
+ *  'open' = at least one finger clearly extended (≥3 for a flat palm, 1 for
+ *  a point — either way not a fist); 'between' = neither (a loose, half-
+ *  curled hand) — callers keep their previous state on these frames. */
+export function curlState(lm: readonly Pt[], cfg: Pick<HandFeelConfig, 'curlOn' | 'extendOn'> = HAND_FEEL): 'closed' | 'open' | 'between' {
+  if (!lm || lm.length < 21) return 'between';
+  const w = lm[0];
+  const d = (p: Pt) => Math.hypot(p.x - w.x, p.y - w.y);
+  let curled = 0, extended = 0;
+  for (const [pip, tip] of FINGER_JOINTS) {
+    const r = d(lm[tip]) / Math.max(1e-6, d(lm[pip]));
+    if (r < cfg.curlOn) curled++;
+    else if (r > cfg.extendOn) extended++;
+  }
+  if (curled === 4) return 'closed';
+  if (extended >= 1) return 'open';
+  return 'between';
+}
 
 // ---------------------------------------------------------------- anchor
 

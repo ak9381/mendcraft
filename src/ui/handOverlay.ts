@@ -28,6 +28,47 @@ export interface HandOverlayOptions {
    *  bold skeleton. Defaults to true — the skeleton only shows when this is
    *  explicitly `false` or the `?skeletonHands=1` query flag is set. */
   lowpoly?: boolean;
+  /** Where this hand's CURSOR is (client px), given its landmarks as drawn
+   *  (selfie-mirrored, normalised). When it returns a point, the drawn hand
+   *  is translated (scale kept) so its palm centre sits exactly on the
+   *  cursor — the cursor uses the palm + active box + smoothing, so without
+   *  this the hand and cursor drift apart. */
+  anchor?: (points: readonly Pt[]) => { x: number; y: number } | null;
+}
+
+const PALM_IDS = [0, 5, 9, 13, 17] as const;
+
+/** Mean of the palm landmarks (wrist + four MCPs). */
+export function overlayPalm(pts: readonly { x: number; y: number }[]): { x: number; y: number } {
+  let x = 0, y = 0;
+  for (const i of PALM_IDS) { x += pts[i]!.x; y += pts[i]!.y; }
+  return { x: x / PALM_IDS.length, y: y / PALM_IDS.length };
+}
+
+/** Translate a drawn hand (in place, scale kept) so its palm centre lands
+ *  on `target`. Returns the applied offset. */
+export function anchorPalmAt<T extends { x: number; y: number }>(pts: T[], target: { x: number; y: number }): { dx: number; dy: number } {
+  if (pts.length < 21) return { dx: 0, dy: 0 };
+  const c = overlayPalm(pts);
+  const dx = target.x - c.x, dy = target.y - c.y;
+  for (const p of pts) { p.x += dx; p.y += dy; }
+  return { dx, dy };
+}
+
+/** The cursor whose (unsmoothed) mapped palm is nearest this hand's mapped
+ *  palm — matches an overlay hand to its pointer slot by position, never by
+ *  MediaPipe Left/Right. */
+export function nearestCursor(
+  palm: { x: number; y: number },
+  cursors: readonly { palm: { x: number; y: number }; cursor: { x: number; y: number } }[],
+): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null; let bestD = Infinity;
+  for (const c of cursors) {
+    if (c.cursor.x < 0) continue;
+    const d = Math.hypot(c.palm.x - palm.x, c.palm.y - palm.y);
+    if (d < bestD) { bestD = d; best = c.cursor; }
+  }
+  return best;
 }
 
 const NUM_POINTS = 21;
@@ -342,6 +383,12 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
         st.drawn[i].y = st.smoothed[i].y;
       }
       capHandAroundTip(st.drawn);
+      // Glue the drawn palm to this hand's cursor (client px → canvas px).
+      const anchor = hand ? opts.anchor?.(hand.points) : null;
+      if (anchor) {
+        const r = container.getBoundingClientRect();
+        anchorPalmAt(st.drawn, { x: (anchor.x - r.left) * dpr, y: (anchor.y - r.top) * dpr });
+      }
       const nearUi = meshNearUi(container, st.drawn);
       const alpha = nearUi ? Math.min(st.opacity, NEAR_UI_ALPHA / LOWPOLY_FILL_ALPHA) : st.opacity;
       if (lowpoly) {

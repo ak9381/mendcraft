@@ -14,6 +14,7 @@ import {
   cursorAnchor,
   handScale,
   palmCenter,
+  curlState,
   pickPrimaryHand,
   pickForegroundHands,
   assignHandSlots,
@@ -270,5 +271,22 @@ describe('createToggleLatch (Tools flicker)', () => {
     expect(latch.allow(0)).toBe(true);
     expect(latch.allow(TOOLS_TOGGLE_GAP_MS - 1)).toBe(false);
     expect(latch.allow(TOOLS_TOGGLE_GAP_MS)).toBe(true);
+  });
+});
+
+describe('curlState: fist from finger geometry, thumb ignored', () => {
+  it('closed = all four fingers curled (thumb in or out); relaxed half-curl is in between; point/pinch are open', async () => {
+    const { synthFist, synthThumbOutFist, synthRelaxed, synthHand } = await import('../helpers/synthHands');
+    const { classifyGesture } = await import('../../src/input/gestures');
+    const W = 1000, H = 800;
+    expect(curlState(synthFist(500, 400, W, H))).toBe('closed');
+    const thumbOut = synthThumbOutFist(500, 400, W, H);
+    expect(curlState(thumbOut)).toBe('closed');
+    expect(classifyGesture(thumbOut as Pt[])).not.toBe('fist'); // the label the old rule tripped on
+    expect(curlState(synthRelaxed(500, 400, W, H))).toBe('between');
+    expect(curlState(synthHand(500, 400, false, W, H))).toBe('open');
+    expect(curlState(synthHand(500, 400, true, W, H))).toBe('open');
+    expect(HAND_FEEL.curlOn).toBe(1.0);
+    expect(HAND_FEEL.extendOn).toBe(1.15);
   });
 });

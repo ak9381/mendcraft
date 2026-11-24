@@ -126,7 +126,7 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
-  it('the facing pill is a small bottom-right chip above the face preview, clear of the AI panel and cluster', () => {
+  it('the facing pill is a large, high-contrast bottom-right chip above the face preview, clear of the AI panel, cluster and engine bar', () => {
     const base = ruleFor(canvasCss, '.mc-facing-banner');
     expect(base).toContain('pointer-events: none');
     // The later .mc-canvas override moves it to the bottom-right corner.
@@ -134,8 +134,15 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(chip).toContain('top: auto');
     expect(chip).toMatch(/right:\s*16px/);
     expect(chip).toMatch(/bottom:\s*calc\(16px/);
-    expect(chip).toMatch(/max-width:\s*200px/);
-    expect(canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0]).toMatch(/right:\s*16px/);
+    expect(chip).toMatch(/max-width:\s*300px/);
+    // Readable on camera: ≥20px pill text, a ≥200×150 face chip.
+    expect(chip).toMatch(/font-size:\s*20px/);
+    const face = canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0] ?? '';
+    expect(face).toMatch(/right:\s*16px/);
+    expect(face).toMatch(/width:\s*200px/);
+    expect(face).toMatch(/height:\s*150px/);
+    // …and lifted above the bottom-centre engine bar on narrower screens.
+    expect(canvasCss).toMatch(/@media \(max-width: 1100px\)[^@]*\.mc-canvas \.mc-face-preview \{ bottom: calc\(96px/);
     expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');
   });
 });

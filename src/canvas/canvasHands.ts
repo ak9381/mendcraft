@@ -226,6 +226,9 @@ export interface MountCanvasHandsOptions {
   suppressMotion?: (id: string) => boolean;
   /** Camera track ended while tracking (unplug / OS revoke) — not a start failure. */
   onCameraLost?: () => void;
+  /** The glass-hand overlay's anchor: this hand's cursor (client px), so
+   *  the drawn palm sits on the cursor (see HandOverlayOptions.anchor). */
+  handAnchor?: (points: readonly Pt[]) => { x: number; y: number } | null;
   /** Override FaceLandmarker. Laptop canvas defaults to off. */
   detectFaces?: boolean;
 }
@@ -288,7 +291,7 @@ export async function mountCanvasHands(
 
   try {
     const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
-    overlay = createHandOverlay(root);
+    overlay = createHandOverlay(root, { anchor: opts.handAnchor });
     // Compact face brackets at the top + a larger facing pill. FaceLandmarker
     // stays throttled (FACE_INTERVAL_MS) so this doesn't steal the hand tracker.
     facing = createFacingBanner(root);

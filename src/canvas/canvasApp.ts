@@ -74,7 +74,8 @@ import { activePeople, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, type HandPointer } from './handPointer';
+import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { nearestCursor } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
 import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
@@ -2206,8 +2207,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     })();
   }
   function onPresenceFrame(f: PresenceFrame): void {
-    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Hands only act while the user faces this screen: the same signal as
+    // the "Facing this device / Not facing" pill. No face seen = unknown,
+    // which never locks the hands (handPointer adds the hysteresis).
+    const op = f.faces.find((x) => x.isOperator) ?? f.faces[0];
+    handPointer?.setFacing?.(op ? op.facing : null, now);
+    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (pinchTwice.active() && f.hands[0]?.points) {
       const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
       const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
@@ -2274,6 +2280,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        // Draw each glass hand with its palm exactly on its cursor.
+        handAnchor: (points) => {
+          const cursors = handPointer?.cursors?.() ?? [];
+          if (!cursors.length) return null;
+          return nearestCursor(mapToScreen(palmCenter(points), innerWidth, innerHeight, false), cursors);
+        },
         onCameraLost: () => {
           if (scanPanel?.isOpen()) closeScan(CAMERA_LOST_REGISTER);
         },
