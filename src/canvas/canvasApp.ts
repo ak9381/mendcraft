@@ -82,6 +82,9 @@ import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createAiFeed } from './aiFeed';
+import { boardForJourney } from './journey';
+import { createNextStepChips, type NextChips } from './nextSteps';
+import { pickNextStepsOnDevice } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -226,6 +229,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let savedAt: string | null = null;
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
 
   const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
@@ -880,6 +884,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyCamera();
     editBoard.setFocus(focusId, !!focusId && !!surfaces[focusId]?.tiles.length);
     if (phoneShell && focusId) stampMorphTiles(focusId);
+    nextChips?.refresh();
   }
 
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
@@ -1596,6 +1601,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const before = pack;
     pack = next;
     applyStrings();
+    nextChips?.refresh();
     if (pending) tagCardI18n(pending.card);
     opts.voice?.setLang?.(resolveLanguage(next?.lang ?? 'en').speechLang);
     if (o.record) {
@@ -2057,6 +2063,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- offline (simulate + real) ----
   function setOnline(on: boolean, announce = false): void {
     net.setOnline(on);
+    nextChips?.refresh();
     const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
     btn.setAttribute('aria-pressed', String(!on));
     btn.dataset.i18n = on ? 'simulateOffline' : 'offlineOn'; // survives applyStrings
@@ -2856,6 +2863,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       },
     };
   }
+
+  // Next-step chips: 2–3 journey steps at the foot of the focused board,
+  // picked by Nano on this device (else the rule list, labelled "Suggested").
+  // Each chip runs a phrase run() already routes. Desktop only.
+  if (!phoneShell) nextChips = createNextStepChips({
+    root: world,
+    focused: () => {
+      const f = focusId ? reg.get(focusId) : undefined;
+      const el = f ? world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`) : null;
+      return f && el ? { id: f.id, el, board: boardForJourney(f, surfaces[f.id]) } : null;
+    },
+    ctx: () => ({
+      lang: pack?.lang ?? 'en', online: net.isOnline(), phones: 0, sim: !!opts.sim,
+      savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
+    }),
+    nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
+    run: (say) => { run(say); },
+    // A note line (feeds the AI monitor too); no turn running → no blinking cursor.
+    onNano: (line) => { const p = panels.forEngine('nano'); p.log('note', line); if (!turnBusy) p.setWorking(false); },
+  });
 
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();

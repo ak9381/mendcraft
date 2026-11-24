@@ -213,6 +213,8 @@ interface Models {
   handAdapt?: TextGenModel | null;
   /** Ramble condenser (ONLY_ON_DEVICE; the raw ramble never rides to the cloud). */
   condense?: TextGenModel | null;
+  /** Next-step chips: Nano picks ids from a fixed list (ONLY_ON_DEVICE; never cloud). */
+  nextSteps?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
   /** Cloud TTS model (spoken replies in her language); null if unsupported. */
@@ -259,6 +261,7 @@ export interface ModelOverrides {
   a11yExplainHedge?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
   condense?: TextGenModel | null;
+  nextSteps?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
   deviceSee?: MultimodalGenModel | null;
@@ -685,6 +688,7 @@ async function ensureModels(): Promise<Models | null> {
       a11yExplainHedge: testOverrides.a11yExplainHedge ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
       condense: testOverrides.condense ?? null,
+      nextSteps: testOverrides.nextSteps ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
       deviceSee: testOverrides.deviceSee ?? null,
@@ -893,6 +897,15 @@ async function initFirebase(): Promise<Models | null> {
         promptOptions: { responseConstraint: CONDENSE_CONSTRAINT },
       },
     });
+    // Next-step chips: ONLY_ON_DEVICE with no cloud params — the pick is a
+    // convenience, so a missing Nano means the rule list, never a cloud call.
+    const nextSteps = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
+      },
+    });
 
     // Server prompt-template model (@beta on the web SDK). Only used when a
     // template ID is set in Remote Config; otherwise the big jobs use the inline
@@ -1020,7 +1033,7 @@ async function initFirebase(): Promise<Models | null> {
     cached = {
       cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
       canvasCloud, canvasCloudHedge,
-      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, promptTemplate, tts,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, nextSteps, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
@@ -1056,6 +1069,7 @@ function blankModels(): Models {
     a11yExplainHedge: null,
     handAdapt: null,
     condense: null,
+    nextSteps: null,
     promptTemplate: null,
     tts: null,
     deviceSee: null,
@@ -1096,6 +1110,7 @@ async function withAppleModels(base: Models | null): Promise<Models | null> {
     fusionLang: appleTextModel(fusionConstraint, plugin),
     handAdapt: appleTextModel(PROFILE_CONSTRAINT, plugin),
     condense: appleTextModel(CONDENSE_CONSTRAINT, plugin),
+    nextSteps: appleTextModel(NEXT_STEPS_CONSTRAINT, plugin),
     cadTool: appleTextModel(CAD_TOOL_CONSTRAINT, plugin),
   };
   return { ...(base ?? blankModels()), ...overlay };
@@ -1972,6 +1987,40 @@ export async function condenseUtterance(
     return { text, fromWords: wordCount(utterance), toWords: wordCount(text), ms: Date.now() - t0 };
   } catch (err) {
     noteError('condense', err);
+    return null;
+  }
+}
+
+/** Prompt API responseConstraint for the next-step pick. */
+export const NEXT_STEPS_CONSTRAINT: Record<string, unknown> = {
+  type: 'object',
+  properties: { ids: { type: 'array', items: { type: 'string' } } },
+  required: ['ids'],
+};
+const NEXT_STEPS_TIMEOUT_MS = 2000;
+
+/**
+ * NEXT-STEP CHIPS (on-device only). Nano reorders a fixed list of step ids;
+ * the caller (canvas/nextSteps) parses the reply strictly. Same posture as
+ * condenseUtterance: ONLY_ON_DEVICE model, gated on Nano being ready, source
+ * re-checked. Null on any miss — the caller shows the rule list, labelled so.
+ */
+export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?: number }): Promise<string | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.nextSteps) return null;
+  if (deviceModelStatus === 'idle') await checkDeviceAvailability();
+  if (deviceModelStatus !== 'ready') return null;
+  try {
+    const { response } = await withTimeout(models.nextSteps.generateContent(prompt), opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS, 'next steps');
+    if (sourceOf(response) !== 'on-device') {
+      noteError('next steps', new Error('resolved off-device; using the rule list'));
+      return null;
+    }
+    recordInference('on-device', 'next-steps', Date.now() - t0);
+    return response.text();
+  } catch (err) {
+    noteError('next steps', err);
     return null;
   }
 }

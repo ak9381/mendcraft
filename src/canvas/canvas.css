@@ -1281,3 +1281,20 @@ body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-arrange { display: none; }
 
 /* The AI monitor is a second-display tool: never offered on a phone. */
 .mc-phone [data-cmd="monitor"] { display: none; }
+
+/* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
+   It is its own flex row under .mc-frame-body (which shrinks to make room),
+   so it never covers board content. ≥52px targets for dwell / touch. */
+.mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
+  border-radius: 0 0 18px 18px; }
+.mc-next-src { font-size: 13px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.mc-next[data-source=nano] .mc-next-src { color: var(--accent); }
+.mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
+  border-color: var(--border); font-size: 18px; }
+.mc-next-chip.mc-btn:hover { border-color: var(--accent); }
+.mc-next-chip.mc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+/* The phones arrange strip (.mc-arrange, sim / host session) floats over the
+   foot of the focused board — the focus insets don't count it. Give the chip
+   row room underneath so the strip sits over padding, not over the chips. */
+.mc-canvas:has(.mc-arrange:not([hidden])) .mc-next { padding-bottom: 64px; }
