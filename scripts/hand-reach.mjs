@@ -76,6 +76,25 @@ async function audit(page, state) {
   }, state);
 }
 
+// Reach-only audit for pages WITHOUT the canvas hand harness (the /mobile
+// companion doesn't register window.__mcHand). Uses collectControls to
+// enumerate interactive controls and records visibility + touch-target size —
+// a reachability proxy, not a dry-run activation. Additive: folds into `all`.
+async function auditReach(page, state) {
+  return page.evaluate((state) => {
+    const { collectControls, controlLabel } = window.__mcHandLib;
+    const res = [];
+    for (const el of collectControls(document)) {
+      const r = el.getBoundingClientRect();
+      const visible = r.width > 0 && r.height > 0 && !el.hidden;
+      res.push({ state, label: controlLabel(el), tag: el.tagName.toLowerCase(),
+        inShadow: el.getRootNode() !== document, w: Math.round(r.width), h: Math.round(r.height),
+        resolved: visible, activated: visible, snapsFromNear: false });
+    }
+    return res;
+  }, state);
+}
+
 // Waits for a selector to exist AND be on-screen; resolves false (never
 // throws) on timeout so a missing control is a recorded miss, not a hang.
 async function waitForVisible(page, selector, timeout = 8000) {
@@ -364,7 +383,32 @@ try {
     all.push(...await audit(page, 'showcase:editing')); // Grid/Tabs/Card top-level move+resize handles
     await page.screenshot({ path: join(OUT, 'showcase-editing.png') });
     real.push({ device: 'showcase', step: 'Done editing (hand)', ...await handPress(page, (el) => el.classList.contains('mc-edit-toggle')) });
+
+    // Laptop screen-arrangement strip (shown in sim): the Swap-sides button is a
+    // hand-reachable normal button — pinch-click it. Additive, same page/harness.
+    all.push(...await audit(page, 'arrange-strip'));
+    real.push({ device: 'showcase', step: 'Arrangement swap (hand)', ...await handPress(page, (el, l) => (el.classList && el.classList.contains('mc-arrange-swap')) || /swap sides/i.test(l)) });
     await page.close();
+
+    // Mobile companion dashboard (?sim=1&paired=1): audit the Pin button, the
+    // stays/goes split and arrangement controls for reach + touch size, on both
+    // the iPhone and Nothing viewports. No live network (sim). Reuses scBrowser
+    // (vite still up) so it never touches the per-device/arc loops.
+    for (const m of [
+      { name: 'ios', width: 393, height: 852, dpr: 3, platform: 'ios' },
+      { name: 'android', width: 412, height: 915, dpr: 2.625, platform: 'android' },
+    ]) {
+      const mp = await scBrowser.newPage();
+      await mp.setViewport({ width: m.width, height: m.height, deviceScaleFactor: m.dpr, isMobile: true, hasTouch: true });
+      await mp.goto(`${BASE}/mobile.html?sim=1&paired=1&mobileScreen=dashboard&platform=${m.platform}`, { waitUntil: 'networkidle2', timeout: 60000 });
+      await mp.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
+      await mp.waitForFunction(() => window.__mcHandLib, { timeout: 15000 });
+      await waitForVisible(mp, '[data-mc-pin]', 5000);
+      await sleep(300);
+      all.push(...await auditReach(mp, `mobile-${m.name}:dashboard`));
+      await mp.screenshot({ path: join(OUT, `mobile-${m.name}-dashboard.png`) });
+      await mp.close();
+    }
   } finally {
     await scBrowser.close();
   }
