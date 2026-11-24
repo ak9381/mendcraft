@@ -11,7 +11,7 @@ function hand(cx: number, cy: number, gap: number): Pt[] {
   return pts;
 }
 const OPEN = 0.15; // ratio 0.75 -> not pinching
-const PINCH = 0.006; // ratio 0.03 -> pinching (< 0.24)
+const PINCH = 0.006; // ratio 0.03 -> pinching (< 0.20)
 
 function setup() {
   const events: HandEvent[] = [];

@@ -54,12 +54,14 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
   const CLOSED = 0.02;
   const BETWEEN = (HAND_FEEL.pinchOn + HAND_FEEL.pinchOff) / 2;
 
-  it('needs engageFrames consecutive closed frames to engage', () => {
+  it('needs engageFrames and ~80 ms of closed hold to engage', () => {
     const m = createPinchMachine();
-    expect(m.update(CLOSED, 0).pinched).toBe(false); // one-frame debounce
-    const second = m.update(CLOSED, 33);
-    expect(second.pinched).toBe(true);
-    expect(second.justDown).toBe(true);
+    expect(m.update(CLOSED, 0).pinched).toBe(false);
+    expect(m.update(CLOSED, 33).pinched).toBe(false); // 2 frames, 33 ms — too short
+    expect(m.update(CLOSED, 66).pinched).toBe(false); // 3 frames, 66 ms — still under 80 ms
+    const held = m.update(CLOSED, 99);
+    expect(held.pinched).toBe(true);
+    expect(held.justDown).toBe(true);
   });
 
   it('a 1–2 frame dip never engages (no click from tracking noise)', () => {
@@ -73,7 +75,7 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
 
   it('does not chatter around the threshold (hysteresis band holds)', () => {
     const m = createPinchMachine();
-    for (const t of [0, 33]) m.update(CLOSED, t);
+    for (const t of [0, 33, 66, 99]) m.update(CLOSED, t);
     expect(m.pinched).toBe(true);
     // Drifting into the between-band must NOT release…
     for (const t of [100, 133, 166, 200]) expect(m.update(BETWEEN, t).pinched).toBe(true);
@@ -86,13 +88,13 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
 
   it('refractory: no new engage right after a click', () => {
     const m = createPinchMachine();
-    for (const t of [0, 33]) m.update(CLOSED, t);
-    m.update(OPEN, 100);
-    m.update(OPEN, 133); // released → click at t=133
-    for (const t of [166, 200, 233, 266]) m.update(CLOSED, t);
+    for (const t of [0, 33, 66, 99]) m.update(CLOSED, t);
+    m.update(OPEN, 133);
+    m.update(OPEN, 166); // released → click at t=166
+    for (const t of [200, 233, 266, 299, 332]) m.update(CLOSED, t);
     expect(m.pinched).toBe(false); // still inside refractoryMs
-    for (const t of [700, 733]) m.update(CLOSED, t);
-    expect(m.pinched).toBe(true); // refractory over
+    for (const t of [700, 733, 766, 799]) m.update(CLOSED, t);
+    expect(m.pinched).toBe(true); // refractory over + 80 ms hold
   });
 });
 

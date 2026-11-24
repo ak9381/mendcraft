@@ -34,8 +34,10 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
 // interaction profile may tighten or loosen these per user.
 // Units: thumb–index tip / wrist→middle-MCP, same as trace `pinchDistance`.
 // Real MediaPipe closes around 0.18–0.20, not 0.045 (synthetic almost-touch).
-export const DEFAULT_PINCH_ON = 0.24;
-export const DEFAULT_PINCH_OFF = 0.33;
+// Enter 0.20 / exit 0.30 is a tighter band than the 0.24 / 0.33 live-test
+// default; the pointer also holds ~80 ms before pinch-down.
+export const DEFAULT_PINCH_ON = 0.20;
+export const DEFAULT_PINCH_OFF = 0.30;
 
 /** Runtime pinch band (defaults, then first-run/Tools or a rolling baseline). */
 export const PINCH_LIVE = { on: DEFAULT_PINCH_ON, off: DEFAULT_PINCH_OFF };

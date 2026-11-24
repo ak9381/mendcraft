@@ -36,6 +36,8 @@ export interface HandFeelConfig {
   pinchOff: number;
   /** Consecutive frames below pinchOn before a pinch engages. */
   engageFrames: number;
+  /** A pinch must also stay closed this long (ms) before pinch-down. */
+  engageMs: number;
   /** Consecutive frames above pinchOff before a pinch releases. */
   releaseFrames: number;
   /** After a click (pinch release), no new pinch can engage for this long. */
@@ -67,9 +69,10 @@ export const HAND_FEEL: HandFeelConfig = {
   cursorFilter: { minCutoff: 0.9, beta: 5, dCutoff: 1 },
   pinchFilter: { minCutoff: 2.5, beta: 8, dCutoff: 1 },
   deadZonePx: 2.5,
-  pinchOn: 0.24,
-  pinchOff: 0.33,
-  engageFrames: 2,
+  pinchOn: 0.20,
+  pinchOff: 0.30,
+  engageFrames: 3,
+  engageMs: 80,
   releaseFrames: 2,
   refractoryMs: 500,
   freezeLookbackMs: 100,
@@ -219,35 +222,56 @@ export interface PinchMachine {
 
 /**
  * Debounced pinch with hysteresis + refractory: engages only after
- * engageFrames consecutive frames below pinchOn (a 1–2 frame tracking dip can
- * never click), releases after releaseFrames above pinchOff, and refuses to
- * re-engage for refractoryMs after a release (one pinch = one click).
+ * engageFrames consecutive closed frames AND at least engageMs of continuous
+ * close (a 1–2 frame tracking dip can never click), releases after
+ * releaseFrames above pinchOff, and refuses to re-engage for refractoryMs
+ * after a release (one pinch = one click). A gap longer than engageMs
+ * between closed frames restarts the hold.
  */
 export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachine {
   let pinched = false;
   let below = 0;
   let above = 0;
+  let belowSince = -1;
+  let lastBelowAt = -Infinity;
   let lastClickAt = -Infinity;
+  const engageMs = cfg.engageMs ?? 80;
+  const gapMs = engageMs;
 
   return {
     update(ratio, now, on = cfg.pinchOn, off = cfg.pinchOff) {
       let justDown = false;
       let justUp = false;
       if (!pinched) {
-        below = ratio < on ? below + 1 : 0;
-        if (below >= cfg.engageFrames && now - lastClickAt >= cfg.refractoryMs) {
-          pinched = true; justDown = true; below = 0; above = 0;
+        if (ratio < on) {
+          if (belowSince < 0 || now - lastBelowAt > gapMs) {
+            below = 0;
+            belowSince = now;
+          }
+          below += 1;
+          lastBelowAt = now;
+        } else {
+          below = 0;
+          belowSince = -1;
+        }
+        if (
+          below >= cfg.engageFrames
+          && belowSince >= 0
+          && now - belowSince >= engageMs
+          && now - lastClickAt >= cfg.refractoryMs
+        ) {
+          pinched = true; justDown = true; below = 0; belowSince = -1; above = 0;
         }
       } else {
         above = ratio > off ? above + 1 : 0;
         if (above >= cfg.releaseFrames) {
-          pinched = false; justUp = true; above = 0; below = 0; lastClickAt = now;
+          pinched = false; justUp = true; above = 0; below = 0; belowSince = -1; lastClickAt = now;
         }
       }
       return { pinched, justDown, justUp };
     },
     get pinched() { return pinched; },
-    reset() { pinched = false; below = 0; above = 0; lastClickAt = -Infinity; },
+    reset() { pinched = false; below = 0; above = 0; belowSince = -1; lastBelowAt = -Infinity; lastClickAt = -Infinity; },
   };
 }
 

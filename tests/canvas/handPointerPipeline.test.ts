@@ -225,7 +225,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(500, 400, false, 5); // enter mid-screen
     feed(160, 50, false, 15); // move to the control and dwell (top edge: reachable)
     expect(hp.target).toBe(btn);
-    feed(160, 50, true, 3); // deliberate pinch: 3 debounced frames
+    feed(160, 50, true, 4); // deliberate pinch: 3 frames + ~80 ms hold
     feed(160, 50, false, 3); // release → click
     expect(btn.click).toHaveBeenCalledTimes(1);
     feed(160, 50, false, 10); // keep hovering: nothing more
@@ -247,7 +247,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(btn);
     // The hand lurches while closing (typical pinch motion): the frames during
     // the pinch sit far away from the button…
-    feed(420, 260, true, 3);
+    feed(420, 260, true, 4);
     feed(420, 260, false, 3); // release far away too
     // …but the click lands where the hand was BEFORE the pinch began.
     expect(btn.click).toHaveBeenCalledTimes(1);
@@ -304,7 +304,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(160, 50, false, 15);
     const cursor = cursorElOf(doc);
     expect(cursor.classList.contains('is-pinched')).toBe(false);
-    feed(160, 50, true, 3); // debounced into the pinch
+    feed(160, 50, true, 4); // debounced into the pinch (~80 ms)
     expect(cursor.classList.contains('is-pinched')).toBe(true);
     feed(160, 50, false, 3); // release → click
     expect(cursor.classList.contains('is-pinched')).toBe(false);

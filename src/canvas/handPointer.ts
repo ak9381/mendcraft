@@ -28,7 +28,7 @@ import { handLabelOf } from './handSpace';
 import { fieldCaretAt } from '../input/caretAt';
 import { INDEX_TIP, PINCH_LIVE } from '../input/handLogic';
 import { createPinchBaseline } from '../input/pinchBaseline';
-import { classifyGesture, isClosingToFist, isTwoFingerScrollPose, type Pt as GesturePt } from '../input/gestures';
+import { classifyGesture, createPointFistGate, isClosingToFist, isTwoFingerScrollPose, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -420,6 +420,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let palmExitSince = -1;
   let palmScrolling = false;
   let lastHandedness: string | null = null;
+  const pointFist = createPointFistGate();
   const palmMotion = createPalmScroll();
   let pinchFocus: HTMLElement | null = null;
   let confirmStarted = 0;
@@ -992,7 +993,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     lastOpenTip = null; frozen = null; pinchAnchor = null;
     dwellStart = 0; dwellOrigin = null; dwellTarget = null; dwellFiredFor = null; dwellProgress = 0;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
-    euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); pinchBase.reset(); history.reset(); sticky.reset(); clickTraceId = null;
+    euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); pinchBase.reset(); history.reset(); sticky.reset(); pointFist.reset(); clickTraceId = null;
     edge.markLeave(clock || now(), pt.x >= 0 ? pt : null);
     pinchHeld = false; pinchDownTs = null;
     palmScrolling = false; palmSince = -1; palmExitSince = -1; palmMotion.reset();
@@ -1038,7 +1039,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // would otherwise fire a click on every fist). It drags live — no
       // freeze — and never taps on release.
       lastHandedness = handLabelOf(h) ?? lastHandedness;
-      const rawPose = classifyGesture(h as unknown as GesturePt[], lastHandedness);
+      const rawClass = classifyGesture(h as unknown as GesturePt[], lastHandedness);
+      const rawPose = pointFist.update(rawClass, h as unknown as GesturePt[], t, lastHandedness);
       lastRatio = pinchRatio(h);
       const rawRatio = pinchRatio(h);
       if (rawRatio < PINCH_LIVE.off) pinchAnchor = { x: h[INDEX_TIP].x, y: h[INDEX_TIP].y };

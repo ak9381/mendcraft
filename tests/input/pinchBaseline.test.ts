@@ -22,9 +22,8 @@ describe('thresholdsFromMinOpen (trace units)', () => {
   });
 
   it('defaults sit in the same units as the trace (not the old 0.045 band)', () => {
-    expect(DEFAULT_PINCH_ON).toBeCloseTo(0.24);
-    expect(DEFAULT_PINCH_OFF).toBeCloseTo(0.33);
-    expect(DEFAULT_PINCH_ON).toBeGreaterThan(0.20);
+    expect(DEFAULT_PINCH_ON).toBeCloseTo(0.20);
+    expect(DEFAULT_PINCH_OFF).toBeCloseTo(0.30);
     expect(DEFAULT_PINCH_OFF).toBeGreaterThan(DEFAULT_PINCH_ON);
   });
 });

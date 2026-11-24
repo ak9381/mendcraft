@@ -41,7 +41,7 @@ const PINKY = [17, 18, 20] as const;
  *  DEFAULT_PINCH_ON (handLogic.ts) and HAND_FEEL.pinchOn (handFeel.ts) so a
  *  "pinch" means the same thing to the pointer, the keep gesture and the
  *  overlay — a consistency test guards it. */
-export const PINCH_CLASSIFY = 0.24;
+export const PINCH_CLASSIFY = 0.20;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -268,9 +268,126 @@ export function isTwoFingerScrollPose(p: Pt[], handedness?: string | null): bool
 }
 
 /**
+ * Mirror x about the palm centre so a Left hand can be scored with the same
+ * signed thumb/curl tests as a Right hand. Distances are unchanged.
+ */
+export function handednessCanonical(p: Pt[], handedness?: string | null): Pt[] {
+  if (!p || p.length < 21) return p;
+  if (parseHandedness(handedness) !== 'Left') return p;
+  const c = palmCenter(p);
+  return p.map((q) => ({ ...q, x: 2 * c.x - q.x, y: q.y }));
+}
+
+/** Signed thumb position along pinky-MCP → index-MCP, in hand sizes, after
+ *  canonicalizing a Left hand. Positive = thumb/index side of the palm. */
+export function thumbPalmSide(p: Pt[], handedness?: string | null): number {
+  if (!p || p.length < 21) return 0;
+  const q = handednessCanonical(p, handedness);
+  const hs = handSize(q);
+  const pinky = q[PINKY[0]];
+  const index = q[INDEX[0]];
+  const thumb = q[THUMB_TIP];
+  const ax = index.x - pinky.x, ay = index.y - pinky.y;
+  const len = Math.hypot(ax, ay) || 1;
+  return ((thumb.x - pinky.x) * ax + (thumb.y - pinky.y) * ay) / len / hs;
+}
+
+/** True when the index has actually joined a fist — not a pointing finger
+ *  that only dipped toward the palm. Uses the handedness-canonical hand. */
+export function isIndexCurled(p: Pt[], handedness?: string | null): boolean {
+  if (!p || p.length < 21) return false;
+  const q = handednessCanonical(p, handedness);
+  const r = tipPalmRatio(q, 8);
+  if (fingerStates(q).index && r >= OPEN_PALM_REACH) return false;
+  const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+  return r <= FIST_TIP_RATIO && r <= others + 0.08;
+}
+
+/** Point ↔ fist must be held this long before the stable pose flips. */
+export const POINT_FIST_HOLD_MS = 120;
+
+export interface PointFistGate {
+  update(pose: StaticGesture, p: Pt[] | null | undefined, t: number, handedness?: string | null): StaticGesture;
+  reset(): void;
+}
+
+/**
+ * Sticky point/fist gate. A fist is accepted only when the index is actually
+ * curled, and point↔fist flips wait `holdMs`. A clearly reaching index
+ * leaves a fist immediately so a point can still pinch. When `p` is missing
+ * (trace replay with no landmarks), only the time debounce is applied.
+ */
+export function createPointFistGate(holdMs = POINT_FIST_HOLD_MS): PointFistGate {
+  let stable: StaticGesture | null = null;
+  let pending: 'point' | 'fist' | null = null;
+  let since = -1;
+
+  const relabel = (pose: StaticGesture, p: Pt[] | null | undefined, handedness?: string | null): StaticGesture => {
+    if (pose !== 'fist' || !p || p.length < 21) return pose;
+    if (isIndexCurled(p, handedness)) return 'fist';
+    const q = handednessCanonical(p, handedness);
+    const r = tipPalmRatio(q, 8);
+    const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+    if (fingerStates(q).index || r >= OPEN_PALM_REACH || r >= others + 0.18) return 'point';
+    return pose;
+  };
+
+  const clearlyPointing = (p: Pt[] | null | undefined, handedness?: string | null): boolean => {
+    if (!p || p.length < 21) return false;
+    const q = handednessCanonical(p, handedness);
+    const r = tipPalmRatio(q, 8);
+    const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+    return (fingerStates(q).index || r >= OPEN_PALM_REACH) && r >= others + 0.18;
+  };
+
+  return {
+    update(pose, p, t, handedness) {
+      const next = relabel(pose, p, handedness);
+      if (next !== 'point' && next !== 'fist') {
+        stable = next;
+        pending = null;
+        since = -1;
+        return next;
+      }
+      if (stable !== 'point' && stable !== 'fist') {
+        stable = next;
+        pending = null;
+        since = -1;
+        return next;
+      }
+      if (next === stable) {
+        pending = null;
+        since = -1;
+        return stable;
+      }
+      // A clearly reaching index may leave a fist immediately (pinch from point).
+      if (stable === 'fist' && next === 'point' && clearlyPointing(p, handedness)) {
+        stable = 'point';
+        pending = null;
+        since = -1;
+        return 'point';
+      }
+      if (pending !== next) {
+        pending = next;
+        since = t;
+      }
+      if (since >= 0 && t - since >= holdMs) {
+        stable = next;
+        pending = null;
+        since = -1;
+        return stable;
+      }
+      return stable;
+    },
+    reset() { stable = null; pending = null; since = -1; },
+  };
+}
+
+/**
  * Classify a single hand's static pose from its 21 landmarks (any coordinate
  * convention — only relative distances matter). Pure and deterministic.
- * `handedness` is used for the two-finger scroll thumb-tuck test.
+ * `handedness` mirrors thumb/curl tests for a Left hand and is used for
+ * the two-finger scroll thumb-tuck test.
  */
 export function classifyGesture(p: Pt[], handedness?: string | null): StaticGesture {
   if (!p || p.length < 21) return 'none';
@@ -285,7 +402,10 @@ export function classifyGesture(p: Pt[], handedness?: string | null): StaticGest
   // than its PIP (so `allOpen` is true) and a low thumb–index ratio (so
   // pinch would win). Tips near the palm are the reliable signal.
   if (fistLike && s.thumb && p[THUMB_TIP].y < p[WRIST].y && thumbPalm >= THUMB_UP_RATIO) return 'thumbs-up';
-  if (fistLike) return 'fist';
+  // A fist needs the index actually curled. A pointing index (including a
+  // left-hand point with the thumb tucked on the index side of the palm)
+  // must not snap to fist; pinch can still fire from that point.
+  if (fistLike && isIndexCurled(p, handedness)) return 'fist';
   // Restore the 4fefac0 pinch rule (thumb–index gap + reaching index).
   // Do NOT require a large index-to-palm ratio — that stole real webcam
   // pinches (and therefore two-hand zoom) after 1f4f2ec. A tighter
