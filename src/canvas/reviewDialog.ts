@@ -1,12 +1,20 @@
 import { SCREEN_MARGIN_PX } from './handEdge';
 import { mountDraggablePanel } from './dragPanel';
+import { NO_VISIBLE_CHANGE, type PlanChange } from './planDiff';
 
-// Compact floating review window: whenever a Proposal needs a human
-// decision it opens here (~360px, top-right inside the 24px safe zone) so
-// the board stays visible behind it. Fist-grab or mouse-drag the title bar
-// to move it. Esc / ✕ close WITHOUT deciding — the proposal stays waiting
-// so voice/pinch keep·drop still work. Approve/Reject proxy-click the same
-// .mc-proposal-keep/.mc-proposal-drop buttons already on the card.
+// Floating review window: whenever a Proposal needs a human decision it opens
+// here (~560px, top-right inside the 24px safe zone, left of the hand
+// cluster) so the board stays visible behind it. It reads like a PLAN:
+//   header  — title + which engine made it (+ SIM when scripted)
+//   asked   — "You asked: …"
+//   THE PLAN — + / ~ / − lines of what will change (scrolls on its own)
+//   footer  — why that engine, and what left this device (real ledger bytes)
+//   actions — Approve / Reject / Ask for something else (always visible)
+// Fist-grab or mouse-drag the title bar to move it; drag (or pinch-drag) the
+// bottom-right corner to resize it — the size is remembered. Esc / ✕ close
+// WITHOUT deciding — the proposal stays waiting so voice/pinch keep·drop
+// still work. Approve/Reject proxy-click the same .mc-proposal-keep /
+// .mc-proposal-drop buttons on the (hidden) card.
 
 export type ReviewAction = 'approve' | 'reject' | 'ask-else';
 
@@ -18,8 +26,40 @@ export function reviewActionFor(action: ReviewAction): 'keep' | 'drop' | null {
   return null;
 }
 
-/** Width of the floating review window (px). */
-export const REVIEW_WINDOW_WIDTH = 360;
+/** Default width of the floating review window (px). */
+export const REVIEW_WINDOW_WIDTH = 560;
+/** Smallest a corner-drag may make the window. */
+export const REVIEW_MIN_SIZE = { width: 420, height: 320 } as const;
+/** Largest, as a fraction of the viewport. */
+export const REVIEW_MAX_FRACTION = { width: 0.8, height: 0.85 } as const;
+const SIZE_KEY = 'mc.reviewSize';
+
+export interface ReviewSize { width: number; height: number }
+
+/** Clamp a corner-drag to [420×320, 80vw×85vh]. On a viewport too small for
+ *  the minimum, the viewport cap wins so the window never runs off screen. */
+export function clampReviewSize(size: ReviewSize, vp: { width: number; height: number }): ReviewSize {
+  const maxW = Math.max(160, Math.floor(vp.width * REVIEW_MAX_FRACTION.width));
+  const maxH = Math.max(160, Math.floor(vp.height * REVIEW_MAX_FRACTION.height));
+  return {
+    width: Math.round(Math.min(Math.max(size.width, REVIEW_MIN_SIZE.width), maxW)),
+    height: Math.round(Math.min(Math.max(size.height, REVIEW_MIN_SIZE.height), maxH)),
+  };
+}
+
+type SizeStorage = Pick<Storage, 'getItem' | 'setItem'>;
+export function loadReviewSize(storage: SizeStorage | null | undefined): ReviewSize | null {
+  try {
+    const raw = storage?.getItem(SIZE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<ReviewSize>;
+    if (typeof v.width === 'number' && typeof v.height === 'number' && v.width > 0 && v.height > 0) return { width: v.width, height: v.height };
+  } catch { /* corrupt or unavailable — use the default size */ }
+  return null;
+}
+export function saveReviewSize(storage: SizeStorage | null | undefined, size: ReviewSize): void {
+  try { storage?.setItem(SIZE_KEY, JSON.stringify(size)); } catch { /* storage unavailable — size just won't persist */ }
+}
 
 /** Starting top-right origin, inside the screen margin and clear of the
  *  tools bar and the always-open AI drawer. */
@@ -40,12 +80,31 @@ export function reviewWindowStart(
   return { top, right };
 }
 
+/** The honest receipt under the plan: who made it, why there, what left. */
+export interface ReviewFacts {
+  /** 'nano' | 'gemini' | 'rules' | 'apple' … — where it actually ran. */
+  engine: string;
+  /** Overrides the chip text (e.g. the teach panel's own engine label). */
+  engineLabel?: string;
+  sim?: boolean;
+  youAsked?: string;
+  /** Why that engine (the route line). */
+  why?: string;
+  /** What left this device, in words (null/'' = nothing). */
+  sentWhat?: string | null;
+  /** Bytes the ledger recorded for this turn; undefined = not measured. */
+  bytes?: number;
+}
+
 export interface ReviewDialogModel {
   title: string;
   /** The rendered Proposal card (keep/drop buttons already wired). */
   card: HTMLElement;
   /** Extra context: what each model did, prompts sent, stayed-local strip. */
   extra?: HTMLElement | null;
+  /** THE PLAN: what will change on the board (see planDiff.ts). */
+  changes?: PlanChange[] | null;
+  facts?: ReviewFacts | null;
 }
 
 export interface ReviewDialog {
@@ -55,6 +114,50 @@ export interface ReviewDialog {
   currentCard(): HTMLElement | null;
   destroy(): void;
 }
+
+const ENGINE_NAMES: Record<string, string> = { nano: 'Nano', gemini: 'Gemini', rules: 'Rules', apple: 'Apple' };
+export function engineName(engine: string): string {
+  return ENGINE_NAMES[engine.toLowerCase()] ?? (engine ? engine[0].toUpperCase() + engine.slice(1) : 'AI');
+}
+/** "Nano · on this device" / "Gemini · cloud". */
+export function engineChipText(facts: Pick<ReviewFacts, 'engine' | 'engineLabel'>): string {
+  if (facts.engineLabel) return facts.engineLabel;
+  const e = facts.engine.toLowerCase();
+  return e === 'gemini' ? 'Gemini · cloud' : `${engineName(e)} · on this device`;
+}
+export function formatReviewBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+/** Route lines often start with the engine chip's own words ("SIM · Nano · on
+ *  device — …"); the chip already says that, so keep only the reason. */
+function reasonOnly(why: string): string {
+  return why.replace(/^SIM · /, '').replace(/^(Nano|Gemini|Apple|Rules|Quick|Deep)\b[^—]*—\s*/i, '').trim();
+}
+const DEFAULT_WHY: Record<string, string> = {
+  nano: 'a quick draft, made right here on this device',
+  rules: 'a fixed rule on this device, no model needed',
+  apple: 'made right here on this device',
+};
+/** The footer's two honest lines. `leftWhat` + `leftBytes` are `left` split so
+ *  the byte count can never be cut off by an ellipsis. */
+export function honestyLines(facts: ReviewFacts): { why: string | null; left: string; leftWhat: string; leftBytes: string } {
+  const engine = facts.engine.toLowerCase();
+  let reason = facts.why ? reasonOnly(facts.why) : '';
+  // "nothing left this device" is the next line's job, not a reason.
+  if (/^nothing (left|sent)\b/i.test(reason)) reason = '';
+  if (!reason) reason = DEFAULT_WHY[engine] ?? '';
+  const why = reason ? `Why ${engineName(engine)}: ${reason}` : null;
+  const nothing = facts.bytes === 0 || (!facts.sentWhat && facts.bytes == null);
+  if (nothing) return { why, left: 'Nothing left this device.', leftWhat: 'Nothing left this device.', leftBytes: '' };
+  const leftWhat = `What left this device: ${(facts.sentWhat || 'your request').replace(/\.\s*$/, '')}`;
+  const leftBytes = facts.bytes != null ? ` · ${formatReviewBytes(facts.bytes)}` : '';
+  return { why, left: leftWhat + leftBytes, leftWhat, leftBytes };
+}
+
+const OP_SIGN: Record<PlanChange['op'], string> = { add: '+', change: '~', remove: '−' };
+const OP_WORD: Record<PlanChange['op'], string> = { add: 'Add', change: 'Change', remove: 'Remove' };
 
 function btn(doc: Document, cls: string, label: string, onClick: () => void, i18n?: string): HTMLButtonElement {
   const b = doc.createElement('button');
@@ -66,10 +169,18 @@ function btn(doc: Document, cls: string, label: string, onClick: () => void, i18
   return b;
 }
 
+function el<K extends keyof HTMLElementTagNameMap>(doc: Document, tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
+  const e = doc.createElement(tag);
+  e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
 export function mountReviewDialog(
   root: HTMLElement,
   handlers: { onAskElse?: () => void } = {},
   doc: Document = document,
+  storage: SizeStorage | null = (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; } })(),
 ): ReviewDialog {
   const dialog = doc.createElement('div');
   dialog.className = 'mc-review-dialog';
@@ -78,25 +189,45 @@ export function mountReviewDialog(
   dialog.setAttribute('aria-labelledby', 'mc-review-title');
   dialog.hidden = true;
 
-  const head = doc.createElement('div');
-  head.className = 'mc-review-head';
-  const drag = doc.createElement('div');
-  drag.className = 'mc-review-drag';
+  const head = el(doc, 'div', 'mc-review-head');
+  const drag = el(doc, 'div', 'mc-review-drag');
   drag.setAttribute('data-mc-drag-handle', '');
   drag.setAttribute('role', 'button');
   drag.setAttribute('tabindex', '0');
   drag.setAttribute('aria-label', 'Move review window');
-  const body = doc.createElement('div');
-  body.className = 'mc-review-body';
-  const titleEl = doc.createElement('h2');
-  titleEl.className = 'mc-review-title';
+  const titleEl = el(doc, 'h2', 'mc-review-title');
   titleEl.id = 'mc-review-title';
-  const extraEl = doc.createElement('div');
-  extraEl.className = 'mc-review-extra';
-  const cardHost = doc.createElement('div');
-  cardHost.className = 'mc-review-card-host';
-  const actions = doc.createElement('div');
-  actions.className = 'mc-review-actions';
+  const chipRow = el(doc, 'div', 'mc-review-chips');
+  const engineChip = el(doc, 'span', 'mc-review-engine');
+  const simChip = el(doc, 'span', 'mc-review-sim', 'SIM');
+  simChip.setAttribute('title', 'Simulated: a prepared reply, no real model call');
+  chipRow.append(engineChip, simChip);
+  const titleWrap = el(doc, 'div', 'mc-review-titles');
+  titleWrap.append(titleEl, chipRow);
+
+  const body = el(doc, 'div', 'mc-review-body');
+  const askedEl = el(doc, 'p', 'mc-review-asked');
+  const planSec = el(doc, 'section', 'mc-review-plan');
+  planSec.setAttribute('aria-label', 'The plan');
+  const planHead = el(doc, 'h3', 'mc-review-plan-head', 'The plan');
+  const planList = el(doc, 'ol', 'mc-review-plan-list');
+  const cardHost = el(doc, 'div', 'mc-review-card-host');
+  const extraEl = el(doc, 'div', 'mc-review-extra');
+  const moreEl = el(doc, 'details', 'mc-review-more');
+  const moreSum = el(doc, 'summary', 'mc-review-more-sum', 'Show the work');
+  moreEl.append(moreSum, extraEl);
+  planSec.append(planHead, planList, cardHost, moreEl);
+  const honesty = el(doc, 'footer', 'mc-review-honesty');
+  const whyEl = el(doc, 'p', 'mc-review-why');
+  const leftEl = el(doc, 'p', 'mc-review-left');
+  honesty.append(whyEl, leftEl);
+  const actions = el(doc, 'div', 'mc-review-actions');
+  const resize = el(doc, 'span', 'mc-review-resize');
+  resize.setAttribute('data-mc-resize-handle', '');
+  resize.setAttribute('role', 'button');
+  resize.setAttribute('tabindex', '-1');
+  resize.setAttribute('aria-label', 'Resize review window');
+  resize.setAttribute('title', 'Drag to resize');
 
   let open = false;
   let card: HTMLElement | null = null;
@@ -118,20 +249,19 @@ export function mountReviewDialog(
   actions.append(approveBtn, rejectBtn, askElseBtn);
   // A visible, pinch-sized ✕ that maps to Escape semantics (A5-005): closes
   // WITHOUT deciding, so the proposal stays waiting and voice/pinch keep·drop
-  // still resume it. It sits in the dialog's top-right corner — a direct child
-  // of the dialog, never inside .mc-review-actions — so it can never cover
-  // Approve/Reject/Ask-else (which are sticky at the bottom).
+  // still resume it. It sits in the header — never inside .mc-review-actions —
+  // so it can never cover Approve/Reject/Ask-else.
   const closeBtn = btn(doc, 'mc-review-close', '✕', () => close());
   closeBtn.setAttribute('aria-label', 'Close without deciding');
   closeBtn.setAttribute('title', 'Close — decide later with voice or a pinch');
-  drag.append(titleEl);
+  drag.append(titleWrap);
   head.append(drag, closeBtn);
-  body.append(extraEl, cardHost, actions);
-  dialog.append(head, body);
+  body.append(askedEl, planSec, honesty, actions);
+  dialog.append(head, body, resize);
   root.append(dialog);
 
-  const canDrag = typeof (dialog as HTMLElement).getBoundingClientRect === 'function';
-  const dragCtl = canDrag
+  const live = typeof (dialog as HTMLElement).getBoundingClientRect === 'function';
+  const dragCtl = live
     ? mountDraggablePanel(dialog, drag, { id: 'review', alreadyFixed: true }, () => {
         const spacer = doc.createElement('div');
         spacer.hidden = true;
@@ -139,11 +269,59 @@ export function mountReviewDialog(
       })
     : null;
 
+  // ---- corner resize (mouse, touch, or the hand's pinch-drag: handPointer
+  // dispatches synthetic pointer events to any [data-mc-resize-handle]) ----
+  const win = (): { width: number; height: number } =>
+    typeof window !== 'undefined' ? { width: window.innerWidth, height: window.innerHeight } : { width: 1280, height: 800 };
+  const isPhone = (): boolean => win().width <= 600;
+  let resizeStart: { x: number; y: number; width: number; height: number; left: number; maxRight: number } | null = null;
+  function applySize(s: ReviewSize): void {
+    dialog.style.width = `${s.width}px`;
+    dialog.style.height = `${s.height}px`;
+  }
+  function onResizeDown(e: PointerEvent): void {
+    if (!live || isPhone()) return;
+    e.preventDefault?.();
+    const r = dialog.getBoundingClientRect();
+    // Pin the top-left so the corner follows the pointer (the default spot is
+    // anchored by `right`, which would make the window grow leftwards).
+    if (!dialog.classList.contains('is-floating')) {
+      dialog.classList.add('is-floating');
+      dialog.style.right = 'auto';
+      dialog.style.left = `${r.left}px`;
+      dialog.style.top = `${r.top}px`;
+    }
+    // A window that starts clear of the hand cluster stays clear of it: once
+    // the right edge reaches the cluster, growing wider slides it left.
+    const cluster = doc.querySelector?.('.mc-hand-cluster')?.getBoundingClientRect?.();
+    const maxRight = cluster && cluster.width > 0 && r.right <= cluster.left ? cluster.left - SCREEN_MARGIN_PX : Infinity;
+    resizeStart = { x: e.clientX, y: e.clientY, width: r.width, height: r.height, left: r.left, maxRight };
+    if (e.pointerId != null) resize.setPointerCapture?.(e.pointerId);
+  }
+  function onResizeMove(e: PointerEvent): void {
+    if (!resizeStart) return;
+    const want = clampReviewSize({ width: resizeStart.width + (e.clientX - resizeStart.x), height: resizeStart.height + (e.clientY - resizeStart.y) }, win());
+    const room = resizeStart.maxRight - SCREEN_MARGIN_PX; // widest it can be left of the cluster
+    const size = { ...want, width: Math.min(want.width, Math.max(REVIEW_MIN_SIZE.width, room)) };
+    applySize(size);
+    dialog.style.left = `${Math.max(SCREEN_MARGIN_PX, Math.min(resizeStart.left, resizeStart.maxRight - size.width))}px`;
+  }
+  function onResizeUp(): void {
+    if (!resizeStart) return;
+    resizeStart = null;
+    const r = dialog.getBoundingClientRect();
+    saveReviewSize(storage, { width: r.width, height: r.height });
+  }
+  resize.addEventListener('pointerdown', onResizeDown as EventListener);
+  resize.addEventListener('pointermove', onResizeMove as EventListener);
+  resize.addEventListener('pointerup', onResizeUp);
+  resize.addEventListener('pointercancel', onResizeUp);
+
   function onKeydown(e: KeyboardEvent): void {
     if (!open) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
     if (e.key === 'Tab') {
-      const items = [approveBtn, rejectBtn, askElseBtn].filter((el) => !el.hidden);
+      const items = [approveBtn, rejectBtn, askElseBtn].filter((x) => !x.hidden);
       if (!items.length) return;
       const first = items[0]; const last = items[items.length - 1];
       if (e.shiftKey && doc.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -161,17 +339,77 @@ export function mountReviewDialog(
     lastFocused?.focus?.();
   }
 
+  function renderPlan(changes: PlanChange[]): void {
+    planList.innerHTML = '';
+    for (const c of changes) {
+      const none = c.label === NO_VISIBLE_CHANGE;
+      const li = el(doc, 'li', `mc-review-change is-${none ? 'none' : c.op}`);
+      const badge = el(doc, 'span', 'mc-review-op', none ? '=' : OP_SIGN[c.op]);
+      badge.setAttribute('aria-label', none ? 'No change' : OP_WORD[c.op]);
+      const text = el(doc, 'span', 'mc-review-change-text');
+      text.append(el(doc, 'span', 'mc-review-change-label', c.label));
+      if (c.detail) text.append(el(doc, 'span', 'mc-review-change-detail', c.detail));
+      li.append(badge, text);
+      planList.append(li);
+    }
+  }
+
   return {
     open(model) {
       card = model.card;
       titleEl.textContent = model.title;
-      extraEl.innerHTML = '';
-      if (model.extra) extraEl.append(model.extra);
+      const facts = model.facts ?? null;
+      const changes = model.changes && model.changes.length ? model.changes : null;
+
+      engineChip.hidden = !facts;
+      simChip.hidden = !facts?.sim;
+      if (facts) {
+        engineChip.textContent = engineChipText(facts);
+        engineChip.dataset.engine = facts.engine.toLowerCase();
+      }
+      const asked = facts?.youAsked?.trim();
+      askedEl.hidden = !asked;
+      askedEl.textContent = asked ? `You asked: “${asked}”` : '';
+
+      // The plan list is the centre when we know the change; otherwise the
+      // proposal card itself (old behaviour) stands in for it.
+      planList.hidden = !changes;
+      if (changes) renderPlan(changes); else planList.innerHTML = '';
       cardHost.innerHTML = '';
       cardHost.append(model.card);
+      cardHost.classList.toggle('is-proxy-only', !!changes);
+      planHead.textContent = 'The plan';
+
+      honesty.hidden = !facts;
+      if (facts) {
+        const lines = honestyLines(facts);
+        whyEl.hidden = !lines.why;
+        whyEl.textContent = lines.why ?? '';
+        whyEl.setAttribute('title', lines.why ?? '');
+        leftEl.innerHTML = '';
+        leftEl.append(el(doc, 'span', 'mc-review-left-what', lines.leftWhat));
+        if (lines.leftBytes) leftEl.append(el(doc, 'span', 'mc-review-left-bytes', lines.leftBytes));
+        leftEl.setAttribute('title', lines.left);
+      }
+
+      extraEl.innerHTML = '';
+      if (model.extra) extraEl.append(model.extra);
+      moreEl.hidden = !model.extra;
+      moreEl.open = false;
+
       dragCtl?.resetPosition();
+      if (live) {
+        // resetPosition leaves the inline right/bottom a drag set; clear them
+        // so the CSS default spot (left of the hand cluster) applies again.
+        dialog.style.right = '';
+        dialog.style.bottom = '';
+        const saved = isPhone() ? null : loadReviewSize(storage);
+        if (saved) applySize(clampReviewSize(saved, win()));
+        else { dialog.style.width = ''; dialog.style.height = ''; }
+      }
       dialog.hidden = false;
       open = true;
+      planSec.scrollTop = 0;
       lastFocused = (doc.activeElement as HTMLElement) ?? null;
       approveBtn.focus();
     },
@@ -180,6 +418,10 @@ export function mountReviewDialog(
     currentCard() { return card; },
     destroy() {
       dragCtl?.destroy();
+      resize.removeEventListener('pointerdown', onResizeDown as EventListener);
+      resize.removeEventListener('pointermove', onResizeMove as EventListener);
+      resize.removeEventListener('pointerup', onResizeUp);
+      resize.removeEventListener('pointercancel', onResizeUp);
       dialog.removeEventListener('keydown', onKeydown);
       dialog.remove();
     },

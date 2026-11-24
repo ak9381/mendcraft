@@ -467,17 +467,25 @@
   .mc-ai { left: auto; right: 8px; width: min(var(--mc-ai-w, 320px), calc(100vw - 160px)); min-width: 0; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
-  /* Keep the floating review clear of the bottom thumb bar. */
+  /* Keep the floating review clear of the bottom thumb bar: a full-width
+     sheet, no resize grip (a saved size isn't applied on a phone). */
   .mc-review-dialog { top: calc(24px + env(safe-area-inset-top, 0px)); right: 24px;
-    width: min(360px, calc(100vw - 48px));
+    width: min(360px, calc(100vw - 48px)); min-width: 0;
     max-height: calc(100dvh - var(--mc-bar-h, 132px) - 48px);
     padding-top: 0; padding-bottom: 0; }
+  .mc-review-resize { display: none; }
+  .mc-review-head { padding: 10px 8px 8px 16px; }
+  .mc-review-title { font-size: 19px; }
+  .mc-review-body { padding: 0 16px 16px; }
   .mc-review-card-host .mc-proposal { padding: 10px 12px; }
   .mc-review-card-host .mc-proposal-title { font-size: 18px; }
   .mc-review-card-host .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
-  .mc-review-actions { position: relative; bottom: auto; gap: 48px; padding: 8px 0 0;
+  .mc-review-change-label { font-size: 18px; }
+  .mc-review-change-detail { font-size: 16px; }
+  .mc-review-actions { position: relative; bottom: auto; gap: 10px 48px; margin-top: 10px;
     background: transparent; box-shadow: none; }
-  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 60px; min-width: 140px; font-size: 18px; }
+  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 60px; min-width: 0; font-size: 18px; padding: 0 12px; }
+  .mc-review-ask-else { min-height: 56px; }
 }
 @media (max-width: 420px) {
   .mc-ai { padding: 10px 12px; }
@@ -622,53 +630,121 @@
 .hand-hover:not(input, textarea, select, [data-hand-dismiss]) { scale: 1.03; }
 @media (prefers-reduced-motion: reduce) { .mc-hand-frame, .mc-hand-cursor { transition: none; } .hand-hover { scale: none; } }
 
-/* Compact floating review window: ~360px, starts top-right inside the 24px
-   safe zone and clear of the always-open AI drawer. The board stays visible
-   behind it. Fist-grab or mouse-drag the title bar to move it. */
+/* Floating review window that reads like a PLAN (reviewDialog.ts): ~560px,
+   starts top-right inside the 24px safe zone, left of the hand cluster, with
+   the board visible behind it. Header (title + engine chip), "You asked",
+   THE PLAN (+ / ~ / − lines — the only part that scrolls), a compact honesty
+   footer, and big Approve / Reject / Ask-else that never scroll away.
+   Fist-grab or mouse-drag the title bar to move it; drag the bottom-right
+   corner to resize it (420×320 … 80vw×85vh, remembered). */
 .mc-review-dialog { position: fixed; z-index: 50; inset: auto;
   top: calc(var(--mc-bar-h, 64px) + 24px);
   right: calc(min(var(--mc-ai-w, 320px), 340px) + 70px);
   left: auto; bottom: auto;
-  width: min(360px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - 48px));
+  min-width: min(420px, calc(100vw - 48px));
+  max-width: 80vw;
   box-sizing: border-box;
-  max-height: min(70vh, calc(100vh - var(--mc-bar-h, 64px) - 48px));
-  background: var(--panel, #FBF7EF);
+  max-height: min(85vh, calc(100vh - var(--mc-bar-h, 64px) - 48px));
+  background: #FBF7EF;
+  color: #2B2B2B;
   border: 1px solid var(--border, #E4E0D8);
-  border-radius: 16px;
-  box-shadow: 0 16px 40px rgb(43 43 43 / 0.16);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgb(43 43 43 / 0.18), 0 2px 8px rgb(43 43 43 / 0.06);
   display: flex; flex-direction: column;
-  padding: 0; overflow: hidden; }
-.mc-review-dialog.is-floating { right: auto; }
-/* Keep the review window left of the hand cluster (≤160px wide + 24px gap). */
-.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) + 184px); }
-@media (max-width: 600px) { .mc-review-dialog:not(.is-floating) { right: 24px; } }
-.mc-review-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
-  padding: 10px 10px 8px 16px; border-bottom: 1px solid var(--border, #E4E0D8);
+  padding: 0; overflow: hidden; container-type: inline-size; }
+.mc-review-dialog.is-floating { right: auto; max-height: 85vh; }
+/* Keep the review window left of the hand cluster (≤160px wide + 24px gap),
+   and never wider than the room left of it. */
+.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) + 184px);
+  max-width: calc(100vw - max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) - 184px - 24px); }
+@media (max-width: 600px) { .mc-review-dialog:not(.is-floating) { right: 24px; max-width: calc(100vw - 48px); } }
+.mc-review-head { display: flex; align-items: flex-start; gap: 8px; flex: 0 0 auto;
+  padding: 14px 12px 10px 24px;
   cursor: grab; }
 .mc-review-head:active { cursor: grabbing; }
-.mc-review-drag { flex: 1 1 auto; min-width: 0; min-height: 44px; display: flex; align-items: center; }
-.mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; margin: 0;
-  display: flex; flex-direction: column; overflow: auto; padding: 12px 16px 16px; }
-.mc-review-title { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.3; }
-.mc-review-extra:empty { display: none; }
-.mc-review-card-host { flex: 1 1 auto; }
+.mc-review-drag { flex: 1 1 auto; min-width: 0; min-height: 48px; display: flex; align-items: center; }
+.mc-review-titles { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mc-review-title { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; color: #2B2B2B; }
+.mc-review-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mc-review-engine, .mc-review-sim { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px;
+  border-radius: 999px; font-size: 13px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.mc-review-engine { background: rgb(107 143 113 / 0.16); color: #3D6145; }
+.mc-review-engine[data-engine="gemini"] { background: rgb(90 123 166 / 0.14); color: #3A5679; }
+.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 11px; }
+.mc-review-engine[hidden], .mc-review-sim[hidden] { display: none; }
+.mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; margin: 0; box-sizing: border-box;
+  display: flex; flex-direction: column; overflow: hidden; padding: 0 24px 20px; }
+.mc-review-asked { flex: 0 0 auto; margin: 0 0 14px; font-size: 16px; line-height: 1.4; color: #5E5A54;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mc-review-asked[hidden] { display: none; }
+/* THE PLAN — the visual centre, and the only part that scrolls. */
+.mc-review-plan { flex: 1 1 auto; min-height: 72px; overflow: auto; overscroll-behavior: contain;
+  background: #FFFFFF; border: 1px solid var(--border, #E4E0D8); border-radius: 14px; padding: 12px 16px 14px; }
+.mc-review-plan-head { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #8A857D; }
+.mc-review-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mc-review-plan-list[hidden] { display: none; }
+.mc-review-change { display: flex; align-items: flex-start; gap: 14px; padding: 10px 0; border-top: 1px solid #F0ECE4; }
+.mc-review-change:first-child { border-top: 0; }
+.mc-review-op { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  font-size: 20px; font-weight: 700; line-height: 1; margin-top: 1px; }
+.mc-review-change.is-add .mc-review-op { background: rgb(107 143 113 / 0.18); color: #3D6145; }
+.mc-review-change.is-change .mc-review-op { background: rgb(201 139 60 / 0.18); color: #855419; }
+.mc-review-change.is-remove .mc-review-op { background: rgb(181 69 58 / 0.14); color: #973A30; }
+.mc-review-change.is-none .mc-review-op { background: #F1EEE6; color: #6E6A63; }
+.mc-review-change-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; }
+.mc-review-change-label { font-size: 19px; font-weight: 600; line-height: 1.35; color: #2B2B2B; overflow-wrap: anywhere; }
+.mc-review-change-detail { font-size: 17px; line-height: 1.35; color: #6E6A63; overflow-wrap: anywhere; }
+.mc-review-change.is-remove .mc-review-change-label { text-decoration: line-through; text-decoration-color: rgb(151 58 48 / 0.5); }
+.mc-review-card-host { flex: 0 0 auto; }
+/* With a plan list, the card is only the keep/drop proxy (Approve/Reject and
+   voice "keep"/"drop" click its buttons) — kept in the DOM, never shown. */
+.mc-review-card-host.is-proxy-only { display: none; }
 /* The underlying Proposal's own Keep/Drop stay in the DOM — Approve/Reject
    proxy-click them, and voice "keep"/"drop" still work — but are never shown
    here; the review's own Approve/Reject/Ask buttons are the only visible
    decision controls. */
 .mc-review-card-host .mc-proposal-actions { display: none; }
-.mc-review-actions { position: relative; bottom: auto; display: flex; flex-wrap: wrap; gap: 48px;
-  justify-content: center; margin-top: 16px;
-  padding: 8px 0 0; background: transparent; }
+.mc-review-more { margin-top: 10px; font-size: 14px; color: #6E6A63; }
+.mc-review-more[hidden] { display: none; }
+.mc-review-more > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-weight: 600; }
+.mc-review-extra:empty { display: none; }
+/* Honesty footer: why this engine, and exactly what left this device. */
+.mc-review-honesty { flex: 0 0 auto; margin: 12px 2px 0; display: flex; flex-direction: column; gap: 2px; }
+.mc-review-honesty[hidden] { display: none; }
+.mc-review-honesty p { margin: 0; font-size: 14px; line-height: 1.4; color: #5E5A54; }
+.mc-review-honesty p[hidden] { display: none; }
+.mc-review-why { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* The byte count never shrinks or ellipsizes; only the "what" text does. */
+.mc-review-left { display: flex; min-width: 0; font-weight: 600; color: #2B2B2B; white-space: nowrap; }
+.mc-review-left-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mc-review-left-bytes { flex: 0 0 auto; white-space: pre; }
+.mc-review-actions { position: relative; bottom: auto; flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 48px;
+  margin-top: 14px; padding: 0; background: transparent; }
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else {
-  min-height: 60px; min-width: 140px; font-size: 18px; flex: 0 1 auto;
-  padding: 0 24px; box-sizing: border-box;
+  min-height: 60px; min-width: 140px; font-size: 18px; font-weight: 600;
+  padding: 0 24px; box-sizing: border-box; border-radius: 14px;
 }
-.mc-review-approve { background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+.mc-review-approve { flex: 1.4 1 0; background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+.mc-review-reject { flex: 1 1 0; background: #FFFFFF; }
+.mc-review-ask-else { flex: 1 1 100%; min-height: 56px; background: transparent; border-color: #D8D2C6; color: #4A4640; }
+/* Wide enough: all three decisions on one row. */
+@container (min-width: 760px) {
+  .mc-review-ask-else { flex: 1.2 1 0; min-height: 60px; }
+}
 /* Pinch-sized ✕ in the window header, never over Approve/Reject. */
 .mc-review-close { position: static; top: auto; right: auto; z-index: 2;
   width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 999px;
-  display: flex; align-items: center; justify-content: center; font-size: 22px; line-height: 1; flex: 0 0 auto; }
+  display: flex; align-items: center; justify-content: center; font-size: 22px; line-height: 1; flex: 0 0 auto;
+  background: transparent; border-color: transparent; color: #6E6A63; }
+.mc-review-close:hover { background: #F1EEE6; }
+/* Bottom-right resize grip — a [data-mc-resize-handle], so mouse, touch and
+   the hand's pinch-drag all work. 28px hit area for a less-precise hand. */
+.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 28px; height: 28px; z-index: 3;
+  cursor: nwse-resize; touch-action: none; border-bottom-right-radius: 18px;
+  background:
+    linear-gradient(135deg, transparent 0 52%, #A39D92 52% 58%, transparent 58% 68%, #A39D92 68% 74%, transparent 74%); }
+.mc-review-resize:hover { background-color: rgb(201 139 60 / 0.12); }
 
 .mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 49;
   background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
