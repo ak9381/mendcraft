@@ -72,6 +72,11 @@ import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline'
 import { loadSetup, saveSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
+const INTENT_ENGLISH: Record<IntentKey, string> = {
+  lampOn: 'turn the lamp on', lampOff: 'turn the lamp off', brighter: 'make it brighter', dimmer: 'make it dimmer',
+  showEverything: 'show everything', newBoard: 'new board', save: 'save', keep: 'keep', drop: 'drop', undo: 'undo',
+};
+import { NOTHING_TO_CHECK, parsePlanExtra, type PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
@@ -2074,7 +2079,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- commands ----
+  /** Kannada heard line + English on the Talk caption. The English comes only
+   *  from the active pack's own intent map (local); no translation → heard only. */
+  function captionHeard(text: string): void {
+    if (!micFab || !/[\u0C80-\u0CFF]/.test(text)) return;
+    const intent = pack ? routePackPhrase(text, pack) : null;
+    micFab.setHeard(text, intent ? INTENT_ENGLISH[intent] : null, resolveLanguage('kn'));
+  }
   function run(text: string): boolean {
+    captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.
@@ -2095,6 +2108,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (gimbalCmd) return inputs.handleSpeech(text);
     if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) { addKannada(); return true; }
     if (/^\s*(show\s+)?history\s*$/i.test(text)) { openHistory(); return true; }
+
+    // CAD extras go to the focused plan board (accessibility, 3D, DXF).
+    const planExtra = parsePlanExtra(text);
+    if (planExtra) {
+      const id = focusId ?? lastFocus;
+      const board = id ? world.querySelector<HTMLElement & { runExtra?: (k: PlanExtra) => string }>(`[data-frame="${id}"] mc-plan-board`) : null;
+      if (board?.runExtra) { say(board.runExtra(planExtra)); return true; }
+      if (planExtra === 'check') { say(NOTHING_TO_CHECK); return true; }
+      if (planExtra === 'dxf') { say('Nothing to export yet — open a floor plan board first.'); return true; }
+      // "3d" without a plan board falls through to the other routes.
+    }
 
     const c = parseCanvasCommand(text);
     if (c) {

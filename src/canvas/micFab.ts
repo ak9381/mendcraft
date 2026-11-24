@@ -4,6 +4,8 @@
 // under reduced motion), a changed label and aria-pressed="true". It stops on
 // a second press or after a safety timeout.
 
+import { buildCaption, type Language } from '../ai/language';
+
 export interface MicVoice {
   readonly supported: boolean;
   pushToTalkStart(): void;
@@ -18,6 +20,8 @@ export interface MicFab {
   stop(): void;
   /** Live words (interim) or a cleared caption (`null`). */
   setCaption(text: string | null): void;
+  /** A finished utterance: her words, plus the English line when there is one. */
+  setHeard(heard: string, translation: string | null | undefined, lang: Language): void;
   /** Visible error; also stops the listening state. */
   setError(text: string): void;
   destroy(): void;
@@ -155,6 +159,12 @@ export function mountMicFab(
         return;
       }
       showCaption(text, 'words');
+    },
+    setHeard(heard, translation, lang) {
+      const cap = buildCaption(heard, translation, lang);
+      if (!cap.heard) return;
+      showCaption(cap.translation ? `${cap.heard}\n→ ${cap.translation}` : cap.heard, 'words');
+      caption.lang = lang.speechLang;
     },
     setError(text) {
       stop();
