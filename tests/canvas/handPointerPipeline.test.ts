@@ -347,6 +347,20 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(after.y).toBeCloseTo(before.y, 0);
   });
 
+  it('fingertips clipping the top of the camera frame (palm inside) do not freeze the cursor at the top bar', () => {
+    const lift = (x: number, y: number) => {
+      const h = synthHand(x, y, false);
+      for (const k of [4, 8, 12, 16, 20]) h[k] = { x: h[k].x, y: 0.02 }; // fingertips at the frame top
+      return h;
+    };
+    for (let i = 0; i < 10; i++) { t += 33; hp.update([lift(600, 40)], t); }
+    for (let x = 600; x >= 300; x -= 10) { t += 33; hp.update([lift(x, 40)], t); }
+    for (let i = 0; i < 40; i++) { t += 33; hp.update([lift(300, 40)], t); }
+    const pos = cursorPos(cursorElOf(doc));
+    expect(pos.x).toBeLessThan(310); // followed the palm, not pinned at 600
+    expect(pos.x).toBeGreaterThan(290);
+  });
+
   it('a raised index fingertip past the top of the active box is not an edge — the palm decides', () => {
     feed(160, 50, 5);
     for (let i = 0; i < 40; i++) {
@@ -380,8 +394,8 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(pos.x).toBeLessThan(160);
     feed(70, 50, 40);
     expect(btn.click).not.toHaveBeenCalled(); // 30px out: the ring pauses
-    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthFist(70, 50)], t); }
-    feed(70, 50, 3);
+    for (let i = 0; i < 4; i++) { t += 33; hp.update([synthFist(70, 50)], t); }
+    feed(70, 50, 4);
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
   });
@@ -453,7 +467,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     for (let i = 0; i < 8; i++) {
       t += 33;
       const h = synthFist(160, 50);
-      h[16] = { x: 0.01, y: 0.5 };
+      h[17] = { x: 0.01, y: h[17].y }; // a PALM landmark clips the frame
       hp.update([h], t);
     }
     const mid = tr.dump().slice(-8);
@@ -466,7 +480,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     for (let i = 0; i < 20; i++) {
       t += 33;
       const h = synthHand(160, 50, false);
-      h[16] = { x: 0.01, y: 0.5 };
+      h[17] = { x: 0.01, y: h[17].y }; // a PALM landmark clips the frame
       hp.update([h], t);
     }
     expect(btn.click).not.toHaveBeenCalled();

@@ -81,11 +81,24 @@ export interface HandFeelConfig {
   dwellAccruePx: number;
   /** FIST TAP = click: a fist that closes and re-opens within this long
    *  (and moves less than fistMovePx) clicks the target under the palm. A
-   *  fist closed longer than this — or moved further — becomes a grab. */
+   *  fist closed longer than this — or moved further (unfiltered palm, px)
+   *  — becomes a grab. */
   fistTapMs: number;
   fistMovePx: number;
   /** No second fist tap within this long of a tap click. */
   tapCooldownMs: number;
+  /** A tap's fist must stay closed at least this long (ms from the first
+   *  fist frame to the first open frame) — a 1–2 frame relaxed-hand
+   *  flicker is never a click. */
+  tapMinClosedMs: number;
+  /** A tap only arms if the hand was open this long / this many frames
+   *  right before it closed… */
+  tapMinOpenBeforeMs: number;
+  tapMinOpenBeforeFrames: number;
+  /** …the palm was moving slower than this (px/ms, unfiltered) as it
+   *  closed, and the target had been locked at least tapMinLockMs. */
+  tapMaxPalmSpeed: number;
+  tapMinLockMs: number;
   /** Consecutive fist frames before a hand counts as closed (no time wait). */
   fistCloseFrames: number;
   /** Consecutive non-fist frames before a (non-grabbing) fist counts as open. */
@@ -121,10 +134,15 @@ export const HAND_FEEL: HandFeelConfig = {
   clickCooldownMs: 600,
   dwellAccruePx: 20,
   fistTapMs: 300,
-  fistMovePx: 12,
+  fistMovePx: 20,
   tapCooldownMs: 400,
-  fistCloseFrames: 2,
-  fistOpenFrames: 2,
+  fistCloseFrames: 3,
+  fistOpenFrames: 3,
+  tapMinClosedMs: 80,
+  tapMinOpenBeforeMs: 150,
+  tapMinOpenBeforeFrames: 4,
+  tapMaxPalmSpeed: 0.5,
+  tapMinLockMs: 150,
   releaseGraceMs: 120,
   releaseGraceFrames: 3,
 };

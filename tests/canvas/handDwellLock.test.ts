@@ -104,8 +104,8 @@ describe('target-locked 800 ms dwell with magnet', () => {
     at(435, 400, 30);
     expect(hp.target).toBe(btn);
     expect(btn.click).not.toHaveBeenCalled();
-    for (let i = 0; i < 3; i++) { t += FRAME; hp.update([synthFist(435, 400, W, H)], t); }
-    at(435, 400, 3);
+    for (let i = 0; i < 4; i++) { t += FRAME; hp.update([synthFist(435, 400, W, H)], t); }
+    at(435, 400, 4);
     expect(btn.click).toHaveBeenCalledTimes(1);
 
     const btn2 = fakeButton({ left: 470, top: 374, width: 60, height: 52 });
@@ -127,6 +127,14 @@ describe('target-locked 800 ms dwell with magnet', () => {
     expect(hp.target).toBe(btn);
     expect(btn.click).not.toHaveBeenCalled();
     at(500, 400, 12); // back on: the remaining ≈300 ms finishes it
+    expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('a fist held on the target pauses the ring (does not reset it)', () => {
+    at(500, 400, 15); // ≈500 ms accrued
+    for (let i = 0; i < 12; i++) { t += FRAME; hp.update([synthFist(500, 400, W, H)], t); } // held: not a tap, no grab on a button
+    expect(btn.click).not.toHaveBeenCalled();
+    at(500, 400, 14); // 3 frames to read as open, then the remaining ≈300 ms
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
