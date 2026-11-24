@@ -19,7 +19,7 @@ import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, 
 import { byName, foundAfterScan, mergeTiles, pickPointChoice, pointConnectFromIdentity, pointFailureReceipt, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
 import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, pointerInCrop, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
 import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
-import { palmCenter } from './handFeel';
+import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
@@ -75,6 +75,8 @@ import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { mountPhoneHands } from './phoneHands';
+import type { PhoneCamera } from './phoneCamera';
 import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
@@ -159,6 +161,9 @@ export interface CanvasOptions {
   lookAwayMs?: number;
   /** Opt-in look-to-edit (default: persisted mc.lookToEdit, off). */
   lookToEdit?: boolean;
+  /** Phone shell: the ONE shared front camera (phoneCamera.ts) — hand control
+   *  and look-to-edit both run on it. Without it the phone has no Hands pill. */
+  phoneCamera?: PhoneCamera;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -2131,6 +2136,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Camera frame height ÷ width (for the pointer's 3D finger-bend test);
   // updated from presence frames, 16:9 until the first one.
   let handCameraAspect = 9 / 16;
+  // Phone shell: the front camera's aspect (null until the first frame —
+  // phoneReach then assumes portrait).
+  let phoneCamAspect: number | null = null;
   const DWELL_KEY = 'mc.dwellClick';
   let dwellClickOn = false;
   try { dwellClickOn = storage.getItem(DWELL_KEY) === '1'; } catch { dwellClickOn = false; }
@@ -2177,6 +2185,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // the fist tap is the click.
         dwellClick: () => dwellClickOn,
         cameraAspect: () => handCameraAspect,
+        // Phone shell: front camera, portrait reach box, a wider magnet for
+        // small targets (PHONE_HAND_FEEL). Laptop: HAND_FEEL defaults.
+        ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect), snapPx: PHONE_HAND_FEEL.magnetCapturePx } : {}),
         onPinch: (ev) => {
           if (!morphFlow) return;
           if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
@@ -2197,6 +2208,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           handTip.style.left = `${Math.min(innerWidth - 8, Math.max(8, r.left + r.width / 2))}px`;
           handTip.style.top = `${below ? r.bottom + 8 : r.top - 8}px`;
         },
+      })
+    : null;
+
+  // Phone shell: hand control from the shared front camera (phoneHands.ts) —
+  // a Hands pill next to Join laptop, persisted, off on first run. Same
+  // pointer as the laptop; touch is untouched. Hand clicks/grabs only reach
+  // the local activity log, never the AI feed that goes to the monitor.
+  const phoneHands = phoneShell && opts.phoneCamera && handPointer && typeof document !== 'undefined'
+    ? mountPhoneHands(root, {
+        camera: opts.phoneCamera,
+        pointer: handPointer,
+        reach: () => phoneReach(phoneCamAspect),
+        storage,
+        say,
+        locked: () => phoneLocked(),
+        onAspect: (a) => { phoneCamAspect = a; handCameraAspect = a; },
       })
     : null;
 
@@ -2818,6 +2845,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     detachMorphPointers();
     morphFlow?.destroy();
     morphCard.destroy();
+    phoneHands?.destroy();
     handPointer?.destroy();
     endPointWait();
     stopReplay();

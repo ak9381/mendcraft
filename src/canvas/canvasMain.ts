@@ -6,6 +6,8 @@ import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
+import { createPhoneCamera, phoneHandsAllowed } from './phoneCamera';
+import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
@@ -105,8 +107,19 @@ const voice = createVoiceController(
     onError: (_code, message) => handle?.setTalkError(message),
   },
 );
+// Hand control is for the ANDROID phone only (the iPhone sits on the gimbal and
+// keeps its own front-camera uses untouched). On Android: ONE front camera for
+// hand control and look-to-edit (one getUserMedia, one tracker), opened only
+// when a feature asks for it. The Capacitor App plugin's pause/resume also
+// stops and restarts it (webviews don't reliably fire visibilitychange).
+// No camera hub → no Hands pill, no hand tracker (mountCanvas), and iPhone
+// look-to-edit stays on its original path.
+const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
+  ? createPhoneCamera({ app: isPhone ? App : null })
+  : undefined;
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'),
+  phoneCamera,
   storage: replayDemo ? memoryStorage() : undefined,
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
@@ -166,7 +179,7 @@ function afterFirstPaint(fn: () => void): void {
 }
 afterFirstPaint(() => {
   if (phoneShell && handle) {
-    startPhoneLookToEdit(handle, { sim: params.has('sim') });
+    startPhoneLookToEdit(handle, { sim: params.has('sim'), camera: phoneCamera });
     // Join laptop: a remembered pair rejoins silently (no mic); otherwise the
     // phone shows "Join laptop", which opens the mic only when tapped and
     // joins by the laptop's chime (or a typed code). Every join binds the AI

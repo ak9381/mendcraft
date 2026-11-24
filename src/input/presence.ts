@@ -24,6 +24,8 @@ import {
   createPresenceGate,
   type FaceSignature,
   type FaceBox,
+  type FacingOptions,
+  type HandGateConfig,
 } from './faceLogic';
 export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
@@ -148,6 +150,14 @@ export function createPresenceTracker(
     detectFaces?: boolean;
     /** When false, skip HandLandmarker (phone companion Facing pill). Default true. */
     detectHands?: boolean;
+    /** Minimum ms between tracking runs, read every animation frame (the
+     *  phone throttles to ~10 fps with no hand in view). Default 0: every
+     *  animation frame. */
+    frameIntervalMs?: () => number;
+    /** Hand-gate thresholds (default HAND_GATE; the phone passes PHONE_HAND_GATE). */
+    handGate?: HandGateConfig;
+    /** Facing-tracker options (the phone passes PHONE_FACING). */
+    facing?: FacingOptions;
   },
 ): PresenceTracker {
   const video = document.createElement('video');
@@ -167,12 +177,14 @@ export function createPresenceTracker(
   let ownsStream = true;
   let rafId = 0;
   let running = false;
+  let stopped = false;
   let lastFaceAt = -Infinity;
+  let lastRunAt = -Infinity;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
-  const facingTracker = createFacingTracker();
-  const handGate = createHandGate();
+  const facingTracker = createFacingTracker(opts?.facing);
+  const handGate = createHandGate(opts?.handGate);
   let lastHandGate: boolean | null = null;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
@@ -323,15 +335,24 @@ export function createPresenceTracker(
       rafId = requestAnimationFrame(loop);
       return;
     }
-    ts = performance.now();
+    const at = performance.now();
+    const minGap = opts?.frameIntervalMs?.() ?? 0;
+    if (minGap > 0 && at - lastRunAt < minGap) {
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+    lastRunAt = at;
+    ts = at;
     // Timestamps must strictly increase per MediaPipe task.
     // Face runs at a few fps (FACE_INTERVAL_MS) so the small Facing pill
     // stays cheap next to the hand tracker.
     const src = squareSource();
     const vw = video.videoWidth, vh = video.videoHeight;
     const usedSquare = src !== video;
+    let ranFace = false;
     if (wantFaces && faceLm && shouldRunFace(ts, lastFaceAt)) {
       lastFaceAt = ts;
+      ranFace = true;
       const fr = faceLm.detectForVideo(src, ts);
       if (usedSquare && fr.faceLandmarks) {
         fr.faceLandmarks = fr.faceLandmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
@@ -344,11 +365,16 @@ export function createPresenceTracker(
         hr.landmarks = hr.landmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
       }
       handleHands(hr);
+    } else if (ranFace) {
+      // Face-only (phone look-to-edit): still emit a frame per face run, or
+      // onFrame subscribers would never see the facing signal.
+      handleHands({ landmarks: [], worldLandmarks: [], handedness: [], handednesses: [] } as unknown as HandLandmarkerResult);
     }
     rafId = requestAnimationFrame(loop);
   }
 
   async function start(existing?: MediaStream): Promise<void> {
+    stopped = false;
     // Ask for the camera FIRST, in parallel with the wasm/model downloads, so
     // Chrome's permission prompt appears immediately and a model/CSP failure
     // can never hide it (the old order threw before getUserMedia was reached,
@@ -397,10 +423,18 @@ export function createPresenceTracker(
     }
 
     const got = await streamPromise;
+    // stop() was called while the models loaded (the phone hid, or the user
+    // turned hands off): never start the loop after the fact.
+    if (stopped) {
+      if (got.owns) for (const t of got.stream.getTracks()) t.stop();
+      stop();
+      return;
+    }
     stream = got.stream;
     ownsStream = got.owns;
     video.srcObject = stream;
     await video.play();
+    if (stopped) { stop(); return; }
 
     running = true;
     if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running);
@@ -408,6 +442,7 @@ export function createPresenceTracker(
   }
 
   function stop(): void {
+    stopped = true;
     running = false;
     cancelAnimationFrame(rafId);
     if (ownsStream) {

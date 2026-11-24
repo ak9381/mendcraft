@@ -1190,7 +1190,6 @@
 .mc-phone-simple .mc-register-chip,
 .mc-phone-simple .mc-reg-chip,
 .mc-phone-simple .mc-facing-banner,
-.mc-phone-simple .hand-overlay,
 .mc-phone-simple .mc-mini-terminal,
 .mc-phone-simple .mc-swarm-dock,
 .mc-phone-simple .mc-phone-menu,
@@ -1421,3 +1420,28 @@
   min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; border: 0; background: transparent;
   color: var(--text-dim); font-size: 22px; line-height: 1; cursor: pointer;
 }
+
+/* ---- Hands on the phone (phoneHands.ts): a Hands pill bottom-right (the
+   Join laptop pill sits bottom-left, the mic bottom-centre), a small
+   "Camera" indicator just above it while the front camera is live, and the
+   glass-hand overlay only while hands are on. Every drawn layer stays
+   pointer-events: none — touch always works. */
+.mc-phone-simple:not(.is-phone-hands) .hand-overlay { display: none !important; }
+.mc-phone-hands-pill, .mc-cam-on { display: none; }
+.mc-phone-simple .mc-phone-hands-pill {
+  display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+}
+.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* Facing gate has the hands locked ("Hands · face the phone"). */
+.mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
+.mc-phone-simple .mc-cam-on:not([hidden]) {
+  /* Just above the Hands pill: the route badge owns the top centre and is
+     wide enough on a phone to collide with a top-right chip. */
+  display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+  padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
+  font-size: 12px; font-weight: 650; pointer-events: none;
+}
+.mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }

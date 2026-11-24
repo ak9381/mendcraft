@@ -325,6 +325,9 @@ export interface HandPointerOptions {
    *  that isn't inside a board (review dialog, dock, engine bar…) is spent.
    *  Default: null, or `.mc-viewport` / `.mc-world`. */
   isCanvasBackground?: (el: Element | null) => boolean;
+  /** Reach box (camera units → the full screen), read every frame. Default
+   *  HAND_FEEL.reach (laptop); the phone shell passes phoneReach(aspect). */
+  reach?: () => typeof REACH;
 }
 
 /** A fist closed this long (or moved HAND_FEEL.fistMovePx while closed)
@@ -1065,7 +1068,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // clamped to the screen anyway, so overshooting the top bar (or
       // dragging a board to the screen edge) must not pin the cursor, start
       // a click cooldown or reset anything.
-      const mappedLive = mapToScreen(palm, innerWidth, innerHeight);
+      const mappedLive = mapToScreen(palm, innerWidth, innerHeight, true, opts.reach?.() ?? REACH);
       const smoothed = euro.filter(mappedLive.x, mappedLive.y, t);
       // Only the PALM landmarks count: raised fingertips near the top of the
       // frame (palm high in the active box) are not an edge.
