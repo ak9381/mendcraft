@@ -22,6 +22,8 @@ export const BRIGHTNESS_STEP = 20;
 
 const COMMON = new Set(['lamp', 'lamps', 'light', 'lights', 'the', 'a']);
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+/** A relative step lands in the range a lamp accepts: off (0) or 10..100. */
+const lampStep = (n: number) => { const v = clamp(n); return v > 0 && v < 10 ? 10 : v; };
 
 function norm(text: string): string {
   return text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -120,7 +122,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     const delta = warmer ? -BRIGHTNESS_STEP : BRIGHTNESS_STEP;
     const verb = warmer ? 'dimmed' : 'brightened';
     const intents = targets.map((d) => {
-      const brightness = clamp(curBright(d) + delta);
+      const brightness = lampStep(curBright(d) + delta);
       return cooler ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const word = warmer ? 'Warmer' : 'Cooler';
@@ -130,7 +132,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   if (dimmer || brighter) {
     const delta = brighter ? BRIGHTNESS_STEP : -BRIGHTNESS_STEP;
     const intents = targets.map((d) => {
-      const brightness = clamp(curBright(d) + delta);
+      const brightness = lampStep(curBright(d) + delta);
       return brighter ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
     });
     const verb = brighter ? 'Brightened' : 'Dimmed';

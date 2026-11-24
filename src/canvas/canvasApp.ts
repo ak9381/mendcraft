@@ -18,7 +18,7 @@ import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { openEndedAsk } from './openEndedAsk';
-import { breakPrompt, detectAttempt, runBreakTurn, scriptedReply, validateAttempt, type Attempt } from './tryToBreak';
+import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -2211,7 +2211,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const engine = engineFor('nano', scriptedReply(attempt));
     aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Checked on this device. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
     try {
-      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { aiPanel.querySelector('.mc-ai-state')!.textContent = t; say(t); } });
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
   }
@@ -2296,8 +2296,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'device': {
         const dc = r.result;
         // An impossible level is refused by validation, never clamped.
-        const attempt = detectAttempt(text, deviceRefs());
-        if (attempt && !validateAttempt(attempt, deviceRefs()).ok) { void breakTurn(text, attempt, ranOn); return true; }
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
@@ -2340,8 +2340,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       case 'openEnded': {
         // "add a control for the oven" with no oven connected: refused, not chatted about.
-        const attempt = detectAttempt(text, deviceRefs());
-        if (attempt && !validateAttempt(attempt, deviceRefs()).ok) { void breakTurn(text, attempt, ranOn); return true; }
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         break;
       }
     }
@@ -3021,6 +3021,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ctx: () => ({
       lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
       pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      lampLabel: deviceRefs().find((d) => d.kind === 'lamp')?.label,
       savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
     }),
     nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },

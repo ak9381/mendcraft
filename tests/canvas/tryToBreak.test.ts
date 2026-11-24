@@ -6,7 +6,7 @@ import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { scriptedEngine } from '../../src/canvas/aiTurn';
 import type { DeviceRef } from '../../src/canvas/deviceCommands';
 import { routeLine } from '../../src/canvas/routeLine';
-import { detectAttempt, runBreakTurn, scriptedReply, validateAttempt, LAMP_RANGE_REFUSAL } from '../../src/canvas/tryToBreak';
+import { VOLUME_RANGE_REFUSAL, detectAttempt, impossibleAttempt, runBreakTurn, scriptedReply, validateAttempt, LAMP_RANGE_REFUSAL } from '../../src/canvas/tryToBreak';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 
 const devices: DeviceRef[] = [
@@ -54,11 +54,22 @@ describe('routing (existing routes)', () => {
     expect(routeLine('set the desk lamp to 500% brightness', world).name).toBe('device');
     expect(routeLine('add a control for the oven', world).name).toBe('openEnded');
   });
-  it('the dashboard step offers a "Try to break it" chip that routes', () => {
-    const ctx = { lang: 'en', online: true, phones: 0 } as const;
-    const chip = ruleSuggestions('dashboard', ctx).find((s) => s.label === 'Try to break it')!;
+  it('the saved step offers "Try to break it" after the floor plan, naming a lamp that exists', () => {
+    const ctx = { lang: 'en', online: true, phones: 0, lampLabel: 'Desk lamp' } as const;
+    const steps = ruleSuggestions('saved', ctx);
+    expect(steps[0].id).toBe('floorplan');
+    const chip = steps.find((s) => s.label === 'Try to break it')!;
     expect(chip.say).toBe('set the desk lamp to 500% brightness');
     expect(routeLine(chip.say, world).name).toBe('device');
+    expect(ruleSuggestions('dashboard', ctx).map((s) => s.id)).toEqual(['connect-speaker', 'save', 'floorplan']);
+  });
+  it('with no known lamp label the chip says "the lamp" and still routes to any lamp', () => {
+    const chip = ruleSuggestions('saved', { lang: 'en', online: true, phones: 0 }).find((s) => s.id === 'try-to-break')!;
+    expect(chip.say).toBe('set the lamp to 500% brightness');
+    const other = { hasPlanBoard: false, devices: [{ id: 'l1', label: 'Reading light', kind: 'lamp' as const }] };
+    expect(['device', 'openEnded']).toContain(routeLine(chip.say, other).name);
+    const a = detectAttempt(chip.say, other.devices)!;
+    expect(a).toMatchObject({ kind: 'brightness', deviceId: 'l1', level: 500 });
   });
 });
 
@@ -119,6 +130,39 @@ describe('runBreakTurn', () => {
   });
 });
 
+describe('volume and bare numbers', () => {
+  it('speaker volume to 150% is refused with the volume reason', () => {
+    const a = detectAttempt('set the speaker volume to 150%', devices)!;
+    expect(a).toMatchObject({ kind: 'volume', deviceId: 'speaker-1', level: 150 });
+    expect(validateAttempt(a, devices)).toEqual({ ok: false, reason: VOLUME_RANGE_REFUSAL });
+    expect(VOLUME_RANGE_REFUSAL).toBe('Volume goes from 0 to 100 %. Nothing changed.');
+    expect(validateAttempt(detectAttempt('speaker volume to 80%', devices)!, devices).ok).toBe(true);
+  });
+  it('a bare "set the lamp to 500" is read as a percent', () => {
+    expect(impossibleAttempt('set the desk lamp to 500', devices)).toMatchObject({ kind: 'brightness', level: 500 });
+    expect(impossibleAttempt('set the desk lamp to 50', devices)).toBeNull();
+  });
+  it('any out-of-range clause in a combined request is refused', () => {
+    expect(impossibleAttempt('desk lamp 50% and speaker volume 500%', devices)).toMatchObject({ kind: 'volume', level: 500 });
+    expect(impossibleAttempt('desk lamp to 50% and ceiling light to 60%', devices)).toBeNull();
+  });
+  it('typed 1-9% for a lamp is refused (not raised to 10)', () => {
+    expect(impossibleAttempt('set the desk lamp to 5%', devices)).toMatchObject({ level: 5 });
+  });
+});
+
+describe('unusable live reply', () => {
+  it('does not claim the model proposed anything', async () => {
+    const attempt = detectAttempt('set the desk lamp to 500% brightness', devices)!;
+    const panel = fakePanel();
+    const junk = { id: 'nano' as const, sim: false, stream: async () => 'sorry, I cannot help' };
+    const r = await runBreakTurn('x', attempt, { engine: junk, devices, panel, say: () => {} });
+    expect(r.refused).toBe(true);
+    expect(panel.lines.some(([, d]) => /proposed/.test(d))).toBe(false);
+    expect(panel.lines.some(([, d]) => d.includes('reply wasn’t usable; checking your request directly.'))).toBe(true);
+  });
+});
+
 describe('guard in the device store', () => {
   it('act() refuses a brightness above 100 instead of clamping it', async () => {
     const run = vi.fn(async () => ({}));
@@ -127,6 +171,22 @@ describe('guard in the device store', () => {
     expect(run).not.toHaveBeenCalled();
     expect(s.brightness).toBe(60);
     expect(s.error).toBe('Lamps go from 10 to 100 %. Nothing changed.');
+  });
+});
+
+describe('guard in the device store (more)', () => {
+  const mk = () => createDeviceStore({ 'wiz-desk': { on: true, brightness: 60 } as never, 's': { volume: 30 } as never }, { run: vi.fn(async () => ({})) }, () => {}, () => 'x');
+  it('refuses brightness 5 (not clamped up by wiz) and accepts 0 and 10', async () => {
+    const st = mk();
+    expect((await st.act({ deviceId: 'wiz-desk', brightness: 5 })).error).toBe('Lamps go from 10 to 100 %. Nothing changed.');
+    expect((await st.act({ deviceId: 'wiz-desk', brightness: 10 })).error).toBe('');
+    expect((await st.act({ deviceId: 'wiz-desk', brightness: 0, on: false })).error).toBe('');
+  });
+  it('uses the volume message for volume', async () => {
+    const st = mk();
+    const s = await st.act({ deviceId: 's', volume: 150 });
+    expect(s.error).toBe(VOLUME_RANGE_REFUSAL);
+    expect(s.volume).toBe(30);
   });
 });
 
