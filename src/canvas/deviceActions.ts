@@ -13,6 +13,8 @@ export type DeviceIntent = {
   playing?: boolean;
   volume?: number;
   next?: boolean;
+  /** "play <something>": a search for the speaker's music service (never shown on the tile). */
+  query?: string;
 };
 
 export interface DeviceConnector {
