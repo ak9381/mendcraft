@@ -41,3 +41,18 @@ Still open from the click pass: 4 (Kannada only swaps palette/empty-state labels
 ## iPhone first run (24 Nov, Akash)
 
 App launches, canvas shows, badge reads "Apple · on device". Blocker: touch is locked behind "Look at me to edit" and never unlocks (front camera on, face check never passes), so nothing can be tapped or swiped. Next: make touch work by default; look-to-edit only as an opt-in, and never lock on a failed/unknown face signal.
+
+## Live hand check (stream B: palm cursor, fist tap, fist grab)
+
+Sim tests use synthetic landmarks; none of this is proven until tried on the Mac camera. Hands on, `?sim=1` (no `hands=0`):
+
+1. **Point** — open hand: the cursor follows the palm, not the fingertip; curling fingers or closing a fist barely moves it. Every edge (top toolbar, right cluster, bottom) is reachable without the hand leaving the camera; overshooting the top bar (fingertips leaving the frame) does not freeze or jump the cursor.
+2. **Fist tap = click** — rest the open hand on a small toolbar button (~0.2 s), then close and open the fist quickly (about 0.1–0.3 s): it clicks once. A relaxed hand drifting or half-closing must NOT click; neither should a fist made while still sweeping in. Try a button 30–40 px off (magnet). Two quick taps under 0.4 s apart click once. Approve / Reject only click on a direct hit. A tap on a board body, bare canvas or a dialog's dimmed backdrop does nothing; a tap on a board title focuses it.
+3. **Fist-move a board across the right cluster** — hold a fist on a board (body or title) for ~0.3 s (or start moving it): it grabs. Drag it over the right-side buttons/chips and to the screen edge: no hover outline, no clicks, the grab never drops; a loose fist that flickers open for a frame keeps it. Opening the hand (~0.15 s) drops it; the position survives a reload.
+4. **Fist on chrome** — a fist held over a button, the review dialog, the dock or the engine bar does nothing (no board under it moves, no pan).
+5. **Fist-pan** — a held fist on bare canvas pans 1:1; in focus mode a fist on the focused board pans.
+6. **Two-fist zoom** — two held fists spread/close to zoom about their midpoint; opening one stops it and the other fist does not start panning.
+7. **Both hands** — repeat 2, 3 and 5 with the LEFT hand only, then the RIGHT only (must feel identical); then point with one while the other makes a fist.
+8. **Hover to click (opt-in)** — Tools → "Hover to click": resting the palm on a button fills the ring and clicks at ~0.8 s; easing from Reject to Approve never fires Reject. Toggle it off: no ring, the hover outline stays.
+9. **Pinch** does nothing anywhere (no keep, no pan, no zoom, no click).
+10. **Camera edge** — at the frame edge the cursor holds and nothing clicks; coming back in eases with no jump; a board being dragged stays grabbed.

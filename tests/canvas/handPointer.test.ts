@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { distToRect, DRAG_HANDLE, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH, SCREEN_MARGIN_PX } from '../../src/canvas/handPointer';
+import { distToRect, DRAG_HANDLE, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH, SCREEN_MARGIN_PX, MAGNET_SNAP_PX } from '../../src/canvas/handPointer';
+import { HAND_FEEL } from '../../src/canvas/handFeel';
 import { micFabState, mountMicFab, MIC_LISTENING_LABEL } from '../../src/canvas/micFab';
 
 const hand = (gap: number) => {
@@ -10,7 +11,10 @@ const hand = (gap: number) => {
 };
 
 describe('hand pointer maths', () => {
-  it('maps the mirrored central 80% reach box to the screen, then clamps to the margin', () => {
+  it('the snap (magnet capture) radius is HAND_FEEL.magnetCapturePx', () => {
+    expect(MAGNET_SNAP_PX).toBe(HAND_FEEL.magnetCapturePx);
+  });
+  it('maps the mirrored active box to the screen, then clamps to the margin', () => {
     const m = SCREEN_MARGIN_PX;
     const a = mapToScreen({ x: 1 - REACH.x0, y: REACH.y0 }, 1000, 800);
     expect(a.x).toBeCloseTo(m); expect(a.y).toBeCloseTo(m);

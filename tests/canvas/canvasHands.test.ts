@@ -128,23 +128,16 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
   });
 
   describe('hand landmark frames processing', () => {
-    // keep now needs HAND_FEEL.keepFrames (3) consecutive pinch frames — a
-    // single-frame tracking dip can no longer keep a proposal by accident.
-    it('emits keep only after 3 consecutive pinch frames, once', () => {
+    // Pinch is unwired from camera frames: a held pinch (any length) never
+    // keeps — it used to fire by accident while pointing.
+    it('pinch frames never emit keep, however long the pinch is held', () => {
       const events: CanvasHandEvent[] = [];
       const adapter = createCanvasHandsAdapter((e) => events.push(e));
 
       const pinch = makePinchingHand();
-      adapter.update({ hands: [pinch], now: 1000 });
-      adapter.update({ hands: [pinch], now: 1033 });
-      expect(events.filter((e) => e.type === 'keep')).toHaveLength(0); // 2 frames: not yet
-      adapter.update({ hands: [pinch], now: 1066 });
-      expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
-
-      // Holding the pinch does not re-fire within the refractory window.
-      adapter.update({ hands: [pinch], now: 1100 });
-      adapter.update({ hands: [pinch], now: 1200 });
-      expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
+      for (let t = 1000; t <= 3000; t += 33) adapter.update({ hands: [pinch], now: t });
+      expect(events.filter((e) => e.type === 'keep')).toHaveLength(0);
+      expect(events.filter((e) => e.type === 'frame').length).toBeGreaterThan(50); // frames still flow
     });
 
     it('a 1–2 frame pinch dip never emits keep (hover cannot activate)', () => {
@@ -412,8 +405,8 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
   });
 });
 
-describe('C080 a held thumbs-up keeps the pending proposal (Approve twin)', () => {
-  it('fires keep once after ~600ms of thumbs-up, never on a brief thumb', async () => {
+describe('C080 thumbs-up is unwired from camera frames (keep is the Approve button or voice)', () => {
+  it('neither a brief nor a long-held thumbs-up fires keep', async () => {
     const { buildHandPose } = await import('../../src/dev/trackingSim');
     const thumb = buildHandPose('thumbs-up', { x: 0.5, y: 0.6 }, 0.22) as Pt[];
     const events: CanvasHandEvent[] = [];
@@ -421,8 +414,8 @@ describe('C080 a held thumbs-up keeps the pending proposal (Approve twin)', () =
     for (let t = 0; t <= 300; t += 33) a.update({ hands: [thumb], now: 1000 + t });
     a.update({ hands: [], now: 1400 });
     expect(events.filter((e) => e.type === 'keep')).toHaveLength(0); // brief thumb
-    for (let t = 0; t <= 800; t += 33) a.update({ hands: [thumb], now: 2000 + t });
-    expect(events.filter((e) => e.type === 'keep')).toHaveLength(1);
+    for (let t = 0; t <= 2000; t += 33) a.update({ hands: [thumb], now: 2000 + t });
+    expect(events.filter((e) => e.type === 'keep')).toHaveLength(0); // held thumb
   });
 });
 

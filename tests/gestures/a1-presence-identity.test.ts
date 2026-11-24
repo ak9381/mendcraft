@@ -21,11 +21,12 @@ function move(pose: () => Pt[], ms: number, x0: number, y0: number, x1: number, 
 }
 
 describe('A1-021 static pose vs motion gesture overlap (suppressMotion)', () => {
-  it('a palm swipe fires drop normally, but is suppressed while suppressMotion flags its id (morph hold in progress)', () => {
+  it('a palm swipe no longer fires drop (unwired), with or without suppressMotion flagging its id', () => {
     const plain: CanvasHandEvent[] = [];
     const normal = createCanvasHandsAdapter((e) => plain.push(e));
     for (const f of move(OPEN, 400, 0.7, 0.8, 0.35, 0.8)) normal.update(f);
-    expect(plain.some((e) => e.type === 'drop')).toBe(true);
+    expect(plain.some((e) => e.type === 'drop')).toBe(false);
+    expect(plain.some((e) => e.type === 'frame')).toBe(true);
 
     const suppressed: CanvasHandEvent[] = [];
     const suppressing = createCanvasHandsAdapter((e) => suppressed.push(e), {

@@ -38,14 +38,24 @@ describe('one pinch definition everywhere', () => {
     expect(PINCH_CLASSIFY).toBe(HAND_FEEL.pinchOn);
     expect(HAND_FEEL.pinchOff).toBeGreaterThan(HAND_FEEL.pinchOn); // hysteresis
   });
-  it('the reach box maps the central 70% of the camera to the screen', () => {
+  it('the active box maps the central 60% x 55% of the camera (palm travel) to the screen', () => {
     expect(REACH).toEqual(HAND_FEEL.reach);
-    expect(HAND_FEEL.reach.x1 - HAND_FEEL.reach.x0).toBeCloseTo(0.70);
-    expect(HAND_FEEL.reach.y1 - HAND_FEEL.reach.y0).toBeCloseTo(0.70);
-    expect(HAND_FEEL.reach.x0).toBeCloseTo(0.15);
-    expect(HAND_FEEL.reach.x1).toBeCloseTo(0.85);
-    expect(HAND_FEEL.reach.y0).toBeCloseTo(0.15);
+    expect(HAND_FEEL.reach.x1 - HAND_FEEL.reach.x0).toBeCloseTo(0.60);
+    expect(HAND_FEEL.reach.y1 - HAND_FEEL.reach.y0).toBeCloseTo(0.55);
+    expect(HAND_FEEL.reach.x0).toBeCloseTo(0.2);
+    expect(HAND_FEEL.reach.x1).toBeCloseTo(0.8);
+    // The palm sits lower in the frame than a fingertip: the box sits lower.
+    expect(HAND_FEEL.reach.y0).toBeCloseTo(0.3);
     expect(HAND_FEEL.reach.y1).toBeCloseTo(0.85);
+  });
+  it('select feel: 800 ms target-locked dwell, 40/60 px magnet, 600 ms click cooldown, screen-px One-Euro', () => {
+    expect(HAND_FEEL.dwellMs).toBe(800);
+    expect(HAND_FEEL.magnetCapturePx).toBe(40);
+    expect(HAND_FEEL.magnetReleasePx).toBe(60);
+    expect(HAND_FEEL.magnetReleasePx).toBeGreaterThan(HAND_FEEL.magnetCapturePx); // hysteresis
+    expect(HAND_FEEL.clickCooldownMs).toBe(600);
+    expect(HAND_FEEL.cursorFilter).toEqual({ minCutoff: 1.0, beta: 0.01, dCutoff: 1.0 });
+    expect(HAND_FEEL.deadZonePx).toBe(3);
   });
 });
 
@@ -236,6 +246,21 @@ describe('background-hand filter + anchor', () => {
     expect(after.x).toBeCloseTo(anchor.x, 5);
     expect(after.y).toBeCloseTo(anchor.y, 5);
     expect(palmCenter(h).x).toBeCloseTo(0.5, 5);
+  });
+
+  it('palmCenter (the live cursor anchor) is the mean of 0/5/9/13/17 and does not move when the fist closes', () => {
+    const h = handAt(0.5, 0.5);
+    h[0] = { x: 0.40, y: 0.70 };
+    h[5] = { x: 0.45, y: 0.50 };
+    h[9] = { x: 0.50, y: 0.48 };
+    h[13] = { x: 0.55, y: 0.50 };
+    h[17] = { x: 0.60, y: 0.54 };
+    const p = palmCenter(h);
+    expect(p.x).toBeCloseTo((0.40 + 0.45 + 0.50 + 0.55 + 0.60) / 5, 6);
+    expect(p.y).toBeCloseTo((0.70 + 0.50 + 0.48 + 0.50 + 0.54) / 5, 6);
+    // Close the fist: every fingertip (8/12/16/20) and the thumb tip moves by 0.1.
+    for (const i of [4, 8, 12, 16, 20]) h[i] = { x: h[i].x + 0.1, y: h[i].y + 0.1 };
+    expect(palmCenter(h)).toEqual(p);
   });
 });
 
