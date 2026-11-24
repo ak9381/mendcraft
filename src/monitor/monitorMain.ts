@@ -129,6 +129,46 @@ export function noteLine(rawText: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// The activity stream: one styled line per real log line
+// ---------------------------------------------------------------------------
+
+/** What a stream line is, which decides its colour and weight (monitor.css):
+ *  heard/work = white · sent = bold blue · handoff = bold amber ·
+ *  redact = bold violet · replied/done = green (bold when it ends the turn) ·
+ *  kept = bold green · fail = bold red · queued = amber · note/self = dim. */
+export type LineKind = 'heard' | 'sent' | 'handoff' | 'redact' | 'replied' | 'done' | 'kept' | 'fail' | 'work' | 'queued' | 'note' | 'self';
+export interface LineStyle { kind: LineKind; label: string; bold: boolean; text: string; sim: boolean }
+
+const BOLD_KINDS: ReadonlySet<LineKind> = new Set(['sent', 'handoff', 'redact', 'kept', 'fail']);
+const WORK_LABEL: Record<string, string> = { plan: 'Planning', build: 'Building', fill: 'Filling' };
+
+/** "→ gemini: plan the pack" → "→ Gemini: plan the pack". */
+export function handoffText(text: string): string {
+  const m = /^(→|←)\s*(\w+):\s*(.*)$/.exec(text.trim());
+  return m ? `${m[1]} ${sentenceCase(m[2]!)}: ${m[3]}` : text;
+}
+
+/** The stream line for one log line: a short human label (never the raw
+ *  verb), its kind and weight, and the text with any SIM tag lifted out (it
+ *  is shown as a pill, not dropped). The text itself is the log's own words. */
+export function lineStyle(engine: MonitorEngine, verb: string, rawText: string): LineStyle {
+  const { text, sim } = stripSim(rawText);
+  const cloud = isCloud(engine);
+  const mk = (kind: LineKind, label: string, t = text): LineStyle => ({ kind, label, bold: BOLD_KINDS.has(kind), text: t, sim });
+  switch (verb) {
+    case 'received': return cloud ? mk('sent', 'Sent') : mk('heard', 'Heard');
+    case 'handoff': return mk('handoff', /^\s*←/.test(text) ? 'Picked up' : 'Handed off', handoffText(text));
+    case 'redact': return mk('redact', 'Redacted');
+    case 'replied': return mk('replied', 'Replied');
+    case 'done': return mk('done', 'Done');
+    case 'fail': return cloud ? mk('fail', 'Failed', `Failed — ${text}`) : mk('fail', 'Blocked', `Blocked — ${text}`);
+    case 'queued': return mk('queued', 'Queued');
+    case 'note': return isSelfCheck(verb, rawText) ? mk('self', 'Self-check') : mk('note', 'Note');
+    default: return mk('work', WORK_LABEL[verb] ?? sentenceCase(verb));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The ledger: turns, packets and "kept on device" counting
 // ---------------------------------------------------------------------------
 //
@@ -535,9 +575,22 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     h.sub.textContent = '';
     h.said = true;
   };
-  const addTick = (h: Half, verb: string, text: string, title?: string) => {
+  /** One activity-stream line: coloured dot · human label · the log's words
+   *  (SIM as a small pill). A redact line strikes the real name and
+   *  highlights its token — only when the real line has that shape. */
+  const addTick = (h: Half, verb: string, st: LineStyle, title?: string) => {
     const p = make('p', `mon-line mon-line--${verb}`);
-    p.append(make('span', 'mon-verb', verb), make('span', 'mon-text', text));
+    p.setAttribute('data-kind', st.kind);
+    p.setAttribute('data-bold', String(st.bold));
+    const body = make('span', 'mon-text');
+    if (st.sim) body.append(make('span', 'mon-sim-pill', 'SIM'));
+    const r = st.kind === 'redact' ? parseRedaction(st.text) : null;
+    if (r) {
+      body.append(make('s', 'mon-strike', r.name), make('span', 'mon-arrow', ' → '), make('mark', 'mon-token', r.token));
+    } else {
+      body.append(make('span', 'mon-words', st.text));
+    }
+    p.append(make('span', 'mon-dot'), make('span', 'mon-verb', st.label), body);
     if (title !== undefined) p.setAttribute('title', title);
     h.ticker.append(p);
     while (h.ticker.children.length > MONITOR_MAX_LINES) (h.ticker.children[0] as HTMLElement).remove();
@@ -566,6 +619,8 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       const chip = restart(v.device.moment, e.refused ? 'mon-settle mon-settle--refused' : 'mon-settle');
       chip.append(make('span', 'mon-settle-check', '✓'),
         make('span', 'mon-settle-text', e.refused ? 'Decided on this device · 0 B sent' : 'Stayed on this device · 0 B'));
+      addTick(v.device, 'kept', { kind: 'kept', label: 'Kept on device', bold: true, sim: false,
+        text: e.refused ? '✓ Decided on this device · 0 B sent' : '✓ Stayed on this device · 0 B' });
       restart(v.device.fx, 'mon-settle-ring');
       restart(keptBox, 'mon-total-pulse');
       return;
@@ -604,12 +659,14 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     if (last && last.className === 'mon-line mon-line--selfok') {
       const n = Number(last.getAttribute('data-n') ?? '1') + 1;
       last.setAttribute('data-n', String(n));
-      (last.children[1] as HTMLElement).textContent = `✓ ×${n}`;
+      (last.children[2] as HTMLElement).textContent = `✓ ×${n}`;
       return;
     }
     const p = make('p', 'mon-line mon-line--selfok');
     p.setAttribute('data-n', '1');
-    p.append(make('span', 'mon-verb', 'self-check'), make('span', 'mon-text', '✓'));
+    p.setAttribute('data-kind', 'self');
+    p.setAttribute('data-bold', 'false');
+    p.append(make('span', 'mon-dot'), make('span', 'mon-verb', 'Self-check'), make('span', 'mon-text', '✓'));
     h.ticker.append(p);
     while (h.ticker.children.length > MONITOR_MAX_LINES) (h.ticker.children[0] as HTMLElement).remove();
   };
@@ -621,7 +678,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     // sub-line, never on the cloud half, and passing ones collapse to one line.
     if (isSelfCheck(verb, text)) {
       if (isCloud(engine)) return;
-      if (SELF_OK.test(text)) tickSelfOk(h); else addTick(h, verb, text);
+      if (SELF_OK.test(text)) tickSelfOk(h); else addTick(h, verb, lineStyle(engine, verb, text));
       return;
     }
     setModel(device, engine);
@@ -630,12 +687,26 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       setSim(h, sim);
       if (!isCloud(engine)) { clearRedact(h); clearFx(h); h.moment.innerHTML = ''; clearFx(v.cloud); setSim(v.cloud, false); }
     } else if (sim) setSim(h, true);
-    if (verb === 'received' && isCloud(engine) && isRawPrompt(text)) {
-      // The cloud's `received` line is the whole (redacted) model prompt:
-      // summarise it; the full text only lives in the title attribute.
-      addTick(h, verb, `sent: the model prompt (${bytesShort(utf8Length(text))})`, text);
-    } else addTick(h, verb, text);
+    const wasEnded = ledger.get(device).turn?.ended ?? true;
     const effects = animate ? ledger.log(device, engine, verb, text, at) : [];
+    const st = lineStyle(engine, verb, text);
+    if (verb === 'received' && isCloud(engine)) {
+      // What reached the cloud: the real bytes delta when this turn crossed;
+      // a raw (redacted) model prompt is summarised, full text only in title.
+      const b = animate ? ledger.get(device).turn?.bytes ?? 0 : 0;
+      const size = b > 0 ? bytesShort(b) : null;
+      if (isRawPrompt(text)) {
+        st.text = size ? `the model prompt · ${size}` : `the model prompt (${bytesShort(utf8Length(text))})`;
+        addTick(h, verb, st, text);
+      } else {
+        if (size) st.text = `${st.text} · ${size}`;
+        addTick(h, verb, st);
+      }
+    } else {
+      // the done/replied line that ends a turn is bold
+      if ((verb === 'done' || verb === 'replied') && animate && !wasEnded && ledger.get(device).turn?.ended) st.bold = true;
+      addTick(h, verb, st);
+    }
     const hl = deriveHeadline(engine, verb, text);
     if (hl) {
       if (verb === 'received' && isCloud(engine)) {
