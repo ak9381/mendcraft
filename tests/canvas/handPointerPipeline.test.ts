@@ -2,7 +2,7 @@
 // the actual createHandPointer().update() path — One-Euro smoothing, dead
 // zone, sticky target, edge guard, dwell-click, two-fist board move — on a
 // faked document. The ONLY ways to activate anything are (1) resting the
-// cursor still for ~3s (HAND_FEEL.dwellMs) on a control or a board, and (2)
+// cursor still for ~1.5s (HAND_FEEL.dwellMs) on a control or a board, and (2)
 // both hands fisted with both cursors over the SAME board, which drags it by
 // the fists' midpoint. There is no pinch-click, pinch-drag, two-hand
 // pinch-zoom, one-fist drag, or two-finger scroll in this pipeline.
@@ -231,33 +231,33 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  it('resting the cursor still on a control for ~3s fills the dwell ring then clicks exactly once', () => {
+  it('resting the cursor still on a control for ~1.5s fills the dwell ring then clicks exactly once', () => {
     feed(500, 400, 5); // enter mid-screen
     feed(160, 50, 15); // move to the control and settle
     expect(hp.target).toBe(btn);
     const cursor = cursorElOf(doc);
     expect(cursor.hidden).toBe(false);
-    feed(160, 50, 60); // still well under 3s (≈2s total on the button so far)
+    feed(160, 50, 15); // still well under 1.5s (≈1s total on the button so far)
     expect(btn.click).not.toHaveBeenCalled();
-    feed(160, 50, 40); // now past 3s
+    feed(160, 50, 25); // now past 1.5s
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
     feed(160, 50, 20); // keep resting: no second click
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('moving beyond the dwell slop resets the ring — the full 3s starts over', () => {
+  it('moving beyond the dwell slop resets the ring — the full 1.5s starts over', () => {
     feed(160, 50, 15);
-    feed(160, 50, 60); // ~2s dwelling
+    feed(160, 50, 15); // dwelling, well under 1.5s
     // Jitter beyond dwellSlopPx (12px) onto the same button — the ring resets.
-    feed(205, 50, 60); // another ~2s, still inside btn's rect, but reset by the jump
+    feed(205, 50, 15); // still inside btn's rect, but reset by the jump
     expect(btn.click).not.toHaveBeenCalled();
-    feed(205, 50, 40); // finish the fresh 3s window
+    feed(205, 50, 50); // finish the fresh 1.5s window
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('leaving the control before 3s does not click', () => {
-    feed(160, 50, 60); // ~2s, under the dwell window
+  it('leaving the control before 1.5s does not click', () => {
+    feed(160, 50, 20); // ~1s, under the dwell window
     feed(500, 400, 10); // leaves before completing
     expect(btn.click).not.toHaveBeenCalled();
     expect(other.click).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(160, 50, 5); // close into a pinch pose
     expect(cursor.classList.contains('is-pinched')).toBe(false); // live pinch is never tracked as a click gesture
     for (let i = 0; i < 4; i++) { t += 33; hp.update([synthHand(160, 50, true)], t); }
-    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthHand(160, 50, false)], t); } // "release" — far under 3s
+    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthHand(160, 50, false)], t); } // "release" — far under 1.5s
     expect(btn.click).not.toHaveBeenCalled(); // a quick pinch-and-release never clicked
     // Resting in that same (pinched) hand shape long enough still dwell-clicks —
     // the trigger is stillness, not the pose.
@@ -483,7 +483,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
 
     // After leaving the edge and waiting out the cooldown, dwell clicks again
     // — the cooldown itself is recorded on the first clean frame, so the
-    // full ~300ms cooldown plus the full ~3s dwell both happen inside feed().
+    // full ~300ms cooldown plus the full ~1.5s dwell both happen inside feed().
     feed(160, 50, 115);
     expect(btn.click).toHaveBeenCalledTimes(1);
     tr.clear();
@@ -578,6 +578,37 @@ describe('two-fist board move', () => {
       feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 10);
       expect(moves.length).toBe(0);
       expect(hp.isBoardGrabbed()).toBe(false);
+    } finally {
+      hp.destroy();
+    }
+  });
+
+  it('a two-fist grab silences dwell on a button under the cursor; dwell works again once a fist opens', () => {
+    const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
+    const insideBtn = fakeButton({ left: 250, top: 200, width: 80, height: 40 });
+    // The button sits inside the board, so its own frame lookup still finds f1.
+    (insideBtn as unknown as { closest: (sel: string) => FakeFrame | null }).closest =
+      (sel) => (sel === '.mc-frame' ? board : null);
+    const doc = fakeDoc([insideBtn], [board]);
+    const hp = createHandPointer(doc, {});
+    let t = 0;
+    try {
+      // Both fists land on the board, right over the button — a grab starts.
+      for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
+      expect(hp.isBoardGrabbed()).toBe(true);
+      // Resting there well past the 1.5s dwell window: isGrabActive silences
+      // this slot's target/dwell even with the button sitting right under it.
+      for (let i = 0; i < 60; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
+      expect(insideBtn.click).not.toHaveBeenCalled();
+      expect(hp.target).toBeNull();
+
+      // One fist opens: the grab ends.
+      t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t);
+      expect(hp.isBoardGrabbed()).toBe(false);
+
+      // Only the open hand remains, resting on the same button: dwell works again.
+      for (let i = 0; i < 55; i++) { t += 33; hp.update([synthHand(270, 220, false)], t); }
+      expect(insideBtn.click).toHaveBeenCalledTimes(1);
     } finally {
       hp.destroy();
     }

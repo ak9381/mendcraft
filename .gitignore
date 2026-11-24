@@ -30,6 +30,7 @@ dist-ssr
 # Secrets and keys
 .env*
 !.env.example
+.secrets/
 *.pem
 *.key
 *.p12

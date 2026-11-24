@@ -14,6 +14,7 @@ import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { openEndedAsk } from './openEndedAsk';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -1911,6 +1912,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     } else if (announce) say(`${OFFLINE_QUICK_ONLY}.`);
   }
 
+  // Open-ended speech that isn't a known command ("hi", "what can you do") —
+  // a short conversational reply, Nano-first, Gemini when Nano can't answer.
+  // No board, no proposal: the question's badge/panel still names what answered.
+  const OPEN_ENDED_SIM_REPLY = "I'm listening — tell me what to build, or ask me anything.";
+  async function openEndedTurn(text: string): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    showAi(true);
+    const nano = engineFor('nano', OPEN_ENDED_SIM_REPLY);
+    const gemini = engineFor('gemini', OPEN_ENDED_SIM_REPLY);
+    const r = await openEndedAsk(text, nano, gemini, (full) => {
+      aiPanel.querySelector('.mc-ai-state')!.textContent = full;
+    });
+    panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
+    aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
+    say(r.reply);
+  }
+
   // ---- commands ----
   function run(text: string): boolean {
     // Morph-first: while the morph card is open, speech (and the say box)
@@ -1995,7 +2013,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       void nameTurn(id, text);
       return true;
     }
-    say(`“${text}” isn’t a canvas command yet.`); return false;
+    void openEndedTurn(text);
+    return true;
   }
 
   // ---- input ----

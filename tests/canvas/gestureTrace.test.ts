@@ -57,6 +57,6 @@ describe('confirm-action gates', () => {
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Ask for something else', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Delete tile', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction(cancel)).toBe(false);
-    expect(CONFIRM_DWELL_MS).toBe(3000);
+    expect(CONFIRM_DWELL_MS).toBe(1500);
   });
 });

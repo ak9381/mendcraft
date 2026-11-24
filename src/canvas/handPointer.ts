@@ -11,7 +11,7 @@
 // aria-modal dialog limits targets to itself.
 //
 // There is exactly one way to activate anything: HOVER-TO-SELECT. Resting
-// the cursor still on a control or a board (.mc-frame) for ~3s (HAND_FEEL.
+// the cursor still on a control or a board (.mc-frame) for ~1.5s (HAND_FEEL.
 // dwellMs) fills the .mc-hand-dwell ring, then clicks it (a button) or
 // focuses it (a board). No pinch-click, no pinch-drag, no two-hand
 // pinch-zoom, no one-fist drag, no two-finger scroll — those gestures do
@@ -280,6 +280,12 @@ export interface HandPointerOptions {
    *  (CSS px) of the fists' midpoint each frame after, 'end' when either
    *  fist opens or the fists part onto different boards. */
   onBoardMove?: (ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number }) => void;
+  /** Slot hook (plural createHandPointer only): true while a two-fist board
+   *  grab is active, on ANY slot — not just this hand's own fist pose. While
+   *  true this slot's dwell/ring/click/hover all stay off, so dragging a
+   *  board across the right-side buttons (or to the edge, onto another
+   *  device) never glitches a hover or fires a stray click underneath. */
+  isGrabActive?: () => boolean;
 }
 
 /** Magnetic focus: snap radius and ease toward the target centre. */
@@ -289,7 +295,7 @@ export const MAGNET_PULL = 0.35;
  *  is the live dwell-to-click time for Approve/Reject, same as everything
  *  else (HAND_FEEL.dwellMs). */
 export const CONFIRM_PINCH_MS = 300;
-export const CONFIRM_DWELL_MS = 3000;
+export const CONFIRM_DWELL_MS = 1500;
 export const CONFIRM_ACTION =
   '.mc-review-approve, .mc-review-reject, .mc-review-ask-else, .mc-trash, [data-act="drop"], [data-act="delete"]';
 
@@ -833,6 +839,17 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       paint();
       return draggingHandle;
     }
+    // A two-fist board grab is active (on any slot, not just this hand's own
+    // fist): no hover, no ring, no dwell, no click, while the board drags
+    // under the cursor — across the right-side buttons, to the edge, or onto
+    // another device.
+    if (opts.isGrabActive?.()) {
+      if (target) setTarget(null);
+      if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
+      resetDwell();
+      paint();
+      return null;
+    }
     const direct = rawInteractiveHit(p);
     // A board with no more specific control under the point is still a valid
     // dwell target — dwelling on it selects/focuses it (world's click
@@ -972,6 +989,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const slots: SlotPointer[] = [0, 1].map((i) =>
     createOneHandPointer(doc, {
       ...opts,
+      // Read fresh each call: true from the moment both fists land on the
+      // same board (set at the bottom of update() below) until either opens
+      // or they part — one frame behind the grab's own start/end, same as
+      // every other cross-slot signal here (bothFisted, sameBoard).
+      isGrabActive: () => !!grabFrameId,
       onLost() {
         active[i] = false;
         prevTips[i] = null;
