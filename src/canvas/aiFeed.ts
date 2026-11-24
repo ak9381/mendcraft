@@ -82,6 +82,14 @@ function newSid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** The canvas's own feed. A phone shell never broadcasts locally: its
+ *  messages would be untagged, so a monitor on the same machine (a narrow
+ *  browser window acting as a phone) would take it for the laptop. Phone
+ *  activity reaches the monitor only via the relay → laptop republish, tagged. */
+export function createCanvasAiFeed(phoneShell: boolean, opts: { channel?: FeedChannel | null } = {}): AiFeed {
+  return createAiFeed(phoneShell ? { channel: null } : opts);
+}
+
 export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFeed {
   const channel = opts.channel === undefined ? defaultChannel() : opts.channel;
   const sid = newSid();

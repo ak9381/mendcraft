@@ -18,7 +18,8 @@ export interface ChimeLoop {
 }
 
 export interface ChimeListener {
-  start(): Promise<'listening' | 'denied' | 'unsupported'>;
+  /** 'stopped' when stop() ran before the mic opened (it is closed again). */
+  start(): Promise<'listening' | 'denied' | 'unsupported' | 'stopped'>;
   stop(): void;
   readonly active: boolean;
 }
@@ -117,6 +118,7 @@ export function createChimeListener(opts: {
   let stopCapture: (() => void) | null = null;
   let active = false;
   let reported = false;
+  let generation = 0;
 
   function consider(samples: Float32Array, sampleRate: number): void {
     if (!active || reported) return;
@@ -168,15 +170,24 @@ export function createChimeListener(opts: {
     };
   }
 
-  async function start(): Promise<'listening' | 'denied' | 'unsupported'> {
+  async function start(): Promise<'listening' | 'denied' | 'unsupported' | 'stopped'> {
     stop();
+    const gen = ++generation;
     reported = false;
     active = true;
     try {
       const startCap = opts.startCapture ?? defaultCapture;
-      stopCapture = await startCap(consider);
+      const stopper = await startCap(consider);
+      // stop() (or a newer start()) ran while the mic permission prompt was
+      // up: close the capture we just got instead of leaving the mic open.
+      if (!active || gen !== generation) {
+        try { stopper(); } catch { /* ignore */ }
+        return 'stopped';
+      }
+      stopCapture = stopper;
       return 'listening';
     } catch (err) {
+      if (gen !== generation) return 'stopped';
       active = false;
       const reason: 'denied' | 'unsupported' =
         err && typeof err === 'object' && 'name' in err && (err as { name: string }).name === 'NotAllowedError'
