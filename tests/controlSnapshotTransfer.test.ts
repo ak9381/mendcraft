@@ -52,3 +52,19 @@ describe('controlSnapshot: new optional fields', () => {
     expect(snap!.transfer).toBeUndefined();
   });
 });
+
+describe('controlSnapshot: boardFor (a board sent to ONE phone)', () => {
+  const board = { kind: 'room', title: 'Kitchen', tiles: [{ type: 'lamp', deviceId: 'lamp-1', label: 'Lamp' }] };
+  it('round-trips a valid target', () => {
+    const snap = buildControlSnapshot({ rev: 3, board, boardFor: 'ios' });
+    expect(snap.boardFor).toBe('ios');
+    expect(coerceSnapshot(JSON.parse(JSON.stringify(snap)))!.boardFor).toBe('ios');
+  });
+  it('drops junk targets and a target without a board', () => {
+    expect(buildControlSnapshot({ rev: 3, board, boardFor: 'windows' }).boardFor).toBeUndefined();
+    expect(buildControlSnapshot({ rev: 3, boardFor: 'ios' }).boardFor).toBeUndefined();
+    const raw = JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 3, board })));
+    raw.boardFor = { evil: true };
+    expect(coerceSnapshot(raw)!.boardFor).toBeUndefined();
+  });
+});

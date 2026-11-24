@@ -74,6 +74,21 @@ describe('joinPhoneAsGuest', () => {
     await first.close();
   });
 
+  it('announces its platform to the laptop once joined', async () => {
+    const transport = createFakeTransport();
+    const host = await createHostSession(transport);
+    const cmds: Array<{ kind: string; text?: string }> = [];
+    host.onCommand((c) => cmds.push(c));
+    const guest = await joinPhoneAsGuest({ code: host.code, transport, platform: 'ios' });
+    expect('error' in guest).toBe(false);
+    await new Promise((r) => setTimeout(r, 20));
+    const ann = cmds.find((c) => c.kind === 'announce');
+    expect(ann).toBeTruthy();
+    expect(JSON.parse(ann!.text!)).toEqual({ platform: 'ios' });
+    if (!('error' in guest)) await guest.stop();
+    await host.close();
+  });
+
   it('returns room not found for an unknown code', async () => {
     const transport = createFakeTransport();
     const result = await joinPhoneAsGuest({ code: 'ABCD1234', transport });

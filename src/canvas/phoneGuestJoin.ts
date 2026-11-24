@@ -80,9 +80,20 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
         platform: deps.platform,
       });
     }
+    if (deps.platform) announcePhone(session, deps.platform);
     return { roomId, session, stop: () => session.close() };
   } catch {
     return { error: 'needs network' };
+  }
+}
+
+/** Tell the laptop which phone this is, so it can place it (Nothing left,
+ *  iPhone right by default) and send a board to THIS phone only. Best-effort. */
+export function announcePhone(session: Pick<GuestSession, 'sendCommand'>, platform: PhonePlatform): void {
+  try {
+    void session.sendCommand({ kind: 'announce', text: JSON.stringify({ platform }) }).catch(() => undefined);
+  } catch {
+    /* a closed session never breaks the join */
   }
 }
 
