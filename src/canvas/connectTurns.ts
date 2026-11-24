@@ -150,7 +150,7 @@ export interface PointIdentifyResult {
 }
 
 export type PointOutcome =
-  | { ok: true; turn: ConnectTurnResult; identity: DeviceIdentity; /** Photo bytes that left (0 on device). */ extraBytes: number }
+  | { ok: true; turn: ConnectTurnResult; identity: DeviceIdentity; /** Photo bytes that left (0 on device). */ extraBytes: number; /** Honest status to say (speaker: Spotify Connect). */ note?: string }
   | { ok: false; message: string; /** Several connected devices fit: ask which one. */ choices?: DeviceHint[] };
 
 export const POINT_UNSURE_MESSAGE = 'I couldn’t tell what you’re pointing at — try naming it.';
@@ -183,6 +183,18 @@ function pointKind(id: DeviceIdentity): string | null {
 const KIND_WORDS: Record<string, string> = { 'smart-bulb': 'smart bulb', tv: 'TV', ac: 'AC' };
 const kindWord = (id: DeviceIdentity): string => KIND_WORDS[id.kind] ?? (isWizIdentity(id) ? 'WiZ light' : id.kind);
 const article = (w: string): string => (/^[aeiou]/i.test(w) && !/^u[a-z]/.test(w) ? 'an' : 'a');
+
+/** A speaker tile is software: the Spotify-aware connector finds the Connect
+ *  device (e.g. /marshall/i) at play time, so pointing at one proposes the
+ *  tile even with no hardware device registered. Never claims a hardware link. */
+export const SPEAKER_ADDED_NOTE = 'Speaker added — it will play through Spotify Connect if your Marshall is awake in Spotify.';
+export const SPEAKER_ON_BOARD = 'The speaker is already on this board.';
+const isMarshall = (id: Pick<DeviceIdentity, 'brand' | 'label'>): boolean => /marshall/i.test(`${id.brand ?? ''} ${id.label ?? ''}`);
+const LAMP_OR_SPEAKER: DeviceHint[] = [
+  { id: 'kind:lamp', label: 'lamp', kind: 'lamp' },
+  { id: 'kind:speaker', label: 'speaker', kind: 'speaker' },
+];
+export const LAMP_OR_SPEAKER_QUESTION = 'Which one — the lamp or the speaker?';
 
 export const notConnectedMessage = (id: DeviceIdentity): string => {
   const w = kindWord(id);
@@ -221,11 +233,26 @@ export function pointConnectFromIdentity(
   opts: {
     frameTitle?: string; sim?: boolean; cropBytes?: number; devices?: DeviceHint[]; onBoard?: string[]; prompt?: string;
     cloudSends?: number; chosenId?: string;
+    /** The photo was taken and identified on the paired iPhone: nothing left this device. */
+    viaIphone?: boolean;
   } = {},
 ): PointOutcome {
   if (!result || !(result.identity.confidence >= POINT_MIN_CONFIDENCE)) return { ok: false, message: POINT_UNSURE_MESSAGE };
-  const { identity } = result;
-  const kind = pointKind(identity);
+  let identity = result.identity;
+  // Lamp and speaker both near the finger: ask, then rebuild from her answer.
+  const alsoKind = identity.alsoKind ? pointKind({ ...identity, kind: identity.alsoKind, brand: identity.alsoBrand ?? '', label: '' }) : null;
+  const firstKind = pointKind(identity);
+  if (opts.chosenId?.startsWith('kind:')) {
+    const k = opts.chosenId.slice(5);
+    const brand = k === firstKind ? identity.brand : (identity.alsoBrand ?? '');
+    const label = k === 'speaker' ? (isMarshall({ brand, label: '' }) || (k === firstKind && isMarshall(identity)) ? 'Marshall speaker' : 'Speaker') : k === firstKind ? identity.label : 'Lamp';
+    identity = { ...identity, kind: k, brand, label, alsoKind: undefined, alsoBrand: undefined };
+    return pointConnectFromIdentity({ ...result, identity }, { ...opts, chosenId: undefined });
+  }
+  if (alsoKind && firstKind && alsoKind !== firstKind && [alsoKind, firstKind].includes('lamp') && [alsoKind, firstKind].includes('speaker')) {
+    return { ok: false, message: LAMP_OR_SPEAKER_QUESTION, choices: LAMP_OR_SPEAKER };
+  }
+  const kind = firstKind;
   if (!kind) return { ok: false, message: POINT_UNSURE_MESSAGE };
 
   const want = mapKindToTile(kind, identity.label).type;
@@ -240,10 +267,17 @@ export function pointConnectFromIdentity(
     const onBoard = new Set(opts.onBoard ?? []);
     const offBoard = eligible.filter((d) => !onBoard.has(d.id));
     const pool = named.length ? named : offBoard.length ? offBoard : eligible;
-    if (pool.length === 0) return { ok: false, message: notConnectedMessage(identity) };
-    if (pool.length > 1) return { ok: false, message: pointChoiceQuestion(pool), choices: pool };
-    known = pool[0];
+    if (pool.length === 0 && kind === 'speaker') {
+      // Software tile: no hardware binding is claimed.
+      if ((opts.onBoard ?? []).some((d) => /^speaker/i.test(d))) return { ok: false, message: SPEAKER_ON_BOARD };
+      const marshall = isMarshall(identity);
+      known = { id: marshall ? 'speaker-marshall' : 'speaker-1', label: marshall ? 'Marshall speaker' : 'Speaker', kind: 'speaker' };
+    } else if (pool.length === 0) return { ok: false, message: notConnectedMessage(identity) };
+    else if (pool.length > 1) return { ok: false, message: pointChoiceQuestion(pool), choices: pool };
+    else known = pool[0];
   }
+  if (!known) return { ok: false, message: POINT_UNSURE_MESSAGE };
+  const software = kind === 'speaker' && !(opts.devices ?? []).some((d) => d.id === known!.id);
   const tile = mapKindToTile(known.kind, known.label, known.id);
 
   const title = opts.frameTitle ?? 'This room';
@@ -256,10 +290,12 @@ export function pointConnectFromIdentity(
   const crop = Math.max(0, Math.round(opts.cropBytes ?? 0));
   const bytes = crop * sends;
   const what = sends > 1 ? `the photo crop of what you pointed at, sent ${sends}× (${fmtBytes(bytes)})` : `1 photo crop of what you pointed at (${fmtBytes(bytes)})`;
-  const sentReceipt = cloud ? `${what}, not stored` : null;
-  const line = cloud
-    ? `Gemini · cloud — ${sentReceipt}`
-    : 'Nano · on device — the photo never left this device';
+  const sentReceipt = cloud && !opts.viaIphone ? `${what}, not stored` : null;
+  const line = opts.viaIphone
+    ? `iPhone camera — identified ${cloud ? 'via Gemini · cloud from the iPhone' : 'on the iPhone'}; nothing left this laptop`
+    : cloud
+      ? `Gemini · cloud — ${sentReceipt}`
+      : 'Nano · on device — the photo never left this device';
   const sent: SentInfo = {
     engine: cloud ? 'gemini' : 'nano',
     prompt: opts.prompt ?? `Name the device in this photo crop of what she is pointing at.`,
@@ -275,8 +311,9 @@ export function pointConnectFromIdentity(
   return {
     ok: true,
     identity,
-    extraBytes: cloud ? bytes : 0,
+    extraBytes: cloud && !opts.viaIphone ? bytes : 0,
     turn: { sent, json, plan, request, engine: scriptedEngine(sent.engine, json) },
+    ...(software ? { note: SPEAKER_ADDED_NOTE } : {}),
   };
 }
 
