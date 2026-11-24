@@ -18,13 +18,23 @@ export interface LedgerTotals {
   totalBytes: number;
   byEngine: Record<string, number>;
   count: number;
+  /** AI turns only: everything except non-AI services such as Spotify. */
+  aiBytes: number;
+  aiCount: number;
+  /** Non-AI calls that also left this device (Spotify), counted separately. */
+  spotifyBytes: number;
+  spotifyCount: number;
 }
+
+export const isAiEngine = (engine: string): boolean => engine.toLowerCase() !== 'spotify';
 
 export interface CanvasLedger {
   record(input: LedgerRecordInput): LedgerEntry;
   totals(): LedgerTotals;
   entries(): readonly LedgerEntry[];
   formatLine(): string;
+  /** "Also left this device: Spotify · N calls · X (not AI)", or '' when none. */
+  formatSpotifyLine(): string;
   clear(): void;
 }
 
@@ -78,10 +88,15 @@ export function createCanvasLedger(): CanvasLedger {
 
     totals(): LedgerTotals {
       let totalBytes = 0;
+      let aiBytes = 0;
+      let aiCount = 0;
+      let spotifyBytes = 0;
+      let spotifyCount = 0;
       const byEngine: Record<string, number> = {};
 
       for (const e of entriesList) {
         totalBytes += e.bytes;
+        if (isAiEngine(e.engine)) { aiBytes += e.bytes; aiCount += 1; } else { spotifyBytes += e.bytes; spotifyCount += 1; }
         byEngine[e.engine] = (byEngine[e.engine] ?? 0) + e.bytes;
       }
 
@@ -89,6 +104,10 @@ export function createCanvasLedger(): CanvasLedger {
         totalBytes,
         byEngine,
         count: entriesList.length,
+        aiBytes,
+        aiCount,
+        spotifyBytes,
+        spotifyCount,
       };
     },
 
@@ -101,6 +120,7 @@ export function createCanvasLedger(): CanvasLedger {
       let lastExternalEngine = 'Gemini';
 
       for (const e of entriesList) {
+        if (!isAiEngine(e.engine)) continue;
         totalBytes += e.bytes;
         if (e.bytes > 0) {
           lastExternalEngine = e.engine;
@@ -110,8 +130,25 @@ export function createCanvasLedger(): CanvasLedger {
       return formatLedgerLine({ bytes: totalBytes, engine: lastExternalEngine });
     },
 
+    formatSpotifyLine(): string {
+      const t = this.totals();
+      if (!t.spotifyCount) return '';
+      const b = t.spotifyBytes;
+      const size = b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b} B`;
+      return `Also left this device: Spotify · ${t.spotifyCount} call${t.spotifyCount === 1 ? '' : 's'} · ${size} (not AI)`;
+    },
+
     clear(): void {
       entriesList.length = 0;
     },
+  };
+}
+
+/** The two honest lines of the AI panel: AI turns, and (apart) Spotify calls. */
+export function ledgerPanelLines(ledger: CanvasLedger): { ai: string; spotify: string } {
+  const t = ledger.totals();
+  return {
+    ai: `This session: ${t.aiCount} AI turn${t.aiCount === 1 ? '' : 's'} · ${ledger.formatLine()}`,
+    spotify: ledger.formatSpotifyLine(),
   };
 }

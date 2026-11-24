@@ -6,6 +6,7 @@ import {
   TRACE_CAP,
 } from '../../src/canvas/gestureTrace';
 import { isConfirmAction, CONFIRM_DWELL_MS } from '../../src/canvas/handPointer';
+import { HAND_FEEL } from '../../src/canvas/handFeel';
 
 describe('gesture trace', () => {
   it('is off by default and enables for ?debug=gestures or a pre-set flag', () => {
@@ -57,6 +58,7 @@ describe('confirm-action gates', () => {
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Ask for something else', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Delete tile', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction(cancel)).toBe(false);
-    expect(CONFIRM_DWELL_MS).toBe(1500);
+    expect(CONFIRM_DWELL_MS).toBe(800);
+    expect(CONFIRM_DWELL_MS).toBe(HAND_FEEL.dwellMs); // one dwell time, no duplicate constant
   });
 });

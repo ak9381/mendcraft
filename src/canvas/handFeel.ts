@@ -21,10 +21,13 @@ const PALM_LANDMARKS = [0, 5, 9, 13, 17] as const;
 const INDEX_MCP_FEEL_ANCHOR = 5;
 
 export interface HandFeelConfig {
-  /** Central sub-rectangle of the camera frame that maps to the full screen,
-   *  so the top toolbar and edges are reachable without leaving the frame. */
+  /** Active box: the central sub-rectangle of the camera frame (where the
+   *  PALM CENTRE travels) that maps to the full screen, so every edge of the
+   *  UI is reachable without the hand leaving the camera. The palm sits
+   *  lower in the frame than a fingertip would, hence the box sits lower. */
   reach: { x0: number; x1: number; y0: number; y1: number };
-  /** One-Euro params for the cursor anchor (screen-space position). */
+  /** One-Euro params for the cursor, applied AFTER mapping to the screen
+   *  (so minCutoff is Hz and beta is per screen-px/s). */
   cursorFilter: { minCutoff: number; beta: number; dCutoff: number };
   /** One-Euro-style smoothing on the pinch ratio itself (1D). */
   pinchFilter: { minCutoff: number; beta: number; dCutoff: number };
@@ -45,8 +48,9 @@ export interface HandFeelConfig {
   /** The click targets the cursor position from this long BEFORE the pinch
    *  began, so closing the fingers can't drag the point off a small button. */
   freezeLookbackMs: number;
-  /** A hovered control stays the target until the pointer has been outside
-   *  it (by stickyMarginPx) for at least this long. */
+  /** createStickyTarget (generic time-based hysteresis). The live hand
+   *  pointer uses the magnet lock (magnetCapturePx / magnetReleasePx)
+   *  instead — the two never run together. */
   stickyMs: number;
   stickyMarginPx: number;
   /** Hands smaller than this (wrist→middle-MCP, camera units) are someone in
@@ -58,18 +62,59 @@ export interface HandFeelConfig {
   palmRefractoryMs: number;
   /** Consecutive pinch-pose frames before "keep" fires on empty canvas. */
   keepFrames: number;
-  /** Dwell-click: rest the index-tip cursor on a control or board this long
-   *  (~1.5s) to click/select it — the only way to click in the live pipeline. */
+  /** Dwell-click: once a control (or a board's title) has captured the
+   *  cursor, it clicks after this long locked on it — the only way to click
+   *  in the live pipeline. Jitter inside the lock never restarts it. */
   dwellMs: number;
-  /** Movement (px) allowed during a dwell without restarting the timer. */
-  dwellSlopPx: number;
+  /** Magnet: the cursor captures the nearest control within this many px of
+   *  its rect (when it is not directly over one)… */
+  magnetCapturePx: number;
+  /** …and a captured (locked) control is only released once the cursor is
+   *  more than this far from its rect, or lands directly on another control. */
+  magnetReleasePx: number;
+  /** After a dwell click, no new dwell can start for this long — and the
+   *  cursor must leave the clicked control before it can re-arm. */
+  clickCooldownMs: number;
+  /** Dwell only accrues while the cursor is within this many px of the
+   *  locked target's rect (it pauses, not resets, further out) — so easing
+   *  away toward a neighbour never finishes the one being left. */
+  dwellAccruePx: number;
+  /** FIST TAP = click: a fist that closes and re-opens within this long
+   *  (and moves less than fistMovePx) clicks the target under the palm. A
+   *  fist closed longer than this — or moved further (unfiltered palm, px)
+   *  — becomes a grab. */
+  fistTapMs: number;
+  fistMovePx: number;
+  /** No second fist tap within this long of a tap click. */
+  tapCooldownMs: number;
+  /** A tap's fist must stay closed at least this long (ms from the first
+   *  fist frame to the first open frame) — a 1–2 frame relaxed-hand
+   *  flicker is never a click. */
+  tapMinClosedMs: number;
+  /** A tap only arms if the hand was open this long / this many frames
+   *  right before it closed… */
+  tapMinOpenBeforeMs: number;
+  tapMinOpenBeforeFrames: number;
+  /** …the palm was moving slower than this (px/ms, unfiltered) as it
+   *  closed, and the target had been locked at least tapMinLockMs. */
+  tapMaxPalmSpeed: number;
+  tapMinLockMs: number;
+  /** Consecutive fist frames before a hand counts as closed (no time wait). */
+  fistCloseFrames: number;
+  /** Consecutive non-fist frames before a (non-grabbing) fist counts as open. */
+  fistOpenFrames: number;
+  /** While a grab runs, the fist only opens after this long AND
+   *  releaseGraceFrames consecutive non-fist frames — a loose fist flickering
+   *  to 'none'/'pinch' for a frame or two never drops the board. */
+  releaseGraceMs: number;
+  releaseGraceFrames: number;
 }
 
 export const HAND_FEEL: HandFeelConfig = {
-  reach: { x0: 0.15, x1: 0.85, y0: 0.15, y1: 0.85 },
-  cursorFilter: { minCutoff: 0.9, beta: 5, dCutoff: 1 },
+  reach: { x0: 0.2, x1: 0.8, y0: 0.3, y1: 0.85 },
+  cursorFilter: { minCutoff: 1.0, beta: 0.01, dCutoff: 1.0 },
   pinchFilter: { minCutoff: 2.5, beta: 8, dCutoff: 1 },
-  deadZonePx: 2.5,
+  deadZonePx: 3,
   pinchOn: 0.20,
   pinchOff: 0.30,
   engageFrames: 3,
@@ -83,8 +128,23 @@ export const HAND_FEEL: HandFeelConfig = {
   palmHoldMs: 600,
   palmRefractoryMs: 1500,
   keepFrames: 3,
-  dwellMs: 1500,
-  dwellSlopPx: 12,
+  dwellMs: 800,
+  magnetCapturePx: 40,
+  magnetReleasePx: 60,
+  clickCooldownMs: 600,
+  dwellAccruePx: 20,
+  fistTapMs: 300,
+  fistMovePx: 20,
+  tapCooldownMs: 400,
+  fistCloseFrames: 3,
+  fistOpenFrames: 3,
+  tapMinClosedMs: 80,
+  tapMinOpenBeforeMs: 150,
+  tapMinOpenBeforeFrames: 4,
+  tapMaxPalmSpeed: 0.5,
+  tapMinLockMs: 150,
+  releaseGraceMs: 120,
+  releaseGraceFrames: 3,
 };
 
 // ---------------------------------------------------------------- anchor

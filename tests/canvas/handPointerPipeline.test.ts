@@ -1,13 +1,14 @@
 // REAL-BEHAVIOUR pipeline test: synthetic 21-landmark frames pushed through
 // the actual createHandPointer().update() path — One-Euro smoothing, dead
-// zone, sticky target, edge guard, dwell-click, two-fist board move — on a
-// faked document. The ONLY ways to activate anything are (1) resting the
-// cursor still for ~1.5s (HAND_FEEL.dwellMs) on a control or a board, and (2)
-// both hands fisted with both cursors over the SAME board, which drags it by
-// the fists' midpoint. There is no pinch-click, pinch-drag, two-hand
-// pinch-zoom, one-fist drag, or two-finger scroll in this pipeline.
+// zone, magnet target lock, edge guard, dwell-click, fist grabs — on a
+// faked document. The cursor is anchored to the PALM CENTRE. The only way to
+// click is a target-locked dwell: once a control (or a board's title) has
+// captured the cursor it clicks after HAND_FEEL.dwellMs (800 ms), whatever
+// the jitter inside the lock. There is no pinch-click, pinch-drag or
+// two-finger scroll in this pipeline.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHandPointer, REACH, type HandPointer } from '../../src/canvas/handPointer';
+import { createHandPointer, type HandPointer } from '../../src/canvas/handPointer';
+import { synthHand as synthHandAt, synthFist as synthFistAt, type SynthOpts } from '../helpers/synthHands';
 import { getGestureTrace } from '../../src/canvas/gestureTrace';
 import type { Pt } from '../../src/input/handLogic';
 
@@ -112,6 +113,7 @@ function fakeDoc(buttons: FakeBtn[], frames: FakeFrame[] = []) {
     body: { append: () => {} },
     querySelectorAll: (sel: string) => {
       if (sel === '*' || sel === '[aria-modal=true]') return [];
+      if (sel === '.mc-frame') return frames;
       return sel.split(',').some((s) => s.trim().startsWith('button')) ? buttons : [];
     },
     elementFromPoint: (x: number, y: number) =>
@@ -143,63 +145,15 @@ function cursorPos(c: FakeOverlayEl): { x: number; y: number } {
   return { x: Number(m![1]), y: Number(m![2]) };
 }
 
-/** Camera-space hand whose INDEX_TIP (landmark 8 — the cursor's hotspot)
- *  maps exactly to screen (px, py). Middle/ring/pinky are built curled (not
- *  extended) and the index extended, so classifyGesture() never reads this
- *  as a fist — it reads as 'point' (open) or 'pinch' (closed), same as a
- *  real pointing/pinching hand. Neither pose clicks in this pipeline; only
- *  dwell (holding still) does. */
-function synthHand(px: number, py: number, pinched: boolean, opts?: { middle?: { x: number; y: number } }): Pt[] {
-  // Invert mapToScreen (mirror on x).
-  const cx = 1 - (REACH.x0 + (px / W) * (REACH.x1 - REACH.x0));
-  const cy = REACH.y0 + (py / H) * (REACH.y1 - REACH.y0);
-  const lm: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-
-  lm[8] = { x: cx, y: cy }; // INDEX_TIP: the pointer's hotspot, exactly on target
-  lm[0] = { x: cx, y: cy + 0.42 }; // wrist
-  lm[9] = { x: cx, y: cy + 0.22 }; // middle MCP
-  lm[5] = { x: cx, y: cy + 0.22 }; // index MCP
-  lm[6] = { x: cx, y: cy + 0.12 }; // index PIP — nearer the wrist than the tip: extended
-  lm[7] = { x: cx, y: cy + 0.06 }; // index DIP
-  // Middle/ring/pinky curled in at the palm (not extended).
-  const palmY = cy + 0.26;
-  lm[10] = { x: cx + 0.05, y: palmY + 0.04 }; lm[11] = { x: cx + 0.05, y: palmY + 0.02 }; lm[12] = { x: cx + 0.05, y: palmY };
-  lm[13] = { x: cx + 0.08, y: cy + 0.22 }; lm[14] = { x: cx + 0.08, y: palmY + 0.04 }; lm[15] = { x: cx + 0.08, y: palmY + 0.02 }; lm[16] = { x: cx + 0.08, y: palmY };
-  lm[17] = { x: cx + 0.12, y: cy + 0.22 }; lm[18] = { x: cx + 0.12, y: palmY + 0.04 }; lm[19] = { x: cx + 0.12, y: palmY + 0.02 }; lm[20] = { x: cx + 0.12, y: palmY };
-
-  const gap = pinched ? 0.006 : 0.16;
-  lm[1] = { x: cx - gap, y: cy + 0.18 }; lm[2] = { x: cx - gap, y: cy + 0.12 }; lm[3] = { x: cx - gap, y: cy + 0.06 };
-  lm[4] = { x: cx - gap, y: cy };
-  const toCam = (sx: number, sy: number) => ({
-    x: 1 - (REACH.x0 + (sx / W) * (REACH.x1 - REACH.x0)),
-    y: REACH.y0 + (sy / H) * (REACH.y1 - REACH.y0),
-  });
-  if (opts?.middle) lm[12] = toCam(opts.middle.x, opts.middle.y);
-  return lm;
+/** Open pointing hand whose PALM CENTRE (the cursor anchor) maps exactly to
+ *  screen (px, py) — see tests/helpers/synthHands.ts. */
+function synthHand(px: number, py: number, pinched: boolean, opts?: SynthOpts): Pt[] {
+  return synthHandAt(px, py, pinched, W, H, opts);
 }
 
-/** A genuine FIST at (px, py): every finger (including the index) curled —
- *  tip nearer the wrist than its own PIP — so classifyGesture() reads
- *  'fist', not 'point'/'pinch'. landmark 8 (the cursor hotspot) still sits
- *  exactly on the target. */
+/** A genuine FIST whose palm centre maps exactly to (px, py). */
 function synthFist(px: number, py: number): Pt[] {
-  const cx = 1 - (REACH.x0 + (px / W) * (REACH.x1 - REACH.x0));
-  const cy = REACH.y0 + (py / H) * (REACH.y1 - REACH.y0);
-  const lm: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-  const wrist = { x: cx, y: cy + 0.2 };
-  lm[0] = wrist;
-  lm[9] = { x: cx, y: cy }; // middle MCP: hand scale (wrist->mid-MCP) = 0.2
-  lm[8] = { x: cx, y: cy }; // INDEX_TIP: still exactly on the target
-  lm[6] = { x: wrist.x + (lm[8].x - wrist.x) * 1.5, y: wrist.y + (lm[8].y - wrist.y) * 1.5 };
-  const curl = (pip: number, tip: number, ox: number) => {
-    lm[pip] = { x: wrist.x + ox, y: wrist.y - 0.3 };
-    lm[tip] = { x: wrist.x + ox, y: wrist.y - 0.03 };
-  };
-  curl(10, 12, 0.05); // middle
-  curl(14, 16, 0.1); // ring
-  curl(18, 20, 0.15); // pinky
-  lm[1] = wrist; lm[2] = wrist; lm[3] = wrist; lm[4] = wrist; // thumb: irrelevant to 'fist'
-  return lm;
+  return synthFistAt(px, py, W, H);
 }
 
 describe('hand pointer real pipeline (synthetic frames)', () => {
@@ -231,48 +185,55 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  it('resting the cursor still on a control for ~1.5s fills the dwell ring then clicks exactly once', () => {
+  it('a control that captures the cursor fills the dwell ring then clicks exactly once at ~800 ms', () => {
     feed(500, 400, 5); // enter mid-screen
-    feed(160, 50, 15); // move to the control and settle
+    feed(160, 50, 10); // move to the control: the magnet captures it on the way in
     expect(hp.target).toBe(btn);
     const cursor = cursorElOf(doc);
     expect(cursor.hidden).toBe(false);
-    feed(160, 50, 15); // still well under 1.5s (≈1s total on the button so far)
+    feed(160, 50, 10); // ≈660 ms since arriving — the lock is younger than 800 ms
     expect(btn.click).not.toHaveBeenCalled();
-    feed(160, 50, 25); // now past 1.5s
+    feed(160, 50, 10); // ≈990 ms since arriving: past 800 ms of lock
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
-    feed(160, 50, 20); // keep resting: no second click
+    feed(160, 50, 60); // keep resting 2 s: no second click without leaving
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('moving beyond the dwell slop resets the ring — the full 1.5s starts over', () => {
-    feed(160, 50, 15);
-    feed(160, 50, 15); // dwelling, well under 1.5s
-    // Jitter beyond dwellSlopPx (12px) onto the same button — the ring resets.
-    feed(205, 50, 15); // still inside btn's rect, but reset by the jump
+  it('moving inside the locked control does not restart the ring (target lock, no slop reset)', () => {
+    feed(160, 50, 12); // ≈400 ms locked on btn
+    // A 45px move that stays on the same button: the old 12px slop would have
+    // restarted the 1.5 s window; the lock keeps counting.
+    feed(205, 50, 8); // ≈660 ms
     expect(btn.click).not.toHaveBeenCalled();
-    feed(205, 50, 50); // finish the fresh 1.5s window
+    feed(205, 50, 6); // ≈860 ms since the lock began
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('leaving the control before 1.5s does not click', () => {
-    feed(160, 50, 20); // ~1s, under the dwell window
-    feed(500, 400, 10); // leaves before completing
+  it('leaving the control before 800 ms does not click', () => {
+    feed(160, 50, 12); // ≈400 ms, under the dwell window
+    feed(500, 400, 30); // leaves well past the 60px release before completing
     expect(btn.click).not.toHaveBeenCalled();
     expect(other.click).not.toHaveBeenCalled();
   });
 
-  it('dwelling on a board with no more specific control under the cursor selects/focuses it', () => {
-    const board = fakeFrame({ left: 400, top: 150, width: 400, height: 200 }, 'f1');
-    const d2 = fakeDoc([], [board]);
+  it('a board BODY is never a dwell target; dwelling on its title focuses it', () => {
+    const board = fakeFrame({ left: 400, top: 150, width: 400, height: 260 }, 'f1');
+    const title = fakeButton({ left: 410, top: 156, width: 200, height: 28 });
+    (title as unknown as { closest: (sel: string) => FakeFrame | null }).closest = (sel) => (sel === '.mc-frame' ? board : null);
+    const d2 = fakeDoc([title], [board]);
     const hp2 = createHandPointer(d2, {});
     let t2 = 0;
     try {
-      for (let i = 0; i < 10; i++) { t2 += 33; hp2.update([synthHand(600, 250, false)], t2); }
-      expect(hp2.target).toBe(board);
-      for (let i = 0; i < 95; i++) { t2 += 33; hp2.update([synthHand(600, 250, false)], t2); }
-      expect(board.click).toHaveBeenCalledTimes(1);
+      // Resting on the body (far from the title) for 2 s: nothing.
+      for (let i = 0; i < 60; i++) { t2 += 33; hp2.update([synthHand(600, 330, false)], t2); }
+      expect(hp2.target).toBeNull();
+      expect(board.click).not.toHaveBeenCalled();
+      expect(title.click).not.toHaveBeenCalled();
+      // On the title: the title button clicks (canvasApp's world click focuses the board).
+      for (let i = 0; i < 40; i++) { t2 += 33; hp2.update([synthHand(500, 170, false)], t2); }
+      expect(title.click).toHaveBeenCalledTimes(1);
+      expect(board.click).not.toHaveBeenCalled();
     } finally {
       hp2.destroy();
     }
@@ -284,7 +245,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(160, 50, 5); // close into a pinch pose
     expect(cursor.classList.contains('is-pinched')).toBe(false); // live pinch is never tracked as a click gesture
     for (let i = 0; i < 4; i++) { t += 33; hp.update([synthHand(160, 50, true)], t); }
-    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthHand(160, 50, false)], t); } // "release" — far under 1.5s
+    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthHand(160, 50, false)], t); } // "release" — under 800 ms
     expect(btn.click).not.toHaveBeenCalled(); // a quick pinch-and-release never clicked
     // Resting in that same (pinched) hand shape long enough still dwell-clicks —
     // the trigger is stillness, not the pose.
@@ -292,7 +253,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('no one-fist drag: a fist over a drag handle never dispatches pointerdown or clicks', () => {
+  it('a fist over a control (a drag handle) never dispatches pointerdown or clicks — fists only grab boards/canvas', () => {
     const rect = { left: 100, top: 30, width: 120, height: 40, right: 220, bottom: 70 };
     const listeners: Record<string, Array<(e: unknown) => void>> = {};
     const handle = {
@@ -345,7 +306,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(btn); // the big hand still owns the cursor
   });
 
-  it('the cursor follows landmark 8 (the index fingertip), not an MCP/palm blend', () => {
+  it('the cursor follows the palm centre (mean of landmarks 0/5/9/13/17), not the index fingertip', () => {
     feed(160, 50, 10);
     const cursor = cursorElOf(doc);
     expect(cursor.hidden).toBe(false);
@@ -361,7 +322,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(before.x).toBeCloseTo(160, 0);
     for (let i = 0; i < 10; i++) {
       t += 33;
-      // Middle tip jumps over the neighbouring button; index stays put.
+      // Middle tip jumps over the neighbouring button; the palm stays put.
       hp.update([synthHand(160, 50, false, { middle: { x: 300, y: 50 } })], t);
     }
     expect(cursor.hidden).toBe(false);
@@ -371,7 +332,47 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(btn);
   });
 
-  it('sticky target: jitter across the gap between neighbours does not flip the highlight', () => {
+  it('closing the hand (every fingertip and the thumb curling in) never moves the cursor', () => {
+    feed(160, 50, 15);
+    const cursor = cursorElOf(doc);
+    const before = cursorPos(cursor);
+    for (let i = 0; i < 10; i++) {
+      t += 33;
+      const h = synthHand(160, 50, false);
+      for (const k of [4, 8, 12, 16, 20]) h[k] = { x: h[k].x + 0.05, y: h[k].y + 0.05 };
+      hp.update([h], t);
+    }
+    const after = cursorPos(cursor);
+    expect(after.x).toBeCloseTo(before.x, 0);
+    expect(after.y).toBeCloseTo(before.y, 0);
+  });
+
+  it('fingertips clipping the top of the camera frame (palm inside) do not freeze the cursor at the top bar', () => {
+    const lift = (x: number, y: number) => {
+      const h = synthHand(x, y, false);
+      for (const k of [4, 8, 12, 16, 20]) h[k] = { x: h[k].x, y: 0.02 }; // fingertips at the frame top
+      return h;
+    };
+    for (let i = 0; i < 10; i++) { t += 33; hp.update([lift(600, 40)], t); }
+    for (let x = 600; x >= 300; x -= 10) { t += 33; hp.update([lift(x, 40)], t); }
+    for (let i = 0; i < 40; i++) { t += 33; hp.update([lift(300, 40)], t); }
+    const pos = cursorPos(cursorElOf(doc));
+    expect(pos.x).toBeLessThan(310); // followed the palm, not pinned at 600
+    expect(pos.x).toBeGreaterThan(290);
+  });
+
+  it('a raised index fingertip past the top of the active box is not an edge — the palm decides', () => {
+    feed(160, 50, 5);
+    for (let i = 0; i < 40; i++) {
+      t += 33;
+      const h = synthHand(160, 50, false);
+      h[8] = { x: h[8].x, y: 0.12 }; // index tip far above the active box (still in frame)
+      hp.update([h], t);
+    }
+    expect(btn.click).toHaveBeenCalledTimes(1); // edge guard did not block the dwell
+  });
+
+  it('magnet lock: jitter across the gap between neighbours does not flip the highlight', () => {
     feed(160, 50, 15);
     expect(hp.target).toBe(btn);
     feed(228, 50, 1);
@@ -383,20 +384,23 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(other);
   });
 
-  it('magnetic focus: a cursor resting within 60px of a control dwell-clicks the focused target, not empty space', () => {
-    // 40px left of the left button (btn is 100–220). Inside the 60px magnet.
+  it('magnetic focus: a cursor within 40px of a control targets it; a fist tap there clicks it (dwell only accrues within 20px)', () => {
+    // 30px left of the left button (btn is 100–220). Inside the 40px capture.
     feed(70, 50, 12);
     expect(hp.target).toBe(btn);
     const pos = cursorPos(cursorElOf(doc));
     // Cursor eases toward the button centre (160), not staying glued at 70.
     expect(pos.x).toBeGreaterThan(70);
     expect(pos.x).toBeLessThan(160);
-    feed(70, 50, 100);
+    feed(70, 50, 40);
+    expect(btn.click).not.toHaveBeenCalled(); // 30px out: the ring pauses
+    for (let i = 0; i < 4; i++) { t += 33; hp.update([synthFist(70, 50)], t); }
+    feed(70, 50, 4);
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
   });
 
-  it('draws two cursors, one on each index fingertip, independently', () => {
+  it('draws two cursors, one on each palm, independently', () => {
     const feed2 = (a: { x: number; y: number }, b: { x: number; y: number }, frames = 1) => {
       for (let i = 0; i < frames; i++) {
         t += 33;
@@ -442,7 +446,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     tr.clear();
     feed(160, 50, 6);
     expect(tr.dump().every((f) => f.clickTarget == null)).toBe(true);
-    feed(160, 50, 95);
+    feed(160, 50, 40);
     expect(btn.click).toHaveBeenCalledTimes(1);
     const hits = tr.dump().filter((f) => f.clickTarget);
     expect(hits).toHaveLength(1);
@@ -463,7 +467,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     for (let i = 0; i < 8; i++) {
       t += 33;
       const h = synthFist(160, 50);
-      h[16] = { x: 0.01, y: 0.5 };
+      h[17] = { x: 0.01, y: h[17].y }; // a PALM landmark clips the frame
       hp.update([h], t);
     }
     const mid = tr.dump().slice(-8);
@@ -476,21 +480,21 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     for (let i = 0; i < 20; i++) {
       t += 33;
       const h = synthHand(160, 50, false);
-      h[16] = { x: 0.01, y: 0.5 };
+      h[17] = { x: 0.01, y: h[17].y }; // a PALM landmark clips the frame
       hp.update([h], t);
     }
     expect(btn.click).not.toHaveBeenCalled();
 
     // After leaving the edge and waiting out the cooldown, dwell clicks again
     // — the cooldown itself is recorded on the first clean frame, so the
-    // full ~300ms cooldown plus the full ~1.5s dwell both happen inside feed().
-    feed(160, 50, 115);
+    // full ~300ms cooldown plus the full 800 ms dwell both happen inside feed().
+    feed(160, 50, 45);
     expect(btn.click).toHaveBeenCalledTimes(1);
     tr.clear();
   });
 });
 
-describe('two-fist board move', () => {
+describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>).innerWidth = W;
     (globalThis as Record<string, unknown>).innerHeight = H;
@@ -515,75 +519,82 @@ describe('two-fist board move', () => {
     }
   };
 
-  it('both fists on the same board drag it by their midpoint until either hand opens', () => {
+  it('two fists on the same board zoom (they no longer drag it); opening either ends it', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const doc = fakeDoc([], [board]);
     const moves: Array<{ phase: string; frameId: string; dx: number; dy: number }> = [];
-    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
+    const zooms: Array<{ phase: string }> = [];
+    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
-      feedPair(hp, () => t, (v) => (t = v), { x: 150, y: 150 }, { x: 350, y: 250 }, 10);
-      expect(moves.some((m) => m.phase === 'start' && m.frameId === 'f1')).toBe(true);
-      expect(hp.isBoardGrabbed()).toBe(true);
+      feedPair(hp, () => t, (v) => (t = v), { x: 150, y: 150 }, { x: 350, y: 250 }, 14);
+      expect(zooms[0]?.phase).toBe('start');
+      expect(hp.isGrabActive()).toBe(true);
+      expect(hp.isBoardGrabbed()).toBe(false);
 
-      moves.length = 0;
-      // Shift both fists by the same (dx, dy): the midpoint follows exactly.
+      // Shift both fists by the same (dx, dy): a zoom 'move', never a board move.
       feedPair(hp, () => t, (v) => (t = v), { x: 190, y: 170 }, { x: 390, y: 270 }, 10);
-      const totalDx = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dx, 0);
-      const totalDy = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dy, 0);
-      expect(totalDx).toBeGreaterThan(30);
-      expect(totalDx).toBeLessThan(50);
-      expect(totalDy).toBeGreaterThan(10);
-      expect(totalDy).toBeLessThan(30);
+      expect(zooms.some((z) => z.phase === 'move')).toBe(true);
+      expect(moves).toHaveLength(0);
 
-      // Opening one fist ends the move.
-      moves.length = 0;
+      // Opening one fist ends the zoom — after the release grace (a 1-frame
+      // flicker does not).
       t += 33;
       hp.update([synthHand(190, 170, false), synthFist(390, 270)], t);
-      expect(moves.some((m) => m.phase === 'end')).toBe(true);
-      expect(hp.isBoardGrabbed()).toBe(false);
+      expect(hp.isGrabActive()).toBe(true);
+      for (let i = 0; i < 4; i++) { t += 33; hp.update([synthHand(190, 170, false), synthFist(390, 270)], t); }
+      expect(zooms.at(-1)?.phase).toBe('end');
+      expect(hp.isGrabActive()).toBe(false);
 
-      // Further joint movement after the open does nothing.
-      moves.length = 0;
-      feedPair(hp, () => t, (v) => (t = v), { x: 250, y: 250 }, { x: 450, y: 350 }, 5);
-      expect(moves.some((m) => m.phase === 'move')).toBe(false);
+      // Further joint movement after the open does nothing until both re-close.
+      const n = zooms.length;
+      t += 33;
+      hp.update([synthHand(250, 250, false), synthFist(450, 350)], t);
+      expect(zooms).toHaveLength(n);
+      expect(moves).toHaveLength(0);
     } finally {
       hp.destroy();
     }
   });
 
-  it('one fist alone over a board never grabs it', () => {
+  it('one fist alone over a board grabs it and moves it', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const doc = fakeDoc([], [board]);
-    const moves: Array<{ phase: string }> = [];
+    const moves: Array<{ phase: string; dx: number }> = [];
     const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
     let t = 0;
     try {
-      for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(200, 200)], t); }
-      expect(moves.length).toBe(0);
-      expect(hp.isBoardGrabbed()).toBe(false);
+      for (let i = 0; i < 14; i++) { t += 33; hp.update([synthFist(200, 200)], t); }
+      expect(moves[0]?.phase).toBe('start');
+      expect(hp.isBoardGrabbed()).toBe(true);
+      for (let i = 0; i < 30; i++) { t += 33; hp.update([synthFist(240, 200)], t); }
+      const dx = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dx, 0);
+      expect(dx).toBeGreaterThan(35);
+      expect(dx).toBeLessThan(45);
     } finally {
       hp.destroy();
     }
   });
 
-  it('fists on two different boards never grab either', () => {
+  it('fists on two different boards zoom the world and move neither board', () => {
     const boardA = fakeFrame({ left: 0, top: 0, width: 200, height: 200 }, 'fA');
     const boardB = fakeFrame({ left: 600, top: 0, width: 200, height: 200 }, 'fB');
     const doc = fakeDoc([], [boardA, boardB]);
     const moves: Array<{ phase: string }> = [];
-    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
+    const zooms: Array<{ phase: string }> = [];
+    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
-      feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 10);
+      feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 14);
       expect(moves.length).toBe(0);
       expect(hp.isBoardGrabbed()).toBe(false);
+      expect(zooms[0]?.phase).toBe('start');
     } finally {
       hp.destroy();
     }
   });
 
-  it('a two-fist grab silences dwell on a button under the cursor; dwell works again once a fist opens', () => {
+  it('a two-fist zoom silences dwell on a button under the cursor; dwell works again once a fist opens', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const insideBtn = fakeButton({ left: 250, top: 200, width: 80, height: 40 });
     // The button sits inside the board, so its own frame lookup still finds f1.
@@ -593,21 +604,21 @@ describe('two-fist board move', () => {
     const hp = createHandPointer(doc, {});
     let t = 0;
     try {
-      // Both fists land on the board, right over the button — a grab starts.
-      for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
-      expect(hp.isBoardGrabbed()).toBe(true);
-      // Resting there well past the 1.5s dwell window: isGrabActive silences
+      // Both fists land on the board, right over the button — a zoom starts.
+      for (let i = 0; i < 14; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
+      expect(hp.isGrabActive()).toBe(true);
+      // Resting there well past the 800 ms dwell window: isGrabActive silences
       // this slot's target/dwell even with the button sitting right under it.
       for (let i = 0; i < 60; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
       expect(insideBtn.click).not.toHaveBeenCalled();
       expect(hp.target).toBeNull();
 
-      // One fist opens: the grab ends.
-      t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t);
-      expect(hp.isBoardGrabbed()).toBe(false);
+      // One fist opens: the zoom ends (after the release grace).
+      for (let i = 0; i < 5; i++) { t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t); }
+      expect(hp.isGrabActive()).toBe(false);
 
       // Only the open hand remains, resting on the same button: dwell works again.
-      for (let i = 0; i < 55; i++) { t += 33; hp.update([synthHand(270, 220, false)], t); }
+      for (let i = 0; i < 35; i++) { t += 33; hp.update([synthHand(270, 220, false)], t); }
       expect(insideBtn.click).toHaveBeenCalledTimes(1);
     } finally {
       hp.destroy();

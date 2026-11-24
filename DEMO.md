@@ -8,7 +8,7 @@ Recorded on the sim-main preview (https://mendcraft--sim-main-o8jrlskh.web.app/c
 
 Every change on the canvas goes through the same review (**Approve** / **Reject** / **Ask for something else**). Nothing is built until Approve. Reject leaves the canvas unchanged.
 
-Gestures in the current build: **hover-select for 1.5 seconds** (the ring fills), and **two fists on a board to move it**. Do not say “pinch.” Other buttons stay quiet while a two-fist grab is on. There is **no on-screen keyboard** in this demo (see the build-list task to remove it from the app).
+Gestures in the current build: **point with your palm**, **tap a fist to click** (close and open quickly), **hold a fist and move** to drag a board or pan the canvas, and **two fists** to zoom. **Hover to click** (rest the palm ~0.8 s) is an opt-in fallback in Tools for anyone who can't close their hand. Do not say “pinch.” Other buttons stay quiet while a grab is on. There is **no on-screen keyboard** in this demo (see the build-list task to remove it from the app).
 
 Badge text, from `src/ai/router.ts` `badgeLabel` / `sourceText`: **Gemini Nano · on device**, **Apple · on device**, **Gemini · cloud**, **Nano → Gemini**, **Apple → Gemini**, **Rules · exact command**. A simulation includes **SIM** — do not pretend it was live. The footer and **What left this device** (`src/ui/ledgerPanel.ts`, `src/core/ledger.ts`) are the honest byte count.
 
