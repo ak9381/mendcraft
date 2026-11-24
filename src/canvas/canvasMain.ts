@@ -14,7 +14,24 @@ import { createVoiceController } from '../input/voice';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
+import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
+import { mountReplayBanner } from './replayBanner';
 
+function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
+  const m = new Map<string, string>();
+  return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); } };
+}
+
+// ?replay=demo: the judge replay (journeyReplay.ts) plays the whole journey by
+// itself. It implies ?sim=1&hands=0 (scripted engines, SIM-labelled; never the
+// camera) — written into the URL so what is simulated is visible there too —
+// and runs on an in-memory canvas so a saved canvas is never overwritten.
+const replayDemo = new URLSearchParams(location.search).get('replay') === 'demo';
+if (replayDemo) {
+  const q = new URLSearchParams(location.search);
+  q.set('sim', '1'); q.set('hands', '0');
+  history.replaceState(null, '', `${location.pathname}?${q.toString()}${location.hash}`);
+}
 const params = new URLSearchParams(location.search);
 if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
 
@@ -88,7 +105,8 @@ const voice = createVoiceController(
   },
 );
 handle = mountCanvas(root, {
-  voice, engines, seed: params.has('seed'), fresh: params.has('fresh'), sim: params.has('sim'),
+  voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'),
+  storage: replayDemo ? memoryStorage() : undefined,
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
   phoneShell,
@@ -175,3 +193,27 @@ if (params.has('sim') && params.get('demo') === 'morph') {
 // reCAPTCHA authorized-domains list, so this call alone can 403 there for no
 // reason a sim run needs to care about.
 if (!params.has('sim')) void prepareHybrid();
+
+// ?replay=demo: play the journey once the canvas has painted. The outcome is
+// also on window.__replay for scripts/e2e-journey.mjs.
+if (replayDemo && handle) {
+  const h = handle;
+  const state: { done: boolean; result: ReplayResult | null; log: string[] } = { done: false, result: null, log: [] };
+  (window as unknown as { __replay: unknown }).__replay = state;
+  const player = createReplayPlayer(h.replay, DEMO_JOURNEY, {
+    beatMs: 1500,
+    onStep: (i, n, step) => { banner.step(i, n, step.label); state.log.push(`step ${i}/${n} ${step.id}`); },
+    onNote: (t) => { banner.note(t); if (t) state.log.push(t); },
+    onStepDone: (r) => { if (r.outcome !== 'done') console.info(`[replay] ${r.id}: ${r.outcome}${r.note ? ` — ${r.note}` : ''}`); },
+    onDone: (r) => {
+      state.result = r; state.done = true;
+      const skipped = r.steps.filter((s) => s.outcome === 'skipped').length;
+      const failed = r.steps.find((s) => s.outcome === 'failed');
+      banner.finish(r.stopped ? 'Replay stopped — the canvas is yours.'
+        : failed ? `Replay stopped at “${failed.label}”: ${failed.note ?? 'failed'}`
+          : `Replay done · ${r.steps.length - skipped} steps${skipped ? ` (${skipped} skipped)` : ''} · ${(r.ms / 1000).toFixed(0)} s`, failed ? 0 : 8000);
+    },
+  });
+  const banner = mountReplayBanner(root, () => player.stop());
+  setTimeout(() => { void player.start(); }, 1200);
+}
