@@ -16,7 +16,7 @@ export const PHONE_PRIMARY = ['ai', 'new'] as const;
 /** Tool groups shown in the menu sheet. */
 export const PHONE_GROUPS: ReadonlyArray<{ title: string; cmds: readonly string[] }> = [
   { title: 'Canvas', cmds: ['everything', 'save', 'undo'] },
-  { title: 'Hands and gestures', cmds: ['hands', 'reregister', 'teach', 'gestures'] },
+  { title: 'Hands and gestures', cmds: ['hands', 'dwell', 'reregister', 'teach', 'gestures'] },
   { title: 'Testing', cmds: ['offline'] },
 ];
 

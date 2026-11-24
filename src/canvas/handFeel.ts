@@ -75,6 +75,26 @@ export interface HandFeelConfig {
   /** After a dwell click, no new dwell can start for this long — and the
    *  cursor must leave the clicked control before it can re-arm. */
   clickCooldownMs: number;
+  /** Dwell only accrues while the cursor is within this many px of the
+   *  locked target's rect (it pauses, not resets, further out) — so easing
+   *  away toward a neighbour never finishes the one being left. */
+  dwellAccruePx: number;
+  /** FIST TAP = click: a fist that closes and re-opens within this long
+   *  (and moves less than fistMovePx) clicks the target under the palm. A
+   *  fist closed longer than this — or moved further — becomes a grab. */
+  fistTapMs: number;
+  fistMovePx: number;
+  /** No second fist tap within this long of a tap click. */
+  tapCooldownMs: number;
+  /** Consecutive fist frames before a hand counts as closed (no time wait). */
+  fistCloseFrames: number;
+  /** Consecutive non-fist frames before a (non-grabbing) fist counts as open. */
+  fistOpenFrames: number;
+  /** While a grab runs, the fist only opens after this long AND
+   *  releaseGraceFrames consecutive non-fist frames — a loose fist flickering
+   *  to 'none'/'pinch' for a frame or two never drops the board. */
+  releaseGraceMs: number;
+  releaseGraceFrames: number;
 }
 
 export const HAND_FEEL: HandFeelConfig = {
@@ -99,6 +119,14 @@ export const HAND_FEEL: HandFeelConfig = {
   magnetCapturePx: 40,
   magnetReleasePx: 60,
   clickCooldownMs: 600,
+  dwellAccruePx: 20,
+  fistTapMs: 300,
+  fistMovePx: 12,
+  tapCooldownMs: 400,
+  fistCloseFrames: 2,
+  fistOpenFrames: 2,
+  releaseGraceMs: 120,
+  releaseGraceFrames: 3,
 };
 
 // ---------------------------------------------------------------- anchor

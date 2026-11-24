@@ -245,6 +245,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
       <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
+      <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
       <button data-cmd="reregister" class="mc-btn">Re-register</button>
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
@@ -1618,7 +1619,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
   }
 
-  // ---- inputs: hands (pinch keep / brush drop) + gimbal modes in one composer.
+  // ---- inputs: hands (palm cursor, fist tap / grab, two-fist zoom) + gimbal modes in one composer.
   // The existing Hands button starts/stops it; gimbal voice goes via handleSpeech.
   let handsMountOk = false; let handsOn = false; let handsBusy = false;
   let lastHandsError: string | null = null;
@@ -1634,6 +1635,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Mirror the plan side (C046): a small bubble anchored above whatever the
   // hand cursor dwells on — any control, or a hint-only element like the swarm
   // pill (A1-047 / A5-017).
+  // Hover-to-click (dwell) is an opt-in fallback, off unless
+  // localStorage mc.dwellClick === '1' (Tools → "Hover to click").
+  const DWELL_KEY = 'mc.dwellClick';
+  let dwellClickOn = false;
+  try { dwellClickOn = storage.getItem(DWELL_KEY) === '1'; } catch { dwellClickOn = false; }
+  function setDwellClick(on: boolean): void {
+    dwellClickOn = on;
+    try { if (on) storage.setItem(DWELL_KEY, '1'); else storage.removeItem(DWELL_KEY); } catch { /* private mode */ }
+    root.querySelector<HTMLElement>('[data-cmd=dwell]')?.setAttribute('aria-pressed', String(on));
+  }
+  setDwellClick(dwellClickOn);
   const handTip = typeof document !== 'undefined' ? document.createElement('div') : null;
   if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
@@ -1658,6 +1670,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onWorldPan: (ev) => onHandWorldPan(ev),
         onWorldZoom: (ev) => onHandWorldZoom(ev),
         focusedFrameId: () => focusId,
+        // A fist only grabs from the world layer: inside a board, or the bare
+        // viewport/world background — never from a panel, dock or bar.
+        isCanvasBackground: (el) => !el || el === viewport || el === world,
+        // Hover-to-click is an opt-in fallback (Tools → "Hover to click");
+        // the fist tap is the click.
+        dwellClick: () => dwellClickOn,
         onPinch: (ev) => {
           if (!morphFlow) return;
           if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
@@ -1904,7 +1922,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
     restoreOwnerLock();
-    say('Hands on: rest your palm on a button to press it. Make a fist to move a board or pan; two fists to zoom.');
+    say('Hands on: point with your palm, tap a fist to click. Hold a fist to move a board or pan; two fists to zoom.');
   }
 
   // ---- offline (simulate + real) ----
@@ -2032,7 +2050,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);

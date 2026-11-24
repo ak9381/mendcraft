@@ -370,7 +370,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(other);
   });
 
-  it('magnetic focus: a cursor resting within 40px of a control dwell-clicks the focused target, not empty space', () => {
+  it('magnetic focus: a cursor within 40px of a control targets it; a fist tap there clicks it (dwell only accrues within 20px)', () => {
     // 30px left of the left button (btn is 100–220). Inside the 40px capture.
     feed(70, 50, 12);
     expect(hp.target).toBe(btn);
@@ -379,6 +379,9 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(pos.x).toBeGreaterThan(70);
     expect(pos.x).toBeLessThan(160);
     feed(70, 50, 40);
+    expect(btn.click).not.toHaveBeenCalled(); // 30px out: the ring pauses
+    for (let i = 0; i < 3; i++) { t += 33; hp.update([synthFist(70, 50)], t); }
+    feed(70, 50, 3);
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
   });
@@ -510,7 +513,7 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
     const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
-      feedPair(hp, () => t, (v) => (t = v), { x: 150, y: 150 }, { x: 350, y: 250 }, 10);
+      feedPair(hp, () => t, (v) => (t = v), { x: 150, y: 150 }, { x: 350, y: 250 }, 14);
       expect(zooms[0]?.phase).toBe('start');
       expect(hp.isGrabActive()).toBe(true);
       expect(hp.isBoardGrabbed()).toBe(false);
@@ -520,9 +523,12 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
       expect(zooms.some((z) => z.phase === 'move')).toBe(true);
       expect(moves).toHaveLength(0);
 
-      // Opening one fist ends the zoom.
+      // Opening one fist ends the zoom — after the release grace (a 1-frame
+      // flicker does not).
       t += 33;
       hp.update([synthHand(190, 170, false), synthFist(390, 270)], t);
+      expect(hp.isGrabActive()).toBe(true);
+      for (let i = 0; i < 4; i++) { t += 33; hp.update([synthHand(190, 170, false), synthFist(390, 270)], t); }
       expect(zooms.at(-1)?.phase).toBe('end');
       expect(hp.isGrabActive()).toBe(false);
 
@@ -544,7 +550,7 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
     const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
     let t = 0;
     try {
-      for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(200, 200)], t); }
+      for (let i = 0; i < 14; i++) { t += 33; hp.update([synthFist(200, 200)], t); }
       expect(moves[0]?.phase).toBe('start');
       expect(hp.isBoardGrabbed()).toBe(true);
       for (let i = 0; i < 30; i++) { t += 33; hp.update([synthFist(240, 200)], t); }
@@ -565,7 +571,7 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
     const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
-      feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 10);
+      feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 14);
       expect(moves.length).toBe(0);
       expect(hp.isBoardGrabbed()).toBe(false);
       expect(zooms[0]?.phase).toBe('start');
@@ -585,7 +591,7 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
     let t = 0;
     try {
       // Both fists land on the board, right over the button — a zoom starts.
-      for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
+      for (let i = 0; i < 14; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
       expect(hp.isGrabActive()).toBe(true);
       // Resting there well past the 800 ms dwell window: isGrabActive silences
       // this slot's target/dwell even with the button sitting right under it.
@@ -593,8 +599,8 @@ describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
       expect(insideBtn.click).not.toHaveBeenCalled();
       expect(hp.target).toBeNull();
 
-      // One fist opens: the zoom ends.
-      t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t);
+      // One fist opens: the zoom ends (after the release grace).
+      for (let i = 0; i < 5; i++) { t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t); }
       expect(hp.isGrabActive()).toBe(false);
 
       // Only the open hand remains, resting on the same button: dwell works again.

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHandPointer, type HandPointer } from '../../src/canvas/handPointer';
 import { HAND_FEEL } from '../../src/canvas/handFeel';
-import { synthHand } from '../helpers/synthHands';
+import { synthFist, synthHand } from '../helpers/synthHands';
 import { fakeButton, fakeHandDoc, ringsOf, type FakeEl } from '../helpers/fakeHandDoc';
 
 const W = 1000;
@@ -98,10 +98,14 @@ describe('target-locked 800 ms dwell with magnet', () => {
     expect(btn.click).toHaveBeenCalledTimes(2);
   });
 
-  it('a point 35px outside the button snaps to it and clicks; 65px does not', () => {
-    // 35px left of the left edge (470): x = 435.
+  it('a point 35px outside the button snaps to it (a fist tap there clicks); 65px does not', () => {
+    // 35px left of the left edge (470): x = 435. Captured by the 40px magnet,
+    // but outside the 20px accrual band the dwell ring pauses.
     at(435, 400, 30);
     expect(hp.target).toBe(btn);
+    expect(btn.click).not.toHaveBeenCalled();
+    for (let i = 0; i < 3; i++) { t += FRAME; hp.update([synthFist(435, 400, W, H)], t); }
+    at(435, 400, 3);
     expect(btn.click).toHaveBeenCalledTimes(1);
 
     const btn2 = fakeButton({ left: 470, top: 374, width: 60, height: 52 });
@@ -112,6 +116,53 @@ describe('target-locked 800 ms dwell with magnet', () => {
       for (let i = 0; i < 40; i++) { t2 += FRAME; hp2.update([synthHand(405, 400, false, W, H)], t2); }
       expect(hp2.target).toBeNull();
       expect(btn2.click).not.toHaveBeenCalled();
+    } finally {
+      hp2.destroy();
+    }
+  });
+
+  it('the ring pauses (does not reset) outside the 20px accrual band', () => {
+    at(500, 400, 15); // ≈500 ms accrued
+    at(440, 400, 30); // 30px out: locked, paused
+    expect(hp.target).toBe(btn);
+    expect(btn.click).not.toHaveBeenCalled();
+    at(500, 400, 12); // back on: the remaining ≈300 ms finishes it
+    expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('dwell off (the app default): no ring and no click, but the target is still highlighted', () => {
+    const b2 = fakeButton({ left: 470, top: 374, width: 60, height: 52 });
+    const d2 = fakeHandDoc([b2]);
+    const hp2 = createHandPointer(d2, { dwellClick: () => false });
+    try {
+      let t2 = 0;
+      for (let i = 0; i < 60; i++) { t2 += FRAME; hp2.update([synthHand(500, 400, false, W, H)], t2); }
+      expect(hp2.target).toBe(b2);
+      expect(ringsOf(d2)[0].hidden).toBe(true);
+      expect(b2.click).not.toHaveBeenCalled();
+    } finally {
+      hp2.destroy();
+    }
+  });
+
+  it('easing from Reject toward Approve through the gap never fires Reject', () => {
+    const label = (el: FakeEl, name: string) => { el.getAttribute = ((n: string) => (n === 'aria-label' ? name : null)) as unknown as FakeEl['getAttribute']; };
+    const reject = fakeButton({ left: 300, top: 374, width: 100, height: 52 });
+    const approve = fakeButton({ left: 412, top: 374, width: 100, height: 52 }); // 12px gap
+    label(reject, 'Reject'); label(approve, 'Approve');
+    const d2 = fakeHandDoc([reject, approve]);
+    const hp2 = createHandPointer(d2, {});
+    try {
+      let t2 = 0;
+      const go = (x: number, n: number) => { for (let i = 0; i < n; i++) { t2 += FRAME; hp2.update([synthHand(x, 400, false, W, H)], t2); } };
+      go(395, 14); // ≈460 ms on Reject, near its right edge
+      // Ease slowly (30 px/s) to the right, through the gap, onto Approve:
+      // the cursor sits in the gap — within 20px of Reject, so its ring is
+      // full — for a few hundred ms, but Reject needs a direct hit to fire.
+      for (let x = 396; x <= 470; x += 1) go(x, 1);
+      go(470, 40);
+      expect(reject.click).not.toHaveBeenCalled();
+      expect(approve.click).toHaveBeenCalledTimes(1);
     } finally {
       hp2.destroy();
     }

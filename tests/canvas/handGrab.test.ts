@@ -1,23 +1,28 @@
-// One fist = grab (move a board / pan the world), two fists = zoom — through
-// the REAL createHandPointer().update() pipeline with synthetic frames.
-// Start order (streamB B6): a control under the fist → nothing; a board
-// (hit by frame RECTS, so chrome over the board doesn't drop it) → move it;
-// empty canvas → pan. A fist must be held ≥150 ms (on top of the 120 ms
-// point/fist gate) before anything happens.
+// Fist gestures through the REAL createHandPointer().update() pipeline with
+// synthetic frames:
+//  - FIST TAP (close + re-open within 300 ms, < 12 px) = click the target;
+//  - ONE fist held ≥ 300 ms (or moved ≥ 12 px) = grab: a control or chrome
+//    under it → nothing; a board (frame RECTS) → move it; bare canvas → pan;
+//  - TWO fists = zoom.
+// A running grab only ends after the release grace (≥120 ms AND ≥3 open
+// frames), so a loose fist flickering open for a frame or two keeps it.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHandPointer, GRAB_HOLD_MS, type HandPointer, type HandPointerOptions } from '../../src/canvas/handPointer';
+import { HAND_FEEL } from '../../src/canvas/handFeel';
 import { synthFist, synthHand } from '../helpers/synthHands';
 import { fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
 
 const W = 1000;
 const H = 800;
 const FRAME = 33;
+/** Frames for a fist to close (2) and pass the 300 ms hold. */
+const HOLD = 13;
 
 type BoardEv = { phase: string; frameId: string; dx: number; dy: number };
 type PanEv = { phase: string; dx: number; dy: number };
 type ZoomEv = { phase: string; a: { x: number; y: number }; b: { x: number; y: number } };
 
-describe('one-fist grab, two-fist zoom', () => {
+describe('fist tap, one-fist grab, two-fist zoom', () => {
   let t: number;
   let hp: HandPointer;
   let board: BoardEv[];
@@ -32,6 +37,7 @@ describe('one-fist grab, two-fist zoom', () => {
       onWorldPan: (ev) => pans.push(ev),
       onWorldZoom: (ev) => zooms.push(ev),
       onHandEvent: (ev) => { if (ev.type === 'click') clicks++; },
+      dwellClick: () => false, // the app default: dwell off, tap is the click
       ...extra,
     });
   };
@@ -44,6 +50,7 @@ describe('one-fist grab, two-fist zoom', () => {
   const fists = (a: { x: number; y: number }, b: { x: number; y: number }, frames = 1) => {
     for (let i = 0; i < frames; i++) { t += FRAME; hp.update([synthFist(a.x, a.y, W, H), synthFist(b.x, b.y, W, H)], t); }
   };
+  const tap = (x: number, y: number) => { open(x, y, 6); fist(x, y, 4); open(x, y, 4); };
   const sum = (evs: { phase: string; dx: number; dy: number }[], k: 'dx' | 'dy') =>
     evs.filter((e) => e.phase === 'move').reduce((s, e) => s + e[k], 0);
 
@@ -58,77 +65,216 @@ describe('one-fist grab, two-fist zoom', () => {
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  it('the hold is 150 ms', () => {
-    expect(GRAB_HOLD_MS).toBe(150);
+  it('fist feel constants: 300 ms tap/hold, 12 px, 400 ms tap cooldown, 120 ms + 3 frame release grace', () => {
+    expect(GRAB_HOLD_MS).toBe(300);
+    expect(HAND_FEEL.fistTapMs).toBe(300);
+    expect(HAND_FEEL.fistMovePx).toBe(12);
+    expect(HAND_FEEL.tapCooldownMs).toBe(400);
+    expect(HAND_FEEL.releaseGraceMs).toBe(120);
+    expect(HAND_FEEL.releaseGraceFrames).toBe(3);
   });
 
-  it('one fist over a board for 200 ms then moving +50px → onBoardMove deltas sum to +50, no click', () => {
+  // ---------------------------------------------------------------- tap
+
+  it('a fist tap on a button clicks it once', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    tap(500, 400);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    expect(clicks).toBe(1);
+    expect(pans).toHaveLength(0);
+  });
+
+  it('a fist tap clicks the magnet target (30 px off the button)', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    tap(420, 400);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('a fist held past 300 ms over a button, then opened, does not click (and does not grab)', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    open(500, 400, 6);
+    fist(500, 400, 15);
+    open(500, 400, 4);
+    expect(btn.click).not.toHaveBeenCalled();
+    expect(pans).toHaveLength(0);
+  });
+
+  it('a fist that moves ≥ 12 px while closed is not a tap', () => {
+    const btn = fakeButton({ left: 400, top: 370, width: 200, height: 60 });
+    mount([btn], []);
+    open(450, 400, 6);
+    fist(450, 400, 2);
+    fist(500, 400, 2); // the (smoothed) palm travels well past 12 px
+    open(500, 400, 4);
+    expect(btn.click).not.toHaveBeenCalled();
+  });
+
+  it('tap cooldown: a second tap within 400 ms is ignored, a later one clicks', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    open(500, 400, 6);
+    fist(500, 400, 3); open(500, 400, 2); // tap 1
+    fist(500, 400, 3); open(500, 400, 2); // tap 2 at ~170 ms after tap 1
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    open(500, 400, 12);
+    fist(500, 400, 3); open(500, 400, 2);
+    expect(btn.click).toHaveBeenCalledTimes(2);
+  });
+
+  it('a fist tap on bare canvas or a board body does nothing', () => {
+    const f1 = fakeFrame({ left: 200, top: 200, width: 300, height: 300 }, 'f1');
+    mount([], [f1]);
+    tap(800, 600);
+    tap(350, 350);
+    expect(clicks).toBe(0);
+    expect(f1.click).not.toHaveBeenCalled();
+    expect(board).toHaveLength(0);
+    expect(pans).toHaveLength(0);
+  });
+
+  it('a confirm action (Reject) needs a direct hit: a magnet-only tap does not click it', () => {
+    const reject = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    reject.getAttribute = ((n: string) => (n === 'aria-label' ? 'Reject' : null)) as unknown as FakeEl['getAttribute'];
+    mount([reject], []);
+    tap(420, 400); // 30 px off: magnet target, not a direct hit
+    expect(reject.click).not.toHaveBeenCalled();
+    open(500, 400, 15);
+    tap(500, 400);
+    expect(reject.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('clickTarget() (the face-click hook) clicks the current target like a tap', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    expect(hp.clickTarget()).toBe(false); // no hand, no target
+    open(500, 400, 6);
+    expect(hp.clickTarget()).toBe(true);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------------------------------------------------------- grab
+
+  it('one fist held over a board then moving +50px → onBoardMove deltas sum to +50, no click', () => {
     const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
     mount([], [f1]);
-    fist(400, 350, 7); // ≈230 ms held
+    fist(400, 350, HOLD);
     expect(board.some((e) => e.phase === 'start' && e.frameId === 'f1')).toBe(true);
     expect(hp.isBoardGrabbed()).toBe(true);
     expect(hp.isGrabActive()).toBe(true);
-    // Move +50px in steps, then hold still long enough for the filter to settle.
     for (let x = 405; x <= 450; x += 5) fist(x, 350);
     fist(450, 350, 60);
     expect(sum(board, 'dx')).toBeGreaterThan(47);
     expect(sum(board, 'dx')).toBeLessThan(53);
     expect(Math.abs(sum(board, 'dy'))).toBeLessThan(3);
     expect(pans).toHaveLength(0);
-    // Opening the hand ends the move.
-    open(450, 350, 2);
+    open(450, 350, 6);
     expect(board.at(-1)?.phase).toBe('end');
     expect(hp.isBoardGrabbed()).toBe(false);
     expect(clicks).toBe(0);
     expect(f1.click).not.toHaveBeenCalled();
   });
 
-  it('a board under non-interactive chrome (the right-side cluster) is still grabbed by its rect', () => {
+  it('moving the fist ≥ 12 px starts the grab early (before 300 ms), from where it closed', () => {
+    const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
+    mount([], [f1]);
+    fist(400, 350, 2);
+    for (let x = 410; x <= 460; x += 10) fist(x, 350); // ≈200 ms in, moving
+    expect(board[0]?.phase).toBe('start');
+    fist(460, 350, 60);
+    expect(sum(board, 'dx')).toBeGreaterThan(56);
+    expect(sum(board, 'dx')).toBeLessThan(63);
+  });
+
+  it('1–2 flicker frames mid-drag do not end the grab; ~150 ms open does', () => {
+    const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
+    mount([], [f1]);
+    fist(400, 350, HOLD);
+    for (let x = 405; x <= 430; x += 5) fist(x, 350);
+    open(430, 350, 1); // one flicker
+    fist(430, 350, 3);
+    open(430, 350, 2); // two flickers
+    for (let x = 435; x <= 450; x += 5) fist(x, 350);
+    expect(board.some((e) => e.phase === 'end')).toBe(false);
+    expect(hp.isBoardGrabbed()).toBe(true);
+    fist(450, 350, 40);
+    // Movement the smoothed cursor makes during a flicker is dropped (no
+    // deltas in the grace), so a little of the 50 px can be lost.
+    expect(sum(board, 'dx')).toBeGreaterThan(40);
+    expect(sum(board, 'dx')).toBeLessThan(54);
+    open(450, 350, 5); // ≈165 ms open
+    expect(board.at(-1)?.phase).toBe('end');
+  });
+
+  it('no deltas are sent during the release grace', () => {
+    const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
+    mount([], [f1]);
+    fist(400, 350, HOLD);
+    fist(400, 350, 30);
+    const n = board.length;
+    open(480, 350, 2); // the hand opens and swings: inside the grace
+    expect(board.slice(n).filter((e) => e.phase === 'move')).toHaveLength(0);
+  });
+
+  it('a board under non-interactive chrome (a panel over the board) is NOT grabbed — the fist is spent', () => {
     const f1 = fakeFrame({ left: 600, top: 200, width: 350, height: 300 }, 'f1');
-    const cluster = fakeFrame({ left: 820, top: 150, width: 160, height: 400 }, 'chrome');
-    cluster.dataset = {}; // not a board: just something on top
-    cluster.closest = () => null;
-    mount([], [f1], [cluster]);
-    fist(880, 300, 7);
-    expect(board.some((e) => e.phase === 'start' && e.frameId === 'f1')).toBe(true);
+    const panel = fakeFrame({ left: 820, top: 150, width: 160, height: 400 }, 'chrome');
+    panel.dataset = {};
+    panel.closest = () => null; // a review dialog / dock / engine bar area
+    mount([], [f1], [panel]);
+    fist(880, 300, HOLD + 5);
+    for (let x = 870; x >= 700; x -= 20) fist(x, 300); // slides off onto the board
+    expect(board).toHaveLength(0);
     expect(pans).toHaveLength(0);
   });
 
-  it('dragging a board across buttons keeps moving it (hit-tests are ignored while a grab runs)', () => {
+  it('dragging a board across buttons and chrome keeps moving it (no hit-tests while a grab runs)', () => {
     const f1 = fakeFrame({ left: 100, top: 300, width: 300, height: 200 }, 'f1');
     const chip = fakeButton({ left: 600, top: 380, width: 120, height: 40 });
     mount([chip], [f1]);
-    fist(250, 400, 7);
+    fist(250, 400, HOLD);
     for (let x = 260; x <= 700; x += 20) fist(x, 400);
-    fist(700, 400, 40); // resting right on the chip, well past the dwell time
+    fist(700, 400, 40);
     expect(sum(board, 'dx')).toBeGreaterThan(430);
     expect(board.some((e) => e.phase === 'end')).toBe(false);
     expect(chip.click).not.toHaveBeenCalled();
     expect(clicks).toBe(0);
   });
 
+  it('dragging a board to the screen edge does not drop it (only camera clipping is an edge)', () => {
+    const f1 = fakeFrame({ left: 600, top: 300, width: 300, height: 200 }, 'f1');
+    mount([], [f1]);
+    fist(750, 400, HOLD);
+    for (let x = 760; x <= 1000; x += 20) fist(x, 400); // past the right screen margin
+    fist(1000, 400, 10);
+    expect(board.some((e) => e.phase === 'end')).toBe(false);
+    expect(hp.isBoardGrabbed()).toBe(true);
+  });
+
   it('one fist over empty canvas → onWorldPan (1:1), not a board move', () => {
     mount([], [fakeFrame({ left: 0, top: 0, width: 100, height: 100 }, 'f1')]);
-    fist(500, 400, 7);
+    fist(500, 400, HOLD);
     expect(pans[0]?.phase).toBe('start');
     for (let y = 410; y <= 450; y += 10) fist(500, y);
     fist(500, 450, 60);
     expect(sum(pans, 'dy')).toBeGreaterThan(47);
     expect(sum(pans, 'dy')).toBeLessThan(53);
     expect(board).toHaveLength(0);
-    open(500, 450, 2);
+    open(500, 450, 6);
     expect(pans.at(-1)?.phase).toBe('end');
     expect(hp.isGrabActive()).toBe(false);
   });
 
-  it('one fist over a button → no onBoardMove, no onWorldPan, no click (Review Focus 3)', () => {
+  it('one fist held over a button → no onBoardMove, no onWorldPan, no click (Review Focus 3)', () => {
     const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
     const btn = fakeButton({ left: 350, top: 320, width: 100, height: 60 }, f1);
     mount([btn], [f1]);
-    fist(400, 350, 10);
+    fist(400, 350, HOLD + 3);
     for (let x = 405; x <= 500; x += 5) fist(x, 350);
     fist(500, 350, 40);
+    open(500, 350, 6);
     expect(board).toHaveLength(0);
     expect(pans).toHaveLength(0);
     expect(zooms).toHaveLength(0);
@@ -140,35 +286,39 @@ describe('one-fist grab, two-fist zoom', () => {
   it('a fist that started over a button stays spent until it opens (no pan once it slides off)', () => {
     const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     mount([btn], []);
-    fist(500, 400, 8);
-    for (let x = 520; x <= 800; x += 20) fist(x, 400); // slides off onto empty canvas
+    fist(500, 400, HOLD);
+    for (let x = 520; x <= 800; x += 20) fist(x, 400);
     expect(pans).toHaveLength(0);
     open(800, 400, 6);
-    fist(800, 400, 12); // a fresh fist (120 ms gate + 150 ms hold) on empty canvas does pan
+    fist(800, 400, HOLD);
     expect(pans[0]?.phase).toBe('start');
   });
 
-  it('a fist on a board TITLE moves the board (the title is a handle, not a no-op control)', () => {
+  it('a fist on a board TITLE moves the board (hold); a tap on it clicks the title', () => {
     const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
     const title = fakeButton({ left: 210, top: 206, width: 200, height: 28 }, f1);
     title.matches = (sel: string) => sel.split(',').some((s) => s.trim().startsWith('button') || s.trim() === '.mc-frame-title');
     mount([title], [f1]);
-    fist(300, 220, 7);
+    tap(300, 220);
+    expect(title.click).toHaveBeenCalledTimes(1);
+    open(300, 220, 15);
+    fist(300, 220, HOLD);
     expect(board.some((e) => e.phase === 'start' && e.frameId === 'f1')).toBe(true);
   });
 
   it('in focus mode, one fist on the FOCUSED board pans instead of moving it', () => {
     const f1 = fakeFrame({ left: 100, top: 100, width: 800, height: 600 }, 'f1');
     mount([], [f1], [], { focusedFrameId: () => 'f1' });
-    fist(500, 400, 7);
+    fist(500, 400, HOLD);
     expect(pans[0]?.phase).toBe('start');
     expect(board).toHaveLength(0);
   });
 
-  it('a fist held < 150 ms → nothing', () => {
+  it('a fist closed < 300 ms and still → nothing grabs', () => {
     mount([], [fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1')]);
-    fist(400, 350, 4); // ≈130 ms
+    fist(400, 350, 7); // ≈230 ms
     open(400, 350, 5);
+    open(300, 300, 20);
     fist(300, 300, 3);
     open(300, 300, 5);
     expect(board).toHaveLength(0);
@@ -178,7 +328,7 @@ describe('one-fist grab, two-fist zoom', () => {
 
   it('two fists spreading → onWorldZoom start then move, end when one opens', () => {
     mount([], []);
-    fists({ x: 400, y: 400 }, { x: 600, y: 400 }, 7);
+    fists({ x: 400, y: 400 }, { x: 600, y: 400 }, HOLD);
     expect(zooms[0]?.phase).toBe('start');
     for (let d = 10; d <= 100; d += 10) fists({ x: 400 - d, y: 400 }, { x: 600 + d, y: 400 });
     fists({ x: 300, y: 400 }, { x: 700, y: 400 }, 20);
@@ -190,19 +340,19 @@ describe('one-fist grab, two-fist zoom', () => {
     expect(span / span0).toBeGreaterThan(1.8);
     expect(pans).toHaveLength(0);
     expect(board).toHaveLength(0);
-    t += FRAME; hp.update([synthHand(300, 400, false, W, H), synthFist(700, 400, W, H)], t);
+    for (let i = 0; i < 5; i++) { t += FRAME; hp.update([synthHand(300, 400, false, W, H), synthFist(700, 400, W, H)], t); }
     expect(zooms.at(-1)?.phase).toBe('end');
-    // The remaining fist is spent: it does not start panning.
-    for (let i = 0; i < 10; i++) { t += FRAME; hp.update([synthHand(300, 400, false, W, H), synthFist(700 + i * 5, 400, W, H)], t); }
-    expect(pans).toHaveLength(0);
+    for (let i = 0; i < 20; i++) { t += FRAME; hp.update([synthHand(300, 400, false, W, H), synthFist(700 + i * 5, 400, W, H)], t); }
+    expect(pans).toHaveLength(0); // the remaining fist is spent
+    expect(clicks).toBe(0); // and the opening fist is not a tap
   });
 
   it('a second fist arriving ends the board move before the zoom starts', () => {
     const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
     mount([], [f1]);
-    fist(400, 350, 7);
+    fist(400, 350, HOLD);
     expect(board[0]?.phase).toBe('start');
-    for (let i = 0; i < 8; i++) { t += FRAME; hp.update([synthFist(400, 350, W, H), synthFist(750, 350, W, H)], t); }
+    for (let i = 0; i < HOLD + 2; i++) { t += FRAME; hp.update([synthFist(400, 350, W, H), synthFist(750, 350, W, H)], t); }
     const endAt = board.findIndex((e) => e.phase === 'end');
     expect(endAt).toBeGreaterThan(0);
     expect(zooms[0]?.phase).toBe('start');
@@ -210,19 +360,21 @@ describe('one-fist grab, two-fist zoom', () => {
     expect(hp.isGrabActive()).toBe(true);
   });
 
-  it('pinch frames (one or two hands) never grab, pan, or zoom', () => {
-    mount([], [fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1')]);
-    for (let i = 0; i < 20; i++) { t += FRAME; hp.update([synthHand(400, 350, true, W, H)], t); }
+  it('pinch frames (one or two hands) never click, grab, pan, or zoom', () => {
+    const btn = fakeButton({ left: 350, top: 320, width: 100, height: 60 });
+    mount([btn], [fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1')]);
+    for (let i = 0; i < 20; i++) { t += FRAME; hp.update([synthHand(400, 350, i % 4 < 2, W, H)], t); }
     for (let i = 0; i < 20; i++) { t += FRAME; hp.update([synthHand(300 - i * 5, 350, true, W, H), synthHand(700 + i * 5, 350, true, W, H)], t); }
+    expect(btn.click).not.toHaveBeenCalled();
     expect(board).toHaveLength(0);
     expect(pans).toHaveLength(0);
     expect(zooms).toHaveLength(0);
   });
 
-  it('dwell is suppressed while a grab is active, on both hands', () => {
+  it('dwell (when on) is suppressed while a grab is active, on both hands', () => {
     const btn = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
-    mount([btn], []);
-    fist(300, 400, 7); // pan starts on empty canvas
+    mount([btn], [], [], { dwellClick: () => true });
+    fist(300, 400, HOLD);
     for (let i = 0; i < 40; i++) { t += FRAME; hp.update([synthFist(300, 400, W, H), synthHand(750, 400, false, W, H)], t); }
     expect(btn.click).not.toHaveBeenCalled();
     expect(hp.target).toBeNull();
@@ -230,7 +382,7 @@ describe('one-fist grab, two-fist zoom', () => {
 
   it('losing the hand mid-grab ends the grab', () => {
     mount([], []);
-    fist(500, 400, 7);
+    fist(500, 400, HOLD);
     expect(hp.isGrabActive()).toBe(true);
     hp.lost();
     expect(pans.at(-1)?.phase).toBe('end');
