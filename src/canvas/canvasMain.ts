@@ -118,7 +118,7 @@ const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
   ? createPhoneCamera({ app: isPhone ? App : null })
   : undefined;
 handle = mountCanvas(root, {
-  voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'),
+  voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   phoneCamera,
   storage: replayDemo ? memoryStorage() : undefined,
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,

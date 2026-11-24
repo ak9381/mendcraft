@@ -35,7 +35,7 @@ import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/p
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import { createCanvasInputs } from './canvasInputs';
-import { followWhileBuilding } from './gimbalCanvas';
+import { followWhileBuilding, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
@@ -113,6 +113,7 @@ import {
   phoneDropLine, saveSpokenLine, tryWriteStorage,
 } from './failLines';
 import { isPhoneCanvasShell } from './iphoneShell';
+import { getGimbalPlugin, isIosShell } from '../devices/native';
 import { LOOK_TO_EDIT_HINT, nextPhoneEditLock, readLookToEdit } from './phoneEditLock';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
@@ -151,6 +152,9 @@ export interface CanvasOptions {
   autoHands?: boolean;
   /** Phone-simple shell: canvas + mic + route badge only (iOS/Android / <600px). */
   phoneShell?: boolean;
+  /** ?gimbalKeepAlive=1: opt-in native camera keep-alive while DockKit face
+   *  tracking is on (iPhone test option; also "keep alive on/off" by voice). */
+  gimbalKeepAlive?: boolean;
   /** Initial routing badge, e.g. 'Apple · on device'. */
   routeBadge?: string;
   /** Spotify Web API calls (job 'spotify') for the outbound ledger; never carries a token. */
@@ -1753,8 +1757,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       say('I didn’t catch a steady point — say it again, or name the device.');
     }, POINT_WAIT_MS);
     if (handsOn) {
-      pointWait = { frameId, steady: createSteadyHold(), timer, cleanup: () => {} };
+      // A docked gimbal holds still during the steady point (no aiming), and
+      // goes back to its mode once the one frame is grabbed (the crop is taken
+      // synchronously right after cleanup). Web: a no-op.
+      const prevGimbal = inputs.gimbal.mode();
+      void inputs.gimbal.setMode('point').catch(() => {});
+      pointWait = { frameId, steady: createSteadyHold(), timer, cleanup: () => { void inputs.gimbal.setMode(prevGimbal).catch(() => {}); } };
       say('Point at it and hold still.');
+      return;
+    }
+    if (isIosShell()) {
+      // The iPhone has no hand tracker, and its selfie camera can't see what
+      // she points at across the room. Don't pretend.
+      clearTimeout(timer);
+      say(POINT_NEEDS_LAPTOP);
       return;
     }
     // Hands off: ONE click on the canvas picks the point (the screen is a
@@ -1844,16 +1860,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const id = focusId ?? lastFocus;
     if (!id || !reg.get(id)) { say('Open a room board first, then scan.'); return; }
     const f = reg.get(id)!;
-    // Pan first when a gimbal is present (iPhone). On the web this fails fast
-    // with the honest why. Either way, we then propose tiles and wait for keep.
-    const r = await inputs.gimbal.scan().catch(() => ({ ok: false as const }));
     const sim = simEnv();
-    // SIM: lamp + speaker. Live: Gemini/Nano photo IDs when the scan produced
-    // any; otherwise the devices already known on this canvas.
-    const found = foundAfterScan(sim ? undefined : deviceHints(), { sim });
-    const turn = roomScan(found, { frameTitle: f.title, sim });
+    // Live room scan isn't built (no real photos are taken or identified), so
+    // live runs say so instead of proposing made-up devices.
+    if (!sim) { say(SCAN_LIVE_WHY); return; }
+    // SIM only: the scripted lamp + speaker, labelled SIM, photo simulated.
+    const turn = roomScan(foundAfterScan(undefined, { sim: true }), { frameTitle: f.title, sim: true });
     const n = turn.plan.tiles.length;
-    await connectTurn(id, utterance, turn, `Scan: ${n} device${n === 1 ? '' : 's'} seen`, 'guess', { photoNote: !r.ok });
+    await connectTurn(id, utterance, turn, `SIM · Scan: ${n} device${n === 1 ? '' : 's'} seen`, 'guess', { photoNote: true });
   }
 
   let sheetOpen: { frameId: string; host: HTMLElement; sheet: ConnectSheet } | null = null;
@@ -2404,6 +2418,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   const inputs = createCanvasInputs({
     root,
+    gimbalKeepAlive: opts.gimbalKeepAlive,
     hands: async (r, onEvent) => {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
@@ -2439,8 +2454,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // never on hover, dwell, or an open-palm hold. A hovering open palm
       // was the "it opens just when I hover" bug.
       palm: () => {},
-      pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
-      scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
       frame: (hands, now) => {
         // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
@@ -3395,6 +3408,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // look-to-edit is started from canvasMain, not here).
   if (!phoneShell && shouldAutoStartHands(opts.autoHands, typeof navigator !== 'undefined' ? navigator : null)) {
     void toggleHands();
+  }
+  // iPhone app with the gimbal plugin: ask DockKit to follow her face and say
+  // what is REALLY on (or the plugin's own error / "no stand docked").
+  if (getGimbalPlugin() && !opts.sim) {
+    void inputs.gimbal.setMode('face').then((r) => { const t = r.ok ? r.status : r.why; if (t) say(t); }).catch(() => {});
   }
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }

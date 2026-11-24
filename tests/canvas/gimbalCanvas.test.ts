@@ -1,13 +1,22 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   createGimbalCanvasController,
+  FACE_ON_KEEPALIVE_STATUS,
+  FACE_ON_STATUS,
   followWhileBuilding,
+  HANDS_NEED_TRACKER,
+  HANDS_ON_STATUS,
+  HOLD_STATUS,
   parseGimbalSpeech,
+  SCAN_LIVE_WHY,
   type GimbalCanvasController,
-  type GimbalCanvasOptions,
 } from '../../src/canvas/gimbalCanvas';
 import type { GimbalPlugin } from '../../src/devices/native';
 import { MAX_STEP_RAD } from '../../src/devices/native';
+import type { Pt } from '../../src/input/handLogic';
+
+/** A 21-landmark hand whose wrist–middle-MCP midpoint sits at (x, y), camera space. */
+const OPEN_AT = (x: number, y: number): Pt[] => Array.from({ length: 21 }, () => ({ x, y }));
 
 describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
   describe('pure parser for gimbal speech', () => {
@@ -15,6 +24,13 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(parseGimbalSpeech('follow my hands')).toBe('hands');
       expect(parseGimbalSpeech('Please, follow my hands!')).toBe('hands');
       expect(parseGimbalSpeech('track my hands')).toBe('hands');
+
+      expect(parseGimbalSpeech('follow me')).toBe('face');
+      expect(parseGimbalSpeech('Follow my face.')).toBe('face');
+      expect(parseGimbalSpeech('track me')).toBe('face');
+
+      expect(parseGimbalSpeech('keep alive on')).toBe('keepAliveOn');
+      expect(parseGimbalSpeech('gimbal keep-alive off')).toBe('keepAliveOff');
 
       expect(parseGimbalSpeech('stop following')).toBe('hold');
       expect(parseGimbalSpeech('stop tracking')).toBe('hold');
@@ -50,9 +66,13 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
   describe('with fake GimbalPlugin', () => {
     let fakePlugin: GimbalPlugin;
     let aimCalls: Array<{ yaw: number; pitch: number; seconds?: number }>;
+    let trackingCalls: Array<{ enabled: boolean; keepAlive?: boolean }>;
+    let tracking: boolean;
 
     beforeEach(() => {
       aimCalls = [];
+      trackingCalls = [];
+      tracking = false;
       fakePlugin = {
         isAvailable: vi.fn().mockResolvedValue({ available: true }),
         aim: vi.fn().mockImplementation((opts) => {
@@ -60,107 +80,117 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
           return Promise.resolve({ ok: true });
         }),
         release: vi.fn().mockResolvedValue(undefined),
+        setSystemTrackingEnabled: vi.fn().mockImplementation(async (o: { enabled: boolean; keepAlive?: boolean }) => {
+          trackingCalls.push(o);
+          tracking = o.enabled;
+          return { ok: true, enabled: tracking, keepAlive: !!o.keepAlive };
+        }),
       };
-      vi.useFakeTimers();
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
+    it('face: turns DockKit system tracking ON and never aims; status says what is on', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const r = await c.setMode('face');
+      expect(r).toEqual({ ok: true, status: FACE_ON_STATUS });
+      expect(trackingCalls).toEqual([{ enabled: true, keepAlive: false }]);
+      expect(c.mode()).toBe('face');
+      await c.onHandsFrame([{ points: OPEN_AT(0.95, 0.9) }], 10_000);
+      expect(aimCalls).toEqual([]);
     });
 
-    it('clamps aim angles to MAX_STEP_RAD in point mode', async () => {
-      const controller = createGimbalCanvasController({ plugin: fakePlugin });
-      await controller.setMode('point');
-
-      // Extreme point at corner (1.0, 1.0)
-      await controller.onPoint({ x: 1.0, y: 1.0 });
-
-      expect(aimCalls.length).toBeGreaterThan(0);
-      const last = aimCalls[aimCalls.length - 1];
-      expect(Math.abs(last.yaw)).toBeLessThanOrEqual(MAX_STEP_RAD + 0.0001);
-      expect(Math.abs(last.pitch)).toBeLessThanOrEqual(MAX_STEP_RAD + 0.0001);
+    it('face: does not claim following when the plugin does not report tracking enabled, and passes its error through', async () => {
+      fakePlugin.setSystemTrackingEnabled = vi.fn(async () => ({ ok: false, enabled: false, error: 'Accessory not connected' }));
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const r = await c.setMode('face');
+      expect(r.ok).toBe(false);
+      expect(r.why).toBe('DockKit tracking didn’t turn on: Accessory not connected');
+      expect(r.status).toBeUndefined();
+      expect(c.mode()).toBe('hold');
     });
 
-    it('holds for 2 seconds steady in point mode before firing onPointTarget', async () => {
-      const onPointTarget = vi.fn();
-      const controller = createGimbalCanvasController({
-        plugin: fakePlugin,
-        onPointTarget,
-      });
-      await controller.setMode('point');
-
-      // Point at (0.6, 0.4)
-      await controller.onPoint({ x: 0.6, y: 0.4 }, 1000);
-      expect(onPointTarget).not.toHaveBeenCalled();
-
-      // Small jitter at 1.5s (still steady within tolerance)
-      await vi.advanceTimersByTimeAsync(1500);
-      await controller.onPoint({ x: 0.61, y: 0.41 }, 2500);
-      expect(onPointTarget).not.toHaveBeenCalled();
-
-      // At 2000 ms after start (t=3000), steady 2s hold is reached
-      await vi.advanceTimersByTimeAsync(600);
-      await controller.onPoint({ x: 0.61, y: 0.41 }, 3100);
-      expect(onPointTarget).toHaveBeenCalledTimes(1);
-
-      const targetBox = onPointTarget.mock.calls[0][0];
-      expect(targetBox).toHaveProperty('x');
-      expect(targetBox).toHaveProperty('y');
-      expect(targetBox).toHaveProperty('w');
-      expect(targetBox).toHaveProperty('h');
+    it('face: an older native build without enabled read-back is not claimed as following', async () => {
+      fakePlugin.setSystemTrackingEnabled = vi.fn(async () => ({ ok: true }));
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const r = await c.setMode('face');
+      expect(r.ok).toBe(false);
+      expect(c.mode()).toBe('hold');
     });
 
-    it('resets steady hold if point moves away significantly', async () => {
-      const onPointTarget = vi.fn();
-      const controller = createGimbalCanvasController({
-        plugin: fakePlugin,
-        onPointTarget,
-      });
-      await controller.setMode('point');
-
-      // Point at (0.2, 0.2)
-      await controller.onPoint({ x: 0.2, y: 0.2 }, 1000);
-      await vi.advanceTimersByTimeAsync(1500);
-
-      // Huge jump at 2500ms
-      await controller.onPoint({ x: 0.8, y: 0.8 }, 2500);
-      expect(onPointTarget).not.toHaveBeenCalled();
-
-      // Advancing only 1s from jump should not fire target
-      await vi.advanceTimersByTimeAsync(1000);
-      await controller.onPoint({ x: 0.8, y: 0.8 }, 3500);
-      expect(onPointTarget).not.toHaveBeenCalled();
-
-      // Advancing full 2s after jump should fire target
-      await vi.advanceTimersByTimeAsync(1100);
-      await controller.onPoint({ x: 0.8, y: 0.8 }, 4600);
-      expect(onPointTarget).toHaveBeenCalledTimes(1);
+    it('face with the opt-in keep-alive asks native for it and says so', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, keepAlive: true });
+      const r = await c.setMode('face');
+      expect(trackingCalls).toEqual([{ enabled: true, keepAlive: true }]);
+      expect(r.status).toBe(FACE_ON_KEEPALIVE_STATUS);
+      const off = await c.setKeepAlive!(false);
+      expect(trackingCalls[1]).toEqual({ enabled: true, keepAlive: false });
+      expect(off.status).toBe(FACE_ON_STATUS);
     });
 
-    it('performs 5 scan steps across +-60 degrees with 600 ms hold each', async () => {
-      const scanFrames: number[] = [];
-      const controller = createGimbalCanvasController({
-        plugin: fakePlugin,
-        onScanFrame: (i) => scanFrames.push(i),
-      });
+    it('hands without a hand tracker: says so plainly and follows the face instead', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => false });
+      const r = await c.setMode('hands');
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(`${HANDS_NEED_TRACKER}. ${FACE_ON_STATUS}`);
+      expect(c.mode()).toBe('face');
+      expect(tracking).toBe(true);
+    });
 
-      const scanPromise = controller.scan();
+    it('hands with a tracker: system tracking OFF and the custom aim runs on camera-space frames', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true });
+      const r = await c.setMode('hands');
+      expect(r).toEqual({ ok: true, status: HANDS_ON_STATUS });
+      expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }]);
+      // Hand on the camera's right → pan right (+yaw).
+      await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.5) }], 10_000);
+      await Promise.resolve();
+      expect(aimCalls).toHaveLength(1);
+      expect(aimCalls[0].yaw).toBeGreaterThan(0);
+      expect(Math.abs(aimCalls[0].yaw)).toBeLessThanOrEqual(MAX_STEP_RAD + 1e-9);
+    });
 
-      // 5 steps: step 0 (-60°), step 1 (-30°), step 2 (0°), step 3 (+30°), step 4 (+60°)
-      // Each step holds 600 ms
-      for (let step = 0; step < 5; step++) {
-        await vi.advanceTimersByTimeAsync(600);
+    it('hold: system tracking OFF, no aiming', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true });
+      await c.setMode('face');
+      const r = await c.setMode('hold');
+      expect(r).toEqual({ ok: true, status: HOLD_STATUS });
+      expect(tracking).toBe(false);
+      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.9) }], 10_000);
+      expect(aimCalls).toEqual([]);
+    });
+
+    it('hold: surfaces the native error when tracking could not be turned off', async () => {
+      fakePlugin.setSystemTrackingEnabled = vi.fn(async () => ({ ok: false, enabled: true, error: 'DockKit busy' }));
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const r = await c.setMode('hold');
+      expect(r).toEqual({ ok: false, why: 'Couldn’t turn DockKit tracking off: DockKit busy' });
+    });
+
+    it('point mode holds the stand: no aim during the steady hold, and no second hold/target event', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      await c.setMode('point');
+      expect(tracking).toBe(false);
+      for (let t = 0; t <= 3000; t += 100) {
+        expect(await c.onPoint({ x: 1.0, y: 1.0 }, t)).toEqual({ ok: true });
       }
+      expect(aimCalls).toEqual([]);
+    });
 
-      const res = await scanPromise;
-      expect(res).toEqual({ ok: true });
-      expect(scanFrames).toEqual([0, 1, 2, 3, 4]);
-      expect(aimCalls.length).toBe(5);
+    it('live room scan is not available and never moves the stand', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const r = await c.scan();
+      expect(r).toEqual({ ok: false, why: SCAN_LIVE_WHY });
+      expect(aimCalls).toEqual([]);
+    });
 
-      const rad60 = (60 * Math.PI) / 180;
-      expect(aimCalls[0].yaw).toBeCloseTo(-rad60, 2);
-      expect(aimCalls[2].yaw).toBeCloseTo(0, 2);
-      expect(aimCalls[4].yaw).toBeCloseTo(rad60, 2);
+    it('caches isAvailable() instead of crossing the bridge every frame', async () => {
+      let now = 0;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 5000 });
+      await c.setMode('hands');
+      for (let i = 0; i < 50; i++) { now += 30; await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now); }
+      expect(fakePlugin.isAvailable).toHaveBeenCalledTimes(1);
+      now += 6000;
+      await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now);
+      expect(fakePlugin.isAvailable).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -177,7 +207,7 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       };
     }
 
-    it('switches to hands mode for the duration of the build, then restores the prior mode', async () => {
+    it('switches to face mode for the duration of the build, then restores the prior mode', async () => {
       const controller = fakeController('hold');
       const calls: string[] = [];
 
@@ -187,7 +217,7 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       });
 
       expect(result).toBe('plan');
-      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'hands');
+      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'face');
       expect(controller.setMode).toHaveBeenNthCalledWith(2, 'hold');
       expect(calls).toEqual(['building']);
     });
@@ -198,8 +228,16 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       await expect(followWhileBuilding(controller, async () => { throw new Error('model error'); }))
         .rejects.toThrow('model error');
 
-      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'hands');
+      expect(controller.setMode).toHaveBeenNthCalledWith(1, 'face');
       expect(controller.setMode).toHaveBeenNthCalledWith(2, 'point');
+    });
+
+    it('leaves an already-following gimbal alone (no bridge churn)', async () => {
+      for (const m of ['face', 'hands']) {
+        const controller = fakeController(m);
+        expect(await followWhileBuilding(controller, async () => 1)).toBe(1);
+        expect(controller.setMode).not.toHaveBeenCalled();
+      }
     });
 
     it('never throws even when the gimbal is unavailable (web soft-fail)', async () => {

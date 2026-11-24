@@ -107,7 +107,7 @@ describe('gimbal follow: modes', () => {
   });
 });
 
-describe('DockKit system tracking: off while Mendcraft is open', () => {
+describe('disableSystemTracking helper (legacy main.ts path)', () => {
   it('disableSystemTracking is a no-op on the web and is called with enabled:false on iOS', async () => {
     expect(await disableSystemTracking({})).toBe(false);
     const set = vi.fn(async () => ({ ok: true }));

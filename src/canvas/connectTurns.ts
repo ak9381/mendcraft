@@ -301,13 +301,14 @@ export const SIM_SCAN_DEVICES: FoundDeviceItem[] = [
 ];
 
 /** Devices to propose after a room scan. Live passes Gemini/Nano photo IDs in
- *  `found`. SIM (or an empty found list) returns a lamp and a speaker. */
+ *  `found`; with none it returns none. Only SIM falls back to the scripted
+ *  lamp + speaker (and roomScan labels those SIM) — never a live run. */
 export function foundAfterScan(
   found: FoundDeviceItem[] | undefined,
-  _opts: { sim?: boolean } = {},
+  opts: { sim?: boolean } = {},
 ): FoundDeviceItem[] {
   if (found && found.length) return found;
-  return SIM_SCAN_DEVICES;
+  return opts.sim ? SIM_SCAN_DEVICES : [];
 }
 
 export function roomScan(
@@ -318,7 +319,7 @@ export function roomScan(
   const tiles: DeviceTileSpec[] = [];
   const seenIds = new Set<string>();
 
-  const items = foundAfterScan(found, opts);
+  const items = foundAfterScan(found, { sim: opts.sim ?? true });
 
   for (let i = 0; i < items.length && tiles.length < MAX_TILES; i++) {
     const item = items[i];

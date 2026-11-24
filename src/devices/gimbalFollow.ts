@@ -1,9 +1,8 @@
-// DockKit follow policy for the Insta360 Flow 2 Pro (optional). Pure aiming
-// math lives here so tests do not need the iOS shell:
-//   - normal use: keep the camera on her hands (centroid of each hand's
-//     wrist–middle-MCP midpoint), never DockKit's own face tracking;
-//   - Add a device: stop following, let her point at the device or nudge
-//     pan/tilt by hand, then hold so the device stays in frame.
+// Custom (hands) aiming for a DockKit stand such as the Insta360 Flow 2 Pro.
+// Pure aiming math lives here so tests do not need the iOS shell. It only
+// moves the stand when hand frames (CAMERA space, not selfie-mirrored) reach
+// onFrame — on the canvas that is gimbalCanvas's 'hands' mode. Following her
+// face is DockKit's own system tracking ('face' mode), not this file.
 
 import { INDEX_TIP, MIDDLE_MCP, WRIST, type Pt } from '../input/handLogic';
 import { classifyGesture } from '../input/gestures';

@@ -90,7 +90,7 @@ render();
 
 // Auto-sync fallback: app focus / page visibility re-sync the board (the camera
 // gaze path uses the same shouldSync logic — see input/gazeSync.ts — but never
-// opens the front camera when a live stream exists or the gimbal is active).
+// opens the front camera when a live stream already exists).
 function evaluateSync(facing: boolean): void {
   if (!savedPair) return;
   const res = shouldSync({
@@ -109,7 +109,7 @@ function evaluateSync(facing: boolean): void {
 }
 
 // Face detection on the phone: a small top Facing pill only (never a full-screen
-// box). Face-only tracker (~5 fps). Never steals a live / gimbal camera.
+// box). Face-only tracker (~5 fps). Never steals a live camera stream.
 if (!sim) {
   const facingBanner = createFacingBanner(document.body);
   let faceTracker: ReturnType<typeof createPresenceTracker> | null = null;

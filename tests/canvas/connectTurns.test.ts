@@ -86,9 +86,13 @@ describe('connectTurns', () => {
       expect(coerced.ok).toBe(true);
     });
 
-    it('foundAfterScan prefers photo IDs, otherwise the scripted lamp + speaker', () => {
+    it('foundAfterScan prefers photo IDs, otherwise the scripted lamp + speaker — in SIM only', () => {
       expect(foundAfterScan(undefined, { sim: true })).toEqual(SIM_SCAN_DEVICES);
       expect(foundAfterScan([], { sim: true })).toEqual(SIM_SCAN_DEVICES);
+      // A live run never gets made-up devices.
+      expect(foundAfterScan(undefined, { sim: false })).toEqual([]);
+      expect(foundAfterScan([], { sim: false })).toEqual([]);
+      expect(foundAfterScan(undefined)).toEqual([]);
       const photos = [{ id: 'wiz-1', label: 'Ceiling', kind: 'lamp' }];
       expect(foundAfterScan(photos, { sim: false })).toEqual(photos);
     });
