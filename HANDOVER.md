@@ -151,10 +151,10 @@ The following device workflow was specified for this handover as the current Mac
 
 ```sh
 # After npm run build && npx cap sync ios, from the iOS project
-xcodebuild -destination id=00008140-00183466020B001C -derivedDataPath ~/mendcraft-live/dd
+xcodebuild -destination id=<iPhone-UDID> -derivedDataPath ~/mendcraft-live/dd
 # then:
-xcrun devicectl device install app --device 00008140-00183466020B001C <path-to-built-app>
-xcrun devicectl device process launch --device 00008140-00183466020B001C app.mendcraft.relay
+xcrun devicectl device install app --device <iPhone-UDID> <path-to-built-app>
+xcrun devicectl device process launch --device <iPhone-UDID> app.mendcraft.relay
 ```
 
 `app.mendcraft.relay` is verified in `capacitor.config.ts`. The exact `xcodebuild` scheme/target flags were not in the repo; fill them from the generated Xcode project on the Mac.

@@ -8,7 +8,7 @@ Running log on top of `HANDOVER.md`. Newest first. Branch: `sim-main` only — n
 - Firebase CLI logged in on this Mac (`~/.config` ownership fixed). Preview deploy: `npm run build && npx firebase-tools hosting:channel:deploy sim-main --project mendcraft` → https://mendcraft--sim-main-o8jrlskh.web.app (expires 4 Dec 2026).
 - Deploy warns "Unable to add channel domain to Firebase Auth" — preview domain is not an authorized domain yet (console step, not done).
 - Tests: 2722 pass; 2 fail only because `goldenTrace8319f68` / `poseStabilityReplay` read trace JSON from the old Linux box path `/workspace/hackathon/firebase-hybrid/e2e-review-2x/live/`.
-- iPhone: iPhone 16 Pro Max paired (UDID `00008140-00183466020B001C`). `ios/App` generated locally (untracked; `ios/debug.xcconfig` must stay uncommitted).
+- iPhone: iPhone 16 Pro Max paired (UDID `<iPhone UDID: xcrun devicectl list devices>`). `ios/App` generated locally (untracked; `ios/debug.xcconfig` must stay uncommitted).
 - Android: SDK at `~/Library/Android/sdk` (platform 36, build-tools 36.0.0). Build with JDK 21: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew assembleDebug` in `android/` after `npm run build && npx cap sync android`. Debug APK id is `app.mendcraft.relay.sim`. `minSdkVersion` raised 24 → 26 (ML Kit genai-prompt requires it). Not yet installed on the Nothing 3a (no device connected).
 
 ## Mouse click-through (24 Nov, `?fresh=1&sim=1&hands=0`, 1470×745 MacBook Air)
