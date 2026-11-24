@@ -33,6 +33,11 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
+import { createSpotifyAwareConnector, spotifySearchQuery } from './spotifyConnector';
+import * as spotifyApi from '../music/spotifyApi';
+import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
+import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
+import { parseMusicIntent } from '../music/musicIntent';
 import { createWizClient, resolveWizToken, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
 import {
@@ -46,7 +51,7 @@ import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
-import { createCanvasLedger } from './ledger';
+import { createCanvasLedger, ledgerPanelLines } from './ledger';
 import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -130,6 +135,8 @@ export interface CanvasOptions {
   phoneShell?: boolean;
   /** Initial routing badge, e.g. 'Apple · on device'. */
   routeBadge?: string;
+  /** Spotify Web API calls (job 'spotify') for the outbound ledger; never carries a token. */
+  onSpotifyCall?: spotifyApi.SpotifyLedger;
   /** Clock for the look-to-edit re-lock timer (tests). */
   now?: () => number;
   /** Look-away re-lock delay in ms (tests). */
@@ -290,6 +297,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3>
         <p class="mc-ai-ledger-total"></p>
+        <p class="mc-ai-ledger-spotify" hidden></p>
         <p class="mc-ai-history-empty">Turns you keep will show up here.</p>
         <ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
@@ -685,9 +693,37 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // probe localhost at all: no console noise for visitors without a lamp.
   const wizClient = opts.sim ? null : (opts.wizClient ?? (resolveWizToken() ? createWizClient() : null));
   const bridgeStatus: BridgeStatus = { up: false };
-  const defaultConnector = wizClient
+  const lampConnector = wizClient
     ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })
     : simulatedConnector;
+  // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
+  const spOpts = (): spotifyApi.SpotifyApiOptions => ({
+    // Path + short query only (redacted in the api layer); never a token.
+    onCall: (i) => {
+      ledger.record({ engine: 'spotify', sentText: i.sent });
+      activityLog.push({ kind: 'spotify', text: i.reason });
+      ledgerTotalRender();
+      opts.onSpotifyCall?.(i);
+    },
+  });
+  let webPlayer: SdkPlayer | null = null;
+  const defaultConnector = opts.sim ? lampConnector : createSpotifyAwareConnector({
+    inner: lampConnector,
+    isConnected: () => !!loadTokens(),
+    listDevices: () => spotifyApi.listDevices(spOpts()),
+    transferPlayback: (id, play) => spotifyApi.transferPlayback(id, spOpts(), play),
+    searchAndPlay: (q, id) => spotifyApi.searchAndPlay(q, spOpts(), id),
+    // Web Playback SDK doesn't run in iOS WKWebView: the phone shell never offers it.
+    browserDevice: phoneShell || isNativeMusicShell() ? undefined : async () => {
+      if (!webPlayer) webPlayer = await startWebPlayback({ getToken: () => getValidAccessToken() });
+      return webPlayer.deviceId;
+    },
+    pause: () => spotifyApi.pause(spOpts()),
+    resume: () => spotifyApi.play(spOpts()),
+    next: async () => { await spotifyApi.next(spOpts()); const pb = await spotifyApi.getPlayback(spOpts()); return pb?.title ? { title: pb.title } : null; },
+    setVolume: (pct) => spotifyApi.setVolumePercent(pct, spOpts()),
+    say,
+  });
   const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? defaultConnector, (m) => {
     const u = (m as unknown as { updateDataModel: Record<string, unknown> }).updateDataModel;
     const path = typeof u.path === 'string' ? u.path : '';
@@ -1128,7 +1164,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const protect = protectTurn(utterance, s.prompt);
     ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
     ledgerTotalRender();
-    panels.setFooterBytes(ledger.totals().totalBytes);
+    panels.setFooterBytes(ledger.totals().aiBytes);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -1148,7 +1184,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       redactedName: protect.used.length > 0,
     });
     swarm.start(plan, opts.sim ? 1 : Date.now());
-    swarm.reportBytes(ledger.totals().totalBytes);
+    swarm.reportBytes(ledger.totals().aiBytes);
     swarmDock.start(buildSwarmAgents(plan), {
       reducedMotion: reduced,
       payloads: s.engine === 'gemini' ? { gemini: cloudReceivedDetail(protect.promptText, activePeople()) } : {},
@@ -1235,9 +1271,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!w) say('Allow pop-ups to open the AI monitor.');
   }
   function ledgerTotalRender(): void {
-    const t = ledger.totals();
-    aiPanel.querySelector('.mc-ai-ledger-total')!.textContent =
-      `This session: ${t.count} AI turn${t.count === 1 ? '' : 's'} · ${ledger.formatLine()}`;
+    const lines = ledgerPanelLines(ledger);
+    aiPanel.querySelector('.mc-ai-ledger-total')!.textContent = lines.ai;
+    const sp = aiPanel.querySelector<HTMLElement>('.mc-ai-ledger-spotify');
+    if (sp) { sp.textContent = lines.spotify; sp.hidden = !lines.spotify; }
   }
   function historyRender(): void {
     ledgerTotalRender();
@@ -2109,6 +2146,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
 
     // Device speech (works in any board — controls the docked dashboard mid-build).
+    // "play <something>" on a speaker: a search, handled by the speaker connector
+    // (Spotify when connected, honest built-in fallback otherwise).
+    const mi = parseMusicIntent(text);
+    const spQuery = mi?.type === 'searchPlay' && !opts.sim ? spotifySearchQuery(mi.query, !!loadTokens()) : null;
+    const speaker = spQuery ? deviceRefs().find((d) => d.kind === 'music') : undefined;
+    if (spQuery && speaker) {
+      void store.act({ deviceId: speaker.id, playing: true, query: spQuery });
+      say(`Looking for ${spQuery}…`);
+      return true;
+    }
+
     const dc = parseDeviceCommands(text, deviceRefs(), { pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()) });
     if (dc) {
       for (const i of dc.intents) void store.act(i);

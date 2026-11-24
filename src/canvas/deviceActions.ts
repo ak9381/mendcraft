@@ -13,6 +13,8 @@ export type DeviceIntent = {
   playing?: boolean;
   volume?: number;
   next?: boolean;
+  /** "play <something>": a search for the speaker's music service (never shown on the tile). */
+  query?: string;
 };
 
 export interface DeviceConnector {
@@ -27,6 +29,9 @@ export interface DeviceStore {
    *  used once the WiZ bridge's reachability is known. */
   setSim(id: string, sim: boolean): void;
 }
+
+/** A "play <query>" turn is a multi-step search-and-play, not a quick ack. */
+export const QUERY_TIMEOUT_MS = 15000;
 
 export function createDeviceStore(
   initial: Record<string, DeviceState>,
@@ -73,7 +78,7 @@ export function createDeviceStore(
 
         const ack = await Promise.race([
           connector.run(fullIntent),
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), intent.query ? Math.max(timeoutMs, QUERY_TIMEOUT_MS) : timeoutMs)),
         ]);
         state[intent.deviceId] = {
           ...state[intent.deviceId],
