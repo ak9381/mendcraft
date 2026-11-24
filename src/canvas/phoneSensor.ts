@@ -29,6 +29,9 @@ export const PHONE_SENSOR_KEY = 'mc.phoneSensor';
 export const SENSOR_ON_LINE = 'Tracking your hands for the gimbal — camera on';
 export const SENSOR_STARTING_LINE = 'Starting the iPhone camera for hand tracking…';
 export const SENSOR_OFF_LINE = 'Hand tracking off — camera off';
+/** The camera was taken (a call, another app, or the native keep-alive) and
+ *  did not come back after the hub's retries. */
+export const SENSOR_LOST_LINE = 'The iPhone camera was taken by something else, so hand tracking stopped. Tap Track or ask again to retry.';
 
 export interface PhoneSensorDeps {
   camera: PhoneCamera;
@@ -41,6 +44,8 @@ export interface PhoneSensorDeps {
   pill?: boolean;
   /** She turned sensing off from the pill (follow / point requests dropped). */
   onUserStop?(): void;
+  /** Plain status lines (camera lost). */
+  say?(text: string): void;
   root?: HTMLElement;
   now?: () => number;
 }
@@ -129,7 +134,10 @@ export function createPhoneSensor(deps: PhoneSensorDeps): PhoneSensor {
   }
 
   const offFrame = deps.camera.onFrame(frame);
-  const offStatus = deps.camera.onStatus(() => changed());
+  const offStatus = deps.camera.onStatus((st) => {
+    if (st === 'error' && want.size) deps.say?.(SENSOR_LOST_LINE);
+    changed();
+  });
 
   if (deps.pill !== false && deps.root) {
     const doc = deps.root.ownerDocument;

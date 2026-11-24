@@ -3,7 +3,7 @@
 // the session (it wins over 'docked'); a new follow/point ask may start it.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { createPhoneSensor } from '../../src/canvas/phoneSensor';
+import { createPhoneSensor, SENSOR_LOST_LINE } from '../../src/canvas/phoneSensor';
 import type { PhoneCamera, PhoneCameraStatus, PhoneCameraUse } from '../../src/canvas/phoneCamera';
 
 function fakeCamera() {
@@ -70,5 +70,16 @@ describe('phoneSensor: explicit asks only, honest pill', () => {
     expect(storage.m.get('mc.phoneSensor')).toBe('1');
     await s.tap();
     expect(storage.m.has('mc.phoneSensor')).toBe(false);
+  });
+
+  it('a camera lost for good (e.g. a muted track) says so plainly', async () => {
+    const camera = fakeCamera();
+    let emit: ((s: 'error') => void) | null = null;
+    camera.onStatus = (cb) => { emit = cb as (s: 'error') => void; return () => undefined; };
+    const say = vi.fn();
+    const s = createPhoneSensor({ camera, onHands: () => undefined, pill: false, storage: mem(), say });
+    await s.request('point', true);
+    emit!('error');
+    expect(say).toHaveBeenCalledWith(SENSOR_LOST_LINE);
   });
 });

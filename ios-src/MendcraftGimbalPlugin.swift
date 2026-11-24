@@ -168,14 +168,29 @@ final class CameraKeepAlive {
     static let shared = CameraKeepAlive()
     private let queue = DispatchQueue(label: "mendcraft.camera.keepalive")
     private var session: AVCaptureSession?
+    private var observers: [NSObjectProtocol] = []
+    /// Last interruption reason (e.g. the WebView camera or a call took the
+    /// front camera). Surfaced as the keep-alive error text.
+    private(set) var lastInterruption: String?
 
-    var isRunning: Bool { queue.sync { session?.isRunning ?? false } }
+    var isRunning: Bool { queue.sync { (session?.isRunning ?? false) && !(session?.isInterrupted ?? false) } }
+
+    /// Must run on `queue`.
+    private func teardown() {
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers.removeAll()
+        session?.stopRunning()
+        session = nil
+    }
 
     func start(completion: @escaping (Bool, String?) -> Void) {
         let begin = { [weak self] in
             guard let self else { completion(false, "keep-alive gone"); return }
             self.queue.async {
-                if let s = self.session, s.isRunning { completion(true, nil); return }
+                if let s = self.session, s.isRunning, !s.isInterrupted { completion(true, nil); return }
+                // Never two sessions: stop any previous (stopped/interrupted) one first.
+                self.teardown()
+                self.lastInterruption = nil
                 guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
                       let input = try? AVCaptureDeviceInput(device: device) else {
                     completion(false, "No front camera"); return
@@ -189,6 +204,24 @@ final class CameraKeepAlive {
                 out.alwaysDiscardsLateVideoFrames = true
                 if s.canAddOutput(out) { s.addOutput(out) }
                 s.commitConfiguration()
+                // Watch interruptions: another capture (likely the WebView's
+                // getUserMedia) taking the front camera. We yield — stop — so
+                // the two never fight; the web layer sees keepAlive:false.
+                let nc = NotificationCenter.default
+                self.observers.append(nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: s, queue: nil) { note in
+                    let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue
+                    let why: String
+                    switch raw.flatMap({ AVCaptureSession.InterruptionReason(rawValue: $0) }) {
+                    case .videoDeviceInUseByAnotherClient?: why = "Keep-alive stopped: the camera is in use by another capture"
+                    case .videoDeviceNotAvailableInBackground?: why = "Keep-alive stopped: app in background"
+                    default: why = "Keep-alive stopped: camera interrupted"
+                    }
+                    // Singleton: a strong capture is fine (no cycle that matters).
+                    self.queue.async { self.lastInterruption = why; self.teardown() }
+                })
+                self.observers.append(nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: s, queue: nil) { _ in
+                    self.queue.async { self.lastInterruption = nil }
+                })
                 s.startRunning()
                 self.session = s
                 completion(s.isRunning, s.isRunning ? nil : "Camera session did not start")
@@ -205,10 +238,7 @@ final class CameraKeepAlive {
     }
 
     func stop() {
-        queue.async { [weak self] in
-            self?.session?.stopRunning()
-            self?.session = nil
-        }
+        queue.async { [weak self] in self?.teardown() }
     }
 }
 
@@ -266,7 +296,7 @@ actor DockWatcher {
             "enabled": DockAccessoryManager.shared.isSystemTrackingEnabled,
             "keepAlive": CameraKeepAlive.shared.isRunning,
         ]
-        if let msg = errText ?? keepAliveErr { r["error"] = msg }
+        if let msg = errText ?? keepAliveErr ?? (keepAliveWanted ? CameraKeepAlive.shared.lastInterruption : nil) { r["error"] = msg }
         return r
     }
 

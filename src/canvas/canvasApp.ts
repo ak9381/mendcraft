@@ -2653,6 +2653,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           feedPointWait(cam, now);
         },
         onChange: () => { senseChanged(); },
+        say,
         onUserStop: () => {
           // Sensing off from the pill: a waiting point ends, and a hands follow
           // with no frames left says so and follows the face instead.
