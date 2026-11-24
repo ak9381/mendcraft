@@ -69,9 +69,6 @@ describe('C026 a dwell-click on the say input focuses it, same generic path as a
     feed(160, 50, 115); // settle + a long rest (one click per visit) on the say box
     expect(hp.target).toBe(input);
     expect(input.focus).toHaveBeenCalledTimes(1);
-    // …and announces a HAND focus so the canvas docks the on-screen keyboard.
-    const types = input.dispatchEvent.mock.calls.map((c) => (c[0] as Event).type);
-    expect(types.filter((t) => t === 'mc-hand-text-focus')).toHaveLength(1);
     hp.destroy();
   });
 });

@@ -797,17 +797,6 @@
   align-content: start; gap: 4px;
 }
 
-/* Hand keyboard (handKeyboard.ts): above sheets and dialogs; docks at the top
-   when the bottom dock would cover the field being typed into. */
-.mc-keyboard.mc-hand-kb { z-index: 1000; bottom: 10px; width: min(880px, calc(100% - 16px)); }
-.mc-keyboard.mc-hand-kb.mc-hand-kb-top { bottom: auto; top: 10px; }
-@media (max-width: 600px) {
-  .mc-keyboard.mc-hand-kb { padding: 6px; gap: 5px; border-radius: 12px; }
-  .mc-hand-kb .mc-key-row { gap: 4px; }
-  .mc-hand-kb .mc-key { height: 44px; font-size: 17px; border-radius: 7px; padding: 0; }
-  .mc-hand-kb .mc-key-ctl { font-size: 12px; }
-}
-
 /* ---- cross-device: edge glow + screen-arrangement strip -------------------
    The viewport edge lights up as a tile nears the side where a phone is paired
    (see setEdgeGlow in canvasApp). The arrangement strip remembers which phone
@@ -1249,11 +1238,9 @@
   .mc-engine-bar.is-handoff .mc-engine-link-line, .mc-engine-bar.is-handoff .mc-engine-link-head { animation: none; transition: none; }
 }
 /* The bar replaces the swarm pill on desktop; the phones strip sits directly
-   above it; the hand keyboard owns the bottom edge while it is open. */
+   above it */
 .mc-canvas:has(.mc-engine-bar) .mc-swarm-pill { display: none; }
 .mc-canvas:has(.mc-engine-bar) .mc-arrange { bottom: 92px; }
-body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-engine-bar,
-body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-arrange { display: none; }
 /* The AI panel overlays the boards while a model works. Keep its foot above
    the engine bar and the corner face chip. */
 @media (min-width: 601px) {

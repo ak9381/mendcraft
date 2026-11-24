@@ -525,7 +525,7 @@ async function main() {
     await pal.keyboard.press('Escape');
     await pal.waitForTimeout(200);
 
-    // ─── Input extras (gestures / on-screen keyboard / browser reference) ────
+    // ─── Input extras (gestures / browser reference) ────
     await pal.goto(`${BASE}/?sim=1`, { waitUntil: 'networkidle' });
     await pal.waitForSelector('#viewport svg', { timeout: 5000 });
     await pal.waitForTimeout(300);
@@ -536,19 +536,6 @@ async function main() {
       await shot(pal, 'extras-gestures.png');
       assert(await pal.isVisible('.mc-gestures-panel'), 'customizable gestures panel opens');
       await pal.click('#btn-gestures');
-    }
-    if (await pal.$('#btn-keyboard')) {
-      // The keyboard mirrors the focused field; trigger the toggle while the
-      // command input holds focus (a real button click would steal it).
-      await pal.evaluate(() => {
-        document.getElementById('command-input')?.focus();
-        document.getElementById('btn-keyboard')?.click();
-      });
-      await pal.waitForSelector('.mc-keyboard:not([hidden])', { timeout: 3000 });
-      await pal.waitForTimeout(300);
-      await shot(pal, 'extras-keyboard.png');
-      assert(await pal.isVisible('.mc-keyboard'), 'on-screen keyboard shows');
-      await pal.click('#btn-keyboard');
     }
     if (await pal.$('#btn-reference')) {
       await pal.click('#btn-reference');
