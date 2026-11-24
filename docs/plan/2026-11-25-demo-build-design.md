@@ -67,3 +67,6 @@ Akash: the iPhone's sensor-only hand/face tracking (docked on the gimbal) should
 3. The prompt "What do you want to connect next? Point at it, name it, or say build the dashboard." now offers a "Point at a device" chip; pointing uses the iPhone camera on the gimbal (sensor-only hands: no UI control), the gimbal holds while the photo is taken, identify runs (Nano/Apple first, cloud second), the lamp tile is proposed through the normal review.
 4. Monitor: the iPhone tab shows the identify turn (what stayed on device vs what crossed).
 Honesty: every status line reflects what is really on; if the gimbal or DockKit tracking isn't available the row says so plainly and pointing falls back to the laptop camera.
+
+## Correction (25 Nov, night): iPhone has two layers, not sensor-only
+Akash: hands on the iPhone should work like Android when he is looking at it. Final rule: SENSING layer (feeds gimbal hands-follow and point-to-connect; not gated by facing, because pointing means looking at the device) + CONTROL layer (full hand control behind the Hands pill, off by default, acts only while facing the phone). One shared camera/tracker. Film with iPhone control OFF unless demonstrating it.
