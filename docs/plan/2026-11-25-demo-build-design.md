@@ -73,3 +73,4 @@ Akash: hands on the iPhone should work like Android when he is looking at it. Fi
 
 ## Film staging note (25 Nov, night): pointing shot
 Akash will look into the iPhone camera and point at the lamp with the lamp placed next to his face (inside the iPhone-on-gimbal camera frame). This satisfies both "device in view" and "facing the phone". Pointing stays un-gated by facing in code so it also works when looking at the lamp. Setup for the take: lamp within ~40 cm of the face, in frame; steady point ~0.6 s; keep iPhone hand CONTROL off.
+Same staging for the Marshall speaker (next to his face, in frame). A speaker identity always proposes the speaker/music tile (software, Spotify Connect resolves the Marshall at play time) — unlike a WiZ lamp, which needs a connected hardware device.
