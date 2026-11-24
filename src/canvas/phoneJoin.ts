@@ -24,6 +24,9 @@ export interface PhoneJoinDeps {
   createHostSession?: typeof createHostSession;
   origin?: string;
   chime?: () => void;
+  /** Resume an existing room token (from pairingStore) so remembered phones stay
+   *  paired across a laptop reload instead of being stranded on a stale code. */
+  token?: string;
   onState?: (state: PairState) => void;
   onCommand?: (cmd: RelayCommand) => void;
   onFrame?: (frame: RelayFrame) => void;
@@ -64,7 +67,7 @@ export async function startPhoneJoin(deps: PhoneJoinDeps = {}): Promise<PhoneJoi
     }
 
     const hostFactory = deps.createHostSession ?? createHostSession;
-    const session = await hostFactory(transport);
+    const session = await hostFactory(transport, undefined, deps.token ? { token: deps.token } : undefined);
 
     const origin =
       deps.origin ??

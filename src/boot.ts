@@ -12,7 +12,7 @@
 //   /judges                    → the old guided-tour page       [flag: judgesLegacy]
 //   /spotify                   → Spotify OAuth callback, used only by the old studio's music panel [flag: studio]
 
-import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
+import { isControlRoute, isJudgesRoute, isLandingRoute, isMobileRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
 import { loadFlags } from './core/flags';
 
 const flags = loadFlags();
@@ -58,6 +58,11 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
   } else {
     window.location.replace(canvasUrl(window.location.search));
   }
+} else if (isMobileRoute(window.location.pathname, window.location.search)) {
+  // The phone + tablet companion (pair / dashboard / split) is its own entry.
+  // No feature flag: this is the shipping phone experience, not a legacy page.
+  const { mobileUrl } = await import('./canvas/route');
+  window.location.replace(mobileUrl(window.location.search));
 } else if (isControlRoute(window.location.pathname, window.location.search)) {
   if (flags.has('control')) {
     const { mountControlPage } = await import('./relay/controlPage');

@@ -320,3 +320,57 @@ html, body { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .mc-m-toast { transition: none; }
 }
+
+/* ---- phone sync: arrangement, pin, stays/goes split, edge glow -------------
+   Added for cross-device sync. Reuses the existing tokens (--panel, --border,
+   --accent, --mc-m-target) so phone + tablet stay visually consistent. */
+.mc-m-sub { color: var(--text-dim); font-size: 0.95rem; line-height: 1.4; margin: 0.25rem 0 0.75rem; }
+.mc-m-code-help { color: var(--text-dim); font-size: 0.85rem; margin: 0.4rem 0; }
+.mc-m-code-help code { color: var(--text); }
+
+.mc-m-dash-actions {
+  display: flex; align-items: center; gap: var(--mc-m-action-gap);
+  flex-wrap: wrap; margin: 0.5rem 0 1rem;
+}
+.mc-m-pin { min-height: var(--mc-m-target); }
+.mc-m-pin[aria-pressed='true'], .mc-m-pin.is-pinned {
+  background: var(--accent-2); color: #0d0d0c; border-color: var(--accent-2);
+}
+.mc-m-sync { color: var(--text-dim); font-size: 0.85rem; }
+
+.mc-m-split {
+  border: 1px solid var(--border); border-radius: var(--mc-m-radius);
+  padding: 0.85rem; margin: 0 0 1rem; background: var(--panel);
+}
+.mc-m-split-badge {
+  display: inline-block; font-size: 0.8rem; font-weight: 600;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 0.1rem 0.6rem; margin-bottom: 0.4rem;
+}
+.mc-m-split-sum { color: var(--text-dim); font-size: 0.9rem; margin: 0 0 0.6rem; }
+.mc-m-split-cols { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.mc-m-split-col { flex: 1 1 10rem; }
+.mc-m-split-col h2 { font-size: 0.85rem; margin: 0 0 0.3rem; }
+.mc-m-split-col ul { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; line-height: 1.5; }
+.mc-m-split-stays h2 { color: var(--accent-2); }
+.mc-m-split-goes h2 { color: var(--accent); }
+
+/* Edge glow: the inner edge a tile enters from / exits toward lights up as a
+   transfer nears. Hidden until .is-active is toggled (mobileMain / glow state). */
+.mc-m-dashboard { position: relative; }
+.mc-m-edge-glow {
+  position: absolute; top: 0; bottom: 0; width: 18px; pointer-events: none;
+  opacity: 0; transition: opacity 120ms ease; z-index: 5;
+}
+.mc-m-edge-left { left: 0; background: linear-gradient(to right, var(--accent), transparent); }
+.mc-m-edge-right { right: 0; background: linear-gradient(to left, var(--accent), transparent); }
+.mc-m-edge-glow.is-active { opacity: 0.9; }
+
+/* A tile that just arrived over Relay slides in from the matching edge once. */
+@keyframes mc-m-enter-left { from { transform: translateX(-40%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes mc-m-enter-right { from { transform: translateX(40%); opacity: 0; } to { transform: none; opacity: 1; } }
+.mc-m-enter-left { animation: mc-m-enter-left 220ms ease-out; }
+.mc-m-enter-right { animation: mc-m-enter-right 220ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .mc-m-enter-left, .mc-m-enter-right { animation: none; }
+}

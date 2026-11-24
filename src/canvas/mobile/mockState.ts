@@ -51,6 +51,15 @@ export interface SimMobileState {
   proposal: MobileProposal;
   gimbal: MobileGimbalState;
   privacy: PrivacyLabelInput;
+  /** Screen arrangement from the hub: which side of the laptop this phone is on,
+   *  and whether another phone is paired (for the "push further" hop hint). */
+  arrangement: { side: 'left' | 'right' | null; otherPhone: boolean };
+  /** "Pin on this device" state. */
+  pinned: boolean;
+  /** True when this phone has a usable on-device model (Apple Foundation Models). */
+  hasAppleAI: boolean;
+  /** How this phone last synced its board from the hub (honest status line). */
+  sync: { reason: 'face' | 'focus' | 'idle'; at: string };
 }
 
 /** Same canonical dataset for every screen (coherent demo), paired everywhere
@@ -87,5 +96,9 @@ export function buildSimMobileState(screen: MobileScreen, pairedOverride?: boole
     },
     gimbal: { following: true, why: NO_GIMBAL_WHY },
     privacy: { isPhone: true, hasNanoOnThisPhone: false, wasRoutedViaHub: true },
+    arrangement: { side: 'left', otherPhone: true },
+    pinned: false,
+    hasAppleAI: false,
+    sync: { reason: 'face', at: 'just now' },
   };
 }

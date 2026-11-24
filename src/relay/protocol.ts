@@ -108,6 +108,14 @@ export function isPhoneRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'phone';
 }
 
+/** Does this location want the /mobile phone + tablet companion (the pair /
+ *  dashboard / split story)? Matches `/mobile` or `?view=mobile`; boot redirects
+ *  it to the standalone /mobile.html entry. */
+export function isMobileRoute(pathname: string, search: string): boolean {
+  if (/^\/mobile\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'mobile';
+}
+
 /** Does this location want the iPad /control dashboard instead of the editor? */
 export function isControlRoute(pathname: string, search: string): boolean {
   if (/^\/control\/?$/.test(pathname)) return true;
@@ -142,6 +150,7 @@ export function isLandingRoute(pathname: string, search: string): boolean {
   if (isStudioRoute(pathname, search)) return false;
   if (isRemoteRoute(pathname, search)) return false;
   if (isPhoneRoute(pathname, search)) return false;
+  if (isMobileRoute(pathname, search)) return false;
   if (isControlRoute(pathname, search)) return false;
   if (isJudgesRoute(pathname, search)) return false;
   if (isSpotifyRoute(pathname, search)) return false;

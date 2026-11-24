@@ -13,3 +13,12 @@ export function canvasUrl(search: string): string {
   const q = p.toString();
   return `/canvas.html${q ? `?${q}` : ''}`;
 }
+
+/** The standalone /mobile.html entry, preserving query flags (sim, platform,
+ *  mobileScreen) but dropping the `view=mobile` that routed us here. */
+export function mobileUrl(search: string): string {
+  const p = new URLSearchParams(search);
+  if (p.get('view') === 'mobile') p.delete('view');
+  const q = p.toString();
+  return `/mobile.html${q ? `?${q}` : ''}`;
+}

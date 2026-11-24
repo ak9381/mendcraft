@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canvasUrl, wantsCanvas } from '../../src/canvas/route';
+import { canvasUrl, mobileUrl, wantsCanvas } from '../../src/canvas/route';
+import { isMobileRoute, isLandingRoute } from '../../src/relay/protocol';
 
 describe('canvas route', () => {
   it('native shells always open the canvas', () => {
@@ -15,5 +16,20 @@ describe('canvas route', () => {
   it('keeps other params', () => {
     expect(canvasUrl('?canvas=1&seed=1')).toBe('/canvas.html?seed=1');
     expect(canvasUrl('')).toBe('/canvas.html');
+  });
+});
+
+describe('mobile route', () => {
+  it('matches /mobile and ?view=mobile, but not the canvas', () => {
+    expect(isMobileRoute('/mobile', '')).toBe(true);
+    expect(isMobileRoute('/', '?view=mobile')).toBe(true);
+    expect(isMobileRoute('/canvas', '')).toBe(false);
+  });
+  it('/mobile is not the landing page', () => {
+    expect(isLandingRoute('/', '?view=mobile')).toBe(false);
+  });
+  it('mobileUrl drops view=mobile but keeps sim/platform/screen flags', () => {
+    expect(mobileUrl('?view=mobile&sim=1&platform=android')).toBe('/mobile.html?sim=1&platform=android');
+    expect(mobileUrl('')).toBe('/mobile.html');
   });
 });
