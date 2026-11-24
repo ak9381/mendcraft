@@ -2646,6 +2646,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, showRemoteBoard, destroy };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;

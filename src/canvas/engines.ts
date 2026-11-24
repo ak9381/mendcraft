@@ -116,9 +116,8 @@ function engineFromChoice(choice: EngineChoice, json: string, rt: EnginesRuntime
   return scripted;
 }
 
-/** Engine factories keyed by step id, for mountCanvas({ engines }). */
-export function createEngines(rt: EnginesRuntime): Partial<Record<EngineId, (json: string) => SurfaceEngine>> {
-  const env: EngineEnv = {
+function envFrom(rt: EnginesRuntime): EngineEnv {
+  return {
     hasLanguageModel: !!rt.languageModel,
     isPhone: !!rt.isPhone,
     hasCloud: !!rt.cloud,
@@ -127,9 +126,13 @@ export function createEngines(rt: EnginesRuntime): Partial<Record<EngineId, (jso
     appleOnDevice: !!rt.appleOnDevice,
     hubReachable: !!rt.hubReachable,
   };
-  const plan = planEngines(env);
+}
+
+/** Engine factories keyed by step id, for mountCanvas({ engines }).
+ *  Re-read runtime flags on every turn so a late-ready Apple plugin is used. */
+export function createEngines(rt: EnginesRuntime): Partial<Record<EngineId, (json: string) => SurfaceEngine>> {
   return {
-    nano: (json) => engineFromChoice(plan.nano, json, rt),
-    gemini: (json) => engineFromChoice(plan.gemini, json, rt),
+    nano: (json) => engineFromChoice(planEngines(envFrom(rt)).nano, json, rt),
+    gemini: (json) => engineFromChoice(planEngines(envFrom(rt)).gemini, json, rt),
   };
 }

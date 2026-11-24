@@ -13,12 +13,14 @@ cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
 cp ios-src/MendcraftViewController.swift ios/App/App/
 cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
 cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
+cp ios-src/SceneDelegate.swift           ios/App/App/
 ```
 
 Then in Xcode:
 
-1. Add those four files to the **App** target if they are not already in the project (drag from `ios/App/App` if needed).
+1. Add those files to the **App** target if they are not already in the project (drag from `ios/App/App` if needed).
 2. Set the Main storyboard’s view controller class to `MendcraftViewController` (module **App**).
+3. If Capacitor generated a `SceneDelegate.swift` that sets `rootViewController = CAPBridgeViewController()`, replace it with `ios-src/SceneDelegate.swift` so the root is `MendcraftViewController()`. A bare `CAPBridgeViewController` never registers `MendcraftAppleAI`, and can leave the WebView black.
 
 `MendcraftGimbalPlugin.swift` turns DockKit system face tracking **off** in
 `load()`, on `UIApplication.didBecomeActive` (resume), when a stand docks, and

@@ -8,7 +8,6 @@ import { joinPhoneAsGuest } from './phoneGuestJoin';
 import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
-import { createChimeListener } from '../ux/pairingChime';
 import type { PhonePlatform } from './screenLayout';
 
 export interface PhoneRouteBadgeInput {
@@ -40,13 +39,15 @@ export function startPhoneLookToEdit(
 ): () => void {
   if (opts.sim || typeof document === 'undefined') return () => undefined;
   let tracker: ReturnType<typeof createPresenceTracker> | null = null;
+  let cancelled = false;
   const start = async (): Promise<void> => {
-    if (tracker || hasLiveCameraStream()) return;
-    const t = createPresenceTracker(() => undefined, (f) => {
-      handle.setFacing(f.facing === true);
-    }, { detectFaces: true, detectHands: false });
+    if (cancelled || tracker || hasLiveCameraStream()) return;
     try {
+      const t = createPresenceTracker(() => undefined, (f) => {
+        handle.setFacing(f.facing === true);
+      }, { detectFaces: true, detectHands: false });
       await t.start();
+      if (cancelled) { t.stop(); return; }
       tracker = t;
     } catch {
       handle.setFacing(false);
@@ -62,8 +63,11 @@ export function startPhoneLookToEdit(
     else void start();
   };
   document.addEventListener('visibilitychange', onVis);
-  void start();
+  const arm = (): void => { void start(); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(arm, 400));
+  else setTimeout(arm, 400);
   return () => {
+    cancelled = true;
     document.removeEventListener('visibilitychange', onVis);
     stop();
   };
@@ -78,37 +82,30 @@ export function startPhoneRelayGuest(
   if (storage) ensureDeviceId(storage);
   const platform = opts.platform ?? 'android';
   let stopSession: (() => Promise<void>) | null = null;
-  let listener: ReturnType<typeof createChimeListener> | null = null;
 
   const bindSession = (session: { onSnapshot(cb: (snap: ControlSnapshot) => void): void; close(): Promise<void> }): void => {
     session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard); });
     stopSession = () => session.close();
   };
 
-  const joinFromCode = async (code: string): Promise<void> => {
-    listener?.stop();
-    const res = await joinPhoneAsGuest({
-      code,
-      storage,
-      platform,
-      hubName: 'the laptop',
-    });
-    if ('error' in res) return;
-    bindSession(res.session);
-  };
-
   const saved = loadPhonePair(storage);
   if (saved?.token) {
-    void joinFromCode(saved.token);
-  } else {
-    listener = createChimeListener({
-      onCode: (code) => { void joinFromCode(code); },
-    });
-    void listener.start();
+    const join = async (): Promise<void> => {
+      const res = await joinPhoneAsGuest({
+        code: saved.token,
+        storage,
+        platform,
+        hubName: 'the laptop',
+      });
+      if ('error' in res) return;
+      bindSession(res.session);
+    };
+    void join();
   }
+  // Do not open the pairing-chime microphone at launch — that getUserMedia
+  // call can stall or blank iOS WKWebView before the canvas is up.
 
   return () => {
-    listener?.stop();
     void stopSession?.();
   };
 }
