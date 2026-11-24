@@ -23,6 +23,7 @@ import {
 } from './catalogApi';
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
+import { localize, resolveLanguage } from '../ai/language';
 import { NOTHING_TO_CHECK, accessibilityReport, browserDownload, exportPlanDxf, isPlanEmpty, type PlanExtra } from './planExtras';
 import type { PlanDoc } from '../plan/doc';
 import { createPlanRenderer } from '../plan/renderer';
@@ -99,7 +100,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     const status = this.querySelector<HTMLElement>('.mc-plan-extra-status');
     const set = (text: string): string => { if (status) status.textContent = text; return text; };
     const ctl = this.extraCtl;
-    if (!ctl) return set(NOTHING_TO_CHECK);
+    if (!ctl) return set(kind === 'check' ? NOTHING_TO_CHECK : kind === 'dxf' ? 'Nothing to export yet — draw or generate a plan first.' : 'Nothing to show in 3D yet — draw or generate a plan first.');
     const doc = ctl.snapshot() as PlanDoc;
     if (kind === 'check') {
       const r = accessibilityReport(doc);
@@ -114,7 +115,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     if (!this.view?.toggle3D) return set('3D is not available on this board.');
     this.is3d = this.view.toggle3D(!this.is3d);
     this.querySelector('[data-extra="3d"]')?.setAttribute('aria-pressed', this.is3d ? 'true' : 'false');
-    return set(this.is3d ? '3D view on.' : '2D view.');
+    return set(localize(this.is3d ? 'view3d' : 'view2d', resolveLanguage('en')));
   }
   override updated() {
     const p = this.controller?.props;

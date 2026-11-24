@@ -20,8 +20,8 @@ describe('talk caption: heard line + English', () => {
   const kn = resolveLanguage('kn');
   it('Kannada with a translation shows both lines', () => {
     const fab = mk();
-    fab.setHeard('ದೀಪ ಆನ್ ಮಾಡು', 'turn the lamp on', kn);
-    expect(fab.captionEl.textContent).toBe('ದೀಪ ಆನ್ ಮಾಡು\n→ turn the lamp on');
+    fab.setHeard('ದೀಪ ಆನ್ ಮಾಡು', 'understood as: turn the lamp on', kn);
+    expect(fab.captionEl.textContent).toBe('ದೀಪ ಆನ್ ಮಾಡು\n→ understood as: turn the lamp on');
     expect(fab.captionEl.hidden).toBe(false);
   });
   it('no translation shows the heard line only, never "undefined"', () => {

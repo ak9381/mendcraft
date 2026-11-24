@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPlan, type PlanDoc } from '../../src/plan/doc';
-import { NOTHING_TO_CHECK, accessibilityReport, exportPlanDxf, parsePlanExtra } from '../../src/canvas/planExtras';
+import { routePlanExtra, NOTHING_TO_CHECK, accessibilityReport, exportPlanDxf, parsePlanExtra } from '../../src/canvas/planExtras';
 
 const narrowDoorPlan = (): PlanDoc => ({
   ...emptyPlan(),
@@ -22,7 +22,7 @@ describe('plan board extras: routing', () => {
   ])('%s -> %s', (text, want) => {
     expect(parsePlanExtra(text)).toBe(want);
   });
-  it.each(['new board', 'zoom in', 'export', 'does the door leave enough width for a wheelchair?'])('%s -> null', (text) => {
+  it.each(['new board', 'zoom in', 'export', 'export the plan as a PDF', 'download the floor plan template', 'what is a dxf', 'does the door leave enough width for a wheelchair?'])('%s -> null', (text) => {
     expect(parsePlanExtra(text)).toBeNull();
   });
 });
@@ -64,5 +64,13 @@ describe('plan board extras: DXF', () => {
     const calls: unknown[] = [];
     expect(exportPlanDxf(emptyPlan(), () => calls.push(1))).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('plan board extras: fall-through without a plan board', () => {
+  it('does not claim the line when no plan board exists', () => {
+    expect(routePlanExtra('make this wheelchair friendly', false)).toBeNull();
+    expect(routePlanExtra('export dxf', false)).toBeNull();
+    expect(routePlanExtra('make this wheelchair friendly', true)).toBe('check');
   });
 });

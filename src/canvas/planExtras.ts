@@ -17,8 +17,14 @@ export function parsePlanExtra(text: string): PlanExtra | null {
   const t = text.trim().toLowerCase();
   if (isAccessibilityRequest(t)) return 'check';
   if (/^(please\s+)?(show |toggle |switch to |turn on |turn off )?(the )?3\s?-?d( view| mode)?$/.test(t)) return '3d';
-  if (/\b(export|download)\b.*\b(dxf|plan)\b|\bdxf\b/.test(t)) return 'dxf';
+  if (/^(please )?(export|download)( the| my)?( floor)?( plan)?( as| to)?( a)? ?dxf( file)?$|^(please )?(export|download)( the| my)? (floor )?(plan|dxf)( file)?$/.test(t)) return 'dxf';
   return null;
+}
+
+/** The extra to run, or null when there is no plan board to run it on (the
+ *  line then falls through to the normal routes). */
+export function routePlanExtra(text: string, hasPlanBoard: boolean): PlanExtra | null {
+  return hasPlanBoard ? parsePlanExtra(text) : null;
 }
 
 export function isPlanEmpty(doc: PlanDoc): boolean {

@@ -45,7 +45,7 @@ import { parseDeviceCommands, resolvePointedDevice, type DeviceKind, type Device
 import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
-import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
+import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
 import { mountCanvasHands, oneHandPinchPoint, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
 import { createHandPan } from './handPan';
@@ -72,11 +72,7 @@ import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline'
 import { loadSetup, saveSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
-const INTENT_ENGLISH: Record<IntentKey, string> = {
-  lampOn: 'turn the lamp on', lampOff: 'turn the lamp off', brighter: 'make it brighter', dimmer: 'make it dimmer',
-  showEverything: 'show everything', newBoard: 'new board', save: 'save', keep: 'keep', drop: 'drop', undo: 'undo',
-};
-import { NOTHING_TO_CHECK, parsePlanExtra, type PlanExtra } from './planExtras';
+import { routePlanExtra, type PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
@@ -2084,7 +2080,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function captionHeard(text: string): void {
     if (!micFab || !/[\u0C80-\u0CFF]/.test(text)) return;
     const intent = pack ? routePackPhrase(text, pack) : null;
-    micFab.setHeard(text, intent ? INTENT_ENGLISH[intent] : null, resolveLanguage('kn'));
+    micFab.setHeard(text, intent ? `understood as: ${INTENT_ENGLISH[intent]}` : null, resolveLanguage('kn'));
   }
   function run(text: string): boolean {
     captionHeard(text);
@@ -2109,15 +2105,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) { addKannada(); return true; }
     if (/^\s*(show\s+)?history\s*$/i.test(text)) { openHistory(); return true; }
 
-    // CAD extras go to the focused plan board (accessibility, 3D, DXF).
-    const planExtra = parsePlanExtra(text);
-    if (planExtra) {
+    // CAD extras go to the focused plan board (else any plan board); with no
+    // plan board the line falls through to the normal routes.
+    {
       const id = focusId ?? lastFocus;
-      const board = id ? world.querySelector<HTMLElement & { runExtra?: (k: PlanExtra) => string }>(`[data-frame="${id}"] mc-plan-board`) : null;
-      if (board?.runExtra) { say(board.runExtra(planExtra)); return true; }
-      if (planExtra === 'check') { say(NOTHING_TO_CHECK); return true; }
-      if (planExtra === 'dxf') { say('Nothing to export yet — open a floor plan board first.'); return true; }
-      // "3d" without a plan board falls through to the other routes.
+      type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
+      const board = (id ? world.querySelector<PB>(`[data-frame="${id}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
+      const planExtra = routePlanExtra(text, !!board?.runExtra);
+      if (planExtra && board?.runExtra) { say(board.runExtra(planExtra)); return true; }
     }
 
     const c = parseCanvasCommand(text);

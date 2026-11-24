@@ -164,7 +164,7 @@ export function mountMicFab(
       const cap = buildCaption(heard, translation, lang);
       if (!cap.heard) return;
       showCaption(cap.translation ? `${cap.heard}\n→ ${cap.translation}` : cap.heard, 'words');
-      caption.lang = lang.speechLang;
+      caption.lang = cap.translation ? lang.speechLang : 'en';
     },
     setError(text) {
       stop();
