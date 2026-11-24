@@ -67,3 +67,6 @@ Merged to sim-main (all reviewed): pan/zoom + HUD + title drag; calmer screen + 
 In review: hands on the phones (Hands pill, one shared front camera).
 Blocked on Akash: Firebase CLI re-login (`npx firebase-tools login --reauth`) before the next preview deploy; iPhone + Nothing phone plugged in for installs; live hand re-test; real-device run-through (checklist P/S).
 Known flaky under heavy load (pass alone): selfCheckLatency, speculative, surfacePlanNested, phoneLookToEdit, gitignore.secrets. Known missing-fixture failures: goldenTrace8319f68, poseStabilityReplay.
+
+## Note: iPhone sensor mode as a connect-devices demo moment
+The iPhone (on the gimbal) runs sensor-only hand/face tracking — no UI control. It appears in the connect-devices flow: paired row → "Gimbal tracking ready / Tracking you" → "Point at a device" chip → photo from the iPhone camera → identify → lamp tile review. See docs/plan/2026-11-25-demo-build-design.md (Note, 25 Nov night) and TEST-CHECKLIST section G.

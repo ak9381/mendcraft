@@ -58,3 +58,12 @@ Akash asked for a rollback with the red blink. Ruling: show the real safety net,
 ## Decision (25 Nov, night): hands on the phones too
 
 Akash: once clicking and moving work on the laptop, the phones get the same hand control. After the laptop hand fix (finger-geometry tap, overlay aligned to cursor, facing gate) is merged and live-verified, the phone shell (iPhone + Android) gets hand control via the front camera: palm cursor, fist tap = click, held fist = move/pan, two fists = zoom, same facing gate (only when facing the phone). Phone menu gets a Hands on/off switch. Must coexist with the front-camera face signal already used for look-to-sync / facing (one camera stream, both trackers). Performance budget: keep ≥ 20 fps tracking on an iPhone 16 Pro Max and a Nothing Phone 3a; throttle when idle. Touch keeps working at all times.
+
+## Note (25 Nov, night): iPhone sensor mode is a demo moment inside "connect devices"
+
+Akash: the iPhone's sensor-only hand/face tracking (docked on the gimbal) should be a visible moment in the connect-devices plan, not a hidden backend. Intended flow on camera:
+1. "Connect devices and make a dashboard" → phones pair (chime). The paired row shows each phone with a ✓.
+2. The iPhone's row gains a sub-state: "Gimbal tracking ready" (iPhone docked + sensor mode available), then "Tracking you" once the gimbal follow/sensor is actually running — only shown when the plugin/tracker really reports it.
+3. The prompt "What do you want to connect next? Point at it, name it, or say build the dashboard." now offers a "Point at a device" chip; pointing uses the iPhone camera on the gimbal (sensor-only hands: no UI control), the gimbal holds while the photo is taken, identify runs (Nano/Apple first, cloud second), the lamp tile is proposed through the normal review.
+4. Monitor: the iPhone tab shows the identify turn (what stayed on device vs what crossed).
+Honesty: every status line reflects what is really on; if the gimbal or DockKit tracking isn't available the row says so plainly and pointing falls back to the laptop camera.
