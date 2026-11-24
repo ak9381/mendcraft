@@ -38,12 +38,14 @@ describe('one pinch definition everywhere', () => {
     expect(PINCH_CLASSIFY).toBe(HAND_FEEL.pinchOn);
     expect(HAND_FEEL.pinchOff).toBeGreaterThan(HAND_FEEL.pinchOn); // hysteresis
   });
-  it('the reach box maps the 12–88% camera centre to the screen', () => {
+  it('the reach box maps the central 80% of the camera to the screen', () => {
     expect(REACH).toEqual(HAND_FEEL.reach);
-    expect(HAND_FEEL.reach.x0).toBeCloseTo(0.12);
-    expect(HAND_FEEL.reach.x1).toBeCloseTo(0.88);
-    expect(HAND_FEEL.reach.y0).toBeCloseTo(0.12);
-    expect(HAND_FEEL.reach.y1).toBeCloseTo(0.88);
+    expect(HAND_FEEL.reach.x1 - HAND_FEEL.reach.x0).toBeCloseTo(0.80);
+    expect(HAND_FEEL.reach.y1 - HAND_FEEL.reach.y0).toBeCloseTo(0.80);
+    expect(HAND_FEEL.reach.x0).toBeCloseTo(0.10);
+    expect(HAND_FEEL.reach.x1).toBeCloseTo(0.90);
+    expect(HAND_FEEL.reach.y0).toBeCloseTo(0.10);
+    expect(HAND_FEEL.reach.y1).toBeCloseTo(0.90);
   });
 });
 

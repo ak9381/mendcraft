@@ -7,7 +7,7 @@
 // raw pinch point are drawn too, for diagnosing tracking quality.
 import { HAND_CONNECTIONS, INDEX_TIP, THUMB_TIP, type HandFrame, type Pt } from '../input/handLogic';
 import { createOneEuroFilter, type OneEuroFilter } from '../input/oneEuro';
-import { mapToScreen } from '../canvas/handPointer';
+import { mapToScreen, REACH, SCREEN_MARGIN_PX } from '../canvas/handPointer';
 import { buildLowpolyHand, createLowpolyMesh, drawLowpolyHand, LOWPOLY_FILL_ALPHA, type LowpolyMesh } from './handLowpoly';
 
 export interface HandOverlay {
@@ -65,6 +65,43 @@ function readSkeletonFlag(): boolean {
 /** Scale a 21-landmark screen-space hand around the index tip so its
  *  bounding-box height does not exceed `maxH`. Mutates `pts` in place.
  *  The tip (landmark 8, or `tipIndex`) is unchanged. */
+/** A landmark this close to 0 or 1 (camera-normalised) counts as clipped. */
+export const CAMERA_EDGE_EPS = 0.04;
+
+/** True when any landmark sits on or near the camera frame edge — the usual
+ *  cause of a squashed / stretched mesh as MediaPipe loses the finger. */
+export function isHandClipped(
+  points: readonly { x: number; y: number }[],
+  eps = CAMERA_EDGE_EPS,
+): boolean {
+  for (const p of points) {
+    if (p.x <= eps || p.x >= 1 - eps || p.y <= eps || p.y >= 1 - eps) return true;
+  }
+  return false;
+}
+
+/** Offsets of every landmark from the index tip (screen or camera px). */
+export function shapeRelativeToTip<T extends { x: number; y: number }>(
+  pts: readonly T[],
+  tipIndex = INDEX_TIP,
+): { x: number; y: number }[] {
+  const tip = pts[tipIndex] ?? { x: 0, y: 0 };
+  return pts.map((p) => ({ x: p.x - tip.x, y: p.y - tip.y }));
+}
+
+/** Place a previously captured shape so its tip sits at `tip`. Mutates `out`. */
+export function placeShapeAtTip(
+  shape: readonly { x: number; y: number }[],
+  tip: { x: number; y: number },
+  out: { x: number; y: number }[],
+): void {
+  const n = Math.min(shape.length, out.length);
+  for (let i = 0; i < n; i++) {
+    out[i]!.x = tip.x + shape[i]!.x;
+    out[i]!.y = tip.y + shape[i]!.y;
+  }
+}
+
 export function capHandAroundTip<T extends { x: number; y: number }>(
   pts: T[],
   maxH = MAX_HAND_HEIGHT_PX,
@@ -139,6 +176,8 @@ interface SlotState {
   pinching: boolean;
   /** Reused low-poly mesh — rebuilt from `smoothed` in place, never reallocated. */
   lowpolyMesh: LowpolyMesh;
+  /** Last unclipped mesh, as offsets from the index tip (screen px). */
+  frozenShape: { x: number; y: number }[] | null;
 }
 
 function makeSlot(): SlotState {
@@ -152,6 +191,7 @@ function makeSlot(): SlotState {
     color: '#38bdf8',
     pinching: false,
     lowpolyMesh: createLowpolyMesh(),
+    frozenShape: null,
   };
 }
 
@@ -192,10 +232,10 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
    *  not a plain `p.x * w` — so the drawn hand and the coral cursor land on
    *  the same screen point. `points` are already selfie-mirrored (presence
    *  mirrors them), so mirror=false here. */
-  function smoothInto(st: SlotState, points: readonly Pt[], w: number, h: number, now: number): void {
+  function smoothInto(st: SlotState, points: readonly Pt[], w: number, h: number, now: number, marginPx: number): void {
     const n = Math.min(points.length, NUM_POINTS);
     for (let i = 0; i < n; i++) {
-      const mapped = mapToScreen(points[i], w, h, false);
+      const mapped = mapToScreen(points[i], w, h, false, REACH, marginPx);
       const f = st.filters[i].filter(mapped.x, mapped.y, now);
       st.smoothed[i].x = f.x;
       st.smoothed[i].y = f.y;
@@ -277,6 +317,11 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
 
     const { w, h, dpr } = fit();
     ctx.clearRect(0, 0, w, h);
+    const marginPx = SCREEN_MARGIN_PX * dpr;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(marginPx, marginPx, Math.max(0, w - 2 * marginPx), Math.max(0, h - 2 * marginPx));
+    ctx.clip();
 
     let anyVisible = false;
     for (let slot = 0; slot < MAX_SLOTS; slot++) {
@@ -285,14 +330,23 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
       const target = hand ? 1 : 0;
       if (reducedMotion) st.opacity = target;
       else st.opacity += (target - st.opacity) * Math.min(1, (1000 / FADE_MS) * (1 / 60));
-      if (st.opacity < 0.01 && !hand) { st.opacity = 0; continue; }
+      if (st.opacity < 0.01 && !hand) { st.opacity = 0; st.frozenShape = null; continue; }
 
       if (hand) {
         st.wasPresent = true;
         st.color = hand.color;
         if (hand.pinching && !st.pinching) st.pinchRingAt = now; // rising edge only
         st.pinching = hand.pinching;
-        smoothInto(st, hand.points, w, h, now);
+        const clipped = isHandClipped(hand.points);
+        if (clipped && st.frozenShape) {
+          // Keep the last good shape; only the tip (cursor) keeps moving.
+          const mapped = mapToScreen(hand.points[INDEX_TIP] ?? { x: 0.5, y: 0.5 }, w, h, false, REACH, marginPx);
+          const f = st.filters[INDEX_TIP]!.filter(mapped.x, mapped.y, now);
+          placeShapeAtTip(st.frozenShape, f, st.smoothed);
+        } else {
+          smoothInto(st, hand.points, w, h, now, marginPx);
+          if (!clipped) st.frozenShape = shapeRelativeToTip(st.smoothed);
+        }
       }
       anyVisible = true;
       for (let i = 0; i < NUM_POINTS; i++) {
@@ -316,6 +370,7 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
       }
       if (debug) drawDebug(st, dpr);
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
     wasIdle = !anyVisible;
   }

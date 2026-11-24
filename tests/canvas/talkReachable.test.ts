@@ -112,17 +112,17 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
 });
 
 describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
-  it('the cluster is a vertically-centred right-edge column with 48px+ equal-width targets', () => {
+  it('the cluster is a vertically-centred inset column with 120px+ equal-width targets', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
-    expect(rule).toContain('right: 16px');
+    expect(rule).toContain('right: max(120px, 9vw)');
     expect(rule).toContain('flex-direction: column');
-    expect(rule).toContain('gap: 12px');
+    expect(rule).toContain('gap: 32px');
     expect(rule).toContain('align-items: stretch');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 48px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 120px');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 

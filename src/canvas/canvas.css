@@ -828,19 +828,20 @@
   z-index: 80;
 }
 
-/* Mid-screen right-edge cluster: Register, Edit, Tools, Talk.
-   Vertically centred so it never sits on the top tools bar. Equal-width
-   48px+ targets, 12px gaps. Shifts left of the AI drawer when that is open. */
+/* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
+   Vertically centred, inset ~9vw (min 120px) from the right edge so a hand
+   cursor does not have to graze the screen edge. Equal-width 120px+ targets,
+   32px gaps. Shifts left of the AI drawer when that is open. */
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
-  right: 16px;
+  right: max(120px, 9vw);
   transform: translateY(-50%);
   z-index: 72;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 12px;
+  gap: 32px;
   pointer-events: none;
   width: max-content;
   min-width: 120px;
@@ -848,7 +849,7 @@
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
 .mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster {
-  right: min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 140px));
+  right: max(max(120px, 9vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 140px)));
 }
 /* Old per-chip `right` offsets are more specific when the AI panel is open
    and would shove relatively-positioned cluster children off the left edge. */
@@ -883,14 +884,14 @@
 .mc-hand-cluster .mc-register-chip,
 .mc-hand-cluster .mc-edit-reset {
   min-height: 52px;
-  min-width: 48px;
+  min-width: 120px;
   width: 100%;
   justify-content: center;
   box-sizing: border-box;
 }
 .mc-hand-cluster .mc-talk-control { align-items: stretch; width: 100%; }
-.mc-hand-cluster .mc-fab-mic { width: 100%; }
-.mc-hand-cluster .mc-edit-reset { min-height: 48px; }
+.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 120px; min-height: 52px; }
+.mc-hand-cluster .mc-edit-reset { min-height: 52px; min-width: 120px; }
 
 /* Dwell-click ring: fills around the arrow tip, then the click fires. */
 .mc-hand-dwell {

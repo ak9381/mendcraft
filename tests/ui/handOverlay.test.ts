@@ -3,7 +3,8 @@
 // is the DEFAULT overlay path (no triangle-free skeleton drawing), and the
 // bold skeleton only comes back via opts.lowpoly===false or ?skeletonHands=1.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { capHandAroundTip, createHandOverlay } from '../../src/ui/handOverlay';
+import { capHandAroundTip, createHandOverlay, isHandClipped, shapeRelativeToTip, placeShapeAtTip, CAMERA_EDGE_EPS } from '../../src/ui/handOverlay';
+import { INDEX_TIP } from '../../src/input/handLogic';
 import type { HandFrame } from '../../src/input/handLogic';
 
 function fakeCtx() {
@@ -118,5 +119,33 @@ describe('capHandAroundTip', () => {
     const before = pts.map((p) => ({ ...p }));
     capHandAroundTip(pts, 220, 8);
     expect(pts).toEqual(before);
+  });
+});
+
+
+describe('edge-clipped mesh freeze', () => {
+  it('flags a hand when any landmark sits near the camera frame edge', () => {
+    const ok = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5 }));
+    expect(isHandClipped(ok)).toBe(false);
+    const clipped = ok.map((p) => ({ ...p }));
+    clipped[16] = { x: 0.01, y: 0.5 };
+    expect(isHandClipped(clipped)).toBe(true);
+    expect(CAMERA_EDGE_EPS).toBeGreaterThan(0);
+    expect(CAMERA_EDGE_EPS).toBeLessThanOrEqual(0.08);
+  });
+
+  it('re-places a frozen shape at a new tip so the mesh translates without distorting', () => {
+    const pts = Array.from({ length: 21 }, (_, i) => ({ x: 100 + i, y: 200 + i * 0.5 }));
+    const shape = shapeRelativeToTip(pts);
+    expect(shape[INDEX_TIP]).toEqual({ x: 0, y: 0 });
+    const moved = pts.map(() => ({ x: 0, y: 0 }));
+    const tip = { x: 400, y: 300 };
+    placeShapeAtTip(shape, tip, moved);
+    expect(moved[INDEX_TIP]).toEqual(tip);
+    // Relative bone lengths are preserved.
+    const d0 = Math.hypot(pts[0].x - pts[INDEX_TIP].x, pts[0].y - pts[INDEX_TIP].y);
+    const d1 = Math.hypot(moved[0].x - moved[INDEX_TIP].x, moved[0].y - moved[INDEX_TIP].y);
+    expect(d1).toBeCloseTo(d0);
+    expect(moved[4].x - moved[INDEX_TIP].x).toBeCloseTo(pts[4].x - pts[INDEX_TIP].x);
   });
 });

@@ -96,18 +96,28 @@ export const SURFACE_HOLD_MS = 500;
 
 /** Reach box: this part of the camera frame maps to the full screen, so the
  *  edges of the UI (top toolbar included) don't need an arm at full stretch.
- *  Single source of truth: HAND_FEEL.reach (12%–88%). */
+ *  Single source of truth: HAND_FEEL.reach (central ~80% → full screen). */
 export const REACH = HAND_FEEL.reach;
+/** Cursor and mesh drawing stay this far inside the screen edge (CSS px). */
+export const SCREEN_MARGIN_PX = 24;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** Pure: normalised camera point -> screen px (selfie view is mirrored). */
-export function mapToScreen(pt: P, w: number, h: number, mirror = true, box = REACH): P {
+export function clampToScreenMargin(p: P, w: number, h: number, margin = SCREEN_MARGIN_PX): P {
+  const mx = Math.min(margin, w / 2);
+  const my = Math.min(margin, h / 2);
+  return { x: clamp(p.x, mx, Math.max(mx, w - mx)), y: clamp(p.y, my, Math.max(my, h - my)) };
+}
+
+/** Pure: normalised camera point -> screen px (selfie view is mirrored).
+ *  The reach box maps to the full screen, then the result is clamped into
+ *  the screen margin so the cursor never sits on the literal edge. */
+export function mapToScreen(pt: P, w: number, h: number, mirror = true, box = REACH, marginPx = SCREEN_MARGIN_PX): P {
   const nx = mirror ? 1 - pt.x : pt.x;
-  return {
+  return clampToScreenMargin({
     x: clamp((nx - box.x0) / (box.x1 - box.x0), 0, 1) * w,
     y: clamp((pt.y - box.y0) / (box.y1 - box.y0), 0, 1) * h,
-  };
+  }, w, h, marginPx);
 }
 
 /** Pure: thumb-index gap relative to hand size (wrist -> middle knuckle). */
