@@ -18,6 +18,8 @@ import { REASON_TEXT, badgeLabel, type RouteReason } from '../ai/router';
 import type { Source } from '../ai/hybrid';
 import { redact, type CloudCall, type LedgerCounts } from '../core/ledger';
 import type { JobKind, JobStatus, QueuedJob } from '../offline/queue';
+import { coerceLayout, type ScreenLayout } from '../canvas/screenLayout';
+import { coerceSurfacePlan, type SurfacePlan } from '../canvas/surfacePlan';
 
 export const SNAPSHOT_VERSION = 1 as const;
 
@@ -134,6 +136,17 @@ export interface ChecklistCard {
 export const CHANGES_MAX = 12;
 export const CHECKLIST_MAX = 12;
 
+/** A committed cross-device tile move, carried in the snapshot so BOTH phones
+ *  (not just the sender) learn about it and animate the tile entering from the
+ *  matching edge. The tile's content rides in `board`; this is just the marker.
+ *  `rev` lets a target apply the enter-animation exactly once. */
+export interface TransferMarker {
+  componentId: string;
+  to: 'laptop' | 'left' | 'right';
+  enterEdge: 'left' | 'right';
+  rev: number;
+}
+
 /** What the caps dropped — surfaced so the dashboard never hides truncation. */
 export interface SnapshotOmissions {
   aiFeed: number;
@@ -159,6 +172,14 @@ export interface ControlSnapshot {
   changes?: ChangeCard[];
   /** Site checklist; present when there are items. */
   checklist?: ChecklistCard[];
+  /** Which phone is on which side of the laptop (screen arrangement). Optional:
+   *  old snapshots without it still coerce; phones default to the empty layout. */
+  layout?: ScreenLayout;
+  /** The shared board the phones mirror/pick tiles from. Re-validated through
+   *  coerceSurfacePlan (bounded, no media). Optional + backward compatible. */
+  board?: SurfacePlan;
+  /** The most recent committed tile transfer (for the enter-from-edge animation). */
+  transfer?: TransferMarker;
   omitted: SnapshotOmissions;
 }
 
@@ -191,6 +212,12 @@ export interface ControlSnapshotInput {
   recipes?: RecipeCardInput[];
   changes?: { id: string; actor: string; title: string; why?: string; status: string }[];
   checklist?: { id: string; question: string; status: string; askedOffline?: boolean; answer?: string }[];
+  /** Screen arrangement (coerced defensively, so wire junk is safe). */
+  layout?: ScreenLayout | null;
+  /** Shared board (re-coerced via coerceSurfacePlan; dropped if invalid). */
+  board?: unknown;
+  /** Last committed transfer marker. */
+  transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
 
 export interface RecipeCardInput {
@@ -311,6 +338,22 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
       ...(c.answer ? { answer: safeText(c.answer, SUMMARY_MAX) } : {}),
     })), CHECKLIST_MAX).kept;
 
+  // Screen arrangement, shared board, and the last transfer marker — all
+  // optional and added only when present, so snapshots that predate these
+  // fields (or a laptop that never arranges phones) stay byte-for-byte as before
+  // and old consumers are unaffected.
+  // Only carry a layout when at least one phone is actually placed — an empty
+  // {left:null,right:null} (no arrangement / wire junk) is omitted so old
+  // snapshots and un-arranged laptops stay field-for-field identical.
+  const coercedLayout = input.layout ? coerceLayout(input.layout) : null;
+  const layout = coercedLayout && (coercedLayout.left || coercedLayout.right) ? coercedLayout : null;
+  let board: SurfacePlan | null = null;
+  if (input.board !== undefined && input.board !== null) {
+    const c = coerceSurfacePlan(input.board);
+    if (c.ok) board = c.value;
+  }
+  const transfer = coerceTransferMarker(input.transfer);
+
   return {
     v: SNAPSHOT_VERSION,
     rev: Number.isFinite(input.rev) ? Math.round(input.rev as number) : 0,
@@ -324,6 +367,9 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     recipes: recipes.kept,
     ...(changes.length ? { changes } : {}),
     ...(checklist.length ? { checklist } : {}),
+    ...(layout ? { layout } : {}),
+    ...(board ? { board } : {}),
+    ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
       ledgerCalls: calls.dropped,
@@ -349,6 +395,25 @@ function buildAppliances(
   if (lampDetail) out.lampDetail = lampDetail;
   if (musicTitle) out.musicTitle = musicTitle;
   return out;
+}
+
+/** Coerce an untrusted transfer marker, or null when malformed/absent. */
+function coerceTransferMarker(
+  raw: ControlSnapshotInput['transfer'],
+): TransferMarker | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const to = raw.to;
+  const edge = raw.enterEdge;
+  const componentId = typeof raw.componentId === 'string' ? raw.componentId : '';
+  if (!componentId || componentId.length > 80) return null;
+  if (to !== 'laptop' && to !== 'left' && to !== 'right') return null;
+  if (edge !== 'left' && edge !== 'right') return null;
+  return {
+    componentId: componentId.slice(0, 80),
+    to,
+    enterEdge: edge,
+    rev: typeof raw.rev === 'number' && Number.isFinite(raw.rev) ? Math.round(raw.rev) : 0,
+  };
 }
 
 function clampPrimitive(p: ScenePrimitive): ScenePrimitive {
@@ -495,6 +560,12 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
       const o = (c ?? {}) as Record<string, unknown>;
       return { id: str(o.id), question: str(o.question), status: str(o.status), askedOffline: o.offline === true, answer: str(o.answer) || undefined };
     }),
+    // New optional fields — absent on old snapshots, so these stay undefined and
+    // buildControlSnapshot omits them (backward compatible). coerceSurfacePlan /
+    // coerceLayout / coerceTransferMarker re-validate the untrusted wire data.
+    layout: r.layout ? coerceLayout(r.layout) : null,
+    board: r.board,
+    transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }
 

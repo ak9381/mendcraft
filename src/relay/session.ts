@@ -73,6 +73,9 @@ export interface GuestSession extends SessionBase {
   sendCommand(cmd: RelayCommand): Promise<void>;
   sendFrame(frame: RelayFrame): Promise<void>;
   sendMusic(music: MusicStatus): Promise<void>;
+  /** Receive the host's privacy-safe state snapshots (board/layout/transfer live
+   *  here too). Coerced before the callback — the phone treats it as untrusted. */
+  onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
   /** Send a raw prompt to the desktop hub; resolves with the filled reply. */
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
 }
@@ -131,12 +134,24 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
  *  full 24-char token, never the short code, once a session is established. */
 export const ALIAS_TTL_MS = 5 * 60 * 1000;
 
+export interface CreateHostOptions {
+  /** Resume an EXISTING room token (e.g. one a remembered phone is still pointed
+   *  at) instead of minting a fresh one. Must be a 24-char token; ignored
+   *  otherwise. This is what lets a laptop reload keep remembered phones paired. */
+  token?: string;
+}
+
+const RESUME_TOKEN_RE = /^[0-9A-Z]{24}$/;
+
 /** Laptop side: create a room, wait for the phone, surface commands/frames. */
 export async function createHostSession(
   transport: RelayTransport,
   random: RandomBytes = cryptoRandom,
+  opts: CreateHostOptions = {},
 ): Promise<HostSession> {
-  const token = generateRoomToken(random);
+  const token = opts.token && RESUME_TOKEN_RE.test(opts.token)
+    ? opts.token
+    : generateRoomToken(random);
   const code = shortCodeOf(token);
   const core = makeCore('host', transport, token);
   let aliasCleared = false;
@@ -187,13 +202,19 @@ export async function createHostSession(
     if (msg.type === 'hello') {
       const wasPaired = core.state === 'paired';
       core.setState(advancePair(core.state, 'peer-hello'));
-      // Ack so the phone flips to paired too; the short-code alias has done its
-      // job once a phone is in the room. Rejoins skip the duplicate ack.
+      // ALWAYS ack a phone hello — even when already paired — so a SECOND phone
+      // joining the same room flips to paired too (two phones share one room and
+      // ignore each other's messages, so only the host can confirm the newcomer).
+      void transport.publish(token, { v: 1, from: 'host', type: 'hello' }).catch(() => undefined);
+      // The short-code alias has done its job once any phone is in the room.
       if (!wasPaired) {
-        void transport.publish(token, { v: 1, from: 'host', type: 'hello' }).catch(() => undefined);
         clearTimeout(aliasTimer);
         void clearAliasOnce();
       }
+      // Replay the latest state so a phone (freshly joined or reloaded) populates
+      // its board/layout immediately — today this only happened for a control
+      // hello, which stranded a late-joining phone until the next change.
+      if (lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
     } else if (msg.type === 'cmd') {
@@ -249,6 +270,11 @@ export async function createGuestSession(
 ): Promise<GuestSession> {
   const core = makeCore('phone', transport, roomId);
 
+  let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
+  // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
+  // still sees current state (same late-join contract as ControlSession).
+  let lastSnapshot: ControlSnapshot | null = null;
+
   const pending = new Map<string, {
     resolve: (r: PrivacyReply) => void;
     reject: (err: Error) => void;
@@ -257,7 +283,16 @@ export async function createGuestSession(
   core.listen((msg) => {
     if (msg.type === 'hello') core.setState(advancePair(core.state, 'peer-hello'));
     else if (msg.type === 'bye') core.setState(advancePair(core.state, 'peer-bye'));
-    else if (msg.type === 'privacyReply') {
+    else if (msg.type === 'state') {
+      // Untrusted wire data: rebuild through coerceSnapshot before anyone reads
+      // a field (board/layout/transfer included). A host 'state' also means the
+      // laptop is live, so flip 'waiting' → 'paired' like a hello.
+      const snap = coerceSnapshot(msg.snapshot);
+      if (!snap) return;
+      core.setState(advancePair(core.state, 'peer-hello'));
+      lastSnapshot = snap;
+      snapshotCb?.(snap);
+    } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {
         clearTimeout(wait.timer);
@@ -279,6 +314,10 @@ export async function createGuestSession(
       }),
     sendMusic: (music) =>
       transport.publish(roomId, { v: 1, from: 'phone', type: 'music', music }),
+    onSnapshot: (cb) => {
+      snapshotCb = cb;
+      if (lastSnapshot) cb(lastSnapshot);
+    },
     sendPrivacyAsk: (ask, timeoutMs = 20000) =>
       new Promise<PrivacyReply>((resolve, reject) => {
         const timer = setTimeout(() => {

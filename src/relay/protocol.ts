@@ -155,16 +155,32 @@ export function isLandingRoute(pathname: string, search: string): boolean {
 // ever sends presence (hello/bye) — never a command or a frame.
 export type RelayRole = 'host' | 'phone' | 'control';
 
-export type RelayCommandKind = 'undo' | 'redo' | 'command' | 'nudge' | 'mic';
+// 'transfer' and 'announce' are the cross-device pick-and-drop kinds. They
+// PIGGYBACK on the existing `cmd` message (which firestore.rules only requires
+// to be a map) and carry their JSON payload in `text` — so no new message
+// `type` and no new top-level key is added, and no rules deploy is needed.
+//   • 'transfer' — a committed tile move (phone→host, or host relaying one on):
+//     text is a serialized TileTransfer (see canvas/tileTransfer.ts).
+//   • 'announce' — a phone telling the hub who it is (deviceId/platform/side):
+//     text is a small JSON object the hub coerces.
+export type RelayCommandKind =
+  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce';
 
 export interface RelayCommand {
   kind: RelayCommandKind;
-  /** For kind 'command': the typed utterance to run through the shared pipeline. */
+  /** For 'command': the typed utterance to run. For 'transfer'/'announce': the
+   *  size-capped JSON payload (parsed by the canvas, never run as an utterance). */
   text?: string;
   /** For kind 'nudge': unit direction, each of dx/dy in {-1, 0, 1}. */
   dx?: number;
   dy?: number;
 }
+
+/** Max length of a 'command' utterance. */
+export const CMD_TEXT_MAX = 500;
+/** Max length of a 'transfer'/'announce' JSON blob carried in `cmd.text`. Well
+ *  under the room-message document limit; a tile spec is far smaller. */
+export const CMD_JSON_MAX = 16_000;
 
 /** The phone's in-app music player state, relayed to the host so it can appear
  *  on the /control dashboard. Carries only title/playing/volume — no audio. */
@@ -237,7 +253,9 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce'];
+/** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
+const JSON_KINDS: readonly string[] = ['transfer', 'announce'];
 
 function isUnit(n: unknown): boolean {
   return n === undefined || n === -1 || n === 0 || n === 1;
@@ -248,7 +266,9 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const c = raw as Record<string, unknown>;
   if (typeof c.kind !== 'string' || !COMMAND_KINDS.includes(c.kind)) return null;
-  if (c.kind === 'command' && (typeof c.text !== 'string' || !c.text.trim() || c.text.length > 500)) return null;
+  if (c.kind === 'command' && (typeof c.text !== 'string' || !c.text.trim() || c.text.length > CMD_TEXT_MAX)) return null;
+  // 'transfer'/'announce' require a non-empty, size-capped JSON blob in `text`.
+  if (JSON_KINDS.includes(c.kind) && (typeof c.text !== 'string' || !c.text || c.text.length > CMD_JSON_MAX)) return null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;
@@ -380,7 +400,13 @@ export function validateMessage(raw: unknown): RelayMessage | null {
 
 /** Keep in lockstep with `isValidMessage` in firestore.rules — this is a pure
  *  TS mirror of the same shape/size check, so client payloads can be tested
- *  against it without a Firestore emulator. */
+ *  against it without a Firestore emulator.
+ *
+ *  NOTE (transfer/announce): the cross-device pick-and-drop kinds add NO new
+ *  message `type` and NO new top-level key — they are ordinary `cmd` messages
+ *  whose `cmd` map carries the payload in `text`. The rules only require `cmd`
+ *  to be a map (checked by isMapField below) and `type` to be `cmd`, so these
+ *  kinds already fit without any firestore.rules change / deploy. */
 const ROOM_MESSAGE_KEYS: readonly string[] = [
   'v', 'from', 'type', 'at',
   'cmd', 'run', 'runStatus', 'runControl',
