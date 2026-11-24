@@ -2,7 +2,8 @@
 // one getUserMedia and one tracker; nothing opens until a use is turned on;
 // hiding the app stops the camera and showing it resumes; the idle throttle.
 import { describe, expect, it, vi } from 'vitest';
-import { createPhoneCamera, PHONE_CAMERA_CONSTRAINTS, readPhoneHands, writePhoneHands, PHONE_HANDS_KEY } from '../../src/canvas/phoneCamera';
+import { CameraLostError, CAMERA_LOST_RETRIES, CAMERA_LOST_RETRY_MS, createPhoneCamera, PHONE_CAMERA_CONSTRAINTS, readPhoneHands, writePhoneHands, PHONE_HANDS_KEY, type PhoneTrackerOptions } from '../../src/canvas/phoneCamera';
+import { PHONE_FACING, PHONE_HAND_GATE } from '../../src/input/faceLogic';
 import { startPhoneLookToEdit } from '../../src/canvas/phoneCanvasRuntime';
 import { PHONE_HAND_FEEL } from '../../src/canvas/handFeel';
 import type { PresenceFrame } from '../../src/input/presence';
@@ -20,7 +21,7 @@ function harness(opts: { gumFails?: Error } = {}) {
     streams.push(s);
     return s.stream;
   });
-  type Made = { opts: { detectHands: boolean; detectFaces: boolean; frameIntervalMs: () => number }; onFrame: (f: PresenceFrame) => void; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
+  type Made = { opts: PhoneTrackerOptions; onFrame: (f: PresenceFrame) => void; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> };
   const trackers: Made[] = [];
   const createTracker = vi.fn((_e: () => void, onFrame: (f: PresenceFrame) => void, o: Made['opts']) => {
     const m: Made = { opts: o, onFrame, start: vi.fn(async () => undefined), stop: vi.fn() };
@@ -34,13 +35,34 @@ function harness(opts: { gumFails?: Error } = {}) {
     removeEventListener: vi.fn(),
   };
   let clock = 0;
-  const cam = createPhoneCamera({ getUserMedia, createTracker, doc: doc as unknown as Document, now: () => clock });
+  const winListeners = new Map<string, () => void>();
+  const win = {
+    addEventListener: vi.fn((type: string, fn: () => void) => { winListeners.set(type, fn); }),
+    removeEventListener: vi.fn(),
+  };
+  const appListeners = new Map<string, () => void>();
+  const appRemove = vi.fn();
+  const app = {
+    addListener: vi.fn((ev: 'pause' | 'resume', fn: () => void) => { appListeners.set(ev, fn); return Promise.resolve({ remove: appRemove }); }),
+  };
+  const timers: { fn: () => void; ms: number }[] = [];
+  const cam = createPhoneCamera({
+    getUserMedia, createTracker, doc: doc as unknown as Document, now: () => clock,
+    win: win as unknown as Window, app,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: () => undefined,
+  });
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); };
   const setVisible = async (v: boolean) => {
     doc.visibilityState = v ? 'visible' : 'hidden';
     listeners.get('visibilitychange')?.();
-    await cam.setUse('face', cam.uses().includes('face')); // flush the chain
+    await settle();
   };
-  return { cam, getUserMedia, createTracker, trackers, streams, doc, setVisible, tick: (ms: number) => { clock += ms; } };
+  const runTimers = async () => { const due = timers.splice(0); for (const t of due) t.fn(); await settle(); };
+  return {
+    cam, getUserMedia, createTracker, trackers, streams, doc, setVisible, settle, timers, runTimers,
+    winListeners, appListeners, appRemove, tick: (ms: number) => { clock += ms; },
+  };
 }
 
 const frame = (hands = 0, handGate: boolean | null = null): PresenceFrame => ({
@@ -174,6 +196,93 @@ describe('phone camera hub', () => {
     expect(h.cam.status()).toBe('error');
     expect(h.cam.lastError()).toBe(denied);
     expect(h.createTracker).not.toHaveBeenCalled();
+  });
+
+  it('after a denial, turning Hands off with look-to-edit on never asks for the camera again', async () => {
+    const denied = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
+    const h = harness({ gumFails: denied });
+    await h.cam.setUse('face', true);
+    await h.cam.setUse('hands', true);
+    const calls = h.getUserMedia.mock.calls.length;
+    await h.cam.setUse('hands', false);
+    await h.setVisible(false);
+    await h.setVisible(true);
+    expect(h.getUserMedia).toHaveBeenCalledTimes(calls);
+    expect(h.cam.status()).toBe('error');
+    // Turning a use ON again is an explicit retry.
+    await h.cam.setUse('hands', true);
+    expect(h.getUserMedia).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('the tracker gets the phone head-pose thresholds (camera below the face)', async () => {
+    const h = harness();
+    await h.cam.setUse('hands', true);
+    expect(h.trackers[0].opts.handGate).toBe(PHONE_HAND_GATE);
+    expect(h.trackers[0].opts.facing).toBe(PHONE_FACING);
+  });
+
+  it('pagehide / pageshow stop and resume the camera', async () => {
+    const h = harness();
+    await h.cam.setUse('hands', true);
+    h.winListeners.get('pagehide')!();
+    expect(h.streams[0].track.stop).toHaveBeenCalled();
+    expect(h.cam.status()).toBe('off');
+    h.winListeners.get('pageshow')!();
+    await h.settle();
+    expect(h.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(h.cam.status()).toBe('live');
+  });
+
+  it('Capacitor App pause / resume stop and resume the camera (visibility unchanged)', async () => {
+    const h = harness();
+    await h.settle();
+    expect(h.appListeners.has('pause') && h.appListeners.has('resume')).toBe(true);
+    await h.cam.setUse('hands', true);
+    h.appListeners.get('pause')!();
+    expect(h.streams[0].track.stop).toHaveBeenCalled();
+    expect(h.cam.status()).toBe('off');
+    await h.settle();
+    expect(h.getUserMedia).toHaveBeenCalledTimes(1); // still paused: nothing reopens
+    h.appListeners.get('resume')!();
+    await h.settle();
+    expect(h.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(h.cam.status()).toBe('live');
+    h.cam.destroy();
+    expect(h.appRemove).toHaveBeenCalledTimes(2);
+  });
+
+  it('a camera lost to the OS while visible is retried, then reported as CameraLostError', async () => {
+    const h = harness();
+    await h.cam.setUse('hands', true);
+    // First loss: comes back on the retry.
+    h.trackers[0].opts.onCameraLost();
+    expect(h.cam.status()).toBe('starting');
+    expect(h.timers[0].ms).toBe(CAMERA_LOST_RETRY_MS);
+    await h.runTimers();
+    expect(h.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(h.cam.status()).toBe('live');
+    // Keeps getting taken: bounded retries, then error.
+    for (let i = 1; i < CAMERA_LOST_RETRIES; i++) {
+      h.trackers.at(-1)!.opts.onCameraLost();
+      await h.runTimers();
+    }
+    h.trackers.at(-1)!.opts.onCameraLost();
+    expect(h.timers).toHaveLength(0);
+    expect(h.cam.status()).toBe('error');
+    expect(h.cam.lastError()).toBeInstanceOf(CameraLostError);
+    expect(h.getUserMedia).toHaveBeenCalledTimes(1 + CAMERA_LOST_RETRIES);
+  });
+});
+
+describe('point-to-connect reuses the phone stream', () => {
+  it('findLiveVideo picks the hand tracker’s live <video> (no second getUserMedia)', async () => {
+    const { findLiveVideo } = await import('../../src/canvas/pointCapture');
+    const live = fakeStream().stream;
+    const tracker = { srcObject: live, readyState: 4, videoWidth: 640 };
+    const doc = {
+      querySelectorAll: (sel: string) => (sel === 'video[data-mc-hand-tracker]' ? [tracker] : [tracker]),
+    } as unknown as Document;
+    expect(findLiveVideo(doc)).toBe(tracker);
   });
 });
 

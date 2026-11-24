@@ -30,6 +30,7 @@
     "@a2ui/lit": "^0.15.0",
     "@a2ui/web_core": "^0.15.0",
     "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.2",
     "@capacitor/ios": "^8.6.2",
     "@mediapipe/tasks-vision": "^1.2.3",

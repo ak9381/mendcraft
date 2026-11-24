@@ -24,6 +24,8 @@ import {
   createPresenceGate,
   type FaceSignature,
   type FaceBox,
+  type FacingOptions,
+  type HandGateConfig,
 } from './faceLogic';
 export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
@@ -152,6 +154,10 @@ export function createPresenceTracker(
      *  phone throttles to ~10 fps with no hand in view). Default 0: every
      *  animation frame. */
     frameIntervalMs?: () => number;
+    /** Hand-gate thresholds (default HAND_GATE; the phone passes PHONE_HAND_GATE). */
+    handGate?: HandGateConfig;
+    /** Facing-tracker options (the phone passes PHONE_FACING). */
+    facing?: FacingOptions;
   },
 ): PresenceTracker {
   const video = document.createElement('video');
@@ -177,8 +183,8 @@ export function createPresenceTracker(
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
-  const facingTracker = createFacingTracker();
-  const handGate = createHandGate();
+  const facingTracker = createFacingTracker(opts?.facing);
+  const handGate = createHandGate(opts?.handGate);
   let lastHandGate: boolean | null = null;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);

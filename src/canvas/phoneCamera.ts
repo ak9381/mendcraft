@@ -9,12 +9,22 @@
 //  - Hands on → tracker with hands + face; look-to-edit alone → face only.
 //    Switching mode restarts the TRACKER on the same stream (no second
 //    getUserMedia).
-//  - Hidden app (visibilitychange) → tracker and camera stopped; visible
-//    again → reopened if any use is still on.
+//  - Backgrounded → tracker and camera stopped at once; back → reopened if a
+//    use is still on. Native webviews don't reliably fire visibilitychange,
+//    so pagehide/pageshow and the Capacitor App pause/resume events count too.
+//  - Camera taken by the OS (a call, another app) while visible: retried a
+//    few times (CAMERA_LOST_RETRY_MS × CAMERA_LOST_RETRIES), then 'error'
+//    with a CameraLostError so the UI can turn Hands off and say so.
+//  - A start failure (denied, no camera) latches: nothing reopens the camera
+//    until a use is turned ON again — turning Hands off never re-prompts for
+//    look-to-edit.
+//  - Phone head-pose thresholds: PHONE_HAND_GATE / PHONE_FACING (the camera
+//    sits below the face in a normal grip).
 //  - Throttle: ~30 fps while a hand was seen in the last 2 s, 10 fps
 //    otherwise (PHONE_HAND_FEEL).
 
 import { createPresenceTracker, type PresenceFrame, type PresenceTracker } from '../input/presence';
+import { PHONE_FACING, PHONE_HAND_GATE, type FacingOptions, type HandGateConfig } from '../input/faceLogic';
 import { phoneTrackIntervalMs } from './handFeel';
 
 export type PhoneCameraUse = 'hands' | 'face';
@@ -31,17 +41,51 @@ export const PHONE_CAMERA_CONSTRAINTS: MediaStreamConstraints = {
   audio: false,
 };
 
+/** A camera lost to the OS is retried this many times, this far apart. */
+export const CAMERA_LOST_RETRIES = 3;
+export const CAMERA_LOST_RETRY_MS = 1000;
+
+/** The camera was taken away (a call, another app) and did not come back. */
+export class CameraLostError extends Error {
+  constructor() {
+    super('The camera was taken by another app or a call.');
+    this.name = 'CameraLostError';
+  }
+}
+
+export interface PhoneTrackerOptions {
+  detectHands: boolean;
+  detectFaces: boolean;
+  frameIntervalMs: () => number;
+  onCameraLost: () => void;
+  handGate: HandGateConfig;
+  facing: FacingOptions;
+}
+
 type TrackerFactory = (
   onEvent: () => void,
   onFrame: (f: PresenceFrame) => void,
-  opts: { detectHands: boolean; detectFaces: boolean; frameIntervalMs: () => number; onCameraLost: () => void },
+  opts: PhoneTrackerOptions,
 ) => Pick<PresenceTracker, 'start' | 'stop'>;
+
+/** The slice of @capacitor/app the hub listens to. */
+export interface AppLifecycle {
+  addListener(event: 'pause' | 'resume', fn: () => void): Promise<{ remove(): unknown }> | { remove(): unknown };
+}
+
+type EventTargetLike = Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
 
 export interface PhoneCameraDeps {
   createTracker?: TrackerFactory;
   getUserMedia?: (c: MediaStreamConstraints) => Promise<MediaStream>;
-  doc?: Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'> | null;
+  doc?: (Pick<Document, 'visibilityState'> & EventTargetLike) | null;
+  /** pagehide / pageshow (default: window). */
+  win?: EventTargetLike | null;
+  /** Capacitor App plugin (native shells): pause / resume. */
+  app?: AppLifecycle | null;
   now?: () => number;
+  setTimeout?: (fn: () => void, ms: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
 }
 
 export interface PhoneCamera {
@@ -51,7 +95,8 @@ export interface PhoneCamera {
   onFrame(cb: (f: PresenceFrame) => void): () => void;
   onStatus(cb: (s: PhoneCameraStatus) => void): () => void;
   status(): PhoneCameraStatus;
-  /** The last start failure (permission denied, no camera, model download). */
+  /** The last start failure (permission denied, no camera, model download,
+   *  CameraLostError). */
   lastError(): unknown;
   /** Current minimum ms between tracking runs (the throttle). */
   intervalMs(): number;
@@ -60,7 +105,10 @@ export interface PhoneCamera {
 
 export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   const doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
+  const win = deps.win !== undefined ? deps.win : (typeof window !== 'undefined' ? window : null);
   const now = deps.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const later = deps.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
+  const cancel = deps.clearTimeout ?? ((id) => clearTimeout(id as ReturnType<typeof setTimeout>));
   const gum = deps.getUserMedia ?? ((c) => {
     const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
     if (!md?.getUserMedia) return Promise.reject(new Error('Camera needs a secure page (HTTPS) on this device.'));
@@ -77,11 +125,17 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   let trackerHands = false;
   let status: PhoneCameraStatus = 'off';
   let error: unknown = null;
+  /** A start failed / the camera was lost for good: stay off until a use is turned on again. */
+  let failed = false;
+  let suspended = false; // Capacitor pause / pagehide
+  let lostTries = 0;
+  let retryTimer: unknown = null;
   let lastHandAt = -Infinity;
   let chain: Promise<void> = Promise.resolve();
   let destroyed = false;
 
-  const visible = (): boolean => !doc || doc.visibilityState !== 'hidden';
+  const visible = (): boolean => !suspended && (!doc || doc.visibilityState !== 'hidden');
+  const active = (): boolean => !destroyed && !failed && want.size > 0 && visible();
   const setStatus = (s: PhoneCameraStatus): void => {
     if (s === status) return;
     status = s;
@@ -100,16 +154,38 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     for (const t of stream?.getTracks() ?? []) { try { t.stop(); } catch { /* ended */ } }
     stream = null;
   }
+  function clearRetry(): void {
+    if (retryTimer !== null) { cancel(retryTimer); retryTimer = null; }
+  }
   function onPresence(f: PresenceFrame): void {
     if (f.hands.length) lastHandAt = now();
     for (const cb of frameSubs) cb(f);
   }
+  function idleStatus(): PhoneCameraStatus {
+    return failed && want.size ? 'error' : 'off';
+  }
+
+  function onLost(): void {
+    stopTracker();
+    stopStream();
+    if (!active()) { setStatus(idleStatus()); return; }
+    if (lostTries < CAMERA_LOST_RETRIES) {
+      lostTries++;
+      setStatus('starting');
+      clearRetry();
+      retryTimer = later(() => { retryTimer = null; void run(); }, CAMERA_LOST_RETRY_MS);
+      return;
+    }
+    failed = true;
+    error = new CameraLostError();
+    setStatus('error');
+  }
 
   async function reconcile(): Promise<void> {
-    if (destroyed || want.size === 0 || !visible()) {
+    if (!active()) {
       stopTracker();
       stopStream();
-      setStatus(error && want.size ? 'error' : 'off');
+      setStatus(idleStatus());
       return;
     }
     const hands = want.has('hands');
@@ -118,7 +194,7 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     try {
       if (!streamLive()) { stopStream(); stream = await gum(PHONE_CAMERA_CONSTRAINTS); }
       // A use was turned off or the app hid while the camera opened.
-      if (destroyed || want.size === 0 || !visible()) { stopTracker(); stopStream(); setStatus('off'); return; }
+      if (!active()) { stopTracker(); stopStream(); setStatus(idleStatus()); return; }
       stopTracker(); // a mode switch: the tracker restarts, the stream stays
       trackerHands = hands;
       lastHandAt = -Infinity;
@@ -126,19 +202,18 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
         detectHands: hands,
         detectFaces: true,
         frameIntervalMs: intervalMs,
-        onCameraLost: () => {
-          // Another app took the camera / the OS revoked it: drop it; the
-          // next visibility change (or toggle) reopens it.
-          stopTracker(); stopStream(); setStatus('off');
-        },
+        onCameraLost: () => { if (tracker === t) onLost(); },
+        handGate: PHONE_HAND_GATE,
+        facing: PHONE_FACING,
       });
       tracker = t;
       await t.start(stream ?? undefined);
-      if (tracker !== t) return; // superseded meanwhile
+      if (tracker !== t) return; // superseded / stopped meanwhile
       error = null;
       setStatus('live');
     } catch (err) {
       error = err;
+      failed = true;
       stopTracker();
       stopStream();
       setStatus('error');
@@ -147,16 +222,30 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   const run = (): Promise<void> => {
     // Stopping never waits behind a start still loading the models: the
     // camera goes off at once (the in-flight start sees it and bails).
-    if (want.size === 0 || !visible()) { stopTracker(); stopStream(); setStatus('off'); }
+    if (!active()) { clearRetry(); stopTracker(); stopStream(); setStatus(idleStatus()); }
     chain = chain.then(reconcile, reconcile);
     return chain;
   };
-  const onVisibility = (): void => { void run(); };
+  const onVisibility = (): void => { if (visible()) lostTries = 0; void run(); };
+  const onPageHide = (): void => { suspended = true; void run(); };
+  const onPageShow = (): void => { suspended = false; lostTries = 0; void run(); };
   doc?.addEventListener('visibilitychange', onVisibility);
+  win?.addEventListener('pagehide', onPageHide);
+  win?.addEventListener('pageshow', onPageShow);
+  const appHandles: Array<{ remove(): unknown }> = [];
+  const keep = (h: Promise<{ remove(): unknown }> | { remove(): unknown }): void => {
+    void Promise.resolve(h).then((x) => { if (destroyed) void x.remove(); else appHandles.push(x); }, () => undefined);
+  };
+  if (deps.app) {
+    try {
+      keep(deps.app.addListener('pause', onPageHide));
+      keep(deps.app.addListener('resume', onPageShow));
+    } catch { /* plugin unavailable on this build */ }
+  }
 
   return {
     setUse(use, on) {
-      if (on) { want.add(use); error = null; } else want.delete(use);
+      if (on) { want.add(use); failed = false; error = null; lostTries = 0; } else want.delete(use);
       return run();
     },
     uses: () => [...want],
@@ -168,7 +257,11 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     destroy() {
       destroyed = true;
       want.clear();
+      clearRetry();
       doc?.removeEventListener('visibilitychange', onVisibility);
+      win?.removeEventListener('pagehide', onPageHide);
+      win?.removeEventListener('pageshow', onPageShow);
+      for (const h of appHandles.splice(0)) void h.remove();
       stopTracker();
       stopStream();
       setStatus('off');

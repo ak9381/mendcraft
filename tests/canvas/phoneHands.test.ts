@@ -5,8 +5,8 @@
 // touch is never intercepted and hand actions never reach the AI feed.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { mountPhoneHands, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
-import { createPhoneCamera, PHONE_HANDS_KEY } from '../../src/canvas/phoneCamera';
+import { mountPhoneHands, PHONE_HANDS_FACE_LINE, PHONE_HANDS_LOST_LINE, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
+import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY } from '../../src/canvas/phoneCamera';
 import { phoneReach } from '../../src/canvas/handFeel';
 import type { PresenceFrame } from '../../src/input/presence';
 
@@ -55,15 +55,22 @@ const frame = (opts: { hands?: number; handGate?: boolean | null; face?: boolean
   facing: true, registered: false, paused: false, aspect: 640 / 480,
 });
 
-function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean } = {}) {
+function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean; startGate?: Promise<void> } = {}) {
   const getUserMedia = vi.fn(async () => { if (opts.gumFails) throw opts.gumFails; return fakeStream(); });
   let feed: ((f: PresenceFrame) => void) | null = null;
-  const createTracker = vi.fn((_e: () => void, onFrame: (f: PresenceFrame) => void) => {
+  let lost: (() => void) | null = null;
+  const createTracker = vi.fn((_e: () => void, onFrame: (f: PresenceFrame) => void, o: { onCameraLost: () => void }) => {
     feed = onFrame;
-    return { start: vi.fn(async () => undefined), stop: vi.fn() };
+    lost = o.onCameraLost;
+    return { start: vi.fn(async () => { await opts.startGate; }), stop: vi.fn() };
   });
-  const camera = createPhoneCamera({ getUserMedia, createTracker, doc: null, now: () => 0 });
-  const pointer = { update: vi.fn(), lost: vi.fn(), setFacing: vi.fn(), cursors: vi.fn(() => []) };
+  const timers: (() => void)[] = [];
+  const camera = createPhoneCamera({
+    getUserMedia, createTracker, doc: null, win: null, now: () => 0,
+    setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout: () => undefined,
+  });
+  let gated = false;
+  const pointer = { update: vi.fn(), lost: vi.fn(), setFacing: vi.fn(), cursors: vi.fn(() => []), handsLocked: vi.fn(() => gated) };
   const say = vi.fn();
   const storage = opts.storage ?? memStorage();
   const root = fakeRoot();
@@ -72,7 +79,12 @@ function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error
     camera, pointer, reach: () => phoneReach(null), storage, say, overlay: false,
     locked: opts.locked, onAspect: (a) => aspects.push(a), now: () => 1000,
   });
-  return { hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, feed: (f: PresenceFrame) => feed?.(f) };
+  return {
+    hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, timers,
+    feed: (f: PresenceFrame) => feed?.(f),
+    lose: () => lost?.(),
+    gate: (on: boolean) => { gated = on; },
+  };
 }
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -184,6 +196,51 @@ describe('phone hand frames', () => {
     s.feed(frame());
     tile.click();
     expect(onTap).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('phone Hands status on the pill and indicator', () => {
+  it('the pill says "face the phone" while the facing gate locks the hands', async () => {
+    const s = setup();
+    await s.hands.setOn(true);
+    s.feed(frame({ handGate: true }));
+    expect(s.hands.pill.textContent).toBe('Hands ✓');
+    s.gate(true);
+    s.feed(frame({ handGate: false }));
+    expect(s.hands.pill.textContent).toBe(PHONE_HANDS_FACE_LINE);
+    s.gate(false);
+    s.feed(frame({ handGate: true }));
+    expect(s.hands.pill.textContent).toBe('Hands ✓');
+  });
+
+  it('the indicator says "Loading hand model…" while starting, then "Camera"', async () => {
+    let release: () => void = () => undefined;
+    const s = setup({ startGate: new Promise<void>((r) => { release = r; }) });
+    const p = s.hands.setOn(true);
+    await flush(); await flush();
+    expect(s.hands.indicator.hidden).toBe(false);
+    expect(s.hands.indicator.innerHTML).toContain('Loading hand model…');
+    release();
+    await p;
+    expect(s.hands.indicator.innerHTML).toContain('Camera');
+    expect(s.hands.indicator.innerHTML).not.toContain('Loading');
+  });
+
+  it('a camera taken for good (retries spent) turns Hands off with a plain message', async () => {
+    const s = setup();
+    await s.hands.setOn(true);
+    for (let i = 0; i < 3; i++) {
+      s.lose();
+      expect(s.hands.isOn()).toBe(true); // retrying
+      for (const fn of s.timers.splice(0)) fn();
+      await flush(); await flush();
+    }
+    s.lose();
+    await flush();
+    expect(s.camera.lastError()).toBeInstanceOf(CameraLostError);
+    expect(s.hands.isOn()).toBe(false);
+    expect(s.hands.pill.getAttribute('aria-pressed')).toBe('false');
+    expect(s.say).toHaveBeenLastCalledWith(PHONE_HANDS_LOST_LINE);
   });
 });
 

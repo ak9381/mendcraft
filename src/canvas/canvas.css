@@ -1434,6 +1434,8 @@
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
 }
 .mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* Facing gate has the hands locked ("Hands · face the phone"). */
+.mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {
   display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 12px;
   top: calc(10px + env(safe-area-inset-top, 0px));

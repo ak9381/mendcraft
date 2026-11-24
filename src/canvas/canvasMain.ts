@@ -7,6 +7,7 @@ import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
 import { createPhoneCamera } from './phoneCamera';
+import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
@@ -108,7 +109,9 @@ const voice = createVoiceController(
 );
 // Phone shell: ONE front camera for hand control and look-to-edit (one
 // getUserMedia, one tracker). It opens nothing until a feature asks for it.
-const phoneCamera = phoneShell ? createPhoneCamera() : undefined;
+// On the native apps the Capacitor App plugin's pause/resume also stops and
+// restarts it (webviews don't reliably fire visibilitychange when backgrounded).
+const phoneCamera = phoneShell ? createPhoneCamera({ app: isPhone ? App : null }) : undefined;
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'),
   phoneCamera,

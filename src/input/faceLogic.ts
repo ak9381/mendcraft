@@ -165,7 +165,16 @@ export interface FacingOptions {
   leaveDeg?: number;
   /** A change must persist this long before it takes effect (ms). */
   debounceMs?: number;
+  /** Extra allowance (deg) for an UPWARD pitch (pitch < 0, chin up toward a
+   *  camera below the face). Default 0 (symmetric). The phone shell uses
+   *  PHONE_FACING: a phone held at chest height sees the face from below. */
+  pitchUpExtraDeg?: number;
 }
+
+/** Phone look-to-edit facing: a normal low grip puts the camera below the
+ *  face (pitch ≈ −20…−40°), so upward pitch gets 25° more room — the same
+ *  allowance PHONE_HAND_GATE adds over HAND_GATE. */
+export const PHONE_FACING: FacingOptions = { pitchUpExtraDeg: 25 };
 
 export interface FacingTracker {
   update(pose: HeadPose, now: number): boolean;
@@ -177,13 +186,15 @@ export function createFacingTracker(opts: FacingOptions = {}): FacingTracker {
   const enterDeg = opts.enterDeg ?? 20;
   const leaveDeg = opts.leaveDeg ?? 28;
   const debounceMs = opts.debounceMs ?? 250;
+  const upExtra = opts.pitchUpExtraDeg ?? 0;
 
   let facing = false;
   let pendingTarget: boolean | null = null;
   let pendingSince = 0;
 
   function update(pose: HeadPose, now: number): boolean {
-    const mag = Math.max(Math.abs(pose.yaw), Math.abs(pose.pitch));
+    const pitchMag = pose.pitch < 0 ? Math.max(0, -pose.pitch - upExtra) : pose.pitch;
+    const mag = Math.max(Math.abs(pose.yaw), pitchMag);
     // Hysteresis: the bar to stay facing (leaveDeg) is looser than to enter.
     const wantFacing = facing ? mag < leaveDeg : mag < enterDeg;
     if (wantFacing === facing) {
@@ -225,8 +236,26 @@ export const HAND_GATE = {
   settleMs: 500,
 } as const;
 
+export interface HandGateConfig {
+  yawOut: number; pitchUpOut: number; pitchDownOut: number;
+  yawIn: number; pitchUpIn: number; pitchDownIn: number;
+  debounceMs: number; settleMs: number;
+}
+
+/** Phone shell hand gate. A phone held normally sits BELOW the face, so the
+ *  head reads as pitched UP (pitch < 0) by 20–40° while the user looks
+ *  straight at it — HAND_GATE's 25° up-limit would lock the hands with an
+ *  ordinary grip. Up gets 50°/45°; down (looking at the desk past the phone)
+ *  is tighter than the laptop's (30°/25°), yaw is unchanged. */
+export const PHONE_HAND_GATE: HandGateConfig = {
+  yawOut: 30, pitchUpOut: 50, pitchDownOut: 30,
+  yawIn: 25, pitchUpIn: 45, pitchDownIn: 25,
+  debounceMs: HAND_GATE.debounceMs,
+  settleMs: HAND_GATE.settleMs,
+};
+
 /** Pure: is this pose "facing" for the hand gate, given the current state? */
-export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g = HAND_GATE): boolean {
+export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g: HandGateConfig = HAND_GATE): boolean {
   const yaw = Math.abs(pose.yaw);
   if (wasOk) return yaw <= g.yawOut && pose.pitch >= -g.pitchUpOut && pose.pitch <= g.pitchDownOut;
   return yaw < g.yawIn && pose.pitch > -g.pitchUpIn && pose.pitch < g.pitchDownIn;
@@ -240,7 +269,7 @@ export interface HandGate {
   reset(): void;
 }
 
-export function createHandGate(g = HAND_GATE): HandGate {
+export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
   let seenSince: number | null = null;
   let ok = true;
   let pending: boolean | null = null;

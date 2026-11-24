@@ -20,14 +20,16 @@ import type { HandPointer } from './handPointer';
 import { mapToScreen } from './handPointer';
 import { palmCenter, type ReachBox } from './handFeel';
 import { cameraHandsFromSelfie, stampHandLabel } from './handSpace';
-import { readPhoneHands, writePhoneHands, type PhoneCamera } from './phoneCamera';
+import { CameraLostError, readPhoneHands, writePhoneHands, type PhoneCamera } from './phoneCamera';
 
 export const PHONE_HANDS_ON_LINE = 'Hands on: point with your palm, tap a fist to click. Hold a fist to move or pan; two fists to zoom.';
 export const PHONE_HANDS_OFF_LINE = 'Hands off.';
+export const PHONE_HANDS_FACE_LINE = 'Hands · face the phone';
+export const PHONE_HANDS_LOST_LINE = 'Another app or a call took the camera, so Hands is off. Tap Hands to turn it back on.';
 
 export interface PhoneHandsDeps {
   camera: PhoneCamera;
-  pointer: Pick<HandPointer, 'update' | 'lost' | 'setFacing' | 'cursors'>;
+  pointer: Pick<HandPointer, 'update' | 'lost' | 'setFacing' | 'cursors' | 'handsLocked'>;
   /** Reach box for the current camera aspect (phoneReach). */
   reach: () => ReachBox;
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
@@ -88,13 +90,24 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     if (fed) { deps.pointer.lost(); fed = false; }
     overlay?.clear();
   }
+  let gateLocked = false;
+  let indicatorText = '';
   function paint(): void {
     pill.setAttribute('aria-pressed', String(on));
-    pill.textContent = on ? 'Hands ✓' : 'Hands';
+    // The phone hides the laptop's facing banner, so the pill itself says
+    // when the facing gate has the hands locked.
+    pill.textContent = !on ? 'Hands' : gateLocked ? PHONE_HANDS_FACE_LINE : 'Hands ✓';
+    pill.classList.toggle('is-gated', on && gateLocked);
     root.classList.toggle('is-phone-hands', on);
     const s = deps.camera.status();
     indicator.dataset.state = s;
     indicator.hidden = !(s === 'live' || s === 'starting');
+    // The first start downloads the hand model (~11 MB): say so.
+    const text = s === 'starting' && on ? 'Loading hand model…' : 'Camera';
+    if (text !== indicatorText) {
+      indicatorText = text;
+      indicator.innerHTML = `<span class="mc-cam-on-dot" aria-hidden="true"></span>${text}`;
+    }
   }
 
   function frame(f: PresenceFrame): void {
@@ -105,6 +118,8 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     // hysteresis); no face / a stranger / unsettled = unknown = allowed.
     const op = f.faces.find((x) => x.isOperator);
     deps.pointer.setFacing?.(op ? (op.handGate ?? null) : null, t);
+    const g = !!deps.pointer.handsLocked?.();
+    if (g !== gateLocked) { gateLocked = g; paint(); }
     if (deps.locked?.()) { release(); return; }
     if (f.hands.length) {
       // Presence hands are selfie-mirrored; the pointer expects camera space
@@ -121,8 +136,10 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     paint();
     if (s !== 'live') release();
     if (s === 'error' && on) {
-      const reason = describeCameraError(deps.camera.lastError());
+      const err = deps.camera.lastError();
+      const reason = err instanceof CameraLostError ? PHONE_HANDS_LOST_LINE : describeCameraError(err);
       on = false;
+      gateLocked = false;
       writePhoneHands(false, deps.storage);
       void deps.camera.setUse('hands', false);
       deps.pointer.setFacing?.(null, now());
@@ -136,6 +153,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
   async function setOn(next: boolean): Promise<void> {
     if (next === on) return;
     on = next;
+    gateLocked = false;
     writePhoneHands(next, deps.storage);
     paint();
     if (next) {
