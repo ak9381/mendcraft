@@ -8,7 +8,6 @@ import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
-import { PHONE_FACING, PHONE_HAND_GATE } from '../input/faceLogic';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
 import type { PhoneCamera } from './phoneCamera';
 
@@ -80,7 +79,7 @@ export function startPhoneLookToEdit(
     try {
       const t = createPresenceTracker(() => undefined, (f) => {
         handle.setFacing(f.facing === true);
-      }, { detectFaces: true, detectHands: false, facing: PHONE_FACING, handGate: PHONE_HAND_GATE });
+      }, { detectFaces: true, detectHands: false });
       await t.start();
       if (cancelled) { t.stop(); return; }
       tracker = t;

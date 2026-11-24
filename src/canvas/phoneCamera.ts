@@ -269,6 +269,14 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   };
 }
 
+/** Hand control runs on the ANDROID phone only (the native Android app, or a
+ *  narrow desktop browser standing in for the Android phone). The iPhone is
+ *  docked on the gimbal and never hand-controlled: no Hands pill, no hand
+ *  tracker, no camera request for hands. */
+export function phoneHandsAllowed(phoneShell: boolean, platform: 'ios' | 'android' | null | undefined): boolean {
+  return phoneShell && platform === 'android';
+}
+
 /** Persisted Hands switch for the phone shell. Off unless explicitly '1'. */
 export const PHONE_HANDS_KEY = 'mc.phoneHands';
 export function readPhoneHands(storage?: Pick<Storage, 'getItem'> | null): boolean {

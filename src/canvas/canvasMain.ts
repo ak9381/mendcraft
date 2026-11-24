@@ -6,7 +6,7 @@ import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
-import { createPhoneCamera } from './phoneCamera';
+import { createPhoneCamera, phoneHandsAllowed } from './phoneCamera';
 import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
@@ -107,11 +107,16 @@ const voice = createVoiceController(
     onError: (_code, message) => handle?.setTalkError(message),
   },
 );
-// Phone shell: ONE front camera for hand control and look-to-edit (one
-// getUserMedia, one tracker). It opens nothing until a feature asks for it.
-// On the native apps the Capacitor App plugin's pause/resume also stops and
-// restarts it (webviews don't reliably fire visibilitychange when backgrounded).
-const phoneCamera = phoneShell ? createPhoneCamera({ app: isPhone ? App : null }) : undefined;
+// Hand control is for the ANDROID phone only (the iPhone sits on the gimbal and
+// keeps its own front-camera uses untouched). On Android: ONE front camera for
+// hand control and look-to-edit (one getUserMedia, one tracker), opened only
+// when a feature asks for it. The Capacitor App plugin's pause/resume also
+// stops and restarts it (webviews don't reliably fire visibilitychange).
+// No camera hub → no Hands pill, no hand tracker (mountCanvas), and iPhone
+// look-to-edit stays on its original path.
+const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
+  ? createPhoneCamera({ app: isPhone ? App : null })
+  : undefined;
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'),
   phoneCamera,

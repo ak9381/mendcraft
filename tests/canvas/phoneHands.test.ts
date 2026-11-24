@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { mountPhoneHands, PHONE_HANDS_FACE_LINE, PHONE_HANDS_LOST_LINE, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
-import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY } from '../../src/canvas/phoneCamera';
+import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY, phoneHandsAllowed } from '../../src/canvas/phoneCamera';
 import { phoneReach } from '../../src/canvas/handFeel';
 import type { PresenceFrame } from '../../src/input/presence';
 
@@ -241,6 +241,39 @@ describe('phone Hands status on the pill and indicator', () => {
     expect(s.hands.isOn()).toBe(false);
     expect(s.hands.pill.getAttribute('aria-pressed')).toBe('false');
     expect(s.say).toHaveBeenLastCalledWith(PHONE_HANDS_LOST_LINE);
+  });
+});
+
+describe('Android only: the iPhone (gimbal) never gets hands', () => {
+  it('phoneHandsAllowed: Android phone shell yes; iPhone, desktop no', () => {
+    expect(phoneHandsAllowed(true, 'android')).toBe(true);
+    expect(phoneHandsAllowed(true, 'ios')).toBe(false);
+    expect(phoneHandsAllowed(false, 'android')).toBe(false);
+    expect(phoneHandsAllowed(true, null)).toBe(false);
+  });
+
+  it('canvasMain creates the camera hub only when allowed; mountCanvas mounts the pill only with a hub', () => {
+    const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(main).toMatch(/const phoneCamera = phoneHandsAllowed\(phoneShell, phonePlatform\)\s*\?\s*createPhoneCamera\(/);
+    expect(main).toMatch(/const phonePlatform = capacitor\?\.getPlatform\?\.\(\) === 'ios' \? 'ios' as const : 'android' as const;/);
+    expect(main.match(/createPhoneCamera\(/g)).toHaveLength(1);
+    const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(app).toMatch(/const phoneHands = phoneShell && opts\.phoneCamera && handPointer/);
+    expect(app.match(/mountPhoneHands\(/g)).toHaveLength(1);
+  });
+
+  it('an iPhone (no hub) → no pill, no tracker, no getUserMedia for hands', async () => {
+    const getUserMedia = vi.fn();
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+    try {
+      // What canvasMain does on iOS: no hub, so there is nothing to mount.
+      const hub = phoneHandsAllowed(true, 'ios') ? createPhoneCamera({ doc: null, win: null }) : undefined;
+      expect(hub).toBeUndefined();
+      await flush();
+      expect(getUserMedia).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

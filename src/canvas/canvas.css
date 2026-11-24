@@ -1423,7 +1423,7 @@
 
 /* ---- Hands on the phone (phoneHands.ts): a Hands pill bottom-right (the
    Join laptop pill sits bottom-left, the mic bottom-centre), a small
-   "Camera" indicator top-right while the front camera is live, and the
+   "Camera" indicator just above it while the front camera is live, and the
    glass-hand overlay only while hands are on. Every drawn layer stays
    pointer-events: none — touch always works. */
 .mc-phone-simple:not(.is-phone-hands) .hand-overlay { display: none !important; }
@@ -1437,8 +1437,10 @@
 /* Facing gate has the hands locked ("Hands · face the phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {
-  display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 12px;
-  top: calc(10px + env(safe-area-inset-top, 0px));
+  /* Just above the Hands pill: the route badge owns the top centre and is
+     wide enough on a phone to collide with a top-right chip. */
+  display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
   font-size: 12px; font-weight: 650; pointer-events: none;
 }
