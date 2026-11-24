@@ -1,6 +1,5 @@
 // C3 Browser panel: hand-path tests against the real createReferencePanel().
-// referencePanel.ts never uses runtime `instanceof HTML*` (unlike
-// onscreenKeyboard.ts), so a plain hand-rolled fake element — same style the
+// referencePanel.ts never uses runtime `instanceof HTML*`, so a plain hand-rolled fake element — same style the
 // rest of this suite uses — is enough; no special classes needed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createReferencePanel, type ReferencePanel } from '../../src/ui/referencePanel';
@@ -172,7 +171,7 @@ describe('browser reference panel hand path', () => {
     const { input } = panelParts(panel);
     panel.open();
     expect(input.focused).toBe(true);
-    expect(input.type).toBe('text'); // qualifies for the same generic pinch-focus/auto-keyboard path as C026
+    expect(input.type).toBe('text'); // qualifies for the same generic pinch-focus path as C026
   });
 
   it('C038 pinch-release on "Go" navigates via the address bar\'s real submit handler', () => {

@@ -2,8 +2,7 @@
 // these GAP-UNTESTED because only the underlying op logic was tested
 // (tests/planTools.test.ts / planComponents.test.ts), never the actual
 // button-click / numInput-change dispatch path a pinch-tap or pinch-drag
-// reaches. propsPanel.ts never uses `instanceof HTMLElement` (unlike
-// src/ui/onscreenKeyboard.ts), so the same hand-rolled fake-doc technique as
+// reaches. propsPanel.ts never uses `instanceof HTMLElement`, so the same hand-rolled fake-doc technique as
 // browser-panel-hand-path.test.ts is enough — no jsdom needed.
 import { describe, expect, it } from 'vitest';
 import { createPropsPanel, type PropsPanelIO } from '../../src/plan/propsPanel';
@@ -258,10 +257,6 @@ describe('B-115 wall length resize via numInput (props panel)', () => {
     len.fire('change');
     expect(applied).toEqual([{ op: 'set_length', target: 'w1', length: 2000 }]);
   });
-});
-
-describe('B-071/B-068/B-070 on-screen keyboard auto-open for props-panel/text-tool fields', () => {
-  it.skip('CAMERA-ONLY/untestable here: src/ui/onscreenKeyboard.ts gates its focusin handler on `el instanceof HTMLInputElement/HTMLTextAreaElement` (onscreenKeyboard.ts:42-48), which requires real DOM globals; this repo\'s vitest runs with environment "node" (no jsdom), so the hand-rolled FakeNode used elsewhere in this file is never `instanceof HTMLInputElement` and cannot exercise that integration', () => {});
 });
 
 describe('B-107/B-131/B-136 on-screen twins of Ctrl+R, Delete, Ctrl+D (hand/touch parity)', () => {

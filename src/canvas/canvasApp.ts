@@ -62,7 +62,6 @@ import { mountScanPanel } from './scanPanel';
 import { computeSignature } from '../input/faceLogic';
 import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
-import { mountHandKeyboard } from './handKeyboard';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
@@ -675,8 +674,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     reviewDialog.open(model);
   }
 
-  // Hand-only typing: a pinch-focused text field docks the on-screen keyboard.
-  mountHandKeyboard(document);
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
     sim: opts.sim,
@@ -2885,8 +2882,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         root.querySelector<HTMLElement>('.mc-say'),
         micFab?.el ?? null,
         document.querySelector<HTMLElement>('.mc-review-dialog:not([hidden])'),
-        // A4-027: typing the edit on the hand keyboard is not "outside".
-        document.querySelector<HTMLElement>('.mc-hand-kb'),
       ];
       for (const el of extra) {
         if (!el) continue;
