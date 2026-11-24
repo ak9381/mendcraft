@@ -1,9 +1,12 @@
-// Full-screen review: whenever a Proposal needs a human decision (board
-// plan, floor plan, Kannada pack, taught gesture) it opens here instead of a
-// cramped inline card. Esc closes WITHOUT deciding — the proposal stays
-// waiting so voice/pinch keep·drop still work. Approve/Reject proxy-click the
-// same .mc-proposal-keep/.mc-proposal-drop buttons already on the card, so
-// every existing path into keep()/drop() keeps working unchanged.
+import { SCREEN_MARGIN_PX } from './handEdge';
+import { mountDraggablePanel } from './dragPanel';
+
+// Compact floating review window: whenever a Proposal needs a human
+// decision it opens here (~360px, top-right inside the 24px safe zone) so
+// the board stays visible behind it. Fist-grab or mouse-drag the title bar
+// to move it. Esc / ✕ close WITHOUT deciding — the proposal stays waiting
+// so voice/pinch keep·drop still work. Approve/Reject proxy-click the same
+// .mc-proposal-keep/.mc-proposal-drop buttons already on the card.
 
 export type ReviewAction = 'approve' | 'reject' | 'ask-else';
 
@@ -13,6 +16,28 @@ export function reviewActionFor(action: ReviewAction): 'keep' | 'drop' | null {
   if (action === 'approve') return 'keep';
   if (action === 'reject') return 'drop';
   return null;
+}
+
+/** Width of the floating review window (px). */
+export const REVIEW_WINDOW_WIDTH = 360;
+
+/** Starting top-right origin, inside the screen margin and clear of the
+ *  tools bar and the always-open AI drawer. */
+export function reviewWindowStart(
+  vp: { width: number; height: number },
+  opts: { barH?: number; aiW?: number; aiRight?: number } = {},
+): { top: number; right: number } {
+  const margin = SCREEN_MARGIN_PX;
+  const barH = opts.barH ?? 0;
+  const aiW = opts.aiW ?? 0;
+  const aiRight = opts.aiRight ?? 16;
+  const top = Math.max(margin, barH + margin);
+  const width = Math.min(REVIEW_WINDOW_WIDTH, Math.max(160, vp.width - margin * 2));
+  const right = Math.min(
+    margin + (aiW > 0 ? aiW + aiRight : 0),
+    Math.max(margin, vp.width - width - margin),
+  );
+  return { top, right };
 }
 
 export interface ReviewDialogModel {
@@ -48,13 +73,23 @@ export function mountReviewDialog(
   const dialog = doc.createElement('div');
   dialog.className = 'mc-review-dialog';
   dialog.setAttribute('role', 'dialog');
-  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-modal', 'false');
+  dialog.setAttribute('aria-labelledby', 'mc-review-title');
   dialog.hidden = true;
 
+  const head = doc.createElement('div');
+  head.className = 'mc-review-head';
+  const drag = doc.createElement('div');
+  drag.className = 'mc-review-drag';
+  drag.setAttribute('data-mc-drag-handle', '');
+  drag.setAttribute('role', 'button');
+  drag.setAttribute('tabindex', '0');
+  drag.setAttribute('aria-label', 'Move review window');
   const body = doc.createElement('div');
   body.className = 'mc-review-body';
   const titleEl = doc.createElement('h2');
   titleEl.className = 'mc-review-title';
+  titleEl.id = 'mc-review-title';
   const extraEl = doc.createElement('div');
   extraEl.className = 'mc-review-extra';
   const cardHost = doc.createElement('div');
@@ -88,9 +123,20 @@ export function mountReviewDialog(
   const closeBtn = btn(doc, 'mc-review-close', '✕', () => close());
   closeBtn.setAttribute('aria-label', 'Close without deciding');
   closeBtn.setAttribute('title', 'Close — decide later with voice or a pinch');
-  body.append(titleEl, extraEl, cardHost, actions);
-  dialog.append(closeBtn, body);
+  drag.append(titleEl);
+  head.append(drag, closeBtn);
+  body.append(extraEl, cardHost, actions);
+  dialog.append(head, body);
   root.append(dialog);
+
+  const canDrag = typeof (dialog as HTMLElement).getBoundingClientRect === 'function';
+  const dragCtl = canDrag
+    ? mountDraggablePanel(dialog, drag, { id: 'review', alreadyFixed: true }, () => {
+        const spacer = doc.createElement('div');
+        spacer.hidden = true;
+        return spacer;
+      })
+    : null;
 
   function onKeydown(e: KeyboardEvent): void {
     if (!open) return;
@@ -122,6 +168,7 @@ export function mountReviewDialog(
       if (model.extra) extraEl.append(model.extra);
       cardHost.innerHTML = '';
       cardHost.append(model.card);
+      dragCtl?.resetPosition();
       dialog.hidden = false;
       open = true;
       lastFocused = (doc.activeElement as HTMLElement) ?? null;
@@ -131,6 +178,7 @@ export function mountReviewDialog(
     isOpen() { return open; },
     currentCard() { return card; },
     destroy() {
+      dragCtl?.destroy();
       dialog.removeEventListener('keydown', onKeydown);
       dialog.remove();
     },

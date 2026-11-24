@@ -79,7 +79,7 @@ describe('the full-screen review dialog never traps clicks on the Tools bar', ()
   });
 
   it('the review dialog reserves the bar\'s own height instead of running content under it', () => {
-    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('padding-top: var(--mc-bar-h');
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('top: calc(var(--mc-bar-h');
   });
 });
 
@@ -148,12 +148,11 @@ describe('hand skeleton paints above the tools bar', () => {
   });
 });
 
-describe('on a phone, the review reserves the bottom Tools bar so Approve stays visible', () => {
-  it('the 600px review rule adds padding-bottom: var(--mc-bar-h)', () => {
-    // The phone media block re-declares .mc-review-dialog; ruleFor joins every
-    // rule that mentions the class, so the phone padding-bottom is in the blob.
+describe('on a phone, the floating review stays clear of the bottom Tools bar', () => {
+  it('the 600px review rule caps height above the thumb bar', () => {
     const all = ruleFor(canvasCss, '.mc-review-dialog');
-    expect(all).toContain('padding-bottom: var(--mc-bar-h');
+    expect(all).toContain('max-height: calc(100dvh - var(--mc-bar-h');
+    expect(all).toContain('width: min(360px');
   });
 });
 
@@ -228,11 +227,10 @@ describe('empty board offers a Talk button on the frame', () => {
 });
 
 describe('review Approve/Reject sit high enough to reach, off the edges', () => {
-  it('raises the action row ~18vh, with 48px gaps and 140×60 targets', () => {
+  it('keeps Approve/Reject 140×60 and 48px apart inside the floating window', () => {
     const actions = ruleFor(canvasCss, '.mc-review-actions');
-    expect(actions).toContain('bottom: 18vh');
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('width: min(360px');
     expect(actions).toContain('gap: 48px');
-    expect(actions).toMatch(/padding:[^;]*max\(32px, 5vw\)/);
     const approve = ruleFor(canvasCss, '.mc-review-approve');
     expect(approve).toContain('min-height: 60px');
     expect(approve).toContain('min-width: 140px');

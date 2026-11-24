@@ -74,6 +74,7 @@ import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanel
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
+import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -243,13 +244,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <div class="mc-dock-surface"></div>
     </aside>
     <div class="mc-ai-scrim" data-hand-dismiss hidden></div>
-    <aside class="mc-ai" aria-label="AI activity" hidden>
+    <aside class="mc-ai" aria-label="AI activity">
       <div class="mc-ai-head">
         <h2 class="mc-ai-h">AI activity</h2>
-        <button type="button" class="mc-ai-close" aria-label="Close AI activity">×</button>
+        <button type="button" class="mc-ai-close" hidden aria-label="Close AI activity">×</button>
       </div>
       <div class="mc-ai-body">
-        <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams.</p>
+        <h3 class="mc-ai-h3">Live</h3>
+        <ol class="mc-ai-live-log" aria-live="polite"></ol>
+        <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams. Pinch clicks, two-finger scrolls and grabs show up here too.</p>
         ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3>
         <p class="mc-ai-ledger-total"></p>
@@ -260,9 +263,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <p class="mc-ai-state" aria-live="polite"></p>
       </div>
     </aside>`;
-  // Every Proposal that needs a decision opens in the full-screen review
-  // dialog (below) — desktop and phone alike, replacing any per-frame or
-  // phone-sheet host this canvas used to need.
+  // Every Proposal that needs a decision opens in the compact floating
+  // review window — the board stays visible behind it.
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
@@ -274,6 +276,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
+  const activityLog = createActivityLog(aiPanel.querySelector<HTMLElement>('.mc-ai-live-log'));
   const panels = mountModelPanels(aiPanel);
   // ---- cross-device screen arrangement + edge tile transfer ----------------
   // The laptop remembers which phone sits on which side (Nothing left, iPhone
@@ -933,22 +936,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // morph / Kannada / self-check-fix / teach reviews that never set `pending`.
   const reviewBusy = (): boolean => turnBusy || !!pending || reviewDialog.isOpen();
 
-  // The panel opens for each AI turn and tucks itself away ~2 s after the
-  // last keep / drop, so the board gets its full width back (unless she opened it).
-  let aiManual = false; let aiHideTimer = 0;
-  const autoHideAi = () => { clearTimeout(aiHideTimer); aiHideTimer = window.setTimeout(() => { if (!aiManual && !pending && !reviewDialog.isOpen()) showAi(false); }, 2000); };
+  // The AI activity drawer stays open for the session so hand events and
+  // model turns are always visible. The scrim is never shown — it would
+  // hide the board.
+  let aiHideTimer = 0;
+  const autoHideAi = (): void => { clearTimeout(aiHideTimer); };
   const aiScrim = root.querySelector<HTMLElement>('.mc-ai-scrim');
-  const closeAi = (): void => { aiManual = false; showAi(false); };
+  const closeAi = (): void => { showAi(true); };
   function showAi(on = true): void {
     clearTimeout(aiHideTimer);
+    if (AI_PANEL_ALWAYS_OPEN) on = true;
     const changed = aiPanel.hidden === on;
     aiPanel.hidden = !on;
-    if (aiScrim) aiScrim.hidden = !on;
+    if (aiScrim) aiScrim.hidden = true;
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
     if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(f)); }
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
-  aiScrim?.addEventListener('click', closeAi);
+  // Scrim stays inert (never used as a dismiss target).
+  showAi(true);
   // sim's scripted engines can resolve near-instantly, which would settle
   // the swarm (and open the review) before a screenshot — or a person — ever
   // sees it mid-flight. Hold it visible for a minimum stretch in sim only;
@@ -965,6 +971,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
     aiPanel.dataset.engine = s.engine;
+    activityLog.push({ kind: 'ai', text: `${s.engine === 'nano' ? 'Quick' : s.engine === 'gemini' ? 'Deep' : s.engine} · ${utterance.trim().slice(0, 80) || 'working'}` });
     // Byte ledger: every AI turn records what actually left the device. Scan
     // the spoken utterance too — not just the canned schema prompt — so a
     // name said aloud (e.g. "floor plan for Mrs Sharma's flat") still shows
@@ -1555,6 +1562,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
+        onHandEvent: (ev) => {
+          if (ev.type === 'pinch-click') activityLog.push({ kind: 'pinch', text: ev.target ? `Pinch click · ${ev.target}` : 'Pinch click', target: ev.target });
+          else if (ev.type === 'scroll') activityLog.push({ kind: 'scroll', text: 'Two-finger scroll' });
+          else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
+        },
         onPinch: (ev) => {
           if (!morphFlow) return;
           if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
@@ -1900,8 +1912,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (paletteCmd === 'close') { closeTools(); return true; }
     if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
-    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { aiManual = true; showAi(true); return true; }
-    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiManual = false; showAi(false); return true; }
+    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true); return true; }
+    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { showAi(true); say('AI activity stays open.'); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
     // Gimbal phrases next: follow my hands / hold still / point / scan the room.
@@ -1980,7 +1992,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, 'calibrate-pinch': startPinchCalibrate } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, 'calibrate-pinch': startPinchCalibrate } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
@@ -2086,7 +2098,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
-    if (!aiPanel.hidden) { e.preventDefault(); aiManual = false; showAi(false); }
   };
   const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height

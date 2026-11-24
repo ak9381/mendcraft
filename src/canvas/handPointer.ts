@@ -272,6 +272,8 @@ export interface HandPointerOptions {
   onTooltip?: (text: string | null, el: HTMLElement | null) => void;
   /** Slot hook: the hand was lost (camera stop or sticky timeout). */
   onLost?: () => void;
+  /** Live activity feed: pinch clicks (with target), two-finger scrolls, fist grabs. */
+  onHandEvent?: (ev: { type: 'pinch-click' | 'scroll' | 'grab'; target?: string | null }) => void;
 }
 
 /** Both hands' pinch-down times must fall in this window to start two-hand zoom. */
@@ -774,6 +776,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
           // Decision buttons need a ~300 ms held pinch (or a 400 ms dwell).
         } else {
           activate(pressedOn);
+          opts.onHandEvent?.({ type: 'pinch-click', target: targetIdOf(pressedOn) });
         }
         // A tap on a text field puts the caret where it landed, as a click does.
         if (tapText && pressedOn === tapText && !dryRun) {
@@ -802,6 +805,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       dragHandleMoved = false;
       dispatchDragEvent(handle, 'pointerdown', p);
       liftTile(handle, true);
+      const grabRoot = handle.closest?.('.mc-review-dialog, .mc-edit-item, .mc-terminal, .mc-ai') as HTMLElement | null;
+      opts.onHandEvent?.({ type: 'grab', target: grabRoot?.classList?.contains('mc-review-dialog') ? 'Review' : targetIdOf(grabRoot ?? handle) });
     } else {
       const hit = deepElementFromPoint(doc, p.x, p.y);
       const scroller = pickPalmScroller(hit, [
@@ -853,6 +858,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     const raw = (deepElementFromPoint(doc, p.x, p.y) as HTMLElement | null) ?? resolved;
     if (!raw) return null;
     if (raw.matches?.(DRAG_HANDLE)) return raw;
+    const handle = raw.closest?.(DRAG_HANDLE) as HTMLElement | null;
+    if (handle) return handle;
     const item = raw.closest?.('.mc-edit-item') as HTMLElement | null;
     return (item?.querySelector?.('[data-mc-drag-handle]') as HTMLElement | null) ?? null;
   }
@@ -1135,6 +1142,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
           const c = mapToScreen(palmCentroid(h), innerWidth, innerHeight);
           if (!palmScrolling) {
             palmScrolling = true;
+            opts.onHandEvent?.({ type: 'scroll', target: null });
             cancelFling();
             palmMotion.reset();
             {

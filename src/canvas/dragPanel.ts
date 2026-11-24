@@ -89,6 +89,9 @@ export interface DraggablePanelOptions {
   id: string;
   storage?: PanelStorage;
   win?: Pick<Window, 'innerWidth' | 'innerHeight'>;
+  /** Already `position: fixed` (review window). Skip the flow spacer and
+   *  just drag in place, clearing `right`/`bottom` so left/top win. */
+  alreadyFixed?: boolean;
 }
 
 export interface DraggablePanel {
@@ -127,15 +130,20 @@ export function mountDraggablePanel(
 
   function floatAt(left: number, top: number): void {
     if (!floating) {
-      const r = panel.getBoundingClientRect();
-      spacer = makeSpacer();
-      spacer.style.height = `${r.height}px`; // holds the panel's old slot open in the flow below it
-      panel.before?.(spacer);
+      if (!opts.alreadyFixed) {
+        const r = panel.getBoundingClientRect();
+        spacer = makeSpacer();
+        spacer.style.height = `${r.height}px`; // holds the panel's old slot open in the flow below it
+        panel.before?.(spacer);
+      }
       panel.classList.add('is-floating');
       floating = true;
     }
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
+    const style = panel.style as { left: string; top: string; right?: string; bottom?: string };
+    style.right = 'auto';
+    style.bottom = 'auto';
+    style.left = `${left}px`;
+    style.top = `${top}px`;
   }
 
   function applyClamped(left: number, top: number): void {
