@@ -10,15 +10,15 @@ import { mountZoomHud } from './zoomHud';
 import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
-import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
+import { resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
 import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
-import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { openEndedAsk } from './openEndedAsk';
-import { createPairFirst, pairedRowHtml, parseConnectDevices } from './pairedRow';
+import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -29,16 +29,15 @@ import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/p
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import { createCanvasInputs } from './canvasInputs';
-import { followWhileBuilding, parseGimbalSpeech } from './gimbalCanvas';
+import { followWhileBuilding } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { createSpotifyAwareConnector, spotifySearchQuery } from './spotifyConnector';
+import { createSpotifyAwareConnector } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
-import { parseMusicIntent } from '../music/musicIntent';
 import { createWizClient, resolveWizToken, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
 import {
@@ -47,7 +46,7 @@ import {
   SplitTileElement, StatTileElement, SwitchTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
-import { parseDeviceCommands, resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
+import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
@@ -76,9 +75,9 @@ import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline'
 import { loadSetup, saveSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
-import { routePlanExtra, type PlanExtra } from './planExtras';
+import type { PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
-import { matchPaletteCommand, mountToolPalette } from './toolPalette';
+import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
@@ -86,6 +85,10 @@ import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createAiFeed } from './aiFeed';
+import { boardForJourney } from './journey';
+import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
+import { routeLine } from './routeLine';
+import { pickNextStepsOnDevice } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -232,6 +235,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let savedAt: string | null = null;
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
 
   const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
@@ -545,13 +549,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     },
     onChange: () => {
       const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase());
+      const rowWasHidden = pairedRow.hidden;
       pairedRow.hidden = !html || phoneShell;
+      // The row changes the bottom inset: re-fit the focused board above it.
+      if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
       if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }
+      nextChips?.refresh();
     },
   });
 
@@ -864,7 +872,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const left = c.getBoundingClientRect().left - viewport.getBoundingClientRect().left;
     return Math.max(0, vp().w - left + DOCK_GAP);
   };
-  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: engineBar ? (engineBar.el.offsetHeight || 68) + 24 : 92 });
+  /** Height the bottom chrome takes: the engine bar, plus the phones arrange
+   *  strip and the connected-device row when they float above it. */
+  const bottomInset = () => {
+    let b = engineBar ? (engineBar.el.offsetHeight || 68) + 24 : 92;
+    const h = viewport.getBoundingClientRect().bottom || vp().h;
+    for (const el of [arrangeStrip, pairedRow]) {
+      if (!el.hidden && el.offsetHeight) b = Math.max(b, Math.round(h - el.getBoundingClientRect().top) + DOCK_GAP);
+    }
+    return b;
+  };
+  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset() });
 
   function clearDock(): void {
     for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
@@ -958,6 +976,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyCamera();
     editBoard.setFocus(focusId, !!focusId && !!surfaces[focusId]?.tiles.length);
     if (phoneShell && focusId) stampMorphTiles(focusId);
+    nextChips?.refresh();
   }
 
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
@@ -1690,6 +1709,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const before = pack;
     pack = next;
     applyStrings();
+    nextChips?.refresh();
     if (pending) tagCardI18n(pending.card);
     opts.voice?.setLang?.(resolveLanguage(next?.lang ?? 'en').speechLang);
     if (o.record) {
@@ -2104,6 +2124,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- offline (simulate + real) ----
   function setOnline(on: boolean, announce = false): void {
     net.setOnline(on);
+    nextChips?.refresh();
     const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
     btn.setAttribute('aria-pressed', String(!on));
     btn.dataset.i18n = on ? 'simulateOffline' : 'offlineOn'; // survives applyStrings
@@ -2152,115 +2173,110 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (morphFlow?.handleSpeech(text)) return true;
     // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
     if (pairFirst.handleSpeech(text)) return true;
-    const paletteCmd = matchPaletteCommand(text);
-    if (paletteCmd === 'open') { openTools(); return true; }
-    if (paletteCmd === 'close') { closeTools(); return true; }
-    if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
-    if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
-    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true, true); return true; }
-    if (/^\s*(open\s+)?(the\s+)?ai\s+monitor\s*$/i.test(text)) { openMonitor(); return true; }
-    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true; }
-    // Active language pack: a spoken phrase routes to the same intents first.
-    if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
-    // Gimbal phrases next: follow my hands / hold still / point / scan the room.
-    // On the web there is no gimbal — handleSpeech answers with the honest why.
-    const gimbalCmd = parseGimbalSpeech(text);
-    if (gimbalCmd === 'scan') { void scanRoom(text); return true; }
-    if (gimbalCmd) return inputs.handleSpeech(text);
-    if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) { addKannada(); return true; }
-    if (/^\s*(show\s+)?history\s*$/i.test(text)) { openHistory(); return true; }
-
     // CAD extras go to the focused plan board (else any plan board); with no
     // plan board the line falls through to the normal routes.
-    {
-      const id = focusId ?? lastFocus;
-      type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
-      const board = (id ? world.querySelector<PB>(`[data-frame="${id}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
-      const planExtra = routePlanExtra(text, !!board?.runExtra);
-      if (planExtra && board?.runExtra) { say(board.runExtra(planExtra)); return true; }
-    }
-
-    const c = parseCanvasCommand(text);
-    if (c) {
-      switch (c.type) {
-        case 'newFrame': newBoard(); break;
-        case 'keep': keep(); break;
-        case 'drop': drop(); break;
-        case 'undo': userUndo(); break;
-        case 'showEverything': void overview(); break;
-        case 'zoom': zoomStep(c.dir); break;
-        case 'zoomReset': zoomReset(); break;
-        case 'save': save(); break;
-        case 'back': if (focusId) void overview(); else if (lastFocus) void focus(lastFocus); break;
-        case 'step': step(c.dir); break;
-        case 'goTo': { const id = resolveFrame(reg.list(), c.target); if (id) void focus(id); else say(`No board called “${c.target}”.`); break; }
-        case 'pin': { const id = focusId ?? lastFocus; if (id) { reg.setPinned(id, c.on); sync(); updateDock(); persist(); say(c.on ? 'Pinned. It docks beside the next board.' : 'Unpinned.'); } break; }
-        case 'buildNext': {
-          const cur = focusId ?? lastFocus;
-          if (cur && surfaces[cur]) reg.setPinned(cur, true);
-          save(); newBoard(); say('Saved. New board ready; your dashboard stays pinned.'); break;
-        }
+    const planId = focusId ?? lastFocus;
+    type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
+    const planBoard = (planId ? world.querySelector<PB>(`[data-frame="${planId}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
+    const r = routeLine(text, {
+      hasPlanBoard: !!planBoard?.runExtra, devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
+      pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
+    });
+    const ranOn = focusId;
+    switch (r.name) {
+      case 'paletteOpen': openTools(); return true;
+      case 'paletteClose': closeTools(); return true;
+      case 'teach': openTeach(); return true;
+      case 'teachList': openTeachList(); return true;
+      case 'showAi': showAi(true, true); return true;
+      case 'monitor': openMonitor(); return true;
+      case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true;
+      case 'packIntent': return runIntent(r.intent);
+      // On the web there is no gimbal — handleSpeech answers with the honest why.
+      case 'gimbalScan': void scanRoom(text); return true;
+      case 'gimbal': return inputs.handleSpeech(text);
+      case 'kannada': addKannada(); return true;
+      case 'history': openHistory(); return true;
+      case 'planExtra': {
+        const said = planBoard!.runExtra!(r.extra);
+        say(said);
+        if (ranOn && planExtraRan(said)) nextChips?.markDone(ranOn, r.extra);
+        return true;
       }
-      return true;
-    }
-
-    // Device speech (works in any board — controls the docked dashboard mid-build).
-    // "play <something>" on a speaker: a search, handled by the speaker connector
-    // (Spotify when connected, honest built-in fallback otherwise).
-    const mi = parseMusicIntent(text);
-    const spQuery = mi?.type === 'searchPlay' && !opts.sim ? spotifySearchQuery(mi.query, !!loadTokens()) : null;
-    const speaker = spQuery ? deviceRefs().find((d) => d.kind === 'music') : undefined;
-    if (spQuery && speaker) {
-      void store.act({ deviceId: speaker.id, playing: true, query: spQuery });
-      say(`Looking for ${spQuery}…`);
-      return true;
-    }
-
-    const dc = parseDeviceCommands(text, deviceRefs(), { pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()) });
-    if (dc) {
-      for (const i of dc.intents) void store.act(i);
-      // With a Kannada pack on, the device-command status line is Kannada too.
-      say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
-      return true;
-    }
-
-    const cd = parseConnectDevices(text);
-    if (cd) {
-      // Phones first; the dashboard review waits for "build the dashboard".
-      const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-      if (!focusId) { sync(); void focus(target); }
-      pairFrame = target;
-      void pairFirst.begin(cd); return true;
-    }
-    if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) {
-      const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-      if (!focusId) { sync(); void focus(target); }
-      void connectRoom(target, text); return true;
-    }
-
-    // "floor plan for Mrs Sharma's flat" / "a floor plan" / "floorplan" —
-    // route to the Nano floor-plan turn with the full utterance so any name
-    // in it (e.g. Sharma) gets redacted by the stayed-local strip.
-    if (/\bfloor\s*plans?\b/i.test(text)) {
-      const cur = focusId;
-      // If the current board already has a surface (e.g. the Living room
-      // dashboard), pin it and draw the plan on a fresh board instead of
-      // drawing the CAD swarm/ghost on top of the dashboard mid-build.
-      let target = cur ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-      if (cur && surfaces[cur]) { reg.setPinned(cur, true); target = reg.add('note', `Board ${reg.list().length + 1}`).id; }
-      if (focusId !== target) { sync(); void focus(target); }
-      floorPlan(target, text); return true;
-    }
-
-    // "connect a device" / "add device" opens the sheet; a named device
-    // ("connect the speaker") becomes a Nano-only by-name turn.
-    const ask = connectAsk(text);
-    if (ask === 'sheet') { openConnectSheet(); return true; }
-    if (ask === 'byName') {
-      const id = focusId ?? lastFocus;
-      if (!id) { say('Open a board first, then connect a device.'); return true; }
-      void nameTurn(id, text);
-      return true;
+      case 'canvas': {
+        const c = r.cmd;
+        switch (c.type) {
+          case 'newFrame': newBoard(); break;
+          case 'keep': keep(); break;
+          case 'drop': drop(); break;
+          case 'undo': userUndo(); break;
+          case 'showEverything': void overview(); break;
+          case 'zoom': zoomStep(c.dir); break;
+          case 'zoomReset': zoomReset(); break;
+          case 'save': save(); break;
+          case 'back': if (focusId) void overview(); else if (lastFocus) void focus(lastFocus); break;
+          case 'step': step(c.dir); break;
+          case 'goTo': { const id = resolveFrame(reg.list(), c.target); if (id) void focus(id); else say(`No board called “${c.target}”.`); break; }
+          case 'pin': { const id = focusId ?? lastFocus; if (id) { reg.setPinned(id, c.on); sync(); updateDock(); persist(); say(c.on ? 'Pinned. It docks beside the next board.' : 'Unpinned.'); } break; }
+          case 'buildNext': {
+            const cur = focusId ?? lastFocus;
+            if (cur && surfaces[cur]) reg.setPinned(cur, true);
+            save(); newBoard(); say('Saved. New board ready; your dashboard stays pinned.'); break;
+          }
+        }
+        return true;
+      }
+      // Device speech (works in any board — controls the docked dashboard mid-build).
+      // "play <something>" on a speaker: a search, handled by the speaker connector
+      // (Spotify when connected, honest built-in fallback otherwise).
+      case 'musicSearch':
+        void store.act({ deviceId: r.deviceId, playing: true, query: r.query });
+        say(`Looking for ${r.query}…`);
+        if (ranOn) nextChips?.markDone(ranOn, 'play-music');
+        return true;
+      case 'device': {
+        const dc = r.result;
+        for (const i of dc.intents) void store.act(i);
+        // With a Kannada pack on, the device-command status line is Kannada too.
+        say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
+        if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
+        return true;
+      }
+      case 'connectDevices': {
+        // Phones first; the dashboard review waits for "build the dashboard".
+        const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
+        if (!focusId) { sync(); void focus(target); }
+        pairFrame = target;
+        void pairFirst.begin({ dashboard: r.dashboard }); return true;
+      }
+      case 'connectRoom': {
+        const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
+        if (!focusId) { sync(); void focus(target); }
+        void connectRoom(target, text); return true;
+      }
+      // "floor plan for Mrs Sharma's flat" / "a floor plan" / "floorplan" —
+      // route to the Nano floor-plan turn with the full utterance so any name
+      // in it (e.g. Sharma) gets redacted by the stayed-local strip.
+      case 'floorPlan': {
+        const cur = focusId;
+        // If the current board already has a surface (e.g. the Living room
+        // dashboard), pin it and draw the plan on a fresh board instead of
+        // drawing the CAD swarm/ghost on top of the dashboard mid-build.
+        let target = cur ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
+        if (cur && surfaces[cur]) { reg.setPinned(cur, true); target = reg.add('note', `Board ${reg.list().length + 1}`).id; }
+        if (focusId !== target) { sync(); void focus(target); }
+        floorPlan(target, text); return true;
+      }
+      // "connect a device" / "add device" opens the sheet; a named device
+      // ("connect the speaker") becomes a Nano-only by-name turn.
+      case 'connectSheet': openConnectSheet(); return true;
+      case 'connectByName': {
+        const id = focusId ?? lastFocus;
+        if (!id) { say('Open a board first, then connect a device.'); return true; }
+        void nameTurn(id, text);
+        return true;
+      }
+      case 'openEnded': break;
     }
     void openEndedTurn(text);
     return true;
@@ -2924,6 +2940,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       },
     };
   }
+
+  // Next-step chips: 2–3 journey steps at the foot of the focused board,
+  // picked by Nano on this device (else the rule list, labelled "Suggested").
+  // Each chip runs a phrase run() already routes. Desktop only.
+  if (!phoneShell) nextChips = createNextStepChips({
+    root: world,
+    focused: () => {
+      const f = focusId ? reg.get(focusId) : undefined;
+      const el = f ? world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`) : null;
+      return f && el ? { id: f.id, el, board: boardForJourney(f, surfaces[f.id]) } : null;
+    },
+    ctx: () => ({
+      lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
+      pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
+    }),
+    nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
+    run: (say) => { run(say); },
+    // A note line (feeds the AI monitor too); no turn running → no blinking cursor.
+    onNano: (line) => { const p = panels.forEngine('nano'); p.log('note', line); if (!turnBusy) p.setWorking(false); },
+  });
 
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();

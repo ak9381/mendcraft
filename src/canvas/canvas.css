@@ -1276,3 +1276,16 @@
 .mc-paired-check { color: #1a7f37; font-weight: 700; }
 .mc-paired-wait { color: var(--text-dim, #777); }
 .mc-phone-simple .mc-paired-row { display: none !important; }
+
+/* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
+   It is its own flex row under .mc-frame-body (which shrinks to make room),
+   so it never covers board content. ≥52px targets for dwell / touch. */
+.mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
+  border-radius: 0 0 18px 18px; }
+.mc-next-src { font-size: 13px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.mc-next[data-source=nano] .mc-next-src { color: var(--accent); }
+.mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
+  border-color: var(--border); font-size: 18px; }
+.mc-next-chip.mc-btn:hover { border-color: var(--accent); }
+.mc-next-chip.mc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
