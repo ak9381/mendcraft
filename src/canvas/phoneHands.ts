@@ -70,7 +70,6 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
   root.append(pill, indicator);
 
   let on = false;
-  let busy = false;
   let fed = false; // the pointer has hands in it (so a lock/stop calls lost())
   let overlay: HandOverlay | null = null;
   let overlayEl: Element | null = null;
@@ -94,6 +93,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     pill.textContent = on ? 'Hands ✓' : 'Hands';
     root.classList.toggle('is-phone-hands', on);
     const s = deps.camera.status();
+    indicator.dataset.state = s;
     indicator.hidden = !(s === 'live' || s === 'starting');
   }
 
@@ -131,27 +131,24 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     }
   });
 
+  // Toggling is never blocked (a tap while the models still load turns it
+  // straight back off); the camera hub serialises the starts and stops.
   async function setOn(next: boolean): Promise<void> {
-    if (next === on || busy) return;
-    busy = true;
-    try {
-      on = next;
-      writePhoneHands(next, deps.storage);
-      paint();
-      if (next) {
-        ensureOverlay();
-        await deps.camera.setUse('hands', true);
-        if (on && deps.camera.status() === 'live') deps.say?.(PHONE_HANDS_ON_LINE);
-      } else {
-        release();
-        deps.pointer.setFacing?.(null, now());
-        await deps.camera.setUse('hands', false);
-        deps.say?.(PHONE_HANDS_OFF_LINE);
-      }
-    } finally {
-      busy = false;
-      paint();
+    if (next === on) return;
+    on = next;
+    writePhoneHands(next, deps.storage);
+    paint();
+    if (next) {
+      ensureOverlay();
+      await deps.camera.setUse('hands', true);
+      if (on && deps.camera.status() === 'live') deps.say?.(PHONE_HANDS_ON_LINE);
+    } else {
+      release();
+      deps.pointer.setFacing?.(null, now());
+      await deps.camera.setUse('hands', false);
+      if (!on) deps.say?.(PHONE_HANDS_OFF_LINE);
     }
+    paint();
   }
 
   const onClick = (): void => { void setOn(!on); };

@@ -171,6 +171,7 @@ export function createPresenceTracker(
   let ownsStream = true;
   let rafId = 0;
   let running = false;
+  let stopped = false;
   let lastFaceAt = -Infinity;
   let lastRunAt = -Infinity;
   let ts = 0;
@@ -367,6 +368,7 @@ export function createPresenceTracker(
   }
 
   async function start(existing?: MediaStream): Promise<void> {
+    stopped = false;
     // Ask for the camera FIRST, in parallel with the wasm/model downloads, so
     // Chrome's permission prompt appears immediately and a model/CSP failure
     // can never hide it (the old order threw before getUserMedia was reached,
@@ -415,10 +417,18 @@ export function createPresenceTracker(
     }
 
     const got = await streamPromise;
+    // stop() was called while the models loaded (the phone hid, or the user
+    // turned hands off): never start the loop after the fact.
+    if (stopped) {
+      if (got.owns) for (const t of got.stream.getTracks()) t.stop();
+      stop();
+      return;
+    }
     stream = got.stream;
     ownsStream = got.owns;
     video.srcObject = stream;
     await video.play();
+    if (stopped) { stop(); return; }
 
     running = true;
     if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running);
@@ -426,6 +436,7 @@ export function createPresenceTracker(
   }
 
   function stop(): void {
+    stopped = true;
     running = false;
     cancelAnimationFrame(rafId);
     if (ownsStream) {

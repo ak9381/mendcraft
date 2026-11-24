@@ -145,6 +145,9 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     }
   }
   const run = (): Promise<void> => {
+    // Stopping never waits behind a start still loading the models: the
+    // camera goes off at once (the in-flight start sees it and bails).
+    if (want.size === 0 || !visible()) { stopTracker(); stopStream(); setStatus('off'); }
     chain = chain.then(reconcile, reconcile);
     return chain;
   };

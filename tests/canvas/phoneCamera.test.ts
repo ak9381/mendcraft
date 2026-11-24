@@ -123,6 +123,28 @@ describe('phone camera hub', () => {
     expect(h.cam.uses()).toEqual(['hands']);
   });
 
+  it('hiding while the models still load stops the camera at once (no wait behind the start)', async () => {
+    const h = harness();
+    let finish: () => void = () => undefined;
+    h.createTracker.mockImplementationOnce((_e, onFrame, o) => {
+      const m = { opts: o, onFrame, start: vi.fn(() => new Promise<void>((r) => { finish = r; })), stop: vi.fn() };
+      h.trackers.push(m);
+      return m;
+    });
+    const starting = h.cam.setUse('hands', true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.cam.status()).toBe('starting');
+    h.doc.visibilityState = 'hidden';
+    (h.doc.addEventListener.mock.calls.find((c) => c[0] === 'visibilitychange')![1] as () => void)();
+    expect(h.trackers[0].stop).toHaveBeenCalled();
+    expect(h.streams[0].track.stop).toHaveBeenCalled();
+    expect(h.cam.status()).toBe('off'); // the indicator goes off at once too
+    finish();
+    await starting;
+    await h.cam.setUse('hands', true);
+    expect(h.cam.status()).toBe('off');
+  });
+
   it('a use turned on while hidden waits for visible', async () => {
     const h = harness();
     h.doc.visibilityState = 'hidden';

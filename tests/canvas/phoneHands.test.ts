@@ -99,6 +99,17 @@ describe('phone Hands pill', () => {
     expect(s.camera.status()).toBe('off');
   });
 
+  it('a second tap while the camera is still starting turns it straight back off', async () => {
+    const s = setup();
+    const first = s.hands.setOn(true);
+    await s.hands.setOn(false);
+    await first;
+    expect(s.hands.isOn()).toBe(false);
+    expect(s.hands.pill.getAttribute('aria-pressed')).toBe('false');
+    expect(s.camera.status()).toBe('off');
+    expect(s.storage.m.has(PHONE_HANDS_KEY)).toBe(false);
+  });
+
   it('resumes when it was left on (persisted)', async () => {
     const s = setup({ storage: memStorage({ [PHONE_HANDS_KEY]: '1' }) });
     await flush(); await flush();
