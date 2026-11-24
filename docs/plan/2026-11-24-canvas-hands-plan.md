@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Branch `sim-main` only; commit messages plain, **no `Co-Authored-By`, no Claude/AI mention**; never push `main`.
+- Branch `sim-main` only; commit messages plain, **no `Co-Authored-By` trailers, no AI-tool mention**; never push `main`.
 - No new runtime dependencies.
 - `?sim=1&hands=0` must never open the camera.
 - Phone shell (`isPhoneCanvasShell`, viewport < 600px or Capacitor) keeps its own layout: new desktop chrome (HUD, engine bar) is hidden there.

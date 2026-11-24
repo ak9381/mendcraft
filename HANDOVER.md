@@ -1,6 +1,6 @@
 # Mendcraft handover
 
-Written 24 Nov 2026 (Asia/Calcutta) so Akash can continue in Claude Code on the Mac at `~/Developer/mendcraft-sim`. Facts below were checked against the `ak9381/mendcraft` git repo (this worktree is `/workspace/hackathon/firebase-hybrid/builder-relay/sim-main-ship`), its git log, and files under `/workspace/hackathon/firebase-hybrid`. Nothing here was invented. No secrets, tokens, or `.env` values are included.
+Written 24 Nov 2026 (Asia/Calcutta) so Akash can continue on the Mac at `~/Developer/mendcraft-sim`. Facts below were checked against the `ak9381/mendcraft` git repo (this worktree is `/workspace/hackathon/firebase-hybrid/builder-relay/sim-main-ship`), its git log, and files under `/workspace/hackathon/firebase-hybrid`. Nothing here was invented. No secrets, tokens, or `.env` values are included.
 
 Repo: https://github.com/ak9381/mendcraft.git  
 Git identity used on this box: Akash K Raju `<ak9381@users.noreply.github.com>`

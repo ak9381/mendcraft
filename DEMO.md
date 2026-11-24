@@ -2,7 +2,7 @@
 
 For the #BuildHybridAI Devpost video. Submissions close **1 Dec 2026, 3:30 AM IST**. Aim for **3:00 or under**, in one continuous take, with English voice-over (or subtitles). Upload to YouTube early; processing is slow.
 
-This is the film plan for the flow Akash described on 24 Nov 2026, checked against `sim-main` in this repo (SHA at the time of writing is on the branch tip). It only claims what the code actually does. Where the code does not yet match the beat, the script says so and gives a way to film today, and the last section lists exact work for Claude Code on the Mac.
+This is the film plan for the flow Akash described on 24 Nov 2026, checked against `sim-main` in this repo (SHA at the time of writing is on the branch tip). It only claims what the code actually does. Where the code does not yet match the beat, the script says so and gives a way to film today, and the last section lists exact build work for the Mac.
 
 Gestures in the current build: **hover-select for 1.5 seconds** (the ring fills), and **two fists on a board to move it**. Do not say “pinch.” Other buttons stay quiet while a two-fist grab is on.
 
@@ -94,7 +94,7 @@ Why this beat is here: the pitch is hands-free work, not a gadget tour. The land
 
 **What the code does today:** there is no visual identifier for a gimbal. Device kinds are lamp, speaker, TV, fan, plug, AC — no gimbal (`src/devices/identify.ts`). DockKit is detected **on the iPhone, when the phone is docked**, by `MendcraftGimbalPlugin` (`ios-src/MendcraftGimbalPlugin.swift`), not by the laptop webcam.
 
-**Film today:** Dock the iPhone in the Flow 2 Pro. You can say, honestly: “The iPhone is in a DockKit gimbal, so it can follow my hands and look where I point.” Do not say the laptop camera recognised the stand unless that work lands (see the Claude list).
+**Film today:** Dock the iPhone in the Flow 2 Pro. You can say, honestly: “The iPhone is in a DockKit gimbal, so it can follow my hands and look where I point.” Do not say the laptop camera recognised the stand unless that work lands (see the build list).
 
 **Model / ledger:** Plugin check is local. No cloud.
 
@@ -137,7 +137,7 @@ Why this beat is here: the pitch is hands-free work, not a gadget tour. The land
 
 **Model / ledger:** First turn **Gemini Nano · on device**. Handoff **Nano → Gemini** (“group the lights and add a room plan”). Second turn **Gemini · cloud**. Footer updates from the real ledger total (`setFooterBytes`).
 
-**Rollback / red flash:** If a build fails after Approve, the last good board is restored and the responsible terminal blinks red (`EnginePanelUi.fail` in `src/canvas/modelPanels.ts`, `.mc-terminal.is-failing` in `src/canvas/canvas.css`; also `rollbackFix` in `src/canvas/selfCheck.ts`). That is real, but it only appears when something actually fails. Do not invent a crash. If you want this in the take, it needs a rehearsed, safe demo seed (Claude list). Otherwise skip it and rely on Approve / Reject.
+**Rollback / red flash:** If a build fails after Approve, the last good board is restored and the responsible terminal blinks red (`EnginePanelUi.fail` in `src/canvas/modelPanels.ts`, `.mc-terminal.is-failing` in `src/canvas/canvas.css`; also `rollbackFix` in `src/canvas/selfCheck.ts`). That is real, but it only appears when something actually fails. Do not invent a crash. If you want this in the take, it needs a rehearsed, safe demo seed (build list). Otherwise skip it and rely on Approve / Reject.
 
 **Status: WORKS** for the two reviews, the swarm-as-agents, the ledger, and fail/rollback when a failure happens. **PARTIAL** for “show a red flash in every take,” and the dashboard still starts from the scripted two lamps, not only the devices you just added.
 
@@ -258,9 +258,9 @@ These are in the product, but the new unified flow did not name them. With a 3:0
 
 ---
 
-## For Claude: what to build
+## Build list
 
-Docs only — do not start this work from the agent that wrote this file. Do it in Claude Code on the Mac, in `~/Developer/mendcraft-sim`, on `sim-main`. No force-push, no production deploy, no secrets in the repo. Keep Nano / Gemini badges and the ledger honest; never invent a cloud call or a device that was not identified.
+Docs only — do not start this work from the agent that wrote this file. Do it on the Mac, in `~/Developer/mendcraft-sim`, on `sim-main`. No force-push, no production deploy, no secrets in the repo. Keep Nano / Gemini badges and the ledger honest; never invent a cloud call or a device that was not identified.
 
 Do these in order. Stop after each one and check the acceptance line before starting the next.
 
