@@ -329,9 +329,10 @@ html, body { margin: 0; height: 100%; background: var(--ink); color: var(--text)
 
 /* ---- SIM: the canvas is running scripted (?sim=1). Persistent banner; the
    header reads SIM, not Live; SIM packets are dashed and say "would send". ---- */
-.mon-sim-banner { position: absolute; top: clamp(70px, 8vh, 96px); left: 50%; transform: translateX(-50%); z-index: 5;
+/* Under the brand, top-left: clear of the tabs and the boundary labels. */
+.mon-sim-banner { position: absolute; top: calc(var(--pad) * 0.6 + 56px); left: var(--pad); z-index: 5;
   font: 600 13px/1.2 var(--mono); letter-spacing: 0.1em; color: var(--amber); white-space: nowrap; pointer-events: none;
-  padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(var(--amber-rgb), 0.5); background: rgba(var(--amber-rgb), 0.08); }
+  padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(var(--amber-rgb), 0.5); background: rgba(var(--amber-rgb), 0.08); }
 .mon-sim-banner[hidden] { display: none; }
 .mon-live[data-sim="true"] { color: var(--amber); }
 .mon-live[data-sim="true"]::before { background: var(--amber); box-shadow: none; }
