@@ -117,7 +117,7 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
-    expect(rule).toContain('right: max(180px, 13vw)');
+    expect(rule).toContain('right: max(180px, 13vw, calc(min(var(--mc-ai-w, 320px), 340px) + 40px))');
     expect(rule).toContain('flex-direction: column');
     expect(rule).toContain('gap: 24px');
     expect(rule).toContain('align-items: stretch');

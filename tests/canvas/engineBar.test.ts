@@ -195,3 +195,14 @@ describe('bar state hygiene', () => {
     expect(q('.mc-engine-card[data-engine="gemini"]').attrs['data-state']).toBe('failed');
   });
 });
+
+describe('turn end', () => {
+  it('settle() finishes any card still Working and leaves the others alone', () => {
+    const { bar, q } = mount();
+    bar.set('nano', 'working', 'connect devices');
+    bar.set('gemini', 'failed', 'x');
+    bar.settle();
+    expect(q('.mc-engine-card[data-engine="nano"]').attrs['data-state']).toBe('done');
+    expect(q('.mc-engine-card[data-engine="gemini"]').attrs['data-state']).toBe('failed');
+  });
+});

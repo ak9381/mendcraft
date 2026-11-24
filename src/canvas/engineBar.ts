@@ -19,6 +19,8 @@ export interface EngineBar {
   setCloudBytes(bytes: number): void;
   /** Queue drained: back to idle, but only if the card is still showing Queued. */
   clearQueued(engine: EngineId): void;
+  /** A turn ended: any card still Working is finished, so it reads Done. */
+  settle(): void;
   /** Swarm summary ("6 agents · Gemini 3 · Nano 3"); '' hides it. */
   setAgents(text: string): void;
   el: HTMLElement;
@@ -109,6 +111,13 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
       void (bar as HTMLElement).offsetWidth;
       bar.classList.add('is-handoff');
       handoffTimer = setTimeout(() => { bar.classList.remove('is-handoff'); handoffTimer = null; }, HANDOFF_MS);
+    },
+    settle() {
+      (['nano', 'gemini'] as const).forEach((e) => {
+        if (cards[e].card.getAttribute('data-state') !== 'working') return;
+        cards[e].card.setAttribute('data-state', 'done');
+        cards[e].state.textContent = STATE_TEXT.done;
+      });
     },
     clearQueued(engine) {
       if (cards[engine].card.getAttribute('data-state') !== 'queued') return;

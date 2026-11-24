@@ -66,7 +66,7 @@ describe('AI panel holds', () => {
   it('an auto-open is a pure overlay: the cluster/swarm shift keys on is-ai-pinned', () => {
     expect(src).toContain("root.classList.toggle('is-ai-pinned', on && !aiAuto)");
     const css = readFileSync(new URL('../../src/canvas/canvas.css', import.meta.url), 'utf8');
-    expect(css).toContain('.mc-canvas.is-ai-pinned .mc-hand-cluster');
+    expect(css).not.toContain('.mc-canvas.is-ai-pinned .mc-hand-cluster');
     expect(css).not.toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster/);
   });
 });
