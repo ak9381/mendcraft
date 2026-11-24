@@ -195,3 +195,10 @@ Line numbers in the tasks are ~70 lines stale; find code by name.
 - C5. Ownership: `canvasApp.ts` template block (the big `root.innerHTML`), `applyStrings`, `showAi`/`autoHideAi`/ledger footer wiring, the "hide ai" reply, `vp()`; `canvas.css` end of file and the cluster/arrange rules; `activityLog.ts`, `modelPanels.ts`, `languagePack.ts`, `toolPalette.ts`, `reviewDialog.ts`, new `engineBar.ts`.
 
 **Later (not in this plan):** DEMO.md build list (point-to-connect, connect→pair phones first, Spotify tile, board-to-phone transfer on grab) — next plan, after this lands. DEMO.md gesture lines get updated when Stream B merges (one fist moves a board, two fists zoom, 0.8 s hover).
+
+## Amendment 2 (25 Nov) — click without waiting
+
+Akash: hold-to-select is too slow/glitchy as the main click. Ruling:
+- **Fist tap = click** (primary): a fist that closes and re-opens within 300 ms with < 12 px palm movement clicks the target under the palm (same target resolution/magnet as dwell; raw direct hit wins). Grab starts only when the fist stays closed ≥ 300 ms or moves ≥ 12 px while closed (replaces the 150 ms hold). Cooldown 400 ms between taps.
+- **Dwell** stays as a fallback, off by default (`mc.dwellClick` = '1' or Tools → "Hover to click"), 800 ms as built.
+- **Face click** (opt-in, Project Gameface idea, Apache-2.0): a mouth-open or brows-up blendshape held ≥ 250 ms (score ≥ 0.6, hysteresis 0.4) clicks the current target, using the FaceLandmarker blendshapes the app already runs. Off by default (`mc.faceClick`).
