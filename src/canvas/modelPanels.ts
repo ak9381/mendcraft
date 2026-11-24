@@ -197,6 +197,10 @@ export interface ModelPanelsUi {
   /** Updates the spanning footer's live "N B sent to cloud" count from the
    *  real cumulative ledger total — never a fabricated number. */
   setFooterBytes(bytes: number): void;
+  /** A turn ended: tell the feed that an engine still Working is Done — the
+   *  same rule as the engine bar's settle(), so the monitor doesn't stay on
+   *  Working after a handoff. Publishes nothing for an engine not Working. */
+  settle(): void;
 }
 
 /** The slice of the engine bar the terminals mirror their state into. */
@@ -211,7 +215,7 @@ function verbState(verb: LogVerb): EngineState | null {
   return 'working';
 }
 
-function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document, bar?: EngineBarSink, feed?: AiFeed): EnginePanelUi {
+function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document, bar?: EngineBarSink, feed?: AiFeed): EnginePanelUi & { settleFeed(): void } {
   const panel = container.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
   const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
   const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
@@ -221,7 +225,12 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
   let lastFed: EngineState | null = null;
   const syncEmpty = () => { if (empty) empty.hidden = lines.childElementCount > 0; };
   syncEmpty();
-  const api: EnginePanelUi = {
+  const api: EnginePanelUi & { settleFeed(): void } = {
+    settleFeed() {
+      if (lastFed !== 'working') return;
+      lastFed = 'done';
+      feed?.publish({ kind: 'state', engine, state: 'done' });
+    },
     log(verb, detail) {
       const line = doc.createElement('p');
       line.className = `mc-term-line mc-term-line--${verb}`;
@@ -278,5 +287,6 @@ export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document,
       feed?.publish({ kind: 'handoff', from, to, text: reason });
     },
     setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); bar?.setCloudBytes(bytes); feed?.publish({ kind: 'bytes', total: bytes }); },
+    settle() { nano.settleFeed(); gemini.settleFeed(); },
   };
 }

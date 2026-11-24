@@ -4,9 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#14130F" />
+    <meta name="theme-color" content="#0A0B09" />
     <title>Mendcraft · AI monitor</title>
-    <style>html,body,#monitor{margin:0;background:#14130F;width:100%;height:100%;min-height:100vh}</style>
+    <!-- Same families the app already loads in index.html; system fallbacks if offline. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <style>html,body,#monitor{margin:0;background:#0A0B09;width:100%;height:100%;min-height:100vh}</style>
   </head>
   <body>
     <main id="monitor" aria-label="AI monitor"></main>
