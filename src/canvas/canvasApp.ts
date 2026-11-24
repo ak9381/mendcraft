@@ -923,8 +923,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function fitBoardWidth(f: Frame): Frame {
     const ins = insets();
     const free = Math.floor(vp().w - ins.left - ins.right - 32);
-    if (free < 480 || f.rect.w <= free) return f;
-    reg.setRect(f.id, { ...f.rect, w: free });
+    // Also clamp height to the space above the phones strip + engine bar (the
+    // board scrolls inside), so its bottom stays reachable.
+    const freeH = Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32));
+    const w = free >= 480 && f.rect.w > free ? free : f.rect.w;
+    const h = !phoneShell && f.rect.h > freeH ? freeH : f.rect.h;
+    if (w === f.rect.w && h === f.rect.h) return f;
+    reg.setRect(f.id, { ...f.rect, w, h });
     sync(); persist();
     return reg.get(f.id) ?? f;
   }
@@ -1255,7 +1260,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
       return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
-    } finally { turnBusy = false; autoHideAi(); }
+    } finally { turnBusy = false; engineBar?.settle(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -2048,6 +2053,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
     aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
     say(r.reply);
+    engineBar?.settle();
     autoHideAi();
   }
 
