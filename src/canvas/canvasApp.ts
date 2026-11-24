@@ -515,14 +515,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.appendChild(pairedRow);
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
+  let flowOpening = false;
+  let flowOwnsHost = false; // only the pair-first flow may auto-hide the pairing host
   const pairFirst = createPairFirst({
     say: (t) => say(t),
     sim: () => simEnv(),
     busy: () => reviewBusy(),
     openPairing: async () => {
-      const id = pairFrame ?? focusId ?? lastFocus;
-      if (!id || !reg.get(id)) return false;
-      openConnectSheet(id);
+      let id = pairFrame ?? focusId ?? lastFocus;
+      if (!id || !reg.get(id)) { // no board yet: make and focus one, never blame the relay
+        id = reg.add('note', `Board ${reg.list().length + 1}`).id;
+        sync(); void focus(id);
+      }
+      pairFrame = id;
+      flowOpening = true;
+      try { openConnectSheet(id); } finally { flowOpening = false; }
       return joinPhone(id);
     },
     buildDashboard: () => {
@@ -537,7 +544,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
-      if (pairingHost && pairFirst.phase() !== 'pairing') pairingHost.hidden = true;
+      if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }
     },
   });
 
@@ -1520,8 +1527,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
   }
+  /** The relay is kept while the pair-first flow still has phones (live/asking). */
+  const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
-    if (pairingStop) { void pairingStop(); pairingStop = null; }
+    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); }
     if (!sheetOpen) return;
     sheetOpen.sheet.unmount();
     sheetOpen.host.hidden = true;
@@ -1535,6 +1544,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const host = world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-connect-host`);
     if (!host) return;
     host.hidden = false;
+    flowOwnsHost = flowOpening;
     const sheet = mountConnectSheet(host, {
       onPoint: () => { closeConnectSheet(); void pointTurn(id); },
       onName: (name) => { closeConnectSheet(); void nameTurn(id, name); },
@@ -1546,6 +1556,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   async function joinPhone(frameId: string): Promise<boolean> {
     const open = sheetOpen; if (!open || open.frameId !== frameId) return false;
+    if (pairingStop && relayKept()) { open.sheet.setStatus(`${pairFirst.phones().length} phone(s) already connected. Use Disconnect in the Connected row to end it.`); return true; }
     if (simEnv() || !net.isOnline()) {
       open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
       return false;

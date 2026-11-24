@@ -162,3 +162,24 @@ describe('flow lifecycle', () => {
     expect(cleared).toEqual([1200, 2600, 4000]);
   });
 });
+
+describe('live phones survive reopening', () => {
+  it('a phone joining while live keeps it live and counts it', async () => {
+    const { pf } = setup();
+    await pf.begin();
+    pf.addPhone({ id: 'ios', label: 'iPhone' });
+    pf.abandon();
+    pf.addPhone({ id: 'android', label: 'Nothing phone' });
+    expect(pf.phase()).toBe('live');
+    expect(pairedRowHtml(pf.phones(), pf.phase())).toContain('2 phones connected');
+  });
+
+  it('losing every real phone while live resets the flow', async () => {
+    const { pf } = setup();
+    await pf.begin();
+    pf.addPhone({ id: 'ios', label: 'iPhone' });
+    pf.abandon();
+    pf.clearReal();
+    expect(pf.phase()).toBe('idle');
+  });
+});
