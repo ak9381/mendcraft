@@ -1289,3 +1289,33 @@
   border-color: var(--border); font-size: 18px; }
 .mc-next-chip.mc-btn:hover { border-color: var(--accent); }
 .mc-next-chip.mc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Join laptop (phone shell): empty-state prompt, Laptop pill, join panel.
+   The phone shell hides the tools menu, so the pill is the persistent entry. */
+.mc-join-prompt, .mc-join-pill, .mc-join-panel { display: none; }
+.mc-phone-simple .mc-join-prompt:not([hidden]) {
+  display: flex; align-items: center; gap: 12px; position: fixed; z-index: 61;
+  left: 16px; right: 16px; top: calc(48px + env(safe-area-inset-top, 0px));
+  padding: 12px 14px; border-radius: 16px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+}
+.mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
+.mc-phone-simple .mc-join-pill:not([hidden]) {
+  display: inline-flex; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+}
+.mc-phone-simple .mc-join-panel:not([hidden]) {
+  display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
+  left: 16px; right: 16px; bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  padding: 16px; border-radius: 18px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
+}
+.mc-join-status { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; }
+.mc-join-code summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--accent-2); font-weight: 600; }
+.mc-join-code-form { display: flex; gap: 8px; }
+.mc-join-code-in {
+  flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; font-size: 18px; letter-spacing: 0.08em;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text);
+}
+.mc-join-close { align-self: flex-end; min-height: 44px; }

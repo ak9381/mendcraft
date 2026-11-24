@@ -4,7 +4,8 @@ import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
-import { phoneRouteBadge, startPhoneLookToEdit, startPhoneRelayGuest } from './phoneCanvasRuntime';
+import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
+import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
@@ -166,12 +167,25 @@ function afterFirstPaint(fn: () => void): void {
 afterFirstPaint(() => {
   if (phoneShell && handle) {
     startPhoneLookToEdit(handle, { sim: params.has('sim') });
-    startPhoneRelayGuest(handle, {
-      sim: params.has('sim'),
+    // Join laptop: a remembered pair rejoins silently (no mic); otherwise the
+    // phone shows "Join laptop", which opens the mic only when tapped and
+    // joins by the laptop's chime (or a typed code). Every join binds the AI
+    // feed forwarder and the re-announce (joinPhoneSession).
+    const h = handle;
+    const sim = params.has('sim');
+    let ui: { update(): void } | null = null;
+    const link = createLaptopLink({
+      storage: (() => { try { return localStorage; } catch { return null; } })(),
       platform: phonePlatform,
       native: isPhone,
+      sim,
       aiForwarder: phoneAiFeed,
+      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform); },
+      onChange: () => ui?.update(),
     });
+    ui = mountLaptopLinkUi(root, link, { sim });
+    void link.rejoinSaved();
+    window.addEventListener('pagehide', () => { void link.stop(); });
   }
 });
 (window as unknown as { __canvas: unknown }).__canvas = handle;

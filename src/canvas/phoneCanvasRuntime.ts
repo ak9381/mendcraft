@@ -1,17 +1,14 @@
-// Phone-simple canvas runtime: look-to-edit (reuse face-only presence) and
-// Relay guest join (joinPhoneSession) so a board dragged from the
-// laptop arrives on this phone. No hand tracking, no new protocol.
+// Phone-simple canvas runtime: look-to-edit (reuse face-only presence), the
+// route badge, and applying a board the laptop sent. The Relay join itself
+// (saved-pair rejoin + first-time chime) lives in laptopLink.ts.
 
 import type { SurfacePlan } from './surfacePlan';
 import type { ControlSnapshot } from '../relay/controlSnapshot';
-import { joinPhoneSession } from './phoneGuestJoin';
-import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
-import type { PhoneAiForwarder } from './phoneAiFeed';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -87,45 +84,5 @@ export function startPhoneLookToEdit(
     cancelled = true;
     document.removeEventListener('visibilitychange', onVis);
     stop();
-  };
-}
-
-export function startPhoneRelayGuest(
-  handle: { showRemoteBoard(plan: SurfacePlan): void },
-  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform; native?: boolean; aiForwarder?: Pick<PhoneAiForwarder, 'bind'> } = {},
-): () => void {
-  if (opts.sim || typeof window === 'undefined') return () => undefined;
-  const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
-  if (storage) ensureDeviceId(storage);
-  const platform = opts.platform ?? 'android';
-  let stopSession: (() => Promise<void>) | null = null;
-  let cancelled = false;
-
-  const saved = loadPhonePair(storage);
-  if (saved?.token) {
-    const join = async (): Promise<void> => {
-      // joinPhoneSession binds the AI-feed forwarder and the re-announce
-      // keep-alive; its stop() tears both down (same helper as the chime join).
-      const res = await joinPhoneSession({
-        code: saved.token,
-        storage,
-        platform,
-        native: opts.native,
-        hubName: 'the laptop',
-        aiForwarder: opts.aiForwarder,
-      });
-      if ('error' in res) return;
-      if (cancelled) { void res.stop(); return; }
-      res.session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
-      stopSession = res.stop;
-    };
-    void join();
-  }
-  // Do not open the pairing-chime microphone at launch — that getUserMedia
-  // call can stall or blank iOS WKWebView before the canvas is up.
-
-  return () => {
-    cancelled = true;
-    void stopSession?.();
   };
 }

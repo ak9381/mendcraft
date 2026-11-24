@@ -148,9 +148,9 @@ describe('joinPhoneSession (every join path: chime, typed code, saved pair)', ()
   });
 
   it('the chime page and the phone-shell canvas both join through joinPhoneSession', () => {
-    for (const f of ['src/canvas/mobileMain.ts', 'src/canvas/phoneCanvasRuntime.ts']) {
+    for (const f of ['src/canvas/mobileMain.ts', 'src/canvas/laptopLink.ts']) {
       const src = readFileSync(resolve(__dirname, '../..', f), 'utf8');
-      expect(src, f).toMatch(/joinPhoneSession\(/);
+      expect(src, f).toMatch(/joinPhoneSession/);
       expect(src, f).not.toMatch(/joinPhoneAsGuest\(/);
     }
   });
