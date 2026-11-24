@@ -1,6 +1,5 @@
 # Canvas navigation, hands, and calmer screen — implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Figma-style pan/zoom + mouse board move, hands that point/select/grab/zoom reliably, and a calmer screen where Nano and Gemini are both always visible.
 

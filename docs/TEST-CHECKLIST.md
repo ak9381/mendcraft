@@ -8,9 +8,9 @@ Local (always latest): http://localhost:5173/canvas.html?fresh=1&sim=1
 Note anything off with its number.
 
 ## 0. Before anything (2 min)
-- [ ] 0.1 Firebase login expired overnight — run in Terminal: `cd ~/Developer/mendcraft-sim && npx firebase-tools login --reauth`, then tell me and I'll redeploy the preview.
-- [ ] 0.2 Plug in the iPhone (unlocked) → I install the latest build.
-- [ ] 0.3 Plug in the Nothing phone (the cable that worked) → I install the latest build.
+- [ ] 0.1 Firebase login expired overnight — run in Terminal: `cd ~/Developer/mendcraft-sim && npx firebase-tools login --reauth`. Then redeploy the preview: `npm run build && npx firebase-tools hosting:channel:deploy sim-main --project mendcraft`.
+- [ ] 0.2 Plug in the iPhone (unlocked) → install the latest build (`xcodebuild … && xcrun devicectl device install app …`, see ios/README.md).
+- [ ] 0.3 Plug in the Nothing phone (the cable that worked, USB debugging allowed) → install the latest build (`npx cap sync android && cd android && ./gradlew assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 
 ## E. Hands on the laptop (most important — 5 min)
 - [ ] E1 Open palm: the glass hand sits ON the cursor; curling fingers doesn't jump it.
@@ -36,7 +36,7 @@ Note anything off with its number.
 - [ ] M4 Switch tabs 1/2/3; Follow (F) jumps to the active device.
 
 ## J. Journey + replay
-- [ ] J1 Chips under each board lead the whole way: Connect devices → Build the dashboard → Play music → Save → Floor plan → Check accessibility → Try to break it → Add Kannada.
+- [ ] J1 Chips under each board lead the whole way: Connect devices → Build the dashboard → Play music → Save (opens a new board) → Draw the floor plan → Check accessibility → … ; "Try to break it" shows on the saved room board (before Add Kannada).
 - [ ] J2 "connect to what I'm pointing at" (sim) → asks which lamp, then proposes it.
 - [ ] J3 Drag the Living room board to the right edge and hold → "Sent to iPhone (SIM)"; board snaps back.
 - [ ] J4 `?replay=demo` plays all 18 steps (~80 s) with a banner + Stop.

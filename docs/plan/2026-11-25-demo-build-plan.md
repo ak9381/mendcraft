@@ -1,6 +1,5 @@
 # Demo build — implementation plan (plan 2)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use `- [ ]`.
 
 **Goal:** Make every `DEMO.md` beat real, add an AI monitor for the Mac's external display, and unblock the iPhone.
 **Architecture:** New isolated modules wired with small hooks; reuse existing hybrid/relay/music/CAD code. Wave 1 = tasks that don't touch the hand pipeline (can run in parallel with plan 1 Stream B). Wave 2 = tasks that touch hands/canvas routing (after Stream B merges).
