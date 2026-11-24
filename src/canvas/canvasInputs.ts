@@ -1,6 +1,8 @@
 // Canvas input composer: bridges hand tracking (canvasHands) and gimbalCanvas.
-// Pinch -> keep, brush -> drop, palm -> palm, point events feed gimbal point mode.
-// Also parses and handles voice commands for gimbal modes, with web status fallback.
+// Pinch -> keep, brush -> drop, palm -> palm, point events go to gimbal point
+// mode (which only holds the stand). Hand frames reach the gimbal in CAMERA
+// space (the presence hands are selfie-mirrored). Also handles the gimbal
+// voice commands and reports what is really enabled on the status line.
 
 import {
   mountCanvasHands,
@@ -11,17 +13,15 @@ import {
   createGimbalCanvasController,
   parseGimbalSpeech,
   NO_GIMBAL_WHY,
-  type Box,
   type GimbalCanvasController,
 } from './gimbalCanvas';
+import { cameraHandsFromSelfie } from './handSpace';
 import type { Pt } from '../input/handLogic';
 
 export interface CanvasInputsCallbacks {
   keep?: () => void;
   drop?: () => void;
   palm?: () => void;
-  pointTarget?: (box: Box) => void;
-  scanFrame?: (i: number) => void;
   status?: (text: string) => void;
   /** Every hand-tracking frame (raw landmarks) — e.g. the always-on
    *  custom-gesture matcher. Fires alongside the gimbal follow below. */
@@ -37,6 +37,10 @@ export interface CanvasInputsOptions {
   root?: HTMLElement;
   hands?: MountHandsFn;
   gimbal?: GimbalCanvasController;
+  /** Opt-in native camera keep-alive for DockKit face tracking (test option). */
+  gimbalKeepAlive?: boolean;
+  /** Another hand tracker is feeding the gimbal (the iPhone's sensing layer). */
+  sensing?: () => boolean;
   on?: CanvasInputsCallbacks;
 }
 
@@ -50,14 +54,20 @@ export interface CanvasInputs {
 
 export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs {
   const on = opts.on ?? {};
+  let activeHandsStop: CanvasHandsStop | null = null;
   const gimbal =
     opts.gimbal ??
     createGimbalCanvasController({
-      onPointTarget: on.pointTarget,
-      onScanFrame: on.scanFrame,
+      handsRunning: () => activeHandsStop !== null || !!opts.sensing?.(),
+      keepAlive: opts.gimbalKeepAlive,
     });
   const handsMount = opts.hands ?? mountCanvasHands;
-  let activeHandsStop: CanvasHandsStop | null = null;
+  const report = (p: Promise<{ ok: boolean; why?: string; status?: string }>): void => {
+    p.then((res) => {
+      const text = res.ok ? res.status : res.why ?? NO_GIMBAL_WHY;
+      if (text) on.status?.(text);
+    }).catch(() => { on.status?.(NO_GIMBAL_WHY); });
+  };
 
   function onHandEvent(ev: CanvasHandEvent): void {
     if (ev.type === 'keep') {
@@ -69,7 +79,9 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     } else if (ev.type === 'point') {
       void gimbal.onPoint(ev.point).catch(() => {});
     } else if (ev.type === 'frame') {
-      void gimbal.onHandsFrame(ev.hands.map((points) => ({ points })), ev.now).catch(() => {});
+      if (gimbal.mode() === 'hands') {
+        void gimbal.onHandsFrame(cameraHandsFromSelfie(ev.hands).map((points) => ({ points })), ev.now).catch(() => {});
+      }
       on.frame?.(ev.hands, ev.now);
     }
   }
@@ -99,7 +111,9 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
       }
       activeHandsStop = null;
     }
-    void gimbal.release().catch(() => {});
+    // No hand frames any more: hands mode would silently stop following.
+    if (gimbal.mode() === 'hands') report(gimbal.setMode('face'));
+    else void gimbal.release().catch(() => {});
   }
 
   function handleSpeech(text: string): boolean {
@@ -107,24 +121,12 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     if (!cmd) return false;
 
     const action =
-      cmd === 'hands'
-        ? gimbal.setMode('hands')
-        : cmd === 'hold'
-        ? gimbal.setMode('hold')
-        : cmd === 'point'
-        ? gimbal.setMode('point')
-        : gimbal.scan();
-
-    action
-      .then((res) => {
-        if (!res.ok) {
-          on.status?.(res.why ?? NO_GIMBAL_WHY);
-        }
-      })
-      .catch(() => {
-        on.status?.(NO_GIMBAL_WHY);
-      });
-
+      cmd === 'keepAliveOn' || cmd === 'keepAliveOff'
+        ? (gimbal.setKeepAlive?.(cmd === 'keepAliveOn') ?? Promise.resolve({ ok: false, why: NO_GIMBAL_WHY }))
+        : cmd === 'scan'
+        ? gimbal.scan()
+        : gimbal.setMode(cmd, { explicit: true });
+    report(action);
     return true;
   }
 

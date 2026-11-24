@@ -9,9 +9,9 @@
 //     only ever reads a boolean `facing` from the injected detector — no frame,
 //     no landmark, ever reaches `onSync` or any wire payload.
 //   • The watcher NEVER opens the front camera if a live camera stream already
-//     exists or the gimbal is active (iPhone on the Insta360 stand). In that case
-//     it falls back to visibility/focus only, so it never steals the rear/gimbal
-//     camera.
+//     exists. In that case it falls back to visibility/focus only, so it never
+//     steals a camera another feature is using. (There is no separate gimbal
+//     guard: no caller ever supplied one.)
 //   • Opening the gaze camera records a ledger START event (on-device), so "I
 //     looked at my phone" is counted honestly without any pixels leaving.
 
@@ -65,8 +65,6 @@ export interface GazeWatcherDeps {
   openGaze: () => Promise<GazeProbe> | GazeProbe;
   /** True when some other camera stream is already live (don't double-open). */
   hasLiveCameraStream: () => boolean;
-  /** True when the iPhone is on the gimbal (never steal the rear/gimbal camera). */
-  gimbalActive: () => boolean;
   /** Current page visibility. */
   isVisible: () => boolean;
   /** Current window focus. */
@@ -88,7 +86,7 @@ export interface GazeWatcher {
 }
 
 /**
- * Build a gaze watcher. If a live camera stream exists or the gimbal is active,
+ * Build a gaze watcher. If a live camera stream exists,
  * it NEVER opens the front camera and runs in visibility/focus-only fallback.
  * Otherwise it opens the gaze probe lazily (recording the on-device start event)
  * and uses `facing` as the strongest sync trigger.
@@ -100,7 +98,7 @@ export function createGazeWatcher(deps: GazeWatcherDeps): GazeWatcher {
   let lastSyncAt: number | null = null;
   let stopped = false;
 
-  const mayOpenCamera = (): boolean => !deps.hasLiveCameraStream() && !deps.gimbalActive();
+  const mayOpenCamera = (): boolean => !deps.hasLiveCameraStream();
 
   function ensureProbe(): void {
     if (stopped || probe || opening || !mayOpenCamera()) return;
@@ -132,7 +130,7 @@ export function createGazeWatcher(deps: GazeWatcherDeps): GazeWatcher {
   return {
     tick() {
       if (stopped) return;
-      // If a camera became live / gimbal engaged mid-session, back off the
+      // If a camera became live mid-session, back off the
       // front camera and fall back to visibility+focus.
       if (!mayOpenCamera()) releaseProbe();
       else ensureProbe();

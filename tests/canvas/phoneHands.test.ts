@@ -6,7 +6,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { mountPhoneHands, PHONE_HANDS_FACE_LINE, PHONE_HANDS_LOST_LINE, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
-import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY, phoneHandsAllowed } from '../../src/canvas/phoneCamera';
+import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY, phoneHandsAllowed, phoneSensingAllowed } from '../../src/canvas/phoneCamera';
+import { createPhoneSensor, PHONE_SENSOR_KEY, SENSOR_ON_LINE } from '../../src/canvas/phoneSensor';
 import { phoneReach } from '../../src/canvas/handFeel';
 import type { PresenceFrame } from '../../src/input/presence';
 
@@ -244,36 +245,116 @@ describe('phone Hands status on the pill and indicator', () => {
   });
 });
 
-describe('Android only: the iPhone (gimbal) never gets hands', () => {
-  it('phoneHandsAllowed: Android phone shell yes; iPhone, desktop no', () => {
+describe('platform split: control on both (pill, facing-gated), sensing on the iPhone', () => {
+  it('phoneHandsAllowed (control hub): Android and iPhone shells; desktop no. phoneSensingAllowed: iPhone only', () => {
     expect(phoneHandsAllowed(true, 'android')).toBe(true);
-    expect(phoneHandsAllowed(true, 'ios')).toBe(false);
+    expect(phoneHandsAllowed(true, 'ios')).toBe(true);
     expect(phoneHandsAllowed(false, 'android')).toBe(false);
     expect(phoneHandsAllowed(true, null)).toBe(false);
+    expect(phoneSensingAllowed(true, 'ios')).toBe(true);
+    expect(phoneSensingAllowed(true, 'android')).toBe(false);
+    expect(phoneSensingAllowed(false, 'ios')).toBe(false);
   });
 
-  it('canvasMain creates the camera hub only when allowed; mountCanvas mounts the pill only with a hub', () => {
+  it('canvasMain creates ONE camera hub; mountCanvas mounts the pill only with a hub, and sensing only when asked', () => {
     const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
     expect(main).toMatch(/const phoneCamera = phoneHandsAllowed\(phoneShell, phonePlatform\)\s*\?\s*createPhoneCamera\(/);
     expect(main).toMatch(/const phonePlatform = capacitor\?\.getPlatform\?\.\(\) === 'ios' \? 'ios' as const : 'android' as const;/);
+    expect(main).toMatch(/phoneSensing: phoneSensingAllowed\(phoneShell, phonePlatform\)/);
     expect(main.match(/createPhoneCamera\(/g)).toHaveLength(1);
     const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(app).toMatch(/const phoneHands = phoneShell && opts\.phoneCamera && handPointer/);
     expect(app.match(/mountPhoneHands\(/g)).toHaveLength(1);
+    expect(app).toMatch(/phoneShell && opts\.phoneSensing && opts\.phoneCamera/);
   });
 
-  it('an iPhone (no hub) → no pill, no tracker, no getUserMedia for hands', async () => {
-    const getUserMedia = vi.fn();
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
-    try {
-      // What canvasMain does on iOS: no hub, so there is nothing to mount.
-      const hub = phoneHandsAllowed(true, 'ios') ? createPhoneCamera({ doc: null, win: null }) : undefined;
-      expect(hub).toBeUndefined();
-      await flush();
-      expect(getUserMedia).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  function iphone(opts: { storage?: ReturnType<typeof memStorage> } = {}) {
+    const s = setup(opts);
+    const sensed: { hands: { x: number; y: number }[][]; now: number }[] = [];
+    const sensor = createPhoneSensor({ camera: s.camera, onHands: (hands, now) => sensed.push({ hands, now }), storage: s.storage, pill: false, now: () => 5 });
+    return { ...s, sensor, sensed };
+  }
+
+  it('iPhone control is OFF by default: fist frames never reach the pointer (no click possible)', async () => {
+    const s = iphone();
+    await s.sensor.request('docked', true);
+    expect(s.camera.status()).toBe('live');
+    s.feed(frame());
+    s.feed(frame({ hands: 2 }));
+    expect(s.hands.isOn()).toBe(false);
+    expect(s.pointer.update).not.toHaveBeenCalled();
+    // …while sensing still gets every hand frame.
+    expect(s.sensed.length).toBe(2);
+  });
+
+  it('pill on + facing → the pointer gets the frames (clicks work through it)', async () => {
+    const s = iphone();
+    await s.hands.setOn(true);
+    s.feed(frame({ handGate: true }));
+    expect(s.pointer.update).toHaveBeenCalledTimes(1);
+    expect(s.pointer.handsLocked()).toBe(false);
+  });
+
+  it('pill on + NOT facing → control locked, but sensing still feeds point/follow (pointing works with facing=false)', async () => {
+    const s = iphone();
+    await s.hands.setOn(true);
+    await s.sensor.request('point', true);
+    s.gate(true);
+    s.feed(frame({ handGate: false }));
+    expect(s.pointer.handsLocked()).toBe(true);
+    expect(s.hands.pill.textContent).toBe(PHONE_HANDS_FACE_LINE);
+    expect(s.sensed.length).toBe(1);
+  });
+
+  it('sensing hands are un-mirrored to camera space (presence hands are selfie-mirrored)', async () => {
+    const s = iphone();
+    await s.sensor.request('follow', true);
+    s.feed(frame()); // every landmark at selfie x = 0.3
+    expect(s.sensed[0]!.hands[0]![0]!.x).toBeCloseTo(0.7, 6);
+  });
+
+  it('one camera, one getUserMedia for sensing + Hands; sensing off → camera off; hidden → camera stops', async () => {
+    const s = iphone();
+    await s.sensor.request('point', true);
+    await s.hands.setOn(true);
+    expect(s.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(s.sensor.running()).toBe(true);
+    await s.hands.setOn(false);
+    expect(s.camera.status()).toBe('live'); // sensing still wants it
+    await s.sensor.request('point', false);
+    expect(s.camera.status()).toBe('off');
+    expect(s.sensor.running()).toBe(false);
+  });
+
+  it('the Track reason is persisted (mc.phoneSensor) and off by default', async () => {
+    const storage = memStorage();
+    const s = iphone({ storage });
+    await flush();
+    expect(s.sensor.reasons()).toEqual([]);
+    expect(s.getUserMedia).not.toHaveBeenCalled();
+    await s.sensor.request('pill', true);
+    expect(storage.m.get(PHONE_SENSOR_KEY)).toBe('1');
+    expect(s.sensor.statusLine()).toBe(SENSOR_ON_LINE);
+  });
+
+  it('stops on hide like every other use (camera lifecycle unchanged)', async () => {
+    let vis: 'visible' | 'hidden' = 'visible';
+    const fns: (() => void)[] = [];
+    const doc = { get visibilityState() { return vis; }, addEventListener: (_: string, fn: () => void) => { fns.push(fn); }, removeEventListener: () => undefined };
+    const track = { readyState: 'live', stop: vi.fn() };
+    const camera = createPhoneCamera({
+      getUserMedia: async () => ({ getTracks: () => [track], getVideoTracks: () => [track] }) as unknown as MediaStream,
+      createTracker: () => ({ start: async () => undefined, stop: vi.fn() }),
+      doc: doc as never, win: null, now: () => 0,
+    });
+    const sensor = createPhoneSensor({ camera, onHands: () => undefined, pill: false, storage: memStorage() });
+    await sensor.request('docked', true);
+    expect(camera.status()).toBe('live');
+    vis = 'hidden';
+    fns.forEach((f) => f());
+    await flush();
+    expect(track.stop).toHaveBeenCalled();
+    expect(camera.status()).toBe('off');
   });
 });
 

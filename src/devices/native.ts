@@ -5,8 +5,8 @@
 //   MendcraftLan    ios/plugins/MendcraftLanPlugin.swift    — UDP/HTTP on the LAN,
 //                   WiZ broadcast discovery, Bonjour browse (the web can't).
 //   MendcraftGimbal ios-src/MendcraftGimbalPlugin.swift — Apple DockKit:
-//                   system face tracking OFF for the life of the app (launch +
-//                   resume); we aim at her hands, or (Add a device) by point/nudge.
+//                   the web layer picks face (DockKit's own tracking), hands
+//                   (our aim, only with a hand tracker) or hold; see gimbalCanvas.ts.
 
 import type { JsonTemplate } from './connector';
 import type { FoundDevice } from './addDeviceFlow';
@@ -19,13 +19,16 @@ export interface LanPlugin {
 
 export interface GimbalPlugin {
   /** DockKit present, iOS 18+, and a stand is docked. */
-  isAvailable(): Promise<{ available: boolean; reason?: string }>;
-  /** Relative move in radians: yaw = pan (+ right), pitch = tilt (+ up). */
-  aim(opts: { yaw: number; pitch: number; seconds?: number }): Promise<{ ok: boolean }>;
-  /** Stop our move; system face tracking stays OFF while Mendcraft is open. */
-  release(): Promise<void>;
-  /** DockKit face tracking. Must be called with enabled:false on launch and resume. */
-  setSystemTrackingEnabled?(opts: { enabled: boolean }): Promise<{ ok: boolean }>;
+  isAvailable(): Promise<{ available: boolean; reason?: string; systemTracking?: boolean }>;
+  /** Relative move in radians: yaw = pan (+ right), pitch = tilt (+ up).
+   *  Native turns system tracking off for this move only, then restores it. */
+  aim(opts: { yaw: number; pitch: number; seconds?: number }): Promise<{ ok: boolean; error?: string }>;
+  /** Restore the last system-tracking state the web layer chose. */
+  release(): Promise<void | { ok?: boolean; enabled?: boolean; error?: string }>;
+  /** DockKit system (subject) tracking. Resolves with what is REALLY on:
+   *  `enabled` is read back from DockKit, `error` is the native error text.
+   *  keepAlive (opt-in) runs a minimal front-camera session while it is on. */
+  setSystemTrackingEnabled?(opts: { enabled: boolean; keepAlive?: boolean }): Promise<{ ok: boolean; enabled?: boolean; keepAlive?: boolean; error?: string }>;
 }
 
 interface CapacitorGlobal {

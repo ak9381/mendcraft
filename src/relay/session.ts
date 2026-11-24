@@ -56,6 +56,8 @@ export interface HostSession extends SessionBase {
   sendPrivacyReply(reply: PrivacyReply): Promise<void>;
   /** Ask every phone still in the room to announce itself again. */
   askWhoIsThere(): Promise<void>;
+  /** Ask the phone of `platform` to take the point-to-connect photo. */
+  askSensePoint(platform: 'ios' | 'android'): Promise<void>;
 }
 
 /** Read-only-ish /control dashboard view: it reads snapshots, and can REQUEST a run
@@ -82,6 +84,8 @@ export interface GuestSession extends SessionBase {
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
   /** The host asked phones to announce themselves again ('whoIsThere'). */
   onWhoIsThere(cb: () => void): void;
+  /** The host asked this phone to take the point-to-connect photo. */
+  onSensePoint(cb: (platform: string) => void): void;
 }
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
@@ -260,6 +264,8 @@ export async function createHostSession(
       transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
     askWhoIsThere: () =>
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere' } }),
+    askSensePoint: (platform) =>
+      transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'sensePoint', text: JSON.stringify({ platform }) } }),
     publishState,
     close: async () => {
       clearTimeout(aliasTimer);
@@ -278,6 +284,7 @@ export async function createGuestSession(
 
   let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
   let whoCb: (() => void) | null = null;
+  let senseCb: ((platform: string) => void) | null = null;
   // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
   // still sees current state (same late-join contract as ControlSession).
   let lastSnapshot: ControlSnapshot | null = null;
@@ -305,6 +312,10 @@ export async function createGuestSession(
       void transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' })
         .catch(() => undefined)
         .then(() => whoCb?.());
+    } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'sensePoint') {
+      let platform = '';
+      try { const o = JSON.parse(msg.cmd.text ?? '{}') as { platform?: unknown }; if (typeof o.platform === 'string') platform = o.platform; } catch { /* malformed */ }
+      if (platform) senseCb?.(platform);
     } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {
@@ -330,6 +341,9 @@ export async function createGuestSession(
     onSnapshot: (cb) => {
       snapshotCb = cb;
       if (lastSnapshot) cb(lastSnapshot);
+    },
+    onSensePoint: (cb) => {
+      senseCb = cb;
     },
     onWhoIsThere: (cb) => {
       whoCb = cb;

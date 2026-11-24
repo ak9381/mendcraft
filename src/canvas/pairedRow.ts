@@ -63,6 +63,8 @@ export interface PairFirst {
   abandon(): void;
   /** Full reset: phones gone, timers cleared (Disconnect, card closed, destroy). */
   cancel(): void;
+  /** Re-render the row (a phone's sub-state changed). */
+  refresh(): void;
 }
 
 const GENERIC_ID = 'phone-generic';
@@ -170,19 +172,27 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
     },
     abandon,
     cancel,
+    refresh: changed,
   };
 }
 
-/** Pure HTML for the connected-device row: a check per joined phone, SIM labelled. */
-export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase): string {
+/** Pure HTML for the connected-device row: a check per joined phone, SIM
+ *  labelled, plus each phone's sub-state (`subOf`, e.g. the iPhone's
+ *  "Gimbal tracking ready" / "Tracking you" — only from real status). */
+export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase, subOf?: (p: PairedPhone) => string): string {
   if (phase === 'idle') return '';
+  const sub = (p: PairedPhone): string => {
+    const t = subOf?.(p) ?? '';
+    return t ? ` <span class="mc-paired-sub" data-phone-sub="${esc(p.id)}">${esc(t)}</span>` : '';
+  };
   if (phase === 'live' || phase === 'asking') {
     const n = phones.length;
     const sim = phones.some((p) => p.sim) ? ' <span class="mc-chip">SIM</span>' : '';
-    return `<span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button>`;
+    const subs = phones.map((p) => { const t = sub(p); return t ? ` <span class="mc-paired-phone">${esc(p.label)}:${t}</span>` : ''; }).join('');
+    return `<span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}${subs}<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button>`;
   }
   const chips = phones.length
-    ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}</span>`).join('')
+    ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}${sub(p)}</span>`).join('')
     : '<span class="mc-paired-wait">Waiting for a phone…</span>';
   const cont = phase === 'pairing'
     ? `<button type="button" class="mc-btn primary mc-paired-continue"${phones.length ? '' : ' disabled'}>Continue</button>`

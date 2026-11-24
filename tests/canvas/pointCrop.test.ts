@@ -6,8 +6,10 @@ import {
   cropAroundPoint,
   fitWithin,
   isIndexExtended,
+  phoneCropFraction,
   pointerInCrop,
   POINT_CROP_FRACTION,
+  rayOutOfFrame,
 } from '../../src/canvas/pointCrop';
 import { classifyGesture, isFistPose } from '../../src/input/gestures';
 
@@ -167,5 +169,40 @@ describe('createSteadyHold', () => {
     expect(s.update(null, 1050)).toBe(false);
     expect(s.update({ x: 0.7, y: 0.5 }, 1100)).toBe(false);
     expect(s.update({ x: 0.7, y: 0.5 }, 1700)).toBe(true);
+  });
+});
+
+describe('iPhone pointing crop (lamp beside the face, 0.5–1 m from the phone)', () => {
+  it('is ~42 % of the frame width, 45 % when the 5→8 ray is short', () => {
+    const long = hand({ x: 0.4, y: 0.6 }, { x: 0.5, y: 0.5 });
+    const short = hand({ x: 0.4, y: 0.6 }, { x: 0.41, y: 0.6 });
+    const rLong = cropAlongRay(long, W, H, { fraction: phoneCropFraction(long, W, H) });
+    const rShort = cropAlongRay(short, W, H, { fraction: phoneCropFraction(short, W, H) });
+    expect(rLong.w).toBe(Math.round(0.42 * W));
+    expect(rShort.w).toBe(Math.round(0.45 * W));
+    // Portrait (720×1280, ~50° across): 60 % of the width ≈ 0.42 m at 0.75 m.
+    const rPortrait = cropAlongRay(long, 720, 1280, { fraction: phoneCropFraction(long, 720, 1280) });
+    expect(rPortrait.w).toBe(Math.round(0.6 * 720));
+    const span = 2 * 0.75 * Math.tan((25 * Math.PI) / 180) * 0.6;
+    expect(span).toBeGreaterThan(0.4);
+  });
+
+  it('a lamp ~35 cm beside the face at 0.75 m (≈ a third of the frame) is inside the crop', () => {
+    // Face centred at x 0.5; she points with her hand below-left of the lamp
+    // which sits at x≈0.83, y≈0.35 (camera space).
+    const lm = hand({ x: 0.62, y: 0.55 }, { x: 0.68, y: 0.48 });
+    const r = cropAlongRay(lm, W, H, { fraction: phoneCropFraction(lm, W, H) });
+    const lamp = { x: 0.83 * W, y: 0.35 * H };
+    expect(lamp.x).toBeGreaterThanOrEqual(r.x);
+    expect(lamp.x).toBeLessThanOrEqual(r.x + r.w);
+    expect(lamp.y).toBeGreaterThanOrEqual(r.y);
+    expect(lamp.y).toBeLessThanOrEqual(r.y + r.h);
+  });
+
+  it('rayOutOfFrame: pointing off the edge is out; a device at the edge is still in', () => {
+    expect(rayOutOfFrame(hand({ x: 0.85, y: 0.5 }, { x: 0.97, y: 0.5 }), W, H)).toBe(true);
+    expect(rayOutOfFrame(hand({ x: 0.5, y: 0.5 }, { x: 0.6, y: 0.5 }), W, H)).toBe(false);
+    expect(rayOutOfFrame(hand({ x: 0.7, y: 0.5 }, { x: 0.75, y: 0.5 }), W, H)).toBe(false);
+    expect(rayOutOfFrame(null, W, H)).toBe(true);
   });
 });

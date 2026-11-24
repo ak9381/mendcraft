@@ -1429,6 +1429,16 @@
   max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* iPhone: the Track pill (hand SENSING for the gimbal / pointing; never acts
+   on the UI) sits just left of the Hands pill. */
+.mc-phone-track-pill { display: none; }
+.mc-phone-simple .mc-phone-track-pill {
+  display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 112px;
+  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+}
+.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mc-paired-sub { font-size: 0.85em; color: var(--text-dim, inherit); }
 /* Facing gate has the hands locked ("Face phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {

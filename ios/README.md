@@ -26,11 +26,9 @@ npm run build                 # produces dist/
 npx cap add ios               # generates ios/App (skip if it already exists)
 
 # 1. the Swift sources (plugins, view controller, scene delegate)
-cp ios-src/MendcraftGimbalPlugin.swift   ios/App/App/
-cp ios-src/MendcraftViewController.swift ios/App/App/
-cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
-cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
-cp ios-src/SceneDelegate.swift           ios/App/App/   # replaces Capacitor's, if any
+cp ios-src/*.swift ios/App/App/ && grep -c requestSystemTrackingOff ios/App/App/*.swift
+#    every count must print 0 (else an old plugin copy is still in the target);
+#    SceneDelegate.swift replaces Capacitor's, if any
 
 # 2. merge the Info.plist keys: copy every <key>/value pair from
 #    ios-src/Info.plist.additions.xml into the top-level <dict> of

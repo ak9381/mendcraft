@@ -1,9 +1,8 @@
-// DockKit follow policy for the Insta360 Flow 2 Pro (optional). Pure aiming
-// math lives here so tests do not need the iOS shell:
-//   - normal use: keep the camera on her hands (centroid of each hand's
-//     wrist–middle-MCP midpoint), never DockKit's own face tracking;
-//   - Add a device: stop following, let her point at the device or nudge
-//     pan/tilt by hand, then hold so the device stays in frame.
+// Custom (hands) aiming for a DockKit stand such as the Insta360 Flow 2 Pro.
+// Pure aiming math lives here so tests do not need the iOS shell. It only
+// moves the stand when hand frames (CAMERA space, not selfie-mirrored) reach
+// onFrame — on the canvas that is gimbalCanvas's 'hands' mode. Following her
+// face is DockKit's own system tracking ('face' mode), not this file.
 
 import { INDEX_TIP, MIDDLE_MCP, WRIST, type Pt } from '../input/handLogic';
 import { classifyGesture } from '../input/gestures';
@@ -11,6 +10,9 @@ import { aimAngles, DEFAULT_FOV } from './native';
 
 export type FollowMode = 'hands' | 'point' | 'hold';
 export type NudgeDir = 'left' | 'right' | 'up' | 'down';
+
+/** Minimum time between two hands-follow moves. */
+export const FOLLOW_INTERVAL_MS = 700;
 
 /** One 8° nudge — enough to reframe, small enough not to whip the stand. */
 export const NUDGE_RAD = (8 * Math.PI) / 180;
@@ -74,7 +76,9 @@ export function createGimbalFollow(opts: {
   intervalMs?: number;
   fov?: { h: number; v: number };
 }): GimbalFollow {
-  const interval = opts.intervalMs ?? 450;
+  // ≥ 700 ms between moves by default: native aim() resolves only after the
+  // move completes, and the `inflight` flag below keeps moves from stacking.
+  const interval = opts.intervalMs ?? FOLLOW_INTERVAL_MS;
   const fov = opts.fov ?? DEFAULT_FOV;
   let mode: FollowMode = 'hands';
   let lastAimAt = 0;

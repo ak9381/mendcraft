@@ -35,7 +35,6 @@ describe('gazeSync watcher camera gating', () => {
     const w = createGazeWatcher({
       openGaze: () => { opened++; return fakeProbe(true); },
       hasLiveCameraStream: () => true,
-      gimbalActive: () => false,
       isVisible: () => true,
       isFocused: () => true,
       now: () => 10000,
@@ -48,21 +47,6 @@ describe('gazeSync watcher camera gating', () => {
     expect(reasons).toEqual(['focus']);
   });
 
-  it('does NOT open the camera when the gimbal is active', () => {
-    let opened = 0;
-    const w = createGazeWatcher({
-      openGaze: () => { opened++; return fakeProbe(true); },
-      hasLiveCameraStream: () => false,
-      gimbalActive: () => true,
-      isVisible: () => true,
-      isFocused: () => false,
-      now: () => 0,
-      onSync: () => {},
-    });
-    w.tick();
-    expect(opened).toBe(0);
-    expect(w.usingCamera()).toBe(false);
-  });
 
   it('opens the gaze camera and records an on-device start (no frames)', async () => {
     let starts = 0;
@@ -70,7 +54,6 @@ describe('gazeSync watcher camera gating', () => {
     const w = createGazeWatcher({
       openGaze: () => fakeProbe(true),
       hasLiveCameraStream: () => false,
-      gimbalActive: () => false,
       isVisible: () => true,
       isFocused: () => false,
       now: () => 50000,

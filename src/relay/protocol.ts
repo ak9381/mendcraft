@@ -179,8 +179,15 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //   • 'whoIsThere' — host → phones: "announce yourselves again". Sent after a
 //     phone drops (the relay can't say which one), so the phones still here
 //     re-announce. No payload. Phones only honour it from the host.
+//   • 'sensePoint' — host → phones: "take the point-to-connect photo with your
+//     camera" (iPhone hand sensing). text: {"platform":"ios"}. Phones only
+//     honour it from the host, and only for their own platform.
+//   • 'pointResult' — phone → host: what that photo was identified as (or why
+//     not). text: a small JSON object coerced by canvas/phonePoint.ts. The
+//     photo itself never rides the relay.
 export type RelayCommandKind =
-  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere';
+  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
+  | 'sensePoint' | 'pointResult';
 
 export interface RelayCommand {
   kind: RelayCommandKind;
@@ -271,9 +278,9 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
-const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent'];
+const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult'];
 
 function isUnit(n: unknown): boolean {
   return n === undefined || n === -1 || n === 0 || n === 1;

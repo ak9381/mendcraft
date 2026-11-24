@@ -129,15 +129,35 @@ function mirrorBox(b: FaceBox): FaceBox {
   return { x, y: b.y, w: b.w, h: b.h, cx: 1 - b.cx, cy: b.cy };
 }
 
+/** A track muted this long counts as lost (WebKit MUTES a camera track
+ *  when another capture — a call, another app, a native session — takes the
+ *  camera; it does not end it). */
+export const CAMERA_MUTE_LOST_MS = 2000;
+
 /** Fire `onLost` when a live camera track ends on its own (unplug, OS
- *  revoke) — not when we called stop() (stillLive is then false). */
+ *  revoke) or stays muted for CAMERA_MUTE_LOST_MS — not when we called
+ *  stop() (stillLive is then false). An unmute in time cancels it. */
 export function watchTracksForEnd(
-  stream: { getTracks(): Array<{ addEventListener(type: 'ended', fn: () => void): void }> },
+  stream: { getTracks(): Array<{ addEventListener(type: 'ended' | 'mute' | 'unmute', fn: () => void): void }> },
   onLost: () => void,
   stillLive: () => boolean,
+  timers: { set(fn: () => void, ms: number): unknown; clear(id: unknown): void } = {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+  },
 ): void {
+  let fired = false;
+  const lost = (): void => { if (!fired && stillLive()) { fired = true; onLost(); } };
   for (const t of stream.getTracks()) {
-    t.addEventListener('ended', () => { if (stillLive()) onLost(); });
+    let muteTimer: unknown = null;
+    t.addEventListener('ended', lost);
+    t.addEventListener('mute', () => {
+      if (muteTimer !== null) return;
+      muteTimer = timers.set(() => { muteTimer = null; lost(); }, CAMERA_MUTE_LOST_MS);
+    });
+    t.addEventListener('unmute', () => {
+      if (muteTimer !== null) { timers.clear(muteTimer); muteTimer = null; }
+    });
   }
 }
 

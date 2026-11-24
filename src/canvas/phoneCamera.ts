@@ -1,6 +1,7 @@
-// ONE front camera for the phone shell. Two features want the front camera:
-// look-to-edit (face only) and hand control (hands + face, for the facing
-// gate). iOS lets only one getUserMedia caller own the lens, and two trackers
+// ONE front camera for the phone shell. Three uses want the front camera:
+// look-to-edit (face only), hand control (hands + face, for the facing gate)
+// and, on the iPhone, hand SENSING for the gimbal and point-to-connect
+// ('sense': hands + face, never acts on the UI). iOS lets only one getUserMedia caller own the lens, and two trackers
 // would halve the frame rate, so this hub owns the single stream and the
 // single presence tracker and fans frames out to both users.
 //
@@ -27,7 +28,7 @@ import { createPresenceTracker, type PresenceFrame, type PresenceTracker } from 
 import { PHONE_FACING, PHONE_HAND_GATE, type FacingOptions, type HandGateConfig } from '../input/faceLogic';
 import { phoneTrackIntervalMs } from './handFeel';
 
-export type PhoneCameraUse = 'hands' | 'face';
+export type PhoneCameraUse = 'hands' | 'face' | 'sense';
 export type PhoneCameraStatus = 'off' | 'starting' | 'live' | 'error';
 
 /** Front camera, modest size: the hand model runs on a ~224 px crop anyway. */
@@ -36,6 +37,19 @@ export const PHONE_CAMERA_CONSTRAINTS: MediaStreamConstraints = {
     facingMode: 'user',
     width: { ideal: 640 },
     height: { ideal: 480 },
+    frameRate: { ideal: 30, max: 30 },
+  },
+  audio: false,
+};
+
+/** iPhone: a sharper stream, because point-to-connect cuts its photo from it
+ *  (a lamp beside the face is a small part of the frame). The hand model
+ *  still runs on a ~224 px crop, so this costs decode, not inference. */
+export const IPHONE_CAMERA_CONSTRAINTS: MediaStreamConstraints = {
+  video: {
+    facingMode: 'user',
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
     frameRate: { ideal: 30, max: 30 },
   },
   audio: false,
@@ -76,6 +90,8 @@ export interface AppLifecycle {
 type EventTargetLike = Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
 
 export interface PhoneCameraDeps {
+  /** getUserMedia constraints (default PHONE_CAMERA_CONSTRAINTS). */
+  constraints?: MediaStreamConstraints;
   createTracker?: TrackerFactory;
   getUserMedia?: (c: MediaStreamConstraints) => Promise<MediaStream>;
   doc?: (Pick<Document, 'visibilityState'> & EventTargetLike) | null;
@@ -188,14 +204,14 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
       setStatus(idleStatus());
       return;
     }
-    const hands = want.has('hands');
+    const hands = want.has('hands') || want.has('sense');
     if (tracker && trackerHands === hands && streamLive()) return;
     setStatus('starting');
     // Hoisted so the catch can tell a real failure from a start that was
     // cancelled (stopped / superseded while `video.play()` was pending).
     let t: ReturnType<typeof makeTracker> | null = null;
     try {
-      if (!streamLive()) { stopStream(); stream = await gum(PHONE_CAMERA_CONSTRAINTS); }
+      if (!streamLive()) { stopStream(); stream = await gum(deps.constraints ?? PHONE_CAMERA_CONSTRAINTS); }
       // A use was turned off or the app hid while the camera opened.
       if (!active()) { stopTracker(); stopStream(); setStatus(idleStatus()); return; }
       stopTracker(); // a mode switch: the tracker restarts, the stream stays
@@ -276,12 +292,20 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   };
 }
 
-/** Hand control runs on the ANDROID phone only (the native Android app, or a
- *  narrow desktop browser standing in for the Android phone). The iPhone is
- *  docked on the gimbal and never hand-controlled: no Hands pill, no hand
- *  tracker, no camera request for hands. */
+/** The phone shell gets the ONE shared camera hub on both platforms.
+ *  Hand CONTROL (palm cursor, fist tap, grab, zoom) is behind the Hands pill
+ *  on both, off by default and facing-gated: phoneHandsControl = Android ||
+ *  iPhone-with-the-pill-on (the pill decides at run time). Hand SENSING (frames
+ *  for the gimbal and point-to-connect, never UI actions) is the iPhone's:
+ *  see phoneSensingAllowed and phoneSensor.ts. */
 export function phoneHandsAllowed(phoneShell: boolean, platform: 'ios' | 'android' | null | undefined): boolean {
-  return phoneShell && platform === 'android';
+  return phoneShell && (platform === 'android' || platform === 'ios');
+}
+
+/** Hand sensing (gimbal follow + pointing from the phone's own camera): the
+ *  iPhone only. On Android sensing is implied by control. */
+export function phoneSensingAllowed(phoneShell: boolean, platform: 'ios' | 'android' | null | undefined): boolean {
+  return phoneShell && platform === 'ios';
 }
 
 /** Persisted Hands switch for the phone shell. Off unless explicitly '1'. */

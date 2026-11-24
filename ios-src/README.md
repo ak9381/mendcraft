@@ -1,7 +1,8 @@
 # Mendcraft iOS sources (`ios-src/`)
 
-These Swift files are written on Linux and are **not compiled here** (no Mac /
-Xcode on the build box). After you generate the Capacitor iOS project on a Mac,
+These Swift files were written on Linux. `MendcraftGimbalPlugin.swift` has
+since been compile-checked with Xcode (generic iOS, no signing) but **not run
+on a device with the stand**. After you generate the Capacitor iOS project on a Mac,
 copy them into the App target.
 
 ## Copy into `ios/App/App`
@@ -9,12 +10,18 @@ copy them into the App target.
 From the `app/` directory, after `npx cap add ios` (or on a later `npx cap sync ios`):
 
 ```sh
-cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
-cp ios-src/MendcraftViewController.swift ios/App/App/
-cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
-cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
-cp ios-src/SceneDelegate.swift           ios/App/App/
+cp ios-src/*.swift ios/App/App/ && grep -c requestSystemTrackingOff ios/App/App/*.swift
 ```
+
+Every count must print **0**. A non-zero count means an old copy (the old
+plugin or view controller) is still in the App target. Copy ALL the files
+together: mixing an old `MendcraftViewController.swift` with the new plugin
+breaks the build. `ios/plugins/*.swift` is a tracked mirror of `ios-src/`,
+kept byte-identical by `tests/ios/swiftCopies.test.ts`.
+
+To check that the new plugin is really in the build: launch the app with the
+stand docked. The status line must read "DockKit tracking on — …" (or a plain
+DockKit error). The old build never prints that line.
 
 Then merge the Info.plist keys and permission strings from
 `ios-src/Info.plist.additions.xml` into `ios/App/App/Info.plist`, and run
@@ -26,15 +33,54 @@ Then in Xcode:
 2. Set the Main storyboard’s view controller class to `MendcraftViewController` (module **App**).
 3. If Capacitor generated a `SceneDelegate.swift` that sets `rootViewController = CAPBridgeViewController()`, replace it with `ios-src/SceneDelegate.swift` so the root is `MendcraftViewController()`. A bare `CAPBridgeViewController` never registers `MendcraftAppleAI`, and can leave the WebView black.
 
-`MendcraftGimbalPlugin.swift` turns DockKit system face tracking **off** in
-`load()`, on `UIApplication.didBecomeActive` (resume), when a stand docks, and
-again from `MendcraftViewController.viewDidAppear`. That call has to actually
-run: otherwise the Flow 2 Pro keeps following a face inside Mendcraft. Tracking
-is turned back on only when the app backgrounds.
+## Gimbal (`MendcraftGimbalPlugin.swift`)
 
-The web layer (already in the hosted bundle) aims at her hands in normal use,
-and in Add a device stops following so she can point or nudge pan/tilt, then
-holds so the device stays in frame.
+The web layer (`src/canvas/gimbalCanvas.ts`) picks one of three modes:
+
+- **face** — DockKit's own subject tracking (`setSystemTrackingEnabled(true)`).
+  We never aim in this mode. This is what "follow me" / "follow my face" /
+  "track me" asks for, and what the iPhone app asks for on launch.
+- **hands** — system tracking off; the web layer aims at her hands. Only when
+  a hand tracker is producing frames; otherwise the app says "Hand following
+  needs a hand tracker — following your face instead" and uses face.
+- **hold** — both off ("hold still" / "stop following").
+
+The plugin no longer forces system tracking off on load, resume, dock or in
+`MendcraftViewController.viewDidAppear`. `aim()` turns system tracking off for
+that one move and restores the last state the web layer chose; `release()`
+restores it too. Backgrounding turns system tracking on (normal behaviour for
+other apps); coming back re-applies the web layer's choice.
+`setSystemTrackingEnabled` resolves `{ ok, enabled, keepAlive, error }`, with
+`enabled` read back from DockKit — the status line only claims following when
+that is true, and shows the native error text otherwise.
+
+**UNVERIFIED — DockKit tracking with the WKWebView camera.** DockKit system
+tracking works from an app's camera capture session. Mendcraft's camera is the
+WebView's `getUserMedia`, which WebKit runs out of process, and the iPhone
+canvas does not open a camera at all unless a feature asks for one. So face
+tracking may do nothing until some camera is running. The status line says
+"DockKit tracking on — needs a camera app/camera running" for that reason.
+
+**Opt-in camera keep-alive (test option, off by default).** Passing
+`keepAlive: true` with `enabled: true` starts a minimal front-camera
+`AVCaptureSession` owned by the app: no preview, no recording, no frame
+processing (a video-data output with no delegate). It stops on hold / hands /
+background. Turn it on with `?gimbalKeepAlive=1` on the canvas URL, or by
+saying "keep alive on" (and "keep alive off"). It may interrupt a WebView
+camera that is already running — check that in the on-device test
+(docs/TEST-CHECKLIST.md, section G). Uses the existing
+`NSCameraUsageDescription`.
+
+Room scan by gimbal is **not** implemented on live runs (the app says so);
+`?sim=1` keeps the scripted, SIM-labelled scan.
+
+**iPhone hand sensing** (`src/canvas/phoneSensor.ts`) runs hands + face on the
+one shared WebView camera (`phoneCamera.ts`) only while the Track pill is on
+or a "follow my hands" / point request is active — docking alone never opens
+the camera, and tapping Track while it runs turns it off. It feeds
+the gimbal's hands mode and point-to-connect (the photo is cut from the same
+stream), never the UI. Hand **control** (Hands pill) is separate, off by
+default, and facing-gated. Both are untested on the device.
 
 ## Apple on-device AI (`MendcraftAppleAIPlugin.swift`)
 
