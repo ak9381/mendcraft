@@ -253,7 +253,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('a fist over a control (a drag handle) never dispatches pointerdown or clicks — fists only grab boards/canvas', () => {
+  it('a held fist on a drag handle grabs it (pointerdown, never a click) — the one control besides a board title a fist may grab', () => {
     const rect = { left: 100, top: 30, width: 120, height: 40, right: 220, bottom: 70 };
     const listeners: Record<string, Array<(e: unknown) => void>> = {};
     const handle = {
@@ -278,11 +278,11 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
       for (let i = 0; i < 8; i++) { t += 33; hp2.update([synthFist(160, 50)], t); }
       const cursor = cursorElOf(d2);
       expect(cursor.classList.contains('is-fist')).toBe(true);
-      t += 33; hp2.update([synthFist(190, 70)], t); // move while fisted
-      expect(pointerDowns).toBe(0);
-      t += 33; hp2.update([synthHand(190, 70, false)], t); // open
+      t += 33; hp2.update([synthFist(190, 70)], t); // move while fisted: now a grab
+      expect(pointerDowns).toBe(1);
+      for (let i = 0; i < 8; i++) { t += 33; hp2.update([synthHand(190, 70, false)], t); } // open
       expect(handle.click).not.toHaveBeenCalled();
-      expect(pointerDowns).toBe(0);
+      expect(pointerDowns).toBe(1);
     } finally {
       hp2.destroy();
     }

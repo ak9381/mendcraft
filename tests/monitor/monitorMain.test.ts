@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAiFeed, type FeedChannel } from '../../src/canvas/aiFeed';
 import {
-  CARRY_MS, createLedger, deriveHeadline, mountMonitor, MONITOR_MAX_LINES, parseDeviceParam, parseRedaction, sentenceCase, stripSim,
+  CARRY_MS, createLedger, deriveHeadline, handoffText, lineStyle, mountMonitor, MONITOR_MAX_LINES, parseDeviceParam, parseRedaction, sentenceCase, stripSim,
 } from '../../src/monitor/monitorMain';
 
 /** Minimal fake DOM (the suite runs under Vitest's node environment). */
@@ -482,7 +482,8 @@ describe('fix round 1', () => {
     feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'connect everything in this room' });
     feed.publish({ kind: 'log', engine: 'gemini', verb: 'received', text: prompt });
     const line = half('laptop', 'cloud').find('mon-line--received')!;
-    expect(line.text()).toMatch(/sent: the model prompt \(\d+ B\)/);
+    expect(line.text()).toContain("the model prompt · 2.3 KB");
+    expect(line.attrs["data-kind"]).toBe("sent");
     expect(line.text()).not.toContain('JSON only');
     expect(line.attrs.title).toBe(prompt);
     // the packet still carries the real bytes delta
@@ -535,5 +536,75 @@ describe('fix round 1', () => {
     ch.toMonitor({ v: 1, sid: 'laptop', t: 101, kind: 'log', engine: 'nano', verb: 'note', text: 'still laptop' });
     expect(half('laptop', 'device').text()).toContain('laptop line');
     expect(half('laptop', 'device').text()).toContain('still laptop');
+  });
+});
+
+describe('activity stream styles', () => {
+  it('maps each verb to a human label, kind and weight', () => {
+    const t = (e: 'nano' | 'gemini' | 'apple' | 'rules', v: string, x = 'x') => {
+      const s = lineStyle(e, v, x);
+      return [s.label, s.kind, s.bold];
+    };
+    expect(t('nano', 'received')).toEqual(['Heard', 'heard', false]);
+    expect(t('gemini', 'received')).toEqual(['Sent', 'sent', true]);
+    expect(t('nano', 'handoff', '→ gemini: plan')).toEqual(['Handed off', 'handoff', true]);
+    expect(t('gemini', 'handoff', '← nano: plan')).toEqual(['Picked up', 'handoff', true]);
+    expect(t('nano', 'redact', 'Sharma → [Client A]')).toEqual(['Redacted', 'redact', true]);
+    expect(t('gemini', 'replied')).toEqual(['Replied', 'replied', false]);
+    expect(t('nano', 'done')).toEqual(['Done', 'done', false]);
+    expect(t('nano', 'fail')).toEqual(['Blocked', 'fail', true]);
+    expect(t('gemini', 'fail')).toEqual(['Failed', 'fail', true]);
+    expect(t('nano', 'plan')).toEqual(['Planning', 'work', false]);
+    expect(t('nano', 'queued')).toEqual(['Queued', 'queued', false]);
+    expect(t('nano', 'note')).toEqual(['Note', 'note', false]);
+    expect(t('nano', 'note', 'self-check: 3 controls, tap replay ok, 0 overlaps')).toEqual(['Self-check', 'self', false]);
+    expect(lineStyle('nano', 'fail', 'Lamps go from 10 to 100 %.').text).toBe('Blocked — Lamps go from 10 to 100 %.');
+    expect(handoffText('→ gemini: plan the Kannada pack')).toBe('→ Gemini: plan the Kannada pack');
+  });
+
+  it('lifts SIM into a pill instead of dropping it', () => {
+    expect(lineStyle('nano', 'note', 'SIM · Checked on this device.')).toMatchObject({ sim: true, text: 'Checked on this device.' });
+    const { feed, half } = setup();
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'note', text: 'SIM · Checked on this device.' });
+    const line = half('laptop', 'device').find('mon-line')!;
+    expect(line.find('mon-sim-pill')!.textContent).toBe('SIM');
+    expect(line.find('mon-verb')!.textContent).toBe('Note');
+  });
+
+  it('renders the stream: labels, kinds, a real redaction struck and tokenised, kept and bold endings', () => {
+    const { feed, half } = setup();
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: "floor plan for Mrs Sharma's flat" });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'redact', text: 'Sharma → [Client A]' });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'done', text: '1 tile filled' });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'done', text: 'again' });
+    const lines = half('laptop', 'device').find('mon-ticker')!.children;
+    expect(lines.map((l) => l.attrs['data-kind'])).toEqual(['heard', 'redact', 'done', 'kept', 'done']);
+    expect(lines.map((l) => l.find('mon-verb')!.textContent)).toEqual(['Heard', 'Redacted', 'Done', 'Kept on device', 'Done']);
+    expect(lines[1]!.find('mon-strike')!.textContent).toBe('Sharma');
+    expect(lines[1]!.find('mon-token')!.textContent).toBe('[Client A]');
+    expect(lines[2]!.attrs['data-bold']).toBe('true'); // the done that ends the turn
+    expect(lines[4]!.attrs['data-bold']).toBe('false');
+    expect(lines[3]!.text()).toContain('✓ Stayed on this device · 0 B');
+    expect(lines[3]!.attrs['data-bold']).toBe('true');
+  });
+
+  it('a redact line without the name → token shape is shown as-is (nothing struck)', () => {
+    const { phone, half } = setup({ withFeed: false });
+    phone({ kind: 'log', engine: 'rules', verb: 'received', text: 'request received', device: 'iphone' });
+    phone({ kind: 'log', engine: 'rules', verb: 'redact', text: 'name kept on the phone → [Client A]', device: 'iphone' });
+    const line = half('iphone', 'device').findAll('mon-line')[1]!;
+    expect(line.attrs['data-kind']).toBe('redact');
+    expect(line.find('mon-strike')).toBeUndefined();
+    expect(line.text()).toContain('name kept on the phone → [Client A]');
+  });
+
+  it('handoff lines read "→ Gemini: …" in bold; sent lines carry the real size', () => {
+    const { feed, half } = setup();
+    kannadaTurn(feed);
+    const h = half('laptop', 'device').findAll('mon-line').find((l) => l.attrs['data-kind'] === 'handoff')!;
+    expect(h.text()).toContain('→ Gemini: plan the Kannada pack — too complex for on-device');
+    expect(h.attrs['data-bold']).toBe('true');
+    const sent = half('laptop', 'cloud').findAll('mon-line').find((l) => l.attrs['data-kind'] === 'sent')!;
+    expect(sent.text()).toContain('2.2 KB');
   });
 });

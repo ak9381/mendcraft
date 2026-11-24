@@ -67,7 +67,8 @@ export interface MorphFlowDeps {
   apply(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): boolean;
   /** When set, the patched tile is shown in the full-screen review and only
    *  applied after Approve — plan-first, same as a board build. */
-  propose?(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): Promise<boolean>;
+  /** `turn`: this morph's own ledger token + words, for the review footer. */
+  propose?(frameId: string, patched: SurfacePlan, summary: string, path?: number[], turn?: { sent: SentInfo; utterance: string }): Promise<boolean>;
   undo(): void;
   ui: MorphUiHooks;
   /** No mic (?sim=1, or a browser with no speech API): the card asks the
@@ -363,7 +364,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     const summary = morphSummary(t.label, utterance);
     deps.ui.log('gemini', 'plan', summary);
     const accepted = deps.propose
-      ? await deps.propose(fid, patched, summary, t.path)
+      ? await deps.propose(fid, patched, summary, t.path, { sent, utterance })
       : deps.apply(fid, patched, summary, t.path);
     if (g !== gen) return;
     if (!accepted) {

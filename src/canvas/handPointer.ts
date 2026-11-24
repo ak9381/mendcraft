@@ -27,8 +27,9 @@
 //
 // Fist grabs are handled by the plural createHandPointer() below: ONE fist
 // held past the tap window (or moved) grabs — over a board it moves the
-// board, over bare canvas it pans the world, over a button or chrome it does
-// nothing; TWO fists zoom the world about their midpoint.
+// board, over a panel's drag/resize handle (DRAG_HANDLE) it drags that
+// handle, over bare canvas it pans the world, over any other button or chrome
+// it does nothing; TWO fists zoom the world about their midpoint.
 // Pinch does nothing in the live pipeline: no pinch-click, no pinch-drag, no
 // pinch-zoom, no pinch-to-keep, and no two-finger scroll.
 //
@@ -66,9 +67,10 @@ export const INTERACTIVE =
 /** A panel's drag handle (its title bar) or a board item's move/resize
  *  handle (editBoard.ts) — also plain `button`s, so they're reachable
  *  through the same INTERACTIVE/collectControls path as any other control.
- *  A pinch-hold that moves drags it (see dragPanel.ts and editBoard.ts,
- *  which listen for the pointerdown/move/up this dispatches); a
- *  pinch-release with no real movement activates it like a tap instead. */
+ *  In the live pipeline a held fist on one drags it (createHandPointer's
+ *  'handle' grab): it dispatches the pointerdown/move/up that dragPanel.ts,
+ *  editBoard.ts and reviewDialog.ts listen for. (The slot's pinch-drag path
+ *  dispatches the same events, but pinch is not wired live — see the top.) */
 /** A drawing area that takes the hand directly (the floor-plan board): no
  *  controls inside, so the pointer hands it hover, tap and drag in client px.
  *  Found via `[data-hand-surface]` + the element's `__mcHandSurface`. */
@@ -332,8 +334,11 @@ export interface HandPointerOptions {
  *  becomes a grab; opening it sooner is a TAP (click). */
 export const GRAB_HOLD_MS = HAND_FEEL.fistTapMs;
 /** A fist over one of these (a board's title) moves the board, even though it
- *  is a control; a fist over any other control does nothing. */
+ *  is a control. A fist over a DRAG_HANDLE drags that handle (see below); a
+ *  fist over any other control does nothing. */
 const BOARD_HANDLE = '.mc-frame-title, [data-mc-board-handle]';
+/* A fist over a DRAG_HANDLE ([data-mc-drag-handle] / [data-mc-resize-handle])
+   grabs that handle too — the one other control a fist may start on. */
 
 /** Magnetic focus: capture radius (a control within this many px of the
  *  cursor captures it) and the ease of the drawn cursor toward its centre.
@@ -1159,6 +1164,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
 type GrabMode =
   | { kind: 'board'; slot: number; frameId: string; last: P }
   | { kind: 'pan'; slot: number; last: P }
+  /** A held fist on a panel's drag/resize handle (the review window's title
+   *  bar or corner, a terminal grip): forwarded as pointerdown/move/up, the
+   *  same events a mouse drag fires, so dragPanel/reviewDialog need nothing new. */
+  | { kind: 'handle'; slot: number; el: HTMLElement; last: P }
   | { kind: 'zoom'; a: P; b: P };
 
 /** Per-slot fist bookkeeping for tap vs grab. */
@@ -1225,6 +1234,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const fist: FistState[] = [freshFist(), freshFist()];
   let lastTapAt = -Infinity;
   let grab: GrabMode | null = null;
+  const handleEvent = opts.createDragEvent ?? ((type: string, p: P) =>
+    new PointerEvent(type, { bubbles: true, composed: true, cancelable: true, clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'pen' }));
+  const fireHandle = (el: HTMLElement, type: string, p: P): void => { if (!opts.dryRun) el.dispatchEvent(handleEvent(type, p)); };
   // Facing gate: only an explicit "not facing" (held FACING_LOCK_MS) locks
   // the hands; unknown (no face tracker / face not visible) never does.
   let awaySince: number | null = null;
@@ -1308,6 +1320,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     setGrab(null);
     if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
     else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
+    else if (g.kind === 'handle') fireHandle(g.el, 'pointerup', g.last);
     else opts.onWorldZoom?.({ phase: 'end', a: g.a, b: g.b });
   }
   /** One holding fist on slot i starts its grab, judged where it closed. */
@@ -1317,7 +1330,15 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (p.x < 0) { s.blocked = true; return; }
     const control = slots[i].controlAt(p);
     const onHandle = !!control && !!control.matches?.(BOARD_HANDLE);
-    if (control && !onHandle) { s.blocked = true; return; } // a fist on a button never grabs
+    if (control && !onHandle && control.matches?.(DRAG_HANDLE)) {
+      // A panel's title bar / resize corner: the fist drags it like a mouse.
+      setGrab({ kind: 'handle', slot: i, el: control, last: p });
+      opts.onHandEvent?.({ type: 'grab', target: control.getAttribute?.('aria-label') ?? 'handle' });
+      fireHandle(control, 'pointerdown', p);
+      stepGrab(slots[i].rawPoint());
+      return;
+    }
+    if (control && !onHandle) { s.blocked = true; return; } // a fist on any other button never grabs
     let frameId: string | null = null;
     if (onHandle) {
       frameId = ((control!.closest?.('.mc-frame') as HTMLElement | null)?.dataset?.frame) ?? frameIdAt(p);
@@ -1348,6 +1369,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     g.last = p;
     if (!dx && !dy) return;
     if (g.kind === 'board') opts.onBoardMove?.({ phase: 'move', frameId: g.frameId, dx, dy, x: p.x, y: p.y });
+    else if (g.kind === 'handle') fireHandle(g.el, 'pointermove', p);
     else opts.onWorldPan?.({ phase: 'move', dx, dy });
   }
   function updateFists(t: number): void {

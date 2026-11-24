@@ -60,3 +60,10 @@ Sim tests use synthetic landmarks; none of this is proven until tried on the Mac
 12. **Glass hand on the cursor** — the drawn hand's palm sits on the coral cursor (no below-left offset), for both hands.
 13. **Facing gate** — turn your head away (pill says "Not facing"): within ~0.3 s the cursor dims, "Look at the screen to use hands" shows, and taps / grabs / pan / zoom do nothing; a board being dragged is dropped where it is. Look back: hands work at once. With no face in view (pill hidden), hands still work.
 14. **Facing pill + face chip** — readable from the chair (large pill, ~200×150 chip, bottom-right), not covering the engine bar or the cluster.
+
+## Overnight status (25 Nov, early morning)
+
+Merged to sim-main (all reviewed): pan/zoom + HUD + title drag; calmer screen + Nano/Gemini engine bar; Kannada visible; hands rewrite (palm cursor, finger-geometry fist tap, fist grab/pan, two-fist zoom, facing gate with looser down-look, overlay on cursor, bigger Facing pill); review window as a plan (resizable, per-turn honest footer); AI monitor "two minds, one boundary" with device tabs + colour-coded activity stream; phones' AI activity relayed to the monitor; in-app "Join laptop" chime pairing; point-to-connect; try-to-break-it refusal; board → phone edge send; next-step chips + single routing table; on-screen keyboard removed; judge replay `?replay=demo` + `npm run e2e` (18 steps, ~80 s, passing).
+In review: hands on the phones (Hands pill, one shared front camera).
+Blocked on Akash: Firebase CLI re-login (`npx firebase-tools login --reauth`) before the next preview deploy; iPhone + Nothing phone plugged in for installs; live hand re-test; real-device run-through (checklist P/S).
+Known flaky under heavy load (pass alone): selfCheckLatency, speculative, surfacePlanNested, phoneLookToEdit, gitignore.secrets. Known missing-fixture failures: goldenTrace8319f68, poseStabilityReplay.
