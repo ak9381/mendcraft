@@ -183,3 +183,15 @@ describe('model panels mirror their engine state into the bar', () => {
     expect(q('.mc-engine-bytes').textContent).toBe('412 B sent to cloud');
   });
 });
+
+describe('bar state hygiene', () => {
+  it('clearQueued returns a Queued card to idle but leaves other states alone', () => {
+    const { bar, q } = mount();
+    bar.set('gemini', 'queued', '1 queued');
+    bar.clearQueued('gemini');
+    expect(q('.mc-engine-card[data-engine="gemini"]').attrs['data-state']).toBe('idle');
+    bar.set('gemini', 'failed', 'x');
+    bar.clearQueued('gemini');
+    expect(q('.mc-engine-card[data-engine="gemini"]').attrs['data-state']).toBe('failed');
+  });
+});

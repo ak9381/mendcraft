@@ -150,7 +150,7 @@
    inside the visible board area and never fly under it (percentages inside
    .mc-swarm recompute against this narrower box), same shift the Tools chip
    and Talk fab already make for the same reason — see below. */
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
+.mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
 .mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: 16px; bottom: 16px;
   width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
@@ -578,7 +578,7 @@
   .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
   .mc-fab-mic .mc-fab-mic-label { display: none; }
   .mc-fab-mic.is-listening .mc-fab-mic-label { display: inline; }
-  .mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: 12px; }
+  .mc-canvas.is-ai-pinned .mc-fab-mic { right: 12px; }
   .mc-menu-open .mc-fab-mic { display: none; }
 }
 
@@ -872,17 +872,17 @@
   max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster {
+.mc-canvas.is-ai-pinned .mc-hand-cluster {
   right: max(max(180px, 13vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 160px)));
 }
 /* Old per-chip `right` offsets are more specific when the AI panel is open
    and would shove relatively-positioned cluster children off the left edge. */
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-fab-mic,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-tools-chip,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-toggle,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-reset,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-register-chip,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-talk-control {
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-fab-mic,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-tools-chip,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-toggle,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-reset,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-register-chip,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-talk-control {
   right: auto;
   top: auto;
   bottom: auto;

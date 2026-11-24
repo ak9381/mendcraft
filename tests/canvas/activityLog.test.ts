@@ -45,12 +45,28 @@ describe('AI activity opens only while a model works', () => {
   it('auto-hides ~3 s after a turn, re-checking review/failure state when the timer fires', () => {
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toContain('const AI_HIDE_MS = 3000');
-    expect(src).toMatch(/if \(reviewBusy\(\) \|\| aiFailed \|\| !aiAuto\) return;/);
+    expect(src).toMatch(/if \(reviewBusy\(\) \|\| aiHold\.size > 0 \|\| !aiAuto\) return;/);
   });
 
   it('an auto-opened panel overlays: vp() ignores it and only a user-pinned open re-flies', () => {
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/aiPanel\.hidden \|\| aiAuto \? 0 :/);
     expect(src).toContain('if (insetBefore !== insetAfter && focusId)');
+  });
+});
+
+describe('AI panel holds', () => {
+  const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+  it('failed and queued engines hold the panel per engine; the timer checks the holds', () => {
+    expect(src).toContain('const aiHold = new Set<EngineId>()');
+    expect(src).toMatch(/state === 'failed' \|\| state === 'queued'\) \{ aiHold\.add\(engine\)/);
+    expect(src).toContain('aiHold.size > 0');
+    expect(src).toContain("aiHold.add('gemini')");
+  });
+  it('an auto-open is a pure overlay: the cluster/swarm shift keys on is-ai-pinned', () => {
+    expect(src).toContain("root.classList.toggle('is-ai-pinned', on && !aiAuto)");
+    const css = readFileSync(new URL('../../src/canvas/canvas.css', import.meta.url), 'utf8');
+    expect(css).toContain('.mc-canvas.is-ai-pinned .mc-hand-cluster');
+    expect(css).not.toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster/);
   });
 });

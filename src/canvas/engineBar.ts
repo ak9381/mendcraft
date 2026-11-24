@@ -17,6 +17,8 @@ export interface EngineBar {
   /** Animates the arrow between the cards for 1.2 s. */
   handoff(from: EngineId, to: EngineId): void;
   setCloudBytes(bytes: number): void;
+  /** Queue drained: back to idle, but only if the card is still showing Queued. */
+  clearQueued(engine: EngineId): void;
   /** Swarm summary ("6 agents · Gemini 3 · Nano 3"); '' hides it. */
   setAgents(text: string): void;
   el: HTMLElement;
@@ -107,6 +109,11 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
       void (bar as HTMLElement).offsetWidth;
       bar.classList.add('is-handoff');
       handoffTimer = setTimeout(() => { bar.classList.remove('is-handoff'); handoffTimer = null; }, HANDOFF_MS);
+    },
+    clearQueued(engine) {
+      if (cards[engine].card.getAttribute('data-state') !== 'queued') return;
+      cards[engine].card.setAttribute('data-state', 'idle');
+      cards[engine].state.textContent = STATE_TEXT.idle;
     },
     setCloudBytes(n) { bytes.textContent = formatFooterBytes(n); },
     setAgents(text) { agents.textContent = text; agents.hidden = !text; },

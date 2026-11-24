@@ -199,9 +199,11 @@ export interface ModelPanelsUi {
 }
 
 /** The slice of the engine bar the terminals mirror their state into. */
-export type EngineBarSink = Pick<EngineBar, 'set' | 'handoff' | 'setCloudBytes'>;
+export type EngineBarSink = Pick<EngineBar, 'set' | 'handoff' | 'setCloudBytes' | 'clearQueued'>;
 
-function verbState(verb: LogVerb): EngineState {
+function verbState(verb: LogVerb): EngineState | null {
+  // A trailing note/handoff line must not flip a finished card back to Working.
+  if (verb === 'note' || verb === 'handoff') return null;
   if (verb === 'fail') return 'failed';
   if (verb === 'done' || verb === 'replied') return 'done';
   if (verb === 'queued') return 'queued';
@@ -230,7 +232,8 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       api.setWorking(!DONE_VERBS.has(verb));
       if (verb === 'fail') panel.classList.add('is-failing');
       else if (DONE_VERBS.has(verb)) panel.classList.remove('is-failing');
-      bar?.set(engine, verbState(verb), detail);
+      const st = verbState(verb);
+      if (st) bar?.set(engine, st, detail);
     },
     fail(detail) { api.log('fail', detail); },
     setWorking(working) {
@@ -247,7 +250,7 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
         queuedBadge.hidden = n <= 0;
         if (n > 0) queuedBadge.textContent = msg;
       }
-      if (count === null || count <= 0) { bar?.set(engine, 'idle'); return; }
+      if (count === null || count <= 0) { bar?.clearQueued(engine); return; }
       api.log('queued', msg);
     },
   };

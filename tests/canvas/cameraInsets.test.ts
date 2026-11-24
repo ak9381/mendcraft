@@ -40,3 +40,20 @@ describe('focusOnInsets', () => {
     expect(centre.y).toBeCloseTo(400, 6);
   });
 });
+
+describe('focusOnInsets bottom inset', () => {
+  it('centres a board in the space above a bottom bar', () => {
+    const rect = { x: 0, y: 0, w: 800, h: 400 };
+    const vp = { w: 1400, h: 800 };
+    const c = focusOnInsets(rect, vp, { top: 100, left: 0, right: 0, bottom: 92 });
+    const centre = worldToScreen(c, { x: 400, y: 200 });
+    expect(centre.y).toBeCloseTo(100 + (800 - 100 - 92) / 2, 0);
+  });
+
+  it('a board taller than the free height pins to the top edge', () => {
+    const rect = { x: 0, y: 0, w: 800, h: 650 };
+    const vp = { w: 1400, h: 800 };
+    expect(focusOnInsets(rect, vp, { top: 100, bottom: 92 }, 16).y).toBe(-116); // 650 > 608
+    expect(focusOnInsets(rect, vp, { top: 100 }, 16).y).not.toBe(-116); // 650 fits without the inset
+  });
+});

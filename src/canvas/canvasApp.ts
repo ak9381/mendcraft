@@ -331,15 +331,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Engine bar: Nano + Gemini always visible (desktop only; CSS also hides it
   // in the phone shell). The terminals mirror their state into it; a failed
   // engine also pins the AI panel open so the reason stays readable.
-  let aiFailed = false;
+  // Engines whose failure/queued state must keep the AI panel open (with the reason).
+  const aiHold = new Set<EngineId>();
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
-      if (state === 'failed') { aiFailed = true; showAi(true); } else if (state === 'working') aiFailed = false;
+      if (state === 'failed' || state === 'queued') { aiHold.add(engine); showAi(true); } else aiHold.delete(engine);
       engineBar.set(engine, state, line);
     },
     handoff: (from, to) => engineBar.handoff(from, to),
     setCloudBytes: (b) => engineBar.setCloudBytes(b),
+    clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
   } : undefined);
   // The bar replaces the swarm pill on desktop: mirror its agent summary
   // (minus the bytes tail, which the bar shows from the ledger) into the bar.
@@ -770,7 +772,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const left = c.getBoundingClientRect().left - viewport.getBoundingClientRect().left;
     return Math.max(0, vp().w - left + DOCK_GAP);
   };
-  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset() });
+  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: engineBar ? (engineBar.el.offsetHeight || 68) + 24 : 92 });
 
   function clearDock(): void {
     for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
@@ -1045,12 +1047,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!aiAuto || aiPanel.hidden) return;
     aiHideTimer = window.setTimeout(() => {
       // Re-check at fire time: a new turn, a waiting review or a failure must keep it open.
-      if (reviewBusy() || aiFailed || !aiAuto) return;
+      if (reviewBusy() || aiHold.size > 0 || !aiAuto) return;
       showAi(false);
     }, AI_HIDE_MS);
   }
   const aiScrim = root.querySelector<HTMLElement>('.mc-ai-scrim');
-  const closeAi = (): void => { aiFailed = false; showAi(false, true); };
+  const closeAi = (): void => { aiHold.clear(); showAi(false, true); };
   /** `pin` marks a user action (stays open, takes layout width); without it
    *  an open is an overlay that autoHideAi() may fold away again. */
   function showAi(on = true, pin = false): void {
@@ -1059,6 +1061,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const insetBefore = !aiPanel.hidden && !aiAuto;
     aiAuto = on && !pin && (!!aiPanel.hidden || aiAuto);
     aiPanel.hidden = !on;
+    // Only a user-pinned panel shifts the cluster/swarm; an auto-open is a pure overlay.
+    root.classList.toggle('is-ai-pinned', on && !aiAuto);
     if (aiScrim) aiScrim.hidden = true;
     root.querySelector('[data-cmd=ai]')?.setAttribute('aria-expanded', String(on));
     // Only a layout-changing (user-pinned) toggle re-flies; an overlay never moves the camera.
@@ -1576,6 +1580,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       net.queueLater('add kannada');
       showAi(true); panels.show();
       panels.forEngine('nano').setQueued(net.laterCount());
+      aiHold.add('gemini'); // the Kannada pack waits on Gemini; keep the reason on screen
       say(`${LATER_LIST_PROMISE}.`);
       return;
     }
@@ -2058,7 +2063,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
     if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true, true); return true; }
-    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiFailed = false; showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true; }
+    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
     // Gimbal phrases next: follow my hands / hold still / point / scan the room.
