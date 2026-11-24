@@ -24,7 +24,7 @@ import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
 import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
-import { createPairFirst, pairedRowHtml } from './pairedRow';
+import { createPairFirst, isBuildDashboard, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -93,7 +93,8 @@ import { mountEngineBar, type EngineBar } from './engineBar';
 import { createAiFeed } from './aiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
-import { routeLine } from './routeLine';
+import { routeLine, type RouteWorld } from './routeLine';
+import type { ReplayHost } from './journeyReplay';
 import { identifyDevice, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
@@ -510,6 +511,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // phone's edge and held for the dwell goes to that phone over the same `state`
   // snapshot; the laptop board snaps back. SIM phones: same glow, no network.
   // Not an AI action, so it never reaches the AI feed — status line only.
+  let boardSends = 0;
   const boardEdge = createBoardEdgeTransferController({
     getViewportWidth: () => viewport.getBoundingClientRect().width || (typeof window !== 'undefined' ? window.innerWidth : 0),
     getLayout: () => pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession }),
@@ -523,6 +525,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         sentBoard.remember({ boardFor: s.target, board: s.board }, focusId, focusId ? surfaces[focusId] ?? null : null);
         publishBoardTransfer(s.frameId, s.board, null, s.target);
       }
+      boardSends++;
       say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
     },
     now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
@@ -675,7 +678,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const hideRetry = () => { retryFn = null; retryBtn.hidden = true; };
   const offerRetry = (fn: () => void) => { retryFn = fn; retryBtn.hidden = false; };
   retryBtn.addEventListener('click', () => { const f = retryFn; hideRetry(); f?.(); });
-  const say = (t: string) => { statusEl.textContent = t; hideRetry(); };
+  // Every status line, in order (the journey replay reads what each step said).
+  const statusLog: string[] = [];
+  let statusBase = 0;
+  const say = (t: string) => {
+    statusEl.textContent = t; hideRetry();
+    statusLog.push(t);
+    if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
+  };
 
   const pinchTwice = createPinchTwiceSession();
   const pinchCalEl = document.createElement('div');
@@ -922,7 +932,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset() });
 
   function clearDock(): void {
-    for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
+    // Delete the dock surface in the processor too: forgetting it only here made
+    // the next renderDock re-create it ("Surface f1-dock already exists").
+    for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: sid } }] as never); }
     dockSurfaceEl.innerHTML = '';
     dockEl.hidden = true;
   }
@@ -1170,7 +1182,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}',
     nanoPlan: '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}',
   };
-  const engineFor = (id: EngineId, json: string): SurfaceEngine => opts.engines?.[id]?.(json) ?? scriptedEngine(id, json);
+  // Model streams in flight (any engine, fallbacks included): the replay's
+  // "is a turn still running?" for turns that don't hold turnBusy.
+  let streamsOut = 0;
+  const counted = (e: SurfaceEngine): SurfaceEngine => ({
+    ...e,
+    stream: async (prompt, onText) => { streamsOut++; try { return await e.stream(prompt, onText); } finally { streamsOut--; } },
+    fallback: e.fallback ? counted(e.fallback) : undefined,
+  });
+  const engineFor = (id: EngineId, json: string): SurfaceEngine => counted(opts.engines?.[id]?.(json) ?? scriptedEngine(id, json));
   const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light', 'speaker-1': 'Speaker' };
   const DEVICE_KINDS: Record<string, DeviceKind> = { 'speaker-1': 'music' };
   const isDeviceTile = (t: SurfacePlan['tiles'][number]): t is Extract<SurfacePlan['tiles'][number], { deviceId: string }> =>
@@ -2385,6 +2405,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const intent = pack ? routePackPhrase(text, pack) : null;
     micFab.setHeard(text, intent ? `understood as: ${INTENT_ENGLISH[intent]}` : null, resolveLanguage('kn'));
   }
+  type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
+  function routePlanBoard(): PB | null {
+    const planId = focusId ?? lastFocus;
+    return (planId ? world.querySelector<PB>(`[data-frame="${planId}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
+  }
+  function routeWorld(planBoard: PB | null): RouteWorld {
+    return {
+      hasPlanBoard: !!planBoard?.runExtra, devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
+      pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
+    };
+  }
   function run(text: string): boolean {
     captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
@@ -2397,13 +2428,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
     // plan board the line falls through to the normal routes.
-    const planId = focusId ?? lastFocus;
-    type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
-    const planBoard = (planId ? world.querySelector<PB>(`[data-frame="${planId}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
-    const r = routeLine(text, {
-      hasPlanBoard: !!planBoard?.runExtra, devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
-      pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
-    });
+    const planBoard = routePlanBoard();
+    const r = routeLine(text, routeWorld(planBoard));
     const ranOn = focusId;
     switch (r.name) {
       case 'paletteOpen': openTools(); return true;
@@ -3231,6 +3257,40 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), destroy };
+  // ?replay=demo (journeyReplay.ts): read-only probes plus the same actions a
+  // person takes — approve the open review, press Simulate offline, hold the
+  // focused board at a paired phone's edge. Nothing here bypasses a review.
+  const replay: ReplayHost = {
+    run,
+    // The pair-first flow claims "build the dashboard" before routeLine does.
+    routeOf: (text) => ((pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking') && isBuildDashboard(text)
+      ? 'pairFirst' : routeLine(text, routeWorld(routePlanBoard())).name),
+    isReviewOpen: () => !!pending || reviewDialog.isOpen(),
+    reviewTitle: () => root.querySelector('.mc-review-title')?.textContent ?? '',
+    reviewApprove: keep,
+    isIdle: () => !turnBusy && !pending && !reviewDialog.isOpen() && streamsOut === 0 && pairFirst.phase() !== 'pairing',
+    statusMark: () => statusBase + statusLog.length,
+    statusSince: (mark) => statusLog.slice(Math.max(0, mark - statusBase)),
+    isOnline: () => net.isOnline(),
+    toggleOffline: () => root.querySelector<HTMLElement>('[data-cmd=offline]')?.click(),
+    async sendBoard(to) {
+      const id = focusId ?? lastFocus;
+      if (!id || !surfaces[id]) return false;
+      const layout = pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession });
+      const side = layout.left === to ? 'left' : layout.right === to ? 'right' : null;
+      if (!side) return false;
+      const w = viewport.getBoundingClientRect().width || window.innerWidth;
+      const at = { frameId: id, clientX: side === 'left' ? 1 : w - 1, clientY: window.innerHeight / 2 };
+      const before = boardSends;
+      boardEdge.handleBoardDrag({ ...at, phase: 'start' });
+      for (let t = 0; t < 40 && boardSends === before; t++) {
+        await new Promise((r) => setTimeout(r, 100));
+        boardEdge.handleBoardDrag({ ...at, phase: 'move' });
+      }
+      boardEdge.handleBoardDrag({ ...at, phase: 'end' });
+      return boardSends > before;
+    },
+  };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;
