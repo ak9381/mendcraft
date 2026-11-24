@@ -233,6 +233,11 @@ export interface MountHandlesOptions {
    *  since the terminal column can open/close mid-session. */
   getBounds(): Rect;
   onCommit?(layout: ItemLayout): void;
+  /** Fired ONLY from the MOVE handle (never resize, never two-hand pinch) once a
+   *  drag has engaged, so a one-hand/mouse move can drive cross-device edge
+   *  transfer. 'move' streams the live pointer; 'end' fires on a committed drop;
+   *  'cancel' on a lost-hand/Escape abort (no fling across devices). */
+  onMoveDrag?(phase: 'move' | 'end' | 'cancel', clientX: number, clientY: number): void;
   /** Accidental-touch guard: a move/resize does nothing (and never commits)
    *  until the pointer has travelled past this many px from the pointerdown —
    *  so a tremor or a brush against a tile in Edit mode can't nudge it. Kept in
@@ -288,36 +293,46 @@ export function mountItemHandles(
   }
   apply();
 
-  let moveStart: { x: number; y: number; left: number; top: number; engaged: boolean } | null = null;
+  let moveStart: { x: number; y: number; left: number; top: number; engaged: boolean; lastX: number; lastY: number } | null = null;
   function onMoveDown(e: PointerLikeEvent): void {
-    moveStart = { x: e.clientX, y: e.clientY, left: layout.left, top: layout.top, engaged: false };
+    moveStart = { x: e.clientX, y: e.clientY, left: layout.left, top: layout.top, engaged: false, lastX: e.clientX, lastY: e.clientY };
     armEscape();
     if (e.pointerId != null) moveHandle.setPointerCapture?.(e.pointerId);
   }
   function onMoveMove(e: PointerLikeEvent): void {
     if (!moveStart) return;
+    moveStart.lastX = e.clientX;
+    moveStart.lastY = e.clientY;
     if (!moveStart.engaged) {
       if (!pastSlop(e.clientX - moveStart.x, e.clientY - moveStart.y, slop)) return;
       moveStart.engaged = true;
     }
     layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x), top: moveStart.top + (e.clientY - moveStart.y) }, opts.getBounds());
     apply();
+    opts.onMoveDrag?.('move', e.clientX, e.clientY);
   }
   function onMoveEnd(): void {
     if (!moveStart) return;
     const engaged = moveStart.engaged;
+    const { lastX, lastY } = moveStart;
     moveStart = null;
     disarmEscape();
-    if (engaged) opts.onCommit?.(layout);
+    if (engaged) {
+      opts.onCommit?.(layout);
+      opts.onMoveDrag?.('end', lastX, lastY);
+    }
   }
   /** A3-006: pointercancel (hand lost mid-drag, Hands off) or Escape aborts —
    *  the tile goes back to where it was grabbed and nothing is committed. */
   function onMoveCancel(): void {
     if (!moveStart) return;
+    const { engaged, lastX, lastY } = moveStart;
     layout = { ...layout, left: moveStart.left, top: moveStart.top };
     moveStart = null;
     disarmEscape();
     apply();
+    // A lost hand mid-drag cancels any pending edge transfer — never a fling.
+    if (engaged) opts.onMoveDrag?.('cancel', lastX, lastY);
   }
 
   const resizeHandles: DirectionedHandle[] = Array.isArray(resizeHandle) ? resizeHandle : [{ el: resizeHandle, dir: 'se' }];
@@ -484,6 +499,10 @@ export interface EditBoardOptions {
   /** A committed move/resize overlapped other tiles and was nudged clear;
    *  `before` is the board's layout from before that move — one undo step. */
   onItemNudged?(frameId: string, key: string, before: FrameLayoutMap, after: FrameLayoutMap): void;
+  /** Live move-handle drag (ONE hand or mouse only — never resize, never a
+   *  two-hand pinch), so the host can light an edge glow and commit a
+   *  cross-device tile transfer. 'move' streams; 'end' drops; 'cancel' aborts. */
+  onItemDrag?(ev: { frameId: string; key: string; phase: 'move' | 'end' | 'cancel'; clientX: number; clientY: number }): void;
 }
 
 export interface EditBoardController {
@@ -644,6 +663,9 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
         min: minSize,
         max: maxSize,
         getBounds: () => liveBounds(canvasEl),
+        onMoveDrag: opts.onItemDrag
+          ? (phase, clientX, clientY) => opts.onItemDrag!({ frameId, key: it.key, phase, clientX, clientY })
+          : undefined,
         onCommit: (l0) => {
           const before: FrameLayoutMap = { ...saved };
           const others = items.filter((o) => o.key !== it.key).map((o) => saved[o.key]).filter((o): o is ItemLayout => !!o);
