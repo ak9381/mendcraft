@@ -85,8 +85,17 @@ Order: 2a (parallel, now) Tasks 4, 5, 6 · 2b (after hands Stream B merges) Task
 - [ ] Tests with fakes: connected + Marshall present → transfer to it then play; no Marshall → browser device; not connected → inner + notice; search miss → notice, no fake title.
 - [ ] Commit `Speaker tile plays through Spotify when connected.`
 
-### Task 7 (2b): Remove the on-screen keyboard — exact list in `DEMO.md` Build list 7.
+### Task 7 (2b): Remove the on-screen keyboard
+
+**Files:** exact delete/edit/test list in `DEMO.md` Build list 7 (onscreenKeyboard.ts, keyboardLogic.ts, handKeyboard.ts; mounts in canvasApp.ts, handPointer.ts, main.ts, referencePanel.ts; tests keyboardLogic, capsLock, handKeyboard, keyboard-hand-path, keyboard parts of say-box-hand-path, t2-B-props-panel, browser-panel-hand-path). Also remove engine-bar/CSS rules that only existed to hide chrome while the hand keyboard was open.
+- [ ] Acceptance: no on-screen keyboard anywhere (canvas, studio, phone); no dead "Keyboard" button; Talk, say box (typed), hover/fist still work; `vitest run` baseline only.
+- [ ] Commit `Remove the on-screen keyboard.`
 ### Task 8 (2b): Point-to-connect — recon in workspace `plan2-recon.md` item 1; never defaults to a speaker; honest ledger source.
-### Task 9 (2b): Board → phone on a held-fist board drag reaching a paired edge (recon item 4); cancel snaps back.
+### Task 9 (2b): Board → phone on a held-fist drag
+
+**Files:** Modify `src/canvas/canvasApp.ts` (the `onBoardMove` handler for hands AND the mouse title-drag `onMove/onEnd` from boardDrag), `src/canvas/edgeTransfer.ts` (add a whole-board path next to the tile path), reuse `screenLayout` edge intent/dwell + `publishBoardTransfer`; Test `tests/canvas/boardEdgeTransfer.test.ts`.
+**Behaviour:** while a board is being dragged (one-fist grab or mouse title drag), the drag point approaching the paired side's screen edge lights the existing edge glow; holding at the edge for the existing dwell commits → `publishBoardTransfer(frameId, surface)` sends the whole board to that phone and the board snaps back to where the drag started on the laptop (it isn't deleted); leaving the edge or releasing early cancels with no transfer. Only when a phone is paired on that side (pair-first flow / host session); under `?sim=1` with SIM phones, show the same glow and a SIM-labelled "Sent to iPhone (SIM)" without network. Status line + AI-feed-free (this is not AI). Mark journey step 'shared' (expose a hook the journey can read: e.g. `sharedBoards` set).
+- [ ] Tests: drag reaching right edge with iPhone paired right + dwell → one publish, board rect restored; leave early → none; no phone on that side → no glow, no publish; mouse title drag path behaves the same.
+- [ ] Commit `Drag a board to a paired phone's edge to send it.`
 ### Task 10 (2b): Journey replay `?replay=demo` + end-to-end test: a timeline of the journey's `say` lines (from Task 4's suggestions) run through `run()`, reviews auto-approved after 2 s with a visible "Replay" label; the same timeline in a vitest asserts every step lands (no "isn't a canvas command", each review kept, final boards present, ledger text SIM-labelled).
 Also in 2b: Nano card settles after the Kannada handoff (languageTurn → settle); wire face click to FaceLandmarker blendshapes if cheap.
