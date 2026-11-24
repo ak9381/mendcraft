@@ -7,8 +7,8 @@ export interface Pt { x: number; y: number }
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Viewport { w: number; h: number }
 
-export const MIN_Z = 0.08;
-export const MAX_Z = 1;
+export const MIN_Z = 0.1;
+export const MAX_Z = 2;
 
 const clampZ = (z: number) => Math.min(MAX_Z, Math.max(MIN_Z, z));
 

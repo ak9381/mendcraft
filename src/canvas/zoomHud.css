@@ -1,0 +1,13 @@
+.mc-zoom-hud { position: absolute; z-index: 9; left: 16px; bottom: 16px; display: flex; align-items: center; gap: 4px;
+  padding: 4px; border-radius: 16px; background: var(--panel); border: 1px solid var(--border); }
+.mc-zoom-btn { all: unset; box-sizing: border-box; min-width: 52px; min-height: 52px; padding: 0 10px; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 12px; font: inherit; font-size: 20px; font-weight: 600;
+  color: var(--text); cursor: pointer; }
+.mc-zoom-btn:hover { background: var(--panel-2); }
+.mc-zoom-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-zoom-pct { font-size: 16px; min-width: 64px; font-variant-numeric: tabular-nums; }
+.mc-zoom-fit { font-size: 16px; }
+.mc-phone-simple .mc-zoom-hud { display: none; }
+@media (max-width: 599px) { .mc-zoom-hud { display: none; } }
+.mc-space-pan .mc-viewport, .mc-space-pan .mc-viewport * { cursor: grab !important; }
+.mc-viewport, body { overscroll-behavior: none; }

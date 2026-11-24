@@ -5,6 +5,9 @@
 import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
+import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav';
+import { mountZoomHud } from './zoomHud';
+import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
@@ -793,6 +796,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
+      if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
+        frameId: f.id,
+        getZoom: () => camera.z,
+        onMove: (id, dx, dy) => {
+          const cur = reg.get(id); if (!cur) return;
+          reg.setRect(id, { ...cur.rect, x: cur.rect.x + dx, y: cur.rect.y + dy });
+          const moved = reg.get(id); if (!moved) return;
+          el!.style.left = `${moved.rect.x}px`; el!.style.top = `${moved.rect.y}px`;
+        },
+        onEnd: () => { sync(); persist(); },
+      });
       if (surfaces[f.id]) queueMicrotask(() => {
         renderSurface(f.id);
         if (f.id === focusId) editBoard.setFocus(focusId, !!surfaces[f.id]?.tiles.length);
@@ -835,6 +849,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
 
+  let zoomHud: ReturnType<typeof mountZoomHud> | null = null;
   function applyCamera(): void {
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
@@ -842,6 +857,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewport.style.backgroundSize = `${g}px ${g}px`;
     viewport.style.backgroundPosition = `${-camera.x * camera.z}px ${-camera.y * camera.z}px`;
     root.dataset.zoom = camera.z.toFixed(2);
+    zoomHud?.setZoom(camera.z);
   }
 
   const vp = (): Viewport => {
@@ -2036,6 +2052,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         case 'drop': drop(); break;
         case 'undo': userUndo(); break;
         case 'showEverything': void overview(); break;
+        case 'zoom': zoomStep(c.dir); break;
+        case 'zoomReset': zoomReset(); break;
         case 'save': save(); break;
         case 'back': if (focusId) void overview(); else if (lastFocus) void focus(lastFocus); break;
         case 'step': step(c.dir); break;
@@ -2129,7 +2147,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const tile = t.closest<HTMLElement>('[data-mc-tile], .mc-edit-item');
       if (tile) { selectPhoneTile(tile); return; }
     }
-    if (frame && frame !== focusId && !dragged) void focus(frame);
+    if (frame && frame !== focusId && !dragged && !t.closest<HTMLElement>('.mc-frame-title')?.dataset.dragged) void focus(frame);
   });
   let drag: { x: number; y: number } | null = null; let dragged = false;
   // Touch two-finger pinch: same anchored transform as the two-hand gesture, so
@@ -2160,6 +2178,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     if (r.ended) { if (touchGrab) persist(); touchGrab = null; }
   }
+  // Held Space: the next mouse drag pans even over boards. Capture phase so a
+  // focused plan board never also draws a wall; we start the pan ourselves.
+  let spaceHeld = false; let spaceSwallowClick = false;
+  viewport.addEventListener('pointerdown', (e) => {
+    if (!spaceHeld || phoneLocked() || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    spaceSwallowClick = true;
+    drag = { x: e.clientX, y: e.clientY }; dragged = false;
+  }, true);
+  viewport.addEventListener('click', (e) => {
+    if (!spaceSwallowClick) return;
+    spaceSwallowClick = false; e.preventDefault(); e.stopPropagation();
+  }, true);
   viewport.addEventListener('pointerdown', (e) => {
     if (phoneLocked()) return;
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return;
@@ -2193,7 +2224,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (touchGrab) persist();
       touchPinch.reset(); touchGrab = null;
     }
-    if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; }, 0);
+    if (drag && dragged) persist(); drag = null; setTimeout(() => { dragged = false; spaceSwallowClick = false; }, 0);
   };
   const onWindowKeydown = (e: KeyboardEvent) => {
     // The teach dialog is aria-modal: Escape closes it (like its ×) even from
@@ -2208,9 +2239,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // B-142 parity: Ctrl/Cmd+Z is the keyboard's Undo (same guard as the button and voice).
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') { e.preventDefault(); userUndo(); return; }
     if (reviewDialog.isOpen()) return; // the dialog's own Esc handler (stopPropagation) owns this key
+    if (!phoneLocked() && !teachPanel.isOpen() && !scanPanel?.isOpen() && !isTypingTarget(e.target)) {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.altKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomStep(1); return; }
+      if (mod && !e.altKey && (e.key === '-' || e.key === '_')) { e.preventDefault(); zoomStep(-1); return; }
+      if (mod && !e.altKey && e.key === '0') { e.preventDefault(); zoomReset(); return; }
+      if (!mod && !e.altKey && e.shiftKey && e.code === 'Digit1') { e.preventDefault(); void overview(); return; }
+      if (e.code === 'Space' && !mod && !e.altKey && !onActivatable(e.target)) {
+        // Held Space = pan mode. preventDefault so Space neither scrolls nor clicks a focused button on keyup.
+        e.preventDefault();
+        if (!spaceHeld) { spaceHeld = true; root.classList.add('mc-space-pan'); }
+        return;
+      }
+    }
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
   };
+  const onActivatable = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest?.('button, a, summary, [role=button]');
+  const onWindowKeyup = (e: KeyboardEvent) => {
+    if (e.code !== 'Space') return;
+    if (onActivatable(e.target)) return;
+    if (spaceHeld) { spaceHeld = false; root.classList.remove('mc-space-pan'); e.preventDefault(); }
+    else if (!isTypingTarget(e.target)) e.preventDefault();
+  };
+  const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
   const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
@@ -2226,6 +2278,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('pointerup', onWindowPointerUp);
   addEventListener('pointercancel', onWindowPointerUp);
   addEventListener('keydown', onWindowKeydown);
+  addEventListener('keyup', onWindowKeyup);
+  addEventListener('blur', onWindowBlur);
   addEventListener('resize', onWindowResize);
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
@@ -2250,20 +2304,81 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('pointerup', onWindowPointerUp);
     removeEventListener('pointercancel', onWindowPointerUp);
     removeEventListener('keydown', onWindowKeydown);
+    removeEventListener('keyup', onWindowKeyup);
+    removeEventListener('blur', onWindowBlur);
     removeEventListener('resize', onWindowResize);
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
     barRo?.disconnect();
   }
+  // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
+  // Every zoom path drops focus first: a focused board is 1:1 only.
+  const dropFocusForZoom = () => { if (focusId) { focusId = null; sync(); } };
+  let zoomGoal: { z: number; at: number } | null = null;
+  let wheelPersistTimer = 0;
+  function zoomTo(z: number): void {
+    dropFocusForZoom();
+    zoomGoal = { z, at: performance.now() };
+    void flyTo(zoomCameraTo(camera, vp(), z));
+  }
+  function zoomStep(dir: 1 | -1): void {
+    // Repeated presses mid-flight build on the pending target, not the in-between zoom.
+    const base = zoomGoal && performance.now() - zoomGoal.at < 450 ? zoomGoal.z : camera.z;
+    zoomTo(stepZoom(base, dir));
+  }
+  function zoomReset(): void { if (Math.abs(camera.z - 1) > 1e-3) zoomTo(1); }
+  /** True when `t` sits inside something that can itself scroll in this direction (AI panel, terminal, board content). */
+  function canScrollInside(t: HTMLElement | null, dx: number, dy: number): boolean {
+    for (let el = t; el && el !== viewport; el = el.parentElement) {
+      if (el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth) continue;
+      const cs = getComputedStyle(el);
+      if (dy && /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight
+        && (dy < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1)) return true;
+      if (dx && /(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth
+        && (dx < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1)) return true;
+    }
+    return false;
+  }
   viewport.addEventListener('wheel', (e) => {
-    if (phoneLocked()) return;
-    if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return; // the board's own zoom
+    if (phoneLocked() || e.defaultPrevented) return;
+    const target = e.target as HTMLElement;
+    if (focusId && target.closest('.mc-frame.focused')) return; // the plan renderer owns the wheel on a focused board
+    const intent = wheelIntent(e);
+    if (intent.kind === 'pan') {
+      if (canScrollInside(target, intent.dx, intent.dy)) return;
+      e.preventDefault();
+      cancelAnimationFrame(flight); zoomGoal = null;
+      camera = panBy(camera, -intent.dx, -intent.dy);
+      applyCamera();
+      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
+      return;
+    }
     e.preventDefault();
-    if (focusId) { focusId = null; sync(); }
+    cancelAnimationFrame(flight); zoomGoal = null;
+    dropFocusForZoom();
     const r = viewport.getBoundingClientRect();
-    camera = zoomAbout(camera, { x: e.clientX - r.left, y: e.clientY - r.top }, Math.exp(-e.deltaY * 0.0015));
+    camera = zoomAbout(camera, { x: e.clientX - r.left, y: e.clientY - r.top }, intent.factor);
     applyCamera(); persist();
   }, { passive: false });
+  // Safari trackpad pinch arrives as gesture events, not ctrl+wheel.
+  let gestureZ0 = 1;
+  type GestureEv = Event & { scale: number; clientX: number; clientY: number };
+  viewport.addEventListener('gesturestart', (e) => {
+    if (phoneLocked()) return;
+    e.preventDefault(); cancelAnimationFrame(flight); dropFocusForZoom(); gestureZ0 = camera.z;
+  });
+  viewport.addEventListener('gesturechange', (e) => {
+    if (phoneLocked()) return;
+    const g = e as GestureEv; e.preventDefault();
+    const r = viewport.getBoundingClientRect();
+    camera = zoomAbout(camera, { x: g.clientX - r.left, y: g.clientY - r.top }, (gestureZ0 * g.scale) / camera.z);
+    applyCamera();
+  });
+  viewport.addEventListener('gestureend', (e) => { e.preventDefault(); persist(); });
+  if (!phoneShell && typeof document !== 'undefined') {
+    zoomHud = mountZoomHud(root, { zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), reset: zoomReset, fit: () => void overview() });
+    zoomHud.setZoom(camera.z);
+  }
 
   const voice = opts.voice ?? null;
 

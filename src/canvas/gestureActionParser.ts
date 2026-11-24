@@ -28,6 +28,8 @@ function summarizeCanvasCmd(cmd: CanvasCommand): string {
     case 'keep': return 'Keep';
     case 'drop': return 'Drop';
     case 'showEverything': return 'Show everything';
+    case 'zoom': return cmd.dir > 0 ? 'Zoom in' : 'Zoom out';
+    case 'zoomReset': return 'Reset zoom to 100%';
     case 'back': return 'Go back';
     case 'buildNext': return 'Save and start the next board';
     case 'step': return cmd.dir > 0 ? 'Next board' : 'Previous board';
