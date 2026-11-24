@@ -24,6 +24,11 @@ export const INTENT_KEYS = [
   'showEverything', 'newBoard', 'save', 'keep', 'drop', 'undo',
 ] as const;
 export type IntentKey = (typeof INTENT_KEYS)[number];
+/** Canned English label per intent (an understood-as line, not a translation). */
+export const INTENT_ENGLISH: Record<IntentKey, string> = {
+  lampOn: 'turn the lamp on', lampOff: 'turn the lamp off', brighter: 'make it brighter', dimmer: 'make it dimmer',
+  showEverything: 'show everything', newBoard: 'new board', save: 'save', keep: 'keep', drop: 'drop', undo: 'undo',
+};
 
 export interface LanguagePack {
   lang: string;

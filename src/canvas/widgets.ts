@@ -23,6 +23,9 @@ import {
 } from './catalogApi';
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
 import { createPlanController } from '../plan/controller';
+import { localize, resolveLanguage } from '../ai/language';
+import { NOTHING_TO_CHECK, accessibilityReport, browserDownload, exportPlanDxf, isPlanEmpty, type PlanExtra } from './planExtras';
+import type { PlanDoc } from '../plan/doc';
 import { createPlanRenderer } from '../plan/renderer';
 import { beginTwoHandDraw, beginTwoHandMeasure, beginTwoHandSession, TAPE_KEEP_MS, type TwoHandSession, type TwoHandTape } from '../plan/twoHandSession';
 import { snapToGrid } from '../plan/snap';
@@ -82,7 +85,37 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     if (!p) return nothing;
     // tabindex: the plan's own keys (Esc ends a wall, Delete, V/W/R tool
     // shortcuts, arrows) listen on this element, which could never take focus.
-    return html`<div class="mc-plan-board" tabindex="0" aria-label="Floor plan drawing area" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
+    return html`<div class="mc-plan-extras" role="toolbar" aria-label="Plan tools">
+        <button type="button" class="mc-plan-extra" data-extra="check" @click=${() => this.runExtra('check')}>Check</button>
+        <button type="button" class="mc-plan-extra" data-extra="3d" aria-pressed=${this.is3d ? 'true' : 'false'} @click=${() => this.runExtra('3d')}>3D</button>
+        <button type="button" class="mc-plan-extra" data-extra="dxf" @click=${() => this.runExtra('dxf')}>DXF</button>
+        <span class="mc-plan-extra-status" role="status" aria-live="polite"></span>
+      </div><div class="mc-plan-board" tabindex="0" aria-label="Floor plan drawing area" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
+  }
+  private is3d = false;
+  private extraCtl: ReturnType<typeof createPlanController> | null = null;
+  /** Accessibility check / 3D / DXF for this board. Returns the line shown (and
+   *  spoken by the canvas). Local only: no model call. */
+  runExtra(kind: PlanExtra): string {
+    const status = this.querySelector<HTMLElement>('.mc-plan-extra-status');
+    const set = (text: string): string => { if (status) status.textContent = text; return text; };
+    const ctl = this.extraCtl;
+    if (!ctl) return set(kind === 'check' ? NOTHING_TO_CHECK : kind === 'dxf' ? 'Nothing to export yet — draw or generate a plan first.' : 'Nothing to show in 3D yet — draw or generate a plan first.');
+    const doc = ctl.snapshot() as PlanDoc;
+    if (kind === 'check') {
+      const r = accessibilityReport(doc);
+      if (!r.empty) { ctl.applyOp({ op: 'select_set', ids: [...new Set(r.issues.flatMap((i) => i.targetIds))] }); this.view?.render(); }
+      return set(r.text);
+    }
+    if (kind === 'dxf') {
+      const name = exportPlanDxf(doc, browserDownload);
+      return set(name ? `Downloaded ${name}.` : 'Nothing to export yet — draw or generate a plan first.');
+    }
+    if (isPlanEmpty(doc)) return set('Nothing to show in 3D yet — draw or generate a plan first.');
+    if (!this.view?.toggle3D) return set('3D is not available on this board.');
+    this.is3d = this.view.toggle3D(!this.is3d);
+    this.querySelector('[data-extra="3d"]')?.setAttribute('aria-pressed', this.is3d ? 'true' : 'false');
+    return set(localize(this.is3d ? 'view3d' : 'view2d', resolveLanguage('en')));
   }
   override updated() {
     const p = this.controller?.props;
@@ -94,6 +127,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.view?.dispose();
     host.innerHTML = '';
     const controller = createPlanController();
+    this.extraCtl = controller;
+    this.is3d = false;
     controller.applyGenerated?.({ ops: buildPlanTemplate(p.template) });
     const view = createPlanRenderer(host, controller, () => {});
     this.view = view;

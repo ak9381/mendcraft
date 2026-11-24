@@ -45,7 +45,7 @@ import { parseDeviceCommands, resolvePointedDevice, type DeviceKind, type Device
 import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
-import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
+import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger } from './ledger';
 import { mountCanvasHands, oneHandPinchPoint, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
 import { createHandPan } from './handPan';
@@ -72,6 +72,7 @@ import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline'
 import { loadSetup, saveSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
+import { routePlanExtra, type PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
@@ -2081,7 +2082,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- commands ----
+  /** Kannada heard line + English on the Talk caption. The English comes only
+   *  from the active pack's own intent map (local); no translation → heard only. */
+  function captionHeard(text: string): void {
+    if (!micFab || !/[\u0C80-\u0CFF]/.test(text)) return;
+    const intent = pack ? routePackPhrase(text, pack) : null;
+    micFab.setHeard(text, intent ? `understood as: ${INTENT_ENGLISH[intent]}` : null, resolveLanguage('kn'));
+  }
   function run(text: string): boolean {
+    captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.
@@ -2102,6 +2111,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (gimbalCmd) return inputs.handleSpeech(text);
     if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) { addKannada(); return true; }
     if (/^\s*(show\s+)?history\s*$/i.test(text)) { openHistory(); return true; }
+
+    // CAD extras go to the focused plan board (else any plan board); with no
+    // plan board the line falls through to the normal routes.
+    {
+      const id = focusId ?? lastFocus;
+      type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
+      const board = (id ? world.querySelector<PB>(`[data-frame="${id}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
+      const planExtra = routePlanExtra(text, !!board?.runExtra);
+      if (planExtra && board?.runExtra) { say(board.runExtra(planExtra)); return true; }
+    }
 
     const c = parseCanvasCommand(text);
     if (c) {
