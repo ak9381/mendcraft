@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  boardSendLine, createBoardEdgeTransferController, pairedEdgeLayout,
+  boardSendLine, createBoardEdgeTransferController, createSentBoardMemo, pairedEdgeLayout,
   type BoardSend, type EdgeGlow,
 } from '../../src/canvas/edgeTransfer';
 import { attachBoardDrag } from '../../src/canvas/boardDrag';
@@ -18,7 +18,10 @@ function rig(layout: ScreenLayout) {
   const rects: Record<string, { x: number; y: number; w: number; h: number }> = { b1: { x: 100, y: 100, w: 300, h: 200 } };
   const sends: BoardSend[] = [];
   const glows: EdgeGlow[] = [];
+  const timers = new Set<() => void>();
   const c = createBoardEdgeTransferController({
+    every: (fn) => { timers.add(fn); return fn; },
+    stopEvery: (h) => { timers.delete(h as () => void); },
     getViewportWidth: () => W,
     getLayout: () => layout,
     getRect: (id) => (rects[id] ? { ...rects[id] } : null),
@@ -38,7 +41,12 @@ function rig(layout: ScreenLayout) {
     },
     end() { c.handleBoardDrag({ frameId: 'b1', phase: 'end', clientX: lastX, clientY: 300 }); },
   };
-  return { c, rects, sends, glows, hand, tick: (ms: number) => { t += ms; } };
+  return {
+    c, rects, sends, glows, hand, timers,
+    tick: (ms: number) => { t += ms; },
+    /** Advance the clock in timer-sized steps, firing the repeating hold check. */
+    hold: (ms: number) => { for (let i = 0; i < ms; i += 60) { t += 60; for (const fn of [...timers]) fn(); } },
+  };
 }
 
 const IPHONE_RIGHT: ScreenLayout = { left: 'android', right: 'ios' };
@@ -70,6 +78,43 @@ describe('board → phone edge transfer', () => {
     expect(r.rects.b1.x).toBe(200);
   });
 
+  it('held STILL at the edge (no more move events) commits after the dwell via the timer', () => {
+    const r = rig(IPHONE_RIGHT);
+    r.hand.start(400);
+    r.hand.move(995); // reaches the edge, then the fist/mouse stops moving
+    expect(r.timers.size).toBe(1);
+    expect(r.sends).toHaveLength(0);
+    r.hold(120);
+    expect(r.sends).toHaveLength(0); // still inside the dwell
+    r.hold(180);
+    expect(r.sends).toHaveLength(1);
+    expect(r.sends[0]).toMatchObject({ side: 'right', target: 'ios' });
+    expect(r.rects.b1).toEqual({ x: 100, y: 100, w: 300, h: 200 });
+    r.hold(500);
+    expect(r.sends).toHaveLength(1); // once per drag
+    r.hand.end();
+    expect(r.timers.size).toBe(0); // the hold check stops with the drag
+  });
+
+  it('held still away from the edge never commits', () => {
+    const r = rig(IPHONE_RIGHT);
+    r.hand.start(400);
+    r.hand.move(700);
+    r.hold(1000);
+    expect(r.sends).toHaveLength(0);
+    r.hand.end();
+    expect(r.rects.b1.x).toBe(400); // an ordinary move stays where it was dropped
+  });
+
+  it('a cancelled drag snaps the board back to where it started', () => {
+    const r = rig(IPHONE_RIGHT);
+    r.hand.start(400);
+    r.hand.move(600);
+    r.c.handleBoardDrag({ frameId: 'b1', phase: 'cancel', clientX: 600, clientY: 300 });
+    expect(r.rects.b1).toEqual({ x: 100, y: 100, w: 300, h: 200 });
+    expect(r.timers.size).toBe(0);
+  });
+
   it('leaving the edge before the dwell sends nothing', () => {
     const r = rig(IPHONE_RIGHT);
     r.hand.start(400);
@@ -92,6 +137,8 @@ describe('board → phone edge transfer', () => {
     r.hand.end();
     expect(r.sends).toHaveLength(0);
     expect(r.glows.at(-1)).toEqual({ side: null, glow: 0 });
+    // Released at the edge mid-hold: back to the start, not left half off-screen.
+    expect(r.rects.b1).toEqual({ x: 100, y: 100, w: 300, h: 200 });
   });
 
   it('a lost hand (cancel) mid-dwell sends nothing', () => {
@@ -183,6 +230,31 @@ describe('pairedEdgeLayout', () => {
   it('a live host session with only an unnamed phone trusts the arrangement strip', () => {
     expect(pairedEdgeLayout(layout, [{ id: 'phone-generic', label: 'Phone', sim: false }], { live: true })).toEqual(layout);
     expect(pairedEdgeLayout(layout, [], { live: true })).toEqual(layout);
+  });
+  it('a live phone is placed by its announce id, never guessed from its label', () => {
+    // Not announced (generic id) even though the label says iPhone → strip, not a guess.
+    expect(pairedEdgeLayout(layout, [{ id: 'x', label: 'iPhone', sim: false }], { live: true })).toEqual(layout);
+    expect(pairedEdgeLayout(layout, [{ id: 'android', label: 'Phone', sim: false }], { live: true })).toEqual({ left: 'android', right: null });
+  });
+});
+
+describe('createSentBoardMemo', () => {
+  const focus = { kind: 'room', title: 'Focus', tiles: [] } as unknown as SurfacePlan;
+  it('routine republishes keep the sent board (with its target) until the focus changes', () => {
+    const m = createSentBoardMemo();
+    expect(m.current('f1', focus)).toEqual({ board: focus });
+    m.remember({ boardFor: 'ios', board: BOARD }, 'f1', focus);
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios' });
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios' });
+    // The focused board was edited (new plan object) → mirror the focus again, for good.
+    const edited = { ...focus } as SurfacePlan;
+    expect(m.current('f1', edited)).toEqual({ board: edited });
+    expect(m.current('f1', focus)).toEqual({ board: focus });
+  });
+  it('focusing another board ends the memo', () => {
+    const m = createSentBoardMemo();
+    m.remember({ boardFor: 'android', board: BOARD }, 'f1', focus);
+    expect(m.current('f2', null)).toEqual({ board: null });
   });
 });
 

@@ -36,10 +36,13 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 }
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board'>,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor'>,
   showBoard: (plan: SurfacePlan) => void,
+  platform?: PhonePlatform,
 ): boolean {
   if (!snap.board) return false;
+  // A board sent to the OTHER phone is not for us.
+  if (snap.boardFor && snap.boardFor !== platform) return false;
   showBoard(snap.board);
   return true;
 }
@@ -97,7 +100,7 @@ export function startPhoneRelayGuest(
   let stopSession: (() => Promise<void>) | null = null;
 
   const bindSession = (session: { onSnapshot(cb: (snap: ControlSnapshot) => void): void; close(): Promise<void> }): void => {
-    session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard); });
+    session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
     stopSession = () => session.close();
   };
 

@@ -22,7 +22,7 @@ import { createPairFirst, pairedRowHtml, parseConnectDevices } from './pairedRow
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
-import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, pairedEdgeLayout } from './edgeTransfer';
+import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
 import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
@@ -387,7 +387,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setScreenLayout(next: ScreenLayout): void {
     screenLayout = next;
     saveLayout(storage, next);
-    publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+    republishCurrentBoard();
+  }
+
+  // A board sent to one phone stays on that phone across routine republishes
+  // (announce, layout swap, rejoin) until the laptop's focused board changes.
+  const sentBoard = createSentBoardMemo();
+  function republishCurrentBoard(): void {
+    const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
+    publishBoardTransfer(focusId ?? '', cur.board, null, cur.boardFor);
   }
 
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
@@ -395,13 +403,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
   }
 
-  function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null): void {
+  function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
     if (!hostSession) return;
     try {
       const snap = buildControlSnapshot({
         rev: ++snapshotRev,
         layout: screenLayout,
         ...(board ? { board } : {}),
+        ...(board && boardFor ? { boardFor } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
       void hostSession.publishState(snap).catch(() => undefined);
@@ -452,7 +461,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (side) say(`${platform === 'android' ? 'The Nothing phone' : 'The iPhone'} is on the ${side}.`);
       } else {
         // Already placed — still republish so the phone gets the current board.
-        publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+        republishCurrentBoard();
       }
       return;
     }
@@ -499,7 +508,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     getBoard: (id) => surfaces[id] ?? null,
     onGlow: (g) => setEdgeGlow(g.side, g.glow),
     onCommit: (s) => {
-      if (hostSession) publishBoardTransfer(s.frameId, s.board, null);
+      if (hostSession) {
+        // Only the phone on that side shows it (boardFor); the other ignores it.
+        sentBoard.remember({ boardFor: s.target, board: s.board }, focusId, focusId ? surfaces[focusId] ?? null : null);
+        publishBoardTransfer(s.frameId, s.board, null, s.target);
+      }
       say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
     },
     now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
@@ -1670,7 +1683,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
     // remembered one that just reconnected) populates its side immediately.
-    publishBoardTransfer(focusId ?? '', focusId ? surfaces[focusId] ?? null : null, null);
+    republishCurrentBoard();
     if (opts.privacyGemini) attachPrivacyHub(res.session, () => activePeople(), opts.privacyGemini);
     sheetOpen = null; // the pairing card replaces the sheet in the same host
     pairing = showPairing(open.host, {
@@ -1860,8 +1873,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
           if (ev.phase === 'start') { boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return; }
           if (ev.phase === 'end') { boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
-          if (ev.phase !== 'move' || (!ev.dx && !ev.dy)) return;
-          if (!boardEdge.handleBoardDrag({ ...at, phase: 'move' })) return;
+          if (ev.phase !== 'move') return;
+          // The edge check runs even on a zero delta (a palm clamped at the edge);
+          // a fist held perfectly still is covered by boardEdge's own hold timer.
+          if (!boardEdge.handleBoardDrag({ ...at, phase: 'move' }) || (!ev.dx && !ev.dy)) return;
           const f = reg.get(ev.frameId);
           if (!f) return;
           reg.setRect(ev.frameId, { ...f.rect, x: f.rect.x + ev.dx / camera.z, y: f.rect.y + ev.dy / camera.z });
