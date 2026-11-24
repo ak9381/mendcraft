@@ -1,8 +1,7 @@
 // Registers the local plugins with Capacitor (LAN, gimbal, Apple on-device AI). In Xcode, set the Main
 // storyboard's view controller class to MendcraftViewController (module App).
-// Also turns DockKit system (face) tracking off on appear, so it really runs
-// on launch even if the plugin's load() missed the first active notification.
-// NOT compiled yet (see ios-src/README.md).
+// DockKit system tracking is NOT forced off here any more: the web layer picks
+// face / hands / hold through MendcraftGimbal.setSystemTrackingEnabled.
 //
 // Copy this file into ios/App/App after `npx cap add ios`.
 
@@ -14,11 +13,6 @@ class MendcraftViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(MendcraftLanPlugin())
         bridge?.registerPluginInstance(MendcraftGimbalPlugin())
         bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        MendcraftGimbalPlugin.requestSystemTrackingOff()
     }
 
     override func viewWillDisappear(_ animated: Bool) {

@@ -10,12 +10,18 @@ copy them into the App target.
 From the `app/` directory, after `npx cap add ios` (or on a later `npx cap sync ios`):
 
 ```sh
-cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
-cp ios-src/MendcraftViewController.swift ios/App/App/
-cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
-cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
-cp ios-src/SceneDelegate.swift           ios/App/App/
+cp ios-src/*.swift ios/App/App/ && grep -c requestSystemTrackingOff ios/App/App/*.swift
 ```
+
+Every count must print **0**. A non-zero count means an old copy (the old
+plugin or view controller) is still in the App target. Copy ALL the files
+together: mixing an old `MendcraftViewController.swift` with the new plugin
+breaks the build. `ios/plugins/*.swift` is a tracked mirror of `ios-src/`,
+kept byte-identical by `tests/ios/swiftCopies.test.ts`.
+
+To check that the new plugin is really in the build: launch the app with the
+stand docked. The status line must read "DockKit tracking on — …" (or a plain
+DockKit error). The old build never prints that line.
 
 Then merge the Info.plist keys and permission strings from
 `ios-src/Info.plist.additions.xml` into `ios/App/App/Info.plist`, and run
