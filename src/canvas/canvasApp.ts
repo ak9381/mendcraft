@@ -626,6 +626,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- language pack: UI strings via data-i18n, English when no pack ----
   const str = (k: LangStringKey): string => pack?.strings[k] ?? EN_PACK.strings[k]!;
   function applyStrings(): void {
+    // <html lang> follows the pack so screen readers and font fallback pick the right script.
+    document.documentElement.lang = pack?.lang ?? 'en';
     root.querySelectorAll<HTMLElement>('[data-i18n]').forEach((el) => {
       const k = el.dataset.i18n as LangStringKey;
       if (el instanceof HTMLInputElement) el.placeholder = str(k);

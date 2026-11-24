@@ -56,8 +56,9 @@ export interface ReviewDialog {
   destroy(): void;
 }
 
-function btn(doc: Document, cls: string, label: string, onClick: () => void): HTMLButtonElement {
+function btn(doc: Document, cls: string, label: string, onClick: () => void, i18n?: string): HTMLButtonElement {
   const b = doc.createElement('button');
+  if (i18n) b.setAttribute('data-i18n', i18n);
   b.type = 'button';
   b.className = `mc-btn ${cls}`;
   b.textContent = label;
@@ -111,9 +112,9 @@ export function mountReviewDialog(
     else handlers.onAskElse?.();
     close();
   }
-  const approveBtn = btn(doc, 'mc-review-approve', 'Approve', () => run('approve'));
-  const rejectBtn = btn(doc, 'mc-review-reject', 'Reject', () => run('reject'));
-  const askElseBtn = btn(doc, 'mc-review-ask-else', 'Ask for something else', () => run('ask-else'));
+  const approveBtn = btn(doc, 'mc-review-approve', 'Approve', () => run('approve'), 'approve');
+  const rejectBtn = btn(doc, 'mc-review-reject', 'Reject', () => run('reject'), 'reject');
+  const askElseBtn = btn(doc, 'mc-review-ask-else', 'Ask for something else', () => run('ask-else'), 'askElse');
   actions.append(approveBtn, rejectBtn, askElseBtn);
   // A visible, pinch-sized ✕ that maps to Escape semantics (A5-005): closes
   // WITHOUT deciding, so the proposal stays waiting and voice/pinch keep·drop
