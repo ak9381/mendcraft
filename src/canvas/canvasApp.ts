@@ -2641,8 +2641,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   // iPhone SENSING layer (phoneSensor.ts): same phone camera/tracker as the
   // Hands pill, but it never acts on the UI and is not facing-gated. Runs
-  // while the gimbal is docked, the Track pill is on, or a follow-hands /
-  // point request is active.
+  // only while the Track pill is on or a follow-hands / point request is
+  // active — docking alone never opens the camera.
   const phoneSensor: PhoneSensor | null = phoneShell && opts.phoneSensing && opts.phoneCamera && typeof document !== 'undefined'
     ? createPhoneSensor({
         camera: opts.phoneCamera,
@@ -2653,6 +2653,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           feedPointWait(cam, now);
         },
         onChange: () => { senseChanged(); },
+        onUserStop: () => {
+          // Sensing off from the pill: a waiting point ends, and a hands follow
+          // with no frames left says so and follows the face instead.
+          if (pointWait?.phone) { endPointWait(); say('Hand tracking off — nothing was captured.'); }
+          if (inputs.gimbal.mode() === 'hands' && !handsOn) void inputs.gimbal.setMode('face').then((r) => { const t = r.ok ? r.status : r.why; if (t) say(t); });
+        },
       })
     : null;
   const senseSubs = new Set<() => void>();
@@ -2675,7 +2681,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const checkDock = async (): Promise<void> => {
       let docked = false;
       try { docked = !!plugin && !!(await plugin.isAvailable()).available; } catch { docked = false; }
-      if (docked !== gimbalDocked) { gimbalDocked = docked; void phoneSensor.request('docked', docked); }
+      // Docking alone never starts the camera (Track / follow / point do).
+      if (docked !== gimbalDocked) gimbalDocked = docked;
       senseChanged();
     };
     void checkDock();

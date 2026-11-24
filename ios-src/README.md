@@ -75,8 +75,9 @@ Room scan by gimbal is **not** implemented on live runs (the app says so);
 `?sim=1` keeps the scripted, SIM-labelled scan.
 
 **iPhone hand sensing** (`src/canvas/phoneSensor.ts`) runs hands + face on the
-one shared WebView camera (`phoneCamera.ts`) while the stand is docked, the
-Track pill is on, or a "follow my hands" / point request is active. It feeds
+one shared WebView camera (`phoneCamera.ts`) only while the Track pill is on
+or a "follow my hands" / point request is active — docking alone never opens
+the camera, and tapping Track while it runs turns it off. It feeds
 the gimbal's hands mode and point-to-connect (the photo is cut from the same
 stream), never the UI. Hand **control** (Hands pill) is separate, off by
 default, and facing-gated. Both are untested on the device.

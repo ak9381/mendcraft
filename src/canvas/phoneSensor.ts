@@ -4,12 +4,15 @@
 // that is the separate, facing-gated CONTROL layer (phoneHands.ts, Hands pill).
 // Sensing is NOT gated by facing: when she points, she looks at the device.
 //
-// It runs while any reason holds:
-//   - 'docked'  — the native gimbal plugin reports a docked DockKit stand;
+// It runs only on an explicit ask (docking alone never starts the camera):
 //   - 'pill'    — the small iPhone-only "Track" pill (off by default,
 //                 persisted mc.phoneSensor);
 //   - 'follow'  — a "follow my hands" request is active;
 //   - 'point'   — a point-to-connect request is waiting for a steady point.
+// The pill shows what is really running. Tapping it while sensing runs is an
+// explicit "sensing off": every reason is dropped and the camera stops. A
+// later follow / point request is a new explicit ask and may start it again;
+// 'docked' (kept for callers that want it) is ignored after that, for the session.
 // Camera lifecycle (hide / pagehide / App pause, retries, one getUserMedia
 // shared with look-to-edit and Hands) is the hub's, unchanged.
 // Frames never leave the device here; only point-to-connect's crop does,
@@ -36,6 +39,8 @@ export interface PhoneSensorDeps {
   onChange?(): void;
   /** Mount the "Track" pill (iPhone shell). Default true. */
   pill?: boolean;
+  /** She turned sensing off from the pill (follow / point requests dropped). */
+  onUserStop?(): void;
   root?: HTMLElement;
   now?: () => number;
 }
@@ -43,6 +48,8 @@ export interface PhoneSensorDeps {
 export interface PhoneSensor {
   /** Turn one reason on/off; resolves once the camera has started/stopped. */
   request(reason: SenseReason, on: boolean): Promise<void>;
+  /** What a tap on the Track pill does (exposed for tests). */
+  tap(): Promise<void>;
   reasons(): SenseReason[];
   /** Really sensing: a reason is on AND the camera is live. */
   running(): boolean;
@@ -71,18 +78,23 @@ export function createPhoneSensor(deps: PhoneSensorDeps): PhoneSensor {
   const now = deps.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
   const want = new Set<SenseReason>();
   let pill: HTMLButtonElement | null = null;
+  /** She turned sensing off from the pill: automatic reasons stay ignored. */
+  let userOff = false;
 
   const running = (): boolean => want.size > 0 && deps.camera.status() === 'live';
   function paint(): void {
     if (!pill) return;
-    const on = want.has('pill');
-    pill.setAttribute('aria-pressed', String(on));
+    // Pressed = really sensing (or starting), not merely "the pill reason".
+    const active = want.size > 0 && deps.camera.status() !== 'off' && deps.camera.status() !== 'error';
+    pill.setAttribute('aria-pressed', String(active));
     pill.textContent = running() ? 'Track ✓' : 'Track';
     pill.title = running() ? SENSOR_ON_LINE : 'Track your hands for the gimbal and pointing (camera)';
   }
   function changed(): void { paint(); deps.onChange?.(); }
 
   async function request(reason: SenseReason, on: boolean): Promise<void> {
+    if (on && reason === 'docked' && userOff) return;
+    if (on && reason !== 'docked') userOff = false;
     const had = want.size > 0;
     if (on) want.add(reason); else want.delete(reason);
     if (reason === 'pill') writePhoneSensor(on, deps.storage);
@@ -101,6 +113,21 @@ export function createPhoneSensor(deps: PhoneSensorDeps): PhoneSensor {
     deps.onHands(cam as Pt[][], now());
   }
 
+  /** The pill: running (or starting) → everything off; else Track on. */
+  async function tap(): Promise<void> {
+    if (want.size > 0) {
+      want.clear();
+      userOff = true;
+      writePhoneSensor(false, deps.storage);
+      changed();
+      await deps.camera.setUse('sense', false);
+      changed();
+      deps.onUserStop?.();
+      return;
+    }
+    await request('pill', true);
+  }
+
   const offFrame = deps.camera.onFrame(frame);
   const offStatus = deps.camera.onStatus(() => changed());
 
@@ -110,7 +137,7 @@ export function createPhoneSensor(deps: PhoneSensorDeps): PhoneSensor {
     pill.type = 'button';
     pill.className = 'mc-btn mc-phone-track-pill';
     pill.dataset.cmd = 'phone-track';
-    pill.addEventListener('click', () => { void request('pill', !want.has('pill')); });
+    pill.addEventListener('click', () => { void tap(); });
     deps.root.append(pill);
     paint();
   }
@@ -118,6 +145,7 @@ export function createPhoneSensor(deps: PhoneSensorDeps): PhoneSensor {
 
   return {
     request,
+    tap,
     reasons: () => [...want],
     running,
     statusLine() {
