@@ -9,7 +9,17 @@ Note anything off with its number.
 
 ## 0. Before anything (2 min)
 - [ ] 0.1 Firebase login expired overnight — run in Terminal: `cd ~/Developer/mendcraft-sim && npx firebase-tools login --reauth`. Then redeploy the preview: `npm run build && npx firebase-tools hosting:channel:deploy sim-main --project mendcraft`.
-- [ ] 0.2 Plug in the iPhone (unlocked) → install the latest build (`xcodebuild … && xcrun devicectl device install app …`, see ios/README.md).
+- [ ] 0.2 Plug in the iPhone (unlocked) and install the latest build — IN THIS ORDER (the app builds from the untracked ios/App, so the new Swift must be copied in first):
+  ```
+  cd ~/Developer/mendcraft-sim && git pull --ff-only origin sim-main && npm run build && npx cap sync ios && cp ios-src/*.swift ios/App/App/
+  grep -c requestSystemTrackingOff ios/App/App/*.swift          # every line must be :0
+  for f in ios-src/*.swift; do cmp -s "$f" "ios/App/App/${f##*/}" || echo "STALE ${f##*/}"; done   # must print nothing
+  xcrun devicectl list devices                                   # copy the iPhone's Identifier (UDID)
+  xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -destination generic/platform=iOS -derivedDataPath ~/mendcraft-live/dd -allowProvisioningUpdates build
+  xcrun devicectl device install app --device <UDID> ~/mendcraft-live/dd/Build/Products/Debug-iphoneos/App.app
+  xcrun devicectl device process launch --terminate-existing --device <UDID> app.mendcraft.relay
+  ```
+  (If install says "Connection interrupted", just rerun the install line.)
 - [ ] 0.3 Plug in the Nothing phone (the cable that worked, USB debugging allowed) → install the latest build (`npx cap sync android && cd android && ./gradlew assembleDebug`, then `adb install -r app/build/outputs/apk/debug/app-debug.apk`).
 
 ## E. Hands on the laptop (most important — 5 min)
