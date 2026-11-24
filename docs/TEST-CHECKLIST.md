@@ -52,3 +52,18 @@ Note anything off with its number.
 ## S. Spotify / WiZ (only if set up)
 - [ ] S1 "play <song>" → real title on the tile, sound on the Marshall.
 - [ ] S2 WiZ lamp responds to the tile buttons (with `npm run wiz-bridge` running).
+
+## G. Gimbal (iPhone docked, ~15 min)
+Setup: latest iPhone build installed (0.2), iOS 18+, iPhone docked in the Flow 2 Pro, stand powered on, Mendcraft open on the canvas. Have the Insta360 app CLOSED. Note the exact status-line text at every step — it should only say "following" when DockKit really reports tracking on.
+- [ ] G0 Launch: the status line reads "DockKit tracking on — needs a camera app/camera running" (PASS) — or a plain error such as "DockKit tracking didn't turn on: …" / "No DockKit stand docked" (write it down; FAIL). Nothing should claim following if the line is an error.
+- [ ] G1 Face follow, no camera running: sit in front of the phone and move slowly left/right ~1 m. Does the stand turn to follow your face? (Expected risk: it does NOT, because no camera session is running in the app.) Note YES / NO.
+- [ ] G2 Face follow, keep-alive: say "keep alive on" (or relaunch with `?gimbalKeepAlive=1` if you can). Status: "DockKit tracking on — camera keep-alive running (test option)" — the green camera dot should appear. Repeat the G1 move. Does it follow now? YES / NO. If G1 was NO and G2 is YES, the keep-alive is needed for the film; if both NO, DockKit tracking does not work from this app — cut the "follows my face" line.
+- [ ] G3 Keep-alive side effects: with keep-alive on, does anything else that uses the camera on the iPhone (look-to-edit, if on) stop or go black? YES / NO. Say "keep alive off": camera dot goes away within ~2 s.
+- [ ] G4 "hold still": status "Gimbal holding still (DockKit tracking off)"; move around — the stand must NOT move. "follow me" again → G0 status, and it follows again (if it did in G1/G2).
+- [ ] G5 "follow my hands" on the iPhone: must say "Hand following needs a hand tracker — following your face instead. DockKit tracking on — …" and keep following the face. FAIL if it claims to follow hands.
+- [ ] G6 "connect to what I'm pointing at" on the iPhone: must say "Pointing needs the laptop camera — turn on Hands on the laptop and say it there." and must NOT open the selfie camera or ask for a click.
+- [ ] G7 "scan the room" on the iPhone (and on the laptop without `?sim=1`): must say "Room scan isn't available yet — point at a device or name it." and propose nothing. With `?sim=1` on the laptop it proposes a lamp + speaker labelled SIM.
+- [ ] G8 Background/foreground: press Home → the stand returns to normal DockKit behaviour (Insta360/Camera app tracking works). Reopen Mendcraft → the G0 status / mode you had is re-applied (e.g. after "hold still" it stays still).
+- [ ] G9 Undock and redock while in face mode: tracking comes back on its own after redock (YES / NO).
+- [ ] G10 (only if you test aiming from the laptop path) Which way does a custom aim go? A hand on the camera's RIGHT should pan the stand RIGHT and raise for a hand HIGH in the frame. Note if yaw or pitch is reversed (axis convention is unverified: Vector3D x = pitch, y = yaw).
+Film decision: the iPhone-on-gimbal beat = following (only if G1 or G2 passed) + the Apple · on device badge (P2). Pointing is filmed on the laptop camera.
