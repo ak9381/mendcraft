@@ -1381,7 +1381,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (s.routeLine) panels.forEngine(s.engine).log('note', s.routeLine);
     if (phoneShell) {
       const line = s.routeLine || '';
-      setRouteBadge(/apple/i.test(line) ? 'Apple · on device' : s.engine === 'gemini' ? 'Gemini · cloud' : line || 'On device');
+      const badge = /apple/i.test(line) ? 'Apple · on device' : s.engine === 'gemini' ? 'Gemini · cloud' : line.replace(/^SIM · /, '') || 'On device';
+      setRouteBadge(s.sim ? `SIM · ${badge}` : badge);
     }
     if (ctx.swarm === false) return;
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,

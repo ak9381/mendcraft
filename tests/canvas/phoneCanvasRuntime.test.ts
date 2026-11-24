@@ -7,7 +7,13 @@ const board: SurfacePlan = { kind: 'room', title: 'Living room', tiles: [] };
 describe('phoneRouteBadge', () => {
   it('prefers Apple on a ready or simulated iOS shell', () => {
     expect(phoneRouteBadge({ appleReady: true, ios: true, sim: false, cloud: true })).toBe('Apple · on device');
-    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: true, cloud: true })).toBe('Apple · on device');
+    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: true, cloud: true })).toBe('SIM · Apple · on device');
+  });
+
+  it('a scripted run (?sim=1, or no cloud model) is labelled SIM, never a bare real route', () => {
+    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: true, cloud: true })).toBe('SIM · Gemini · cloud');
+    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: false, cloud: false })).toBe('SIM · Gemini · cloud');
+    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: false, cloud: false })).toBe('SIM · Apple · on device');
   });
 
   it('shows Gemini cloud when that is the live route', () => {
