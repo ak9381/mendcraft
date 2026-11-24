@@ -4,7 +4,7 @@
 // real hub, remembers the room, pins locally, and keeps the sync status honest.
 import '../style.css';
 import './mobile/mobile.css';
-import { joinPhoneAsGuest } from './phoneGuestJoin';
+import { joinPhoneSession } from './phoneGuestJoin';
 import { createChimeListener } from '../ux/pairingChime';
 import { buildSimMobileState, type SimMobileState } from './mobile/mockState';
 import { parseMobileScreen } from './mobile/mobileRoute';
@@ -148,16 +148,20 @@ if (!sim) {
 // as a GUEST. The phone must never mint a host room (startPhoneJoin would).
 if (!sim && !savedPair) {
   let listener: ReturnType<typeof createChimeListener> | null = null;
+  let joined: { stop(): Promise<void> } | null = null;
   const statusOf = () => root.querySelector<HTMLElement>('.mc-m-listen-status');
 
   const joinFromCode = async (code: string) => {
     listener?.stop();
     const st = statusOf();
     if (st) st.textContent = 'Heard the chime — joining…';
-    const res = await joinPhoneAsGuest({
+    // Same helper as every other join path: re-announce keep-alive (and an
+    // AI-feed forwarder, if this page ever runs AI turns — it does not today).
+    const res = await joinPhoneSession({
       code,
       storage,
       platform: platform.os === 'ios' ? 'ios' : 'android',
+      native: !!capacitor?.isNativePlatform?.(),
       hubName: 'the laptop',
       onState: (s) => { if (s === 'paired') render(); },
     });
@@ -171,6 +175,7 @@ if (!sim && !savedPair) {
       }
       return;
     }
+    joined = res;
     render();
   };
 
@@ -210,5 +215,5 @@ if (!sim && !savedPair) {
   // Kick off listening once the pair screen is in the DOM. Do not open the
   // mic on other screens, or in the background after the tab is hidden.
   if (screen === 'pair') startListen();
-  window.addEventListener('pagehide', () => listener?.stop());
+  window.addEventListener('pagehide', () => { listener?.stop(); void joined?.stop(); });
 }

@@ -18,6 +18,7 @@ import {
 } from '../relay/pairingStore';
 import type { PhonePlatform } from './screenLayout';
 import type { PairState } from '../relay/protocol';
+import type { PhoneAiForwarder } from './phoneAiFeed';
 
 export interface PhoneGuestJoinDeps {
   /** Decoded (or last-resort typed) short code or full join URL / token. */
@@ -134,4 +135,37 @@ export function keepAnnouncing(
   session.onWhoIsThere?.(again);
   const id = timers.setInterval(again, RE_ANNOUNCE_MS);
   return () => { stopped = true; timers.clearInterval(id); };
+}
+
+export interface PhoneSessionDeps extends PhoneGuestJoinDeps {
+  /** The phone shell's AI-feed tap; bound to the session while it is open. */
+  aiForwarder?: Pick<PhoneAiForwarder, 'bind'>;
+  /** Injectable re-announce timers (tests). */
+  keepAliveTimers?: Parameters<typeof keepAnnouncing>[3];
+}
+
+/** The ONE way a phone joins the laptop's room — chime first-join, typed code
+ *  and saved-pair rejoin alike. On success it binds the AI-feed forwarder (if
+ *  any) and starts the 20 s / whoIsThere re-announce; `stop()` tears both down
+ *  and closes the session. */
+export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGuestJoinResult> {
+  const res = await joinPhoneAsGuest(deps);
+  if ('error' in res) return res;
+  const { session } = res;
+  deps.aiForwarder?.bind(session);
+  const deviceId = deps.storage ? ensureDeviceId(deps.storage) : undefined;
+  const stopAnnouncing = deps.platform
+    ? keepAnnouncing(session, deps.platform, { deviceId, native: deps.native }, deps.keepAliveTimers)
+    : () => undefined;
+  let stopped = false;
+  return {
+    ...res,
+    stop: async () => {
+      if (stopped) return;
+      stopped = true;
+      stopAnnouncing();
+      deps.aiForwarder?.bind(null);
+      await session.close();
+    },
+  };
 }

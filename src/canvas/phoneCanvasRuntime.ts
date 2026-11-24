@@ -1,17 +1,16 @@
 // Phone-simple canvas runtime: look-to-edit (reuse face-only presence) and
-// Relay guest join (reuse joinPhoneAsGuest) so a board dragged from the
+// Relay guest join (joinPhoneSession) so a board dragged from the
 // laptop arrives on this phone. No hand tracking, no new protocol.
 
 import type { SurfacePlan } from './surfacePlan';
 import type { ControlSnapshot } from '../relay/controlSnapshot';
-import { joinPhoneAsGuest, keepAnnouncing } from './phoneGuestJoin';
+import { joinPhoneSession } from './phoneGuestJoin';
 import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
-import type { RelayCommand } from '../relay/protocol';
 import type { PhoneAiForwarder } from './phoneAiFeed';
 
 export interface PhoneRouteBadgeInput {
@@ -97,35 +96,28 @@ export function startPhoneRelayGuest(
 ): () => void {
   if (opts.sim || typeof window === 'undefined') return () => undefined;
   const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
-  const deviceId = storage ? ensureDeviceId(storage) : undefined;
+  if (storage) ensureDeviceId(storage);
   const platform = opts.platform ?? 'android';
   let stopSession: (() => Promise<void>) | null = null;
-
-  const bindSession = (session: {
-    onSnapshot(cb: (snap: ControlSnapshot) => void): void;
-    close(): Promise<void>;
-    sendCommand(cmd: RelayCommand): Promise<void>;
-    onWhoIsThere?(cb: () => void): void;
-  }): void => {
-    session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
-    // This phone's AI activity now reaches the laptop's monitor (display only).
-    opts.aiForwarder?.bind(session);
-    const stopAnnouncing = keepAnnouncing(session, platform, { deviceId, native: opts.native });
-    stopSession = () => { stopAnnouncing(); opts.aiForwarder?.bind(null); return session.close(); };
-  };
+  let cancelled = false;
 
   const saved = loadPhonePair(storage);
   if (saved?.token) {
     const join = async (): Promise<void> => {
-      const res = await joinPhoneAsGuest({
+      // joinPhoneSession binds the AI-feed forwarder and the re-announce
+      // keep-alive; its stop() tears both down (same helper as the chime join).
+      const res = await joinPhoneSession({
         code: saved.token,
         storage,
         platform,
         native: opts.native,
         hubName: 'the laptop',
+        aiForwarder: opts.aiForwarder,
       });
       if ('error' in res) return;
-      bindSession(res.session);
+      if (cancelled) { void res.stop(); return; }
+      res.session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
+      stopSession = res.stop;
     };
     void join();
   }
@@ -133,6 +125,7 @@ export function startPhoneRelayGuest(
   // call can stall or blank iOS WKWebView before the canvas is up.
 
   return () => {
+    cancelled = true;
     void stopSession?.();
   };
 }
