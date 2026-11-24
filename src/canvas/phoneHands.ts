@@ -25,7 +25,8 @@ import { CameraLostError, readPhoneHands, writePhoneHands, type PhoneCamera } fr
 
 export const PHONE_HANDS_ON_LINE = 'Hands on: point with your palm, tap a fist to click. Hold a fist to move or pan; two fists to zoom.';
 export const PHONE_HANDS_OFF_LINE = 'Hands off.';
-export const PHONE_HANDS_FACE_LINE = 'Hands · face the phone';
+/** Short: the pill sits beside the centre mic on a 390 px phone. */
+export const PHONE_HANDS_FACE_LINE = 'Face phone';
 export const PHONE_HANDS_LOST_LINE = 'Another app or a call took the camera, so Hands is off. Tap Hands to turn it back on.';
 
 export interface PhoneHandsDeps {
