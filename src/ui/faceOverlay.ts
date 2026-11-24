@@ -17,6 +17,8 @@ export interface FaceOverlayOptions {
   /** Override the bracket colours (the canvas passes warm-paper tones). */
   operatorColor?: string;
   dimColor?: string;
+  /** Small top-of-screen preview instead of a full-viewport overlay. */
+  compact?: boolean;
 }
 
 const OPERATOR_COLOR = '#38f8a0';
@@ -36,7 +38,7 @@ function readReducedMotion(): boolean {
 
 export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptions = {}): FaceOverlay {
   const canvas = document.createElement('canvas');
-  canvas.className = 'face-overlay';
+  canvas.className = opts.compact ? 'face-overlay face-overlay--compact' : 'face-overlay';
   canvas.setAttribute('aria-hidden', 'true');
   container.appendChild(canvas);
   const ctx = canvas.getContext('2d')!;

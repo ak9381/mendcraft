@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createDragVelocity, createMomentum, scrollableAncestor } from '../../src/canvas/handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, palmCentroid } from '../../src/canvas/handScroll';
 
 // Node-env fake (the suite doesn't use jsdom): just the layout props + the
 // getComputedStyle path that scrollableAncestor reads.
@@ -94,6 +94,36 @@ describe('handScroll — drag velocity + momentum fling (A2-025 / C156)', () => 
     it('ignores overflowing content whose overflow style forbids scrolling', () => {
       const clipped = overflowing('hidden', 500, 100);
       expect(scrollableAncestor(clipped)).toBeNull();
+    });
+  });
+
+  describe('pickPalmScroller', () => {
+    it('prefers the nearest overflow-y ancestor under the cursor', () => {
+      const list = overflowing('auto', 800, 200);
+      const row = overflowing('visible', 0, 0);
+      row.parentElement = list;
+      expect(pickPalmScroller(row, [])).toBe(list);
+    });
+
+    it('falls back to the first provided vertical scroller (review / AI / term)', () => {
+      const review = overflowing('auto', 900, 300);
+      const row = overflowing('visible', 0, 0);
+      expect(pickPalmScroller(row, [review])).toBe(review);
+    });
+
+    it('skips a fallback that cannot scroll and returns null when nothing qualifies', () => {
+      const fitted = overflowing('auto', 100, 100);
+      const row = overflowing('visible', 0, 0);
+      expect(pickPalmScroller(row, [fitted])).toBeNull();
+    });
+  });
+
+  describe('palmCentroid', () => {
+    it('is the midpoint of wrist (0) and middle MCP (9)', () => {
+      const h = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));
+      h[0] = { x: 0, y: 0 };
+      h[9] = { x: 2, y: 4 };
+      expect(palmCentroid(h)).toEqual({ x: 1, y: 2 });
     });
   });
 });

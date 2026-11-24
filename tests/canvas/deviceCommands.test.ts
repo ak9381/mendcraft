@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDeviceCommands, type DeviceRef } from '../../src/canvas/deviceCommands';
+import { parseDeviceCommands, resolvePointedDevice, type DeviceRef } from '../../src/canvas/deviceCommands';
 
 const devices: DeviceRef[] = [
   { id: 'wiz-desk', label: 'Desk lamp', on: false, brightness: 40 },
@@ -47,6 +47,36 @@ describe('device voice commands', () => {
     expect(parseDeviceCommands('turn on the toaster', devices)).toBeNull();
     expect(parseDeviceCommands('hello there', devices)).toBeNull();
     expect(parseDeviceCommands('', devices)).toBeNull();
+  });
+
+  it('resolves "that" / "this" / "it" to the pointed (focused) tile', () => {
+    const pointed = devices[0];
+    expect(parseDeviceCommands('turn that off', devices, { pointed })!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', on: false }]);
+    expect(parseDeviceCommands('dim this', devices, { pointed })!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', brightness: 20 }]);
+    expect(parseDeviceCommands('turn it on', devices, { pointed })!.intents)
+      .toEqual([{ deviceId: 'wiz-desk', on: true }]);
+    // Without a focused tile, a bare "that" is not a command.
+    expect(parseDeviceCommands('turn that off', devices)).toBeNull();
+  });
+
+  it('resolvePointedDevice maps a focused tile element to a device by id or label', () => {
+    const el = {
+      getAttribute: (n: string) => (n === 'data-device' ? 'wiz-ceiling' : null),
+      parentElement: null,
+      textContent: '',
+      innerText: '',
+    } as unknown as Element;
+    expect(resolvePointedDevice(el, devices)?.id).toBe('wiz-ceiling');
+    const labelled = {
+      getAttribute: (n: string) => (n === 'aria-label' ? 'Move Desk lamp' : null),
+      parentElement: null,
+      textContent: '',
+      innerText: '',
+    } as unknown as Element;
+    expect(resolvePointedDevice(labelled, devices)?.id).toBe('wiz-desk');
+    expect(resolvePointedDevice(null, devices)).toBeNull();
   });
 });
 

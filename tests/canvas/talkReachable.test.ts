@@ -126,12 +126,13 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
-  it('the facing banner is a small top-left pill and does not cover the cluster', () => {
+  it('the facing banner is a large readable top-left pill and does not cover the cluster', () => {
     const banner = ruleFor(canvasCss, '.mc-facing-banner');
     expect(banner).toContain('top: calc(10px + env(safe-area-inset-top, 0px))');
     expect(banner).toContain('left: 16px');
     expect(banner).toContain('pointer-events: none');
-    expect(banner).toMatch(/max-width:\s*min\(260px/);
+    expect(banner).toMatch(/max-width:\s*min\(340px/);
+    expect(banner).toContain('font-size: 16px');
     expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');
   });
 });

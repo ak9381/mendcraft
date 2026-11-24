@@ -86,7 +86,13 @@ export function isFistPose(p: Pt[]): boolean {
   if (!p || p.length < 21) return false;
   const size = handSize(p);
   const palm = palmCenter(p);
-  return FINGER_TIPS.every((i) => dist(p[i], palm) / size <= FIST_TIP_RATIO);
+  const reach = (i: number) => dist(p[i], palm) / size;
+  if (!FINGER_TIPS.every((i) => reach(i) <= FIST_TIP_RATIO)) return false;
+  // A pinch (index stretched toward a target, other fingers curled) can
+  // have every tip under FIST_TIP_RATIO on an angled or close-up hand.
+  // Only call it a fist when the index has joined the other fingertips.
+  const others = Math.max(reach(12), reach(16), reach(20));
+  return reach(8) <= others + 0.28;
 }
 
 /** Min index-tip→palm / palm-size for a pose to count as a pinch.
@@ -109,8 +115,30 @@ export function isClosingToFist(p: Pt[]): boolean {
   if (isFistPose(p)) return true;
   const size = handSize(p);
   const palm = palmCenter(p);
-  const othersIn = [12, 16, 20].filter((i) => dist(p[i], palm) / size <= PINCH_INDEX_REACH).length;
-  return othersIn >= 3 && tipPalmRatio(p, 8) < PINCH_INDEX_REACH;
+  const reach = (i: number) => dist(p[i], palm) / size;
+  const othersIn = [12, 16, 20].filter((i) => reach(i) <= PINCH_INDEX_REACH).length;
+  if (othersIn < 3) return false;
+  // Index has come in to join the curled fingers. A pointing or pinching
+  // index stays clearly past them, so this stays false.
+  const othersMax = Math.max(reach(12), reach(16), reach(20));
+  return reach(8) <= othersMax + 0.28;
+}
+
+const OPEN_TIPS = [4, 8, 12, 16, 20] as const;
+/** Min tip→palm / palm-size for a finger to count as open (inverse of fist curl). */
+export const OPEN_PALM_REACH = 1.15;
+
+/** All five fingertips stretched away from the palm — not a pointing hand
+ *  (only the index out) and not a fist. */
+export function isOpenPalmPose(p: Pt[]): boolean {
+  if (!p || p.length < 21) return false;
+  if (isFistPose(p) || isClosingToFist(p)) return false;
+  // Thumb + index already together is a pinch, even if the other fingers
+  // are splayed — two-hand zoom must not be swallowed as a scroll palm.
+  if (pinchRatio(p) < PINCH_CLASSIFY) return false;
+  const size = handSize(p);
+  const palm = palmCenter(p);
+  return OPEN_TIPS.every((i) => dist(p[i], palm) / size >= OPEN_PALM_REACH);
 }
 
 export interface FingerStates {
@@ -151,12 +179,16 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   // pinch would win). Tips near the palm are the reliable signal.
   if (fistLike && s.thumb && p[THUMB_TIP].y < p[WRIST].y && thumbPalm >= THUMB_UP_RATIO) return 'thumbs-up';
   if (fistLike) return 'fist';
-  // Open palm wins before pinch: splayed fingers shouldn't read as a pinch.
-  if (allOpen) return 'open-palm';
-  // Thumb + index tips together *while the index clearly reaches out* →
-  // pinch. A curling index (closing toward the palm from open/point) must
-  // not count — that is the path into a fist, and must not fire a pinch click.
-  if (ratio < PINCH_CLASSIFY && s.index && tipPalmRatio(p, 8) >= PINCH_INDEX_REACH && !isClosingToFist(p)) return 'pinch';
+  // Restore the 4fefac0 pinch rule (thumb–index gap + reaching index).
+  // Do NOT require a large index-to-palm ratio — that stole real webcam
+  // pinches (and therefore two-hand zoom) after 1f4f2ec. A tighter
+  // isClosingToFist still blocks the last frames of a curl-into-fist so
+  // those don't fire a pinch click.
+  if (ratio < PINCH_CLASSIFY && s.index && !isClosingToFist(p)) return 'pinch';
+  // Open palm: five-finger palm-normalised test, with the legacy
+  // all-four-extended check as a fallback for synthetic fixtures.
+  // Only after pinch, so a pinch with splayed fingers still zooms.
+  if (isOpenPalmPose(p) || allOpen) return 'open-palm';
   // Only the index extended → pointing.
   if (s.index && fingers === 1) return 'point';
   // Fallback thumbs-up / fist for poses the palm-ratio test missed.

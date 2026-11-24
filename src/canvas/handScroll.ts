@@ -93,3 +93,34 @@ export function createMomentum(opts: { friction?: number; minSpeed?: number } = 
     stop() { active = false; vx = 0; vy = 0; },
   };
 }
+
+/** Open-palm swipe: hold this long before scroll engages. */
+export const PALM_HOLD_MS = 150;
+/** Ignore sub-pixel jitter on the palm centroid. */
+export const PALM_DEADZONE_PX = 6;
+
+/** Wrist + middle-MCP centroid (the palm), in the same space as the landmarks. */
+export function palmCentroid(h: readonly { x: number; y: number }[]): { x: number; y: number } {
+  const w = h[0] ?? { x: 0, y: 0 };
+  const m = h[9] ?? w;
+  return { x: (w.x + m.x) / 2, y: (w.y + m.y) / 2 };
+}
+
+/** Nearest overflow-y auto/scroll ancestor under the cursor, else the first
+ *  provided fallback that can actually scroll vertically (review / AI / term). */
+export function pickPalmScroller(
+  hit: Element | null,
+  fallbacks: Array<Element | null | undefined> = [],
+): HTMLElement | null {
+  const near = scrollableAncestor(hit);
+  if (near?.y) return near.el;
+  for (const f of fallbacks) {
+    if (!f) continue;
+    const el = f as HTMLElement;
+    const cs = el.ownerDocument?.defaultView?.getComputedStyle?.(el);
+    const oy = cs?.overflowY ?? (el as HTMLElement & { overflowY?: string }).overflowY ?? 'visible';
+    const canY = (el.scrollHeight - el.clientHeight > 1) && (oy === 'auto' || oy === 'scroll' || oy === 'overlay');
+    if (canY) return el;
+  }
+  return near?.el ?? null;
+}

@@ -7,6 +7,7 @@ import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from 
 import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFacingBanner } from './ui/facingBanner';
+import { createFaceOverlay } from './ui/faceOverlay';
 import { createHandHover, magnetPull, tooltipTextFor } from './ui/handHover';
 import { openHandSelect } from './ui/handSelect';
 import { createVoiceController, type VoiceController } from './input/voice';
@@ -5240,6 +5241,7 @@ btnMic.addEventListener('click', () => {
 
 const handOverlay = createHandOverlay(viewportEl);
 const facingBanner = createFacingBanner(viewportEl);
+const faceOverlay = createFaceOverlay(viewportEl, { compact: true });
 const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
@@ -5531,6 +5533,7 @@ function noteFps(now: number): number {
 
 function onPresenceFrame(f: PresenceFrame): void {
   handOverlay.draw(f.hands);
+  faceOverlay.draw(f.faces, f.rejectedHands);
   facingBanner.set(typeof f.facing === 'boolean' ? f.facing : null);
 
   const fps = noteFps(performance.now());

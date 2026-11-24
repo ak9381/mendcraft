@@ -47,7 +47,7 @@ const curBright = (d: DeviceRef) => (typeof d.brightness === 'number' ? d.bright
 const curVol = (d: DeviceRef) => (typeof d.volume === 'number' ? d.volume : 50);
 const labelList = (ds: readonly DeviceRef[], all: boolean) => (all ? 'everything' : ds.map((d) => d.label).join(' and '));
 
-export function parseDeviceCommands(text: string, devices: readonly DeviceRef[]): DeviceCommandResult | null {
+export function parseDeviceCommands(text: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
 
@@ -97,8 +97,12 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
   const relative = warmer || cooler || dimmer || brighter;
   let targets: DeviceRef[];
   let all = false;
+  const deictic = /\b(this|that|it)\b/.test(t);
   if (matched.length) {
     targets = matched;
+  } else if (deictic && opts?.pointed) {
+    // Voice + point: "turn that off" / "dim this" uses the focused tile.
+    targets = [opts.pointed];
   } else if ((percent || relative || hasAllWord) && lamps.length) {
     targets = lamps.slice();
     all = true;
@@ -141,4 +145,32 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[])
   }
 
   return null;
+}
+
+/** Map the magnet-focused element (button / tile / chip) to a device, so
+ *  Talk "that" / "this" / "it" can resolve without a spoken name. */
+export function resolvePointedDevice(el: Element | null | undefined, devices: readonly DeviceRef[]): DeviceRef | null {
+  if (!el || !devices.length) return null;
+  let node: Element | null = el;
+  const ids = new Map(devices.map((d) => [d.id, d]));
+  while (node) {
+    for (const attr of ['data-device', 'data-device-id', 'data-deviceid']) {
+      const v = node.getAttribute?.(attr);
+      if (v && ids.has(v)) return ids.get(v)!;
+      if (v) {
+        const stripped = v.replace(/^(lamp|music|switch)-/, '');
+        if (ids.has(stripped)) return ids.get(stripped)!;
+      }
+    }
+    const label = (node.getAttribute?.('aria-label') || '').trim().toLowerCase();
+    if (label) {
+      const hit = devices.filter((d) => d.label && label.includes(d.label.toLowerCase()));
+      if (hit.length === 1) return hit[0];
+    }
+    node = node.parentElement;
+  }
+  const blob = ((el as HTMLElement).innerText || el.textContent || el.getAttribute?.('aria-label') || '').toLowerCase();
+  if (!blob.trim()) return null;
+  const hit = devices.filter((d) => d.label && blob.includes(d.label.toLowerCase()));
+  return hit.length === 1 ? hit[0] : null;
 }

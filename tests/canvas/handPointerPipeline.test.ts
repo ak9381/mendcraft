@@ -477,20 +477,107 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(other.click).toHaveBeenCalledTimes(1);
   });
 
-  it('losing one hand hides only that cursor; the other hand keeps its cursor', () => {
+  it('losing one hand hides only that cursor after the sticky window; a brief dropout does not reset the other', () => {
     for (let i = 0; i < 10; i++) {
       t += 33;
       hp.update([synthHand(160, 50, false), synthHand(300, 50, false)], t);
     }
     expect(cursorsOf(doc).filter((c) => !c.hidden)).toHaveLength(2);
+    // ~165 ms dropout: both cursors stay (one hand must not reset the other).
     for (let i = 0; i < 5; i++) {
       t += 33;
       hp.update([synthHand(300, 50, false)], t);
     }
+    expect(cursorsOf(doc).filter((c) => !c.hidden)).toHaveLength(2);
+    // After the 400 ms sticky lost window, only the remaining hand stays.
+    t += 500;
+    hp.update([synthHand(300, 50, false)], t);
     const left = cursorsOf(doc).filter((c) => !c.hidden);
     expect(left).toHaveLength(1);
     const m = /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)/.exec(left[0].style.transform);
     expect(Number(m![1])).toBeCloseTo(300, 0);
+  });
+
+  it('left pinch click alone and right pinch click alone never start two-hand zoom', () => {
+    const feed2 = (a: { x: number; y: number; pinch: boolean }, b: { x: number; y: number; pinch: boolean }, frames = 1) => {
+      for (let i = 0; i < frames; i++) {
+        t += 33;
+        hp.update([synthHand(a.x, a.y, a.pinch), synthHand(b.x, b.y, b.pinch)], t);
+      }
+    };
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: false }, 8);
+    feed2({ x: 160, y: 50, pinch: true }, { x: 300, y: 50, pinch: false }, 5);
+    expect(hp.isTwoHandZooming()).toBe(false);
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: false }, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    expect(other.click).not.toHaveBeenCalled();
+
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: true }, 5);
+    expect(hp.isTwoHandZooming()).toBe(false);
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: false }, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    expect(other.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('simultaneous pinches enter two-hand zoom and cancel both pending clicks', () => {
+    const feed2 = (a: { x: number; y: number; pinch: boolean }, b: { x: number; y: number; pinch: boolean }, frames = 1) => {
+      for (let i = 0; i < frames; i++) {
+        t += 33;
+        hp.update([synthHand(a.x, a.y, a.pinch), synthHand(b.x, b.y, b.pinch)], t);
+      }
+    };
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: false }, 8);
+    feed2({ x: 160, y: 50, pinch: true }, { x: 300, y: 50, pinch: true }, 6);
+    expect(hp.isTwoHandZooming()).toBe(true);
+    expect(cursorsOf(doc).filter((c) => !c.hidden)).toHaveLength(2);
+    feed2({ x: 160, y: 50, pinch: false }, { x: 300, y: 50, pinch: false }, 4);
+    expect(hp.isTwoHandZooming()).toBe(false);
+    expect(btn.click).not.toHaveBeenCalled();
+    expect(other.click).not.toHaveBeenCalled();
+  });
+
+  it('fist on one hand while the other points moves only the fist cursor and clicks nothing', () => {
+    for (let i = 0; i < 8; i++) {
+      t += 33;
+      hp.update([synthHand(160, 50, false), synthHand(500, 400, false)], t);
+    }
+    expect(cursorsOf(doc).filter((c) => !c.hidden)).toHaveLength(2);
+    for (let i = 0; i < 6; i++) {
+      t += 33;
+      hp.update([synthFist(160, 50), synthHand(500, 400, false)], t);
+    }
+    const cursors = cursorsOf(doc);
+    const byX = [...cursors].sort((a, b) => cursorPos(a).x - cursorPos(b).x);
+    expect(byX[0].classList.contains('is-fist')).toBe(true);
+    expect(byX[1].classList.contains('is-fist')).toBe(false);
+    expect(byX[1].classList.contains('is-pinched')).toBe(false);
+    expect(cursorPos(byX[1]).x).toBeCloseTo(500, 0);
+
+    for (let i = 0; i < 8; i++) {
+      t += 33;
+      hp.update([synthFist(200, 80), synthHand(500, 400, false)], t);
+    }
+    const after = [...cursorsOf(doc)].sort((a, b) => cursorPos(a).x - cursorPos(b).x);
+    expect(cursorPos(after[0]).x).toBeGreaterThan(180);
+    expect(cursorPos(after[0]).x).toBeLessThan(210);
+    expect(cursorPos(after[1]).x).toBeCloseTo(500, 0);
+    expect(btn.click).not.toHaveBeenCalled();
+    expect(other.click).not.toHaveBeenCalled();
+  });
+
+  it('magnetic focus: nearest control within 60px gets the ring and a pinch clicks the focused target, not the raw miss', () => {
+    // 40px left of the left button (btn is 100–220). Inside the 60px magnet.
+    feed(70, 50, false, 12);
+    expect(hp.target).toBe(btn);
+    expect(cursorElOf(doc).hidden).toBe(false);
+    const pos = cursorPos(cursorElOf(doc));
+    // Cursor eases toward the button centre (160), not staying glued at 70.
+    expect(pos.x).toBeGreaterThan(70);
+    expect(pos.x).toBeLessThan(160);
+    feed(70, 50, true, 5);
+    feed(70, 50, false, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    expect(other.click).not.toHaveBeenCalled();
   });
 
   function cursorPos(c: FakeOverlayEl): { x: number; y: number } {

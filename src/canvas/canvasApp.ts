@@ -37,7 +37,7 @@ import {
   SplitTileElement, StatTileElement, SwitchTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
-import { parseDeviceCommands, type DeviceKind, type DeviceRef } from './deviceCommands';
+import { parseDeviceCommands, resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
@@ -1890,7 +1890,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
 
     // Device speech (works in any board — controls the docked dashboard mid-build).
-    const dc = parseDeviceCommands(text, deviceRefs());
+    const dc = parseDeviceCommands(text, deviceRefs(), { pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()) });
     if (dc) {
       for (const i of dc.intents) void store.act(i);
       // With a Kannada pack on, the device-command status line is Kannada too.

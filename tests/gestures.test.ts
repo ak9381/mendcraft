@@ -4,6 +4,7 @@ import {
   fingerStates,
   isFistPose,
   isClosingToFist,
+  isOpenPalmPose,
   pinchRatio,
   twoHandSpan,
   createGestureRecognizer,
@@ -120,10 +121,22 @@ describe('classifyGesture', () => {
     // pull the index tip in toward the palm but leave it slightly past its PIP
     // so the old extended() test would still call it a reaching index.
     p[6] = { x: 0.45, y: 0.62 };
-    p[8] = { x: 0.50, y: 0.58 };
-    p[4] = { x: 0.49, y: 0.58 }; // thumb almost on the index tip
+    p[8] = { x: 0.48, y: 0.66 }; // index has come in to join the curled tips
+    p[4] = { x: 0.47, y: 0.66 }; // thumb almost on the index tip
     expect(isClosingToFist(p) || isFistPose(p)).toBe(true);
     expect(classifyGesture(p)).not.toBe('pinch');
+  });
+
+  it('open palm vs point vs fist: only all five reaching fingers are a palm', () => {
+    const palm = makeHand({ index: true, middle: true, ring: true, pinky: true, thumb: 'up' });
+    expect(classifyGesture(palm)).toBe('open-palm');
+    expect(isOpenPalmPose(palm) || classifyGesture(palm) === 'open-palm').toBe(true);
+    const point = makeHand({ index: true, thumb: 'curled' });
+    expect(classifyGesture(point)).toBe('point');
+    expect(isOpenPalmPose(point)).toBe(false);
+    const fist = makeHand({ thumb: 'curled' });
+    expect(classifyGesture(fist)).toBe('fist');
+    expect(isOpenPalmPose(fist)).toBe(false);
   });
 });
 

@@ -10,11 +10,12 @@ import { findLiveCameraStream } from '../input/cameraShare';
 import { describeCameraError, INSECURE_CONTEXT_MESSAGE } from '../input/cameraError';
 import { createHandOverlay, type HandOverlay } from '../ui/handOverlay';
 import { createFacingBanner, type FacingBanner } from '../ui/facingBanner';
+import { createFaceOverlay, type FaceOverlay } from '../ui/faceOverlay';
 import { HAND_FEEL, createHoldGesture } from './handFeel';
 
-/** FaceLandmarker is on by default. The canvas shows only the small
- *  "Facing this device" pill — never the old full-screen face box.
- *  Presence throttles the model to a few fps (FACE_INTERVAL_MS). */
+/** FaceLandmarker is on by default. The canvas shows a compact top face
+ *  preview (the original AF brackets, smaller) plus a larger "Facing this
+ *  device" pill. Presence throttles the model (FACE_INTERVAL_MS). */
 export const LAPTOP_DETECT_FACES = true;
 
 export type CanvasHandEvent =
@@ -291,18 +292,21 @@ export async function mountCanvasHands(
   let tracker: PresenceTracker | null = null;
   let overlay: HandOverlay | null = null;
   let facing: FacingBanner | null = null;
+  let faces: FaceOverlay | null = null;
 
   try {
     const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
     overlay = createHandOverlay(root);
-    // A small top pill, never a full-screen face box. FaceLandmarker runs
-    // throttled so the pill can update without stealing the hand tracker.
+    // Compact face brackets at the top + a larger facing pill. FaceLandmarker
+    // stays throttled (FACE_INTERVAL_MS) so this doesn't steal the hand tracker.
     facing = createFacingBanner(root);
+    faces = createFaceOverlay(root, { compact: true });
     const detectFaces = opts.detectFaces ?? LAPTOP_DETECT_FACES;
     tracker = createPresenceTracker(
       () => {},
       (presenceFrame) => {
         overlay?.draw(presenceFrame.hands);
+        faces?.draw(presenceFrame.faces, presenceFrame.rejectedHands);
         const op = presenceFrame.faces.find((f) => f.isOperator) ?? presenceFrame.faces[0];
         facing?.set(op ? op.facing : null);
         opts.onPresence?.(presenceFrame);
@@ -320,6 +324,7 @@ export async function mountCanvasHands(
     try {
       tracker?.stop();
       overlay?.clear();
+      faces?.clear();
       facing?.destroy();
     } catch {
       // safe cleanup
@@ -333,6 +338,7 @@ export async function mountCanvasHands(
     try {
       live.stop();
       overlay?.clear();
+      faces?.clear();
       facing?.destroy();
     } catch {
       // safe cleanup

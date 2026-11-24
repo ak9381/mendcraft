@@ -596,9 +596,9 @@
    follows the index fingertip everywhere else (a 4-arrow move icon while
    fisted). Fixed overlays so they work for controls inside shadow DOM too. */
 .mc-hand-frame, .mc-hand-cursor { position: fixed; left: 0; top: 0; z-index: 85; pointer-events: none; }
-.mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent);
-  box-shadow: 0 0 0 4px rgb(107 143 113 / 0.18), 0 0 14px rgb(107 143 113 / 0.3); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
-.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(107 143 113 / 0.3), 0 0 18px rgb(107 143 113 / 0.45); }
+.mc-hand-frame { border-radius: 14px; border: 3px solid #f07a60;
+  box-shadow: 0 0 0 4px rgb(240 122 96 / 0.22), 0 0 14px rgb(240 122 96 / 0.35); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(240 122 96 / 0.35), 0 0 18px rgb(240 122 96 / 0.5); }
 /* Small coral arrow — hotspot is the SVG's own drawn tip, which sits at the
    shape's origin, so translate(x,y) alone puts the tip exactly at the hand's
    index fingertip. */
@@ -940,12 +940,12 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: min(260px, calc(100vw - 220px));
-  padding: 6px 10px 6px 12px;
+  max-width: min(340px, calc(100vw - 220px));
+  padding: 10px 16px 10px 18px;
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.82);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.01em;
   box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
@@ -958,11 +958,11 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  padding: 4px 6px;
-  min-height: 28px;
+  padding: 6px 8px;
+  min-height: 32px;
   border-radius: 999px;
 }
 .mc-facing-banner-hide:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -988,3 +988,57 @@
 }
 .mc-term-empty { margin: 12px 14px; font-size: 13px; color: #C8C6BF; }
 .mc-term-body { min-height: 48px; }
+
+/* Compact face preview: the original AF brackets, smaller, pinned to the top. */
+.face-overlay.face-overlay--compact {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(180px, 36vw);
+  height: min(120px, 18vh);
+  inset: auto;
+  pointer-events: none;
+  z-index: 70;
+  border-radius: 12px;
+  background: rgba(11, 15, 20, 0.28);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.16);
+}
+.mc-hand-cursor.is-palm-scroll::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: -18px;
+  width: 8px;
+  height: 28px;
+  background:
+    linear-gradient(#fff, #fff) 3px 0 / 2px 28px no-repeat,
+    linear-gradient(#fff, #fff) 0 0 / 8px 2px no-repeat,
+    linear-gradient(#fff, #fff) 0 26px / 8px 2px no-repeat,
+    polygon(evenodd, 0 0, 8px 0, 4px 7px),
+    #0000;
+  /* Low-poly vertical double-arrow (up + down) beside the frozen cursor. */
+  clip-path: polygon(4px 0, 8px 8px, 5px 8px, 5px 20px, 8px 20px, 4px 28px, 0 20px, 3px 20px, 3px 8px, 0 8px);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+  pointer-events: none;
+}
+.mc-hand-cursor.is-palm-scroll::before {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: 0;
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+/* Fist-grab on a tile: a short lift shadow while the hand carries it. */
+.mc-edit-item.is-hand-lift {
+  box-shadow: 0 14px 28px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
+  transform: translateY(-3px);
+  z-index: 6;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
