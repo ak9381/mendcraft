@@ -33,6 +33,9 @@ describe('journeyStepOf', () => {
     expect(journeyStepOf(board('plan', ['plan']), { ...ctx, online: false })).toBe('offline');
     expect(journeyStepOf(board('room', ['lamp']), { ...ctx, shared: true, online: false })).toBe('shared');
   });
+  it('while phones pair (pair-first connect) the board is at the devices step', () => {
+    expect(journeyStepOf(board('note', []), { ...ctx, pairing: true, phones: 1 })).toBe('devices');
+  });
   it('paired phones alone do not mean the board was shared', () => {
     expect(journeyStepOf(board('room', ['lamp']), { ...ctx, phones: 2 })).toBe('dashboard');
   });
