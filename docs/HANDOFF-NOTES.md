@@ -37,3 +37,7 @@ Still open from the click pass: 4 (Kannada only swaps palette/empty-state labels
 - Demo has to feel "wow"; UI feels crowded; show **both** Nano and Gemini clearly.
 - Hand control (cursor movement + selection) is currently worse than mouse/keyboard — it should help, not hinder.
 - Vision: a smart canvas you can work on and make anything.
+
+## iPhone first run (24 Nov, Akash)
+
+App launches, canvas shows, badge reads "Apple · on device". Blocker: touch is locked behind "Look at me to edit" and never unlocks (front camera on, face check never passes), so nothing can be tapped or swiped. Next: make touch work by default; look-to-edit only as an opt-in, and never lock on a failed/unknown face signal.
