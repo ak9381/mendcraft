@@ -1,6 +1,7 @@
 // C2 Say box / text command field: hand-path tests.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHandPointer, REACH, type HandPointer } from '../../src/canvas/handPointer';
+import { createHandPointer, type HandPointer } from '../../src/canvas/handPointer';
+import { synthHand as synthHandAt } from '../helpers/synthHands';
 import type { Pt } from '../../src/input/handLogic';
 import { wireSayBar } from '../../src/canvas/mobile/components/sayBar';
 import { MIC_IDLE_LABEL, MIC_LISTENING_LABEL } from '../../src/canvas/micFab';
@@ -9,29 +10,10 @@ import { mountToolPalette } from '../../src/canvas/toolPalette';
 const W = 1000;
 const H = 800;
 
-/** Camera-space hand whose INDEX_TIP (landmark 8 — the cursor's hotspot)
- *  maps exactly to screen (px, py); same construction
- *  handPointerPipeline.test.ts uses for its real pipeline. Index stays
- *  "extended" and the other three fingers curled, so classifyGesture()
- *  never reads this as a fist. */
+/** Open pointing hand whose PALM CENTRE (the cursor anchor) maps exactly to
+ *  screen (px, py) — the shared builder handPointerPipeline.test.ts uses. */
 function synthHand(px: number, py: number, pinched: boolean): Pt[] {
-  const cx = 1 - (REACH.x0 + (px / W) * (REACH.x1 - REACH.x0));
-  const cy = REACH.y0 + (py / H) * (REACH.y1 - REACH.y0);
-  const lm: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-  lm[8] = { x: cx, y: cy };
-  lm[0] = { x: cx, y: cy + 0.42 };
-  lm[9] = { x: cx, y: cy + 0.22 };
-  lm[5] = { x: cx, y: cy + 0.22 };
-  lm[6] = { x: cx, y: cy + 0.12 };
-  lm[7] = { x: cx, y: cy + 0.06 };
-  const palmY = cy + 0.26;
-  lm[10] = { x: cx + 0.05, y: palmY + 0.04 }; lm[12] = { x: cx + 0.05, y: palmY };
-  lm[13] = { x: cx + 0.08, y: cy + 0.22 }; lm[14] = { x: cx + 0.08, y: palmY + 0.04 }; lm[16] = { x: cx + 0.08, y: palmY };
-  lm[17] = { x: cx + 0.12, y: cy + 0.22 }; lm[18] = { x: cx + 0.12, y: palmY + 0.04 }; lm[20] = { x: cx + 0.12, y: palmY };
-  const gap = pinched ? 0.006 : 0.16;
-  lm[1] = { x: cx - gap, y: cy + 0.18 }; lm[2] = { x: cx - gap, y: cy + 0.12 }; lm[3] = { x: cx - gap, y: cy + 0.06 };
-  lm[4] = { x: cx - gap, y: cy };
-  return lm;
+  return synthHandAt(px, py, pinched, W, H);
 }
 
 function fakeSayInput(rect: { left: number; top: number; width: number; height: number }) {
@@ -76,7 +58,7 @@ describe('C026 a dwell-click on the say input focuses it, same generic path as a
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  it('a ~3s dwell on the say box calls activate() -> focus(), not click()', () => {
+  it('a dwell on the say box calls activate() -> focus(), not click()', () => {
     const input = fakeSayInput({ left: 100, top: 30, width: 200, height: 40 });
     const hp: HandPointer = createHandPointer(fakeDoc(input), {});
     let t = 0;
@@ -84,7 +66,7 @@ describe('C026 a dwell-click on the say input focuses it, same generic path as a
       for (let i = 0; i < frames; i++) { t += 33; hp.update([synthHand(px, py, false)], t); }
     };
     feed(500, 400, 5);
-    feed(160, 50, 115); // settle + ~3s dwell on the say box
+    feed(160, 50, 115); // settle + a long rest (one click per visit) on the say box
     expect(hp.target).toBe(input);
     expect(input.focus).toHaveBeenCalledTimes(1);
     // …and announces a HAND focus so the canvas docks the on-screen keyboard.

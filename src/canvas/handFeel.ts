@@ -21,10 +21,13 @@ const PALM_LANDMARKS = [0, 5, 9, 13, 17] as const;
 const INDEX_MCP_FEEL_ANCHOR = 5;
 
 export interface HandFeelConfig {
-  /** Central sub-rectangle of the camera frame that maps to the full screen,
-   *  so the top toolbar and edges are reachable without leaving the frame. */
+  /** Active box: the central sub-rectangle of the camera frame (where the
+   *  PALM CENTRE travels) that maps to the full screen, so every edge of the
+   *  UI is reachable without the hand leaving the camera. The palm sits
+   *  lower in the frame than a fingertip would, hence the box sits lower. */
   reach: { x0: number; x1: number; y0: number; y1: number };
-  /** One-Euro params for the cursor anchor (screen-space position). */
+  /** One-Euro params for the cursor, applied AFTER mapping to the screen
+   *  (so minCutoff is Hz and beta is per screen-px/s). */
   cursorFilter: { minCutoff: number; beta: number; dCutoff: number };
   /** One-Euro-style smoothing on the pinch ratio itself (1D). */
   pinchFilter: { minCutoff: number; beta: number; dCutoff: number };
@@ -45,8 +48,9 @@ export interface HandFeelConfig {
   /** The click targets the cursor position from this long BEFORE the pinch
    *  began, so closing the fingers can't drag the point off a small button. */
   freezeLookbackMs: number;
-  /** A hovered control stays the target until the pointer has been outside
-   *  it (by stickyMarginPx) for at least this long. */
+  /** createStickyTarget (generic time-based hysteresis). The live hand
+   *  pointer uses the magnet lock (magnetCapturePx / magnetReleasePx)
+   *  instead — the two never run together. */
   stickyMs: number;
   stickyMarginPx: number;
   /** Hands smaller than this (wrist→middle-MCP, camera units) are someone in
@@ -58,18 +62,26 @@ export interface HandFeelConfig {
   palmRefractoryMs: number;
   /** Consecutive pinch-pose frames before "keep" fires on empty canvas. */
   keepFrames: number;
-  /** Dwell-click: rest the index-tip cursor on a control or board this long
-   *  (~1.5s) to click/select it — the only way to click in the live pipeline. */
+  /** Dwell-click: once a control (or a board's title) has captured the
+   *  cursor, it clicks after this long locked on it — the only way to click
+   *  in the live pipeline. Jitter inside the lock never restarts it. */
   dwellMs: number;
-  /** Movement (px) allowed during a dwell without restarting the timer. */
-  dwellSlopPx: number;
+  /** Magnet: the cursor captures the nearest control within this many px of
+   *  its rect (when it is not directly over one)… */
+  magnetCapturePx: number;
+  /** …and a captured (locked) control is only released once the cursor is
+   *  more than this far from its rect, or lands directly on another control. */
+  magnetReleasePx: number;
+  /** After a dwell click, no new dwell can start for this long — and the
+   *  cursor must leave the clicked control before it can re-arm. */
+  clickCooldownMs: number;
 }
 
 export const HAND_FEEL: HandFeelConfig = {
-  reach: { x0: 0.15, x1: 0.85, y0: 0.15, y1: 0.85 },
-  cursorFilter: { minCutoff: 0.9, beta: 5, dCutoff: 1 },
+  reach: { x0: 0.2, x1: 0.8, y0: 0.3, y1: 0.85 },
+  cursorFilter: { minCutoff: 1.0, beta: 0.01, dCutoff: 1.0 },
   pinchFilter: { minCutoff: 2.5, beta: 8, dCutoff: 1 },
-  deadZonePx: 2.5,
+  deadZonePx: 3,
   pinchOn: 0.20,
   pinchOff: 0.30,
   engageFrames: 3,
@@ -83,8 +95,10 @@ export const HAND_FEEL: HandFeelConfig = {
   palmHoldMs: 600,
   palmRefractoryMs: 1500,
   keepFrames: 3,
-  dwellMs: 1500,
-  dwellSlopPx: 12,
+  dwellMs: 800,
+  magnetCapturePx: 40,
+  magnetReleasePx: 60,
+  clickCooldownMs: 600,
 };
 
 // ---------------------------------------------------------------- anchor

@@ -6,7 +6,8 @@ import { createHandsProcessor, TAP_MOVE_LIMIT, type HandEvent, type Pt } from '.
 import { createPinchMachine, HAND_FEEL } from '../../src/canvas/handFeel';
 import { PROFILES } from '../../src/input/handProfile';
 import { createDwellClicker } from '../../src/input/dwell';
-import { createHandPointer, REACH, type HandPointer } from '../../src/canvas/handPointer';
+import { createHandPointer, type HandPointer } from '../../src/canvas/handPointer';
+import { synthHand as synthHandAt } from '../helpers/synthHands';
 
 /** 21 landmarks; wrist->middle MCP = 0.2. `gap` = thumb-index tip distance.
  *  Same fixture tests/handLogic.test.ts uses for this module. */
@@ -62,25 +63,10 @@ describe('C194 the 400ms silence timeout is the real boundary for "lost"', () =>
       },
     } as unknown as Document;
   }
-  // The cursor's hotspot is landmark 8 (INDEX_TIP) itself, so it must sit
-  // exactly on the target; index stays "extended" (PIP nearer the wrist than
-  // the tip) and the other three fingers curled, so classifyGesture() never
-  // reads this as a fist.
+  // The cursor is anchored to the PALM CENTRE: the shared builder places the
+  // palm exactly on the target (index extended, others curled — a 'point').
   function synthHand(px: number, py: number): Pt[] {
-    const cx = 1 - (REACH.x0 + (px / W) * (REACH.x1 - REACH.x0));
-    const cy = REACH.y0 + (py / H) * (REACH.y1 - REACH.y0);
-    const lm: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-    lm[8] = { x: cx, y: cy };
-    lm[0] = { x: cx, y: cy + 0.2 };
-    lm[9] = { x: cx, y: cy };
-    lm[5] = { x: cx, y: cy + 0.15 };
-    lm[6] = { x: cx, y: cy + 0.12 };
-    lm[7] = { x: cx, y: cy + 0.06 };
-    lm[10] = { x: cx + 0.05, y: cy + 0.1 }; lm[12] = { x: cx + 0.05, y: cy + 0.18 };
-    lm[13] = { x: cx + 0.1, y: cy + 0.15 }; lm[14] = { x: cx + 0.1, y: cy + 0.1 }; lm[16] = { x: cx + 0.1, y: cy + 0.18 };
-    lm[17] = { x: cx + 0.15, y: cy + 0.15 }; lm[18] = { x: cx + 0.15, y: cy + 0.1 }; lm[20] = { x: cx + 0.15, y: cy + 0.18 };
-    lm[4] = { x: cx - 0.16, y: cy }; // thumb tip: open (ratio 0.8)
-    return lm;
+    return synthHandAt(px, py, false, W, H);
   }
   let hp: HandPointer;
   beforeEach(() => {

@@ -9,7 +9,7 @@ import {
   isEdgeFrame,
   isHandClipped,
 } from '../../src/canvas/handEdge';
-import { HAND_FEEL } from '../../src/canvas/handFeel';
+import { HAND_FEEL, palmCenter } from '../../src/canvas/handFeel';
 import { SCREEN_MARGIN_PX } from '../../src/canvas/handPointer';
 
 describe('edge detection', () => {
@@ -32,6 +32,18 @@ describe('edge detection', () => {
     const mid = { x: 0.5, y: 0.5 };
     expect(isAtScreenEdge(mid, 1000, 800, false)).toBe(false);
     expect(SCREEN_MARGIN_PX).toBe(24);
+  });
+
+  it('the screen-edge test runs on the PALM point (the cursor anchor), not the index tip', () => {
+    // Palm comfortably inside the active box; the raised index fingertip is
+    // above the box top (it would map past the screen clamp) — not an edge.
+    const pts = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.6 }));
+    pts[8] = { x: 0.5, y: HAND_FEEL.reach.y0 - 0.1 };
+    const palm = palmCenter(pts);
+    expect(isAtScreenEdge(pts[8], 1000, 800, false)).toBe(true);
+    expect(isEdgeFrame(pts, palm, 1000, 800, false)).toBe(false);
+    // The palm itself at the active-box bottom edge IS the screen edge.
+    expect(isEdgeFrame(pts, { x: 0.5, y: HAND_FEEL.reach.y1 }, 1000, 800, false)).toBe(true);
   });
 });
 
