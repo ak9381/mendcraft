@@ -29,7 +29,8 @@ export function isContinue(text: string): boolean {
   return /^\s*(?:continue|next|done|that'?s all|go on)\s*[.!]?\s*$/i.test(text);
 }
 
-export type PairFirstPhase = 'idle' | 'pairing' | 'asking';
+/** live: the flow is over but phones stay connected (relay alive). */
+export type PairFirstPhase = 'idle' | 'pairing' | 'asking' | 'live';
 
 export interface PairFirstDeps {
   say(text: string): void;
@@ -37,18 +38,20 @@ export interface PairFirstDeps {
   openPairing(): Promise<boolean>;
   /** Run the lamp dashboard review (connectRoom). */
   buildDashboard(): void;
+  /** True while a proposal/review is waiting (the dashboard review must queue behind it). */
+  busy?(): boolean;
   /** Called whenever the phone list or phase changes (render the row). */
   onChange?(): void;
   /** True under ?sim=1: simulate two phones, labelled SIM. */
   sim(): boolean;
   schedule?: (fn: () => void, ms: number) => unknown;
+  clear?: (handle: unknown) => void;
 }
 
 export interface PairFirst {
   phase(): PairFirstPhase;
   phones(): readonly PairedPhone[];
-  pendingDashboard(): boolean;
-  begin(o: { dashboard: boolean }): Promise<void>;
+  begin(o?: { dashboard?: boolean }): Promise<void>;
   addPhone(p: { id: string; label: string; sim?: boolean }): void;
   /** A generic "paired" with no platform info; replaced once a named phone announces. */
   addGeneric(): void;
@@ -56,6 +59,9 @@ export interface PairFirst {
   continueNext(): boolean;
   /** Returns true when the utterance belonged to this flow. */
   handleSpeech(text: string): boolean;
+  /** Leave the pair-first flow without dropping phones (new board, undo, unrelated command). */
+  abandon(): void;
+  /** Full reset: phones gone, timers cleared (Disconnect, card closed, destroy). */
   cancel(): void;
 }
 
@@ -65,13 +71,17 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
   const sched = d.schedule ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   let phase: PairFirstPhase = 'idle';
   let list: PairedPhone[] = [];
-  let pendingDash = false;
+  let timers: unknown[] = [];
   let gen = 0; // invalidates scripted sim joins after cancel / a new begin
 
+  const clearTimer = d.clear ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  const later = (fn: () => void, ms: number) => { timers.push(sched(fn, ms)); };
+  const clearTimers = () => { timers.forEach(clearTimer); timers = []; };
+  const busy = () => !!d.busy?.();
   const changed = () => d.onChange?.();
 
   function addPhone(p: { id: string; label: string; sim?: boolean }): void {
-    if (phase !== 'pairing') return;
+    if (phase === 'idle') return;
     if (p.id !== GENERIC_ID) list = list.filter((x) => x.id !== GENERIC_ID);
     if (list.some((x) => x.id === p.id)) return;
     list = [...list, { id: p.id, label: p.label, sim: !!p.sim }];
@@ -82,6 +92,7 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
   function continueNext(): boolean {
     if (phase !== 'pairing') return false;
     if (list.length === 0) { d.say('No phone has joined yet. Hold one near the laptop, or type the code on it.'); return true; }
+    if (busy()) { d.say('Finish the waiting proposal first: keep or drop. Then continue.'); return true; }
     phase = 'asking';
     changed();
     d.say(NEXT_PROMPT);
@@ -89,30 +100,46 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
   }
 
   function buildNow(): void {
-    phase = 'idle';
-    pendingDash = false;
+    if (busy()) { d.say('Finish the waiting proposal first: keep or drop. Then say build the dashboard.'); return; }
+    phase = list.length ? 'live' : 'idle';
     gen++;
+    clearTimers();
     changed();
     d.buildDashboard();
+  }
+
+  function abandon(): void {
+    if (phase !== 'pairing' && phase !== 'asking') return;
+    gen++;
+    clearTimers();
+    phase = list.length ? 'live' : 'idle';
+    changed();
+  }
+
+  function cancel(): void {
+    gen++;
+    clearTimers();
+    phase = 'idle';
+    list = [];
+    changed();
   }
 
   return {
     phase: () => phase,
     phones: () => list,
-    pendingDashboard: () => pendingDash,
-    async begin(o) {
+    async begin() {
       gen++;
       const mine = gen;
       phase = 'pairing';
       list = [];
-      pendingDash = o.dashboard;
+      clearTimers();
       changed();
       if (d.sim()) {
         d.say('SIM: no relay here, so two phones join on a script. Real phones pair by chime.');
-        sched(() => { if (gen === mine) addPhone({ id: 'sim-1', label: 'Nothing phone', sim: true }); }, 1200);
-        sched(() => { if (gen === mine) addPhone({ id: 'sim-2', label: 'iPhone', sim: true }); }, 2600);
+        later(() => { if (gen === mine) addPhone({ id: 'sim-1', label: 'Nothing phone', sim: true }); }, 1200);
+        later(() => { if (gen === mine) addPhone({ id: 'sim-2', label: 'iPhone', sim: true }); }, 2600);
         // The scripted judge path should not stall on a button.
-        sched(() => { if (gen === mine && phase === 'pairing' && list.length >= 2) continueNext(); }, 4000);
+        later(() => { if (gen === mine && phase === 'pairing' && list.length >= 2) continueNext(); }, 4000);
         return;
       }
       d.say('Pairing phones first. Playing the chime; hold a phone near the laptop.');
@@ -128,22 +155,32 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
     clearReal() {
       if (phase === 'idle') return;
       list = list.filter((x) => x.sim);
+      if (!list.length) { cancel(); return; }
       changed();
     },
     continueNext,
     handleSpeech(text) {
-      if (phase === 'idle') return false;
+      if (phase !== 'pairing' && phase !== 'asking') return false;
       if (isBuildDashboard(text)) { buildNow(); return true; }
-      if (isContinue(text) && phase === 'pairing') return continueNext();
+      if (phase === 'pairing') return isContinue(text) && list.length > 0 ? continueNext() : false;
+      // asking: point / name / connect stay in the flow; anything else ends it.
+      if (/\b(point|connect|add|name)\b/i.test(text)) return false;
+      abandon();
       return false;
     },
-    cancel() { gen++; phase = 'idle'; list = []; pendingDash = false; changed(); },
+    abandon,
+    cancel,
   };
 }
 
 /** Pure HTML for the connected-device row: a check per joined phone, SIM labelled. */
 export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase): string {
   if (phase === 'idle') return '';
+  if (phase === 'live' || phase === 'asking') {
+    const n = phones.length;
+    const sim = phones.some((p) => p.sim) ? ' <span class="mc-chip">SIM</span>' : '';
+    return `<span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button>`;
+  }
   const chips = phones.length
     ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}</span>`).join('')
     : '<span class="mc-paired-wait">Waiting for a phone…</span>';

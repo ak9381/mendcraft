@@ -513,17 +513,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   pairedRow.setAttribute('aria-label', 'Connected devices');
   pairedRow.hidden = true;
   root.appendChild(pairedRow);
+  let pairFrame: string | null = null;
+  let pairingHost: HTMLElement | null = null;
   const pairFirst = createPairFirst({
     say: (t) => say(t),
     sim: () => simEnv(),
+    busy: () => reviewBusy(),
     openPairing: async () => {
-      const id = focusId ?? lastFocus;
-      if (!id) return false;
+      const id = pairFrame ?? focusId ?? lastFocus;
+      if (!id || !reg.get(id)) return false;
       openConnectSheet(id);
       return joinPhone(id);
     },
     buildDashboard: () => {
-      const id = focusId ?? lastFocus; // phones stay paired: do not close the pairing card's session
+      const id = pairFrame ?? focusId ?? lastFocus; // phones stay paired: do not close the pairing card's session
       if (id) void connectRoom(id);
     },
     onChange: () => {
@@ -531,6 +534,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pairedRow.hidden = !html || phoneShell;
       pairedRow.innerHTML = html;
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
+      pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
+      // Past the pairing step the card collapses into the row's "N phones connected"
+      // chip (relay stays alive) so it never covers the review.
+      if (pairingHost && pairFirst.phase() !== 'pairing') pairingHost.hidden = true;
     },
   });
 
@@ -1007,6 +1014,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
+    pairFirst.abandon();
     const n = reg.list().length + 1;
     const f = reg.add('note', `Board ${n}`);
     sync(); void focus(f.id); persist();
@@ -1506,6 +1514,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   let sheetOpen: { frameId: string; host: HTMLElement; sheet: ConnectSheet } | null = null;
   let pairingStop: (() => Promise<void>) | null = null;
+  /** Explicit Disconnect: stop the relay and reset the pair-first flow. */
+  function disconnectPhones(): void {
+    if (pairingStop) { void pairingStop(); pairingStop = null; }
+    if (pairingHost) pairingHost.hidden = true;
+    pairFirst.cancel();
+  }
   function closeConnectSheet(): void {
     if (pairingStop) { void pairingStop(); pairingStop = null; }
     if (!sheetOpen) return;
@@ -1595,8 +1609,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     pairing = showPairing(open.host, {
       code: res.code,
       note: 'Playing a chime — hold your phone near this laptop. No typing, no scanning. After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
-      onClose: () => { if (pairingStop) { void pairingStop(); pairingStop = null; } open.host.hidden = true; },
+      onClose: () => { disconnectPhones(); open.host.hidden = true; },
     });
+    pairingHost = open.host;
     return true;
   }
   // Keep / drop act on the waiting board Proposal, else the waiting language Proposal.
@@ -1612,6 +1627,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     undo();
   }
   function undo(): void {
+    pairFirst.abandon();
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
@@ -2204,6 +2220,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // Phones first; the dashboard review waits for "build the dashboard".
       const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
       if (!focusId) { sync(); void focus(target); }
+      pairFrame = target;
       void pairFirst.begin(cd); return true;
     }
     if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) {
@@ -2413,6 +2430,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
+    pairFirst.cancel();
     if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
     phoneMenu?.destroy();
     toolPalette.destroy();
