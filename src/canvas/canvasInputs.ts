@@ -39,6 +39,8 @@ export interface CanvasInputsOptions {
   gimbal?: GimbalCanvasController;
   /** Opt-in native camera keep-alive for DockKit face tracking (test option). */
   gimbalKeepAlive?: boolean;
+  /** Another hand tracker is feeding the gimbal (the iPhone's sensing layer). */
+  sensing?: () => boolean;
   on?: CanvasInputsCallbacks;
 }
 
@@ -56,7 +58,7 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
   const gimbal =
     opts.gimbal ??
     createGimbalCanvasController({
-      handsRunning: () => activeHandsStop !== null,
+      handsRunning: () => activeHandsStop !== null || !!opts.sensing?.(),
       keepAlive: opts.gimbalKeepAlive,
     });
   const handsMount = opts.hands ?? mountCanvasHands;

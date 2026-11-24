@@ -96,7 +96,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
 export function announcePhone(
   session: Pick<GuestSession, 'sendCommand'>,
   platform: PhonePlatform,
-  extra: { deviceId?: string; native?: boolean; refresh?: boolean } = {},
+  extra: { deviceId?: string; native?: boolean; refresh?: boolean; status?: () => object | null } = {},
 ): void {
   try {
     // deviceId: the laptop keys this phone's AI-monitor events on it.
@@ -106,6 +106,10 @@ export function announcePhone(
     if (extra.deviceId) body.deviceId = extra.deviceId;
     if (extra.native !== undefined) body.native = extra.native;
     if (extra.refresh) body.refresh = true;
+    // iPhone sensing: gimbal / sensor / hand-control state for the laptop's
+    // connect-devices row (phonePoint.ts). Only what is really on.
+    const st = extra.status?.();
+    if (st) Object.assign(body, st, body);
     void session.sendCommand({ kind: 'announce', text: JSON.stringify(body) }).catch(() => undefined);
   } catch {
     /* a closed session never breaks the join */
@@ -124,7 +128,7 @@ export const RE_ANNOUNCE_MS = 20_000;
 export function keepAnnouncing(
   session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere'>>,
   platform: PhonePlatform,
-  extra: { deviceId?: string; native?: boolean },
+  extra: { deviceId?: string; native?: boolean; status?: () => object | null },
   timers: { setInterval(fn: () => void, ms: number): unknown; clearInterval(id: unknown): void } = {
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as ReturnType<typeof setInterval>),
@@ -142,6 +146,8 @@ export interface PhoneSessionDeps extends PhoneGuestJoinDeps {
   aiForwarder?: Pick<PhoneAiForwarder, 'bind'>;
   /** Injectable re-announce timers (tests). */
   keepAliveTimers?: Parameters<typeof keepAnnouncing>[3];
+  /** Extra announce fields (iPhone sensing status), read at each announce. */
+  announceStatus?: () => object | null;
 }
 
 /** The ONE way a phone joins the laptop's room — chime first-join, typed code
@@ -155,7 +161,7 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
   deps.aiForwarder?.bind(session);
   const deviceId = deps.storage ? ensureDeviceId(deps.storage) : undefined;
   const stopAnnouncing = deps.platform
-    ? keepAnnouncing(session, deps.platform, { deviceId, native: deps.native }, deps.keepAliveTimers)
+    ? keepAnnouncing(session, deps.platform, { deviceId, native: deps.native, status: deps.announceStatus }, deps.keepAliveTimers)
     : () => undefined;
   let stopped = false;
   return {

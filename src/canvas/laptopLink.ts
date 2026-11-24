@@ -16,6 +16,10 @@ import type { ControlSnapshot } from '../relay/controlSnapshot';
 import type { PhoneAiForwarder } from './phoneAiFeed';
 import type { PhonePlatform } from './screenLayout';
 import type { PairState } from '../relay/protocol';
+import type { GuestSession } from '../relay/session';
+
+/** The bit of the guest session iPhone sensing needs. */
+export type PhoneGuestSessionLike = Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onSensePoint'>>;
 
 export type LinkState = 'idle' | 'listening' | 'joining' | 'connected' | 'error' | 'sim';
 
@@ -49,6 +53,9 @@ export interface LaptopLinkDeps {
   aiForwarder?: Pick<PhoneAiForwarder, 'bind'>;
   /** A board the laptop sent to this phone. */
   onSnapshot(snap: ControlSnapshot): void;
+  /** The live guest session (null when it closes) — iPhone sensing uses it to
+   *  answer the laptop's point request and to re-announce its status. */
+  onSession?(session: PhoneGuestSessionLike | null): void;
   onChange?(s: { state: LinkState; message: string }): void;
   /** Injectables (tests): the chime listener, the join, join extras such as a
    *  fake transport, and timers. */
@@ -132,6 +139,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     }
     res.session.onSnapshot((snap) => deps.onSnapshot(snap));
     current = res;
+    deps.onSession?.(res.session);
     live = true;
     set('connected', LINK_LINES.connected);
     return true;
@@ -202,6 +210,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       current = null;
       // Not connected any more, so a later resume() (pageshow) rejoins.
       if (!deps.sim && state !== 'idle') set('idle', LINK_LINES.idle);
+      if (prev) deps.onSession?.(null);
       await prev?.stop();
     },
   };

@@ -17,7 +17,9 @@ import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pickPointChoice, pointConnectFromIdentity, pointFailureReceipt, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
-import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, pointerInCrop, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
+import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, phoneCropFraction, pointerInCrop, rayOutOfFrame, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
+import { createPhoneSensor, type PhoneSensor } from './phoneSensor';
+import { coercePointResult, coerceSenseStatus, encodePointResult, phoneSubState, PHONE_POINT_FALLBACK, PHONE_POINT_LINE, POINT_OUT_OF_FRAME, type PhonePointResult, type PhoneSenseStatus } from './phonePoint';
 import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
@@ -35,7 +37,7 @@ import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/p
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import { createCanvasInputs } from './canvasInputs';
-import { followWhileBuilding, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
+import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
@@ -152,6 +154,11 @@ export interface CanvasOptions {
   autoHands?: boolean;
   /** Phone-simple shell: canvas + mic + route badge only (iOS/Android / <600px). */
   phoneShell?: boolean;
+  /** iPhone shell: the hand SENSING layer (phoneSensor.ts) on the shared
+   *  phone camera — feeds the gimbal and point-to-connect, never the UI. */
+  phoneSensing?: boolean;
+  /** iPhone shell: send a point-to-connect result to the laptop (relay). */
+  sendPointResult?: (text: string) => void;
   /** ?gimbalKeepAlive=1: opt-in native camera keep-alive while DockKit face
    *  tracking is on (iPhone test option; also "keep alive on/off" by voice). */
   gimbalKeepAlive?: boolean;
@@ -482,9 +489,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       let deviceId: unknown;
       let native: unknown;
       let refresh = false;
+      let sense: PhoneSenseStatus | null = null;
       try {
         const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown };
         if (o.platform === 'android' || o.platform === 'ios') platform = o.platform;
+        sense = coerceSenseStatus(o);
         if (o.side === 'left' || o.side === 'right') wantedSide = o.side;
         deviceId = o.deviceId;
         native = o.native;
@@ -493,6 +502,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (!platform) return;
+      const prevSense = phoneSense.get(platform);
+      if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
+      if (JSON.stringify(prevSense) !== JSON.stringify(sense ?? undefined)) pairFirst.refresh();
       // A keep-alive re-announce only re-learns who the phone is for the AI
       // monitor — no re-placing, no board republish every 20 s.
       if (refresh) { phoneAi.announce(platform, deviceId, native); return; }
@@ -606,6 +618,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let pairingHost: HTMLElement | null = null;
   let flowOpening = false;
   let flowOwnsHost = false; // only the pair-first flow may auto-hide the pairing host
+  /** iPhone sensing status per announced phone (phonePoint.ts), from its
+   *  announce — only what the phone reports is really on. */
+  const phoneSense = new Map<string, PhoneSenseStatus>();
+  const isIphoneRow = (p: { id: string; label: string; sim: boolean }): boolean => p.id === 'ios' || (p.sim && /iphone/i.test(p.label));
   const pairFirst = createPairFirst({
     say: (t) => say(t),
     sim: () => simEnv(),
@@ -626,7 +642,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (id) void connectRoom(id);
     },
     onChange: () => {
-      const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase());
+      const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }));
       const rowWasHidden = pairedRow.hidden;
       pairedRow.hidden = !html || phoneShell;
       // The row changes the bottom inset: re-fit the focused board above it.
@@ -1687,8 +1703,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // you look at the device you point at, not at this screen.
   const POINT_UTTERANCE = 'connect what I am pointing at';
   const POINT_WAIT_MS = 20_000;
-  type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string };
-  let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void } | null = null;
+  type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string; viaIphone?: boolean };
+  /** phone: the frames come from the iPhone's own sensing camera (bigger
+   *  crop, out-of-frame check). remote: the laptop asked for this photo —
+   *  send the identity back instead of proposing here. */
+  let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void; phone?: boolean; remote?: boolean } | null = null;
+  /** Laptop: waiting for the iPhone's point photo result. */
+  let iphonePoint: { frameId: string; timer: ReturnType<typeof setTimeout> } | null = null;
   /** "Desk lamp or ceiling light?" is waiting for her answer (one question). */
   let pointChoice: { frameId: string; r: PointIdentifyResult; o: PointOpts; choices: DeviceHint[] } | null = null;
   function endPointWait(): void {
@@ -1705,9 +1726,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const pointing = !!h && h.length > 17 && isIndexExtended(h);
     const palm = pointing ? palmCenter(h as Parameters<typeof palmCenter>[0]) : null;
     if (!pointWait.steady.update(palm, now)) return;
-    const fid = pointWait.frameId;
+    const { frameId: fid, phone, remote } = pointWait;
+    // The crop is taken synchronously inside capturePoint (live video), so
+    // it happens before cleanup releases the gimbal hold / sensing camera.
+    void capturePoint(fid, h.map((p) => ({ x: p.x, y: p.y })), null, { phone, remote });
     endPointWait();
-    void capturePoint(fid, h.map((p) => ({ x: p.x, y: p.y })), null);
   }
   /** Ledger + feed for a point that did not become a proposal. Goes through
    *  logTurnReceipt first, so Nano's "received" precedes any Gemini line. */
@@ -1747,10 +1770,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pointChoice) { ledgerPointFailure(pointChoice.r, pointChoice.o, null); pointChoice = null; }
     if (opts.sim) {
       // ?sim=1: no camera. A scripted identity (a WiZ desk lamp), labelled SIM.
-      say('Point at it and hold still.');
+      const simIphone = pairFirst.phones().some((p) => p.sim && isIphoneRow(p));
+      say(simIphone ? 'SIM: the iPhone camera would take this photo. Point at it and hold still.' : 'Point at it and hold still.');
       await finishPoint(frameId, { identity: SIM_POINT_IDENTITY, source: 'on-device', ms: 0 }, { cropBytes: 0, sim: true });
       return;
     }
+    // Laptop with a paired iPhone that can sense: the iPhone takes the photo
+    // with its own camera (its gimbal holds), identifies it, and sends back
+    // only the identity. Its monitor tab shows what stayed on device.
+    const iphone = !phoneShell && hostSession ? phoneSense.get('ios') : undefined;
+    if (iphone?.canPoint && hostSession) {
+      if (iphonePoint) clearTimeout(iphonePoint.timer);
+      iphonePoint = {
+        frameId,
+        timer: setTimeout(() => { if (iphonePoint?.frameId === frameId) { iphonePoint = null; say('The iPhone didn’t send a photo — say it again, or name the device.'); } }, POINT_WAIT_MS + 8000),
+      };
+      say(PHONE_POINT_LINE);
+      void hostSession.askSensePoint('ios').catch(() => { iphonePoint = null; say('Couldn’t reach the iPhone — say it again, or name the device.'); });
+      return;
+    }
+    if (!phoneShell && !handsOn && pairFirst.phones().some((p) => isIphoneRow(p))) say(PHONE_POINT_FALLBACK);
+    if (phoneSensor) { await phoneSensorPoint(frameId, false); return; }
     const timer = setTimeout(() => {
       if (pointWait?.frameId !== frameId) return;
       endPointWait();
@@ -1767,8 +1807,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     if (isIosShell()) {
-      // The iPhone has no hand tracker, and its selfie camera can't see what
-      // she points at across the room. Don't pretend.
+      // No sensing layer on this iPhone build/camera: don't pretend.
       clearTimeout(timer);
       say(POINT_NEEDS_LAPTOP);
       return;
@@ -1797,42 +1836,103 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
     say('Hands are off — click where the device is (as in a mirror) and I’ll take one photo. Esc cancels.');
   }
-  async function capturePoint(frameId: string, landmarks: CropPt[] | null, clickPt: CropPt | null): Promise<void> {
-    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+  async function capturePoint(frameId: string, landmarks: CropPt[] | null, clickPt: CropPt | null, how: { phone?: boolean; remote?: boolean } = {}): Promise<void> {
+    const sendBack = (res: PhonePointResult): void => { opts.sendPointResult?.(encodePointResult(res)); };
+    if (!how.remote && reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     // Reuse the hand tracker's live camera; only hands-off opens it once.
     let video = findLiveVideo();
     let once: Awaited<ReturnType<typeof openCameraOnce>> = null;
-    if (!video) { once = await openCameraOnce(); video = once?.video ?? null; }
+    // iPhone sensing: the photo comes from the hub's own stream (the tracker's
+    // tagged <video>) — never a second getUserMedia.
+    if (!video && !how.phone) { once = await openCameraOnce(); video = once?.video ?? null; }
     let shot: ReturnType<typeof captureCrop> = null;
     let pointer: CropPt | undefined;
     try {
       if (video) {
         const W = video.videoWidth, H = video.videoHeight;
-        const rect = landmarks ? cropAlongRay(landmarks, W, H) : cropAroundPoint(clickPt, W, H);
-        const aim = landmarks ? rayTarget(landmarks, W, H) : clickPt;
+        // iPhone: lamp beside her face — a 42–45 %-of-width crop (pointCrop.ts).
+        const ray = how.phone && landmarks ? { fraction: phoneCropFraction(landmarks, W, H) } : {};
+        if (how.phone && landmarks && rayOutOfFrame(landmarks, W, H, ray)) {
+          // The device is not in this camera's view: never guess.
+          say(POINT_OUT_OF_FRAME);
+          if (how.remote) sendBack({ ok: false, reason: 'out-of-frame', message: POINT_OUT_OF_FRAME });
+          return;
+        }
+        const rect = landmarks ? cropAlongRay(landmarks, W, H, ray) : cropAroundPoint(clickPt, W, H);
+        const aim = landmarks ? rayTarget(landmarks, W, H, ray) : clickPt;
         pointer = aim ? pointerInCrop(aim, rect, W, H) : undefined;
         shot = captureCrop(video, rect);
       }
     } finally { once?.stop(); }
-    if (!shot) { say('I couldn’t get a camera frame — try naming the device instead.'); return; }
+    if (!shot) {
+      say('I couldn’t get a camera frame — try naming the device instead.');
+      if (how.remote) sendBack({ ok: false, reason: 'no-frame', message: 'The iPhone couldn’t get a camera frame.' });
+      return;
+    }
     say('Got it — looking at what you pointed at…');
     const hint = pointer ? { pointer } : undefined;
     const trace: VisionTrace = { cloudSends: 0 };
     const r = await identifyDevice(shot, hint, trace).catch(() => null);
-    await finishPoint(frameId, r, {
-      cropBytes: shot.bytes, sim: false, cloudSends: trace.cloudSends, cloudAnswered: trace.cloudAnswered, prompt: buildIdentifyPrompt(hint),
-    });
+    const o: PointOpts = { cropBytes: shot.bytes, sim: false, cloudSends: trace.cloudSends, cloudAnswered: trace.cloudAnswered, prompt: buildIdentifyPrompt(hint) };
+    if (how.remote) {
+      // The laptop proposes the tile. Here: book what left THIS phone and
+      // show the identify in this phone's AI feed (→ the monitor's iPhone tab).
+      const idNote = r ? `identify for the laptop: ${r.identity.label} (${r.identity.kind}) · ${Math.round(r.identity.confidence * 100)}% · ${r.source === 'cloud' ? 'Gemini · cloud' : 'on device'}` : 'identify for the laptop: nothing recognised';
+      ledgerPointFailure(r, o, idNote);
+      sendBack(r && r.identity.kind !== 'none'
+        ? { ok: true, identity: r.identity, source: r.source, ms: r.ms, cropBytes: shot.bytes, cloudSends: Math.max(r.source === 'cloud' ? 1 : 0, trace.cloudSends ?? 0) }
+        : { ok: false, reason: 'unidentified', message: 'The iPhone couldn’t tell what that was.' });
+      return;
+    }
+    await finishPoint(frameId, r, o);
+  }
+  /** iPhone: the sensing layer arms a steady point (not facing-gated); the
+   *  gimbal holds still; the photo comes from the SAME phone camera stream. */
+  async function phoneSensorPoint(frameId: string, remote: boolean): Promise<void> {
+    if (!phoneSensor) return;
+    endPointWait();
+    const prevGimbal = inputs.gimbal.mode();
+    void inputs.gimbal.setMode('point').catch(() => {});
+    await phoneSensor.request('point', true);
+    const release = (): void => { void phoneSensor?.request('point', false); void inputs.gimbal.setMode(prevGimbal).catch(() => {}); };
+    if (!phoneSensor.running()) {
+      release();
+      const why = phoneSensor.statusLine();
+      say(`${why}. ${POINT_NEEDS_LAPTOP}`);
+      if (remote) opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: why }));
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (pointWait?.frameId !== frameId) return;
+      endPointWait();
+      say('I didn’t catch a steady point — say it again, or name the device.');
+      if (remote) opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'timeout', message: 'No steady point on the iPhone.' }));
+    }, POINT_WAIT_MS);
+    pointWait = { frameId, steady: createSteadyHold(), timer, cleanup: release, phone: true, remote };
+    say(remote ? `${phoneSensor.statusLine()}. Point at it and hold still — this camera takes one photo for the laptop.` : PHONE_POINT_LINE);
+  }
+  /** Laptop: the iPhone's answer to askSensePoint. */
+  function onIphonePointResult(text: string): void {
+    const res = coercePointResult(text);
+    const wait = iphonePoint;
+    if (!res || !wait) return;
+    clearTimeout(wait.timer);
+    iphonePoint = null;
+    if (!res.ok) { say(res.message || 'The iPhone couldn’t identify that — name the device instead.'); return; }
+    // Nothing crossed from THIS laptop: the photo stayed on the iPhone (its own
+    // ledger + monitor tab books any crop it sent to Gemini).
+    void finishPoint(wait.frameId, { identity: res.identity, source: res.source, ms: res.ms }, { cropBytes: 0, sim: false, cloudSends: 0, prompt: '', viaIphone: true });
   }
   async function finishPoint(frameId: string, r: PointIdentifyResult | null, o: PointOpts): Promise<void> {
     const f = reg.get(frameId); if (!f) return;
     const where = r ? (r.source === 'cloud' ? 'Gemini · cloud' : 'Nano · on device') : null;
     const out = pointConnectFromIdentity(r, {
-      frameTitle: f.title, sim: o.sim, cropBytes: o.cropBytes, prompt: o.prompt, cloudSends: o.cloudSends, chosenId: o.chosenId,
+      frameTitle: f.title, sim: o.sim, cropBytes: o.cropBytes, prompt: o.prompt, cloudSends: o.cloudSends, chosenId: o.chosenId, viaIphone: o.viaIphone,
       devices: deviceHints(),
       onBoard: (surfaces[frameId]?.tiles ?? []).flatMap((t) => (isDeviceTile(t) ? [t.deviceId] : [])),
     });
     const idNote = r
-      ? `${o.sim ? 'SIM · ' : ''}identify: ${r.identity.label} (${r.identity.kind}${r.identity.brand ? `, ${r.identity.brand}` : ''}) · ${Math.round(r.identity.confidence * 100)}% · ${where}${r.ms ? ` · ${r.ms} ms` : ''}`
+      ? `${o.sim ? 'SIM · ' : ''}${o.viaIphone ? 'iPhone camera · ' : ''}identify: ${r.identity.label} (${r.identity.kind}${r.identity.brand ? `, ${r.identity.brand}` : ''}) · ${Math.round(r.identity.confidence * 100)}% · ${where}${r.ms ? ` · ${r.ms} ms` : ''}`
       : null;
     if (!out.ok) {
       if (out.choices?.length && r && !o.chosenId) {
@@ -1847,6 +1947,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
       { identified: true, extraBytes: out.extraBytes, photoNote: o.sim, note: idNote ?? undefined });
+    if (out.note) say(out.note);
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
@@ -1949,6 +2050,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           handlePhoneDeviceCommand(cmd.kind, cmd.text ?? '');
           return;
         }
+        if (cmd.kind === 'pointResult') { onIphonePointResult(cmd.text ?? ''); return; }
+        if (cmd.kind === 'sensePoint') return; // host → phone only
         dispatchRelayCommand(cmd, {
           run,
           undo,
@@ -2419,6 +2522,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const inputs = createCanvasInputs({
     root,
     gimbalKeepAlive: opts.gimbalKeepAlive,
+    sensing: () => !!phoneSensor?.running(),
     hands: async (r, onEvent) => {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
@@ -2466,6 +2570,51 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       },
     },
   });
+  // iPhone SENSING layer (phoneSensor.ts): same phone camera/tracker as the
+  // Hands pill, but it never acts on the UI and is not facing-gated. Runs
+  // while the gimbal is docked, the Track pill is on, or a follow-hands /
+  // point request is active.
+  const phoneSensor: PhoneSensor | null = phoneShell && opts.phoneSensing && opts.phoneCamera && typeof document !== 'undefined'
+    ? createPhoneSensor({
+        camera: opts.phoneCamera,
+        root,
+        storage,
+        onHands: (cam, now) => {
+          if (inputs.gimbal.mode() === 'hands') void inputs.gimbal.onHandsFrame(cam.map((points) => ({ points })), now).catch(() => {});
+          feedPointWait(cam, now);
+        },
+        onChange: () => { senseChanged(); },
+      })
+    : null;
+  const senseSubs = new Set<() => void>();
+  let senseLast = '';
+  let gimbalDocked = false;
+  function senseChanged(): void {
+    const k = JSON.stringify(phoneSenseStatus());
+    if (k === senseLast) return;
+    senseLast = k;
+    for (const cb of senseSubs) cb();
+  }
+  /** What this iPhone really has on (for its announce to the laptop). */
+  function phoneSenseStatus(): PhoneSenseStatus | null {
+    if (!phoneSensor) return null;
+    const tracking = phoneSensor.running() || (gimbalDocked && inputs.gimbal.mode() === 'face');
+    return { gimbal: !gimbalDocked ? 'none' : tracking ? 'tracking' : 'ready', sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: true };
+  }
+  if (phoneSensor) {
+    const plugin = getGimbalPlugin();
+    const checkDock = async (): Promise<void> => {
+      let docked = false;
+      try { docked = !!plugin && !!(await plugin.isAvailable()).available; } catch { docked = false; }
+      if (docked !== gimbalDocked) { gimbalDocked = docked; void phoneSensor.request('docked', docked); }
+      senseChanged();
+    };
+    void checkDock();
+    if (plugin) {
+      const dockTimer = setInterval(() => { if (document.visibilityState !== 'hidden') void checkDock(); }, 10_000);
+      addEventListener('pagehide', () => clearInterval(dockTimer), { once: true });
+    }
+  }
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
     if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
@@ -2581,7 +2730,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       }
       case 'gimbalScan': void scanRoom(text); return true;
-      case 'gimbal': return inputs.handleSpeech(text);
+      case 'gimbal': {
+        const g = parseGimbalSpeech(text);
+        if (phoneSensor && g === 'hands') {
+          void phoneSensor.request('follow', true).then(() => { inputs.handleSpeech(text); });
+          return true;
+        }
+        if (phoneSensor && (g === 'face' || g === 'hold')) void phoneSensor.request('follow', false);
+        return inputs.handleSpeech(text);
+      }
       case 'kannada': addKannada(); return true;
       case 'history': openHistory(); return true;
       case 'planExtra': {
@@ -2859,6 +3016,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     morphFlow?.destroy();
     morphCard.destroy();
     phoneHands?.destroy();
+    phoneSensor?.destroy();
     handPointer?.destroy();
     endPointWait();
     stopReplay();
@@ -3451,6 +3609,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return boardSends > before;
     },
   };
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy };
+  return {
+    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
+    /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
+    pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
+    phoneSenseStatus,
+    onPhoneSenseChange: (cb: () => void) => { senseSubs.add(cb); return () => { senseSubs.delete(cb); }; },
+  };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;

@@ -17,6 +17,8 @@ export interface NextStepCtx extends JourneyCtx {
   sim?: boolean;
   /** Label of a connected lamp, so "Try to break it" names one that exists. */
   lampLabel?: string;
+  /** The pair-first flow asked "What do you want to connect next?". */
+  asking?: boolean;
 }
 
 export interface NextStepsResult { steps: NextStep[]; source: 'nano' | 'rules'; sim?: boolean }
@@ -28,6 +30,9 @@ const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
   'connect-devices': { label: 'Connect devices', say: 'connect devices' },
   // Consumed by the live pair-first flow (pairedRow.ts) while phones pair.
   'build-dashboard': { label: 'Build the dashboard', say: 'build the dashboard' },
+  // After pairing ("What do you want to connect next?"): point / name / build.
+  'point-device': { label: 'Point at a device', say: 'connect to what I’m pointing at' },
+  'name-device': { label: 'Name a device', say: 'connect a device' },
   'connect-room': { label: 'Connect this room', say: 'connect this room' },
   'connect-device': { label: 'Connect a device', say: 'connect a device' },
   'connect-speaker': { label: 'Connect the speaker', say: 'connect the speaker' },
@@ -75,7 +80,7 @@ const step = (id: string, ctx?: NextStepCtx): NextStep => {
 export function ruleSuggestions(at: JourneyStep, ctx: NextStepCtx): NextStep[] {
   let ids = RULES[at];
   if (at === 'empty' && ctx.savedRoom) ids = ['floorplan', 'connect-device', 'everything'];
-  if (at === 'devices' && ctx.pairing) ids = ['build-dashboard', 'connect-device'];
+  if (at === 'devices' && ctx.pairing) ids = ctx.asking ? ['point-device', 'name-device', 'build-dashboard'] : ['build-dashboard', 'connect-device'];
   const skip = new Set(ctx.done ?? []);
   if (ctx.lang && ctx.lang !== 'en') skip.add('kannada');
   const out = ids.filter((id) => !skip.has(id));

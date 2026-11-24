@@ -22,8 +22,22 @@ const INDEX_TIP = 8;
 
 const finite = (p: Pt | undefined): p is Pt => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
 
-function squareAt(cx: number, cy: number, frameW: number, frameH: number): Rect {
-  const side = Math.min(frameW, frameH, Math.round(POINT_CROP_FRACTION * Math.max(frameW, frameH)));
+/** iPhone (docked, she looks into the camera and points at a lamp beside her
+ *  head, ~0.5–1 m away): the crop is ~42 % of the frame WIDTH, 45 % when the
+ *  5→8 ray is short (finger foreshortened toward/away from the lens, so its
+ *  direction is least reliable). At 0.75 m a 70° front camera sees ~1.05 m
+ *  across, so 42–45 % ≈ 44–47 cm — a lamp within ~40 cm of the face fits. */
+export const PHONE_CROP_WIDTH_FRACTION = 0.42;
+export const PHONE_CROP_WIDTH_FRACTION_SHORT = 0.45;
+/** A 5→8 ray shorter than this (fraction of frame width) counts as short. */
+export const SHORT_RAY = 0.05;
+
+function sideFor(frameW: number, frameH: number, fraction = POINT_CROP_FRACTION): number {
+  return Math.min(frameW, frameH, Math.round(fraction * Math.max(frameW, frameH)));
+}
+
+function squareAt(cx: number, cy: number, frameW: number, frameH: number, fraction?: number): Rect {
+  const side = sideFor(frameW, frameH, fraction);
   const x = Math.round(Math.min(Math.max(cx - side / 2, 0), frameW - side));
   const y = Math.round(Math.min(Math.max(cy - side / 2, 0), frameH - side));
   return { x, y, w: side, h: side };
@@ -35,7 +49,7 @@ export function rayTarget(
   landmarks: readonly Pt[] | null | undefined,
   frameW: number,
   frameH: number,
-  opts: { mirrored?: boolean } = {},
+  opts: { mirrored?: boolean; fraction?: number } = {},
 ): Pt | null {
   if (!landmarks || landmarks.length <= INDEX_TIP) return null;
   const mcp = landmarks[INDEX_MCP], tip = landmarks[INDEX_TIP];
@@ -44,7 +58,7 @@ export function rayTarget(
   const tx = fx(tip), ty = tip.y * frameH;
   const dx = tx - fx(mcp), dy = ty - mcp.y * frameH;
   const len = Math.hypot(dx, dy);
-  const side = Math.min(frameW, frameH, Math.round(POINT_CROP_FRACTION * Math.max(frameW, frameH)));
+  const side = sideFor(frameW, frameH, opts.fraction);
   const ahead = len > 1e-6 ? side / 2 : 0;
   const cx = tx + (len > 1e-6 ? (dx / len) * ahead : 0);
   const cy = ty + (len > 1e-6 ? (dy / len) * ahead : 0);
@@ -57,11 +71,37 @@ export function cropAlongRay(
   landmarks: readonly Pt[] | null | undefined,
   frameW: number,
   frameH: number,
-  opts: { mirrored?: boolean } = {},
+  opts: { mirrored?: boolean; fraction?: number } = {},
 ): Rect {
   const t = rayTarget(landmarks, frameW, frameH, opts);
   if (!t) return { x: 0, y: 0, w: frameW, h: frameH };
-  return squareAt(t.x * frameW, t.y * frameH, frameW, frameH);
+  return squareAt(t.x * frameW, t.y * frameH, frameW, frameH, opts.fraction);
+}
+
+/** The crop fraction (of the LONG side, as cropAlongRay takes it) that gives
+ *  the iPhone's 42 % / 45 %-of-width crop for this frame and hand. */
+export function phoneCropFraction(landmarks: readonly Pt[] | null | undefined, frameW: number, frameH: number): number {
+  const long = Math.max(frameW, frameH) || 1;
+  const mcp = landmarks?.[INDEX_MCP], tip = landmarks?.[INDEX_TIP];
+  const short = !finite(mcp) || !finite(tip) || Math.hypot(tip.x - mcp.x, (tip.y - mcp.y) * (frameH / (frameW || 1))) < SHORT_RAY;
+  return ((short ? PHONE_CROP_WIDTH_FRACTION_SHORT : PHONE_CROP_WIDTH_FRACTION) * frameW) / long;
+}
+
+/** True when the ray's target (fingertip + half a crop along 5→8) lies past
+ *  the frame edge by more than a quarter crop: the device she points at is
+ *  not in the camera's view, so we must not guess from whatever patch the
+ *  clamped crop would show. (A device right at the edge still counts.) */
+export function rayOutOfFrame(
+  landmarks: readonly Pt[] | null | undefined,
+  frameW: number,
+  frameH: number,
+  opts: { mirrored?: boolean; fraction?: number } = {},
+): boolean {
+  const t = rayTarget(landmarks, frameW, frameH, opts);
+  if (!t) return true;
+  const side = sideFor(frameW, frameH, opts.fraction);
+  const mx = (side / 4) / frameW, my = (side / 4) / frameH;
+  return t.x < -mx || t.x > 1 + mx || t.y < -my || t.y > 1 + my;
 }
 
 /** Hands off: a click picked a point (normalised, raw camera space). */

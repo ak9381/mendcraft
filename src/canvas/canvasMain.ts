@@ -6,7 +6,9 @@ import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
-import { createPhoneCamera, phoneHandsAllowed } from './phoneCamera';
+import { createPhoneCamera, phoneHandsAllowed, phoneSensingAllowed } from './phoneCamera';
+import { announcePhone } from './phoneGuestJoin';
+import type { PhoneGuestSessionLike } from './laptopLink';
 import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
@@ -107,19 +109,24 @@ const voice = createVoiceController(
     onError: (_code, message) => handle?.setTalkError(message),
   },
 );
-// Hand control is for the ANDROID phone only (the iPhone sits on the gimbal and
-// keeps its own front-camera uses untouched). On Android: ONE front camera for
-// hand control and look-to-edit (one getUserMedia, one tracker), opened only
-// when a feature asks for it. The Capacitor App plugin's pause/resume also
-// stops and restarts it (webviews don't reliably fire visibilitychange).
-// No camera hub → no Hands pill, no hand tracker (mountCanvas), and iPhone
-// look-to-edit stays on its original path.
+// Phone shells (Android and iPhone): ONE front camera for hand control,
+// look-to-edit and — on the iPhone — hand sensing for the gimbal and
+// point-to-connect (one getUserMedia, one tracker), opened only when a feature
+// asks for it. The Capacitor App plugin's pause/resume also stops and
+// restarts it (webviews don't reliably fire visibilitychange). Hand CONTROL
+// (Hands pill) is off by default on both and facing-gated; iPhone SENSING
+// never acts on the UI (phoneSensor.ts).
 const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
   ? createPhoneCamera({ app: isPhone ? App : null })
   : undefined;
+// The iPhone's live guest session (null while not joined): it answers the
+// laptop's point request and re-announces its sensing status.
+let guestSession: PhoneGuestSessionLike | null = null;
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   phoneCamera,
+  phoneSensing: phoneSensingAllowed(phoneShell, phonePlatform),
+  sendPointResult: (text) => { void guestSession?.sendCommand({ kind: 'pointResult', text }).catch(() => undefined); },
   storage: replayDemo ? memoryStorage() : undefined,
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
@@ -195,6 +202,17 @@ afterFirstPaint(() => {
       aiForwarder: phoneAiFeed,
       onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform); },
       onChange: () => ui?.update(),
+      onSession: (s) => {
+        guestSession = s;
+        s?.onSensePoint?.((platform) => { if (platform === phonePlatform) h.pointForLaptop(); });
+      },
+      joinExtras: { announceStatus: () => h.phoneSenseStatus() },
+    });
+    // A sensing change re-announces at once (the laptop row reads it).
+    h.onPhoneSenseChange(() => {
+      if (!guestSession) return;
+      const storage = (() => { try { return localStorage; } catch { return null; } })();
+      announcePhone(guestSession, phonePlatform, { deviceId: storage ? ensureDeviceId(storage) : undefined, native: isPhone, refresh: true, status: () => h.phoneSenseStatus() });
     });
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });
     void link.rejoinSaved();
