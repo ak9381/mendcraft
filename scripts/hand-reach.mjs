@@ -409,6 +409,34 @@ try {
       await mp.screenshot({ path: join(OUT, `mobile-${m.name}-dashboard.png`) });
       await mp.close();
     }
+
+    // Unpaired pair screen (?sim=1, no mic): Listen again must be a hand-reachable
+    // normal button on both phone viewports. Sim does not open a real microphone.
+    for (const m of [
+      { name: 'ios', width: 393, height: 852, dpr: 3, platform: 'ios' },
+      { name: 'android', width: 412, height: 915, dpr: 2.625, platform: 'android' },
+    ]) {
+      const mp = await scBrowser.newPage();
+      await mp.setViewport({ width: m.width, height: m.height, deviceScaleFactor: m.dpr, isMobile: true, hasTouch: true });
+      await mp.goto(`${BASE}/mobile.html?sim=1&paired=0&mobileScreen=pair&platform=${m.platform}`, { waitUntil: 'networkidle2', timeout: 60000 });
+      await mp.addScriptTag({ type: 'module', content: `import * as L from '/src/canvas/handPointer.ts'; window.__mcHandLib = L;` });
+      await mp.waitForFunction(() => window.__mcHandLib, { timeout: 15000 });
+      await waitForVisible(mp, '[data-mc-listen-again]', 5000);
+      await sleep(300);
+      all.push(...await auditReach(mp, `mobile-${m.name}:pair`));
+      // The companion page has no window.__mcHand (no camera hands there); a
+      // real click still proves the button is a normal pressable control.
+      const listenOk = await mp.evaluate(() => {
+        const el = document.querySelector('[data-mc-listen-again]');
+        if (!el) return false;
+        el.click();
+        const st = document.querySelector('.mc-m-listen-status');
+        return !!(st && /Listening for laptop chime/i.test(st.textContent || ''));
+      });
+      real.push({ device: `mobile-${m.name}`, step: 'Listen again (click)', ok: listenOk, label: 'Listen again' });
+      await mp.screenshot({ path: join(OUT, `mobile-${m.name}-pair.png`) });
+      await mp.close();
+    }
   } finally {
     await scBrowser.close();
   }

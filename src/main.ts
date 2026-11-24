@@ -395,7 +395,7 @@ app.innerHTML = `
         <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
         <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
         <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
-        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair an iPad or phone as a remote and a second camera (scan a QR)">Pair iPad or phone</button>
+        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote and a second camera (play a chime — no scanning)">Pair a phone</button>
         <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
         <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
         <button id="btn-a11y" type="button" class="ghost" title="Guideline check: door widths, stairs, room sizes. Never certified code compliance. Also say “check the plan”.">Guideline check</button>
@@ -1850,7 +1850,7 @@ async function initPairing(): Promise<void> {
     pairPanel.setPaired(s === 'paired');
     if (s === 'paired') {
       say('Phone remote connected.');
-      // Push current state so a /control iPad in the room populates immediately.
+      // Push current state so a /control dashboard in the room populates immediately.
       publishControlSnapshot();
       // Honest ledger: pairing over Firestore is a cloud call — but only the
       // room token + handshake. Camera stills are REDACTED by design: they go
@@ -1878,7 +1878,7 @@ async function initPairing(): Promise<void> {
   // The phone's music player relays its state (title/playing/volume, no audio);
   // mirror it onto the /control dashboard.
   hostSession.onMusic((music) => setControlMusic(music));
-  // A /control iPad (or phone) can request a saved recipe run. The laptop owns
+  // A /control dashboard (or phone) can request a saved recipe run. The laptop owns
   // the recipe book and the devices, so it executes and publishes live status.
   hostSession.onRun((run) => void handleRelayRun(run));
 }
@@ -2322,12 +2322,12 @@ async function runAccessibilityCheck(): Promise<boolean> {
 const cloudConfigured = isFirebaseConfigured() || SIM_ACTIVE;
 const jobQueue = createJobQueue(createIndexedDbStore());
 
-// ---- iPad /control dashboard publisher ----------------------------------
+// ---- optional /control dashboard publisher ----------------------------------
 // When a room is live (hostSession), the laptop publishes a small, privacy-safe
 // snapshot (relay/controlSnapshot) the /control page renders. It carries source
 // + reason for every AI event, cloud utterances only (private text stays here),
 // the ledger, the queue, captions and a compact scene — never camera, landmarks
-// or audio. Built fresh on every change; a no-op until a phone/iPad pairs.
+// or audio. Built fresh on every change; a no-op until a phone pairs.
 
 /** Compact 2D primitives for the dashboard's wireframe preview. Plan walls are
  *  line segments; other modes fall back to summary-only (empty primitives). */

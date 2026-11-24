@@ -1288,7 +1288,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // paired (minting a fresh token every time would strand them).
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
-        if (st === 'paired') pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+        if (st === 'paired') { pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
         else if (st === 'disconnected' || st === 'gone') {
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
@@ -1338,7 +1338,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sheetOpen = null; // the pairing card replaces the sheet in the same host
     pairing = showPairing(open.host, {
       code: res.code,
-      note: 'Type this 8-character code on the phone once — no scanning. After that the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
+      note: 'Playing a chime — hold your phone near this laptop. No typing, no scanning. After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
       onClose: () => { if (pairingStop) { void pairingStop(); pairingStop = null; } open.host.hidden = true; },
     });
   }

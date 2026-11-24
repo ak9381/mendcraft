@@ -4,6 +4,7 @@
 
 import { esc } from '../core/esc';
 import { groupCode, normalizeCode } from '../relay/protocol';
+import { createChimeLoop, speakPairingCode, type ChimeLoop } from '../ux/pairingChime';
 
 export interface ConnectSheetCallbacks {
   onPoint?: () => void;
@@ -20,15 +21,25 @@ export interface ConnectSheet {
 
 export interface PairingOptions {
   code: string;
+  /** Ignored: first-time pairing is a chime, not a QR. Kept so older callers type-check. */
   qrDataUrl?: string;
   note?: string;
   onClose?: () => void;
+  /** Injected chime player (tests). When omitted, the in-repo FSK loop is used. */
+  playChime?: () => void | Promise<void>;
+  speakCode?: () => void;
+  chimeEveryMs?: number;
+  /** Default true in a real browser; tests leave this false / omit Audio. */
+  autoPlay?: boolean;
 }
 
 export interface PairingView {
   readonly element: HTMLElement;
   setStatus(text: string): void;
   setNote(text: string): void;
+  playChimeAgain(): void;
+  speakCode(): void;
+  stopChime(): void;
   clear(): void;
 }
 
@@ -64,7 +75,7 @@ export function connectSheetOptions(): readonly { id: string; label: string; des
   return [
     { id: 'point', label: 'Point at it', desc: 'Aim camera or gimbal at the device' },
     { id: 'name', label: 'Say its name', desc: 'Type or say what you want to add' },
-    { id: 'phone', label: 'Join a phone', desc: 'Connect phone remote via Relay room' },
+    { id: 'phone', label: 'Join a phone', desc: 'Play a chime; the phone listens and joins' },
   ];
 }
 
@@ -106,7 +117,7 @@ export function mountConnectSheet(
           <button type="button" class="mc-btn primary mc-connect-opt mc-connect-phone" data-connect="phone" aria-label="Join a phone">
             Join a phone
           </button>
-          <span class="mc-chip">Relay room & QR</span>
+          <span class="mc-chip">Laptop chime</span>
         </div>
       </div>
     </section>
@@ -157,10 +168,8 @@ export function showPairing(
   opts: PairingOptions,
 ): PairingView {
   const codeFormatted = formatPairingCode(opts.code);
-  const qrHtml = opts.qrDataUrl
-    ? `<div class="mc-pair-qr-wrap"><img class="mc-pair-qr" src="${opts.qrDataUrl}" alt="QR code to pair a phone" width="220" height="220" /></div>`
-    : '';
-  const noteHtml = opts.note ? `<p class="mc-pair-note">${esc(opts.note)}</p>` : '<p class="mc-pair-note"></p>';
+  const noteDefault = 'Playing a chime — hold your phone near this laptop. No typing, no scanning.';
+  const noteHtml = `<p class="mc-pair-note">${esc(opts.note ?? noteDefault)}</p>`;
 
   const html = `
     <section class="mc-pairing-card" role="region" aria-label="Pair phone to canvas">
@@ -168,10 +177,16 @@ export function showPairing(
         <h3 class="mc-prop-title">Pair phone</h3>
         <button type="button" class="mc-btn mc-pairing-close" aria-label="Close pairing view">✕</button>
       </div>
-      <p class="mc-pair-status" role="status" aria-live="polite">Waiting for phone to join…</p>
-      ${qrHtml}
-      <p class="mc-pair-code-row">Type this code on your phone: <strong class="mc-pair-code">${codeFormatted}</strong></p>
+      <p class="mc-pair-status" role="status" aria-live="polite">Playing a chime — hold your phone near this laptop. No typing, no scanning.</p>
+      <div class="mc-pair-actions">
+        <button type="button" class="mc-btn primary mc-pair-play" data-mc-play-chime>Play chime again</button>
+        <button type="button" class="mc-btn mc-pair-speak" data-mc-speak-code>Say the code aloud</button>
+      </div>
       ${noteHtml}
+      <details class="mc-pair-fallback">
+        <summary>Can't hear the chime?</summary>
+        <p class="mc-pair-code-row">Last resort — type this code on the phone: <strong class="mc-pair-code">${codeFormatted}</strong></p>
+      </details>
     </section>
   `.trim();
 
@@ -180,8 +195,61 @@ export function showPairing(
   const statusEl = host.querySelector<HTMLElement>('.mc-pair-status');
   const noteEl = host.querySelector<HTMLElement>('.mc-pair-note');
 
+  let loop: ChimeLoop | null = null;
+  const playOnce = async () => {
+    if (opts.playChime) {
+      await opts.playChime();
+      return;
+    }
+    if (!loop) {
+      loop = createChimeLoop({ code: formatPairingCode(opts.code).replace(/-/g, ''), everyMs: opts.chimeEveryMs });
+    }
+    await loop.playOnce();
+  };
+
+  const startLoop = () => {
+    if (opts.playChime) {
+      void playOnce();
+      return;
+    }
+    if (!loop) {
+      loop = createChimeLoop({ code: normalizeCode(opts.code), everyMs: opts.chimeEveryMs });
+    }
+    loop.start();
+  };
+
+  const stopChime = () => {
+    loop?.stop();
+  };
+
+  const speak = () => {
+    if (opts.speakCode) opts.speakCode();
+    else speakPairingCode(codeFormatted);
+  };
+
+  // Auto-play in a real browser unless the caller asked us not to (tests).
+  const canAuto = opts.autoPlay ?? (typeof AudioContext !== 'undefined' || typeof window !== 'undefined');
+  if (opts.autoPlay === true || (opts.autoPlay !== false && opts.playChime)) {
+    startLoop();
+  } else if (opts.autoPlay !== false && canAuto && !opts.playChime) {
+    // Only start the Web Audio loop when we are actually in a page — Node tests
+    // have no AudioContext and must not leak a timer.
+    if (typeof AudioContext !== 'undefined') startLoop();
+  }
+
+  const playBtn = host.querySelector<HTMLElement>('.mc-pair-play');
+  playBtn?.addEventListener('click', () => { void playOnce(); });
+  const speakBtn = host.querySelector<HTMLElement>('.mc-pair-speak');
+  speakBtn?.addEventListener('click', () => speak());
+
+  const tearDown = () => {
+    stopChime();
+    host.innerHTML = '';
+  };
+
   const closeBtn = host.querySelector<HTMLElement>('.mc-pairing-close');
   closeBtn?.addEventListener('click', () => {
+    stopChime();
     opts.onClose?.();
     host.innerHTML = '';
   });
@@ -194,8 +262,9 @@ export function showPairing(
     setNote(text: string) {
       if (noteEl) noteEl.textContent = text;
     },
-    clear() {
-      host.innerHTML = '';
-    },
+    playChimeAgain() { void playOnce(); },
+    speakCode() { speak(); },
+    stopChime,
+    clear() { tearDown(); },
   };
 }

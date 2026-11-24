@@ -829,7 +829,7 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
   }
 }
 
-/* iPad portrait and narrow laptops: stack the side panel; the topbar stays one row. */
+/* Portrait and narrow laptops: stack the side panel; the topbar stays one row. */
 @media (max-width: 1024px) and (orientation: portrait) {
   #layout {
     grid-template-columns: 1fr;
@@ -2016,6 +2016,13 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
 .mc-pair-cam figcaption { font-size: 11px; opacity: 0.8; margin-top: 4px; }
 .mc-pair-note { margin: 0; font-size: 11px; opacity: 0.8; }
 
+.mc-pair-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mc-pair-actions .mc-btn { min-height: 44px; }
+.mc-pair-fallback { margin: 0; font-size: 12px; }
+.mc-pair-fallback summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; }
+.mc-pairing-card .mc-pair-actions { margin: 8px 0; }
+
+
 /* ---- relay pairing: phone /remote page ---- */
 .remote-page {
   max-width: 480px;
@@ -2074,9 +2081,9 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
 .remote-preview { width: 100%; border-radius: 10px; }
 .remote-privacy, .remote-note { font-size: 12px; opacity: 0.8; margin: 0; }
 
-/* ===== iPad /control dashboard ===========================================
+/* ===== optional /control dashboard ===========================================
    A read-mostly control room. visionOS-style glass cards, large text + 60px
-   touch targets, a wide grid that reflows to one column on a portrait iPad.
+   touch targets, a wide grid that reflows to one column on a portrait phone or narrow display.
    No editor shell styling here. */
 
 .control-page h2,
@@ -2099,7 +2106,7 @@ body.control-room {
 .control-page {
   max-width: 1280px;
   margin: 0 auto;
-  /* iPhone/iPad-safe insets (viewport-fit=cover); env() → 0 where unsupported. */
+  /* iPhone-safe insets (viewport-fit=cover); env() → 0 where unsupported. */
   padding: calc(20px + env(safe-area-inset-top)) calc(clamp(16px, 3vw, 32px) + env(safe-area-inset-right))
     calc(48px + env(safe-area-inset-bottom)) calc(clamp(16px, 3vw, 32px) + env(safe-area-inset-left));
   color: var(--text);
@@ -2302,7 +2309,7 @@ body.control-room {
 }
 .c-scene-full:hover { border-color: var(--accent); }
 
-/* Fullscreen 3D review overlay — orbit her plan on the iPad with touch. */
+/* Fullscreen 3D review overlay — orbit her plan on the /control dashboard with touch. */
 .scene3d-overlay {
   position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
   background: #eef2f7;
@@ -2632,7 +2639,7 @@ body.control-room {
 .conf-unsure { background: #fdf3df; color: #8a5a00; border-color: #ecc878; }
 .conf-unknown { background: #fdeaea; color: #9c2121; border-color: #ecb0b0; }
 
-/* Narrow iPad / small tablets: keep the one-row toolbar inside the viewport.
+/* Narrow / small wide viewports: keep the one-row toolbar inside the viewport.
    Placed last so these max-width rules beat the earlier #lang-select { 11em }. */
 @media (max-width: 768px) {
   #topbar {

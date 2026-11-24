@@ -1,10 +1,11 @@
-// Entry for /mobile.html — the phone + tablet companion to the desktop smart
+// Entry for /mobile.html — the phone companion to the desktop smart
 // canvas hub. `?sim=1` renders every screen deterministically with mock data
 // (no camera/hub/network) so screenshots are stable; otherwise it pairs with the
 // real hub, remembers the room, pins locally, and keeps the sync status honest.
 import '../style.css';
 import './mobile/mobile.css';
-import { startPhoneJoin } from './phoneJoin';
+import { joinPhoneAsGuest } from './phoneGuestJoin';
+import { createChimeListener } from '../ux/pairingChime';
 import { buildSimMobileState, type SimMobileState } from './mobile/mockState';
 import { parseMobileScreen } from './mobile/mobileRoute';
 import { detectPlatform, type CapacitorLike } from './mobile/platform';
@@ -108,14 +109,71 @@ if (!sim && savedPair) {
   evaluate(false);
 }
 
-// First-time pairing (no remembered room): the typable-code flow. startPhoneJoin
-// honestly leaves the view generic until the hub actually syncs its canvas.
-if (!sim && !savedPair && screen === 'pair') {
-  void startPhoneJoin({
-    onState: (st) => { if (st === 'paired') render(); },
-  }).then((res) => {
-    if ('error' in res) return;
-    const state = liveState();
-    render({ ...state, pair: { ...state.pair, hubName: 'This Mac', code: res.code } });
+// First-time pairing (no remembered room): listen for the laptop chime and join
+// as a GUEST. The phone must never mint a host room (startPhoneJoin would).
+if (!sim && !savedPair) {
+  let listener: ReturnType<typeof createChimeListener> | null = null;
+  const statusOf = () => root.querySelector<HTMLElement>('.mc-m-listen-status');
+
+  const joinFromCode = async (code: string) => {
+    listener?.stop();
+    const st = statusOf();
+    if (st) st.textContent = 'Heard the chime — joining…';
+    const res = await joinPhoneAsGuest({
+      code,
+      storage,
+      platform: platform.os === 'ios' ? 'ios' : 'android',
+      hubName: 'the laptop',
+      onState: (s) => { if (s === 'paired') render(); },
+    });
+    if ('error' in res) {
+      if (st) {
+        st.textContent = res.error === 'needs network'
+          ? 'Needs the network to join the laptop room.'
+          : res.error === 'room not found'
+            ? 'Heard a code, but no laptop room is waiting. Play the chime again on the laptop.'
+            : 'Could not read that code. Pinch Listen again.';
+      }
+      return;
+    }
+    render();
+  };
+
+  const startListen = () => {
+    if (!listener) {
+      listener = createChimeListener({
+        onCode: (code) => { void joinFromCode(code); },
+        onError: (reason) => {
+          const st = statusOf();
+          if (!st) return;
+          st.textContent = reason === 'denied'
+            ? 'Microphone permission is off, so this phone cannot hear the chime. The mic stays on this device and is never uploaded.'
+            : 'This phone cannot open a microphone, so it cannot hear the chime.';
+        },
+      });
+    }
+    const st = statusOf();
+    if (st) st.textContent = 'Listening for laptop chime…';
+    void listener.start().then((r) => {
+      const el = statusOf();
+      if (!el) return;
+      if (r === 'listening') el.textContent = 'Listening for laptop chime…';
+    });
+  };
+
+  root.addEventListener('mc-listen-again', () => startListen());
+  // Last-resort typed code (hidden behind the disclosure).
+  root.addEventListener('submit', (e) => {
+    const form = (e.target as HTMLElement | null)?.closest?.('.mc-m-code-form');
+    if (!form) return;
+    e.preventDefault();
+    const input = root.querySelector<HTMLInputElement>('.mc-m-code-in');
+    const code = input?.value?.trim() ?? '';
+    if (code) void joinFromCode(code);
   });
+
+  // Kick off listening once the pair screen is in the DOM. Do not open the
+  // mic on other screens, or in the background after the tab is hidden.
+  if (screen === 'pair') startListen();
+  window.addEventListener('pagehide', () => listener?.stop());
 }

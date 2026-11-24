@@ -90,11 +90,11 @@ describe('connectSheet', () => {
       const card = buildPairingCard({
         code: '12345678',
         qrDataUrl: 'data:image/png;base64,...',
-        note: 'Scan or type',
+        note: 'Hold your phone near this laptop',
       });
       expect(card.code).toBe('1234-5678');
       expect(card.qrDataUrl).toBe('data:image/png;base64,...');
-      expect(card.note).toBe('Scan or type');
+      expect(card.note).toBe('Hold your phone near this laptop');
     });
 
     it('connectSheetOptions provides the three big options', () => {
@@ -125,19 +125,28 @@ describe('connectSheet', () => {
       expect(host.innerHTML).toContain('Join a phone');
     });
 
-    it('showPairing renders pairing info into host', () => {
+    it('showPairing renders a chime-first pairing card, with the typable code as a last resort only', () => {
       const host = createMockElement('div');
       const pairing = showPairing(host, {
         code: 'WXYZ-5678',
         qrDataUrl: 'data:image/png;base64,mockqr',
         note: 'Relay active',
+        autoPlay: false,
       });
 
       expect(pairing).toBeDefined();
       expect(typeof pairing.setStatus).toBe('function');
       expect(typeof pairing.setNote).toBe('function');
+      expect(typeof pairing.playChimeAgain).toBe('function');
+      expect(typeof pairing.stopChime).toBe('function');
       expect(host.innerHTML).toContain('WXYZ-5678');
-      expect(host.innerHTML).toContain('data:image/png;base64,mockqr');
+      expect(host.innerHTML).toContain('Play chime again');
+      expect(host.innerHTML).toContain('Say the code aloud');
+      expect(host.innerHTML).toContain("Can't hear the chime?");
+      expect(host.innerHTML).toContain('No typing, no scanning');
+      // QR is no longer the pairing path — even if a caller still passes a data URL.
+      expect(host.innerHTML).not.toContain('data:image/png;base64,mockqr');
+      expect(host.innerHTML).not.toContain('Type this code on your phone');
       expect(host.innerHTML).toContain('Relay active');
     });
 
@@ -146,6 +155,7 @@ describe('connectSheet', () => {
       showPairing(host, {
         code: 'WXYZ-5678',
         note: '<img src=x onerror=alert(1)>',
+        autoPlay: false,
       });
       expect(host.innerHTML).not.toContain('<img');
       expect(host.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');

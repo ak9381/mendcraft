@@ -33,7 +33,9 @@ export function utf8ByteLength(text: string): number {
   if (typeof TextEncoder !== 'undefined') {
     return new TextEncoder().encode(text).length;
   }
-  return Buffer.from(text, 'utf-8').length;
+  const Buf = (globalThis as unknown as { Buffer?: { from(text: string, enc: string): { length: number } } }).Buffer;
+  if (Buf) return Buf.from(text, 'utf-8').length;
+  return text.length;
 }
 
 function capitalize(s: string): string {

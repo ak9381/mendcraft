@@ -24,6 +24,7 @@ const ALWAYS_LOCAL = [
   'Pin state',
   'Local rules',
   'WiZ lamp (LAN)',
+  'Pairing-chime mic (never uploaded)',
 ] as const;
 
 /**

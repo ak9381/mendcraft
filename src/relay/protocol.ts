@@ -1,6 +1,6 @@
 // Relay pairing protocol — pure helpers, no DOM and no Firebase. A laptop
 // (host) opens a room named by a high-entropy capability token; a phone
-// (guest) joins by scanning the QR URL or typing the short code. Everything
+// (guest) joins by hearing the laptop chime (last-resort: short code). Everything
 // here is deterministic and unit-tested: token/code generation, join-URL
 // build/parse, the message envelope, and the pairing state machine.
 
@@ -108,7 +108,7 @@ export function isPhoneRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'phone';
 }
 
-/** Does this location want the /mobile phone + tablet companion (the pair /
+/** Does this location want the /mobile phone companion (the pair /
  *  dashboard / split story)? Matches `/mobile` or `?view=mobile`; boot redirects
  *  it to the standalone /mobile.html entry. */
 export function isMobileRoute(pathname: string, search: string): boolean {
@@ -116,7 +116,7 @@ export function isMobileRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'mobile';
 }
 
-/** Does this location want the iPad /control dashboard instead of the editor? */
+/** Does this location want the optional /control dashboard instead of the editor? */
 export function isControlRoute(pathname: string, search: string): boolean {
   if (/^\/control\/?$/.test(pathname)) return true;
   return new URLSearchParams(search).get('view') === 'control';
@@ -159,7 +159,7 @@ export function isLandingRoute(pathname: string, search: string): boolean {
 
 // ---- message envelope -------------------------------------------------------
 
-// 'control' is the read-only iPad dashboard: it subscribes to a host's room and
+// 'control' is the optional read-only /control dashboard: it subscribes to a host's room and
 // receives privacy-safe state snapshots. It never drives the editor, so it only
 // ever sends presence (hello/bye) — never a command or a frame.
 export type RelayRole = 'host' | 'phone' | 'control';
@@ -204,7 +204,7 @@ export interface MusicStatus {
  *  imported from recipes) so the protocol stays DOM/feature-free. */
 export const RUN_DEVICES: readonly string[] = ['designer', 'browser', 'lamp', 'music', 'android', 'iphone'];
 
-/** "Run this saved recipe" — sent from the iPad /control dashboard (or a phone)
+/** "Run this saved recipe" — sent from the optional /control dashboard (or a phone)
  *  into the room; the device that owns the recipe executes it. */
 export interface RelayRunRequest {
   runId: string;
@@ -253,7 +253,7 @@ export type RelayMessage =
   /** The phone's music-player state (title/playing/volume) — relayed to the host
    *  so the /control dashboard can show it. No audio ever leaves the phone. */
   | { v: 1; from: 'phone'; type: 'music'; music: MusicStatus }
-  /** The laptop's privacy-safe state for the iPad /control dashboard. Only a
+  /** The laptop's privacy-safe state for the optional /control dashboard. Only a
    *  host sends it; the snapshot carries NO camera/landmark/audio (see
    *  controlSnapshot.ts). Validated loosely here and re-coerced on receipt. */
   | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot }

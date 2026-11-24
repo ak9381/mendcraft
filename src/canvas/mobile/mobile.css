@@ -7,7 +7,7 @@
   src: url('/fonts/NotoSansKannada-var-kannada.woff2') format('woff2');
   unicode-range: U+0C80-0CFF, U+200C-200D, U+25CC;
 }
-/* Mobile companion shell: phone + tablet only. Loaded standalone (mobile.html)
+/* Mobile companion shell: phone only. Loaded standalone (mobile.html)
    alongside style.css, never alongside canvas.css, so every rule lives under
    .mc-mobile and can't leak into (or collide with) the desktop canvas. */
 
@@ -150,6 +150,22 @@ html, body { margin: 0; }
 .mc-ios .mc-m-title { font-size: 2.125rem; font-weight: 700; } /* HIG large title */
 .mc-m-sub { margin: 0.5rem 0 0; color: var(--text-dim); font-size: 1rem; }
 .mc-m-pair-card { display: flex; flex-direction: column; gap: 1rem; }
+
+.mc-m-listen-again {
+  min-width: 44px;
+  min-height: 48px;
+  font-size: 1.05rem;
+  padding: 0.85rem 1.1rem;
+}
+.mc-m-listen-status { margin: 0; min-height: 1.25em; font-size: 0.9rem; opacity: 0.85; }
+.mc-m-code-fallback { margin-top: 0.5rem; font-size: 0.9rem; }
+.mc-m-code-fallback summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
 .mc-m-qr {
   align-self: center;
   width: 11rem; height: 11rem;
@@ -323,7 +339,7 @@ html, body { margin: 0; }
 
 /* ---- phone sync: arrangement, pin, stays/goes split, edge glow -------------
    Added for cross-device sync. Reuses the existing tokens (--panel, --border,
-   --accent, --mc-m-target) so phone + tablet stay visually consistent. */
+   --accent, --mc-m-target) so both phone sizes stay visually consistent. */
 .mc-m-sub { color: var(--text-dim); font-size: 0.95rem; line-height: 1.4; margin: 0.25rem 0 0.75rem; }
 .mc-m-code-help { color: var(--text-dim); font-size: 0.85rem; margin: 0.4rem 0; }
 .mc-m-code-help code { color: var(--text); }

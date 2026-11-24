@@ -1,16 +1,18 @@
-// "Pair phone" panel: QR + short code for the phone to join, live pairing
-// status, and the incoming phone-camera preview. DOM only — session wiring
-// (transport pick, command handling) stays in main.ts. Pinned over the canvas
-// like the other float panels; buttons work for mouse AND pinch pointer.
+// "Pair phone" panel: the laptop plays a short pairing chime so a phone can
+// join without typing or scanning. Live pairing status and the incoming
+// phone-camera preview still live here. DOM only — session wiring stays in
+// main.ts. Pinned over the canvas like the other float panels; buttons work
+// for mouse AND pinch pointer.
 
 import { groupCode } from '../relay/protocol';
+import { createChimeLoop, speakPairingCode, type ChimeLoop } from '../ux/pairingChime';
 
 export interface PairPanel {
   readonly element: HTMLElement;
   toggle(): void;
   open(): void;
   isOpen(): boolean;
-  /** Show the join QR + typable code once the host session exists. */
+  /** Remember the room and start looping the pairing chime. */
   setRoom(joinUrl: string, code: string): void;
   setStatus(text: string): void;
   setTransportNote(text: string): void;
@@ -36,9 +38,15 @@ export function createPairPanel(opts: {
       <button type="button" class="mc-pair-x" aria-label="Close pair panel">✕</button>
     </div>
     <p class="mc-pair-status" role="status" aria-live="polite">Starting…</p>
-    <canvas class="mc-pair-qr" width="220" height="220" role="img" aria-label="QR code to pair a phone" hidden></canvas>
-    <p class="mc-pair-code-row" hidden>or type this code on <span class="mc-pair-host"></span>/remote:
-      <strong class="mc-pair-code"></strong></p>
+    <div class="mc-pair-actions">
+      <button type="button" class="mc-btn primary mc-pair-play" data-mc-play-chime hidden>Play chime again</button>
+      <button type="button" class="mc-btn mc-pair-speak" data-mc-speak-code hidden>Say the code aloud</button>
+    </div>
+    <details class="mc-pair-fallback" hidden>
+      <summary>Can't hear the chime?</summary>
+      <p class="mc-pair-code-row">Last resort — type this code on the phone:
+        <strong class="mc-pair-code"></strong></p>
+    </details>
     <figure class="mc-pair-cam" hidden>
       <img class="mc-pair-frame" alt="Live still from the paired phone camera" />
       <figcaption>Phone camera — stays between your two devices, never sent to AI.</figcaption>
@@ -48,19 +56,31 @@ export function createPairPanel(opts: {
   `;
 
   const statusEl = root.querySelector<HTMLParagraphElement>('.mc-pair-status')!;
-  const qrCanvas = root.querySelector<HTMLCanvasElement>('.mc-pair-qr')!;
-  const codeRow = root.querySelector<HTMLParagraphElement>('.mc-pair-code-row')!;
+  const fallback = root.querySelector<HTMLDetailsElement>('.mc-pair-fallback')!;
   const codeEl = root.querySelector<HTMLElement>('.mc-pair-code')!;
-  const hostEl = root.querySelector<HTMLElement>('.mc-pair-host')!;
+  const playBtn = root.querySelector<HTMLButtonElement>('.mc-pair-play')!;
+  const speakBtn = root.querySelector<HTMLButtonElement>('.mc-pair-speak')!;
   const camFig = root.querySelector<HTMLElement>('.mc-pair-cam')!;
   const frameImg = root.querySelector<HTMLImageElement>('.mc-pair-frame')!;
   const noteEl = root.querySelector<HTMLParagraphElement>('.mc-pair-note')!;
   const disconnectBtn = root.querySelector<HTMLButtonElement>('.mc-pair-disconnect')!;
 
-  root.querySelector('.mc-pair-x')!.addEventListener('click', () => {
+  let loop: ChimeLoop | null = null;
+  let lastCode = '';
+
+  const stopChime = () => { loop?.stop(); };
+
+  const hide = () => {
+    stopChime();
     root.hidden = true;
-  });
+  };
+
+  root.querySelector('.mc-pair-x')!.addEventListener('click', hide);
   disconnectBtn.addEventListener('click', () => opts.onDisconnect());
+  playBtn.addEventListener('click', () => { void loop?.playOnce(); });
+  speakBtn.addEventListener('click', () => {
+    if (lastCode) speakPairingCode(groupCode(lastCode));
+  });
 
   return {
     element: root,
@@ -70,20 +90,19 @@ export function createPairPanel(opts: {
     },
     toggle() {
       if (root.hidden) this.open();
-      else root.hidden = true;
+      else hide();
     },
     isOpen: () => !root.hidden,
-    setRoom(joinUrl, code) {
+    setRoom(_joinUrl, code) {
+      lastCode = code;
       codeEl.textContent = groupCode(code);
-      hostEl.textContent = new URL(joinUrl).host;
-      codeRow.hidden = false;
-      qrCanvas.hidden = false;
-      // qrcode is lazy-loaded so the phone page / tests never pull it in.
-      void import('qrcode').then((QRCode) =>
-        QRCode.toCanvas(qrCanvas, joinUrl, { width: 220, margin: 1 }),
-      ).catch(() => {
-        qrCanvas.hidden = true; // code row still shows the typable fallback
-      });
+      fallback.hidden = false;
+      playBtn.hidden = false;
+      speakBtn.hidden = false;
+      stopChime();
+      loop = createChimeLoop({ code });
+      loop.start();
+      statusEl.textContent = 'Playing a chime — hold your phone near this laptop. No typing, no scanning.';
     },
     setStatus(text) {
       statusEl.textContent = text;
@@ -101,6 +120,7 @@ export function createPairPanel(opts: {
     },
     setPaired(paired) {
       disconnectBtn.hidden = !paired;
+      if (paired) stopChime();
       if (!paired) this.clearFrame();
     },
   };

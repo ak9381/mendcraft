@@ -19,7 +19,7 @@ describe('deviceSplit', () => {
 
   it('gaze frames, pin, rules and WiZ LAN always stay local', () => {
     for (const s of [deviceSplit('ios', true), deviceSplit('android', false), deviceSplit('ios', false)]) {
-      expect(s.stays).toEqual(expect.arrayContaining(['Gaze camera frames', 'Pin state', 'Local rules', 'WiZ lamp (LAN)']));
+      expect(s.stays).toEqual(expect.arrayContaining(['Gaze camera frames', 'Pin state', 'Local rules', 'WiZ lamp (LAN)', 'Pairing-chime mic (never uploaded)']));
       // Never claims gaze frames go to the cloud.
       expect(s.goes.join(' ')).not.toMatch(/[Gg]aze|frame|landmark/);
     }
@@ -27,6 +27,13 @@ describe('deviceSplit', () => {
 
   it('iPhone without the Apple model falls back to cloud', () => {
     expect(deviceSplit('ios', false).badge).toBe('Gemini · cloud');
+  });
+
+  it('lists the pairing-chime mic as on-device only, never as cloud', () => {
+    for (const s of [deviceSplit('ios', true), deviceSplit('android', false), deviceSplit('laptop', false)]) {
+      expect(s.stays).toContain('Pairing-chime mic (never uploaded)');
+      expect(s.goes.join(' ')).not.toMatch(/[Cc]hime|[Mm]ic/);
+    }
   });
 
   it('summary line matches the on-device flag', () => {
