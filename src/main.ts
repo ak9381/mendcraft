@@ -5533,7 +5533,7 @@ function noteFps(now: number): number {
 
 function onPresenceFrame(f: PresenceFrame): void {
   handOverlay.draw(f.hands);
-  faceOverlay.draw(f.faces, f.rejectedHands);
+  faceOverlay.draw(f.faces, f.hands.map((h) => h.points));
   facingBanner.set(typeof f.facing === 'boolean' ? f.facing : null);
 
   const fps = noteFps(performance.now());

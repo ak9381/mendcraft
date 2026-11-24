@@ -6,6 +6,7 @@
 // cannot drag the click off the button (pre-pinch freeze).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHandPointer, REACH, type HandPointer } from '../../src/canvas/handPointer';
+import { getGestureTrace } from '../../src/canvas/gestureTrace';
 import type { Pt } from '../../src/input/handLogic';
 
 const W = 1000;
@@ -696,5 +697,19 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
   it('dwell-click does not fire during a fist', () => {
     for (let i = 0; i < 25; i++) { t += 33; hp.update([synthFist(160, 50)], t); }
     expect(btn.click).not.toHaveBeenCalled();
+  });
+
+  it('trace clickTarget is only set on the frame of an actual click', () => {
+    const tr = getGestureTrace();
+    tr.enable();
+    tr.clear();
+    feed(160, 50, false, 6);
+    expect(tr.dump().every((f) => f.clickTarget == null)).toBe(true);
+    feed(160, 50, true, 5);
+    feed(160, 50, false, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    const hits = tr.dump().filter((f) => f.clickTarget);
+    expect(hits).toHaveLength(1);
+    tr.clear();
   });
 });

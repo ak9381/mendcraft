@@ -67,8 +67,8 @@ export const HAND_FEEL: HandFeelConfig = {
   cursorFilter: { minCutoff: 0.9, beta: 5, dCutoff: 1 },
   pinchFilter: { minCutoff: 2.5, beta: 8, dCutoff: 1 },
   deadZonePx: 2.5,
-  pinchOn: 0.045,
-  pinchOff: 0.07,
+  pinchOn: 0.24,
+  pinchOff: 0.33,
   engageFrames: 2,
   releaseFrames: 2,
   refractoryMs: 500,
@@ -212,7 +212,7 @@ export interface PinchFrame {
 }
 
 export interface PinchMachine {
-  update(ratio: number, now: number): PinchFrame;
+  update(ratio: number, now: number, on?: number, off?: number): PinchFrame;
   readonly pinched: boolean;
   reset(): void;
 }
@@ -230,16 +230,16 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
   let lastClickAt = -Infinity;
 
   return {
-    update(ratio, now) {
+    update(ratio, now, on = cfg.pinchOn, off = cfg.pinchOff) {
       let justDown = false;
       let justUp = false;
       if (!pinched) {
-        below = ratio < cfg.pinchOn ? below + 1 : 0;
+        below = ratio < on ? below + 1 : 0;
         if (below >= cfg.engageFrames && now - lastClickAt >= cfg.refractoryMs) {
           pinched = true; justDown = true; below = 0; above = 0;
         }
       } else {
-        above = ratio > cfg.pinchOff ? above + 1 : 0;
+        above = ratio > off ? above + 1 : 0;
         if (above >= cfg.releaseFrames) {
           pinched = false; justUp = true; above = 0; below = 0; lastClickAt = now;
         }

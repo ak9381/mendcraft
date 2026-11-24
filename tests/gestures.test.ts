@@ -201,3 +201,45 @@ describe('createGestureRecognizer', () => {
     expect(r.update({ hands: [fist], now: 50 }).fired).not.toContain('fist');
   });
 });
+
+describe('live-style poses (moderate MediaPipe reaches)', () => {
+  // palm ≈ (0.5, 0.76), hand size wrist→MCP9 = 0.25. Place tips along -y.
+  function handAt(reaches: { index: number; middle: number; ring: number; pinky: number; thumb?: number }): Pt[] {
+    const p: Pt[] = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.8 }));
+    p[0] = { x: 0.5, y: 0.95 };
+    p[5] = { x: 0.45, y: 0.72 };
+    p[6] = { x: 0.45, y: 0.65 };
+    p[9] = { x: 0.50, y: 0.70 };
+    p[10] = { x: 0.50, y: 0.64 };
+    p[13] = { x: 0.55, y: 0.72 };
+    p[14] = { x: 0.55, y: 0.65 };
+    p[17] = { x: 0.60, y: 0.74 };
+    p[18] = { x: 0.60, y: 0.68 };
+    const palm = { x: (p[0].x + p[5].x + p[9].x + p[13].x + p[17].x) / 5, y: (p[0].y + p[5].y + p[9].y + p[13].y + p[17].y) / 5 };
+    const size = Math.hypot(p[0].x - p[9].x, p[0].y - p[9].y);
+    const tip = (i: number, reach: number, x: number) => { p[i] = { x, y: palm.y - reach * size }; };
+    tip(8, reaches.index, 0.45);
+    tip(12, reaches.middle, 0.50);
+    tip(16, reaches.ring, 0.55);
+    tip(20, reaches.pinky, 0.60);
+    tip(4, reaches.thumb ?? 0.8, 0.32);
+    return p;
+  }
+
+  it('recognises a pointing hand even when curled fingers still have mid reach', () => {
+    // The kind of frame that used to fall through to 'none' at OPEN_PALM_REACH 0.95.
+    expect(classifyGesture(handAt({ index: 0.95, middle: 0.55, ring: 0.52, pinky: 0.50 }))).toBe('point');
+  });
+
+  it('recognises a naturally open palm (not a fully splayed demo pose)', () => {
+    expect(classifyGesture(handAt({ index: 0.95, middle: 0.92, ring: 0.90, pinky: 0.88, thumb: 0.85 }))).toBe('open-palm');
+  });
+
+  it('recognises a loose fist', () => {
+    expect(classifyGesture(handAt({ index: 0.45, middle: 0.42, ring: 0.40, pinky: 0.38, thumb: 0.40 }))).toBe('fist');
+  });
+
+  it('treats a relaxed hand with loosely extended fingers as an open palm', () => {
+    expect(classifyGesture(handAt({ index: 0.90, middle: 0.85, ring: 0.80, pinky: 0.62, thumb: 0.50 }))).toBe('open-palm');
+  });
+});

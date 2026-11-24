@@ -1,6 +1,8 @@
 // Pure (MediaPipe-free, DOM-free) two-hand pinch logic + skeleton geometry.
 // Kept separate from hands.ts so it can be unit-tested.
 
+import { isFistPose, isClosingToFist } from './gestures';
+
 export const THUMB_TIP = 4;
 export const INDEX_TIP = 8;
 export const WRIST = 0;
@@ -30,8 +32,24 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
 // bug); 0.38/0.52 is back near the original M1 feel (0.35/0.48), deliberate
 // but still forgiving of an incomplete close. Calibration and the
 // interaction profile may tighten or loosen these per user.
-export const DEFAULT_PINCH_ON = 0.045;
-export const DEFAULT_PINCH_OFF = 0.07;
+// Units: thumb–index tip / wrist→middle-MCP, same as trace `pinchDistance`.
+// Real MediaPipe closes around 0.18–0.20, not 0.045 (synthetic almost-touch).
+export const DEFAULT_PINCH_ON = 0.24;
+export const DEFAULT_PINCH_OFF = 0.33;
+
+/** Runtime pinch band (defaults, then first-run/Tools or a rolling baseline). */
+export const PINCH_LIVE = { on: DEFAULT_PINCH_ON, off: DEFAULT_PINCH_OFF };
+
+export function setLivePinchThresholds(on: number, off: number): void {
+  if (!(on > 0) || !Number.isFinite(on) || !Number.isFinite(off) || off <= on) return;
+  PINCH_LIVE.on = on;
+  PINCH_LIVE.off = off;
+}
+
+export function resetLivePinchThresholds(): void {
+  PINCH_LIVE.on = DEFAULT_PINCH_ON;
+  PINCH_LIVE.off = DEFAULT_PINCH_OFF;
+}
 /** Movement (in mirrored screen units) that disqualifies a pinch from being a tap. */
 export const TAP_MOVE_LIMIT = 0.045;
 
@@ -196,7 +214,7 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       const x = aim.x;
       const y = aim.y;
 
-      if (!st.pinching && ratio < pinchOn) {
+      if (!st.pinching && ratio < pinchOn && !isFistPose(lm) && !isClosingToFist(lm)) {
         st.pinching = true;
         st.tapCandidate = true;
         st.lastX = x;

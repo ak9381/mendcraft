@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, palmCentroid } from '../../src/canvas/handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, palmCentroid, createCriticalSpring, createPalmScroll, PALM_GAIN, PALM_HOLD_MS, PALM_DEADZONE_PX } from '../../src/canvas/handScroll';
 
 // Node-env fake (the suite doesn't use jsdom): just the layout props + the
 // getComputedStyle path that scrollableAncestor reads.
@@ -125,5 +125,67 @@ describe('handScroll — drag velocity + momentum fling (A2-025 / C156)', () => 
       h[9] = { x: 2, y: 4 };
       expect(palmCentroid(h)).toEqual({ x: 1, y: 2 });
     });
+  });
+});
+
+describe('palm scroll smoothness', () => {
+  it('engages quickly (~100 ms) and uses 3× gain with a small deadzone', () => {
+    expect(PALM_HOLD_MS).toBe(100);
+    expect(PALM_GAIN).toBe(3);
+    expect(PALM_DEADZONE_PX).toBeLessThanOrEqual(6);
+  });
+
+  it('the critically-damped spring approaches a step target without overshooting', () => {
+    const s = createCriticalSpring({ freqHz: 7 });
+    let v = 0;
+    const samples: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      v = s.tick(1, 16);
+      samples.push(v);
+    }
+    expect(Math.max(...samples)).toBeLessThanOrEqual(1 + 1e-6);
+    expect(v).toBeGreaterThan(0.95);
+    expect(v).toBeLessThanOrEqual(1 + 1e-6);
+    // Monotone from rest toward the target (no jerk / reverse).
+    for (let i = 1; i < samples.length; i++) {
+      expect(samples[i]!).toBeGreaterThanOrEqual(samples[i - 1]! - 1e-9);
+    }
+  });
+
+  it('maps a small wrist move to a ~3× scroll once the spring settles', () => {
+    const p = createPalmScroll({ freqHz: 12, deadzonePx: 4, gain: 3 });
+    let scrolled = 0;
+    let t = 0;
+    p.sample(100, 0);
+    // 10 px of wrist motion over 100 ms, sampled along the way, then a hold
+    // so target velocity returns to 0. Integrated scroll ≈ 10 × 3.
+    for (let i = 1; i <= 10; i++) {
+      t = i * 10;
+      p.sample(100 + i, t);
+      scrolled += p.tick(10);
+    }
+    for (let i = 0; i < 20; i++) {
+      t += 16;
+      p.sample(110, t); // hand held still
+      scrolled += p.tick(16);
+    }
+    expect(scrolled).toBeGreaterThan(10 * 2);
+    expect(scrolled).toBeLessThan(10 * 3 * 1.25 + 8);
+  });
+
+  it('swallows sub-deadzone jitter and still flings gently on release', () => {
+    const p = createPalmScroll({ freqHz: 10, deadzonePx: 4, gain: 3 });
+    p.sample(50, 0);
+    p.sample(51, 50); // 1 px / 50 ms = 0.02 px/ms, under the velocity deadzone
+    expect(Math.abs(p.tick(16))).toBeLessThan(0.2);
+    p.sample(80, 133); // 28 px over 100 ms → vy = 0.84
+    for (let i = 0; i < 10; i++) p.tick(16);
+    const vy = p.release();
+    expect(vy).toBeGreaterThan(0.2);
+    const fling = createMomentum({ friction: 0.94, minSpeed: 0.01 });
+    fling.start(0, vy);
+    let gone = 0;
+    for (let i = 0; i < 40 && fling.active; i++) gone += Math.abs(fling.tick(16).dy);
+    expect(gone).toBeGreaterThan(0);
   });
 });

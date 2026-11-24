@@ -5,7 +5,7 @@
 // temporal/two-hand gestures (double pinch, two-hand pinch zoom) that the
 // Gestures settings panel maps to actions.
 
-import { THUMB_TIP, INDEX_TIP, WRIST, type Pt } from './handLogic';
+import { THUMB_TIP, INDEX_TIP, WRIST, PINCH_LIVE, type Pt } from './handLogic';
 
 export type { Pt } from './handLogic';
 
@@ -40,7 +40,7 @@ const PINKY = [17, 18, 20] as const;
  *  DEFAULT_PINCH_ON (handLogic.ts) and HAND_FEEL.pinchOn (handFeel.ts) so a
  *  "pinch" means the same thing to the pointer, the keep gesture and the
  *  overlay — a consistency test guards it. */
-export const PINCH_CLASSIFY = 0.045;
+export const PINCH_CLASSIFY = 0.24;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -68,7 +68,7 @@ const FINGER_TIPS = [8, 12, 16, 20] as const;
  *  the palm, not folded past their PIP toward the wrist) still counts, but
  *  tight enough that a pointing index that only dips (air-tap) stays a point.
  *  A fully extended index is typically ≳ 1.3× palm size away. */
-export const FIST_TIP_RATIO = 0.90;
+export const FIST_TIP_RATIO = 0.88;
 /** Thumb must be at least this far from the palm (and raised) to count as
  *  thumbs-up instead of a fist. */
 const THUMB_UP_RATIO = 1.05;
@@ -92,7 +92,7 @@ export function isFistPose(p: Pt[]): boolean {
   // have every tip under FIST_TIP_RATIO on an angled or close-up hand.
   // Only call it a fist when the index has joined the other fingertips.
   const others = Math.max(reach(12), reach(16), reach(20));
-  return reach(8) <= others + 0.28;
+  return reach(8) <= others + 0.15;
 }
 
 /** Min index-tip→palm / palm-size for a pose to count as a pinch.
@@ -116,12 +116,12 @@ export function isClosingToFist(p: Pt[]): boolean {
   const size = handSize(p);
   const palm = palmCenter(p);
   const reach = (i: number) => dist(p[i], palm) / size;
-  const othersIn = [12, 16, 20].filter((i) => reach(i) <= PINCH_INDEX_REACH).length;
+  const othersIn = [12, 16, 20].filter((i) => reach(i) <= 0.80).length;
   if (othersIn < 3) return false;
   // Index has come in to join the curled fingers. A pointing or pinching
-  // index stays clearly past them, so this stays false.
+  // index stays clearly past them (margin 0.18 in classify), so this stays false.
   const othersMax = Math.max(reach(12), reach(16), reach(20));
-  return reach(8) <= othersMax + 0.28;
+  return reach(8) <= othersMax + 0.15;
 }
 
 /** Fingers that must be stretched for an open palm (thumb is optional —
@@ -129,7 +129,7 @@ export function isClosingToFist(p: Pt[]): boolean {
 const OPEN_PALM_TIPS = [8, 12, 16, 20] as const;
 /** Min tip→palm / palm-size for a finger to count as open. Loosened so a
  *  real open hand (not a fully-splayed demo pose) still classifies. */
-export const OPEN_PALM_REACH = 0.95;
+export const OPEN_PALM_REACH = 0.70;
 
 /** Four fingertips stretched away from the palm — not a pointing hand
  *  (only the index out) and not a fist. Thumb extension is optional. */
@@ -138,10 +138,40 @@ export function isOpenPalmPose(p: Pt[]): boolean {
   if (isFistPose(p) || isClosingToFist(p)) return false;
   // Thumb + index already together is a pinch, even if the other fingers
   // are splayed — two-hand zoom must not be swallowed as a scroll palm.
-  if (pinchRatio(p) < PINCH_CLASSIFY) return false;
+  if (pinchRatio(p) < (PINCH_LIVE.on ?? PINCH_CLASSIFY)) return false;
+  const s = fingerStates(p);
+  const ext = Number(s.index) + Number(s.middle) + Number(s.ring) + Number(s.pinky);
+  // A pointing hand (only the index PIP-extended) must not scroll, even when
+  // curled fingertips still have a mid tip→palm reach on real MediaPipe.
+  if (ext < 3) return false;
   const size = handSize(p);
   const palm = palmCenter(p);
   return OPEN_PALM_TIPS.every((i) => dist(p[i], palm) / size >= OPEN_PALM_REACH);
+}
+
+/** Min tip→palm / palm-size for a *relaxed* open finger (low-effort scroll). */
+export const RELAXED_PALM_REACH = 0.55;
+
+/** A relaxed open hand: 3+ fingertips loosely extended, thumb ignored.
+ *  A pointing index with the others clearly curled is not a palm. */
+export function isRelaxedOpenPalm(p: Pt[]): boolean {
+  if (!p || p.length < 21) return false;
+  if (isFistPose(p) || isClosingToFist(p)) return false;
+  if (pinchRatio(p) < (PINCH_LIVE.on ?? PINCH_CLASSIFY)) return false;
+  const s = fingerStates(p);
+  const ext = Number(s.index) + Number(s.middle) + Number(s.ring) + Number(s.pinky);
+  if (ext < 3) return false;
+  // A clean three-finger or V pose is not a scroll palm.
+  if (s.index && s.middle && s.ring && !s.pinky) return false;
+  if (s.index && s.middle && !s.ring && !s.pinky) return false;
+  const size = handSize(p);
+  const palm = palmCenter(p);
+  const rs = OPEN_PALM_TIPS.map((i) => dist(p[i], palm) / size);
+  const n = rs.filter((r) => r >= RELAXED_PALM_REACH).length;
+  if (n < 3) return false;
+  const othersMax = Math.max(rs[1]!, rs[2]!, rs[3]!);
+  if (n < 4 && rs[0]! >= othersMax + 0.18) return false;
+  return true;
 }
 
 export interface FingerStates {
@@ -186,19 +216,22 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   // pinches (and therefore two-hand zoom) after 1f4f2ec. A tighter
   // isClosingToFist still blocks the last frames of a curl-into-fist so
   // those don't fire a pinch click.
-  if (ratio < PINCH_CLASSIFY && s.index && !isClosingToFist(p)) return 'pinch';
-  // Open palm is the palm-normalised four-finger test only. The legacy
-  // all-four-PIP-extended check (`allOpen`) is too loose on a pointing hand
-  // (curled middle/ring/pinky often still sit past their PIP).
-  if (isOpenPalmPose(p)) return 'open-palm';
-  // Index reaching, other fingertips not open: a point, even if the PIP
-  // test still calls some curled fingers "extended".
-  if (s.index && fingers === 1) return 'point';
-  if (s.index && tipPalmRatio(p, 8) >= OPEN_PALM_REACH
-      && [12, 16, 20].every((i) => tipPalmRatio(p, i) < OPEN_PALM_REACH)) return 'point';
-  // Fallback thumbs-up / fist for poses the palm-ratio test missed.
+  const pinchOn = PINCH_LIVE.on ?? PINCH_CLASSIFY;
+  if (ratio < pinchOn && !isClosingToFist(p) && (s.index || tipPalmRatio(p, 8) >= OPEN_PALM_REACH)) return 'pinch';
+  // Curled fingers + raised thumb is thumbs-up, even when tip→palm ratios
+  // look "open" (the demo thumbs-up pose has a long thumb and mid finger
+  // reaches). Must beat the relaxed-palm test.
   if (fingers === 0 && s.thumb && p[THUMB_TIP].y < p[WRIST].y) return 'thumbs-up';
   if (fingers === 0) return 'fist';
+  // Relaxed open hand (3+ loosely extended fingers, thumb optional) scrolls.
+  if (isRelaxedOpenPalm(p) || isOpenPalmPose(p)) return 'open-palm';
+  // Index clearly out, others not: a point. Real MediaPipe often still
+  // reports curled fingers as PIP-extended, so don't require fingers === 1,
+  // and don't demand a fully-splayed 0.95 reach — 0.70 plus a margin is enough.
+  const indexReach = tipPalmRatio(p, 8);
+  const othersMax = Math.max(tipPalmRatio(p, 12), tipPalmRatio(p, 16), tipPalmRatio(p, 20));
+  if ((s.index || indexReach >= OPEN_PALM_REACH) && indexReach >= othersMax + 0.18) return 'point';
+  if (s.index && fingers === 1) return 'point';
   return 'none';
 }
 

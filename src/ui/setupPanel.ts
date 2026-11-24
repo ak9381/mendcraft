@@ -3,7 +3,7 @@
 // file owns the dialog, the step screens and feeding camera frames into them.
 // Every number it computes stays in this browser (localStorage).
 
-import { INDEX_TIP, type Pt } from '../input/handLogic';
+import { INDEX_TIP, setLivePinchThresholds, type Pt } from '../input/handLogic';
 import type { Pt3 } from '../input/faceLogic';
 import { pinchRatio } from '../input/handMetrics';
 import { computeCalibration, type Calibration } from '../setup/calibration';
@@ -45,7 +45,8 @@ export interface SetupPanel {
 }
 
 const STILL_MS = 2500;
-const PINCHES_NEEDED = 5;
+const PINCHES_NEEDED = 2;
+const PINCH_TWICE_MS = 3000;
 const TRY_MS = 1200;
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -105,6 +106,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
   let pinchFrames: Pt[][] = [];
   let pinchCount = 0;
   let wasPinched = false;
+  let pinchStartAt = 0;
   let stillFrames: Pt[][] = [];
   let stillStart = 0;
   let faceSamples: FaceRatios[] = [];
@@ -146,7 +148,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
   function resetCapture(): void {
     // Sample arrays survive step changes (calibration needs all three); each is
     // cleared only when its own step starts again.
-    pinchCount = 0; wasPinched = false;
+    pinchCount = 0; wasPinched = false; pinchStartAt = 0;
     stillStart = 0; faceSamples = []; capturingFace = false;
     if (step === 'reach') { reachFrames = []; targetIndex = 0; targetHoldStart = 0; targetHits = []; }
     if (step === 'pinch') pinchFrames = [];
@@ -157,6 +159,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
   function finishCalibration(): void {
     const cal: Calibration = computeCalibration({ reach: reachFrames, pinch: pinchFrames, still: stillFrames });
     data = { ...data, calibration: cal };
+    setLivePinchThresholds(cal.pinchOn, cal.pinchOff);
     persist();
   }
 
@@ -407,7 +410,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     switch (step) {
       case 'welcome': renderWelcome(); break;
       case 'reach': renderReach(); break;
-      case 'pinch': renderCapture(`Pinch ${PINCHES_NEEDED} times, only as firmly as is comfortable today.`, 'ಇಂದು ಆರಾಮವಿರುವಷ್ಟು ಮಾತ್ರ ಚಿವುಟಿ.'); break;
+      case 'pinch': renderCapture('Pinch twice — about three seconds.', 'ಎರಡು ಬಾರಿ ಚಿವುಟಿ — ಸುಮಾರು ಮೂರು ಸೆಕೆಂಡು.'); break;
       case 'still': renderCapture('Point at the screen and hold still for a moment.', 'ಪರದೆಯ ಕಡೆ ಬೆರಳು ತೋರಿಸಿ, ಸ್ವಲ್ಪ ಹೊತ್ತು ಹಾಗೇ ಇಡಿ.'); break;
       case 'gestures': renderGestures(); break;
       case 'shortcuts': renderShortcuts(); break;
@@ -448,13 +451,16 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
       }
     } else if (step === 'pinch' && progressEl) {
       pinchFrames.push(p);
+      if (!pinchStartAt) pinchStartAt = now;
       const r = pinchRatio(p);
-      const closed = r < 0.45;
+      const closed = r < 0.40;
       if (closed && !wasPinched) pinchCount++;
-      wasPinched = closed ? true : r > 0.55 ? false : wasPinched;
-      setProgress(pinchCount / PINCHES_NEEDED);
-      live.textContent = `${pinchCount} of ${PINCHES_NEEDED}`;
-      if (pinchCount >= PINCHES_NEEDED && !closed) go('still');
+      wasPinched = closed ? true : r > 0.50 ? false : wasPinched;
+      const elapsed = now - pinchStartAt;
+      setProgress(Math.max(pinchCount / PINCHES_NEEDED, elapsed / PINCH_TWICE_MS));
+      live.textContent = pinchCount >= 2 ? 'Pinch saved.' : `Pinch twice… ${Math.max(0, Math.ceil((PINCH_TWICE_MS - elapsed) / 1000))}s`;
+      const timesUp = elapsed >= PINCH_TWICE_MS && pinchFrames.length >= 8;
+      if ((pinchCount >= PINCHES_NEEDED && !closed) || timesUp) go('still');
     } else if (step === 'still' && progressEl) {
       if (!stillStart) stillStart = now;
       stillFrames.push(p);

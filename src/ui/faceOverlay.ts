@@ -7,7 +7,8 @@ import type { FaceFrame } from '../input/presence';
 import { findLiveCameraStream } from '../input/cameraShare';
 
 export interface FaceOverlay {
-  draw(faces: FaceFrame[], rejectedHands?: unknown): void;
+  /** `hands` are 21-point landmarks already mirrored to screen/camera space (0..1). */
+  draw(faces: FaceFrame[], hands?: readonly (readonly { x: number; y: number }[])[]): void;
   clear(): void;
 }
 
@@ -23,6 +24,53 @@ export interface FaceOverlayOptions {
 export const FACE_BOX_GREEN = '#38f8a0';
 const DIM_COLOR = '#6b7280';
 const MAX_DPR = 2;
+const SKELETON_GREEN = '#7dffc0';
+
+/** MediaPipe 21-landmark edges (wrist, fingers, palm). */
+export const HAND_SKELETON_EDGES: readonly (readonly [number, number])[] = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20],
+  [0, 17],
+];
+
+/** Cheap lines+dots for one hand, in the same 0..1 space as the face box. */
+export function drawHandSkeleton(
+  ctx: CanvasRenderingContext2D,
+  hand: readonly { x: number; y: number }[],
+  w: number,
+  h: number,
+  dpr: number,
+  color = SKELETON_GREEN,
+): void {
+  if (!hand || hand.length < 21) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.2 * dpr;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalAlpha = 0.92;
+  ctx.beginPath();
+  for (const [a, b] of HAND_SKELETON_EDGES) {
+    const p = hand[a], q = hand[b];
+    if (!p || !q) continue;
+    ctx.moveTo(p.x * w, p.y * h);
+    ctx.lineTo(q.x * w, q.y * h);
+  }
+  ctx.stroke();
+  for (let i = 0; i < 21; i++) {
+    const p = hand[i];
+    if (!p) continue;
+    const r = (i === 4 || i === 8 ? 2.3 : 1.5) * dpr;
+    ctx.beginPath();
+    ctx.arc(p.x * w, p.y * h, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
 function attachPreviewStream(video: HTMLVideoElement): void {
   try {
@@ -82,7 +130,7 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
     if (compact) host.classList.remove('is-live');
   }
 
-  function draw(faces: FaceFrame[], _rejectedHands?: unknown): void {
+  function draw(faces: FaceFrame[], hands?: readonly (readonly { x: number; y: number }[])[]): void {
     if (compact && video) attachPreviewStream(video);
     const { w, h, dpr } = fit();
     ctx.clearRect(0, 0, w, h);
@@ -101,6 +149,12 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
       ctx.shadowBlur = face.isOperator ? 6 * dpr : 0;
       ctx.strokeRect(x, y, bw, bh);
       ctx.shadowBlur = 0;
+    }
+    if (hands && hands.length) {
+      ctx.shadowBlur = 0;
+      for (let i = 0; i < hands.length; i++) {
+        drawHandSkeleton(ctx, hands[i]!, w, h, dpr, i === 0 ? SKELETON_GREEN : '#b8ffe0');
+      }
     }
     ctx.globalAlpha = 1;
   }

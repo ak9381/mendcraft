@@ -306,7 +306,7 @@ export async function mountCanvasHands(
       () => {},
       (presenceFrame) => {
         overlay?.draw(presenceFrame.hands);
-        faces?.draw(presenceFrame.faces, presenceFrame.rejectedHands);
+        faces?.draw(presenceFrame.faces, presenceFrame.hands.map((h) => h.points));
         const op = presenceFrame.faces.find((f) => f.isOperator) ?? presenceFrame.faces[0];
         facing?.set(op ? op.facing : null);
         opts.onPresence?.(presenceFrame);

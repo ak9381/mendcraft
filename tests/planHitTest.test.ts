@@ -121,14 +121,14 @@ describe('pinch detection with real-looking landmarks', () => {
     expect(pinchGapRatio(farPts)).toBeCloseTo(0.4, 2);
   });
 
-  // Tightened default thresholds (0.045/0.07): only a nearly-closed
-  // thumb–index gap counts as a pinch, so an open or relaxed hand never
-  // clicks or steals palm-scroll.
+  // Live thresholds (0.24/0.33) are in the same units as trace pinchDistance
+  // (thumb–index / hand size). A real close is ~0.18–0.20, so a 0.03 fixture
+  // still counts as a pinch; an open hand at 0.8 does not.
   it('registers a nearly-closed pinch (ratio ~0.03)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
     const open = rawHand(0.4, 0.6, 0.16); // ratio 0.8
-    const loose = rawHand(0.4, 0.6, 0.006); // ratio 0.03 < 0.045
+    const loose = rawHand(0.4, 0.6, 0.006); // ratio 0.03 < 0.24
     expect(pinchGapRatio(loose)).toBeCloseTo(0.03, 2);
     expect(pinchGapRatio(loose)).toBeLessThan(DEFAULT_PINCH_ON);
     p.process([{ landmarks: open, label: 'Right' }]);
@@ -146,10 +146,10 @@ describe('pinch detection with real-looking landmarks', () => {
   it('releases only after the off-threshold (hysteresis)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.006), label: 'Right' }]); // 0.03, on (< 0.045)
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.011), label: 'Right' }]); // 0.055, between on/off: still held
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.006), label: 'Right' }]); // 0.03, on (< 0.24)
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.056), label: 'Right' }]); // 0.28, between on/off: still held
     expect(events.filter((e) => e.type === 'pinch-end')).toHaveLength(0);
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.02), label: 'Right' }]); // 0.10, off (> 0.07)
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.08), label: 'Right' }]); // 0.40, off (> 0.33)
     expect(events.some((e) => e.type === 'pinch-end')).toBe(true);
   });
 

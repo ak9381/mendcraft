@@ -94,10 +94,16 @@ export function createMomentum(opts: { friction?: number; minSpeed?: number } = 
   };
 }
 
-/** Open-palm swipe: hold this long before scroll engages. */
-export const PALM_HOLD_MS = 150;
-/** Ignore sub-pixel jitter on the palm centroid. */
-export const PALM_DEADZONE_PX = 6;
+/** Open-palm swipe: short hold so a relaxed hand engages without strain. */
+export const PALM_HOLD_MS = 100;
+/** Ignore small wrist jitter on the palm centroid (screen px). */
+export const PALM_DEADZONE_PX = 2;
+/** Ignore wrist velocity under this (px/ms) — ~2 px per 50 ms. */
+export const PALM_DEADZONE_VY = 0.04;
+/** Small wrist motion maps to a larger scroll. */
+export const PALM_GAIN = 3;
+/** Critically-damped spring frequency for scroll velocity (Hz). */
+export const PALM_SPRING_HZ = 7;
 
 /** Wrist + middle-MCP centroid (the palm), in the same space as the landmarks. */
 export function palmCentroid(h: readonly { x: number; y: number }[]): { x: number; y: number } {
@@ -123,4 +129,97 @@ export function pickPalmScroller(
     if (canY) return el;
   }
   return near?.el ?? null;
+}
+
+/**
+ * Critically damped spring (ζ = 1) toward a target value. Used to smooth
+ * palm-scroll velocity so camera-frame jitter does not jerk the list.
+ * Analytic integration — no overshoot from rest, testable without DOM.
+ */
+export function createCriticalSpring(opts?: { freqHz?: number }): {
+  tick(target: number, dtMs: number): number;
+  value(): number;
+  reset(): void;
+} {
+  const w = 2 * Math.PI * (opts?.freqHz ?? PALM_SPRING_HZ);
+  let v = 0;
+  let vDot = 0;
+  return {
+    tick(target, dtMs) {
+      const dt = Math.max(0, Math.min(0.05, dtMs / 1000));
+      if (dt === 0) return v;
+      const e0 = v - target;
+      const eDot0 = vDot;
+      const A = e0;
+      const B = eDot0 + w * e0;
+      const exp = Math.exp(-w * dt);
+      const e = (A + B * dt) * exp;
+      vDot = (B - w * (A + B * dt)) * exp;
+      v = target + e;
+      return v;
+    },
+    value: () => v,
+    reset() { v = 0; vDot = 0; },
+  };
+}
+
+export interface PalmScroll {
+  /** Camera-frame sample of the palm centroid (screen px, timestamp ms). */
+  sample(y: number, t: number): void;
+  /** Scroll delta (px) to apply on this animation frame. */
+  tick(dtMs: number): number;
+  /** Stop driving; returns the launch velocity (px/ms) for a gentle fling. */
+  release(): number;
+  reset(): void;
+}
+
+/** 3×-gained, deadzoned wrist motion → smoothed velocity, applied per rAF. */
+export function createPalmScroll(opts?: {
+  gain?: number;
+  deadzonePx?: number;
+  freqHz?: number;
+}): PalmScroll {
+  const gain = opts?.gain ?? PALM_GAIN;
+  const minVy = (opts?.deadzonePx ?? PALM_DEADZONE_PX) / 50; // px/ms
+  const spring = createCriticalSpring({ freqHz: opts?.freqHz ?? PALM_SPRING_HZ });
+  let lastY: number | null = null;
+  let lastT: number | null = null;
+  let targetVy = 0;
+  return {
+    sample(y, t) {
+      if (lastY == null || lastT == null || t <= lastT) {
+        lastY = y;
+        lastT = t;
+        targetVy = 0;
+        return;
+      }
+      const dy = y - lastY;
+      const dt = t - lastT;
+      lastY = y;
+      lastT = t;
+      if (dt <= 0) return;
+      // Velocity deadzone so jitter is ignored, but a slow 1 px / 10 ms
+      // swipe (well above 0.04 px/ms) still counts — a per-frame 4 px gate
+      // was swallowing those and making scroll feel strained.
+      const vyRaw = dy / dt;
+      targetVy = Math.abs(vyRaw) < minVy ? 0 : vyRaw * gain;
+    },
+    tick(dtMs) {
+      return spring.tick(targetVy, dtMs) * dtMs;
+    },
+    release() {
+      const vy = spring.value();
+      targetVy = 0;
+      spring.reset();
+      lastY = null;
+      lastT = null;
+      return vy;
+    },
+    reset() {
+      spring.reset();
+      lastY = null;
+      lastT = null;
+      targetVy = 0;
+    },
+  };
 }

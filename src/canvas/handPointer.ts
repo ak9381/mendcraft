@@ -20,12 +20,13 @@
 // a control activates it (click / focus); pinch on a range slider drags it.
 
 import { createOneEuroFilter } from '../input/oneEuro';
-import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, PALM_HOLD_MS, PALM_DEADZONE_PX, palmCentroid } from './handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, PALM_HOLD_MS, palmCentroid, createPalmScroll } from './handScroll';
 import { magnetPull, tooltipTextFor } from '../ui/handHover';
 import { getGestureTrace, targetIdOf } from './gestureTrace';
 import { fieldCaretAt } from '../input/caretAt';
-import { INDEX_TIP } from '../input/handLogic';
-import { classifyGesture, isClosingToFist, isOpenPalmPose, type Pt as GesturePt } from '../input/gestures';
+import { INDEX_TIP, PINCH_LIVE } from '../input/handLogic';
+import { createPinchBaseline } from '../input/pinchBaseline';
+import { classifyGesture, isClosingToFist, isOpenPalmPose, isRelaxedOpenPalm, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -117,7 +118,7 @@ export function pinchRatio(lm: readonly LM[]): number {
 }
 
 /** Thumb–index gap against a stored index tip (camera space). Used so a
- *  mid-pinch MediaPipe 8↔12 swap does not pop the 0.045/0.07 pinch band. */
+ *  mid-pinch MediaPipe 8↔12 swap does not pop the live pinch band. */
 export function pinchRatioTo(lm: readonly LM[], tip: P): number {
   const d = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y);
   const size = d(lm[0], lm[9]) || 1e-6;
@@ -333,6 +334,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   const ratioEuro = createScalarEuro(HAND_FEEL.pinchFilter);
   const deadZone = createDeadZone(HAND_FEEL.deadZonePx);
   const pinchFsm = createPinchMachine(HAND_FEEL);
+  const pinchBase = createPinchBaseline();
   const history = createPositionHistory(HAND_FEEL.freezeLookbackMs + 300);
   const sticky = createStickyTarget<HTMLElement>((el) => el.getBoundingClientRect(), HAND_FEEL);
 
@@ -381,6 +383,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let fisted = false;
   let liftedEl: HTMLElement | null = null;
   let lastActivated: HTMLElement | null = null;
+  let clickTraceId: string | null = null;
   let consumedUntil = -Infinity;
   let suppressRelease = false;
   let pt: P = { x: -1, y: -1 };
@@ -402,7 +405,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let pinchDownTs: number | null = null;
   let palmSince = 0;
   let palmScrolling = false;
-  let palmLast: P | null = null;
+  const palmMotion = createPalmScroll();
   let pinchFocus: HTMLElement | null = null;
   let confirmStarted = 0;
   let fistScrolling = false;
@@ -548,6 +551,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
 
   function activate(el: HTMLElement) {
     lastActivated = el;
+    clickTraceId = targetIdOf(el);
     consumedUntil = now() + 700;
     if (dryRun) {
       const stop = (e: Event) => { e.stopImmediatePropagation(); e.preventDefault(); };
@@ -608,20 +612,46 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     }
     scrollLast = p;
   }
-  function startFling() {
+  function startFling(vel?: { vx: number; vy: number }) {
     const el = scrollEl;
-    const { vx, vy } = dragVel.velocity(now());
+    const { vx, vy } = vel ?? dragVel.velocity(now());
     momentum.start(scrollAxes.x ? vx : 0, scrollAxes.y ? vy : 0);
     if (!el || dryRun || !rafAvailable || !momentum.active) return;
     let last = now();
-    const step = () => {
-      const t = now(); const dt = t - last; last = t;
+    const step = (ts?: number) => {
+      const t = typeof ts === 'number' ? ts : now(); const dt = Math.min(48, Math.max(0, t - last)); last = t;
       const { dx, dy } = momentum.tick(dt);
       if (scrollAxes.y) el.scrollTop -= dy;
       if (scrollAxes.x) el.scrollLeft -= dx;
       flingRaf = momentum.active ? requestAnimationFrame(step) : 0;
     };
     flingRaf = requestAnimationFrame(step);
+  }
+
+  function ensurePalmRaf() {
+    if (flingRaf || dryRun || !rafAvailable || !scrollEl) return;
+    let last = now();
+    const step = (ts: number) => {
+      const dt = Math.min(48, Math.max(0, ts - last));
+      last = ts;
+      if (palmScrolling && scrollEl) {
+        scrollEl.scrollTop -= palmMotion.tick(dt);
+        flingRaf = requestAnimationFrame(step);
+        return;
+      }
+      flingRaf = 0;
+    };
+    flingRaf = requestAnimationFrame(step);
+  }
+
+  function endPalmScroll() {
+    if (!palmScrolling) return;
+    const vy = palmMotion.release();
+    palmScrolling = false;
+   
+    palmSince = 0;
+    if (flingRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(flingRaf); flingRaf = 0; }
+    startFling({ vx: 0, vy });
   }
 
   function press(down: boolean) {
@@ -935,7 +965,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       pinchHeld = false; pinchDownTs = null;
-      palmScrolling = false; palmLast = null; palmSince = 0;
+      palmScrolling = false; palmSince = 0; palmMotion.reset(); palmMotion.reset();
       pinchFocus = null; confirmStarted = 0; fistScrolling = false;
       paintConfirm(null, false);
       liftTile(null, false);
@@ -946,9 +976,9 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     lastOpenTip = null; frozen = null; pinchAnchor = null;
     dwellStart = 0; dwellOrigin = null; dwellTarget = null; dwellFiredFor = null; dwellProgress = 0;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
-    euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); history.reset(); sticky.reset();
+    euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); pinchBase.reset(); history.reset(); sticky.reset(); clickTraceId = null;
     pinchHeld = false; pinchDownTs = null;
-    palmScrolling = false; palmLast = null; palmSince = 0;
+    palmScrolling = false; palmSince = 0; palmMotion.reset();
     paint();
     opts.onLost?.();
   }
@@ -996,11 +1026,11 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       const isFist = pose === 'fist';
       const closingToFist = isFist || isClosingToFist(h as unknown as GesturePt[]);
       const rawRatio = pinchRatio(h);
-      if (rawRatio < HAND_FEEL.pinchOff) pinchAnchor = { x: h[INDEX_TIP].x, y: h[INDEX_TIP].y };
+      if (rawRatio < PINCH_LIVE.off) pinchAnchor = { x: h[INDEX_TIP].x, y: h[INDEX_TIP].y };
       const fsmRatio = (frozen || pinchHeld) && pinchAnchor
         ? Math.min(rawRatio, pinchRatioTo(h, pinchAnchor))
         : rawRatio;
-      const closing = !isFist && !closingToFist && fsmRatio < HAND_FEEL.pinchOff;
+      const closing = !isFist && !closingToFist && fsmRatio < PINCH_LIVE.off;
       // While the hand is closing or already pinched, do not feed live tips
       // into the 1-Euro filter — MediaPipe often swaps landmark 8 with 12
       // (middle) mid-pinch, which would drag the cursor and the click.
@@ -1028,7 +1058,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         lastOpenTip = live;
         history.push(live, t);
         pinchHeld = false; pinchDownTs = null;
-        if (palmScrolling) { startFling(); palmScrolling = false; palmLast = null; }
+        if (palmScrolling) endPalmScroll();
         palmSince = 0;
         cancelPinchWithoutClick();
         if (interact) {
@@ -1045,10 +1075,12 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         return;
       }
 
-      // Open-palm swipe scroll: 150 ms hold, then the wrist+MCP centroid
-      // scrolls the nearest overflow-y ancestor. Pauses pinch/dwell; cursor
-      // freezes. Fist already returned above so it always wins.
-      const openPalm = pose === 'open-palm' || isOpenPalmPose(h as unknown as GesturePt[]);
+      // Relaxed open-palm swipe: ~100 ms hold on 3+ loosely extended fingers,
+      // then the wrist+MCP centroid drives a 3×-gained, spring-smoothed scroll
+      // applied on animation frames (not camera frames). Fist already returned
+      // above so it always wins.
+      const gp = h as unknown as GesturePt[];
+      const openPalm = pose === 'open-palm' || isRelaxedOpenPalm(gp) || isOpenPalmPose(gp);
       if (openPalm) {
         if (!palmSince) palmSince = t;
         if (t - palmSince >= PALM_HOLD_MS) {
@@ -1061,7 +1093,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
           if (!palmScrolling) {
             palmScrolling = true;
             cancelFling();
-            dragVel.reset();
+            palmMotion.reset();
             {
               const hit = deepElementFromPoint(doc, frozen.x, frozen.y);
               scrollEl = pickPalmScroller(hit, [
@@ -1073,31 +1105,26 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
               ]);
             }
             scrollAxes = { x: false, y: true };
-            palmLast = c;
-            if (scrollEl) dragVel.push(c.x, c.y, t);
-          } else if (palmLast) {
-            const dy = c.y - palmLast.y;
-            if (Math.abs(dy) >= PALM_DEADZONE_PX) {
-              if (scrollEl && !dryRun) scrollEl.scrollTop -= dy;
-              dragVel.push(c.x, c.y, t);
-              palmLast = c;
+            palmMotion.sample(c.y, t);
+            if (scrollEl && !dryRun) ensurePalmRaf();
+          } else {
+            palmMotion.sample(c.y, t);
+            if (!rafAvailable && scrollEl && !dryRun) {
+              scrollEl.scrollTop -= palmMotion.tick(33);
             }
           }
           aim(frozen, t, t, false);
           return;
         }
       } else if (palmScrolling) {
-        startFling();
-        palmScrolling = false;
-        palmLast = null;
-        palmSince = 0;
+        endPalmScroll();
       } else {
         palmSince = 0;
       }
 
       // Only a confirmed curl (and only when the thumb–index gap is not already
       // a pinch) may skip the pinch FSM — a live pinch must still click.
-      if (closingToFist && fsmRatio >= HAND_FEEL.pinchOff) {
+      if (closingToFist && fsmRatio >= PINCH_LIVE.off) {
         cancelPinchWithoutClick();
         frozen = null;
         lastOpenTip = live;
@@ -1111,9 +1138,14 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // Pinch ratio is smoothed too, then debounced with hysteresis +
       // refractory: hover can NEVER activate anything — only this machine's
       // justDown/justUp edges press and release.
-      ratioEuro.filter(fsmRatio, t); // still smoothed for traces / feel, but the
-      // FSM uses the unsmoothed ratio so a 0.045/0.07 band can actually engage.
-      const st = pinchFsm.update(fsmRatio, t);
+      // Trace pinchDistance is this same ratio (thumb–index / hand size).
+      // The FSM must use those units, with a rolling per-hand min/open baseline
+      // (enter = min + 0.35*(open-min)) once it has seen a close and an open.
+      const band = pinchBase.push(rawRatio, t);
+      const pinchOn = band.ready ? band.pinchOn : PINCH_LIVE.on;
+      const pinchOff = band.ready ? band.pinchOff : PINCH_LIVE.off;
+      ratioEuro.filter(fsmRatio, t);
+      const st = pinchFsm.update(fsmRatio, t, pinchOn, pinchOff);
       const wasHeld = pinchHeld;
       pinchHeld = !!(st.pinched || st.justDown);
       if (pinchHeld && !wasHeld) pinchDownTs = t;
@@ -1179,14 +1211,18 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     isFisted: () => fisted,
     pinchDownAt: () => pinchDownTs,
     cancelPressWithoutClick,
-    snapshot: () => ({
-      classification: lastClass,
-      pinchDistance: lastRatio,
-      raw: { ...pt },
-      eased: displayPoint(pt),
-      focusedTargetId: targetIdOf(target ?? pinchFocus),
-      clickTarget: targetIdOf(pressedOn ?? lastActivated),
-    }),
+    snapshot: () => {
+      const clickTarget = clickTraceId;
+      clickTraceId = null;
+      return {
+        classification: lastClass,
+        pinchDistance: lastRatio,
+        raw: { ...pt },
+        eased: displayPoint(pt),
+        focusedTargetId: targetIdOf(target ?? pinchFocus),
+        clickTarget,
+      };
+    },
   } as SlotPointer;
 }
 

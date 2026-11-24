@@ -16,13 +16,13 @@ export type Pose = ReturnType<typeof classifyGesture> | 'v-sign' | 'three-finger
 
 /** classifyGesture plus the two extra counting poses (V, three fingers). */
 export function classifyPose(p: readonly Pt[]): Pose {
-  const base = classifyGesture(p as Pt[]);
-  if (base !== 'none') return base;
   if (!p || p.length < 21) return 'none';
   const s = fingerStates(p as Pt[]);
+  // Named digit poses beat a relaxed open-palm (3 loosely extended fingers
+  // would otherwise swallow "three fingers" and a V as scroll/cancel).
   if (s.index && s.middle && !s.ring && !s.pinky && pinchRatio(p as Pt[]) >= PINCH_CLASSIFY) return 'v-sign';
   if (s.index && s.middle && s.ring && !s.pinky) return 'three-fingers';
-  return 'none';
+  return classifyGesture(p as Pt[]);
 }
 
 export interface MotionEvent {

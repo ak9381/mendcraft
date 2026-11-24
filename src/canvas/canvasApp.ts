@@ -62,6 +62,11 @@ import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, type HandPointer, type HandSurface } from './handPointer';
+import { setLivePinchThresholds } from '../input/handLogic';
+import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
+import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
+import { loadSetup, saveSetup } from '../setup/setupState';
+
 import { cameraHandsFromSelfie } from './handSpace';
 import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
@@ -220,6 +225,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
       <button data-cmd="reregister" class="mc-btn">Re-register</button>
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
+      <button data-cmd="calibrate-pinch" class="mc-btn">Calibrate pinch</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
@@ -484,6 +490,39 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const offerRetry = (fn: () => void) => { retryFn = fn; retryBtn.hidden = false; };
   retryBtn.addEventListener('click', () => { const f = retryFn; hideRetry(); f?.(); });
   const say = (t: string) => { statusEl.textContent = t; hideRetry(); };
+
+  const pinchTwice = createPinchTwiceSession();
+  const pinchCalEl = document.createElement('div');
+  pinchCalEl.className = 'mc-pinch-cal';
+  pinchCalEl.hidden = true;
+  pinchCalEl.setAttribute('role', 'status');
+  root.appendChild(pinchCalEl);
+  {
+    const saved = loadSetup()?.calibration;
+    if (saved && saved.pinchOn >= 0.16 && saved.pinchOn <= 0.40 && saved.pinchOff > saved.pinchOn) {
+      setLivePinchThresholds(saved.pinchOn, saved.pinchOff);
+    }
+  }
+  function startPinchCalibrate(): void {
+    if (!handsOn) void toggleHands();
+    pinchTwice.start(typeof performance !== 'undefined' ? performance.now() : Date.now());
+    pinchCalEl.hidden = false;
+    pinchCalEl.textContent = 'Pinch twice…';
+    say('Pinch twice — about three seconds.');
+  }
+  function finishPinchCalibrate(ok: boolean): void {
+    const band = ok ? pinchTwice.result() : null;
+    pinchTwice.reset();
+    pinchCalEl.hidden = true;
+    if (!band) { say("Didn't catch a pinch — try Calibrate pinch again."); return; }
+    setLivePinchThresholds(band.pinchOn, band.pinchOff);
+    const data = loadSetup();
+    if (data?.calibration) {
+      saveSetup({ ...data, calibration: { ...data.calibration, pinchOn: band.pinchOn, pinchOff: band.pinchOff } });
+    }
+    say(`Pinch saved at ${band.pinchOn.toFixed(2)} / ${band.pinchOff.toFixed(2)}.`);
+  }
+
   // The floating mic is mounted later; "ask for something else" starts it.
   let micFabRef: MicFab | null = null;
   const reviewDialog = mountReviewDialog(root, {
@@ -1645,6 +1684,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function onPresenceFrame(f: PresenceFrame): void {
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (pinchTwice.active() && f.hands[0]?.points) {
+      const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
+      const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
+      pinchCalEl.textContent = st.count >= 2 ? 'Pinch saved.' : `Pinch twice… ${left}s`;
+      if (st.done) finishPinchCalibrate(st.ready);
+    }
     if (scanPanel?.isOpen()) {
       const op = f.faces.find((x) => x.isOperator) ?? f.faces[0] ?? null;
       const st = scanFlow.update({
@@ -1935,7 +1980,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { aiManual = aiPanel.hidden === true; showAi(aiPanel.hidden === true); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, 'calibrate-pinch': startPinchCalibrate } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);

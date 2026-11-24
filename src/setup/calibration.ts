@@ -11,6 +11,7 @@
 // browser's localStorage; no frame or landmark ever leaves the device.
 
 import { DEFAULT_PINCH_ON, DEFAULT_PINCH_OFF, INDEX_TIP, type Pt } from '../input/handLogic';
+import { thresholdsFromMinOpen } from '../input/pinchBaseline';
 import { pinchRatio, meanJerk } from '../input/handMetrics';
 
 export interface ReachBox { x0: number; y0: number; x1: number; y1: number }
@@ -87,20 +88,16 @@ export function isFullReach(r: ReachBox): boolean {
 
 /**
  * Pinch thresholds from the pinch step. `ratios` are per-frame pinch ratios.
- * Her firmest comfortable close is the 10th percentile; the on-threshold sits
- * 40% of the way from that to her open hand so she never has to squeeze fully,
- * clamped to sane bounds, with off = on + 0.12 hysteresis.
+ * Her firmest comfortable close is the 10th percentile, her open hand the
+ * 90th. enter = min + 0.35*(open-min) in the same units as the live trace.
  */
 export function pinchFromRatios(ratios: readonly number[]): { pinchOn: number; pinchOff: number } {
   const finite = ratios.filter((r) => Number.isFinite(r)).sort((a, b) => a - b);
   if (finite.length < 10) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
   const closed = finite[Math.floor(finite.length * 0.1)];
   const open = finite[Math.floor(finite.length * 0.9)];
-  if (open - closed < 0.08) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
-  // On-threshold sits just above her firm close so a relaxed open hand
-  // is never a pinch. When she can close tightly this lands near 0.045.
-  const on = clamp(closed + 0.02, 0.03, 0.6);
-  return { pinchOn: round3(on), pinchOff: round3(clamp(on + 0.025, on + 0.015, 0.8)) };
+  if (open - closed < 0.12) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
+  return thresholdsFromMinOpen(closed, open);
 }
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
