@@ -141,6 +141,13 @@ export function watchTracksForEnd(
   }
 }
 
+/** A registered operator's hands keep flowing while the presence gate has
+ *  not paused (her face may be briefly hidden, e.g. behind her own hand):
+ *  they bind to her last-seen face box. Only a pause — or no box ever — drops them. */
+export function bindOperatorHands(paused: boolean, lastBox: unknown): boolean {
+  return !paused && lastBox != null;
+}
+
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
@@ -281,12 +288,15 @@ export function createPresenceTracker(
       paused = presence.paused;
       emitPaused(paused);
 
-      if (paused || !operatorPresent) {
-        // Lost the operator: end any active drag cleanly and feed no hands.
+      if (!bindOperatorHands(paused, operator.lastBox)) {
+        // Lost the operator for good (the gate paused): end any active drag
+        // cleanly and feed no hands. A face only briefly hidden — her own hand
+        // in front of it — keeps her hands, bound to her last-seen face box,
+        // for the gate's grace (LOST_TIMEOUT_MS).
         acceptedInputs = [];
         rejectedPts = rawHands.map((h) => h.landmarks.map((p) => ({ x: 1 - p.x, y: p.y })));
       } else {
-        const box = operator.lastBox!;
+        const box = operator.lastBox!; // last seen: still hers within the grace
         const cands: HandCandidate[] = rawHands.map((h, i) => ({
           index: i,
           wrist: h.landmarks[WRIST],

@@ -1742,7 +1742,7 @@ const addDevicePanel = createAddDevicePanel({
   onStep: (ev) => {
     if (ev.sim || ev.state === 'active' || (ev.source !== 'cloud' && ev.source !== 'on-device')) return;
     const sent: Record<string, string> = {
-      identify: 'one camera still (not stored)', connector: 'device kind + brand (text only)', verify: 'two camera stills (not stored)',
+      identify: 'one camera still (sent for this answer only; Mendcraft keeps no copy)', connector: 'device kind + brand (text only)', verify: 'two camera stills (sent for this answer only; Mendcraft keeps no copy)',
     };
     recordLedger(ev.source, `add device · ${ev.step}`, ev.source === 'cloud' ? 'needs the larger model' : 'private, on device',
       ev.source === 'cloud' ? (sent[ev.step] ?? 'text') : 'nothing', ev.ms);

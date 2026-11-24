@@ -23,7 +23,7 @@ import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
-import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
+import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, isBuildDashboard, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -70,7 +70,7 @@ import { mountTeachPanel } from './teachPanel';
 import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
-import { activePeople, protectTurn } from '../privacy/directory';
+import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
@@ -79,9 +79,7 @@ import { mountPhoneHands } from './phoneHands';
 import type { PhoneCamera } from './phoneCamera';
 import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
-import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
-import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
-import { loadSetup, saveSetup } from '../setup/setupState';
+import { loadSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
@@ -229,6 +227,15 @@ export function seedDoc(): CanvasDoc {
   };
 }
 
+/** The size a focused board is SHOWN at so it clears the chrome: narrower
+ *  than `free` only when it fits ≥480 px, shorter than `freeH` (not on a
+ *  phone). null = its own size fits. Pure; never persisted. */
+export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number; freeH: number; phone: boolean }): { w: number; h: number } | null {
+  const w = o.free >= 480 && rect.w > o.free ? o.free : rect.w;
+  const h = !o.phone && rect.h > o.freeH ? o.freeH : rect.h;
+  return w === rect.w && h === rect.h ? null : { w, h };
+}
+
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   for (const El of [
     LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement,
@@ -253,6 +260,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let savedAt: string | null = null;
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  /** Display-only fitted size of the focused board (fitBoardWidth). */
+  const focusFit = new Map<string, { w: number; h: number }>();
   let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
 
   const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
@@ -379,7 +388,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const aiHold = new Set<EngineId>();
   // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
   // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
-  const aiFeed = createCanvasAiFeed(phoneShell);
+  const aiFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
@@ -387,7 +396,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       engineBar.set(engine, state, line);
     },
     handoff: (from, to) => engineBar.handoff(from, to),
-    setCloudBytes: (b) => engineBar.setCloudBytes(b),
+    setCloudBytes: (b, sim) => engineBar.setCloudBytes(b, sim),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
   } : undefined, opts.phoneAiFeed ? teeFeed(aiFeed, opts.phoneAiFeed) : aiFeed);
   // A turn ended: the bar and the AI feed (monitor) both stop saying Working.
@@ -721,29 +730,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
   };
 
-  const pinchTwice = createPinchTwiceSession();
-  const pinchCalEl = document.createElement('div');
-  pinchCalEl.className = 'mc-pinch-cal';
-  pinchCalEl.hidden = true;
-  pinchCalEl.setAttribute('role', 'status');
-  root.appendChild(pinchCalEl);
   {
     const saved = loadSetup()?.calibration;
     if (saved && saved.pinchOn >= 0.16 && saved.pinchOn <= 0.40 && saved.pinchOff > saved.pinchOn) {
       setLivePinchThresholds(saved.pinchOn, saved.pinchOff);
     }
-  }
-  function finishPinchCalibrate(ok: boolean): void {
-    const band = ok ? pinchTwice.result() : null;
-    pinchTwice.reset();
-    pinchCalEl.hidden = true;
-    if (!band) { say("Didn't catch a pinch — try Calibrate pinch again."); return; }
-    setLivePinchThresholds(band.pinchOn, band.pinchOff);
-    const data = loadSetup();
-    if (data?.calibration) {
-      saveSetup({ ...data, calibration: { ...data.calibration, pinchOn: band.pinchOn, pinchOff: band.pinchOff } });
-    }
-    say(`Pinch saved at ${band.pinchOn.toFixed(2)} / ${band.pinchOff.toFixed(2)}.`);
   }
 
   // The floating mic is mounted later; "ask for something else" starts it.
@@ -770,19 +761,35 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The review's honesty footer for the turn that owns `si`. No token means
    *  no AI call made this change: say so, and claim no bytes. */
   const reviewFacts = (si: SentInfo | null, youAsked?: string): ReviewFacts => receipts.facts(si, { youAsked, sim: opts.sim });
+  /** The teach turn's own ledger token, when a model (not the rules) parsed it. */
+  let teachSent: SentInfo | null = null;
   /** Teach runs on rules/Nano/Gemini; its card already names which. */
   function teachFacts(card: HTMLElement): ReviewFacts {
     const label = card.querySelector('.mc-proposal-engine')?.textContent?.trim() ?? '';
     const engine = /gemini/i.test(label) ? 'gemini' : /nano/i.test(label) ? 'nano' : 'rules';
-    return engine === 'gemini'
-      ? { engine, engineLabel: label, sim: !!opts.sim, why: 'turning your words into a canvas action', sentWhat: 'your description of the action' }
-      : { engine, engineLabel: label || undefined, sim: !!opts.sim, bytes: 0 };
+    const si = teachSent;
+    teachSent = null;
+    if (engine === 'gemini') {
+      // The bytes the ledger booked for this teach turn (onModelSent), never a guess.
+      const booked = si ? receipts.facts(si) : null;
+      return { engine, engineLabel: label, sim: !!opts.sim, why: 'turning your words into a canvas action', sentWhat: 'your description of the action', bytes: booked?.bytes ?? 0, ...(booked?.simBytes ? { simBytes: booked.simBytes } : {}) };
+    }
+    return { engine, engineLabel: label || undefined, sim: !!opts.sim, bytes: 0 };
   }
 
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
     sim: opts.sim,
     say,
+    onModelSent: (engine, prompt) => {
+      const cloud = engine === 'gemini';
+      teachSent = {
+        engine, prompt, sim: !!opts.sim,
+        sent: cloud ? 'your description of the action' : null,
+        routeLine: cloud ? 'Gemini · cloud — turning your words into a canvas action' : 'Nano · on device — nothing left this device',
+      };
+      recordSent(teachSent, cloud ? protectTurn('', prompt).promptText : '');
+    },
     openReview: (title, card) => showReview({
       title, card,
       changes: [{ op: 'add', label: 'New gesture', detail: title.replace(/^Teach: /, '') }],
@@ -1060,7 +1067,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); deviceSurfaces.untrack(el.dataset.frame!); el.remove(); } });
     for (const f of frames) {
       const el = frameEl(f);
-      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${f.rect.w}px`, height: `${f.rect.h}px` });
+      // The focused board may show narrower/shorter than its own size (see
+      // fitBoardWidth); that fit is display-only, never stored.
+      const fit = focusId === f.id ? focusFit.get(f.id) : undefined;
+      const w = fit?.w ?? f.rect.w, h = fit?.h ?? f.rect.h;
+      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: `${h}px` });
       el.querySelector('.mc-frame-title')!.textContent = f.title;
       el.querySelector('.mc-chip')!.textContent = f.pinned ? `${labelFor(f)} · pinned` : labelFor(f);
       const focused = focusId === f.id;
@@ -1150,19 +1161,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
    *  so its "Connect this room" call-to-action is on screen. */
   /** Narrow a focused board to the free width between the dock and the hand
-   *  cluster, so nothing on it sits under chrome. Never below 480px. */
+   *  cluster, so nothing on it sits under chrome. Never below 480px.
+   *  Display-only: the board's own size (registry + storage) is never
+   *  changed, so it grows back when the space returns, in overview, and
+   *  across reloads. Returns the board as it is shown (for the camera). */
   function fitBoardWidth(f: Frame): Frame {
     const ins = insets();
     const free = Math.floor(vp().w - ins.left - ins.right - 32);
     // Also clamp height to the space above the phones strip + engine bar (the
     // board scrolls inside), so its bottom stays reachable.
     const freeH = Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32));
-    const w = free >= 480 && f.rect.w > free ? free : f.rect.w;
-    const h = !phoneShell && f.rect.h > freeH ? freeH : f.rect.h;
-    if (w === f.rect.w && h === f.rect.h) return f;
-    reg.setRect(f.id, { ...f.rect, w, h });
-    sync(); persist();
-    return reg.get(f.id) ?? f;
+    const fit = fitFocusedSize(f.rect, { free, freeH, phone: phoneShell });
+    const had = focusFit.get(f.id);
+    if (fit) focusFit.set(f.id, fit); else focusFit.delete(f.id);
+    if (had?.w !== fit?.w || had?.h !== fit?.h) sync();
+    return fit ? { ...f, rect: { ...f.rect, ...fit } } : f;
   }
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
@@ -1329,14 +1342,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
   /** One ledger line for a turn, remembered against that turn's SentInfo
-   *  (summed if the same turn sends twice, e.g. a fallback retry). */
-  function recordSent(s: SentInfo, sentText: string, extraBytes = 0): void {
-    const entry = ledger.record({ engine: s.engine, sentText, extraBytes });
-    receipts.record(s, entry.bytes);
-    ledgerTotalRender();
-    panels.setFooterBytes(ledger.totals().aiBytes);
+   *  (summed if the same turn really sends twice). A SIM turn books 0 real
+   *  bytes — only what it would send. `prebooked`: bytes of this turn already
+   *  booked the moment they left (a point-to-connect crop whose clarifying
+   *  question was pending) — the receipt counts them, the total not twice. */
+  function recordSent(s: SentInfo, sentText: string, extraBytes = 0, prebooked = 0): void {
+    const full = utf8ByteLength(sentText) + Math.max(0, extraBytes);
+    const entry = ledger.record({ engine: s.engine, extraBytes: Math.max(0, full - prebooked), sim: s.sim });
+    receipts.record(s, entry.bytes + (s.sim || s.engine === 'nano' ? 0 : Math.min(prebooked, full)), entry.simBytes ?? 0);
+    renderBytes();
   }
-  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number } = {}): void {
+  /** Every byte counter (AI panel line, footer, engine bar, feed, swarm pill)
+   *  from the one ledger: real bytes, and SIM "would send" apart. */
+  function renderBytes(): void {
+    const t = ledger.totals();
+    ledgerTotalRender();
+    panels.setFooterBytes(t.aiBytes, t.simBytes);
+    swarm.reportBytes(t.aiBytes, t.simBytes);
+  }
+  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
@@ -1348,7 +1372,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
     // extraBytes: a photo crop that went with the prompt (point-to-connect).
-    recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0);
+    recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0, s.sent ? ctx.prebookedBytes : 0);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -1357,22 +1381,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (s.routeLine) panels.forEngine(s.engine).log('note', s.routeLine);
     if (phoneShell) {
       const line = s.routeLine || '';
-      setRouteBadge(/apple/i.test(line) ? 'Apple · on device' : s.engine === 'gemini' ? 'Gemini · cloud' : line || 'On device');
+      const badge = /apple/i.test(line) ? 'Apple · on device' : s.engine === 'gemini' ? 'Gemini · cloud' : line.replace(/^SIM · /, '') || 'On device';
+      setRouteBadge(s.sim ? `SIM · ${badge}` : badge);
     }
+    if (ctx.swarm === false) return;
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,
     // layout, tile frames) and Nano (labels, device values, redaction/Kannada
-    // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls.
+    // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls. A call
+    // that ran on Nano shows Nano cursors only.
     swarmStartedAt = Date.now();
     const plan = ctx.swarmPlan ?? buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
       tileCount: ctx.tileCount,
       redactedName: protect.used.length > 0,
     });
     swarm.start(plan, opts.sim ? 1 : Date.now());
-    swarm.reportBytes(ledger.totals().aiBytes);
+    swarm.reportBytes(ledger.totals().aiBytes, ledger.totals().simBytes);
     swarmDock.start(buildSwarmAgents(plan), {
       reducedMotion: reduced,
       payloads: s.engine === 'gemini' ? { gemini: cloudReceivedDetail(protect.promptText, activePeople()) } : {},
     });
+  }
+  /** A real model call failed and a prepared (SIM) draft takes over: only the
+   *  route label changes. No second ledger line, no second cloud `received`,
+   *  no new swarm — only what really left is ever booked. */
+  function aiFellBack(s: SentInfo): void {
+    if (s.routeLine) panels.forEngine(s.engine).log('note', s.routeLine);
   }
   /** The full-screen review's `extra`: the live terminals + footer, so a
    *  review is never just the proposal summary with no trace of who worked
@@ -1428,7 +1461,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!tileEl) { morphFlow?.pulseTarget(); return; }
     tileEl.classList.add('is-swarm-target');
     window.setTimeout(() => tileEl.classList.remove('is-swarm-target'), 900);
-    revealGhostTile(tileEl, kind === 'gemini' ? 'controls' : 'labels');
+    // The first cursor on a tile frames it, the next labels it (a Nano-only
+    // turn has no Gemini framer, so its first Nano cursor frames).
+    revealGhostTile(tileEl, kind === 'gemini' || tileEl.classList.contains('stage-frame') ? 'controls' : 'labels');
   }
   function ghost(frameId: string, g: PartialPlan | null): void {
     const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-ghost`);
@@ -1499,6 +1534,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       let sentInfo: SentInfo | null = null;
       const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
         onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
+        onFallback: aiFellBack,
         onGhost: (g) => ghost(frameId, g),
         onNote: (note) => {
           const state = aiPanel.querySelector('.mc-ai-state');
@@ -1622,7 +1658,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
-  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; note?: string } = {}): Promise<boolean> {
+  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; prebookedBytes?: number; note?: string } = {}): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
@@ -1635,7 +1671,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
         turn.sent.sim = engine.sim;
       }
-      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes });
+      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes });
       if (o.note) panels.forEngine(turn.sent.engine).log('note', o.note);
       if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
       const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
@@ -1652,7 +1688,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         }
         turn.sent.sim = true;
         turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
-        aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
+        aiFellBack(turn.sent);
         try {
           full = await withBuildGimbal(() => streamOne(fallbackEngine));
         } catch (e2) {
@@ -1683,10 +1719,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // you look at the device you point at, not at this screen.
   const POINT_UTTERANCE = 'connect what I am pointing at';
   const POINT_WAIT_MS = 20_000;
-  type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string };
+  /** How long "Desk lamp or ceiling light?" waits for her answer. */
+  const POINT_CHOICE_MS = 20_000;
+  /** prebooked: bytes already in the ledger (booked when the crop left). */
+  type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string; prebooked?: number };
   let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void } | null = null;
   /** "Desk lamp or ceiling light?" is waiting for her answer (one question). */
-  let pointChoice: { frameId: string; r: PointIdentifyResult; o: PointOpts; choices: DeviceHint[] } | null = null;
+  let pointChoice: { frameId: string; r: PointIdentifyResult; o: PointOpts; choices: DeviceHint[]; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** Clear the pending question (and its expiry) and return it. */
+  function takePointChoice(): NonNullable<typeof pointChoice> | null {
+    const pc = pointChoice;
+    pointChoice = null;
+    if (pc) clearTimeout(pc.timer);
+    return pc;
+  }
+  /** The bytes a point's cloud sends carried (crop × sends, plus the prompt
+   *  each time) — booked the moment they left, once per point. */
+  function bookPointSends(r: PointIdentifyResult | null, o: PointOpts): void {
+    if (o.prebooked != null) return;
+    const sends = Math.max(r?.source === 'cloud' ? 1 : 0, o.cloudSends ?? 0);
+    const receipt = pointFailureReceipt({ cropBytes: o.cropBytes, cloudSends: sends, cloudAnswered: o.cloudAnswered || r?.source === 'cloud' });
+    o.prebooked = 0;
+    if (receipt.bytes <= 0) return;
+    const prompt = o.prompt ?? '';
+    const entry = ledger.record({ engine: 'gemini', sentText: prompt, extraBytes: receipt.bytes + utf8ByteLength(prompt) * (sends - 1), sim: o.sim });
+    o.prebooked = entry.bytes;
+    renderBytes();
+  }
   function endPointWait(): void {
     if (!pointWait) return;
     clearTimeout(pointWait.timer);
@@ -1717,20 +1776,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.show();
     logTurnReceipt(panels, { engine, utterance: POINT_UTTERANCE, used: [], people: activePeople(), cloudPayload: prompt });
     if (idNote) panels.forEngine(r?.source === 'cloud' ? 'gemini' : 'nano').log('note', idNote);
-    if (receipt.bytes > 0) {
-      // The prompt text went with every send, and the crop each time.
-      ledger.record({ engine: 'gemini', sentText: prompt, extraBytes: receipt.bytes + utf8ByteLength(prompt) * (sends - 1) });
-      ledgerTotalRender();
-      panels.setFooterBytes(ledger.totals().aiBytes);
-    }
+    // The prompt text went with every send, and the crop each time (booked
+    // once: a point whose question was pending already booked them).
+    bookPointSends(r, o);
     panels.forEngine(engine).log('note', `${o.sim ? 'SIM · ' : ''}${receipt.line}`);
   }
   /** Her answer to the clarifying question; anything else drops it (and
    *  books what already left) and routes normally. */
   function handlePointChoice(text: string): boolean {
-    if (!pointChoice) return false;
-    const pc = pointChoice;
-    pointChoice = null;
+    const pc = takePointChoice();
+    if (!pc) return false;
     const pick = pickPointChoice(text, pc.choices);
     if (!pick) { ledgerPointFailure(pc.r, pc.o, null); return false; }
     void finishPoint(pc.frameId, pc.r, { ...pc.o, chosenId: pick.id });
@@ -1740,7 +1795,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
     endPointWait();
-    if (pointChoice) { ledgerPointFailure(pointChoice.r, pointChoice.o, null); pointChoice = null; }
+    { const pc = takePointChoice(); if (pc) ledgerPointFailure(pc.r, pc.o, null); }
     if (opts.sim) {
       // ?sim=1: no camera. A scripted identity (a WiZ desk lamp), labelled SIM.
       say('Point at it and hold still.');
@@ -1820,8 +1875,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       : null;
     if (!out.ok) {
       if (out.choices?.length && r && !o.chosenId) {
-        // One clarifying question; the bytes are booked when it resolves.
-        pointChoice = { frameId, r, o, choices: out.choices };
+        // One clarifying question. The crop already left: book it now, not
+        // when (or if) she answers. Unanswered, it expires with a plain line.
+        bookPointSends(r, o);
+        const timer = setTimeout(() => {
+          if (pointChoice?.timer !== timer) return;
+          const pc = takePointChoice();
+          if (pc) ledgerPointFailure(pc.r, pc.o, null);
+          say('I didn’t hear which one, so nothing was connected. Point again or name the device.');
+        }, POINT_CHOICE_MS);
+        pointChoice = { frameId, r, o, choices: out.choices, timer };
         say(out.message);
         return;
       }
@@ -1830,7 +1893,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
-      { identified: true, extraBytes: out.extraBytes, photoNote: o.sim, note: idNote ?? undefined });
+      { identified: true, extraBytes: out.extraBytes, prebookedBytes: o.prebooked, photoNote: o.sim, note: idNote ?? undefined });
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
@@ -2342,12 +2405,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
-    if (pinchTwice.active() && f.hands[0]?.points) {
-      const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
-      const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
-      pinchCalEl.textContent = st.count >= 2 ? 'Pinch saved.' : `Pinch twice… ${left}s`;
-      if (st.done) finishPinchCalibrate(st.ready);
-    }
     if (scanPanel?.isOpen()) {
       const op = f.faces.find((x) => x.isOperator) ?? f.faces[0] ?? null;
       const st = scanFlow.update({
@@ -2448,7 +2505,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // grab (board move / pan) and two-fist zoom.
         const cam = cameraHandsFromSelfie(hands);
         handPointer?.update(cam, now);
-        teachPanel.matchFrame(hands, now);
+        // Taught gestures obey the same guards as built-ins: never while the
+        // hands are locked (not facing the screen) or a fist grab is running.
+        if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive()) teachPanel.matchFrame(hands, now);
         feedPointWait(cam, now);
       },
     },
@@ -2495,12 +2554,39 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     showAi(true);
     const nano = engineFor('nano', OPEN_ENDED_SIM_REPLY);
     const gemini = engineFor('gemini', OPEN_ENDED_SIM_REPLY);
-    const r = await openEndedAsk(text, nano, gemini, (full) => {
-      aiPanel.querySelector('.mc-ai-state')!.textContent = full;
-    });
+    // Each engine really tried goes through the ledger like any AI turn. A
+    // cloud one (Gemini — including the "Nano" step on a device without Nano)
+    // only ever gets the redacted prompt, and its bytes are booked.
+    const prepare = (eng: SurfaceEngine, prompt: string): string => {
+      const cloud = eng.id === 'gemini';
+      const base = cloud
+        ? (eng.routeLine ?? 'Gemini · cloud — sent your words (names redacted) for a short reply')
+        : 'Nano · on device — nothing left this device';
+      aiSent(text, {
+        engine: eng.id, prompt, sim: eng.sim,
+        sent: cloud ? 'your words (names redacted). No board data, no device addresses.' : null,
+        routeLine: eng.sim && !base.startsWith('SIM') ? `SIM · ${base}` : base,
+      }, { swarm: false });
+      return cloud ? protectTurn(text, prompt).promptText : prompt;
+    };
+    let r: Awaited<ReturnType<typeof openEndedAsk>>;
+    try {
+      r = await openEndedAsk(text, nano, gemini, (full) => {
+        aiPanel.querySelector('.mc-ai-state')!.textContent = full;
+      }, prepare);
+    } catch (e) {
+      const why = `No answer: ${e instanceof Error ? e.message : String(e)}`;
+      panels.forEngine('gemini').fail(why);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+      settleEngines(); autoHideAi();
+      return;
+    }
+    // A cloud reply may carry the redaction tokens back: real names return on this device.
+    const reply = r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply;
+    // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
-    aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
-    say(r.reply);
+    aiPanel.querySelector('.mc-ai-state')!.textContent = reply;
+    say(reply);
     settleEngines();
     autoHideAi();
   }
@@ -2509,8 +2595,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  validation refuses, Nano's terminal fails red, and nothing is applied. */
   async function breakTurn(text: string, attempt: Attempt, frameId: string | null): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    const engine = engineFor('nano', scriptedReply(attempt));
-    aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Checked on this device. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
+    // Only a real on-device Nano (or the ?sim=1 script) is asked. On a device
+    // without Nano the "Nano" engine is Gemini in the cloud: her words would
+    // leave for a check the deterministic validator already decides — so no
+    // model is called and the route says Rules, not Nano.
+    const engine = breakEngine(engineFor('nano', scriptedReply(attempt)), !!opts.sim);
+    if (engine) {
+      aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Nano · on this device — checked here. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
+    } else {
+      // No model, no ledger turn, no swarm: the Nano terminal (this device's
+      // side) shows the received line and the rules' verdict.
+      showAi(true);
+      aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
+      panels.show();
+      panels.forEngine('nano').log('received', text);
+    }
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
@@ -2837,6 +2936,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
+    // Pending writes and timers go first, so nothing fires into a torn-down canvas.
+    clearTimeout(persistTimer);
+    clearTimeout(wheelPersistTimer);
+    boardEdge.reset();
+    if (pairingStop) { void pairingStop(); pairingStop = null; }
+    hostSession = null;
+    nextChips?.destroy();
+    nextChips = null;
+    takePointChoice(); // clears its 20 s expiry timer
     pairFirst.cancel();
     if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
     phoneMenu?.destroy();
@@ -3404,9 +3512,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // focused board at a paired phone's edge. Nothing here bypasses a review.
   const replay: ReplayHost = {
     run,
-    // The pair-first flow claims "build the dashboard" before routeLine does.
-    routeOf: (text) => ((pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking') && isBuildDashboard(text)
-      ? 'pairFirst' : routeLine(text, routeWorld(routePlanBoard())).name),
+    // The same claim order as run(): an open morph card, then the pair-first
+    // flow ("build the dashboard"), then a pending point-choice answer, and
+    // only then routeLine.
+    routeOf: (text) => {
+      if (morphFlow?.claimsSpeech(text)) return 'morph';
+      if ((pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking') && isBuildDashboard(text)) return 'pairFirst';
+      if (pointChoice && pickPointChoice(text, pointChoice.choices)) return 'pointChoice';
+      return routeLine(text, routeWorld(routePlanBoard())).name;
+    },
     isReviewOpen: () => !!pending || reviewDialog.isOpen(),
     reviewTitle: () => root.querySelector('.mc-review-title')?.textContent ?? '',
     reviewApprove: keep,

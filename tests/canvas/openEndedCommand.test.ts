@@ -24,8 +24,16 @@ describe('canvasApp.run() open-ended fallback', () => {
     expect(body).toContain("engineFor('gemini'");
     expect(body).toContain('openEndedAsk(text, nano, gemini');
     expect(body).toContain('panels.forEngine(r.engineId).log(');
-    expect(body).toContain("aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply");
-    expect(body).toContain('say(r.reply)');
+    expect(body).toContain("aiPanel.querySelector('.mc-ai-state')!.textContent = reply");
+    expect(body).toContain('say(reply)');
+  });
+
+  it('a cloud engine (incl. "Nano" on a device without Nano) gets the redacted prompt and is ledgered', () => {
+    const body = src.slice(src.indexOf('async function openEndedTurn('), src.indexOf('// ---- commands ----'));
+    expect(body).toContain("eng.id === 'gemini'");
+    expect(body).toContain('protectTurn(text, prompt).promptText');
+    expect(body).toMatch(/aiSent\(text, \{/);
+    expect(body).toContain('fillVisible(r.reply)');
   });
 
   it("'hi how are you' and \"let's build something\" don't match any known command", () => {

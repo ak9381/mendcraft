@@ -316,7 +316,7 @@ describe('phone shell never broadcasts untagged feed messages locally', () => {
 
   it('canvasApp builds its feed with createCanvasAiFeed(phoneShell)', () => {
     const src = readFileSync(resolve(__dirname, '../../src/canvas/canvasApp.ts'), 'utf8');
-    expect(src).toMatch(/createCanvasAiFeed\(phoneShell\)/);
+    expect(src).toMatch(/createCanvasAiFeed\(phoneShell[,)]/);
     expect(src).not.toMatch(/createAiFeed\(\)/);
   });
 });

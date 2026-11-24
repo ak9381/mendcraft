@@ -1,13 +1,11 @@
 // Canvas hands adapter: maps the on-device hand gesture stream to canvas events.
 // From camera frames: 'frame' (raw landmarks, every frame — the hand pointer's
 // dwell / fist-grab / two-fist zoom run off this), 'point' with the
-// normalised fingertip, and 'palm' for a held open palm. Pinch → 'keep',
-// thumbs-up → 'keep' and palm swipe → 'drop' are no longer wired from frames.
-// mapGestureToCanvasEvent / feedGesture (no live caller) still map named
-// gestures, with a 600 ms refractory debounce for 'keep'.
+// normalised fingertip, and 'palm' for a held open palm. Pinch is not used:
+// pinch, thumbs-up and palm swipe are not wired from frames (keep/drop are the
+// review buttons — fist-tap clickable — and voice).
 import { classifyGesture, type Pt } from '../input/gestures';
-import { INDEX_TIP, THUMB_TIP } from '../input/handLogic';
-import { mapToScreen } from './handPointer';
+import { INDEX_TIP } from '../input/handLogic';
 import { createMotionRecognizer } from '../input/motionGestures';
 import { createPresenceTracker, type PresenceFrame, type PresenceTracker } from '../input/presence';
 import { findLiveCameraStream } from '../input/cameraShare';
@@ -34,93 +32,20 @@ export type CanvasHandEvent =
 
 export interface CanvasHandsAdapter {
   update(frame: { hands?: Array<{ points?: readonly Pt[] } | readonly Pt[]>; now: number }): void;
-  feedGesture(
-    gesture: string,
-    details?: { point?: { x: number; y: number }; now?: number; x?: number; y?: number },
-  ): void;
   reset(): void;
 }
 
 export interface CanvasHandsOptions {
-  refractoryMs?: number;
   /** Drop a motion-recognizer event by id for this frame — e.g. a pinch the
    *  morph hold classifier armed on must never also emit `pinch-hold-still`
    *  (the morph opens the mic itself; firing both would double-toggle). */
   suppressMotion?: (id: string) => boolean;
 }
 
-export function mapGestureToCanvasEvent(
-  gesture: string,
-  details?: { x: number; y: number } | { point?: { x: number; y: number } },
-): CanvasHandEvent | null {
-  if (gesture === 'pinch') return { type: 'keep' };
-  if (
-    gesture === 'brush' ||
-    gesture === 'palm-swipe-left' ||
-    gesture === 'palm-swipe-right' ||
-    gesture === 'drop'
-  ) {
-    return { type: 'drop' };
-  }
-  if (gesture === 'open-palm' || gesture === 'palm') return { type: 'palm' };
-  if (gesture === 'point') {
-    const pt = details && 'point' in details && details.point
-      ? details.point
-      : details && 'x' in details
-      ? { x: (details as { x: number }).x, y: (details as { y: number }).y }
-      : { x: 0.5, y: 0.5 };
-    return { type: 'point', point: pt };
-  }
-  return null;
-}
-
-/**
- * Both-hands-pinch extractor for anchored two-hand zoom/pan. Given the raw hand
- * landmark frames, returns the two pinch points in SCREEN pixels (the same
- * selfie-mirrored reach-box mapping the hand cursor uses, so the zoom anchors
- * exactly where the user sees their pinches) — but only when at least two hands
- * are pinching. Returns null otherwise, so one-hand behaviour is untouched.
- * Pure (no DOM): the caller passes the viewport size.
- */
-export function twoHandPinchPoints(
-  hands: readonly (readonly Pt[])[],
-  w: number,
-  h: number,
-): { p: { x: number; y: number }; q: { x: number; y: number } } | null {
-  const pinching = hands.filter((hnd) => hnd && hnd.length >= 21 && classifyGesture(hnd as Pt[]) === 'pinch');
-  if (pinching.length < 2) return null;
-  const toScreen = (hnd: readonly Pt[]) => {
-    const mid = { x: (hnd[THUMB_TIP].x + hnd[INDEX_TIP].x) / 2, y: (hnd[THUMB_TIP].y + hnd[INDEX_TIP].y) / 2 };
-    return mapToScreen(mid, w, h);
-  };
-  return { p: toScreen(pinching[0]), q: toScreen(pinching[1]) };
-}
-
-/**
- * One-hand pinch extractor for the pinch-drag pan (A1-012). Returns the single
- * pinch point in SCREEN pixels (same selfie-mirrored reach-box mapping as the
- * hand cursor and twoHandPinchPoints), but only when EXACTLY one hand is
- * pinching — so the two-hand zoom/pan path is never disturbed. Returns null
- * otherwise. Pure (no DOM): the caller passes the viewport size.
- */
-export function oneHandPinchPoint(
-  hands: readonly (readonly Pt[])[],
-  w: number,
-  h: number,
-): { x: number; y: number } | null {
-  const pinching = hands.filter((hnd) => hnd && hnd.length >= 21 && classifyGesture(hnd as Pt[]) === 'pinch');
-  if (pinching.length !== 1) return null;
-  const hnd = pinching[0];
-  const mid = { x: (hnd[THUMB_TIP].x + hnd[INDEX_TIP].x) / 2, y: (hnd[THUMB_TIP].y + hnd[INDEX_TIP].y) / 2 };
-  return mapToScreen(mid, w, h);
-}
-
 export function createCanvasHandsAdapter(
   onEvent: (event: CanvasHandEvent) => void,
   opts: CanvasHandsOptions = {},
 ): CanvasHandsAdapter {
-  const refractoryMs = opts.refractoryMs ?? 600;
-  let lastKeepAt = -Infinity;
   const motion = createMotionRecognizer();
   // Open palm must be HELD (HAND_FEEL.palmHoldMs) to toggle the tools panel —
   // the old per-frame 'palm' event toggled it every single frame the pose was
@@ -133,22 +58,6 @@ export function createCanvasHandsAdapter(
   // review card's buttons (dwell-clickable) and voice. The motion recognizer
   // still runs so suppressMotion keeps seeing its ids (taught gestures).
 
-  function fire(ev: CanvasHandEvent, now: number): void {
-    if (ev.type === 'keep') {
-      if (now - lastKeepAt < refractoryMs) return;
-      lastKeepAt = now;
-    }
-    onEvent(ev);
-  }
-
-  function feedGesture(
-    gesture: string,
-    details: { point?: { x: number; y: number }; now?: number; x?: number; y?: number } = {},
-  ): void {
-    const now = details.now ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    const ev = mapGestureToCanvasEvent(gesture, details);
-    if (ev) fire(ev, now);
-  }
 
   function extractPoints(h: { points?: readonly Pt[]; label?: string } | readonly Pt[]): readonly Pt[] {
     if ('points' in h && Array.isArray(h.points)) {
@@ -178,19 +87,17 @@ export function createCanvasHandsAdapter(
       const gesture = classifyGesture(h as Pt[], (h as Pt[] & { label?: string }).label);
       if (gesture === 'point') {
         const tip = h[INDEX_TIP];
-        if (tip) fire({ type: 'point', point: { x: tip.x, y: tip.y } }, now);
+        if (tip) onEvent({ type: 'point', point: { x: tip.x, y: tip.y } });
       } else if (gesture === 'open-palm') {
         anyPalm = true;
       }
     }
-    if (palmHold.update(anyPalm, now)) fire({ type: 'palm' }, now);
+    if (palmHold.update(anyPalm, now)) onEvent({ type: 'palm' });
   }
 
   return {
     update,
-    feedGesture,
     reset() {
-      lastKeepAt = -Infinity;
       motion.reset();
       palmHold.reset();
     },
@@ -229,7 +136,7 @@ export interface MountCanvasHandsOptions {
   /** The glass-hand overlay's anchors: each present hand's cursor (client
    *  px), so the drawn palm sits on it (see HandOverlayOptions.anchors). */
   handAnchors?: (hands: readonly (readonly Pt[])[]) => ({ x: number; y: number } | null)[];
-  /** Override FaceLandmarker. Laptop canvas defaults to off. */
+  /** Override FaceLandmarker. Laptop canvas defaults to on (LAPTOP_DETECT_FACES). */
   detectFaces?: boolean;
 }
 
@@ -338,7 +245,26 @@ export async function mountCanvasHands(
   lastCameraError = null;
 
   const live = tracker;
+  // The laptop camera is off while the tab is hidden (no tracking, the light
+  // goes out) and comes back when it is visible again. Starts and stops run
+  // in order so a quick hide/show never leaves two loops or a dead camera.
+  const doc = typeof document !== 'undefined' ? document : null;
+  let chain: Promise<void> = Promise.resolve();
+  let stopped = false;
+  const onVisibility = (): void => {
+    if (!doc || stopped) return;
+    const hidden = doc.visibilityState === 'hidden';
+    chain = chain.then(async () => {
+      if (stopped) return;
+      if (hidden) { live.stop(); overlay?.clear(); faces?.clear(); return; }
+      if (live.videoEl && !live.videoEl.isConnected) doc.body?.appendChild(live.videoEl);
+      await live.start(findLiveCameraStream() ?? undefined);
+    }).catch((err) => { console.error('[mendcraft] camera resume failed:', err); });
+  };
+  doc?.addEventListener('visibilitychange', onVisibility);
   const stop = () => {
+    stopped = true;
+    doc?.removeEventListener('visibilitychange', onVisibility);
     try {
       live.stop();
       overlay?.clear();

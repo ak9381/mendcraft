@@ -108,8 +108,22 @@ function parseReply(raw: string, devices: readonly DeviceRef[]): Attempt | null 
 
 const describe = (a: Attempt) => (a.kind === 'control' ? `a control for the ${a.thing}` : `${a.label} ${a.kind === 'volume' ? 'volume ' : ''}to ${a.level}%`);
 
+/** The route line when no on-device model checks the request: the validator
+ *  is deterministic, so it runs alone and no model is claimed. */
+export const BREAK_RULES_ROUTE = 'Rules · on this device — checked by fixed limits, no model. Nothing sent.';
+
+/** The model a try-to-break turn may consult: only a real on-device Nano (or
+ *  the ?sim=1 script). A "Nano" step that would really be drafted by Gemini in
+ *  the cloud is never called — her words would leave the device for a check
+ *  the rules already decide — so it returns null and the rules decide alone. */
+export function breakEngine(engine: SurfaceEngine, sim: boolean): SurfaceEngine | null {
+  if (sim) return engine.sim ? engine : null;
+  return engine.id === 'nano' && !engine.sim ? engine : null;
+}
+
 export interface BreakDeps {
-  engine: SurfaceEngine;
+  /** null: no on-device model — the deterministic validator decides alone. */
+  engine: SurfaceEngine | null;
   devices: readonly DeviceRef[];
   /** The responsible engine's terminal (fail() blinks it red and flips the bar + feed). */
   panel: { log(verb: LogVerb, detail: string): void; fail(detail: string): void };
@@ -122,9 +136,11 @@ export interface BreakDeps {
  *  the caller applies the (valid) request itself. */
 export async function runBreakTurn(text: string, attempt: Attempt, deps: BreakDeps): Promise<{ refused: boolean; reason?: string }> {
   const { engine, panel, devices } = deps;
-  const tag = engine.sim ? 'SIM · ' : '';
   let proposed: Attempt = attempt;
-  try {
+  if (!engine) {
+    panel.log('note', BREAK_RULES_ROUTE);
+  } else try {
+    const tag = engine.sim ? 'SIM · ' : '';
     const reply = await engine.stream(breakPrompt(text), () => {});
     const parsed = parseReply(reply, devices);
     if (parsed) {
@@ -134,7 +150,7 @@ export async function runBreakTurn(text: string, attempt: Attempt, deps: BreakDe
       panel.log('note', `${tag}The model’s reply wasn’t usable; checking your request directly.`);
     }
   } catch {
-    panel.log('note', `${tag}the model didn’t answer; checking your request directly.`);
+    panel.log('note', `${engine.sim ? 'SIM · ' : ''}the model didn’t answer; checking your request directly.`);
   }
   for (const a of [attempt, proposed]) {
     const v = validateAttempt(a, devices);

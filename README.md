@@ -56,9 +56,13 @@ With no hub and no Nano, Mendcraft asks before sending anything uncleaned.
 
 - MediaPipe hand and face landmarks stay on the device. The overlay is smoothed
   (one-euro filter), fades in and out, and respects reduced motion.
-- **No always-on dot.** Like visionOS and Ultraleap's content-first guidance,
-  the targeted element gets a hover highlight with a soft snap; a short ring
-  shows only while you pinch. Debug landmarks: `?debugHands=1`.
+- **A glass-hand cursor on your palm.** The cursor sits on the palm centre
+  (curling a finger barely moves it); the targeted control gets a hover
+  highlight with a soft snap. **Tap a fist** (close and open quickly) to
+  click; **hold a fist** and move to drag a board, or on the bare canvas to
+  pan; **two fists** zoom. **Hover to click** (rest the palm) is an opt-in
+  fallback in Tools. Pinch is not used. Hands pause while you look away from
+  the screen. Debug landmarks: `?debugHands=1`.
 - **Teach a gesture** — record 2–3 samples, say what it should do ("save the
   canvas"), approve it on a Proposal card. Poses match by nearest template,
   motions by DTW, with a confidence threshold and a warning on conflicts with

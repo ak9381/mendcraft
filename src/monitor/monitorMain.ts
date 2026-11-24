@@ -197,24 +197,29 @@ export function lineStyle(engine: MonitorEngine, verb: string, rawText: string):
 export type Redaction = { text: string; name: string | null; token: string | null };
 
 export type StageEffect =
-  | { kind: 'packet'; device: FeedDevice; dir: 'out'; bytes: number; redactions: Redaction[] }
+  /** `sim`: a scripted (SIM) turn — nothing left; `bytes` is what it would send. */
+  | { kind: 'packet'; device: FeedDevice; dir: 'out'; bytes: number; redactions: Redaction[]; sim?: boolean }
   | { kind: 'packet'; device: FeedDevice; dir: 'back'; label: string }
   | { kind: 'kept'; device: FeedDevice; refused: boolean };
 
 interface Turn { bytes: number; cloud: boolean; cloudReceived: boolean; cloudAt: number; redactions: Redaction[]; ended: boolean; counted: boolean }
 
-export interface DeviceLedger { lastTotal: number; pending: number; pendingAt: number; turn: Turn | null; kept: number }
+export interface DeviceLedger {
+  lastTotal: number; pending: number; pendingAt: number; turn: Turn | null; kept: number;
+  /** SIM turns: cumulative would-send total and its uncrossed delta. Never real bytes. */
+  lastSimTotal: number; simPending: number;
+}
 export const CARRY_MS = 1500;
 
 const newTurn = (): Turn => ({ bytes: 0, cloud: false, cloudReceived: false, cloudAt: 0, redactions: [], ended: false, counted: false });
 
 export function createLedger() {
   const devs = {} as Record<FeedDevice, DeviceLedger>;
-  const resetDevice = (d: FeedDevice) => { devs[d] = { lastTotal: 0, pending: 0, pendingAt: 0, turn: null, kept: 0 }; };
+  const resetDevice = (d: FeedDevice) => { devs[d] = { lastTotal: 0, pending: 0, pendingAt: 0, turn: null, kept: 0, lastSimTotal: 0, simPending: 0 }; };
   const reset = () => { DEVICES.forEach(resetDevice); };
   /** A new turn opens: stale pending bytes are not this turn's. */
   const open = (d: DeviceLedger, at: number) => {
-    if (d.pending > 0 && at - d.pendingAt > CARRY_MS) d.pending = 0;
+    if ((d.pending > 0 || d.simPending > 0) && at - d.pendingAt > CARRY_MS) { d.pending = 0; d.simPending = 0; }
     d.turn = newTurn();
   };
   reset();
@@ -222,10 +227,18 @@ export function createLedger() {
   const cross = (device: FeedDevice): StageEffect[] => {
     const d = devs[device];
     const t = d.turn;
-    if (!t || t.ended || !t.cloudReceived || d.pending <= 0) return [];
+    if (!t || t.ended || !t.cloudReceived) return [];
+    if (d.pending <= 0) {
+      // A SIM turn crosses as a labelled SIM packet — never as real bytes.
+      if (d.simPending <= 0) return [];
+      const would = d.simPending;
+      d.simPending = 0;
+      return [{ kind: 'packet', device, dir: 'out', bytes: would, redactions: [...t.redactions], sim: true }];
+    }
     const bytes = d.pending;
     t.bytes += bytes;
     d.pending = 0;
+    d.simPending = 0;
     return [{ kind: 'packet', device, dir: 'out', bytes, redactions: [...t.redactions] }];
   };
 
@@ -234,14 +247,24 @@ export function createLedger() {
     reset,
     resetDevice,
     /** Snapshot baseline: the total so far, without animating it. */
-    baseline(device: FeedDevice, total: number) { devs[device].lastTotal = Math.max(0, total); devs[device].pending = 0; },
+    baseline(device: FeedDevice, total: number, simTotal = 0) {
+      const d = devs[device];
+      d.lastTotal = Math.max(0, total); d.pending = 0;
+      d.lastSimTotal = Math.max(0, simTotal); d.simPending = 0;
+    },
+    simTotal: () => DEVICES.reduce((n, d) => n + devs[d].lastSimTotal, 0),
     keptTotal: () => DEVICES.reduce((n, d) => n + devs[d].kept, 0),
     sentTotal: () => DEVICES.reduce((n, d) => n + devs[d].lastTotal, 0),
-    bytes(device: FeedDevice, total: number, at: number = Date.now()): StageEffect[] {
+    bytes(device: FeedDevice, total: number, at: number = Date.now(), simTotal?: number): StageEffect[] {
       const d = devs[device];
       const delta = total - d.lastTotal;
       d.lastTotal = total;
       if (delta > 0) { d.pending += delta; d.pendingAt = at; }
+      if (simTotal !== undefined) {
+        const simDelta = simTotal - d.lastSimTotal;
+        d.lastSimTotal = simTotal;
+        if (simDelta > 0) { d.simPending += simDelta; d.pendingAt = at; }
+      }
       // Late bytes cross for the open turn only if its cloud receipt is recent;
       // otherwise they wait for the turn that is about to open.
       const t = d.turn;
@@ -373,6 +396,10 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   followBtn.append(make('span', 'mon-follow-dot'), make('span', 'mon-follow-text', 'Follow'), make('kbd', 'mon-kbd', 'F'));
   const live = make('div', 'mon-live', 'Waiting');
   right.append(followBtn, live);
+  let simMode = false;
+  const simBanner = make('div', 'mon-sim-banner', 'SIM · scripted run — no real model calls, nothing leaves this device');
+  simBanner.setAttribute('role', 'status');
+  simBanner.hidden = true;
   top.append(brand, tabs, right);
 
   const stage = make('div', 'mon-stage');
@@ -460,7 +487,9 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   const foot = make('footer', 'mon-foot');
   const sentBox = make('div', 'mon-total mon-total--cloud');
   const sentNum = make('span', 'mon-total-num', bytesShort(0));
-  sentBox.append(make('span', 'mon-total-label', 'Sent to cloud'), sentNum, make('span', 'mon-total-unit', 'total'));
+  const simNote = make('span', 'mon-total-sim', '');
+  simNote.hidden = true;
+  sentBox.append(make('span', 'mon-total-label', 'Sent to cloud'), sentNum, make('span', 'mon-total-unit', 'total'), simNote);
   const keptBox = make('div', 'mon-total mon-total--kept');
   const keptNum = make('span', 'mon-total-num', '0');
   const keptUnit = make('span', 'mon-total-unit', 'tasks');
@@ -474,7 +503,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   empty.append(make('div', 'mon-empty-title', 'Mendcraft'), make('div', 'mon-empty-tag', 'two minds, one boundary'),
     make('div', 'mon-empty-wait', 'Waiting for the canvas…'));
 
-  wrap.append(bg, top, stage, foot, bytes, empty);
+  wrap.append(bg, top, stage, foot, bytes, empty, simBanner);
   root.append(wrap);
 
   // ---- tabs / follow ----
@@ -528,8 +557,11 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     keptNum.textContent = String(kept);
     keptUnit.textContent = kept === 1 ? 'task' : 'tasks';
     const total = ledger.sentTotal();
+    const simTotal = ledger.simTotal();
     sentNum.textContent = bytesShort(total);
-    bytes.textContent = formatFooterBytes(total);
+    simNote.textContent = simTotal > 0 ? `SIM · would send ${bytesShort(simTotal)}` : '';
+    simNote.hidden = simTotal <= 0;
+    bytes.textContent = formatFooterBytes(total, simTotal);
     DEVICES.forEach((d) => {
       const l = ledger.get(d);
       views[d].device.stat.textContent = `${l.kept} task${l.kept === 1 ? '' : 's'} kept on this device`;
@@ -627,7 +659,12 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     }
     const pk = make('div', `mon-packet mon-packet--${e.dir}`);
     pk.setAttribute('data-dir', e.dir);
-    if (e.dir === 'out') {
+    if (e.dir === 'out' && e.sim) {
+      // Nothing left: a scripted turn. Its packet says so, never a real size.
+      pk.setAttribute('data-sim', 'true');
+      pk.setAttribute('data-would-bytes', String(e.bytes));
+      pk.append(make('span', 'mon-packet-size', `SIM · ${bytesShort(e.bytes)}`), make('span', 'mon-packet-note', 'would send · nothing left'));
+    } else if (e.dir === 'out') {
       pk.setAttribute('data-bytes', String(e.bytes));
       pk.append(make('span', 'mon-packet-size', bytesShort(e.bytes)));
       const named = e.redactions.length;
@@ -649,7 +686,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     const done = () => { pk.remove(); flash.remove(); };
     on(pk, 'animationend', done);
     later(lead + PACKET_MS + 8000, done);
-    if (e.dir === 'out') restart(sentBox, 'mon-total-pulse');
+    if (e.dir === 'out' && !e.sim) restart(sentBox, 'mon-total-pulse');
   };
   const run = (effects: StageEffect[]) => { effects.forEach(launch); updateTotals(); };
 
@@ -776,7 +813,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
         run(ledger.handoff(d, m.from, m.to, m.text));
         break;
       }
-      case 'bytes': run(ledger.bytes(touch(m), m.total, m.t)); break;
+      case 'bytes': run(ledger.bytes(touch(m), m.total, m.t, m.simTotal)); break;
       case 'snapshot': {
         // Joining mid-session: show the laptop's lines and states and set the
         // byte baseline, but replay no packets and count no turns.
@@ -787,7 +824,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
           s.lines.forEach((l) => { const [vb, t] = splitTab(l); onLog('laptop', e, vb, t, false); });
           if (s.state in STATE_TEXT) setState('laptop', e === 'gemini' ? views.laptop.cloud : views.laptop.device, s.state);
         });
-        ledger.baseline('laptop', m.total);
+        ledger.baseline('laptop', m.total, m.simTotal ?? 0);
         updateTotals();
         break;
       }
@@ -815,10 +852,19 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       if (had) { clearLaptop(); if (m.kind !== 'snapshot') hello(); }
     }
     if (!isPhoneTagged(m)) currentT = Math.max(currentT, m.t);
+    if (m.sim && !simMode) {
+      // The canvas runs scripted (?sim=1): a persistent banner, and the
+      // header never says Live — nothing here is a real model or a real send.
+      simMode = true;
+      simBanner.hidden = false;
+      wrap.setAttribute('data-sim', 'true');
+      live.textContent = 'SIM';
+      live.setAttribute('data-sim', 'true');
+    }
     if (!empty.hidden) {
       empty.hidden = true;
       wrap.setAttribute('data-idle', 'false');
-      live.textContent = 'Live';
+      live.textContent = simMode ? 'SIM' : 'Live';
       live.setAttribute('data-live', 'true');
     }
     apply(m);

@@ -16,7 +16,8 @@ export interface EngineBar {
   set(engine: EngineId, state: EngineState, line?: string): void;
   /** Animates the arrow between the cards for 1.2 s. */
   handoff(from: EngineId, to: EngineId): void;
-  setCloudBytes(bytes: number): void;
+  /** Real bytes that left; `simBytes` (SIM turns) shows as "SIM · would send N". */
+  setCloudBytes(bytes: number, simBytes?: number): void;
   /** Queue drained: back to idle, but only if the card is still showing Queued. */
   clearQueued(engine: EngineId): void;
   /** A turn ended: any card still Working is finished, so it reads Done. */
@@ -124,7 +125,7 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
       cards[engine].card.setAttribute('data-state', 'idle');
       cards[engine].state.textContent = STATE_TEXT.idle;
     },
-    setCloudBytes(n) { bytes.textContent = formatFooterBytes(n); },
+    setCloudBytes(n, sim = 0) { bytes.textContent = formatFooterBytes(n, sim); },
     setAgents(text) { agents.textContent = text; agents.hidden = !text; },
   };
 }
