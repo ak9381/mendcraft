@@ -9,6 +9,7 @@ import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
+import { readLookToEdit } from './phoneEditLock';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -34,9 +35,11 @@ export function applyGuestSnapshot(
 }
 
 export function startPhoneLookToEdit(
-  handle: { setFacing(facing: boolean): void },
-  opts: { sim?: boolean } = {},
+  handle: { setFacing(facing: boolean | null): void },
+  opts: { sim?: boolean; enabled?: boolean } = {},
 ): () => void {
+  // Look-to-edit is opt-in: when off, never open the front camera for it.
+  if (!(opts.enabled ?? readLookToEdit())) return () => undefined;
   if (opts.sim || typeof document === 'undefined') return () => undefined;
   let tracker: ReturnType<typeof createPresenceTracker> | null = null;
   let cancelled = false;
@@ -50,13 +53,13 @@ export function startPhoneLookToEdit(
       if (cancelled) { t.stop(); return; }
       tracker = t;
     } catch {
-      handle.setFacing(false);
+      handle.setFacing(null);
     }
   };
   const stop = (): void => {
     tracker?.stop();
     tracker = null;
-    handle.setFacing(false);
+    handle.setFacing(null);
   };
   const onVis = (): void => {
     if (document.visibilityState === 'hidden') stop();
