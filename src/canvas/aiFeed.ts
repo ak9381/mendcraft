@@ -9,13 +9,23 @@ import type { EngineState } from './engineBar';
 
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
+/** Which device an event came from. Absent = the laptop (this canvas). */
+export type FeedDevice = 'laptop' | 'iphone' | 'android';
+/** Engines a feed event may name: the laptop's Nano/Gemini, plus Apple
+ *  Foundation Models when an iPhone ran a turn on device. */
+export type FeedEngine = EngineId | 'apple';
+/** Optional device tags on log/state/handoff/bytes. A phone's events carry
+ *  `device` + `deviceLabel` ("iPhone", "Nothing phone"); a `bytes` message
+ *  with a phone `device` is that phone's OWN cloud total, not the laptop's. */
+export interface FeedDeviceTag { device?: FeedDevice; deviceLabel?: string }
+
 /** Snapshot `lines` entries are `verb\ttext`; snapshot `lane` entries are
  *  `handoff\tNano → Gemini: reason` or `redact\ttext`. */
 export type AiFeedMsg = { v: 1; sid: string; t: number } & (
-  | { kind: 'log'; engine: EngineId; verb: string; text: string }
-  | { kind: 'state'; engine: EngineId; state: EngineState; line?: string }
-  | { kind: 'handoff'; from: EngineId; to: EngineId; text: string }
-  | { kind: 'bytes'; total: number }
+  | ({ kind: 'log'; engine: FeedEngine; verb: string; text: string } & FeedDeviceTag)
+  | ({ kind: 'state'; engine: FeedEngine; state: EngineState; line?: string } & FeedDeviceTag)
+  | ({ kind: 'handoff'; from: FeedEngine; to: FeedEngine; text: string } & FeedDeviceTag)
+  | ({ kind: 'bytes'; total: number } & FeedDeviceTag)
   | { kind: 'snapshot'; engines: Record<EngineId, { state: EngineState; line?: string; lines: string[] }>; total: number; lane?: string[] }
   | { kind: 'hello' }
 );
@@ -33,9 +43,9 @@ export interface AiFeed {
 export const FEED_CHANNEL = 'mendcraft-ai';
 export const FEED_KEEP_LINES = 40;
 const LANE_KEEP = 20;
-const NAME: Record<EngineId, string> = { nano: 'Nano', gemini: 'Gemini' };
+const NAME: Record<FeedEngine, string> = { nano: 'Nano', gemini: 'Gemini', apple: 'Apple' };
 
-export function handoffLabel(from: EngineId, to: EngineId, text: string): string {
+export function handoffLabel(from: FeedEngine, to: FeedEngine, text: string): string {
   return `${NAME[from]} → ${NAME[to]}: ${text}`;
 }
 
@@ -43,7 +53,10 @@ export function isAiFeedMsg(d: unknown): d is AiFeedMsg {
   if (!d || typeof d !== 'object') return false;
   const m = d as Record<string, unknown>;
   if (m.v !== 1 || typeof m.sid !== 'string' || typeof m.t !== 'number') return false;
-  const eng = (x: unknown) => x === 'nano' || x === 'gemini';
+  const eng = (x: unknown) => x === 'nano' || x === 'gemini' || x === 'apple';
+  const tagOk = (m.device === undefined || m.device === 'laptop' || m.device === 'iphone' || m.device === 'android')
+    && (m.deviceLabel === undefined || typeof m.deviceLabel === 'string');
+  if (!tagOk) return false;
   switch (m.kind) {
     case 'log': return eng(m.engine) && typeof m.verb === 'string' && typeof m.text === 'string';
     case 'state': return eng(m.engine) && typeof m.state === 'string';
@@ -97,12 +110,17 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
 
   return {
     publish(m) {
+      // A phone's events pass straight through: they never touch the laptop's
+      // engine cards, lane or byte total (the snapshot stays laptop-only).
+      if (isPhoneTagged(m)) { send(m); return; }
       if (m.kind === 'log') {
+        if (m.engine === 'apple') { send(m); return; }
         const l = engines[m.engine].lines;
         l.push(`${m.verb}\t${m.text}`);
         if (l.length > FEED_KEEP_LINES) l.splice(0, l.length - FEED_KEEP_LINES);
         if (m.verb === 'redact') pushLane(`redact\t${m.text}`);
       } else if (m.kind === 'state') {
+        if (m.engine === 'apple') { send(m); return; }
         engines[m.engine].state = m.state;
         if (m.line !== undefined) engines[m.engine].line = m.line;
       } else if (m.kind === 'bytes') {
@@ -114,4 +132,10 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
     },
     onHello(f) { helloListeners.push(f); },
   };
+}
+
+/** True when a message is tagged as coming from a phone (not this laptop). */
+export function isPhoneTagged(m: object): boolean {
+  const d = (m as { device?: unknown }).device;
+  return d === 'iphone' || d === 'android';
 }

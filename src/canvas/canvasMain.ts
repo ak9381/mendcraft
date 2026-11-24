@@ -11,6 +11,8 @@ import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/a
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
+import { activePeople } from '../privacy/directory';
+import { createPhoneAiForwarder } from './phoneAiFeed';
 
 const params = new URLSearchParams(location.search);
 if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
@@ -62,6 +64,19 @@ const engines = createEngines({
   sim: params.has('sim'),
 });
 
+// Phone shell: forward this phone's AI terminal activity to the paired
+// laptop's AI monitor (compact, redacted, ≤5/s; dropped with no session).
+// The "nano" terminal is Apple on an iPhone with Apple Intelligence, the
+// Android on-device model when ML Kit has one, else no model ('rules').
+const phonePlatform = capacitor?.getPlatform?.() === 'ios' ? 'ios' as const : 'android' as const;
+const phoneAiFeed = phoneShell
+  ? createPhoneAiForwarder({
+      platform: phonePlatform,
+      localEngine: () => (apple.ready ? 'apple' : apple.androidNano ? 'nano' : 'rules'),
+      people: () => activePeople(),
+    })
+  : undefined;
+
 const root = document.getElementById('canvas')!;
 let handle: ReturnType<typeof mountCanvas> | null = null;
 const voice = createVoiceController(
@@ -76,6 +91,7 @@ handle = mountCanvas(root, {
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
   phoneShell,
+  phoneAiFeed,
   routeBadge: phoneShell
     ? phoneRouteBadge({
         appleReady: !!apple.plugin,
@@ -133,7 +149,8 @@ afterFirstPaint(() => {
     startPhoneLookToEdit(handle, { sim: params.has('sim') });
     startPhoneRelayGuest(handle, {
       sim: params.has('sim'),
-      platform: capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android',
+      platform: phonePlatform,
+      aiForwarder: phoneAiFeed,
     });
   }
 });

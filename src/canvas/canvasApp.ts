@@ -86,7 +86,8 @@ import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './edi
 import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
-import { createAiFeed } from './aiFeed';
+import { createAiFeed, type AiFeed } from './aiFeed';
+import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
 import { routeLine } from './routeLine';
@@ -126,6 +127,9 @@ export interface CanvasOptions {
   sim?: boolean;
   /** Desktop hub: run Gemini on a redacted prompt for a connected phone. */
   privacyGemini?: (redacted: string) => Promise<string>;
+  /** Phone shell only: a tap that forwards this phone's AI terminal activity
+   *  to the paired laptop's AI monitor (see phoneAiFeed.ts). */
+  phoneAiFeed?: AiFeed;
   /** Real WiZ bridge client; defaults to one pointed at the configured bridge
    *  URL/token. Pass a fake in tests. Unused when `sim` is set. */
   wizClient?: WizClient;
@@ -361,6 +365,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // engine also pins the AI panel open so the reason stays readable.
   // Engines whose failure/queued state must keep the AI panel open (with the reason).
   const aiHold = new Set<EngineId>();
+  // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
+  // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
+  const aiFeed = createAiFeed();
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
@@ -370,7 +377,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handoff: (from, to) => engineBar.handoff(from, to),
     setCloudBytes: (b) => engineBar.setCloudBytes(b),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
-  } : undefined, createAiFeed());
+  } : undefined, opts.phoneAiFeed ? teeFeed(aiFeed, opts.phoneAiFeed) : aiFeed);
   // The bar replaces the swarm pill on desktop: mirror its agent summary
   // (minus the bytes tail, which the bar shows from the ledger) into the bar.
   const swarmPillEl = swarmEl.querySelector<HTMLElement>('.mc-swarm-pill');
@@ -439,9 +446,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     publishBoardTransfer(frameId, next, t);
   }
 
-  /** A phone 'announce' (which side it is on) or 'transfer' (a tile sent back),
-   *  intercepted before dispatchRelayCommand. Both carry JSON in cmd.text. */
-  function handlePhoneDeviceCommand(kind: 'announce' | 'transfer', text: string): void {
+  // Phones that announced themselves → their AI activity on the laptop's monitor.
+  const phoneAi = createPhoneAiRepublisher({ feed: aiFeed });
+  /** A phone 'announce' (which side it is on), 'transfer' (a tile sent back) or
+   *  'aiEvent' (its AI activity line), intercepted before dispatchRelayCommand.
+   *  All carry JSON in cmd.text. */
+  function handlePhoneDeviceCommand(kind: 'announce' | 'transfer' | 'aiEvent', text: string): void {
+    if (kind === 'aiEvent') {
+      // Tagged by device; display only — never ledgered, never counted in the
+      // laptop's cloud total.
+      phoneAi.handle(text);
+      return;
+    }
     if (kind === 'announce') {
       let platform: PhonePlatform | null = null;
       let wantedSide: Side | null = null;
@@ -453,7 +469,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (!platform) return;
-      pairFirst.addPhone({ id: platform, label: platform === 'android' ? 'Nothing phone' : 'iPhone' });
+      pairFirst.addPhone({ id: platform, label: phoneAi.announce(platform) });
       // Honour an explicit side; otherwise place it on its default side only if
       // that side is empty — never overwrite a manual swap the user already made.
       let next = screenLayout;
@@ -1678,7 +1694,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // on) and 'transfer' (a tile sent back from a phone). Both carry JSON in
         // cmd.text; the host applies the transfer and republishes via state so
         // the OTHER phone sees it too.
-        if (cmd.kind === 'announce' || cmd.kind === 'transfer') {
+        if (cmd.kind === 'announce' || cmd.kind === 'transfer' || cmd.kind === 'aiEvent') {
           handlePhoneDeviceCommand(cmd.kind, cmd.text ?? '');
           return;
         }

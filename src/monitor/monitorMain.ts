@@ -4,7 +4,7 @@
 // it never invents a line or a number. Built with createElement/textContent
 // only so it runs under the suite's node-only fake DOM.
 import './monitor.css';
-import { FEED_CHANNEL, handoffLabel, isAiFeedMsg, type AiFeedMsg, type FeedChannel } from '../canvas/aiFeed';
+import { FEED_CHANNEL, handoffLabel, isAiFeedMsg, isPhoneTagged, type AiFeedMsg, type FeedChannel } from '../canvas/aiFeed';
 import type { EngineId } from '../canvas/aiTurn';
 import type { EngineState } from '../canvas/engineBar';
 import { formatFooterBytes } from '../canvas/modelPanels';
@@ -103,8 +103,8 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null): Mo
 
   const apply = (m: AiFeedMsg) => {
     switch (m.kind) {
-      case 'log': addLine(m.engine, m.verb, m.text); if (m.verb === 'redact') addLane('redact', m.text); break;
-      case 'state': if (m.state in STATE_TEXT) setState(m.engine, m.state); break;
+      case 'log': if (m.engine === 'apple') break; addLine(m.engine, m.verb, m.text); if (m.verb === 'redact') addLane('redact', m.text); break;
+      case 'state': if (m.engine === 'apple') break; if (m.state in STATE_TEXT) setState(m.engine, m.state); break;
       case 'handoff': addLane('handoff', handoffLabel(m.from, m.to, m.text)); break;
       case 'bytes': setTotal(m.total); break;
       case 'snapshot':
@@ -125,6 +125,9 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null): Mo
     if (!isAiFeedMsg(e.data)) return;
     const m = e.data;
     if (m.kind === 'hello') return;
+    // Phone-tagged events (device: iphone/android) are for the per-device view;
+    // this two-column layout is laptop-only, so never mix them in here.
+    if (isPhoneTagged(m)) return;
     if (currentSid !== m.sid) {
       if (currentSid !== null && m.t < currentT) return;
       const had = currentSid !== null;

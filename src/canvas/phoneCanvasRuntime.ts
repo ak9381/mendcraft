@@ -11,6 +11,8 @@ import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
+import type { RelayCommand } from '../relay/protocol';
+import type { PhoneAiForwarder } from './phoneAiFeed';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -91,7 +93,7 @@ export function startPhoneLookToEdit(
 
 export function startPhoneRelayGuest(
   handle: { showRemoteBoard(plan: SurfacePlan): void },
-  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform } = {},
+  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform; aiForwarder?: Pick<PhoneAiForwarder, 'bind'> } = {},
 ): () => void {
   if (opts.sim || typeof window === 'undefined') return () => undefined;
   const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
@@ -99,9 +101,15 @@ export function startPhoneRelayGuest(
   const platform = opts.platform ?? 'android';
   let stopSession: (() => Promise<void>) | null = null;
 
-  const bindSession = (session: { onSnapshot(cb: (snap: ControlSnapshot) => void): void; close(): Promise<void> }): void => {
+  const bindSession = (session: {
+    onSnapshot(cb: (snap: ControlSnapshot) => void): void;
+    close(): Promise<void>;
+    sendCommand(cmd: RelayCommand): Promise<void>;
+  }): void => {
     session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
-    stopSession = () => session.close();
+    // This phone's AI activity now reaches the laptop's monitor (display only).
+    opts.aiForwarder?.bind(session);
+    stopSession = () => { opts.aiForwarder?.bind(null); return session.close(); };
   };
 
   const saved = loadPhonePair(storage);
