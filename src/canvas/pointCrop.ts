@@ -1,0 +1,125 @@
+// Point-to-connect geometry (pure, DOM-free). She points at a real device;
+// we crop the camera frame along the pointing ray — index knuckle (MediaPipe
+// landmark 5) → index fingertip (8) — so only the patch ahead of her finger
+// goes to identifyDevice, not the whole room. No hand → the full frame.
+//
+// Landmarks are normalised 0–1 in RAW camera space (what the <video> frame
+// holds). Selfie-mirrored landmarks (presence / overlay space) pass
+// { mirrored: true } and are flipped back first.
+
+export interface Pt { x: number; y: number }
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/** Crop side as a fraction of the frame's long side (capped at the short side). */
+export const POINT_CROP_FRACTION = 0.38;
+/** Longest side of the JPEG that is sent to identify. */
+export const POINT_CROP_MAX_PX = 512;
+/** How long the palm must hold still before the frame is taken. */
+export const POINT_HOLD_MS = 600;
+
+const INDEX_MCP = 5;
+const INDEX_TIP = 8;
+
+const finite = (p: Pt | undefined): p is Pt => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+
+function squareAt(cx: number, cy: number, frameW: number, frameH: number): Rect {
+  const side = Math.min(frameW, frameH, Math.round(POINT_CROP_FRACTION * Math.max(frameW, frameH)));
+  const x = Math.round(Math.min(Math.max(cx - side / 2, 0), frameW - side));
+  const y = Math.round(Math.min(Math.max(cy - side / 2, 0), frameH - side));
+  return { x, y, w: side, h: side };
+}
+
+/** The point (normalised, raw camera space) the crop is aimed at: half a crop
+ *  ahead of the fingertip along MCP → tip. Null when there is no usable hand. */
+export function rayTarget(
+  landmarks: readonly Pt[] | null | undefined,
+  frameW: number,
+  frameH: number,
+  opts: { mirrored?: boolean } = {},
+): Pt | null {
+  if (!landmarks || landmarks.length <= INDEX_TIP) return null;
+  const mcp = landmarks[INDEX_MCP], tip = landmarks[INDEX_TIP];
+  if (!finite(mcp) || !finite(tip) || frameW <= 0 || frameH <= 0) return null;
+  const fx = (p: Pt) => (opts.mirrored ? 1 - p.x : p.x) * frameW;
+  const tx = fx(tip), ty = tip.y * frameH;
+  const dx = tx - fx(mcp), dy = ty - mcp.y * frameH;
+  const len = Math.hypot(dx, dy);
+  const side = Math.min(frameW, frameH, Math.round(POINT_CROP_FRACTION * Math.max(frameW, frameH)));
+  const ahead = len > 1e-6 ? side / 2 : 0;
+  const cx = tx + (len > 1e-6 ? (dx / len) * ahead : 0);
+  const cy = ty + (len > 1e-6 ? (dy / len) * ahead : 0);
+  return { x: cx / frameW, y: cy / frameH };
+}
+
+/** A square crop (~38 % of the frame) just ahead of the fingertip, clamped
+ *  inside the frame. Full frame when there is no hand. Pixel units. */
+export function cropAlongRay(
+  landmarks: readonly Pt[] | null | undefined,
+  frameW: number,
+  frameH: number,
+  opts: { mirrored?: boolean } = {},
+): Rect {
+  const t = rayTarget(landmarks, frameW, frameH, opts);
+  if (!t) return { x: 0, y: 0, w: frameW, h: frameH };
+  return squareAt(t.x * frameW, t.y * frameH, frameW, frameH);
+}
+
+/** Hands off: a click picked a point (normalised, raw camera space). */
+export function cropAroundPoint(pt: Pt | null | undefined, frameW: number, frameH: number): Rect {
+  if (!finite(pt ?? undefined) || frameW <= 0 || frameH <= 0) return { x: 0, y: 0, w: frameW, h: frameH };
+  return squareAt(pt!.x * frameW, pt!.y * frameH, frameW, frameH);
+}
+
+/** A frame point (normalised) in the crop's own 0–1 coordinates, clamped —
+ *  the `pointer` hint identifyDevice gets alongside the cropped photo. */
+export function pointerInCrop(pt: Pt, crop: Rect, frameW: number, frameH: number): Pt {
+  const c = (n: number) => Math.min(1, Math.max(0, n));
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    x: r2(c((pt.x * frameW - crop.x) / Math.max(1, crop.w))),
+    y: r2(c((pt.y * frameH - crop.y) / Math.max(1, crop.h))),
+  };
+}
+
+/** Downscale (never up) so the long side is ≤ max. */
+export function fitWithin(w: number, h: number, max = POINT_CROP_MAX_PX): { w: number; h: number } {
+  const s = Math.min(1, max / Math.max(w, h, 1));
+  return { w: Math.round(w * s), h: Math.round(h * s) };
+}
+
+/** Decoded size of a base64 payload — the bytes a photo really costs on the wire
+ *  (the SDK sends them as inline data). */
+export function base64ByteLength(b64: string): number {
+  if (!b64) return 0;
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return Math.floor((b64.length * 3) / 4) - pad;
+}
+
+export interface SteadyHold {
+  /** Feed the palm (normalised) each frame; true exactly once, when it has
+   *  stayed within `tolerance` of where it settled for ≥ holdMs. */
+  update(palm: Pt | null, now: number): boolean;
+  reset(): void;
+}
+
+export function createSteadyHold(o: { holdMs?: number; tolerance?: number } = {}): SteadyHold {
+  const holdMs = o.holdMs ?? POINT_HOLD_MS;
+  const tol = o.tolerance ?? 0.03;
+  let anchor: Pt | null = null;
+  let since = 0;
+  let fired = false;
+  return {
+    update(palm, now) {
+      if (fired) return false;
+      if (!palm || !finite(palm)) { anchor = null; return false; }
+      if (!anchor || Math.hypot(palm.x - anchor.x, palm.y - anchor.y) > tol) {
+        anchor = { x: palm.x, y: palm.y };
+        since = now;
+        return false;
+      }
+      if (now - since >= holdMs) { fired = true; return true; }
+      return false;
+    },
+    reset() { anchor = null; since = 0; fired = false; },
+  };
+}

@@ -11,6 +11,8 @@ export interface LedgerEntry {
 export interface LedgerRecordInput {
   engine: string;
   sentText?: string;
+  /** Non-text bytes that left with this turn (e.g. a photo crop's decoded size). */
+  extraBytes?: number;
   at?: number;
 }
 
@@ -74,7 +76,8 @@ export function createCanvasLedger(): CanvasLedger {
   return {
     record(input: LedgerRecordInput): LedgerEntry {
       const isNano = input.engine.toLowerCase() === 'nano';
-      const bytes = isNano ? 0 : utf8ByteLength(input.sentText ?? '');
+      const extra = Number.isFinite(input.extraBytes) ? Math.max(0, Math.round(input.extraBytes!)) : 0;
+      const bytes = isNano ? 0 : utf8ByteLength(input.sentText ?? '') + extra;
       const at = input.at ?? (typeof Date !== 'undefined' ? Date.now() : 0);
 
       const entry: LedgerEntry = {

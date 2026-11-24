@@ -31,6 +31,7 @@ export type Route =
   | { name: 'teach' } | { name: 'teachList' }
   | { name: 'showAi' } | { name: 'monitor' } | { name: 'hideAi' }
   | { name: 'packIntent'; intent: IntentKey }
+  | { name: 'pointConnect' }
   | { name: 'gimbalScan' } | { name: 'gimbal' }
   | { name: 'kannada' }
   | { name: 'history' }
@@ -45,6 +46,8 @@ export type Route =
   | { name: 'openEnded' };
 export type RouteName = Route['name'];
 
+const POINT_CONNECT_RE = /\bconnect (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b/i;
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -56,6 +59,10 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) return { name: 'hideAi' };
   // Active language pack: a spoken phrase routes to the same intents first.
   if (world.pack) { const intent = routePackPhrase(text, world.pack); if (intent) return { name: 'packIntent', intent }; }
+  // Point-to-connect: hold a point at a real device; a frame is cropped along
+  // the finger and identified. Before the gimbal routes, which also claim
+  // "connect what I'm pointing at" for the iPhone gimbal's point mode.
+  if (POINT_CONNECT_RE.test(text)) return { name: 'pointConnect' };
   // Gimbal phrases: follow my hands / hold still / point / scan the room.
   const gimbal = parseGimbalSpeech(text);
   if (gimbal === 'scan') return { name: 'gimbalScan' };

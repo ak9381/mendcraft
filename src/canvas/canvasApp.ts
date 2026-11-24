@@ -16,7 +16,11 @@ import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
-import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { byName, foundAfterScan, mergeTiles, pointConnectFromIdentity, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
+import { createSteadyHold, cropAlongRay, cropAroundPoint, pointerInCrop, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
+import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
+import { palmCenter } from './handFeel';
+import { buildIdentifyPrompt } from '../devices/identify';
 import { openEndedAsk } from './openEndedAsk';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -88,7 +92,7 @@ import { createAiFeed } from './aiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
 import { routeLine } from './routeLine';
-import { pickNextStepsOnDevice } from '../ai/hybrid';
+import { identifyDevice, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -1213,7 +1217,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
-  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput } = {}): void {
+  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
@@ -1224,7 +1228,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // name said aloud (e.g. "floor plan for Mrs Sharma's flat") still shows
     // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
-    ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
+    // extraBytes: a photo crop that went with the prompt (point-to-connect).
+    ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '', extraBytes: s.sent ? ctx.extraBytes : 0 });
     ledgerTotalRender();
     panels.setFooterBytes(ledger.totals().aiBytes);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
@@ -1494,15 +1499,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
-  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean } = {}): Promise<boolean> {
+  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; note?: string } = {}): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
       const f = reg.get(frameId); if (!f) return false;
-      const engine = engineFor(turn.sent.engine, turn.json);
-      if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
-      turn.sent.sim = engine.sim;
-      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length });
+      // identified: the model work already happened (identifyDevice) and its
+      // honest route/sim label is on turn.sent; the tile is the deterministic
+      // mapping of that identity, replayed into the ghost — no second call.
+      const engine = o.identified ? turn.engine : engineFor(turn.sent.engine, turn.json);
+      if (!o.identified) {
+        if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
+        turn.sent.sim = engine.sim;
+      }
+      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes });
+      if (o.note) panels.forEngine(turn.sent.engine).log('note', o.note);
       if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
       const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
         ghost(frameId, parsePartialPlan(chunk));
@@ -1542,11 +1553,117 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     } finally { turnBusy = false; }
   }
 
+  // ---- point-to-connect: hold a point (or click, hands off) → one frame →
+  // crop along the finger → identifyDevice (Nano first, Gemini cloud second)
+  // → the mapped tile through the normal review. Never a default device.
+  const POINT_UTTERANCE = 'connect what I am pointing at';
+  const POINT_WAIT_MS = 20_000;
+  let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void } | null = null;
+  function endPointWait(): void {
+    if (!pointWait) return;
+    clearTimeout(pointWait.timer);
+    pointWait.cleanup();
+    pointWait = null;
+  }
+  /** Fed from the hand frame loop (raw camera-space hands) while a point is armed. */
+  function feedPointWait(cam: readonly (readonly CropPt[])[], now: number): void {
+    if (!pointWait) return;
+    const h = cam[0];
+    const palm = h && h.length > 17 ? palmCenter(h as Parameters<typeof palmCenter>[0]) : null;
+    if (!pointWait.steady.update(palm, now)) return;
+    const fid = pointWait.frameId;
+    endPointWait();
+    void capturePoint(fid, h.map((p) => ({ x: p.x, y: p.y })), null);
+  }
   async function pointTurn(frameId: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
-    const turn = pointConnect('speaker', { frameTitle: f.title, sim: simEnv() });
-    await connectTurn(frameId, 'connect what I am pointing at', turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess', { photoNote: true });
+    endPointWait();
+    if (opts.sim) {
+      // ?sim=1: no camera. A scripted identity (a WiZ lamp), labelled SIM.
+      say('Point at it and hold still.');
+      await finishPoint(frameId, { identity: SIM_POINT_IDENTITY, source: 'on-device', ms: 0 }, { cropBytes: 0, sim: true });
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (pointWait?.frameId !== frameId) return;
+      endPointWait();
+      say('I didn’t catch a steady point — say it again, or name the device.');
+    }, POINT_WAIT_MS);
+    if (handsOn) {
+      pointWait = { frameId, steady: createSteadyHold(), timer, cleanup: () => {} };
+      say('Point at it and hold still.');
+      return;
+    }
+    // Hands off: one click on the canvas picks the point (the screen is a
+    // mirror of the camera, so x flips), then ONE frame is captured.
+    const onClick = (e: MouseEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      const w = window.innerWidth || 1, h = window.innerHeight || 1;
+      const pt = { x: 1 - e.clientX / w, y: e.clientY / h };
+      endPointWait();
+      void capturePoint(frameId, null, pt);
+    };
+    viewport.addEventListener('click', onClick, { capture: true });
+    pointWait = { frameId, steady: createSteadyHold(), timer, cleanup: () => viewport.removeEventListener('click', onClick, { capture: true }) };
+    say('Hands are off — click where the device is (as in a mirror) and I’ll take one photo.');
+  }
+  async function capturePoint(frameId: string, landmarks: CropPt[] | null, clickPt: CropPt | null): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    // Reuse the hand tracker's live camera; only hands-off opens it once.
+    let video = findLiveVideo();
+    let once: Awaited<ReturnType<typeof openCameraOnce>> = null;
+    if (!video) { once = await openCameraOnce(); video = once?.video ?? null; }
+    let shot: ReturnType<typeof captureCrop> = null;
+    let pointer: CropPt | undefined;
+    try {
+      if (video) {
+        const W = video.videoWidth, H = video.videoHeight;
+        const rect = landmarks ? cropAlongRay(landmarks, W, H) : cropAroundPoint(clickPt, W, H);
+        const aim = landmarks ? rayTarget(landmarks, W, H) : clickPt;
+        pointer = aim ? pointerInCrop(aim, rect, W, H) : undefined;
+        shot = captureCrop(video, rect);
+      }
+    } finally { once?.stop(); }
+    if (!shot) { say('I couldn’t get a camera frame — try naming the device instead.'); return; }
+    say('Got it — looking at what you pointed at…');
+    const hint = pointer ? { pointer } : undefined;
+    const trace: VisionTrace = {};
+    const r = await identifyDevice(shot, hint, trace).catch(() => null);
+    await finishPoint(frameId, r, { cropBytes: shot.bytes, sim: false, cloudTried: !!trace.cloudTried, prompt: buildIdentifyPrompt(hint) });
+  }
+  async function finishPoint(frameId: string, r: PointIdentifyResult | null, o: { cropBytes: number; sim: boolean; cloudTried?: boolean; prompt?: string }): Promise<void> {
+    const f = reg.get(frameId); if (!f) return;
+    const where = r ? (r.source === 'cloud' ? 'Gemini · cloud' : 'Nano · on device') : null;
+    const out = pointConnectFromIdentity(r, {
+      frameTitle: f.title, sim: o.sim, cropBytes: o.cropBytes, prompt: o.prompt,
+      devices: deviceHints(),
+      onBoard: (surfaces[frameId]?.tiles ?? []).flatMap((t) => (isDeviceTile(t) ? [t.deviceId] : [])),
+    });
+    const eng = r?.source === 'cloud' ? 'gemini' : 'nano';
+    const idNote = r
+      ? `${o.sim ? 'SIM · ' : ''}identify: ${r.identity.label} (${r.identity.kind}${r.identity.brand ? `, ${r.identity.brand}` : ''}) · ${Math.round(r.identity.confidence * 100)}% · ${where}${r.ms ? ` · ${r.ms} ms` : ''}`
+      : null;
+    if (!out.ok) {
+      showAi(true);
+      aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
+      panels.show();
+      if (idNote) panels.forEngine(eng).log('note', idNote);
+      // Still honest about the photo: if it went to the cloud, it's on the ledger.
+      const sentCloud = r ? r.source === 'cloud' : !!o.cloudTried;
+      if (sentCloud && o.cropBytes > 0) {
+        ledger.record({ engine: 'gemini', sentText: o.prompt ?? '', extraBytes: o.cropBytes });
+        ledgerTotalRender();
+        panels.setFooterBytes(ledger.totals().aiBytes);
+        panels.forEngine('gemini').log('note', `Gemini · cloud — 1 photo crop of what you pointed at (${o.cropBytes >= 1024 ? `${(o.cropBytes / 1024).toFixed(1)} KB` : `${o.cropBytes} B`}), not stored`);
+      } else if (!r) {
+        panels.forEngine('nano').log('note', 'identify: no answer · nothing left this device');
+      }
+      say(out.message);
+      return;
+    }
+    await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
+      { identified: true, extraBytes: out.extraBytes, photoNote: o.sim, note: idNote ?? undefined });
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
@@ -2102,6 +2219,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         const cam = cameraHandsFromSelfie(hands);
         handPointer?.update(cam, now);
         teachPanel.matchFrame(hands, now);
+        feedPointWait(cam, now);
       },
     },
   });
@@ -2193,6 +2311,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true;
       case 'packIntent': return runIntent(r.intent);
       // On the web there is no gimbal — handleSpeech answers with the honest why.
+      case 'pointConnect': {
+        const id = focusId ?? lastFocus;
+        if (!id) { say('Open a board first, then point at the device.'); return true; }
+        void pointTurn(id);
+        return true;
+      }
       case 'gimbalScan': void scanRoom(text); return true;
       case 'gimbal': return inputs.handleSpeech(text);
       case 'kannada': addKannada(); return true;
@@ -2464,6 +2588,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     morphFlow?.destroy();
     morphCard.destroy();
     handPointer?.destroy();
+    endPointWait();
     stopReplay();
     reviewDialog.destroy();
     swarm.destroy();

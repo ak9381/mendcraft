@@ -2030,22 +2030,32 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
 
 export interface FrameImage { mimeType: string; dataBase64: string }
 
+/** Set by a vision call when the photo may have left the device (cloud route
+ *  or cloud twin tried) — so a caller's ledger stays honest even when the
+ *  answer is unusable and identifyDevice returns null. */
+export interface VisionTrace { cloudTried?: boolean }
+
 /** Multimodal hybrid call: PREFER_ON_DEVICE first, cloud twin if it throws. */
 async function callVision(
   hybridModel: MultimodalGenModel | null | undefined,
   cloud: MultimodalGenModel | null | undefined,
   parts: Array<string | ImagePart>,
   label: string,
+  trace?: VisionTrace,
 ): Promise<ModelResponse | null> {
   if (hybridModel) {
     try {
       const { response } = await withTimeout(hybridModel.generateContent(parts), ON_DEVICE_TIMEOUT_MS, label);
+      if (trace && sourceOf(response) === 'cloud') trace.cloudTried = true;
       return response;
     } catch (err) {
+      // PREFER_ON_DEVICE without a ready Nano already went to the cloud.
+      if (trace && deviceModelStatus !== 'ready') trace.cloudTried = true;
       noteError(`${label} (hybrid)`, err);
     }
   }
   if (!cloud) return null;
+  if (trace) trace.cloudTried = true;
   try {
     const r = await withTimeout(cloud.generateContent(parts), CLOUD_GENERATE_TIMEOUT_MS * 2, `${label} cloud`);
     return { text: () => r.response.text(), inferenceSource: 'in_cloud' };
@@ -2062,11 +2072,12 @@ const imagePart = (f: FrameImage): ImagePart => ({ inlineData: { mimeType: f.mim
 export async function identifyDevice(
   frame: FrameImage,
   hint?: IdentifyHint,
+  trace?: VisionTrace,
 ): Promise<{ identity: DeviceIdentity; source: Source; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models) return null;
-  const response = await callVision(models.deviceSee, models.deviceSeeCloud, [buildIdentifyPrompt(hint), imagePart(frame)], 'device identify');
+  const response = await callVision(models.deviceSee, models.deviceSeeCloud, [buildIdentifyPrompt(hint), imagePart(frame)], 'device identify', trace);
   const identity = response ? parseIdentity(extractJson(response.text())) : null;
   if (!identity) return null;
   const source = sourceOf(response!);

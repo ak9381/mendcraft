@@ -17,7 +17,7 @@ import {
   type SurfaceEngine,
   type SurfaceRequest,
 } from './aiTurn';
-import { deviceNameIn, identityFromWords, isAddDevicePhrase } from '../devices/identify';
+import { deviceNameIn, identityFromWords, isAddDevicePhrase, type DeviceIdentity } from '../devices/identify';
 import type { FoundDevice } from '../devices/addDeviceFlow';
 
 export type DeviceGuess =
@@ -52,7 +52,7 @@ export type DeviceTileSpec =
   | { type: 'music'; deviceId: string; label: string }
   | { type: 'switch'; deviceId: string; label: string };
 
-function mapKindToTile(kind: string, label: string, explicitId?: string): DeviceTileSpec {
+export function mapKindToTile(kind: string, label: string, explicitId?: string): DeviceTileSpec {
   const k = kind.toLowerCase();
   const baseLabel = label.trim() || 'Device';
   if (k === 'speaker' || k === 'music') {
@@ -136,6 +136,94 @@ export function pointConnect(
     plan,
     request,
     engine: scriptedEngine('gemini', json),
+  };
+}
+
+// ---- point-to-connect from a REAL identification ---------------------------
+
+/** What identifyDevice (Nano first, Gemini cloud second) said about the crop. */
+export interface PointIdentifyResult {
+  identity: DeviceIdentity;
+  /** Where it really ran: 'on-device' (Nano) or 'cloud' (Gemini). */
+  source: string;
+  ms?: number;
+}
+
+export type PointOutcome =
+  | { ok: true; turn: ConnectTurnResult; identity: DeviceIdentity; /** Photo bytes that left (0 on device). */ extraBytes: number }
+  | { ok: false; message: string };
+
+export const POINT_UNSURE_MESSAGE = 'I couldn’t tell what you’re pointing at — try naming it.';
+export const POINT_MIN_CONFIDENCE = 0.5;
+
+/** ?sim=1: the scripted identity — a WiZ lamp, never a speaker. */
+export const SIM_POINT_IDENTITY: DeviceIdentity = {
+  kind: 'smart-bulb', brand: 'WiZ', model: '', label: 'WiZ lamp', confidence: 0.92,
+};
+
+function fmtBytes(n: number): string {
+  return n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`;
+}
+
+/** Identity → the tile kind mapKindToTile understands, or null when it isn't
+ *  something a tile can control. No default: an unknown is never a speaker. */
+function pointKind(id: DeviceIdentity): string | null {
+  const k = id.kind.toLowerCase();
+  if (/\bwiz\b/i.test(id.brand) || /\bwiz\b/i.test(id.label)) return 'lamp';
+  if (k === 'smart-bulb' || k === 'lamp' || k === 'bulb') return 'lamp';
+  if (k === 'speaker') return 'speaker';
+  if (k === 'plug' || k === 'fan' || k === 'tv' || k === 'ac') return k;
+  return null;
+}
+
+/** Turn a pointed-at identification into ONE proposed tile, labelled with
+ *  where the identify really ran. Null / low confidence / unknown kind → a
+ *  message and no proposal. A known device of the same kind already on the
+ *  canvas wins (so the tile drives the real WiZ lamp), preferring one that
+ *  isn't on this board yet. */
+export function pointConnectFromIdentity(
+  result: PointIdentifyResult | null,
+  opts: { frameTitle?: string; sim?: boolean; cropBytes?: number; devices?: DeviceHint[]; onBoard?: string[]; prompt?: string } = {},
+): PointOutcome {
+  if (!result || !(result.identity.confidence >= POINT_MIN_CONFIDENCE)) return { ok: false, message: POINT_UNSURE_MESSAGE };
+  const { identity } = result;
+  const kind = pointKind(identity);
+  if (!kind) return { ok: false, message: POINT_UNSURE_MESSAGE };
+
+  const want = mapKindToTile(kind, identity.label).type;
+  const same = (opts.devices ?? []).filter((d) => mapKindToTile(d.kind, d.label, d.id).type === want);
+  const onBoard = new Set(opts.onBoard ?? []);
+  const known = same.find((d) => !onBoard.has(d.id)) ?? same[0];
+  const tile = known ? mapKindToTile(known.kind, known.label, known.id) : mapKindToTile(kind, identity.label);
+
+  const title = opts.frameTitle ?? 'This room';
+  const plan: SurfacePlan = { kind: 'room', title, tiles: [tile] };
+  const json = JSON.stringify(plan, null, 2);
+
+  const sim = !!opts.sim;
+  const cloud = result.source === 'cloud';
+  const bytes = cloud ? Math.max(0, Math.round(opts.cropBytes ?? 0)) : 0;
+  const sentReceipt = cloud ? `1 photo crop of what you pointed at (${fmtBytes(bytes)}), not stored` : null;
+  const line = cloud
+    ? `Gemini · cloud — ${sentReceipt}`
+    : 'Nano · on device — the photo never left this device';
+  const sent: SentInfo = {
+    engine: cloud ? 'gemini' : 'nano',
+    prompt: opts.prompt ?? `Name the device in this photo crop of what she is pointing at.`,
+    sent: sentReceipt,
+    routeLine: sim ? `SIM · ${line}` : line,
+    sim,
+  };
+  const request: SurfaceRequest = {
+    utterance: 'connect what I am pointing at',
+    frameTitle: title,
+    devices: [{ id: tile.deviceId, label: tile.label, kind: tile.type }],
+  };
+  return {
+    ok: true,
+    identity,
+    extraBytes: bytes,
+    turn: { sent, json, plan, request, engine: scriptedEngine(sent.engine, json) },
   };
 }
 
