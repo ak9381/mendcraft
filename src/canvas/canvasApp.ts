@@ -7,6 +7,7 @@ import { MessageProcessor } from '@a2ui/web_core/v0_9';
 import { cameraTransform, fitRects, focusOnInsets, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
 import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav';
 import { mountZoomHud } from './zoomHud';
+import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
 import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { parseCanvasCommand, resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
@@ -795,6 +796,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
+      if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
+        frameId: f.id,
+        getZoom: () => camera.z,
+        onMove: (id, dx, dy) => {
+          const cur = reg.get(id); if (!cur) return;
+          reg.setRect(id, { ...cur.rect, x: cur.rect.x + dx, y: cur.rect.y + dy });
+          const moved = reg.get(id); if (!moved) return;
+          el!.style.left = `${moved.rect.x}px`; el!.style.top = `${moved.rect.y}px`;
+        },
+        onEnd: () => { sync(); persist(); },
+      });
       if (surfaces[f.id]) queueMicrotask(() => {
         renderSurface(f.id);
         if (f.id === focusId) editBoard.setFocus(focusId, !!surfaces[f.id]?.tiles.length);
@@ -2135,7 +2147,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const tile = t.closest<HTMLElement>('[data-mc-tile], .mc-edit-item');
       if (tile) { selectPhoneTile(tile); return; }
     }
-    if (frame && frame !== focusId && !dragged) void focus(frame);
+    if (frame && frame !== focusId && !dragged && !t.closest<HTMLElement>('.mc-frame-title')?.dataset.dragged) void focus(frame);
   });
   let drag: { x: number; y: number } | null = null; let dragged = false;
   // Touch two-finger pinch: same anchored transform as the two-hand gesture, so

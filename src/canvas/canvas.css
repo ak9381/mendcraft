@@ -39,7 +39,7 @@
 .mc-canvas[data-mode=overview] .mc-frame { cursor: zoom-in; }
 .mc-canvas[data-mode=overview] .mc-frame:hover { border-color: var(--accent); }
 .mc-frame-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
-.mc-frame-title { all: unset; font-size: 26px; font-weight: 650; color: var(--text); cursor: pointer; }
+.mc-frame-title { all: unset; font-size: 26px; font-weight: 650; color: var(--text); cursor: grab; }
 .mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
 .mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
