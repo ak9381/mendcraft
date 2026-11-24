@@ -28,13 +28,17 @@ export interface HandOverlayOptions {
    *  bold skeleton. Defaults to true — the skeleton only shows when this is
    *  explicitly `false` or the `?skeletonHands=1` query flag is set. */
   lowpoly?: boolean;
-  /** Where this hand's CURSOR is (client px), given its landmarks as drawn
-   *  (selfie-mirrored, normalised). When it returns a point, the drawn hand
-   *  is translated (scale kept) so its palm centre sits exactly on the
-   *  cursor — the cursor uses the palm + active box + smoothing, so without
-   *  this the hand and cursor drift apart. */
-  anchor?: (points: readonly Pt[]) => { x: number; y: number } | null;
+  /** Where each present hand's CURSOR is (client px), given every present
+   *  hand's landmarks as drawn (selfie-mirrored, normalised), in the same
+   *  order. A hand with a point is translated (scale kept) so its palm
+   *  centre sits exactly on its cursor — the cursor uses the palm + active
+   *  box + smoothing, so without this the hand and cursor drift apart.
+   *  null = leave that hand where the mapping puts it. */
+  anchors?: (hands: readonly (readonly Pt[])[]) => ({ x: number; y: number } | null)[];
 }
+
+/** Beyond this, an overlay hand is not glued to a cursor (it isn't that hand's). */
+export const ANCHOR_MATCH_PX = 80;
 
 const PALM_IDS = [0, 5, 9, 13, 17] as const;
 
@@ -55,20 +59,30 @@ export function anchorPalmAt<T extends { x: number; y: number }>(pts: T[], targe
   return { dx, dy };
 }
 
-/** The cursor whose (unsmoothed) mapped palm is nearest this hand's mapped
- *  palm — matches an overlay hand to its pointer slot by position, never by
- *  MediaPipe Left/Right. */
-export function nearestCursor(
-  palm: { x: number; y: number },
+/** Match overlay hands to pointer cursors ONE-TO-ONE (greedy, closest pair
+ *  first) by mapped palm position — never by MediaPipe Left/Right, never two
+ *  hands on one cursor, and no match beyond `capPx`. Returns each hand's
+ *  cursor (client px) or null. */
+export function matchCursors(
+  palms: readonly { x: number; y: number }[],
   cursors: readonly { palm: { x: number; y: number }; cursor: { x: number; y: number } }[],
-): { x: number; y: number } | null {
-  let best: { x: number; y: number } | null = null; let bestD = Infinity;
-  for (const c of cursors) {
-    if (c.cursor.x < 0) continue;
-    const d = Math.hypot(c.palm.x - palm.x, c.palm.y - palm.y);
-    if (d < bestD) { bestD = d; best = c.cursor; }
+  capPx = ANCHOR_MATCH_PX,
+): ({ x: number; y: number } | null)[] {
+  const pairs: { h: number; c: number; d: number }[] = [];
+  palms.forEach((p, h) => cursors.forEach((c, ci) => {
+    if (c.cursor.x < 0) return;
+    const d = Math.hypot(c.palm.x - p.x, c.palm.y - p.y);
+    if (d <= capPx) pairs.push({ h, c: ci, d });
+  }));
+  pairs.sort((a, b) => a.d - b.d);
+  const out: ({ x: number; y: number } | null)[] = palms.map(() => null);
+  const usedC = new Set<number>();
+  for (const pr of pairs) {
+    if (out[pr.h] || usedC.has(pr.c)) continue;
+    out[pr.h] = { ...cursors[pr.c].cursor };
+    usedC.add(pr.c);
   }
-  return best;
+  return out;
 }
 
 const NUM_POINTS = 21;
@@ -207,6 +221,8 @@ interface SlotState {
   lowpolyMesh: LowpolyMesh;
   /** Last unclipped mesh, as offsets from the index tip (screen px). */
   frozenShape: { x: number; y: number }[] | null;
+  /** Last cursor-anchor offset (canvas px), kept while the hand fades out. */
+  anchorOffset: { dx: number; dy: number } | null;
 }
 
 function makeSlot(): SlotState {
@@ -221,6 +237,7 @@ function makeSlot(): SlotState {
     pinching: false,
     lowpolyMesh: createLowpolyMesh(),
     frozenShape: null,
+    anchorOffset: null,
   };
 }
 
@@ -352,6 +369,13 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
     ctx.rect(marginPx, marginPx, Math.max(0, w - 2 * marginPx), Math.max(0, h - 2 * marginPx));
     ctx.clip();
 
+    // One matching pass for every present hand (one-to-one with cursors).
+    const anchorsBySlot = new Map<number, { x: number; y: number }>();
+    if (opts.anchors && hands.length) {
+      const got = opts.anchors(hands.map((hh) => hh.points));
+      hands.forEach((hh, i) => { const a = got[i]; if (a) anchorsBySlot.set(hh.slot, a); });
+    }
+
     let anyVisible = false;
     for (let slot = 0; slot < MAX_SLOTS; slot++) {
       const st = slots[slot];
@@ -359,7 +383,7 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
       const target = hand ? 1 : 0;
       if (reducedMotion) st.opacity = target;
       else st.opacity += (target - st.opacity) * Math.min(1, (1000 / FADE_MS) * (1 / 60));
-      if (st.opacity < 0.01 && !hand) { st.opacity = 0; st.frozenShape = null; continue; }
+      if (st.opacity < 0.01 && !hand) { st.opacity = 0; st.frozenShape = null; st.anchorOffset = null; continue; }
 
       if (hand) {
         st.wasPresent = true;
@@ -383,11 +407,16 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
         st.drawn[i].y = st.smoothed[i].y;
       }
       capHandAroundTip(st.drawn);
-      // Glue the drawn palm to this hand's cursor (client px → canvas px).
-      const anchor = hand ? opts.anchor?.(hand.points) : null;
+      // Glue the drawn palm to this hand's cursor (client px → canvas px);
+      // while it fades out (no hand), keep the last offset — no jump.
+      const anchor = hand ? anchorsBySlot.get(slot) ?? null : null;
       if (anchor) {
         const r = container.getBoundingClientRect();
-        anchorPalmAt(st.drawn, { x: (anchor.x - r.left) * dpr, y: (anchor.y - r.top) * dpr });
+        st.anchorOffset = anchorPalmAt(st.drawn, { x: (anchor.x - r.left) * dpr, y: (anchor.y - r.top) * dpr });
+      } else if (hand) {
+        st.anchorOffset = null;
+      } else if (st.anchorOffset) {
+        for (const p of st.drawn) { p.x += st.anchorOffset.dx; p.y += st.anchorOffset.dy; }
       }
       const nearUi = meshNearUi(container, st.drawn);
       const alpha = nearUi ? Math.min(st.opacity, NEAR_UI_ALPHA / LOWPOLY_FILL_ALPHA) : st.opacity;

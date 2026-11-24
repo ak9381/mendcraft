@@ -75,7 +75,9 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(HAND_FEEL.fistCloseFrames).toBe(2);
     expect(HAND_FEEL.fistOpenFrames).toBe(3);
     expect(HAND_FEEL.tapMinClosedMs).toBe(60);
-    expect(HAND_FEEL.tapMinOpenBeforeMs).toBe(100);
+    expect(HAND_FEEL.tapMinOpenBeforeMs).toBe(150);
+    expect(HAND_FEEL.tapAfterHoldOpenMs).toBe(250);
+    expect(HAND_FEEL.grabLooseOpenMs).toBe(400);
     expect(HAND_FEEL.tapMaxPalmSpeed).toBe(0.8);
     expect(HAND_FEEL.tapMinLockMs).toBe(100);
     expect(HAND_FEEL.tapCooldownMs).toBe(400);
@@ -135,10 +137,65 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
   it('a thumb-out fist tap clicks on the FIRST try', () => {
     const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     mount([btn], []);
-    open(500, 400, 4); // ≈130 ms open and resting
+    open(500, 400, 5); // ≈165 ms open and resting
     for (let i = 0; i < 3; i++) { t += FRAME; hp.update([synthThumbOutFist(500, 400, W, H)], t); }
     open(500, 400, 3);
     expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('a held fist with pinky twitches (3–5 frames) never clicks and never drops the drag', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    const f1 = fakeFrame({ left: 100, top: 100, width: 300, height: 300 }, 'f1');
+    mount([btn], [f1]);
+    const twitch = (x: number, y: number) => {
+      const h = synthFist(x, y, W, H);
+      // The pinky tip flicks out (a lone pinky guess from the tracker).
+      const w = h[0], pip = h[18];
+      h[20] = { x: w.x + (pip.x - w.x) * 1.6, y: w.y + (pip.y - w.y) * 1.6 };
+      return h;
+    };
+    // Over the button: hold, twitch, re-close — no click.
+    open(500, 400, 8);
+    fist(500, 400, 4);
+    for (let i = 0; i < 3; i++) { t += FRAME; hp.update([twitch(500, 400)], t); }
+    fist(500, 400, 3);
+    open(500, 400, 4);
+    expect(btn.click).not.toHaveBeenCalled();
+    // Dragging a board: twitches mid-drag keep the grab.
+    open(250, 250, 10);
+    fist(250, 250, HOLD);
+    expect(board[0]?.phase).toBe('start');
+    for (let k = 0; k < 4; k++) {
+      for (let i = 0; i < 5; i++) { t += FRAME; hp.update([twitch(260 + k * 10, 250)], t); } // longer than the release grace
+      fist(265 + k * 10, 250, 3);
+    }
+    expect(board.some((e) => e.phase === 'end')).toBe(false);
+    expect(hp.isBoardGrabbed()).toBe(true);
+  });
+
+  it('after a held fist, re-opening and closing quickly is not a tap (250 ms open-before)', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    open(500, 400, 8);
+    fist(500, 400, 15); // a hold (blocked over the button)
+    open(500, 400, 6); // ≈200 ms open
+    fist(500, 400, 4); open(500, 400, 4);
+    expect(btn.click).not.toHaveBeenCalled();
+    open(500, 400, 10);
+    fist(500, 400, 4); open(500, 400, 4); // a normal tap now
+    expect(btn.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('during a grab, a half-relaxed hand held ≥ 400 ms drops the board', () => {
+    const f1 = fakeFrame({ left: 100, top: 100, width: 300, height: 300 }, 'f1');
+    mount([], [f1]);
+    fist(250, 250, HOLD);
+    expect(hp.isBoardGrabbed()).toBe(true);
+    for (let i = 0; i < 8; i++) { t += FRAME; hp.update([synthRelaxed(250, 250, W, H)], t); } // ≈260 ms
+    expect(hp.isBoardGrabbed()).toBe(true);
+    for (let i = 0; i < 10; i++) { t += FRAME; hp.update([synthRelaxed(250, 250, W, H)], t); }
+    expect(hp.isBoardGrabbed()).toBe(false);
+    expect(board.at(-1)?.phase).toBe('end');
   });
 
   it('classifier flips (fist ↔ thumbs-up ↔ pinch) during a deliberate tap still click once', () => {

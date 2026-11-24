@@ -142,7 +142,7 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(face).toMatch(/width:\s*200px/);
     expect(face).toMatch(/height:\s*150px/);
     // …and lifted above the bottom-centre engine bar on narrower screens.
-    expect(canvasCss).toMatch(/@media \(max-width: 1100px\)[^@]*\.mc-canvas \.mc-face-preview \{ bottom: calc\(96px/);
+    expect(canvasCss).toMatch(/@media \(max-width: 1240px\)[^@]*\.mc-canvas \.mc-face-preview \{ bottom: calc\(96px/);
     expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');
   });
 });

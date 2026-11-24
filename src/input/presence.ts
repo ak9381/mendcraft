@@ -19,6 +19,7 @@ import {
   headPose,
   boxArea,
   createFacingTracker,
+  createHandGate,
   createOperatorTracker,
   createPresenceGate,
   type FaceSignature,
@@ -54,6 +55,12 @@ export interface FaceFrame {
   /** The locked operator (or, before registration, the main/largest face). */
   isOperator: boolean;
   facing: boolean;
+  /** Canvas HAND GATE for this face (operator only; null otherwise): true =
+   *  facing, false = an actually turned head (looser thresholds than
+   *  `facing` — looking down at the keyboard is fine), null = unknown (a
+   *  face just (re)appeared and hasn't settled, or none). Only an explicit
+   *  false locks the hands, and the canvas "Not facing" pill follows it. */
+  handGate?: boolean | null;
   /** Non-operator faces are drawn greyed out. */
   dim: boolean;
 }
@@ -69,6 +76,8 @@ export interface PresenceFrame {
   facing: boolean;
   registered: boolean;
   paused: boolean;
+  /** Camera frame height ÷ width (landmark y is normalised to it). */
+  aspect?: number;
 }
 
 export interface PresenceTracker {
@@ -163,6 +172,8 @@ export function createPresenceTracker(
 
   const processor = createHandsProcessor(onEvent);
   const facingTracker = createFacingTracker();
+  const handGate = createHandGate();
+  let lastHandGate: boolean | null = null;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
   const binder = createHandBinder();
@@ -207,9 +218,12 @@ export function createPresenceTracker(
     focusFace = focusIdx !== null ? (result.faceLandmarks[focusIdx] ?? null) : null;
     if (focusIdx !== null) {
       const c = candidates[focusIdx];
-      const facing = facingTracker.update(headPose(result.faceLandmarks[focusIdx], c.matrix), now);
+      const pose = headPose(result.faceLandmarks[focusIdx], c.matrix);
+      const facing = facingTracker.update(pose, now);
+      lastHandGate = handGate.update(pose, now);
       emitFacing(facing);
     } else {
+      lastHandGate = handGate.update(null, now); // no face → unknown, never "not facing"
       emitFacing(facingTracker.update({ yaw: 90, pitch: 90 }, now)); // no face → not facing
     }
   }
@@ -233,6 +247,7 @@ export function createPresenceTracker(
       box: mirrorBox(c.signature.box),
       isOperator: i === focusIdx,
       facing: i === focusIdx && lastFacing,
+      handGate: i === focusIdx ? lastHandGate : null,
       dim: operator.registered ? i !== operatorIdx : i !== mainIdx,
     }));
   }
@@ -284,6 +299,7 @@ export function createPresenceTracker(
       facing: lastFacing,
       registered: operator.registered,
       paused,
+      aspect: video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : undefined,
     });
   }
 

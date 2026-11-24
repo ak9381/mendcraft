@@ -92,8 +92,10 @@ export interface HandFeelConfig {
    *  flicker is never a click. */
   tapMinClosedMs: number;
   /** A tap only arms if the hand was not closed (geometrically) for this
-   *  long right before it closed… */
+   *  long right before it closed (tapAfterHoldOpenMs after a HELD fist —
+   *  re-opening from a grab and closing again quickly is not a click)… */
   tapMinOpenBeforeMs: number;
+  tapAfterHoldOpenMs: number;
   /** …the palm's average speed over the last 3 frames (px/ms, unfiltered)
    *  was below this as it closed, and the target had been locked at least
    *  tapMinLockMs. */
@@ -104,6 +106,19 @@ export interface HandFeelConfig {
    *  it is neither — so a loose hand sits in the hysteresis band. */
   curlOn: number;
   extendOn: number;
+  /** The index ALONE past this ratio counts as open (a point); a lone
+   *  middle/ring/pinky never does — that is usually tracker noise. */
+  indexOpenOn: number;
+  /** 3D PIP bend (degrees, angle between MCP→PIP and PIP→TIP) used when
+   *  landmarks carry z: above curlDeg = curled, below extendDeg = extended.
+   *  Robust to fingers pointing at the camera, where the 2D ratio collapses. */
+  curlDeg: number;
+  extendDeg: number;
+  /** Camera frame height ÷ width, to un-squash normalised y for 3D angles. */
+  cameraAspect: number;
+  /** While grabbing, a half-relaxed ('between') hand held this long counts
+   *  as open — the board drops instead of sticking to a loosened hand. */
+  grabLooseOpenMs: number;
   /** Consecutive geometric-closed frames before a hand counts as closed (no time wait). */
   fistCloseFrames: number;
   /** Consecutive non-fist frames before a (non-grabbing) fist counts as open. */
@@ -144,38 +159,69 @@ export const HAND_FEEL: HandFeelConfig = {
   fistCloseFrames: 2,
   fistOpenFrames: 3,
   tapMinClosedMs: 60,
-  tapMinOpenBeforeMs: 100,
+  tapMinOpenBeforeMs: 150,
+  tapAfterHoldOpenMs: 250,
   tapMaxPalmSpeed: 0.8,
   tapMinLockMs: 100,
   curlOn: 1.0,
   extendOn: 1.15,
+  indexOpenOn: 1.25,
+  curlDeg: 90,
+  extendDeg: 35,
+  cameraAspect: 9 / 16,
+  grabLooseOpenMs: 400,
   releaseGraceMs: 120,
   releaseGraceFrames: 3,
 };
 
 // ---------------------------------------------------------------- curl
 
-/** [PIP, TIP] for index, middle, ring, pinky. The thumb is ignored: a
+/** [MCP, PIP, TIP] for index, middle, ring, pinky. The thumb is ignored: a
  *  natural quick fist often leaves it out (thumbs-up / pinch labels). */
-const FINGER_JOINTS = [[6, 8], [10, 12], [14, 16], [18, 20]] as const;
+const FINGER_JOINTS = [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]] as const;
+
+type Pt3 = Pt & { z?: number };
+
+/** Per finger: 'curled' | 'extended' | 'mid', plus whether it is STRONGLY
+ *  extended (used for a lone index). 3D PIP bend when z is present (2D
+ *  ratio as fallback). */
+export function fingerStates(
+  lm: readonly Pt3[],
+  cfg: Pick<HandFeelConfig, 'curlOn' | 'extendOn' | 'indexOpenOn' | 'curlDeg' | 'extendDeg' | 'cameraAspect'> = HAND_FEEL,
+): { state: 'curled' | 'extended' | 'mid'; strong: boolean }[] {
+  const w = lm[0];
+  const has3d = FINGER_JOINTS.every(([m, p, t]) => typeof lm[m].z === 'number' && typeof lm[p].z === 'number' && typeof lm[t].z === 'number')
+    && FINGER_JOINTS.some(([m, p, t]) => lm[m].z !== 0 || lm[p].z !== 0 || lm[t].z !== 0);
+  const k = cfg.cameraAspect;
+  return FINGER_JOINTS.map(([mcp, pip, tip]) => {
+    if (has3d) {
+      const a = { x: lm[pip].x - lm[mcp].x, y: (lm[pip].y - lm[mcp].y) * k, z: (lm[pip].z ?? 0) - (lm[mcp].z ?? 0) };
+      const b = { x: lm[tip].x - lm[pip].x, y: (lm[tip].y - lm[pip].y) * k, z: (lm[tip].z ?? 0) - (lm[pip].z ?? 0) };
+      const na = Math.hypot(a.x, a.y, a.z), nb = Math.hypot(b.x, b.y, b.z);
+      const cos = na && nb ? (a.x * b.x + a.y * b.y + a.z * b.z) / (na * nb) : 1;
+      const deg = (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
+      const state = deg > cfg.curlDeg ? 'curled' : deg < cfg.extendDeg ? 'extended' : 'mid';
+      return { state, strong: state === 'extended' };
+    }
+    const d = (p: Pt) => Math.hypot(p.x - w.x, p.y - w.y);
+    const r = d(lm[tip]) / Math.max(1e-6, d(lm[pip]));
+    const state = r < cfg.curlOn ? 'curled' : r > cfg.extendOn ? 'extended' : 'mid';
+    return { state, strong: r > cfg.indexOpenOn };
+  });
+}
 
 /** Geometric hand state from finger curl alone (no classifier label):
- *  'closed' = all four fingers curled (tip nearer the wrist than its PIP);
- *  'open' = at least one finger clearly extended (≥3 for a flat palm, 1 for
- *  a point — either way not a fist); 'between' = neither (a loose, half-
- *  curled hand) — callers keep their previous state on these frames. */
-export function curlState(lm: readonly Pt[], cfg: Pick<HandFeelConfig, 'curlOn' | 'extendOn'> = HAND_FEEL): 'closed' | 'open' | 'between' {
+ *  'closed' = all four fingers curled; 'open' = two or more fingers
+ *  extended, or the INDEX alone strongly extended (a point) — a lone
+ *  middle/ring/pinky never opens a fist (tracker noise); 'between' =
+ *  neither (a loose, half-curled hand) — callers keep their previous state. */
+export function curlState(lm: readonly Pt3[], cfg: Parameters<typeof fingerStates>[1] = HAND_FEEL): 'closed' | 'open' | 'between' {
   if (!lm || lm.length < 21) return 'between';
-  const w = lm[0];
-  const d = (p: Pt) => Math.hypot(p.x - w.x, p.y - w.y);
-  let curled = 0, extended = 0;
-  for (const [pip, tip] of FINGER_JOINTS) {
-    const r = d(lm[tip]) / Math.max(1e-6, d(lm[pip]));
-    if (r < cfg.curlOn) curled++;
-    else if (r > cfg.extendOn) extended++;
-  }
+  const f = fingerStates(lm, cfg);
+  const curled = f.filter((x) => x.state === 'curled').length;
+  const extended = f.filter((x) => x.state === 'extended').length;
   if (curled === 4) return 'closed';
-  if (extended >= 1) return 'open';
+  if (extended >= 2 || (f[0].state === 'extended' && f[0].strong)) return 'open';
   return 'between';
 }
 
