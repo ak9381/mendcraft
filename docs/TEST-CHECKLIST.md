@@ -1,54 +1,54 @@
-# Akash's test checklist (25 Nov)
+# Akash's test checklist (morning, 25 Nov)
 
-Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1&sim=1
-Monitor: https://mendcraft--sim-main-o8jrlskh.web.app/monitor.html
-Note anything that feels off with the item number.
+Preview (after the Firebase re-login below): https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1&sim=1
+AI monitor: https://mendcraft--sim-main-o8jrlskh.web.app/monitor.html (keys 1/2/3 = Laptop/iPhone/Android, F = Follow)
+Judge replay: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?replay=demo
+Local (always latest): http://localhost:5173/canvas.html?fresh=1&sim=1
 
-## A. Mouse / trackpad (no camera: add `&hands=0`)
-- [ ] A1 Trackpad two-finger scroll pans the canvas; pinch zooms at the cursor.
-- [ ] A2 Mouse wheel pans; Cmd + wheel zooms (one notch is a gentle step).
-- [ ] A3 Zoom HUD bottom-left: − / + / Fit work; clicking the % goes back to 100%.
-- [ ] A4 Cmd + / Cmd − / Cmd 0 zoom; Shift+1 shows everything. Typing "-" or "0" in the command box just types.
-- [ ] A5 Hold Space and drag = pan.
-- [ ] A6 Drag a board by its title to move it; a plain click on the title still opens it.
+Note anything off with its number.
 
-## B. Calmer screen + both engines
-- [ ] B1 Empty canvas: only the prompt, right buttons, zoom HUD, and the Nano | Gemini bar at the bottom.
-- [ ] B2 Tools → type "connect everything in this room": AI panel slides in while working, Nano card shows Working → Done, then Gemini; panel hides ~3 s after Approve.
-- [ ] B3 Right-side buttons never cover the review window or the AI panel.
-- [ ] B4 Bar shows real bytes, e.g. "2.3 KB sent to cloud".
+## 0. Before anything (2 min)
+- [ ] 0.1 Firebase login expired overnight — run in Terminal: `cd ~/Developer/mendcraft-sim && npx firebase-tools login --reauth`, then tell me and I'll redeploy the preview.
+- [ ] 0.2 Plug in the iPhone (unlocked) → I install the latest build.
+- [ ] 0.3 Plug in the Nothing phone (the cable that worked) → I install the latest build.
 
-## C. AI monitor (external display)
-- [ ] C1 Tools → AI monitor opens a window; drag it to the external screen, full-screen it.
-- [ ] C2 Type "add kannada" on the canvas: monitor shows Nano left, Gemini right, handoff arrows in the middle, bytes at the top.
-- [ ] C3 Reload the monitor mid-turn: it catches up.
+## E. Hands on the laptop (most important — 5 min)
+- [ ] E1 Open palm: the glass hand sits ON the cursor; curling fingers doesn't jump it.
+- [ ] E2 Quick fist tap (close + open, thumb anywhere) on Tools clicks on the FIRST try. A relaxed or half-curled hand never clicks.
+- [ ] E3 Hold a fist on a board (title or body) and move: it follows; drag across the right buttons — no clicks, no drop. Open hand → drops.
+- [ ] E4 Fist on empty canvas pans; two fists zoom.
+- [ ] E5 Look clearly away (turn your head): "Not facing" shows and hands stop (cursor dims, hint). Look back: works immediately.
+- [ ] E6 Look DOWN at the keyboard and at your hands: hands must NOT lock.
+- [ ] E7 Raise a hand in front of your face mid-drag, lower it: the board must not drop.
+- [ ] E8 Repeat E2–E4 with the LEFT hand only, then RIGHT only.
+- [ ] E9 Hold a fist still for 3 s and wiggle it: no click.
+- [ ] E10 Point your index straight at the camera: must not count as a fist.
 
-## D. Journey pieces
-- [ ] D1 "connect devices and make a dashboard": two phones join (SIM-labelled) with checks, then "What do you want to connect next?"; say "build the dashboard" → reviews.
-- [ ] D2 After building, a pairing chip says "2 phones connected"; the pairing card doesn't cover the board.
-- [ ] D3 "floor plan for Mrs Sharma's flat" → Approve → the plan board has Check / 3D / DXF buttons. Check lists door/ramp findings; 3D toggles; DXF downloads `mendcraft-plan.dxf`.
-- [ ] D4 "add kannada" → Approve: Tools chip and Approve/Reject buttons turn Kannada. "undo" → English.
-- [ ] D5 Tools → Simulate offline, ask for something, go back online → it runs.
+## R. Review window (the "plan")
+- [ ] R1 "connect everything in this room" → the review shows THE PLAN (+ add / ~ change / − remove), engine chip, "What left this device · N KB".
+- [ ] R2 Resize from the bottom-right corner (mouse, or held fist); size is remembered.
+- [ ] R3 "add kannada" → its footer shows ~385 B (its own turn), not the dashboard's 2.3 KB.
 
-## E. Hands (camera on, remove `&hands=0`) — the important one
-- [ ] E1 Open palm: cursor follows your palm smoothly; curling fingers doesn't jump it.
-- [ ] E2 Quick fist tap (close + open, ~¼ s) on Tools clicks it. A relaxed hand does NOT click things by itself.
-- [ ] E3 Hold a fist on a board (title or body) and move: the board follows; drag it across the right buttons — nothing clicks, the board doesn't drop.
-- [ ] E4 Hold a fist on empty canvas: pans. Two fists spread/squeeze: zoom.
-- [ ] E5 Fist over a button or the review window: nothing moves.
-- [ ] E6 Repeat E2–E4 with the LEFT hand only, then the RIGHT hand only.
-- [ ] E7 Tools → Hover to click: resting the palm on a button ~0.8 s clicks it (fallback).
-- [ ] E8 Reach the top bar with your palm without the cursor freezing.
+## M. AI monitor (ultrawide)
+- [ ] M1 Tools → AI monitor; drag to the ultrawide, full-screen.
+- [ ] M2 "connect everything in this room": packet crosses with the real size; stream lines coloured (Heard white, Handed off amber, Sent blue, Kept on device green).
+- [ ] M3 "set the main light to 500% brightness": red Blocked, "Decided on this device · 0 B sent".
+- [ ] M4 Switch tabs 1/2/3; Follow (F) jumps to the active device.
 
-## F. iPhone (plug in by cable first so I can install the latest build)
-- [ ] F1 Tap and swipe work straight away; no "Look at me to edit".
-- [ ] F2 Badge reads "Apple · on device", or tells you why not (e.g. "Apple Intelligence is off").
-- [ ] F3 Settings → Apple Intelligence & Siri is ON and the model is downloaded.
+## J. Journey + replay
+- [ ] J1 Chips under each board lead the whole way: Connect devices → Build the dashboard → Play music → Save → Floor plan → Check accessibility → Try to break it → Add Kannada.
+- [ ] J2 "connect to what I'm pointing at" (sim) → asks which lamp, then proposes it.
+- [ ] J3 Drag the Living room board to the right edge and hold → "Sent to iPhone (SIM)"; board snaps back.
+- [ ] J4 `?replay=demo` plays all 18 steps (~80 s) with a banner + Stop.
 
-## G. Spotify + Marshall (only if signed in to Spotify Premium on the web app)
-- [ ] G1 "play <a song>" → the speaker tile shows the real title; sound from the Marshall if it's awake in Spotify.
-- [ ] G2 Not signed in → it says Spotify isn't connected and plays the built-in track.
-- [ ] G3 "play the floor plan in 3D" does NOT search Spotify.
+## P. Phones (needs both phones + laptop on the same Wi-Fi)
+- [ ] P1 Phone app → "Join laptop" → laptop Tools → connect devices: the chime pairs; the phone shows "Laptop ✓"; the laptop row shows a check.
+- [ ] P2 iPhone badge reads "Apple · on device" (or says why not — then check Settings → Apple Intelligence & Siri).
+- [ ] P3 iPhone mic: a small request → the monitor's iPhone tab shows it "kept on device · 0 B".
+- [ ] P4 Nothing phone request → monitor's Android tab shows it crossing to Gemini with its bytes.
+- [ ] P5 Drag a laptop board to the iPhone's edge and hold → it appears on the iPhone only.
+- [ ] P6 Phone "Hands" pill → camera prompt → palm cursor + fist tap on the phone; touch still works; app in background turns the camera off.
 
-## H. Accounts
-- [ ] H1 AI Studio billing tab: I reopened it after a test run replaced it by mistake — check it's how you left it.
+## S. Spotify / WiZ (only if set up)
+- [ ] S1 "play <song>" → real title on the tile, sound on the Marshall.
+- [ ] S2 WiZ lamp responds to the tile buttons (with `npm run wiz-bridge` running).
