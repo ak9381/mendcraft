@@ -32,7 +32,7 @@ const G0={rooms:[
  doors:[{room:'living',side:'w',at:1.4,w:1},{room:'kitchen',side:'w',at:1.2,w:.9},{room:'bedroom',side:'n',at:2.6,w:.9},{room:'bath',side:'n',at:.5,w:.8},{room:'balcony',side:'w',at:1.2,w:.9},{room:'store',side:'w',at:.2,w:.8}],
  windows:[{room:'living',side:'n',at:1.4,w:1.8},{room:'kitchen',side:'n',at:.9,w:1.2},{room:'bedroom',side:'w',at:1,w:1.4},{room:'bedroom',side:'s',at:1.2,w:1.4},{room:'balcony',side:'e',at:.6,w:2}]};
 const TRACKS=[{t:'Rain on the window',a:'Focus playlist'},{t:'Slow river',a:'Focus playlist'},{t:'Morning raga on flute',a:'Focus playlist'}];
-const DEV={laptop:{name:'Studio laptop',sub:'Chrome on desktop, editing the ground floor plan',model:'Gemini Nano ready'},ipad:{name:'Studio iPad',sub:'Chrome on iPad, editing the ground floor plan',model:'No on-device model'},phone:{name:'Pixel phone',sub:'Chrome on Android, working as a remote',model:'No on-device model'}};
+const DEV={laptop:{name:'Studio laptop',sub:'Chrome on desktop, editing the ground floor plan',model:'Gemini Nano ready'},iphone:{name:'iPhone',sub:'Safari on iPhone, a second canvas beside the laptop',model:'Apple on device when available'},phone:{name:'Nothing phone',sub:'Chrome on Android, working as a remote',model:'No on-device model'}};
 const JOB={
  en:{where:'device',eng:'nano',why:'English command → on device',need:'English command'},
  summary:{where:'device',eng:'nano',why:'Private summary → on device',need:'Summary'},
@@ -87,7 +87,7 @@ function keep(el,fn){const a=document.activeElement;let sel=null;if(a&&el.contai
 
 /* router */
 const cloudOK=()=>S.online&&!P.local;
-const devWord=()=>S.device==='ipad'?'iPad':'this phone';
+const devWord=()=>S.device==='iphone'?'this iPhone':'this phone';
 function decide(type){
  const j=JOB[type];let where=j.where,why=j.why,eng=j.eng;
  if(eng==='nano'&&S.device!=='laptop'){where='cloud';eng='cloud';why=`No Gemini Nano on ${devWord()} → cloud`}
@@ -421,7 +421,7 @@ const dCloud=on=>`<g transform="translate(562 22) scale(3.2)"><path d="M7 19h10a
 /* hero constellation */
 const HD=[
  {id:'laptop',f:dLaptop,x:168,y:300,s:.92,w:240,h:150,n:'Laptop',st:()=>HS.kg>.5?'Kitchen now 3.5 m':'Mendcraft editor'},
- {id:'tablet',f:dTablet,x:318,y:150,s:.78,w:128,h:176,n:'iPad',st:()=>HS.tab>.5?'Showing the plan':'Second canvas'},
+ {id:'tablet',f:dTablet,x:318,y:150,s:.78,w:128,h:176,n:'iPhone',st:()=>HS.tab>.5?'Showing the plan':'Second canvas'},
  {id:'phone',f:dPhone,x:888,y:148,s:.86,w:80,h:164,n:'Phone',st:()=>HS.read>.5?'Reading aloud':'Messages'},
  {id:'lamp',f:dLamp,x:1036,y:298,s:.82,w:160,h:240,n:'Desk lamp',st:()=>`${Math.round(HS.lamp*100)}%`},
  {id:'speaker',f:dSpeaker,x:890,y:478,s:.78,w:110,h:150,n:'Speaker',st:()=>HS.playing?'Playing':'Paused'},
@@ -430,7 +430,7 @@ const HSEQ=[
  {d:'lamp',lang:'kn',said:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',tr:'Dim the lamp',via:'cloud',why:'Kannada detected → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
  {d:'speaker',lang:'en',said:'Pause the music',tr:'ಹಾಡನ್ನು ನಿಲ್ಲಿಸು',via:'dev',why:'English command → on device',fx:{playing:false},call:'music.pause()',app:'Mendcraft Home app'},
  {d:'phone',lang:'en',said:'Read my last message',tr:'ನನ್ನ ಕೊನೆಯ ಸಂದೇಶ ಓದು',via:'dev',why:'English command → on device',fx:{read:1},call:'messages.readLatest()',app:'Mendcraft phone app'},
- {d:'tablet',lang:'kn',said:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',tr:'Show the plan on the iPad',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
+ {d:'tablet',lang:'kn',said:'ನಕ್ಷೆಯನ್ನು ಐಫೋನ್‌ನಲ್ಲಿ ತೋರಿಸು',tr:'Show the plan on the iPhone',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("iphone", "plan")',app:'Mendcraft phone app'},
  {d:'browser',lang:'en',said:'Scroll down a bit',tr:'ಸ್ವಲ್ಪ ಕೆಳಗೆ ಸರಿಸು',via:'dev',why:'English command → on device',fx:{scroll:1},call:'page.scroll(0.5)',app:'Mendcraft for Chrome'},
  {d:'laptop',lang:'en',said:'Make the kitchen a bit bigger',tr:'ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು',via:'dev',why:'English command → on device',fx:{kg:1,ksel:1},call:'plan.resizeRoom("kitchen", +0.5)',app:'Mendcraft Studio'}];
 const HS0={lamp:.8,playing:true,kg:0,ksel:0,read:0,tab:0,scroll:0};
@@ -478,7 +478,7 @@ const XD=[
  {id:'lamp',n:'Desk lamp',k:'Any smart lamp',d:'Brightness and warmth, by voice or a slow pinch and lift.',f:dLamp,w:160,h:240,say:'ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು',alt:'Dim the lamp',lang:'kn',via:'cloud',why:'Kannada detected → cloud',fx:{lamp:.3},call:'lamp.setBrightness(30)',app:'Mendcraft Home app'},
  {id:'music',n:'Music',k:'Speaker or phone',d:'Play, pause, skip and set the volume without reaching for anything.',f:dSpeaker,w:110,h:150,say:'Pause the music',alt:'ಹಾಡನ್ನು ನಿಲ್ಲಿಸು',lang:'en',via:'dev',why:'English command → on device',fx:{playing:false},call:'music.pause()',app:'Mendcraft Home app'},
  {id:'phone',n:'Phone',k:'Android or iPhone',d:'Read and reply to messages, answer calls and scroll, from across the room.',f:dPhone,w:80,h:164,say:'Read my last message',alt:'ನನ್ನ ಕೊನೆಯ ಸಂದೇಶ ಓದು',lang:'en',via:'dev',why:'English command → on device',fx:{read:1},call:'messages.readLatest()',app:'Mendcraft phone app'},
- {id:'ipad',n:'iPad',k:'Second screen',d:'A second canvas beside you, or the control room propped up on the desk.',f:dTablet,w:128,h:176,say:'ನಕ್ಷೆಯನ್ನು ಐಪ್ಯಾಡಿನಲ್ಲಿ ತೋರಿಸು',alt:'Show the plan on the iPad',lang:'kn',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("ipad", "plan")',app:'Mendcraft phone app'},
+ {id:'iphone',n:'iPhone',k:'Second screen',d:'A second canvas beside you — the iPhone on the right of the laptop.',f:dTablet,w:128,h:176,say:'ನಕ್ಷೆಯನ್ನು ಐಫೋನ್‌ನಲ್ಲಿ ತೋರಿಸು',alt:'Show the plan on the iPhone',lang:'kn',via:'cloud',why:'Kannada detected → cloud',fx:{tab:1},call:'display.show("iphone", "plan")',app:'Mendcraft phone app'},
  {id:'web',n:'The browser',k:'Chrome',d:'Scroll pages, press buttons and fill in forms, anywhere on the web.',f:dBrowser,w:240,h:160,say:'Scroll down a bit',alt:'ಸ್ವಲ್ಪ ಕೆಳಗೆ ಸರಿಸು',lang:'en',via:'dev',why:'English command → on device',fx:{scroll:1},call:'page.scroll(0.5)',app:'Mendcraft for Chrome'},
  {id:'design',n:'Design tools',k:'Laptop',d:'Floor plans, app screens and printable parts. One of the things your hands and voice can do.',f:dLaptop,w:240,h:150,say:'Make the kitchen a bit bigger',alt:'ಅಡುಗೆಮನೆಯನ್ನು ಸ್ವಲ್ಪ ದೊಡ್ಡದು ಮಾಡು',lang:'en',via:'dev',why:'English command → on device',fx:{kg:1,ksel:1},call:'plan.resizeRoom("kitchen", +0.5)',app:'Mendcraft Studio'}];
 let xi=0,xRaf=0,xPulse=null,xTim=[];const XS=Object.assign({t:0},HS0);

@@ -42,9 +42,9 @@ export interface HostSession extends SessionBase {
   onFrame(cb: (frame: RelayFrame) => void): void;
   /** The phone's latest music-player state (for the /control dashboard). */
   onMusic(cb: (music: MusicStatus) => void): void;
-  /** Publish the latest privacy-safe state to the room for any /control iPad. */
+  /** Publish the latest privacy-safe state to the room for any /control dashboard. */
   publishState(snapshot: ControlSnapshot): Promise<void>;
-  /** A "run this recipe" request from a /control iPad (or phone). */
+  /** A "run this recipe" request from a /control dashboard (or phone). */
   onRun(cb: (run: RelayRunRequest) => void): void;
   /** A confirm/cancel for a run that stopped on a send/submit step. */
   onRunControl(cb: (control: RelayRunControl) => void): void;
@@ -56,7 +56,7 @@ export interface HostSession extends SessionBase {
   sendPrivacyReply(reply: PrivacyReply): Promise<void>;
 }
 
-/** Read-only-ish iPad dashboard view: it reads snapshots, and can REQUEST a run
+/** Read-only-ish /control dashboard view: it reads snapshots, and can REQUEST a run
  *  (which still needs a confirm on the target for anything that sends). */
 export interface ControlSession extends SessionBase {
   readonly roomId: string;
@@ -167,7 +167,7 @@ export async function createHostSession(
   let runCb: ((run: RelayRunRequest) => void) | null = null;
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
-  // The most recent snapshot, re-sent whenever a /control iPad announces itself,
+  // The most recent snapshot, re-sent whenever a /control dashboard announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
   let lastSnapshot: ControlSnapshot | null = null;
@@ -178,7 +178,7 @@ export async function createHostSession(
   }
 
   core.listen((msg) => {
-    // Run requests + confirms may come from a /control iPad or the phone. They
+    // Run requests + confirms may come from a /control dashboard or the phone. They
     // don't touch phone-pairing state and are handled before the control
     // early-return below.
     if (msg.type === 'run') {
@@ -345,7 +345,7 @@ export async function createGuestSession(
   };
 }
 
-/** iPad dashboard side: subscribe to a host room and receive state snapshots.
+/** Optional /control dashboard side: subscribe to a host room and receive state snapshots.
  *  It announces presence (so the host replays its latest state) but never sends
  *  a command or a frame, and never flips the host's phone-pairing state. */
 export async function createControlSession(

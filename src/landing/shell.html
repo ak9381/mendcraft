@@ -95,7 +95,7 @@
     <figure class="hero-product wrap rv d2s">
       <img src="/product-studio.png" width="1440" height="900" alt="The Mendcraft editor with a two-bedroom plan. The copilot has answered “what’s the wall thickness?” straight from the drawing.">
     </figure>
-    <div class="cons" id="cons" hidden role="img" aria-hidden="true" aria-label="You at the centre, connected to a desk lamp, a speaker, a phone, an iPad, a web browser and a laptop. Gemini Nano on this device, or Gemini in the cloud when needed, understands each request and picks a command, and a Mendcraft app carries it out on the device.">
+    <div class="cons" id="cons" hidden role="img" aria-hidden="true" aria-label="You at the centre, connected to a desk lamp, a speaker, a phone, a web browser and a laptop. Gemini Nano on this device, or Gemini in the cloud when needed, understands each request and picks a command, and a Mendcraft app carries it out on the device.">
       <svg id="heroSvg" viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
     </div>
     <div class="hstrip" hidden>
@@ -172,7 +172,7 @@
         <div class="gbox on" id="gb-cmd"><span class="k">Command</span><h3>Function call</h3><p>Gemini understands the request and picks one command. It never touches a device itself.</p><p class="call" id="gdCall"></p></div>
         <div class="gbox on" id="gb-apps"><span class="k">Action</span><h3>Mendcraft apps</h3><ul id="gdApps">
             <li data-app="home"><span><b>Mendcraft Home app</b><span>The lamp and the music</span></span></li>
-            <li data-app="phone"><span><b>Mendcraft phone app</b><span>Phones and iPad</span></span></li>
+            <li data-app="phone"><span><b>Mendcraft phone app</b><span>Phones</span></span></li>
             <li data-app="chrome"><span><b>Mendcraft for Chrome</b><span>The browser</span></span></li>
             <li data-app="studio"><span><b>Mendcraft Studio</b><span>Plans, screens and parts</span></span></li>
             <li data-app="input"><span><b>Mendcraft input</b><span>Your hand cursor</span></span></li></ul></div>
@@ -318,7 +318,7 @@
       <aside class="stay" aria-labelledby="h-stay">
         <h2 id="h-stay">Stayed here</h2>
         <dl id="stayList"></dl>
-        <p>Hand tracking always runs on the device, even on iPad. English speech, short commands and summaries of your own work run on Gemini Nano in Chrome.</p>
+        <p>Hand tracking always runs on the device, even on a phone. English speech, short commands and summaries of your own work run on Gemini Nano in Chrome.</p>
         <button class="sw" role="switch" aria-checked="false" data-local><span class="trk" aria-hidden="true"></span><span>Keep everything on this device<small>Cloud jobs wait in the queue</small></span></button>
       </aside>
     </div>
@@ -339,7 +339,7 @@
       <dl class="facts" id="devFacts"></dl>
       <div class="devsw" role="group" aria-label="Hand off to another device">
         <button class="btn btn-q" data-dev="laptop" aria-pressed="true"><svg class="i" aria-hidden="true"><use href="#i-laptop"/></svg>Laptop</button>
-        <button class="btn btn-q" data-dev="ipad" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-tablet"/></svg>iPad</button>
+        <button class="btn btn-q" data-dev="iphone" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg>iPhone</button>
         <button class="btn btn-q" data-dev="phone" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg>Phone</button>
       </div>
     </section>
@@ -440,7 +440,7 @@
       <li><span class="sig cloud">Gemini · cloud</span><div><b>Big renders and the accessibility checker</b><p>Room previews, sketch photos, whole screens and accessibility reviews need the larger model.</p></div></li>
       <li><span class="sig queue">Queued for Gemini · cloud</span><div><b>Cloud jobs while offline, or while the cloud is paused</b><p>They wait, then send themselves. Every one is listed in the ledger.</p></div></li>
     </ul>
-    <p class="muted" style="font-size:15px">Gemini Nano needs Chrome on desktop. On iPad and phones, language goes to Gemini in the cloud and the badge says so. Hand tracking still stays on the device.</p>
+    <p class="muted" style="font-size:15px">Gemini Nano needs Chrome on desktop. On phones, language goes to Gemini in the cloud and the badge says so. Hand tracking still stays on the device.</p>
     <div class="row"><button class="btn btn-p" id="whyLedger">Open the ledger</button><button class="btn btn-s" data-close>Close</button></div>
   </div>
 </dialog>

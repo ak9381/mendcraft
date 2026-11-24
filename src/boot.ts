@@ -8,7 +8,7 @@
 //   /studio (or ?sim / ?play)  → the old hands-free editor      [flag: studio]
 //   /remote (or ?view=remote)  → the phone remote + camera page [flag: remote]
 //   /phone (or ?view=phone)    → the remote's "lamp & music" PWA variant [flag: remote]
-//   /control                   → the iPad control room          [flag: control]
+//   /control                   → the optional /control dashboard [flag: control]
 //   /judges                    → the old guided-tour page       [flag: judgesLegacy]
 //   /spotify                   → Spotify OAuth callback, used only by the old studio's music panel [flag: studio]
 
@@ -59,7 +59,7 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
     window.location.replace(canvasUrl(window.location.search));
   }
 } else if (isMobileRoute(window.location.pathname, window.location.search)) {
-  // The phone + tablet companion (pair / dashboard / split) is its own entry.
+  // The phone companion (pair / dashboard / split) is its own entry.
   // No feature flag: this is the shipping phone experience, not a legacy page.
   const { mobileUrl } = await import('./canvas/route');
   window.location.replace(mobileUrl(window.location.search));

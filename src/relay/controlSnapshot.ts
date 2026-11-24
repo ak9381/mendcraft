@@ -1,5 +1,5 @@
 // CONTROL-ROOM SNAPSHOT — the small, privacy-safe state the laptop publishes to
-// the paired iPad /control dashboard. It is PURE (no DOM, no Firebase, no
+// the optional /control dashboard. It is PURE (no DOM, no Firebase, no
 // model): buildControlSnapshot() clamps, redacts, and omits so that whatever
 // leaves the laptop is honest and bounded.
 //
@@ -102,7 +102,7 @@ export interface QueueEntry {
   seq: number;
 }
 
-/** One shared-recipe card for the iPad dashboard: what it does, which device
+/** One shared-recipe card for the /control dashboard: what it does, which device
  *  runs it, who taught it. No steps/ops leave — just the summary line. */
 export interface RecipeCard {
   id: string;
@@ -114,7 +114,7 @@ export interface RecipeCard {
   steps: number;
 }
 
-/** One change-log entry for the iPad: who changed what, why, and its review
+/** One change-log entry for the /control dashboard: who changed what, why, and its review
  *  state. No geometry or snapshots leave — just the human line. */
 export interface ChangeCard {
   id: string;
@@ -124,7 +124,7 @@ export interface ChangeCard {
   status: 'pending' | 'applied' | 'rejected' | 'reverted';
 }
 
-/** One site-checklist question for the iPad. */
+/** One site-checklist question for the /control dashboard. */
 export interface ChecklistCard {
   id: string;
   question: string;

@@ -32,7 +32,7 @@ export function createSceneView3d(container: HTMLElement): SceneView3d {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   // OrbitControls maps one-finger drag → orbit, two-finger → dolly/pan, so
-  // touch orbit on the iPad works with no extra wiring.
+  // touch orbit on the /control dashboard works with no extra wiring.
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 1.4));
   const sun = new THREE.DirectionalLight(0xffffff, 1.2);

@@ -5,7 +5,7 @@ import { sanitizeRoute, type RouteInfo } from './routeReason';
 // AI changes arrive as PENDING proposals: nothing touches the plan until she
 // accepts (pinch, click or "accept"). Her own edits are recorded as applied.
 // Any applied entry can be reverted. Persisted locally; the metadata (never the
-// document snapshots) syncs to Firestore and shows on the iPad /control page.
+// document snapshots) syncs to Firestore and shows on the optional /control dashboard.
 
 export type Actor = 'her' | 'nano' | 'gemini' | 'rules';
 export type ChangeStatus = 'pending' | 'applied' | 'rejected' | 'reverted';

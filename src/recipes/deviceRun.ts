@@ -2,7 +2,7 @@
 // same { op: {...} } steps as everything else, but the ops name lamp/music verbs
 // instead of editor ops. This module turns a validated step into a concrete
 // LampIntent (for lampControl) or PlayerAction(s) (for musicController), so the
-// SAME recipe runs from Chrome or from the iPad /control card. Nothing here
+// SAME recipe runs from Chrome or from the /control dashboard card. Nothing here
 // sends to a network service, so no confirm gate is needed; every value is
 // clamped to the device's own limits before it is emitted.
 

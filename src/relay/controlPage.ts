@@ -1,4 +1,4 @@
-// iPad /control dashboard: a read-mostly control room for the demo. Mounted by
+// optional /control dashboard: a read-mostly control room for the demo. Mounted by
 // src/boot.ts BEFORE the editor shell, so none of the editor (camera, MediaPipe,
 // AI) loads here. It subscribes to the laptop's room over an injected transport
 // and renders the privacy-safe ControlSnapshot the laptop publishes — never
@@ -336,7 +336,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
         }
         const runId = `run-${++runSeq}-${r.id.slice(0, 8)}`;
         setRunStatus(`Asked the laptop to run “${r.name}”…`);
-        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => {
+        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'control' }).catch(() => {
           setRunStatus(`Couldn't reach the laptop to run “${r.name}” — check the connection.`);
         });
       });

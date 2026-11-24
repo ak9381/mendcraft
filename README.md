@@ -65,13 +65,13 @@ With no hub and no Nano, Mendcraft asks before sending anything uncleaned.
   built-in gestures. Custom gestures are stored on this device only. Demo:
   thumbs up = save.
 
-## Phone and tablet companion (iOS and Android)
+## Phone companion (iOS and Android)
 
 `/mobile.html` is the Capacitor companion: pairing (QR or 8-character code),
 a one-handed canvas view with a board strip, the pinned dashboard, Proposal
 cards as bottom sheets with Keep/Drop in the thumb zone, privacy-route chips,
 and the gimbal camera. iOS follows the HIG, Android follows Material 3, and
-tablets get a split view. Deep links: `?mobileScreen=pair|canvas|dashboard|approval|gimbal|tablet&sim=1`.
+a wide viewport gets a split view. Deep links: `?mobileScreen=pair|canvas|dashboard|approval|gimbal|tablet&sim=1`.
 
 ## Feature flags
 

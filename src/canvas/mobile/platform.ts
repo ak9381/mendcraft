@@ -5,7 +5,7 @@
 
 export type MobileOS = 'ios' | 'android' | 'web';
 
-/** >=744px is the iPad mini portrait breakpoint: split view kicks in there. */
+/** >=744px is the wide-viewport breakpoint: split view kicks in there. */
 export const TABLET_MIN_WIDTH = 744;
 
 export interface CapacitorLike {

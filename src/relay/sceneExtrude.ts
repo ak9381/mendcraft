@@ -1,6 +1,6 @@
 // PURE extrude geometry for the /control dashboard's fullscreen 3D review.
 //
-// The iPad only ever receives the privacy-safe ControlSnapshot — compact 2D
+// The /control dashboard only ever receives the privacy-safe ControlSnapshot — compact 2D
 // ScenePrimitives (plan wall segments, part/ui boxes), never the full PlanDoc
 // (which stays on the laptop). So the dashboard can't call the editor's
 // extrude3d (that needs a PlanDoc). Instead it extrudes exactly what crossed the

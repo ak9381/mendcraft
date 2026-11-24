@@ -37,7 +37,7 @@ describe('detectPlatform', () => {
   it('isTablet flips at the 744px breakpoint regardless of OS', () => {
     expect(detectPlatform({ search: '', viewportWidth: TABLET_MIN_WIDTH - 1 }).isTablet).toBe(false);
     expect(detectPlatform({ search: '', viewportWidth: TABLET_MIN_WIDTH }).isTablet).toBe(true);
-    const ipad = detectPlatform({ search: '?platform=ios', viewportWidth: 820 });
-    expect(ipad).toEqual({ os: 'ios', isNative: false, isTablet: true, isPhone: false });
+    const wideIos = detectPlatform({ search: '?platform=ios', viewportWidth: 820 });
+    expect(wideIos).toEqual({ os: 'ios', isNative: false, isTablet: true, isPhone: false });
   });
 });

@@ -29,7 +29,7 @@ export const SUGGESTIONS: readonly Suggestion[] = [
   { id: 'materials', text: 'Add materials and light? Online, about 15 s', say: 'Warm evening light, terracotta floor', minLevel: 3 },
   { id: 'email', text: 'Tell the client what changed today?', say: 'Email the client about today', minLevel: 3 },
   { id: 'site', text: 'Going to site? I can answer from the plan.', say: 'Site visit', minLevel: 4 },
-  { id: 'sync', text: 'A second device is here. Join it?', say: 'Join my iPad', minLevel: 4 },
+  { id: 'sync', text: 'A second device is here. Join it?', say: 'Join my phone', minLevel: 4 },
   { id: 'connect', text: 'Connect the lamp? Deep writes the link; you approve what it can do.', say: 'Connect the lamp', minLevel: 4 },
 ];
 

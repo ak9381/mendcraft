@@ -173,7 +173,7 @@ export type BrowserPlan =
   | { ok: true; steps: PlannedStep[]; confirmCount: number; opensExternal: boolean }
   | { ok: false; error: string };
 
-/** One human line describing a step (for the highlight banner + iPad card). */
+/** One human line describing a step (for the highlight banner + /control card). */
 export function describeBrowserStep(step: BrowserStep): string {
   switch (step.op) {
     case 'open':

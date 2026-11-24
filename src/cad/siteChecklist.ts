@@ -4,7 +4,7 @@
 // (research / run the check) or "Email the client" (Gemini drafts, she reads
 // the draft, and NOTHING is sent unless she confirms — it opens her own mail
 // app with the draft; she presses send there). Stored locally, synced to
-// Firestore when online, shown live on the iPad /control page.
+// Firestore when online, shown live on the optional /control dashboard.
 
 export type ChecklistStatus = 'open' | 'answered' | 'emailed' | 'done';
 

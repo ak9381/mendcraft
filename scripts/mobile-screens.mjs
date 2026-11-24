@@ -1,4 +1,4 @@
-// mobile:screens — deterministic screenshot walk for the phone + tablet
+// mobile:screens — deterministic screenshot walk for the phone companion
 // companion shell (src/canvas/mobile/*), one PNG per state, no camera/mic/
 // hub/network (?sim=1 drives every screen from mock data).
 //
@@ -117,14 +117,6 @@ async function main() {
       await page.close();
     }
 
-    // One iPad split-view shot: the explicit tablet deep link, iOS styling.
-    const ipad = await browser.newPage();
-    await ipad.setViewport({ width: 820, height: 1180, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-    await ipad.goto(`${base}/mobile.html?sim=1&mobileScreen=tablet&platform=ios`, { waitUntil: 'networkidle0', timeout: 20000 });
-    await sleep(250);
-    await ipad.screenshot({ path: resolve(OUT, 'ipad-split.png') });
-    console.log('  wrote ipad-split.png');
-    await ipad.close();
   } catch (e) {
     console.error('mobile:screens — error:', e?.message || e);
     failed = true;
