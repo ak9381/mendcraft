@@ -50,3 +50,7 @@ Akash: features should be truly integrated end to end, not separate things to de
 - **Cut:** on-screen keyboard (removed), gimbal photo ID (optional, not planned).
 
 Wave 2 of the plan is re-scoped to: journey state + next-step suggestions, then each build-list item as a journey step (pair-first connect, point-to-connect, Spotify, board-to-phone), then replay + end-to-end test.
+
+## Decision (25 Nov): a real "try to break it" beat, no staged failure
+
+Akash asked for a rollback with the red blink. Ruling: show the real safety net, not a faked crash. The journey gets a "Try to break it" step: ask for something that violates a real limit (lamp brightness outside WiZ's 10–100 %, or a control for a device that isn't connected). The model proposes; validation refuses it; the responsible engine blinks red (panel, engine bar, AI monitor); the board is unchanged. Builder must first verify these requests reach validation and are refused (not silently clamped) on both `?sim=1` (scripted reply must be the model's real-shaped attempt, labelled SIM) and live; if a path clamps instead, make the validator refuse with a plain reason. Undo stays as the user-driven rollback.
