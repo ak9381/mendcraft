@@ -6,11 +6,18 @@
 // is never recorded in any ledger or counted in any "sent to cloud" total —
 // its `bytes` field is the PHONE's own honest cloud total, shown per device.
 //
-// Privacy: the phone never forwards raw text it kept local. A local engine's
-// `received` line (the raw utterance) becomes a fixed status line, a `redact`
-// line keeps only its token, every other line goes through the same
-// protectForCloud redaction the phone applies before a cloud call (and is
-// dropped if a known name still shows), and every text is capped at 120 chars.
+// Privacy: text an on-phone engine (Apple / Android on-device / rules) logged
+// never leaves the phone unless it is app-authored — an allow-list of known
+// templates (route lines, "N tiles filled", try-to-break refusals, fixed fail
+// lines, handoff reasons). Anything else becomes a fixed line per verb
+// ("replied on the phone"). Gemini lines already went to the cloud, so they
+// keep the protectForCloud redaction. Every line also has IPv4/MAC addresses
+// masked, and is capped at 120 chars with control/bidi/zero-width chars gone.
+//
+// Sender identity: the relay has no per-sender identity (every phone posts as
+// `from: 'phone'`). Each event carries the phone's install deviceId; the
+// laptop labels and rate-limits by the deviceId it saw in that phone's
+// announce, and ignores the event's own claim of platform.
 
 import type { AiFeed, AiFeedMsg, DistributiveOmit, FeedEngine } from './aiFeed';
 import type { EngineState } from './engineBar';
@@ -19,20 +26,29 @@ import type { PhonePlatform } from './screenLayout';
 import type { RelayCommand } from '../relay/protocol';
 import { AI_EVENT_JSON_MAX } from '../relay/protocol';
 import { nothingRaw, protectForCloud, type Person } from '../privacy/directory';
+import { APPLE_ON_DEVICE_NOTE, NO_NANO_NOTE, PHONE_NANO_NOTE, ROUTE_VIA_HUB } from './engines';
+import { ROUTE_LINES } from '../ux/routeCatalog';
+import { LAMP_RANGE_REFUSAL, VOLUME_RANGE_REFUSAL } from './deviceGuard';
+import * as FAIL_LINES from './failLines';
 
 /** Which engine ran on the phone. 'apple' = Apple Foundation Models (iPhone),
  *  'nano' = an Android on-device model, 'gemini' = Gemini cloud via Firebase
- *  AI Logic, 'rules' = no model (local status lines only). */
+ *  AI Logic, 'rules' = no model (rule-based steps such as redaction). */
 export type PhoneAiEngine = 'apple' | 'nano' | 'gemini' | 'rules';
 
+/** `id` is the sending phone's install deviceId (as in its announce). */
 export type PhoneAiEvent =
-  | { k: 'log'; platform: PhonePlatform; engine: PhoneAiEngine; verb: LogVerb; text: string }
-  | { k: 'state'; platform: PhonePlatform; engine: PhoneAiEngine; state: EngineState }
-  | { k: 'handoff'; platform: PhonePlatform; from: PhoneAiEngine; to: PhoneAiEngine; text: string }
-  | { k: 'bytes'; platform: PhonePlatform; bytes: number };
+  | { k: 'log'; id: string; engine: PhoneAiEngine; verb: LogVerb; text: string }
+  | { k: 'state'; id: string; engine: PhoneAiEngine; state: EngineState }
+  | { k: 'handoff'; id: string; from: PhoneAiEngine; to: PhoneAiEngine; text: string }
+  | { k: 'bytes'; id: string; bytes: number };
 
 export const AI_EVENT_TEXT_MAX = 120;
+/** Phone send rate; the laptop allows double that per device. */
 export const AI_EVENT_RATE = { max: 5, windowMs: 1000 } as const;
+export const HOST_AI_EVENT_RATE = { max: 10, windowMs: 1000 } as const;
+/** Log lines held on the phone while over the rate (oldest dropped past it). */
+export const AI_EVENT_QUEUE_MAX = 10;
 /** A phone's cloud total is a running byte count; anything past this is junk. */
 const BYTES_MAX = 1_000_000_000;
 
@@ -41,20 +57,46 @@ const VERBS: readonly LogVerb[] = ['received', 'redact', 'handoff', 'plan', 'bui
 const STATES: readonly EngineState[] = ['idle', 'working', 'done', 'queued', 'failed', 'unavailable'];
 
 export const LOCAL_RECEIVED_LINE = 'request received · stayed on the phone';
+/** The fixed line per verb for on-phone text that is not app-authored. */
+export const LOCAL_FIXED_LINE: Record<LogVerb, string> = {
+  received: LOCAL_RECEIVED_LINE,
+  redact: 'a name was kept on the phone',
+  handoff: 'handed off',
+  plan: 'working on the phone',
+  build: 'working on the phone',
+  fill: 'working on the phone',
+  done: 'replied on the phone',
+  replied: 'replied on the phone',
+  queued: 'queued on the phone',
+  note: 'note kept on the phone',
+  fail: 'failed on the phone',
+};
 
-/** Strip control characters and cap at 120 chars (with an ellipsis). */
+// U+0000–U+001F, U+007F, zero-width + LRM/RLM (U+200B–U+200F), bidi embeds
+// (U+202A–U+202E), bidi isolates (U+2066–U+2069).
+// eslint-disable-next-line no-control-regex
+const STRIP = /[\u0000-\u001f\u007f​-‏‪-‮⁦-⁩]+/g;
+
+/** Strip control/bidi/zero-width characters and cap at 120 chars. */
 export function capText(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  const clean = s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  const clean = s.replace(STRIP, ' ').replace(/\s{2,}/g, ' ').trim();
   return clean.length > AI_EVENT_TEXT_MAX ? `${clean.slice(0, AI_EVENT_TEXT_MAX - 1)}…` : clean;
 }
 
+const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const MAC = /\b[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}\b/gi;
+/** Mask IPv4 and MAC addresses (device addresses never leave the phone). */
+export function maskAddresses(s: string): string {
+  return s.replace(MAC, '[mac]').replace(IPV4, '[ip]');
+}
+
 const isEngine = (x: unknown): x is PhoneAiEngine => typeof x === 'string' && (ENGINES as readonly string[]).includes(x);
-const isPlatform = (x: unknown): x is PhonePlatform => x === 'ios' || x === 'android';
+const isDeviceId = (x: unknown): x is string => typeof x === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(x);
 
 /** Strictly coerce an aiEvent payload from the wire (JSON text or object).
- *  Unknown kinds → null; unknown fields are dropped; engine/verb/state are
- *  whitelisted; text is capped; bytes must be a finite non-negative integer. */
+ *  Unknown kinds → null; unknown fields (including any `platform` claim) are
+ *  dropped; engine/verb/state are whitelisted; text is capped; bytes must be
+ *  a finite non-negative integer. */
 export function coerceAiEvent(raw: unknown): PhoneAiEvent | null {
   let o: unknown = raw;
   if (typeof raw === 'string') {
@@ -63,61 +105,52 @@ export function coerceAiEvent(raw: unknown): PhoneAiEvent | null {
   }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
   const m = o as Record<string, unknown>;
-  if (!isPlatform(m.platform)) return null;
-  const platform = m.platform;
+  if (!isDeviceId(m.id)) return null;
+  const id = m.id;
   const text = (): string | null => (typeof m.text === 'string' ? capText(m.text) : null);
   switch (m.k) {
     case 'log': {
       if (!isEngine(m.engine) || typeof m.verb !== 'string' || !(VERBS as readonly string[]).includes(m.verb)) return null;
       const t = text();
-      return t === null ? null : { k: 'log', platform, engine: m.engine, verb: m.verb as LogVerb, text: t };
+      return t === null ? null : { k: 'log', id, engine: m.engine, verb: m.verb as LogVerb, text: t };
     }
     case 'state':
       if (!isEngine(m.engine) || typeof m.state !== 'string' || !(STATES as readonly string[]).includes(m.state)) return null;
-      return { k: 'state', platform, engine: m.engine, state: m.state as EngineState };
+      return { k: 'state', id, engine: m.engine, state: m.state as EngineState };
     case 'handoff': {
       if (!isEngine(m.from) || !isEngine(m.to)) return null;
       const t = text();
-      return t === null ? null : { k: 'handoff', platform, from: m.from, to: m.to, text: t };
+      return t === null ? null : { k: 'handoff', id, from: m.from, to: m.to, text: t };
     }
     case 'bytes':
       if (typeof m.bytes !== 'number' || !Number.isInteger(m.bytes) || m.bytes < 0 || m.bytes > BYTES_MAX) return null;
-      return { k: 'bytes', platform, bytes: m.bytes };
+      return { k: 'bytes', id, bytes: m.bytes };
     default:
       return null;
   }
 }
 
-/** The label the laptop shows for a phone, from that phone's announce. */
-export function phoneDeviceLabel(platform: PhonePlatform): string {
-  return platform === 'ios' ? 'iPhone' : 'Nothing phone';
+/** The label the laptop shows for a phone, from that phone's announce. Only a
+ *  native Android app is the Nothing phone; a narrow browser is just Android. */
+export function phoneDeviceLabel(platform: PhonePlatform, native = true): string {
+  if (platform === 'ios') return 'iPhone';
+  return native ? 'Nothing phone' : 'Android phone';
 }
 
 type FeedOut = DistributiveOmit<AiFeedMsg, 'v' | 'sid' | 't'>;
 
-/** The feed only knows Nano/Gemini/Apple; 'rules' (no model ran) has no
- *  monitor column, so it is not republished rather than mislabelled. */
-const feedEngine = (e: PhoneAiEngine): FeedEngine | null => (e === 'rules' ? null : e);
+export interface AnnouncedPhone { platform: PhonePlatform; label: string }
 
-/** Host side: one coerced phone event → a device-tagged feed message. */
-export function phoneAiEventToFeed(ev: PhoneAiEvent, deviceLabel: string): FeedOut | null {
-  const tag = { device: ev.platform === 'ios' ? 'iphone' as const : 'android' as const, deviceLabel: capText(deviceLabel).slice(0, 40) };
+/** Host side: one coerced phone event → a device-tagged feed message. The
+ *  device comes from the sender's announce, never from the event itself. */
+export function phoneAiEventToFeed(ev: PhoneAiEvent, phone: AnnouncedPhone): FeedOut {
+  const tag = { device: phone.platform === 'ios' ? 'iphone' as const : 'android' as const, deviceLabel: capText(phone.label).slice(0, 40) };
+  const eng = (e: PhoneAiEngine): FeedEngine => e;
   switch (ev.k) {
-    case 'log': {
-      const engine = feedEngine(ev.engine);
-      return engine ? { kind: 'log', engine, verb: ev.verb, text: ev.text, ...tag } : null;
-    }
-    case 'state': {
-      const engine = feedEngine(ev.engine);
-      return engine ? { kind: 'state', engine, state: ev.state, ...tag } : null;
-    }
-    case 'handoff': {
-      const from = feedEngine(ev.from);
-      const to = feedEngine(ev.to);
-      return from && to ? { kind: 'handoff', from, to, text: ev.text, ...tag } : null;
-    }
-    case 'bytes':
-      return { kind: 'bytes', total: ev.bytes, ...tag };
+    case 'log': return { kind: 'log', engine: eng(ev.engine), verb: ev.verb, text: ev.text, ...tag };
+    case 'state': return { kind: 'state', engine: eng(ev.engine), state: ev.state, ...tag };
+    case 'handoff': return { kind: 'handoff', from: eng(ev.from), to: eng(ev.to), text: ev.text, ...tag };
+    case 'bytes': return { kind: 'bytes', total: ev.bytes, ...tag };
   }
 }
 
@@ -146,49 +179,99 @@ export function createRateLimiter(opts: { max?: number; windowMs?: number; now?:
       const list = prune(key, t);
       return list.length < max ? 0 : Math.max(0, windowMs - (t - list[0]!));
     },
+    clear(): void { hits.clear(); },
   };
 }
 
-/** Host side: phones that announced themselves → the laptop's AI feed.
- *  An aiEvent from a platform that never announced is dropped; each phone is
- *  rate-limited on its own. Never touches a ledger. */
+/** Host side: announced phones (by deviceId) → the laptop's AI feed. An event
+ *  whose deviceId never announced is dropped; each phone is rate-limited on
+ *  its own (10/s). Never touches a ledger. */
 export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; now?: () => number }) {
-  const labels = new Map<PhonePlatform, string>();
-  const limiter = createRateLimiter({ now: opts.now });
+  const phones = new Map<string, AnnouncedPhone>();
+  const limiter = createRateLimiter({ ...HOST_AI_EVENT_RATE, now: opts.now });
   return {
-    announce(platform: PhonePlatform): string {
-      const label = phoneDeviceLabel(platform);
-      labels.set(platform, label);
+    /** Record a phone's announce; returns its label. Without a deviceId the
+     *  phone is placed as before but its aiEvents are not accepted. */
+    announce(platform: PhonePlatform, deviceId?: unknown, native?: unknown): string {
+      const label = phoneDeviceLabel(platform, native !== false);
+      if (isDeviceId(deviceId)) phones.set(deviceId, { platform, label });
       return label;
     },
+    /** Forget every announced phone (a phone dropped / the relay closed). */
+    clear(): void { phones.clear(); limiter.clear(); },
     /** Returns whether the event reached the feed. */
     handle(text: string): boolean {
       const ev = coerceAiEvent(text);
       if (!ev) return false;
-      const label = labels.get(ev.platform);
-      if (!label || !limiter.allow(ev.platform)) return false;
-      const msg = phoneAiEventToFeed(ev, label);
-      if (!msg) return false;
-      opts.feed.publish(msg);
+      const phone = phones.get(ev.id);
+      if (!phone || !limiter.allow(ev.id)) return false;
+      opts.feed.publish(phoneAiEventToFeed(ev, phone));
       return true;
     },
   };
 }
 
-/** Phone side: make a feed line safe to leave the phone, or null to drop it. */
-export function phoneSafeText(engine: PhoneAiEngine, verb: string, text: string, people: readonly Person[]): string | null {
-  if (verb === 'received' && engine !== 'gemini') return LOCAL_RECEIVED_LINE;
+const ROUTE_NOTES: readonly string[] = [
+  APPLE_ON_DEVICE_NOTE, NO_NANO_NOTE, PHONE_NANO_NOTE, ROUTE_VIA_HUB,
+  'Nano · on device — nothing left this device',
+  'Gemini · cloud — sent your words and device names to improve the layout',
+  ...Object.values(ROUTE_LINES),
+];
+const FIXED_APP_LINES: readonly string[] = [
+  ...ROUTE_NOTES,
+  LAMP_RANGE_REFUSAL, VOLUME_RANGE_REFUSAL,
+  ...(Object.values(FAIL_LINES) as unknown[]).filter((v): v is string => typeof v === 'string'),
+  'no camera or gimbal here, so the photo is simulated.',
+];
+
+/** App-authored text an on-phone engine may send as-is (or a safe rewrite of
+ *  it); null when the text is not a known template. */
+export function appAuthoredLine(text: string): string | null {
+  const t = text.replace(/^SIM · /, '');
+  const sim = t !== text ? 'SIM · ' : '';
+  if (FIXED_APP_LINES.includes(t)) return sim + t;
+  if (/^\d{1,3} tiles? filled$/.test(t)) return sim + t;
+  if (/^Kannada pack ready · \d{1,4} swaps$/.test(t)) return sim + t;
+  // Try-to-break refusal names the thing she said — keep the template only.
+  if (/^There's no .{1,60} connected\. Nothing changed\.$/.test(t)) return `${sim}No such device connected. Nothing changed.`;
+  if (/^(?:SIM · )?the model didn’t answer; checking your request directly\.$/.test(t)) return text;
+  return null;
+}
+
+const HANDOFF_REASONS: readonly string[] = [
+  'group the lights and add a room plan',
+  'plan the Kannada pack — too complex for on-device',
+];
+/** App-authored handoff reasons; anything else becomes "handed off". */
+export function safeHandoffReason(reason: string): string {
+  const r = reason.replace(/^[→←]\s*(?:nano|gemini):\s*/, '');
+  const arrow = reason.slice(0, reason.length - r.length);
+  if (HANDOFF_REASONS.includes(r) || /^apply \d{1,4} label swaps locally$/.test(r)) return arrow + r;
+  if (/^edit one tile\b/.test(r)) return `${arrow}edit one tile`;
+  return LOCAL_FIXED_LINE.handoff;
+}
+
+/** Phone side: make a feed line safe to leave the phone. `engine` is the
+ *  engine the line is sent under. Never returns raw on-phone text. */
+export function phoneSafeText(engine: PhoneAiEngine, verb: LogVerb, text: string, people: readonly Person[]): string {
   if (verb === 'redact') {
     const tok = /(\[[^\]\n]{1,40}\])\s*$/.exec(text);
-    return tok ? `name kept on the phone → ${tok[1]}` : null;
+    return tok ? `name kept on the phone → ${capText(tok[1]!)}` : LOCAL_FIXED_LINE.redact;
   }
-  const red = protectForCloud(text, people).text;
-  if (!nothingRaw(red, people)) return null;
-  return capText(red);
+  if (verb === 'handoff') return capText(safeHandoffReason(text));
+  if (engine === 'gemini') {
+    // Already sent to the cloud (redacted); keep that same redaction.
+    const red = maskAddresses(protectForCloud(text, people).text);
+    return nothingRaw(red, people) ? capText(red) : LOCAL_FIXED_LINE[verb];
+  }
+  if (verb === 'received') return LOCAL_RECEIVED_LINE;
+  const app = appAuthoredLine(text);
+  return app === null ? LOCAL_FIXED_LINE[verb] : capText(maskAddresses(app));
 }
 
 export interface PhoneAiForwarderOptions {
-  platform: PhonePlatform;
+  /** This phone's install deviceId (the same one its announce carries). */
+  deviceId: string;
   /** Which on-phone engine backs the "nano" terminal right now. */
   localEngine: () => Exclude<PhoneAiEngine, 'gemini'>;
   people?: () => readonly Person[];
@@ -203,74 +286,90 @@ export interface PhoneAiForwarder extends AiFeed {
   bind(session: { sendCommand(cmd: RelayCommand): Promise<void> } | null): void;
 }
 
+type Build = () => PhoneAiEvent | null;
+
 /** The phone's AiFeed tap: modelPanels → compact aiEvent relay commands.
- *  ≤5/s; over the limit, log lines are dropped while the latest state per
- *  engine and the latest byte total are held and sent when a slot opens. */
+ *  ≤5/s. Over the limit, log lines wait in a FIFO of 10 (oldest dropped past
+ *  that), and the latest state per engine and latest byte total replace any
+ *  queued older one — all flushed in order as slots free. Lines are only
+ *  redacted when they are actually sent. */
 export function createPhoneAiForwarder(opts: PhoneAiForwarderOptions): PhoneAiForwarder {
   const limiter = createRateLimiter({ max: opts.max, windowMs: opts.windowMs, now: opts.now });
   const setTimer = opts.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const people = opts.people ?? (() => []);
+  const id = opts.deviceId;
   let session: { sendCommand(cmd: RelayCommand): Promise<void> } | null = null;
-  const pending = new Map<string, PhoneAiEvent>();
+  const queue: Array<{ key?: string; build: Build }> = [];
   let timer = false;
 
-  const sendNow = (ev: PhoneAiEvent): void => {
+  const sendNow = (build: Build): void => {
+    const ev = build();
+    if (!ev || !session) return;
     const text = JSON.stringify(ev);
-    if (!session || text.length > AI_EVENT_JSON_MAX) return;
+    if (text.length > AI_EVENT_JSON_MAX) return;
     try { void session.sendCommand({ kind: 'aiEvent', text }).catch(() => undefined); } catch { /* best-effort */ }
   };
-  const flush = (): void => {
+  const schedule = (): void => {
+    if (timer || !queue.length) return;
+    timer = true;
+    setTimer(flush, Math.max(1, limiter.waitMs()));
+  };
+  function flush(): void {
     timer = false;
-    for (const [key, ev] of pending) {
-      if (!session) { pending.clear(); return; }
-      if (!limiter.allow()) break;
-      pending.delete(key);
-      sendNow(ev);
-    }
-    if (pending.size && !timer) { timer = true; setTimer(flush, Math.max(1, limiter.waitMs())); }
-  };
-  const emit = (ev: PhoneAiEvent, coalesceKey?: string): void => {
+    while (queue.length && session && limiter.allow()) sendNow(queue.shift()!.build);
+    if (!session) queue.length = 0;
+    schedule();
+  }
+  const emit = (build: Build, key?: string): void => {
     if (!session) return;
-    if (limiter.allow()) {
-      if (coalesceKey) pending.delete(coalesceKey);
-      sendNow(ev);
-      return;
+    if (key) {
+      const i = queue.findIndex((q) => q.key === key);
+      if (i >= 0) queue.splice(i, 1);
     }
-    if (!coalesceKey) return; // a dropped log line
-    pending.set(coalesceKey, ev);
-    if (!timer) { timer = true; setTimer(flush, Math.max(1, limiter.waitMs())); }
+    // Rate check first: only lines that are sent now get redacted now.
+    if (!queue.length && limiter.allow()) { sendNow(build); return; }
+    queue.push({ key, build });
+    const logs = queue.filter((q) => !q.key);
+    if (logs.length > AI_EVENT_QUEUE_MAX) queue.splice(queue.indexOf(logs[0]!), 1);
+    schedule();
   };
-  const mapEngine = (e: FeedEngine): PhoneAiEngine => (e === 'gemini' ? 'gemini' : opts.localEngine());
+  const mapEngine = (e: FeedEngine): PhoneAiEngine => (e === 'gemini' ? 'gemini' : e === 'nano' ? opts.localEngine() : e);
 
   return {
-    bind(s) { session = s; if (!s) pending.clear(); },
+    bind(s) { session = s; if (!s) queue.length = 0; },
     onHello() { /* the phone has no monitor of its own */ },
     publish(m) {
       if (!session) return;
-      const platform = opts.platform;
       switch (m.kind) {
         case 'log': {
-          const engine = mapEngine(m.engine);
-          const text = phoneSafeText(engine, m.verb, m.text, people());
-          if (text === null || !(VERBS as readonly string[]).includes(m.verb)) return;
-          emit({ k: 'log', platform, engine, verb: m.verb as LogVerb, text });
+          if (!(VERBS as readonly string[]).includes(m.verb)) return;
+          const verb = m.verb as LogVerb;
+          const ran = mapEngine(m.engine);
+          // Receiving and redacting are rule-based steps, not a model's work.
+          const engine: PhoneAiEngine = ran !== 'gemini' && (verb === 'received' || verb === 'redact') ? 'rules' : ran;
+          const raw = m.text;
+          emit(() => ({ k: 'log', id, engine, verb, text: phoneSafeText(ran === 'gemini' ? 'gemini' : engine, verb, raw, people()) }));
           return;
         }
         case 'state': {
           // State only — the line repeats a log detail that may be local text.
           const engine = mapEngine(m.engine);
-          emit({ k: 'state', platform, engine, state: m.state }, `state:${engine}`);
+          const state = m.state;
+          emit(() => ({ k: 'state', id, engine, state }), `state:${engine}`);
           return;
         }
         case 'handoff': {
-          const text = phoneSafeText('gemini', 'handoff', m.text, people());
-          if (text === null) return;
-          emit({ k: 'handoff', platform, from: mapEngine(m.from), to: mapEngine(m.to), text });
+          const from = mapEngine(m.from);
+          const to = mapEngine(m.to);
+          const raw = m.text;
+          emit(() => ({ k: 'handoff', id, from, to, text: capText(safeHandoffReason(raw)) }));
           return;
         }
-        case 'bytes':
-          emit({ k: 'bytes', platform, bytes: Math.max(0, Math.round(m.total)) }, 'bytes');
+        case 'bytes': {
+          const bytes = Math.max(0, Math.round(m.total));
+          emit(() => ({ k: 'bytes', id, bytes }), 'bytes');
           return;
+        }
         default:
           return;
       }

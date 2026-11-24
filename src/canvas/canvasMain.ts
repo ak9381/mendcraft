@@ -13,6 +13,7 @@ import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMe
 import { createVoiceController } from '../input/voice';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
+import { ensureDeviceId } from '../relay/pairingStore';
 
 const params = new URLSearchParams(location.search);
 if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
@@ -71,7 +72,7 @@ const engines = createEngines({
 const phonePlatform = capacitor?.getPlatform?.() === 'ios' ? 'ios' as const : 'android' as const;
 const phoneAiFeed = phoneShell
   ? createPhoneAiForwarder({
-      platform: phonePlatform,
+      deviceId: ensureDeviceId((() => { try { return localStorage; } catch { return null; } })()),
       localEngine: () => (apple.ready ? 'apple' : apple.androidNano ? 'nano' : 'rules'),
       people: () => activePeople(),
     })
@@ -150,6 +151,7 @@ afterFirstPaint(() => {
     startPhoneRelayGuest(handle, {
       sim: params.has('sim'),
       platform: phonePlatform,
+      native: isPhone,
       aiForwarder: phoneAiFeed,
     });
   }

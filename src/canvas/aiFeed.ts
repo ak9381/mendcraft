@@ -12,8 +12,9 @@ export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omi
 /** Which device an event came from. Absent = the laptop (this canvas). */
 export type FeedDevice = 'laptop' | 'iphone' | 'android';
 /** Engines a feed event may name: the laptop's Nano/Gemini, plus Apple
- *  Foundation Models when an iPhone ran a turn on device. */
-export type FeedEngine = EngineId | 'apple';
+ *  Foundation Models when an iPhone ran a turn on device, and 'rules' for a
+ *  phone's rule-based steps (no model: "on phone · no model"). */
+export type FeedEngine = EngineId | 'apple' | 'rules';
 /** Optional device tags on log/state/handoff/bytes. A phone's events carry
  *  `device` + `deviceLabel` ("iPhone", "Nothing phone"); a `bytes` message
  *  with a phone `device` is that phone's OWN cloud total, not the laptop's. */
@@ -43,7 +44,7 @@ export interface AiFeed {
 export const FEED_CHANNEL = 'mendcraft-ai';
 export const FEED_KEEP_LINES = 40;
 const LANE_KEEP = 20;
-const NAME: Record<FeedEngine, string> = { nano: 'Nano', gemini: 'Gemini', apple: 'Apple' };
+const NAME: Record<FeedEngine, string> = { nano: 'Nano', gemini: 'Gemini', apple: 'Apple', rules: 'Rules' };
 
 export function handoffLabel(from: FeedEngine, to: FeedEngine, text: string): string {
   return `${NAME[from]} → ${NAME[to]}: ${text}`;
@@ -53,7 +54,7 @@ export function isAiFeedMsg(d: unknown): d is AiFeedMsg {
   if (!d || typeof d !== 'object') return false;
   const m = d as Record<string, unknown>;
   if (m.v !== 1 || typeof m.sid !== 'string' || typeof m.t !== 'number') return false;
-  const eng = (x: unknown) => x === 'nano' || x === 'gemini' || x === 'apple';
+  const eng = (x: unknown) => x === 'nano' || x === 'gemini' || x === 'apple' || x === 'rules';
   const tagOk = (m.device === undefined || m.device === 'laptop' || m.device === 'iphone' || m.device === 'android')
     && (m.deviceLabel === undefined || typeof m.deviceLabel === 'string');
   if (!tagOk) return false;
@@ -114,13 +115,13 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
       // engine cards, lane or byte total (the snapshot stays laptop-only).
       if (isPhoneTagged(m)) { send(m); return; }
       if (m.kind === 'log') {
-        if (m.engine === 'apple') { send(m); return; }
+        if (m.engine === 'apple' || m.engine === 'rules') { send(m); return; }
         const l = engines[m.engine].lines;
         l.push(`${m.verb}\t${m.text}`);
         if (l.length > FEED_KEEP_LINES) l.splice(0, l.length - FEED_KEEP_LINES);
         if (m.verb === 'redact') pushLane(`redact\t${m.text}`);
       } else if (m.kind === 'state') {
-        if (m.engine === 'apple') { send(m); return; }
+        if (m.engine === 'apple' || m.engine === 'rules') { send(m); return; }
         engines[m.engine].state = m.state;
         if (m.line !== undefined) engines[m.engine].line = m.line;
       } else if (m.kind === 'bytes') {

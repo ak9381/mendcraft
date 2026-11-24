@@ -93,7 +93,7 @@ export function startPhoneLookToEdit(
 
 export function startPhoneRelayGuest(
   handle: { showRemoteBoard(plan: SurfacePlan): void },
-  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform; aiForwarder?: Pick<PhoneAiForwarder, 'bind'> } = {},
+  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform; native?: boolean; aiForwarder?: Pick<PhoneAiForwarder, 'bind'> } = {},
 ): () => void {
   if (opts.sim || typeof window === 'undefined') return () => undefined;
   const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
@@ -119,6 +119,7 @@ export function startPhoneRelayGuest(
         code: saved.token,
         storage,
         platform,
+        native: opts.native,
         hubName: 'the laptop',
       });
       if ('error' in res) return;

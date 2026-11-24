@@ -29,6 +29,8 @@ export interface PhoneGuestJoinDeps {
   storage?: StorageLike | null;
   platform?: PhonePlatform;
   hubName?: string;
+  /** True in the native Capacitor app (a narrow browser is not "the Nothing phone"). */
+  native?: boolean;
   onState?: (state: PairState) => void;
 }
 
@@ -71,8 +73,9 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
       deps.onState(session.state());
       session.onState(deps.onState);
     }
+    let deviceId: string | undefined;
     if (deps.storage) {
-      const deviceId = ensureDeviceId(deps.storage);
+      deviceId = ensureDeviceId(deps.storage);
       savePhonePair(deps.storage, {
         token: roomId,
         hubName: deps.hubName ?? 'the laptop',
@@ -80,7 +83,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
         platform: deps.platform,
       });
     }
-    if (deps.platform) announcePhone(session, deps.platform);
+    if (deps.platform) announcePhone(session, deps.platform, { deviceId, native: deps.native });
     return { roomId, session, stop: () => session.close() };
   } catch {
     return { error: 'needs network' };
@@ -89,9 +92,17 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
 
 /** Tell the laptop which phone this is, so it can place it (Nothing left,
  *  iPhone right by default) and send a board to THIS phone only. Best-effort. */
-export function announcePhone(session: Pick<GuestSession, 'sendCommand'>, platform: PhonePlatform): void {
+export function announcePhone(
+  session: Pick<GuestSession, 'sendCommand'>,
+  platform: PhonePlatform,
+  extra: { deviceId?: string; native?: boolean } = {},
+): void {
   try {
-    void session.sendCommand({ kind: 'announce', text: JSON.stringify({ platform }) }).catch(() => undefined);
+    // deviceId: the laptop keys this phone's AI-monitor events on it.
+    const body: Record<string, unknown> = { platform };
+    if (extra.deviceId) body.deviceId = extra.deviceId;
+    if (extra.native !== undefined) body.native = extra.native;
+    void session.sendCommand({ kind: 'announce', text: JSON.stringify(body) }).catch(() => undefined);
   } catch {
     /* a closed session never breaks the join */
   }

@@ -103,8 +103,8 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null): Mo
 
   const apply = (m: AiFeedMsg) => {
     switch (m.kind) {
-      case 'log': if (m.engine === 'apple') break; addLine(m.engine, m.verb, m.text); if (m.verb === 'redact') addLane('redact', m.text); break;
-      case 'state': if (m.engine === 'apple') break; if (m.state in STATE_TEXT) setState(m.engine, m.state); break;
+      case 'log': if (m.engine === 'apple' || m.engine === 'rules') break; addLine(m.engine, m.verb, m.text); if (m.verb === 'redact') addLane('redact', m.text); break;
+      case 'state': if (m.engine === 'apple' || m.engine === 'rules') break; if (m.state in STATE_TEXT) setState(m.engine, m.state); break;
       case 'handoff': addLane('handoff', handoffLabel(m.from, m.to, m.text)); break;
       case 'bytes': setTotal(m.total); break;
       case 'snapshot':
