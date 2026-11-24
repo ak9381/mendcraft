@@ -259,8 +259,9 @@ describe('empty board offers a Talk button on the frame', () => {
 describe('review Approve/Reject sit high enough to reach, off the edges', () => {
   it('keeps Approve/Reject 140×60 and 48px apart inside the floating window', () => {
     const actions = ruleFor(canvasCss, '.mc-review-actions');
-    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('width: min(360px');
-    expect(actions).toContain('gap: 48px');
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('width: min(560px');
+    // row-gap may be tighter (Ask-else wraps below); Approve↔Reject stay 48px apart.
+    expect(actions).toMatch(/gap: \d+px 48px/);
     const approve = ruleFor(canvasCss, '.mc-review-approve');
     expect(approve).toContain('min-height: 60px');
     expect(approve).toContain('min-width: 140px');

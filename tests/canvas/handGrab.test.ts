@@ -471,6 +471,39 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(board.some((e) => e.phase === 'start' && e.frameId === 'f1')).toBe(true);
   });
 
+  it('a held fist on a panel drag / resize handle drags it with pointerdown → move → up (review window)', () => {
+    for (const attr of ['[data-mc-drag-handle]', '[data-mc-resize-handle]']) {
+      const handle = fakeButton({ left: 600, top: 100, width: 200, height: 48 });
+      handle.matches = (sel: string) => sel.split(',').some((s) => s.trim().startsWith('button') || s.trim() === attr);
+      const evs: { type: string; x: number; y: number }[] = [];
+      mount([handle], [], [], { createDragEvent: (type, p) => { evs.push({ type, x: p.x, y: p.y }); return { type } as unknown as Event; } });
+      open(700, 124, 6);
+      fist(700, 124, HOLD);
+      for (let x = 700; x <= 760; x += 20) fist(x, 124 + (x - 700));
+      open(760, 184, 8);
+      const types = evs.map((e) => e.type);
+      expect(types[0], attr).toBe('pointerdown');
+      expect(types).toContain('pointermove');
+      expect(types[types.length - 1], attr).toBe('pointerup');
+      expect(evs.filter((e) => e.type === 'pointermove').pop()!.x).toBeGreaterThan(720);
+      expect(handle.dispatchEvent).toHaveBeenCalled();
+      expect(board).toHaveLength(0);
+      expect(pans).toHaveLength(0);
+      hp.destroy();
+    }
+  });
+
+  it('a fist on an ordinary button still never grabs (only board titles and drag/resize handles do)', () => {
+    const btn = fakeButton({ left: 600, top: 100, width: 200, height: 48 });
+    const evs: string[] = [];
+    mount([btn], [], [], { createDragEvent: (type) => { evs.push(type); return { type } as unknown as Event; } });
+    open(700, 124, 6);
+    fist(700, 124, HOLD);
+    for (let x = 700; x <= 780; x += 20) fist(x, 124);
+    expect(evs).toHaveLength(0);
+    expect(pans).toHaveLength(0);
+  });
+
   it('in focus mode, one fist on the FOCUSED board pans instead of moving it', () => {
     const f1 = fakeFrame({ left: 100, top: 100, width: 800, height: 600 }, 'f1');
     mount([], [f1], [], { focusedFrameId: () => 'f1' });

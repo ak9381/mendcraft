@@ -88,7 +88,8 @@ import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { mountReviewDialog } from './reviewDialog';
+import { createReviewReceipts, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
@@ -756,12 +757,32 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneMenu?.close();
     reviewDialog.open(model);
   }
+  /** Per-turn ledger receipts: each SentInfo a turn hands to the ledger
+   *  (aiSent / recordSent) is the token that turn later passes to its own
+   *  review, so a footer can only ever show THAT turn's engine, route and
+   *  bytes — never whatever turn happened to run last. */
+  const receipts = createReviewReceipts();
+  /** The review's honesty footer for the turn that owns `si`. No token means
+   *  no AI call made this change: say so, and claim no bytes. */
+  const reviewFacts = (si: SentInfo | null, youAsked?: string): ReviewFacts => receipts.facts(si, { youAsked, sim: opts.sim });
+  /** Teach runs on rules/Nano/Gemini; its card already names which. */
+  function teachFacts(card: HTMLElement): ReviewFacts {
+    const label = card.querySelector('.mc-proposal-engine')?.textContent?.trim() ?? '';
+    const engine = /gemini/i.test(label) ? 'gemini' : /nano/i.test(label) ? 'nano' : 'rules';
+    return engine === 'gemini'
+      ? { engine, engineLabel: label, sim: !!opts.sim, why: 'turning your words into a canvas action', sentWhat: 'your description of the action' }
+      : { engine, engineLabel: label || undefined, sim: !!opts.sim, bytes: 0 };
+  }
 
   const teachPanel = mountTeachPanel(root, {
     devices: () => deviceRefs(),
     sim: opts.sim,
     say,
-    openReview: (title, card) => showReview({ title, card }),
+    openReview: (title, card) => showReview({
+      title, card,
+      changes: [{ op: 'add', label: 'New gesture', detail: title.replace(/^Teach: /, '') }],
+      facts: teachFacts(card),
+    }),
     onSaved: () => {},
     onTriggered: (gesture) => {
       const text = typeof gesture.action.text === 'string' ? gesture.action.text : '';
@@ -1302,6 +1323,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
+  /** One ledger line for a turn, remembered against that turn's SentInfo
+   *  (summed if the same turn sends twice, e.g. a fallback retry). */
+  function recordSent(s: SentInfo, sentText: string, extraBytes = 0): void {
+    const entry = ledger.record({ engine: s.engine, sentText, extraBytes });
+    receipts.record(s, entry.bytes);
+    ledgerTotalRender();
+    panels.setFooterBytes(ledger.totals().aiBytes);
+  }
   function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
@@ -1314,9 +1343,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
     // extraBytes: a photo crop that went with the prompt (point-to-connect).
-    ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '', extraBytes: s.sent ? ctx.extraBytes : 0 });
-    ledgerTotalRender();
-    panels.setFooterBytes(ledger.totals().aiBytes);
+    recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -1536,7 +1563,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
-      showReview({ title: summary, card, extra: buildReviewExtra() });
+      showReview({
+        title: summary, card, extra: buildReviewExtra(),
+        // A blank board still has a name ("Board 3"): diff against it, so the
+        // plan says "Board 3 → This room" — or nothing when the name stays.
+        changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
+        facts: reviewFacts(si, utterance),
+      });
       say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
     });
   }
@@ -2002,7 +2035,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       `UI string keys: ${Object.keys(EN_PACK.strings).join(', ')}.`,
       'Kannada script only, each string ≤80 chars, no markup.',
     ].join('\n');
-    aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim }, { task: 'kannada' });
+    const knSent: SentInfo = { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim };
+    aiSent(utterance, knSent, { task: 'kannada' });
     // The redact-before-handoff invariant: aiSent() above already logged any
     // Nano redaction, so it's safe to announce the handoff now.
     panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
@@ -2044,7 +2078,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
       onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English.'); autoHideAi(); },
     });
-    showReview({ title: 'Add Kannada', card, extra: buildReviewExtra() });
+    showReview({
+      title: 'Add Kannada', card, extra: buildReviewExtra(),
+      changes: languagePackChanges('Kannada', swapCount),
+      facts: reviewFacts(knSent, utterance),
+    });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
@@ -3067,12 +3105,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const entries = enumerateMorphTiles(plan);
       for (const target of selectSelfCheckTargets(entries, els, wantPath)) {
         const session = selfCheckFixSession(frameId, target.path);
+        let fixSent: SentInfo | null = null;
         void runSelfCheck({
           host: target.host,
           spec: target.spec,
           tileId: target.id,
           log: tileSelfCheckLog,
-          requestFix: (prompt) => engineFor('gemini', scriptedFixJson(target.spec)).stream(prompt, () => {}),
+          requestFix: async (prompt) => {
+            const eng = engineFor('gemini', scriptedFixJson(target.spec));
+            const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
+            const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
+            recordSent(si, eng.id === 'nano' ? '' : prompt);
+            fixSent = si;
+            try { return await eng.stream(prompt, () => {}); } catch (e) {
+              if (!eng.fallback) throw e;
+              // The prepared draft answered instead: the footer says SIM.
+              si.sim = true;
+              return eng.fallback.stream(prompt, () => {});
+            }
+          },
           applyFix: session.applyFix,
           rollbackFix: session.rollbackFix,
           commitFix: session.commitFix,
@@ -3098,7 +3149,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
                 onKeep: () => { reviewDialog.close(); done(true); },
                 onDrop: () => { reviewDialog.close(); done(false); },
               });
-              showReview({ title: `Fix ${target.label}`, card, extra: buildReviewExtra() });
+              showReview({
+                title: `Fix ${target.label}`, card, extra: buildReviewExtra(),
+                changes: diffTile(original, parsed.value, { devices: store.all() }),
+                facts: reviewFacts(fixSent, 'self-check fix'),
+              });
             });
           },
         }).then((stat) => { if (!stat.passed) onUnverified?.(); });
@@ -3187,7 +3242,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       supported: () => !!voice?.supported && !opts.sim,
     },
     apply: applyMorph,
-    propose: (fid, patched, summary, path) => new Promise((done) => {
+    propose: (fid, patched, summary, path, turn) => new Promise((done) => {
       const card = renderProposalCard(document, {
         id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
@@ -3195,7 +3250,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onKeep: () => { reviewDialog.close(); done(applyMorph(fid, patched, summary, path)); },
         onDrop: () => { reviewDialog.close(); done(false); },
       });
-      showReview({ title: summary, card, extra: buildReviewExtra() });
+      showReview({
+        title: summary, card, extra: buildReviewExtra(),
+        changes: diffPlans(surfaces[fid] ?? null, patched, { devices: store.all() }),
+        facts: reviewFacts(turn?.sent ?? null, turn?.utterance ?? summary),
+      });
     }),
     undo,
     ui: {
