@@ -18,6 +18,7 @@ import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { openEndedAsk } from './openEndedAsk';
+import { breakPrompt, detectAttempt, runBreakTurn, scriptedReply, validateAttempt, type Attempt } from './tryToBreak';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -1737,7 +1738,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     void languageTurn('add kannada');
   }
+  // Like aiTurn: whatever way the turn ends, the cards stop saying Working
+  // (the Nano card was left on Working after the Kannada handoff).
   async function languageTurn(utterance: string): Promise<void> {
+    try { await languageTurnRun(utterance); } finally { engineBar?.settle(); }
+  }
+  async function languageTurnRun(utterance: string): Promise<void> {
     const engine = engineFor('gemini', JSON.stringify(SCRIPTED_KN_PACK));
     const prompt = [
       'Translate the smart-canvas UI into Kannada. Reply with JSON only:',
@@ -2157,6 +2163,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     autoHideAi();
   }
 
+  /** An impossible request: Nano proposes (scripted + SIM in ?sim=1), real
+   *  validation refuses, Nano's terminal fails red, and nothing is applied. */
+  async function breakTurn(text: string, attempt: Attempt, frameId: string | null): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const engine = engineFor('nano', scriptedReply(attempt));
+    aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Checked on this device. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
+    try {
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { aiPanel.querySelector('.mc-ai-state')!.textContent = t; say(t); } });
+      if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
+    } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
+  }
+
   // ---- commands ----
   /** Kannada heard line + English on the Talk caption. The English comes only
    *  from the active pack's own intent map (local); no translation → heard only. */
@@ -2236,6 +2254,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       case 'device': {
         const dc = r.result;
+        // An impossible level is refused by validation, never clamped.
+        const attempt = detectAttempt(text, deviceRefs());
+        if (attempt && !validateAttempt(attempt, deviceRefs()).ok) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
@@ -2276,7 +2297,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         void nameTurn(id, text);
         return true;
       }
-      case 'openEnded': break;
+      case 'openEnded': {
+        // "add a control for the oven" with no oven connected: refused, not chatted about.
+        const attempt = detectAttempt(text, deviceRefs());
+        if (attempt && !validateAttempt(attempt, deviceRefs()).ok) { void breakTurn(text, attempt, ranOn); return true; }
+        break;
+      }
     }
     void openEndedTurn(text);
     return true;

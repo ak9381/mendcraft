@@ -39,6 +39,8 @@ const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
   everything: { label: 'Show everything', say: 'show everything' },
   'new-board': { label: 'New board', say: 'new board' },
   undo: { label: 'Undo', say: 'undo' },
+  // A real safety-net beat: the request breaks a limit, validation refuses it.
+  'try-to-break': { label: 'Try to break it', say: 'set the desk lamp to 500% brightness' },
 };
 
 // Not here yet because run() has no route for them in this build:
@@ -46,7 +48,7 @@ const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
 const RULES: Record<JourneyStep, string[]> = {
   empty: ['connect-devices', 'floorplan', 'connect-device'],
   devices: ['connect-room', 'connect-device', 'floorplan'],
-  dashboard: ['connect-speaker', 'save', 'floorplan'],
+  dashboard: ['connect-speaker', 'try-to-break', 'save', 'floorplan'],
   music: ['play-music', 'save', 'floorplan'],
   saved: ['floorplan', 'kannada', 'everything'],
   floorplan: ['check', '3d', 'dxf'],
@@ -59,7 +61,7 @@ const FILLERS = ['everything', 'new-board'];
 
 /** Steps whose effect the board shape can't show; once run on a board (by
  *  chip or by voice, and only when it worked) they are not offered there again. */
-export const ONE_SHOT: ReadonlySet<string> = new Set(['check', '3d', 'dxf', 'play-music']);
+export const ONE_SHOT: ReadonlySet<string> = new Set(['check', '3d', 'dxf', 'play-music', 'try-to-break']);
 
 const step = (id: string): NextStep => ({ id, ...CATALOG[id] });
 
