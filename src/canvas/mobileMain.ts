@@ -13,6 +13,9 @@ import { mountMobile } from './mobile/mobileShell';
 import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { loadPin, togglePin } from './phonePin';
 import { shouldSync, type SyncReason } from '../input/gazeSync';
+import { createPresenceTracker } from '../input/presence';
+import { createFacingBanner } from '../ui/facingBanner';
+import { hasLiveCameraStream } from '../input/cameraShare';
 import { coerceSurfacePlan, type SurfacePlan } from './surfacePlan';
 
 const params = new URLSearchParams(location.search);
@@ -88,25 +91,57 @@ render();
 // Auto-sync fallback: app focus / page visibility re-sync the board (the camera
 // gaze path uses the same shouldSync logic — see input/gazeSync.ts — but never
 // opens the front camera when a live stream exists or the gimbal is active).
-if (!sim && savedPair) {
-  const evaluate = (facing: boolean): void => {
-    const res = shouldSync({
-      visible: document.visibilityState === 'visible',
-      facing,
-      focused: document.hasFocus(),
-      lastSyncAt,
-      now: Date.now(),
-      minIntervalMs: 4000,
-    });
-    if (res.sync) {
-      lastSyncAt = Date.now();
-      syncReason = res.reason;
-      render();
+function evaluateSync(facing: boolean): void {
+  if (!savedPair) return;
+  const res = shouldSync({
+    visible: document.visibilityState === 'visible',
+    facing,
+    focused: document.hasFocus(),
+    lastSyncAt,
+    now: Date.now(),
+    minIntervalMs: 4000,
+  });
+  if (res.sync) {
+    lastSyncAt = Date.now();
+    syncReason = res.reason;
+    render();
+  }
+}
+
+// Face detection on the phone: a small top Facing pill only (never a full-screen
+// box). Face-only tracker (~5 fps). Never steals a live / gimbal camera.
+if (!sim) {
+  const facingBanner = createFacingBanner(document.body);
+  let faceTracker: ReturnType<typeof createPresenceTracker> | null = null;
+  const startFace = async (): Promise<void> => {
+    if (faceTracker || hasLiveCameraStream()) return;
+    const t = createPresenceTracker(() => {}, (f) => {
+      facingBanner.set(typeof f.facing === 'boolean' ? f.facing : null);
+      evaluateSync(!!f.facing);
+    }, { detectFaces: true, detectHands: false });
+    try {
+      await t.start();
+      faceTracker = t;
+    } catch {
+      facingBanner.set(null);
     }
   };
-  document.addEventListener('visibilitychange', () => evaluate(false));
-  window.addEventListener('focus', () => evaluate(false));
-  evaluate(false);
+  const stopFace = (): void => {
+    faceTracker?.stop();
+    faceTracker = null;
+    facingBanner.set(null);
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      stopFace();
+      evaluateSync(false);
+    } else {
+      void startFace();
+    }
+  });
+  window.addEventListener('focus', () => evaluateSync(false));
+  void startFace();
+  evaluateSync(false);
 }
 
 // First-time pairing (no remembered room): listen for the laptop chime and join

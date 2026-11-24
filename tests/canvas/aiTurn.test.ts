@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSurfacePrompt, createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
+import { buildSurfacePrompt, createCanvasHistory, GEMINI_TIMEOUT_MS, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, withTimeoutRetry, type SurfaceEngine } from '../../src/canvas/aiTurn';
 import { OFFLINE_MID_LINE } from '../../src/canvas/failLines';
 import { focusOnInset } from '../../src/canvas/camera';
 import { parseCanvasCommand } from '../../src/canvas/canvasCommands';
@@ -155,10 +155,13 @@ describe('parseModelPlan (real-shaped model output)', () => {
     if (wrapped.ok) expect(wrapped.value.title).toBe('Wrapped');
   });
 
-  it('refuses unknown widgets even when the JSON is well-formed', () => {
+  it('drops unknown widgets with a note and keeps the valid tiles', () => {
     const r = parseModelPlan('```json\n{"kind":"room","title":"Living","tiles":[{"type":"script","src":"alert(1)"},{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"}]}\n```');
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/tile|type|widget|unknown/i);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.tiles).toHaveLength(1);
+    expect(r.value.tiles[0].type).toBe('lamp');
+    expect(r.notes?.some((n) => /script/i.test(n))).toBe(true);
   });
 });
 
@@ -210,5 +213,66 @@ describe('redaction covers nested surface plans', () => {
     const lamp = card.children[0];
     if (lamp.type !== 'lamp') throw new Error('expected lamp');
     expect(lamp.deviceId).toBe('wiz-desk');
+  });
+});
+
+
+describe('Gemini tile-agent timeout and retry', () => {
+  const PLAN = '{"kind":"room","title":"Studio","tiles":[{"type":"lamp","deviceId":"wiz-1","label":"Desk lamp"},{"type":"plan","boardId":"plan-1","template":"studio"}]}';
+  const req = { utterance: 'connect everything', frameTitle: 'Studio', devices: [] as { id: string; label: string; kind: string }[] };
+  const instant = async (_ms: number) => { /* expire immediately */ };
+
+  it('a live Gemini stream that finishes is a plan, not an infinite start', async () => {
+    const plan = await runSurfaceTurn(req, scriptedEngine('gemini', PLAN, { chunk: 80, delayMs: 0 }), {}, { timeoutMs: 20_000, sleep: instant });
+    // scripted engines are sim:true so they skip the timeout wrapper; use a live-like engine:
+    let text = '';
+    const live: SurfaceEngine = {
+      id: 'gemini', sim: false,
+      stream: async (_p, on) => { on(PLAN); text = PLAN; return PLAN; },
+    };
+    const got = await runSurfaceTurn(req, live, {}, { timeoutMs: GEMINI_TIMEOUT_MS, sleep: async () => new Promise(() => { /* never fires */ }) });
+    expect(got?.tiles.length).toBeGreaterThan(0);
+    expect(text).toBe(PLAN);
+  });
+
+  it('retries once after a ~20s timeout and streams to done', async () => {
+    let attempts = 0;
+    const live: SurfaceEngine = {
+      id: 'gemini', sim: false,
+      stream: async (_p, on) => {
+        attempts += 1;
+        if (attempts === 1) return new Promise(() => { /* hang */ });
+        on(PLAN);
+        return PLAN;
+      },
+    };
+    let sleeps = 0;
+    const sleep = async () => {
+      sleeps += 1;
+      if (sleeps === 1) return; // first attempt times out immediately
+      await new Promise(() => { /* second attempt is allowed to finish */ });
+    };
+    const plan = await runSurfaceTurn(req, live, {}, { timeoutMs: 5, sleep });
+    expect(attempts).toBe(2);
+    expect(plan?.tiles.length).toBeGreaterThan(0);
+  });
+
+  it('after a timeout and a failed retry, reports an error instead of hanging at start', async () => {
+    let why = '';
+    const live: SurfaceEngine = { id: 'gemini', sim: false, stream: async () => new Promise(() => { /* hang */ }) };
+    const plan = await runSurfaceTurn(req, live, { onError: (e) => { why = e; } }, { timeoutMs: 5, sleep: instant });
+    expect(plan).toBeNull();
+    expect(why).toMatch(/timed out/i);
+  });
+
+  it('withTimeoutRetry resolves on the second attempt', async () => {
+    let n = 0;
+    const v = await withTimeoutRetry(async () => {
+      n += 1;
+      if (n === 1) throw new Error('boom');
+      return 7;
+    }, { timeoutMs: 5, retries: 1, sleep: instant });
+    expect(v).toBe(7);
+    expect(n).toBe(2);
   });
 });

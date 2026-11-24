@@ -39,7 +39,7 @@ describe('overlays never cover the Talk button', () => {
     expect(cursor).not.toContain('radial-gradient'); // the old dark dot
     expect(cursor).not.toContain('border-radius: 50%'); // no circular dot/ring shape
     expect(cursor).toContain('background-image'); // the small SVG arrow
-    expect(ruleFor(canvasCss, '.mc-hand-cursor.is-pinched')).toContain('scale: 0.78'); // shrinks on pinch
+    expect(ruleFor(canvasCss, '.mc-hand-cursor.is-pinched')).toContain('scale: 0.92'); // shrinks on pinch
   });
 
   it('clicking Talk starts speech recognition (handler wiring)', () => {
@@ -55,7 +55,7 @@ describe('overlays never cover the Talk button', () => {
       append() {},
       remove: vi.fn(),
     };
-    const root = { ownerDocument: { createElement: () => el }, append: vi.fn() } as unknown as HTMLElement;
+    const root = { ownerDocument: { createElement: () => el }, append: vi.fn(), querySelectorAll: () => [] } as unknown as HTMLElement;
     const voice = { supported: true, pushToTalkStart: vi.fn(), pushToTalkStop: vi.fn() };
     const said: string[] = [];
     const fab = mountMicFab(root, voice, (t) => said.push(t), { setTimer: (() => 1) as never, clearTimer: (() => {}) as never });
@@ -111,16 +111,19 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
   });
 });
 
-describe('hand cluster sits at the top right, clear of the facing banner', () => {
-  it('the cluster is a top-right flex column with 48px+ targets', () => {
+describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
+  it('the cluster is a vertically-centred right-edge column with 48px+ equal-width targets', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
-    expect(rule).toContain('top: calc(10px + env(safe-area-inset-top, 0px))');
+    expect(rule).toContain('top: 50%');
+    expect(rule).toContain('transform: translateY(-50%)');
     expect(rule).toContain('right: 16px');
     expect(rule).toContain('flex-direction: column');
-    expect(rule).toContain('gap: 10px');
+    expect(rule).toContain('gap: 12px');
+    expect(rule).toContain('align-items: stretch');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 48px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
   it('the facing banner is a small top-left pill and does not cover the cluster', () => {
@@ -171,17 +174,54 @@ describe('Talk stop clears a stale "Listening…" line (A7-020)', () => {
     const fab = mountMicFab(root, voice, (t) => { status.text = t; }, { setTimer: ((f: () => void) => { fire = f; return 1; }) as never, clearTimer: (() => {}) as never, getStatus: () => status.text });
     return { fab, click: () => listeners.click(), timeout: () => fire?.() };
   }
-  it('a second tap with nothing heard says it stopped', () => {
+  it('a second tap with nothing heard shows the caption once, not a status toast', () => {
     const s = { text: '' }; const m = mk(s);
     m.click(); expect(s.text).toBe('Listening…');
-    m.click(); expect(m.fab.listening).toBe(false); expect(s.text).toBe('Stopped listening.');
+    m.click(); expect(m.fab.listening).toBe(false);
+    expect(s.text).toBe('Listening…'); // status bar / toast is not also written
+    expect(m.fab.captionEl.textContent).toMatch(/Stopped listening/);
+    expect(m.fab.captionEl.hidden).toBe(false);
   });
-  it('the 15s safety stop says nothing was heard', () => {
+  it('the 15s safety stop shows “nothing heard” once as the caption', () => {
     const s = { text: '' }; const m = mk(s);
-    m.click(); m.timeout(); expect(s.text).toBe('Stopped listening — nothing heard.');
+    m.click(); m.timeout();
+    expect(s.text).toBe('Listening…');
+    expect(m.fab.captionEl.textContent).toBe('Stopped listening — nothing heard.');
+    expect(m.fab.captionEl.hidden).toBe(false);
   });
   it('never overwrites a turn that already replaced the line', () => {
     const s = { text: '' }; const m = mk(s);
     m.click(); s.text = 'Building your dashboard…'; m.click(); expect(s.text).toBe('Building your dashboard…');
+  });
+});
+
+describe('AI activity drawer stays compact and closable, cluster stays on screen', () => {
+  it('the drawer is a compact ~320px side panel, not half the canvas', () => {
+    const ai = ruleFor(canvasCss, '.mc-ai');
+    expect(canvasCss).toContain('--mc-ai-w: 320px');
+    expect(ai).toMatch(/width:\s*min\(var\(--mc-ai-w, 320px\), 340px\)/);
+    expect(ai).not.toContain('min-width: 560px');
+    expect(ai).not.toMatch(/min\(720px/);
+  });
+
+  it('the Close button is at least 44px so a pinch can hit it', () => {
+    const close = ruleFor(canvasCss, '.mc-ai-close');
+    expect(close).toContain('min-width: 44px');
+    expect(close).toContain('min-height: 44px');
+  });
+
+  it('when the AI panel is open, cluster children keep right: auto so they stay in the viewport', () => {
+    const blob = ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic');
+    expect(blob).toContain('right: auto');
+    const cluster = ruleFor(canvasCss, '.mc-hand-cluster');
+    expect(cluster).toContain('var(--mc-ai-w');
+  });
+});
+
+describe('empty board offers a Talk button on the frame', () => {
+  it('the empty-board Talk control is pinch-sized', () => {
+    const talk = ruleFor(canvasCss, '.mc-empty-talk');
+    expect(talk).toContain('min-height: 56px');
+    expect(talk).toContain('min-width: 180px');
   });
 });

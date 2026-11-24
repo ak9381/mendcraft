@@ -128,6 +128,7 @@ export const MODEL_PANELS_HTML = `
         </div>
         <div class="mc-term-body" aria-live="polite">
           <div class="mc-term-lines"></div>
+          <p class="mc-term-empty">Not used for this draft.</p>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
         <span class="mc-term-resize" data-mc-resize-handle data-engine="nano" role="button" tabindex="0" aria-label="Resize the Nano terminal"></span>
@@ -150,6 +151,7 @@ export const MODEL_PANELS_HTML = `
         </div>
         <div class="mc-term-body" aria-live="polite">
           <div class="mc-term-lines"></div>
+          <p class="mc-term-empty">Not used for this draft.</p>
           <span class="mc-term-cursor" aria-hidden="true" hidden>▌</span>
         </div>
         <span class="mc-term-resize" data-mc-resize-handle data-engine="gemini" role="button" tabindex="0" aria-label="Resize the Gemini terminal"></span>
@@ -199,8 +201,11 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
   const panel = container.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
   const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
   const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
+  const empty = panel.querySelector<HTMLElement>('.mc-term-empty');
   const cursor = panel.querySelector<HTMLElement>('.mc-term-cursor')!;
   const queuedBadge = panel.querySelector<HTMLElement>('.mc-term-queued');
+  const syncEmpty = () => { if (empty) empty.hidden = lines.childElementCount > 0; };
+  syncEmpty();
   const api: EnginePanelUi = {
     log(verb, detail) {
       const line = doc.createElement('p');
@@ -209,6 +214,7 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
       line.innerHTML = `<span class="mc-term-mark">${mark}</span><span class="mc-term-time">${nowHHMMSS()}</span>` +
         `<span class="mc-term-verb">${verb}</span><span class="mc-term-detail">${esc(detail)}</span>`;
       lines.append(line);
+      syncEmpty();
       body.scrollTop = body.scrollHeight;
       api.setWorking(!DONE_VERBS.has(verb));
       if (verb === 'fail') panel.classList.add('is-failing');

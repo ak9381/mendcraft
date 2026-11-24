@@ -80,6 +80,7 @@ class FakeEl {
   scrollTop = 0;
   scrollHeight = 0;
   children: FakeEl[] = [];
+  get childElementCount() { return this.children.length; }
   attrs: Record<string, string> = {};
   private html = '';
   constructor(tag: string) { this.tag = tag; }
@@ -125,8 +126,9 @@ function fakePanel(): HTMLElement {
     const queued = new FakeEl('span'); queued.className = 'mc-term-queued'; queued.hidden = true;
     const body = new FakeEl('div'); body.className = 'mc-term-body';
     const lines = new FakeEl('div'); lines.className = 'mc-term-lines';
+    const empty = new FakeEl('p'); empty.className = 'mc-term-empty'; empty.textContent = 'Not used for this draft.';
     const cursor = new FakeEl('span'); cursor.className = 'mc-term-cursor'; cursor.hidden = true;
-    body.append(lines, cursor);
+    body.append(lines, empty, cursor);
     section.append(queued, body);
     return section;
   };
@@ -167,6 +169,17 @@ describe('mountModelPanels — terminal log lines', () => {
     expect(cursor.hidden).toBe(false);
     panels.forEngine('nano').log('done', '4 tiles filled');
     expect(cursor.hidden).toBe(true);
+  });
+
+  it('an engine with no lines shows a “not used for this draft” empty state', () => {
+    const aiPanel = fakePanel();
+    const panels = mountModelPanels(aiPanel, fakeDoc);
+    const gemini = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-gemini')!;
+    const empty = gemini.querySelector('.mc-term-empty')!;
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toMatch(/not used for this draft/i);
+    panels.forEngine('gemini').log('received', 'layout the room');
+    expect(empty.hidden).toBe(true);
   });
 
   it('showHandoff writes a line into BOTH terminals, with opposite directionality', () => {

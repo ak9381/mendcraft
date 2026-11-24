@@ -71,7 +71,7 @@ export interface SceneState {
 
 export type A2uiMessage = Record<string, unknown> & { version: typeof PROTOCOL };
 
-export type Coerced<T> = { ok: true; value: T } | { ok: false; error: string };
+export type Coerced<T> = { ok: true; value: T; notes?: string[] } | { ok: false; error: string };
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -126,19 +126,36 @@ function coerceFormField(raw: unknown): FormField | null {
  *  whole tree; `depth` enforces MAX_DEPTH. A `null` value (not an error)
  *  means "valid but a duplicate id — silently skip", same as the old loop's
  *  `continue`. */
-function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }): TileResult {
+function isFatalTileError(error: string): boolean {
+  return error.startsWith('too many nodes') || error.startsWith('nesting too deep');
+}
+
+/** Models often emit the singular "tab" for a tabs container. */
+function aliasTileRaw(o: Record<string, unknown>): Record<string, unknown> {
+  const typ = typeof o.type === 'string' ? o.type.toLowerCase() : '';
+  if (typ !== 'tab') return o;
+  if (Array.isArray(o.tabs) && o.tabs.length) return { ...o, type: 'tabs' };
+  const children = Array.isArray(o.children) ? o.children : [];
+  return { type: 'tabs', tabs: [{ label: o.label, children }] };
+}
+
+function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }, notes: string[]): TileResult {
   counter.n++;
   if (counter.n > MAX_NODES) return { ok: false, error: `too many nodes (> ${MAX_NODES})` };
   if (depth > MAX_DEPTH) return { ok: false, error: `nesting too deep (> ${MAX_DEPTH})` };
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'tile is not an object' };
-  const o = raw as Record<string, unknown>;
+  const o = aliasTileRaw(raw as Record<string, unknown>);
 
   function coerceChildren(list: unknown, label: string): { ok: true; value: TileSpec[] } | { ok: false; error: string } {
     if (!Array.isArray(list)) return { ok: false, error: `${label} needs a list of children` };
     const out: TileSpec[] = [];
     for (const c of list) {
-      const r = coerceTile(c, depth + 1, seen, counter);
-      if (!r.ok) return r;
+      const r = coerceTile(c, depth + 1, seen, counter, notes);
+      if (!r.ok) {
+        if (isFatalTileError(r.error)) return r;
+        notes.push(`Dropped a tile: ${r.error}`);
+        continue;
+      }
       if (r.value) out.push(r.value);
     }
     return { ok: true, value: out };
@@ -229,18 +246,21 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   if (o.type === 'row') {
     const children = coerceChildren(o.children, 'row');
     if (!children.ok) return children;
+    if (!children.value.length) { notes.push('Dropped an empty row.'); return { ok: true, value: null }; }
     return { ok: true, value: { type: 'row', children: children.value } };
   }
   if (o.type === 'grid') {
     const columns = o.columns === 2 || o.columns === 3 || o.columns === 4 ? o.columns : 2;
     const children = coerceChildren(o.children, 'grid');
     if (!children.ok) return children;
+    if (!children.value.length) { notes.push('Dropped an empty grid.'); return { ok: true, value: null }; }
     return { ok: true, value: { type: 'grid', columns, children: children.value } };
   }
   if (o.type === 'card') {
     const title = cleanText(o.title, 40) ?? '';
     const children = coerceChildren(o.children, 'card');
     if (!children.ok) return children;
+    if (!children.value.length) { notes.push('Dropped an empty card.'); return { ok: true, value: null }; }
     return { ok: true, value: { type: 'card', title, children: children.value } };
   }
   if (o.type === 'tabs') {
@@ -254,6 +274,7 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
       if (!children.ok) return children;
       tabs.push({ label, children: children.value });
     }
+    if (!tabs.length) { notes.push('Dropped an empty tabs tile.'); return { ok: true, value: null }; }
     return { ok: true, value: { type: 'tabs', tabs } };
   }
   if (o.type === 'split') {
@@ -264,16 +285,19 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     if (!second.ok) return second;
     return { ok: true, value: { type: 'split', direction, first: first.value, second: second.value } };
   }
-  return { ok: false, error: `unknown tile type ${String(o.type)}` };
+  notes.push(`Dropped unknown tile type “${String(o.type)}”.`);
+  return { ok: true, value: null };
+
 }
 
 /** Untrusted model output -> ONE valid tile (the morph patch path): the same
  *  per-tile validation coerceSurfacePlan runs, over a single node tree. */
 export function coerceTileSpec(raw: unknown): Coerced<TileSpec> {
-  const res = coerceTile(raw, 1, new Set(), { n: 0 });
+  const notes: string[] = [];
+  const res = coerceTile(raw, 1, new Set(), { n: 0 }, notes);
   if (!res.ok) return res;
-  if (!res.value) return { ok: false, error: 'tile had no valid content' };
-  return { ok: true, value: res.value };
+  if (!res.value) return { ok: false, error: notes[0] ?? 'tile had no valid content' };
+  return notes.length ? { ok: true, value: res.value, notes } : { ok: true, value: res.value };
 }
 
 /** Untrusted model output -> a valid SurfacePlan, or a reason it was refused. */
@@ -287,13 +311,19 @@ export function coerceSurfacePlan(raw: unknown): Coerced<SurfacePlan> {
   const tiles: TileSpec[] = [];
   const seen = new Set<string>();
   const counter = { n: 0 };
+  const notes: string[] = [];
   for (const t of r.tiles) {
-    const res = coerceTile(t, 1, seen, counter);
-    if (!res.ok) return res;
+    const res = coerceTile(t, 1, seen, counter, notes);
+    if (!res.ok) {
+      if (isFatalTileError(res.error) || res.error.startsWith('too many tiles')) return res;
+      notes.push(`Dropped a tile: ${res.error}`);
+      continue;
+    }
     if (res.value) tiles.push(res.value);
   }
   if (!tiles.length) return { ok: false, error: 'no tiles' };
-  return { ok: true, value: { kind: r.kind, title, tiles } };
+  const value: SurfacePlan = { kind: r.kind, title, tiles };
+  return notes.length ? { ok: true, value, notes } : { ok: true, value };
 }
 
 /** Stable, positional id for a tile's A2UI component — `path` is this tile's

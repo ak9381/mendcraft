@@ -3,7 +3,7 @@
 // is the DEFAULT overlay path (no triangle-free skeleton drawing), and the
 // bold skeleton only comes back via opts.lowpoly===false or ?skeletonHands=1.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createHandOverlay } from '../../src/ui/handOverlay';
+import { capHandAroundTip, createHandOverlay } from '../../src/ui/handOverlay';
 import type { HandFrame } from '../../src/input/handLogic';
 
 function fakeCtx() {
@@ -92,5 +92,31 @@ describe('createHandOverlay default overlay path', () => {
     const overlay = createHandOverlay(container);
     overlay.draw([handFrame()], 1000);
     expect(calls).toContain('arc');
+  });
+});
+
+describe('capHandAroundTip', () => {
+  it('scales a tall hand down to max height, keeping the index tip fixed', () => {
+    const tip = { x: 200, y: 100 };
+    const pts = [
+      { x: 200, y: 400 }, // wrist, 300px below the tip
+      { x: 180, y: 300 },
+      { x: 200, y: 100 }, // index tip (landmark 8 must be index 8)
+    ];
+    while (pts.length < 21) pts.push({ x: 200, y: 250 });
+    pts[8] = { ...tip };
+    capHandAroundTip(pts, 220, 8);
+    const ys = pts.map((p) => p.y);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThanOrEqual(220 + 1e-6);
+    expect(pts[8].x).toBeCloseTo(200, 5);
+    expect(pts[8].y).toBeCloseTo(100, 5);
+  });
+
+  it('leaves a short hand alone', () => {
+    const pts = Array.from({ length: 21 }, (_, i) => ({ x: 10, y: 10 + i }));
+    pts[8] = { x: 10, y: 18 };
+    const before = pts.map((p) => ({ ...p }));
+    capHandAroundTip(pts, 220, 8);
+    expect(pts).toEqual(before);
   });
 });

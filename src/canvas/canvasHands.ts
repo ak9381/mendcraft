@@ -10,10 +10,12 @@ import { findLiveCameraStream } from '../input/cameraShare';
 import { describeCameraError, INSECURE_CONTEXT_MESSAGE } from '../input/cameraError';
 import { createHandOverlay, type HandOverlay } from '../ui/handOverlay';
 import { createFacingBanner, type FacingBanner } from '../ui/facingBanner';
-
-/** Laptop canvas must not run FaceLandmarker (steals frames, huge facing box). */
-export const LAPTOP_DETECT_FACES = false;
 import { HAND_FEEL, createHoldGesture } from './handFeel';
+
+/** FaceLandmarker is on by default. The canvas shows only the small
+ *  "Facing this device" pill — never the old full-screen face box.
+ *  Presence throttles the model to a few fps (FACE_INTERVAL_MS). */
+export const LAPTOP_DETECT_FACES = true;
 
 export type CanvasHandEvent =
   | { type: 'keep' }
@@ -293,8 +295,8 @@ export async function mountCanvasHands(
   try {
     const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
     overlay = createHandOverlay(root);
-    // A small top pill, never a full-screen face box. FaceLandmarker stays off
-    // on the laptop canvas so the banner typically stays hidden.
+    // A small top pill, never a full-screen face box. FaceLandmarker runs
+    // throttled so the pill can update without stealing the hand tracker.
     facing = createFacingBanner(root);
     const detectFaces = opts.detectFaces ?? LAPTOP_DETECT_FACES;
     tracker = createPresenceTracker(

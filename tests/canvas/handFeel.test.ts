@@ -15,6 +15,8 @@ import {
   handScale,
   palmCenter,
   pickPrimaryHand,
+  pickForegroundHands,
+  assignHandSlots,
 } from '../../src/canvas/handFeel';
 import { DEFAULT_PINCH_ON, DEFAULT_PINCH_OFF, type Pt } from '../../src/input/handLogic';
 import { PINCH_CLASSIFY } from '../../src/input/gestures';
@@ -199,6 +201,25 @@ describe('background-hand filter + anchor', () => {
     expect(pickPrimaryHand([far, near])).toBe(near);
     const mid = handAt(0.7, 0.5, 0.1);
     expect(pickPrimaryHand([mid, near])).toBe(near); // largest wins
+    const both = pickForegroundHands([far, mid, near], 2);
+    expect(both).toEqual([near, mid]);
+    expect(pickForegroundHands([far], 2)).toEqual([]);
+  });
+
+  it('assignHandSlots keeps a hand on its previous slot and does not swap', () => {
+    const left = handAt(0.2, 0.5, 0.2);
+    const right = handAt(0.8, 0.5, 0.2);
+    const first = assignHandSlots([left, right], [null, null]);
+    expect(first[0]).toBe(left); // smaller tip-x fills slot 0
+    expect(first[1]).toBe(right);
+    // Swap the input order — slots must hold by previous tips, not array order.
+    const again = assignHandSlots([right, left], [left[8], right[8]]);
+    expect(again[0]).toBe(left);
+    expect(again[1]).toBe(right);
+    // Losing the left hand clears only slot 0.
+    const one = assignHandSlots([right], [left[8], right[8]]);
+    expect(one[0]).toBeNull();
+    expect(one[1]).toBe(right);
   });
 
   it('the anchor sits on the palm/index-MCP blend and ignores fingertip motion', () => {

@@ -56,6 +56,10 @@ export interface HandFeelConfig {
   palmRefractoryMs: number;
   /** Consecutive pinch-pose frames before "keep" fires on empty canvas. */
   keepFrames: number;
+  /** Dwell-click: rest the index-tip cursor on a control this long to click. */
+  dwellMs: number;
+  /** Movement (px) allowed during a dwell without restarting the timer. */
+  dwellSlopPx: number;
 }
 
 export const HAND_FEEL: HandFeelConfig = {
@@ -75,6 +79,8 @@ export const HAND_FEEL: HandFeelConfig = {
   palmHoldMs: 600,
   palmRefractoryMs: 1500,
   keepFrames: 3,
+  dwellMs: 500,
+  dwellSlopPx: 12,
 };
 
 // ---------------------------------------------------------------- anchor
@@ -118,6 +124,63 @@ export function pickPrimaryHand<T extends readonly Pt[]>(
     if (s > bestScale) { best = h; bestScale = s; }
   }
   return best;
+}
+
+/** Up to `max` foreground hands, largest first, ignoring background-small ones. */
+export function pickForegroundHands<T extends readonly Pt[]>(
+  hands: readonly T[],
+  max = 2,
+  minScale = HAND_FEEL.minHandScale,
+): T[] {
+  const scored: { h: T; s: number }[] = [];
+  for (const h of hands) {
+    if (!h || h.length < 21) continue;
+    const s = handScale(h);
+    if (s < minScale) continue;
+    scored.push({ h, s });
+  }
+  scored.sort((a, b) => b.s - a.s);
+  return scored.slice(0, Math.max(0, max)).map((x) => x.h);
+}
+
+/** Stable slot assignment for two cursors. Hands stay on the slot whose
+ *  previous index-tip (landmark 8) they are nearest; leftover hands fill
+ *  empty slots (smaller tip-x first). Never swaps two tracked hands. */
+export function assignHandSlots<T extends readonly Pt[]>(
+  hands: readonly T[],
+  prevTips: readonly (Pt | null)[],
+): (T | null)[] {
+  const slots: (T | null)[] = prevTips.map(() => null);
+  const usedHands = new Set<number>();
+  const usedSlots = new Set<number>();
+  const tip = (h: T): Pt => h[8] ?? h[0] ?? { x: 0, y: 0 };
+  const pairs: { hi: number; si: number; d: number }[] = [];
+  for (let hi = 0; hi < hands.length; hi++) {
+    const t0 = tip(hands[hi]);
+    for (let si = 0; si < prevTips.length; si++) {
+      const p = prevTips[si];
+      if (!p) continue;
+      pairs.push({ hi, si, d: Math.hypot(t0.x - p.x, t0.y - p.y) });
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d);
+  for (const p of pairs) {
+    if (usedHands.has(p.hi) || usedSlots.has(p.si)) continue;
+    slots[p.si] = hands[p.hi];
+    usedHands.add(p.hi);
+    usedSlots.add(p.si);
+  }
+  const leftover = hands
+    .map((h, hi) => ({ h, hi }))
+    .filter((x) => !usedHands.has(x.hi))
+    .sort((a, b) => tip(a.h).x - tip(b.h).x);
+  for (const item of leftover) {
+    const si = slots.findIndex((_, i) => !usedSlots.has(i));
+    if (si < 0) break;
+    slots[si] = item.h;
+    usedSlots.add(si);
+  }
+  return slots;
 }
 
 // ---------------------------------------------------------------- dead zone

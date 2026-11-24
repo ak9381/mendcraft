@@ -6,7 +6,7 @@ import type { HandEvent } from './input/hands';
 import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from './input/presence';
 import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
-import { createFaceOverlay } from './ui/faceOverlay';
+import { createFacingBanner } from './ui/facingBanner';
 import { createHandHover, magnetPull, tooltipTextFor } from './ui/handHover';
 import { openHandSelect } from './ui/handSelect';
 import { createVoiceController, type VoiceController } from './input/voice';
@@ -5239,7 +5239,7 @@ btnMic.addEventListener('click', () => {
 // ---- hand tracking ----
 
 const handOverlay = createHandOverlay(viewportEl);
-const faceOverlay = createFaceOverlay(viewportEl);
+const facingBanner = createFacingBanner(viewportEl);
 const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
@@ -5531,7 +5531,7 @@ function noteFps(now: number): number {
 
 function onPresenceFrame(f: PresenceFrame): void {
   handOverlay.draw(f.hands);
-  faceOverlay.draw(f.faces, f.rejectedHands);
+  facingBanner.set(typeof f.facing === 'boolean' ? f.facing : null);
 
   const fps = noteFps(performance.now());
   const handCount = f.hands.length;
@@ -5647,7 +5647,7 @@ function disableCamera(): void {
   tracker?.stop();
   tracker = null;
   handOverlay.clear();
-  faceOverlay.clear();
+  facingBanner.set(null);
   resumeHint.hidden = true;
   btnCamera.setAttribute('aria-pressed', 'false');
   btnCamera.classList.remove('active');

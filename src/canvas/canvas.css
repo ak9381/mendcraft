@@ -9,6 +9,7 @@
   --panel-2: #F1EEE6;
   --border: #E4E0D8;
   --text: #2B2B2B;
+  --mc-ai-w: 320px;
   --text-dim: #6E6A63;
   --accent: #6B8F71;
   --accent-2: #5A7BA6;
@@ -26,7 +27,7 @@
   --a2ui-font-size-2xl: 32px; --a2ui-font-size-xl: 28px; --a2ui-font-size-l: 24px; --a2ui-font-size-m: 20px;
   color: var(--text);
 }
-.mc-canvas { position: fixed; inset: 0; overflow: hidden; background: var(--bg); }
+.mc-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: 100%; overflow: hidden; background: var(--bg); }
 .mc-viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
   background-image: radial-gradient(circle, rgb(43 43 43 / 0.08) 1px, transparent 1.4px); }
 .mc-canvas[data-mode=focus] .mc-viewport { cursor: default; }
@@ -94,10 +95,15 @@
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
 .mc-edit-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-edit-toggle, .mc-canvas:has(.mc-ai:not([hidden])) .mc-edit-reset { right: calc(min(720px, 46vw) + 32px); }
+/* Cluster owns placement — do not set `right` on these chips when the AI drawer is open. */
 @media (max-width: 600px) { .mc-edit-toggle, .mc-edit-reset { display: none; } }
 .mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
-.mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; }
+.mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; max-width: 22ch; justify-self: center; }
+.mc-empty-talk { display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: 56px; min-width: 180px; padding: 0 22px; font-size: 20px; justify-self: center; margin: 8px 0 4px; }
+.mc-empty-talk svg { width: 28px; height: 28px; }
+.mc-empty-talk-caption { margin: 0; font-size: 15px; color: var(--text-dim); min-height: 1.2em; }
+.mc-empty-talk-caption.is-error { color: #8B2E2E; }
 .mc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .mc-ghost { position: absolute; inset: 0; padding: 20px; background: var(--panel); border-radius: 0 0 18px 18px; z-index: 4; display: grid; align-content: start; gap: 12px; pointer-events: none; }
 .mc-ghost-title { margin: 0; font-size: 28px; font-weight: 650; color: var(--accent); opacity: 0.85; }
@@ -144,17 +150,26 @@
    inside the visible board area and never fly under it (percentages inside
    .mc-swarm recompute against this narrower box), same shift the Tools chip
    and Talk fab already make for the same reason — see below. */
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-swarm { right: calc(min(720px, 46vw) + 32px); }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: var(--mc-bar-h, 132px); bottom: 16px; width: min(720px, 46vw); min-width: 560px;
-  overflow: hidden; padding: 14px 14px 14px 16px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
+.mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: 16px; bottom: 16px;
+  width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
+  overflow: hidden; padding: 12px 14px 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); font-size: 16px; display: flex; flex-direction: column; min-height: 0; }
+.mc-ai-scrim { position: fixed; inset: 0; z-index: 8; background: transparent; }
+.mc-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; margin: 0 0 8px; }
+.mc-ai-h { margin: 0; position: static; width: auto; height: auto; overflow: visible; clip: auto;
+  font-size: 16px; font-weight: 650; color: var(--text); }
+.mc-ai-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; width: 44px; height: 44px; padding: 0;
+  border: 0; border-radius: 999px; background: var(--panel-2, #F1EEE6); color: var(--text); font-size: 22px;
+  line-height: 1; cursor: pointer; }
+.mc-ai-close:focus-visible { outline: 3px solid var(--focus, #C98B3C); outline-offset: 2px; }
+.mc-ai-history-empty { color: var(--text-dim); font-size: 13px; margin: 4px 0 8px; }
+.mc-ai-history-empty[hidden] { display: none; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
 .mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
 .mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
-/* The old "AI activity" card title is redundant with the aside's own
-   aria-label now that each terminal carries its own "nano"/"gemini" head. */
-.mc-ai-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .mc-ai-h3 { margin: 16px 0 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
 .mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
 .mc-ai-ledger-total { font-size: 13px; }
@@ -268,8 +283,8 @@
    fixed spot right next to the terminal column it was opened from — a chip
    only exists while that column is open, never near the flying cursors
    (which stay mid-canvas) or the Tools/Talk fabs (reserved below it). */
-.mc-mini-terminal { position: fixed; z-index: 45; right: calc(min(720px, 46vw) + 32px); left: auto; bottom: 180px; top: auto; transform: none;
-  width: min(420px, calc(100% - 48px)); max-height: min(60vh, 420px); display: flex; flex-direction: column;
+.mc-mini-terminal { position: fixed; z-index: 45; right: calc(min(var(--mc-ai-w, 320px), 340px) + 24px); left: auto; bottom: 180px; top: auto; transform: none;
+  width: min(360px, calc(100vw - min(var(--mc-ai-w, 320px), 340px) - 48px)); max-width: calc(100vw - 24px); max-height: min(60vh, 420px); display: flex; flex-direction: column;
   border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 .mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
 .mc-mini-close { margin-left: auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;
@@ -444,7 +459,7 @@
   /* Start below the top-right mic FAB (top 12px + 64px tall) so its nano
      terminal header never hides under the mic — the FAB floats in the clear
      strip above. */
-  .mc-ai { left: 8px; right: 8px; width: auto; min-width: 0; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
+  .mc-ai { left: auto; right: 8px; width: min(var(--mc-ai-w, 320px), calc(100vw - 160px)); min-width: 0; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
   .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
   /* The bar sits in the thumb zone at the bottom, so the review must reserve
@@ -551,7 +566,7 @@
   border: 3px solid var(--accent); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
 @keyframes mc-mic-pulse { from { opacity: 1; transform: scale(0.96); } to { opacity: 0; transform: scale(1.12); } }
 @media (prefers-reduced-motion: reduce) { .mc-fab-mic.is-listening::after { animation: none; opacity: 1; } }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: calc(min(720px, 46vw) + 32px); }
+/* Cluster owns Talk placement when the AI drawer is open. */
 @media (max-width: 600px) {
   /* Phones: top-right, clear of the thumb bar and the Proposal sheet (thumbs also have a talk toggle in the bar). */
   .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
@@ -568,7 +583,7 @@
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-tools-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-tools-chip { right: calc(min(720px, 46vw) + 32px); }
+/* Cluster owns Tools placement when the AI drawer is open. */
 @media (max-width: 600px) { .mc-tools-chip { display: none; } }
 
 /* Fully empty canvas (?fresh=1): a soft centred prompt instead of fixed chrome. */
@@ -590,7 +605,7 @@
 .mc-hand-cursor { width: 15px; height: 19px; background-repeat: no-repeat; background-size: contain;
   filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); transition: scale 90ms ease, filter 90ms ease; scale: 1;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 19'%3E%3Cpath d='M1 1 L1 15.2 L4.4 11.8 L7.3 18.2 L9.9 17 L7 10.6 L13.8 10.6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1.1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
-.mc-hand-cursor.is-pinched { scale: 0.78; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)) brightness(0.72); }
+.mc-hand-cursor.is-pinched { scale: 0.92; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)) brightness(0.88); }
 /* Fist (grab/move): a centred 4-arrow move icon (see paint()'s -50%/-50% transform). */
 .mc-hand-cursor.is-fist { width: 20px; height: 20px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1 L13 6 L11 6 L11 9 L14 9 L14 7 L19 10 L14 13 L14 11 L11 11 L11 14 L13 14 L10 19 L7 14 L9 14 L9 11 L6 11 L6 13 L1 10 L6 7 L6 9 L9 9 L9 6 L7 6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
@@ -648,7 +663,7 @@
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-register-chip:hover { filter: brightness(0.95); }
 .mc-register-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-register-chip { right: calc(min(720px, 46vw) + 32px); }
+/* Cluster owns Register placement when the AI drawer is open. */
 @media (max-width: 600px) { .mc-register-chip { display: none; } }
 
 .mc-blank .mc-blank-register { pointer-events: auto; justify-self: center; margin-top: 10px;
@@ -813,22 +828,41 @@
   z-index: 80;
 }
 
-/* Top-right hand-reachable cluster: Talk, Tools, Edit, Register, Reset.
-   48px+ targets, clear of the viewport edge and of the facing banner (top-left). */
+/* Mid-screen right-edge cluster: Register, Edit, Tools, Talk.
+   Vertically centred so it never sits on the top tools bar. Equal-width
+   48px+ targets, 12px gaps. Shifts left of the AI drawer when that is open. */
 .mc-hand-cluster {
   position: fixed;
-  top: calc(10px + env(safe-area-inset-top, 0px));
+  top: 50%;
   right: 16px;
+  transform: translateY(-50%);
   z-index: 72;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: stretch;
+  gap: 12px;
   pointer-events: none;
-  max-width: min(280px, calc(100vw - 32px));
+  width: max-content;
+  min-width: 120px;
+  max-width: min(200px, calc(100vw - 32px));
 }
-.mc-hand-cluster > * { pointer-events: auto; }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster { right: calc(min(720px, 46vw) + 24px); }
+.mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster {
+  right: min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 140px));
+}
+/* Old per-chip `right` offsets are more specific when the AI panel is open
+   and would shove relatively-positioned cluster children off the left edge. */
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-fab-mic,
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-tools-chip,
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-toggle,
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-reset,
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-register-chip,
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-talk-control {
+  right: auto;
+  top: auto;
+  bottom: auto;
+  left: auto;
+}
 
 .mc-hand-cluster .mc-fab-mic,
 .mc-hand-cluster .mc-tools-chip,
@@ -846,11 +880,33 @@
 .mc-hand-cluster .mc-fab-mic,
 .mc-hand-cluster .mc-tools-chip,
 .mc-hand-cluster .mc-edit-toggle,
-.mc-hand-cluster .mc-register-chip {
+.mc-hand-cluster .mc-register-chip,
+.mc-hand-cluster .mc-edit-reset {
   min-height: 52px;
   min-width: 48px;
+  width: 100%;
+  justify-content: center;
+  box-sizing: border-box;
 }
+.mc-hand-cluster .mc-talk-control { align-items: stretch; width: 100%; }
+.mc-hand-cluster .mc-fab-mic { width: 100%; }
 .mc-hand-cluster .mc-edit-reset { min-height: 48px; }
+
+/* Dwell-click ring: fills around the arrow tip, then the click fires. */
+.mc-hand-dwell {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(#f07a60 calc(var(--mc-dwell, 0) * 360deg), rgb(240 122 96 / 0.2) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+}
+.mc-hand-dwell[hidden] { display: none; }
 
 .mc-talk-control {
   display: flex;
@@ -911,3 +967,24 @@
 }
 .mc-facing-banner-hide:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
+/* Draft / approval summary on the light canvas: a LIGHT card with dark text.
+   The shared .mc-proposal rule (style.css) is a dark studio card whose
+   `color: var(--text)` becomes #2B2B2B inside .mc-canvas — unreadable. */
+.mc-review-card-host .mc-proposal,
+.mc-canvas .mc-proposal {
+  background: #FFFFFF;
+  color: #2B2B2B;
+  border: 1px solid var(--border, #E4E0D8);
+  box-shadow: 0 8px 24px rgb(11 15 20 / 0.08);
+}
+.mc-review-card-host .mc-proposal-title,
+.mc-canvas .mc-proposal-title,
+.mc-review-card-host .mc-proposal p,
+.mc-canvas .mc-proposal p { color: #2B2B2B; }
+.mc-canvas .mc-proposal.is-guess .mc-proposal-badge,
+.mc-review-card-host .mc-proposal.is-guess .mc-proposal-badge {
+  background: #334155;
+  color: #F8FAFC;
+}
+.mc-term-empty { margin: 12px 14px; font-size: 13px; color: #C8C6BF; }
+.mc-term-body { min-height: 48px; }

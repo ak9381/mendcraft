@@ -39,7 +39,7 @@ export const EN_PACK: LanguagePack = {
   strings: {
     showEverything: 'Show everything', newBoard: 'New board', save: 'Save', undo: 'Undo', ai: 'AI activity',
     sayPlaceholder: 'Say: new board · show everything · go to floor plan',
-    emptyLead: 'Empty board.', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
+    emptyLead: 'What would you like to build on this board?', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
     keep: 'PINCH  keep', drop: 'BRUSH  drop',
     go: 'Go', hands: 'Hands',
     simulateOffline: 'Simulate offline', offlineOn: 'Offline (simulated)',
@@ -57,7 +57,7 @@ export const SCRIPTED_KN_PACK: LanguagePack = {
     undo: 'ರದ್ದುಮಾಡು',
     ai: 'ಎಐ ಚಟುವಟಿಕೆ',
     sayPlaceholder: 'ಹೇಳಿ: ಹೊಸ ಬೋರ್ಡ್ · ಎಲ್ಲಾ ತೋರಿಸು · ನೆಲ ನಕ್ಷೆ',
-    emptyLead: 'ಖಾಲಿ ಬೋರ್ಡ್.',
+    emptyLead: 'ಈ ಬೋರ್ಡ್‌ನಲ್ಲಿ ನೀವು ಏನನ್ನು ನಿರ್ಮಿಸಲು ಇಷ್ಟಪಡುತ್ತೀರಿ?',
     emptyConnect: 'ಈ ಕೋಣೆ ಸೇರಿಸು',
     emptyFloorplan: 'ನೆಲ ನಕ್ಷೆ',
     keep: 'ಇಟ್ಟುಕೋ',

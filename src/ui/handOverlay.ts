@@ -8,7 +8,7 @@
 import { HAND_CONNECTIONS, INDEX_TIP, THUMB_TIP, type HandFrame, type Pt } from '../input/handLogic';
 import { createOneEuroFilter, type OneEuroFilter } from '../input/oneEuro';
 import { mapToScreen } from '../canvas/handPointer';
-import { buildLowpolyHand, createLowpolyMesh, drawLowpolyHand, type LowpolyMesh } from './handLowpoly';
+import { buildLowpolyHand, createLowpolyMesh, drawLowpolyHand, LOWPOLY_FILL_ALPHA, type LowpolyMesh } from './handLowpoly';
 
 export interface HandOverlay {
   draw(hands: HandFrame[], now?: number): void;
@@ -33,6 +33,13 @@ const MAX_SLOTS = 2;
 const MAX_DPR = 2;
 const FADE_MS = 180;
 const PINCH_RING_MS = 240;
+/** Cap the on-screen hand mesh so a hand close to the camera can't cover the UI.
+ *  The index tip (landmark 8) stays put so it still lines up with the cursor. */
+export const MAX_HAND_HEIGHT_PX = 220;
+/** Fill opacity when the mesh sits over a UI target (tools bar, cluster, drawer). */
+export const NEAR_UI_ALPHA = 0.35;
+const UI_PAD_PX = 16;
+const UI_SELECTORS = ['.mc-bar', '.mc-hand-cluster', '.mc-ai', '.mc-review-dialog'];
 /** Smoothing tuned for a hand-sized, fast-moving signal (lower minCutoff than
  *  the cursor's pointer filter — hands are naturally jumpier than an aimed tip). */
 const HAND_FILTER_PARAMS = { minCutoff: 1.4, beta: 6, dCutoff: 1 };
@@ -54,6 +61,60 @@ function readSkeletonFlag(): boolean {
   }
 }
 
+
+/** Scale a 21-landmark screen-space hand around the index tip so its
+ *  bounding-box height does not exceed `maxH`. Mutates `pts` in place.
+ *  The tip (landmark 8, or `tipIndex`) is unchanged. */
+export function capHandAroundTip<T extends { x: number; y: number }>(
+  pts: T[],
+  maxH = MAX_HAND_HEIGHT_PX,
+  tipIndex = INDEX_TIP,
+): void {
+  if (pts.length <= tipIndex) return;
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const h = maxY - minY;
+  if (!(h > maxH)) return;
+  const s = maxH / h;
+  const tip = pts[tipIndex];
+  for (const p of pts) {
+    p.x = tip.x + (p.x - tip.x) * s;
+    p.y = tip.y + (p.y - tip.y) * s;
+  }
+}
+
+function handBBox(pts: readonly { x: number; y: number }[]): { left: number; top: number; right: number; bottom: number } | null {
+  if (!pts.length) return null;
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const p of pts) {
+    if (p.x < left) left = p.x;
+    if (p.y < top) top = p.y;
+    if (p.x > right) right = p.x;
+    if (p.y > bottom) bottom = p.y;
+  }
+  return { left, top, right, bottom };
+}
+
+function rectsOverlap(a: { left: number; top: number; right: number; bottom: number }, b: DOMRect, pad = UI_PAD_PX): boolean {
+  return a.left < b.right + pad && a.right > b.left - pad && a.top < b.bottom + pad && a.bottom > b.top - pad;
+}
+
+function meshNearUi(container: HTMLElement, pts: readonly { x: number; y: number }[]): boolean {
+  const box = handBBox(pts);
+  if (!box) return false;
+  const root = container.closest?.('.mc-canvas') ?? container.ownerDocument ?? document;
+  for (const sel of UI_SELECTORS) {
+    const el = (root as ParentNode).querySelector?.(sel) as HTMLElement | null;
+    if (!el || el.hidden || el.getAttribute?.('hidden') != null) continue;
+    const r = el.getBoundingClientRect?.();
+    if (r && r.width > 0 && r.height > 0 && rectsOverlap(box, r)) return true;
+  }
+  return false;
+}
+
 function readReducedMotion(): boolean {
   try {
     return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -69,6 +130,8 @@ interface SlotState {
    *  frame so draw() never allocates (fixes S1: handOverlay.ts used to
    *  `points.map(...)` a fresh array every frame). */
   smoothed: Pt[];
+  /** Display copy of smoothed, scale-capped around the index tip. */
+  drawn: Pt[];
   opacity: number;
   wasPresent: boolean;
   pinchRingAt: number;
@@ -82,6 +145,7 @@ function makeSlot(): SlotState {
   return {
     filters: Array.from({ length: NUM_POINTS }, () => createOneEuroFilter(HAND_FILTER_PARAMS)),
     smoothed: Array.from({ length: NUM_POINTS }, () => ({ x: 0, y: 0 })),
+    drawn: Array.from({ length: NUM_POINTS }, () => ({ x: 0, y: 0 })),
     opacity: 0,
     wasPresent: false,
     pinchRingAt: -Infinity,
@@ -231,11 +295,24 @@ export function createHandOverlay(container: HTMLElement, opts: HandOverlayOptio
         smoothInto(st, hand.points, w, h, now);
       }
       anyVisible = true;
+      for (let i = 0; i < NUM_POINTS; i++) {
+        st.drawn[i].x = st.smoothed[i].x;
+        st.drawn[i].y = st.smoothed[i].y;
+      }
+      capHandAroundTip(st.drawn);
+      const nearUi = meshNearUi(container, st.drawn);
+      const alpha = nearUi ? Math.min(st.opacity, NEAR_UI_ALPHA / LOWPOLY_FILL_ALPHA) : st.opacity;
       if (lowpoly) {
-        buildLowpolyHand(st.smoothed, st.lowpolyMesh);
-        drawLowpolyHand(ctx, st.lowpolyMesh, { alpha: st.opacity });
+        buildLowpolyHand(st.drawn, st.lowpolyMesh);
+        drawLowpolyHand(ctx, st.lowpolyMesh, { alpha });
       } else {
+        // Skeleton uses st.smoothed — swap in drawn for the same cap.
+        const saved = st.smoothed;
+        st.smoothed = st.drawn;
+        const prev = ctx.globalAlpha;
         drawSkeleton(st, dpr, now);
+        st.smoothed = saved;
+        void prev;
       }
       if (debug) drawDebug(st, dpr);
     }

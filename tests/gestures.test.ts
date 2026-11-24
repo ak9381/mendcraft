@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyGesture,
   fingerStates,
+  isFistPose,
+  isClosingToFist,
   pinchRatio,
   twoHandSpan,
   createGestureRecognizer,
@@ -81,6 +83,47 @@ describe('classifyGesture', () => {
 
   it('none: too few landmarks', () => {
     expect(classifyGesture([{ x: 0, y: 0 }])).toBe('none');
+  });
+
+  it('fist: real-ish MediaPipe landmarks (tips near the palm, not folded past the PIP)', () => {
+    // Laptop-webcam style fist: palm facing roughly inward, fingertips
+    // curled to the palm. Several tips still sit slightly farther from the
+    // wrist than their PIP (so the old extended() test reads them as open)
+    // and the thumb sits close to the index (so pinch used to win).
+    const p: Pt[] = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.6 }));
+    p[0] = { x: 0.50, y: 0.72 }; // wrist
+    p[1] = { x: 0.44, y: 0.66 }; p[2] = { x: 0.41, y: 0.61 }; p[3] = { x: 0.44, y: 0.56 };
+    p[4] = { x: 0.49, y: 0.55 }; // thumb tip tucked over the fingers
+    p[5] = { x: 0.46, y: 0.56 }; p[6] = { x: 0.47, y: 0.58 }; p[7] = { x: 0.49, y: 0.56 };
+    p[8] = { x: 0.51, y: 0.55 }; // index tip near palm, still slightly past its PIP
+    p[9] = { x: 0.50, y: 0.55 }; p[10] = { x: 0.50, y: 0.57 }; p[11] = { x: 0.51, y: 0.56 };
+    p[12] = { x: 0.52, y: 0.55 };
+    p[13] = { x: 0.54, y: 0.56 }; p[14] = { x: 0.54, y: 0.58 }; p[15] = { x: 0.53, y: 0.56 };
+    p[16] = { x: 0.52, y: 0.55 };
+    p[17] = { x: 0.57, y: 0.58 }; p[18] = { x: 0.57, y: 0.59 }; p[19] = { x: 0.55, y: 0.57 };
+    p[20] = { x: 0.54, y: 0.56 };
+    expect(isFistPose(p)).toBe(true);
+    expect(fingerStates(p).index).toBe(true); // the old test would call this "extended"
+    expect(pinchRatio(p)).toBeLessThan(0.38); // would have been classified as pinch
+    expect(classifyGesture(p)).toBe('fist');
+  });
+
+  it('pinch is not swallowed: an extended index meeting the thumb is still a pinch', () => {
+    expect(classifyGesture(makeHand({ index: true, thumb: 'pinch' }))).toBe('pinch');
+    expect(isFistPose(makeHand({ index: true, thumb: 'pinch' }))).toBe(false);
+  });
+
+  it('closing to a fist is not a pinch: a curling index near the palm, even with a close thumb, is a fist path', () => {
+    // Point-like hand whose index has started curling in (tip near the palm)
+    // while the thumb sits close — the live "I tried to fist and it pinched" case.
+    const p = makeHand({ thumb: 'curled' });
+    // pull the index tip in toward the palm but leave it slightly past its PIP
+    // so the old extended() test would still call it a reaching index.
+    p[6] = { x: 0.45, y: 0.62 };
+    p[8] = { x: 0.50, y: 0.58 };
+    p[4] = { x: 0.49, y: 0.58 }; // thumb almost on the index tip
+    expect(isClosingToFist(p) || isFistPose(p)).toBe(true);
+    expect(classifyGesture(p)).not.toBe('pinch');
   });
 });
 

@@ -1,7 +1,11 @@
 // HAND POINTER: every on-screen control is reachable with a hand.
 //
-// The fingertip (midpoint of thumb and index tips, so the point holds still
-// while you pinch) is smoothed with a one-euro filter and mapped from a
+// The cursor and click always sit on the INDEX FINGERTIP (landmark 8) of the
+// same hand — never the thumb, never the middle tip (12), never a midpoint.
+// On pinch close the point FREEZES at the smoothed landmark-8 position from
+// just before the fingers started closing (~100 ms lookback), so a tracker
+// swap of 8↔12 mid-pinch cannot drag the click onto the middle finger. The
+// fingertip is smoothed with a one-euro filter and mapped from a
 // comfortable "reach box" in the camera frame to the whole screen. Hit-testing
 // is deep: elementFromPoint walks into open shadow roots (A2UI / Lit tiles),
 // and when the hand is near but not on a control, a snap radius picks the
@@ -20,7 +24,7 @@ import { createDragVelocity, createMomentum, scrollableAncestor } from './handSc
 import { tooltipTextFor } from '../ui/handHover';
 import { fieldCaretAt } from '../input/caretAt';
 import { INDEX_TIP } from '../input/handLogic';
-import { classifyGesture, type Pt as GesturePt } from '../input/gestures';
+import { classifyGesture, isClosingToFist, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -28,8 +32,9 @@ import {
   createPositionHistory,
   createScalarEuro,
   createStickyTarget,
-  cursorAnchor,
   pickPrimaryHand,
+  pickForegroundHands,
+  assignHandSlots,
 } from './handFeel';
 
 type P = { x: number; y: number };
@@ -247,8 +252,8 @@ export interface HandPointerOptions {
 }
 
 export interface HandPointer {
-  /** Feed a tracking frame (first hand used). */
-  update(hands: readonly (readonly LM[])[], now: number): void;
+  /** Feed a tracking frame. Up to two foreground hands each get a cursor. */
+  update(hands: readonly (readonly LM[])[], now: number, flags?: { interact?: boolean }): void;
   /** Simulation / tests: aim at a screen point, then press / release. */
   pointAt(x: number, y: number): HTMLElement | null;
   pinch(down: boolean): void;
@@ -268,7 +273,7 @@ export interface HandPointer {
   destroy(): void;
 }
 
-export function createHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
+function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
   const snapPx = opts.snapPx ?? 56;
   let dryRun = !!opts.dryRun;
   const euro = createOneEuroFilter(HAND_FEEL.cursorFilter);
@@ -286,6 +291,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   // so no per-frame hotspot math is needed here.
   const cursor = doc.createElement('div');
   cursor.className = 'mc-hand-cursor'; cursor.setAttribute('aria-hidden', 'true'); cursor.hidden = true;
+  const dwellRing = doc.createElement('div');
+  dwellRing.className = 'mc-hand-dwell';
+  dwellRing.setAttribute('aria-hidden', 'true');
+  dwellRing.hidden = true;
+  if (typeof cursor.append === 'function') cursor.append(dwellRing);
   doc.body.append(frame, cursor);
 
   let controls: HTMLElement[] = []; let controlsAt = -Infinity;
@@ -317,6 +327,16 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let suppressRelease = false;
   let pt: P = { x: -1, y: -1 };
   let lostTimer: ReturnType<typeof setTimeout> | null = null;
+  // Pre-pinch lock: last clearly-open landmark-8 screen point, and the frozen
+  // click/cursor point once a pinch engages. Never updated from live tips
+  // while the hand is closing (MediaPipe often swaps 8 with 12).
+  let lastOpenTip: P | null = null;
+  let frozen: P | null = null;
+  let dwellStart = 0;
+  let dwellOrigin: P | null = null;
+  let dwellTarget: HTMLElement | null = null;
+  let dwellFiredFor: HTMLElement | null = null;
+  let dwellProgress = 0;
 
   // Hand scroll + fling (A2-025 / C156): a pinch-drag inside a scrollable
   // container scrolls it with release momentum; a still/short pinch stays a tap.
@@ -379,6 +399,12 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     cursor.hidden = pt.x < 0;
     cursor.classList.toggle('is-pinched', pinched);
     cursor.classList.toggle('is-fist', fisted);
+    if (dwellRing) {
+      dwellRing.hidden = dwellProgress <= 0;
+      const style = dwellRing.style as CSSStyleDeclaration & { setProperty?: (k: string, v: string) => void };
+      if (typeof style.setProperty === 'function') style.setProperty('--mc-dwell', String(dwellProgress));
+      else (style as unknown as Record<string, string>)['--mc-dwell'] = String(dwellProgress);
+    }
     // Fist (move) cursor is centred on the hotspot; the arrow's tip is
     // already drawn at the SVG's own origin, so it needs no extra offset.
     cursor.style.transform = fisted
@@ -645,7 +671,45 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     paint();
   }
 
-  function aim(p: P, stickyNow?: number): HTMLElement | null {
+  function resetDwell(): void {
+    dwellStart = 0; dwellOrigin = null; dwellTarget = null; dwellProgress = 0;
+  }
+
+  /** Dwell-click: resting the index-tip cursor on a control for dwellMs,
+   *  within dwellSlopPx, fills a ring then clicks once. Disabled during a
+   *  fist or any drag. Does not re-fire until the cursor leaves the control. */
+  function tickDwell(p: P, t: number, allowed: boolean): void {
+    const busy = pinched || fisted || !!dragging || !!draggingHandle || surfaceDragging || textSelecting || scrolled;
+    const el = target;
+    if (!allowed || busy || !el || isDismiss(el)) {
+      if (!el || el !== dwellFiredFor) dwellFiredFor = el ? dwellFiredFor : null;
+      if (!el) dwellFiredFor = null;
+      resetDwell();
+      return;
+    }
+    if (dwellFiredFor === el) { dwellProgress = 0; return; }
+    if (dwellTarget !== el || !dwellOrigin) {
+      dwellTarget = el;
+      dwellStart = t;
+      dwellOrigin = { x: p.x, y: p.y };
+      dwellProgress = 0;
+      return;
+    }
+    if (Math.hypot(p.x - dwellOrigin.x, p.y - dwellOrigin.y) > HAND_FEEL.dwellSlopPx) {
+      dwellStart = t;
+      dwellOrigin = { x: p.x, y: p.y };
+      dwellProgress = 0;
+      return;
+    }
+    dwellProgress = Math.min(1, (t - dwellStart) / HAND_FEEL.dwellMs);
+    if (dwellProgress >= 1) {
+      activate(el);
+      dwellFiredFor = el;
+      resetDwell();
+    }
+  }
+
+  function aim(p: P, stickyNow?: number, dwellAt?: number, dwellOn = true): HTMLElement | null {
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
     if (surface) {
@@ -691,6 +755,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     setTarget(stickyNow !== undefined ? sticky.update(resolved, p, stickyNow) : resolved);
     if (!target && !pinched && !dryRun) handSurfaceAt(deepElementFromPoint(doc, p.x, p.y))?.hover?.(p.x, p.y);
     emitTooltip(target);
+    if (dwellAt !== undefined) tickDwell(p, dwellAt, dwellOn);
     paint();
     return target;
   }
@@ -711,63 +776,128 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (!dryRun) (doc as Document & { dispatchEvent?: (e: Event) => boolean }).dispatchEvent?.(new CustomEvent(HAND_RELEASE));
     }
     setTarget(null); pt = { x: -1, y: -1 };
+    lastOpenTip = null; frozen = null;
+    dwellStart = 0; dwellOrigin = null; dwellTarget = null; dwellFiredFor = null; dwellProgress = 0;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
     euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); history.reset(); sticky.reset();
     paint();
   }
 
   return {
-    update(hands, t) {
-      // Only a real foreground hand drives the cursor; small background hands
+    update(hands, t, flags) {
+      // Only a real foreground hand drives this slot; small background hands
       // (someone behind you) are ignored outright.
+      const interact = flags?.interact !== false;
       const h = pickPrimaryHand(hands as readonly (readonly { x: number; y: number }[])[]);
       if (!h) return;
       if (lostTimer) clearTimeout(lostTimer);
       lostTimer = setTimeout(lost, 400);
 
-      // Hotspot is the INDEX FINGERTIP itself (landmark 8) — not the
-      // MCP/palm-centre blend, which is for gesture stability, not the visible
-      // cursor. 1-Euro-smoothed, with a micro dead-zone, same as before.
-      const tip = h[INDEX_TIP] ?? cursorAnchor(h);
-      const s = euro.filter(tip.x, tip.y, t);
-      const p = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
-      history.push(p, t);
+      // Hotspot is ALWAYS this hand's INDEX FINGERTIP (landmark 8) — never
+      // the thumb, never the middle tip (12), never a pinch midpoint, never
+      // the MCP/palm-centre blend (that's for gesture stability only).
+      const tip = h[INDEX_TIP];
+      if (!tip) return;
 
       // Fist is a distinct gesture from pinch: a fist's curled fingers also
       // read as a low thumb/index ratio, so it must never reach pinchFsm (it
       // would otherwise fire a click on every fist). It drags live — no
       // freeze — and never taps on release.
-      const isFist = classifyGesture(h as unknown as GesturePt[]) === 'fist';
+      const pose = classifyGesture(h as unknown as GesturePt[]);
+      const isFist = pose === 'fist';
+      const closingToFist = isFist || isClosingToFist(h as unknown as GesturePt[]);
+      const rawRatio = pinchRatio(h);
+      const closing = !isFist && !closingToFist && rawRatio < HAND_FEEL.pinchOff;
+      // While the hand is closing or already pinched, do not feed live tips
+      // into the 1-Euro filter — MediaPipe often swaps landmark 8 with 12
+      // (middle) mid-pinch, which would drag the cursor and the click.
+      const feedFilter = isFist || (!closing && !frozen);
+      let live: P;
+      if (feedFilter) {
+        const s = euro.filter(tip.x, tip.y, t);
+        live = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
+      } else {
+        live = frozen ?? lastOpenTip ?? deadZone.apply(mapToScreen(tip, innerWidth, innerHeight));
+      }
+
+      // A fist (or a hand mid-curl into one) must never start or finish a
+      // pinch click. If we were already pinched, promote to a fist: cancel
+      // the pinch without a click, and keep any in-flight surface/handle drag.
+      const cancelPinchWithoutClick = () => {
+        if (!pinched) return;
+        suppressRelease = true;
+        pinched = false;
+        opts.onPinch?.({ phase: 'cancel', p: live, now: t });
+      };
+
       if (isFist) {
-        if (!fisted) { fisted = true; fistDown(p); }
-        aim(p, t);
+        frozen = null;
+        lastOpenTip = live;
+        history.push(live, t);
+        cancelPinchWithoutClick();
+        if (interact) {
+          if (!fisted) {
+            fisted = true;
+            if (!surface && !draggingHandle) fistDown(live);
+          }
+        } else if (fisted) {
+          fisted = false;
+          fistUp(live);
+        }
+        aim(live, t, t, false); // fist: no dwell click
         return;
       }
-      if (fisted) { fisted = false; fistUp(p); return; }
+      if (closingToFist) {
+        // Open/point → curling: don't let pinchFsm see these frames.
+        cancelPinchWithoutClick();
+        frozen = null;
+        lastOpenTip = live;
+        history.push(live, t);
+        aim(live, t, t, false);
+        return;
+      }
+      if (fisted) { fisted = false; fistUp(live); return; }
 
       // Pinch ratio is smoothed too, then debounced with hysteresis +
       // refractory: hover can NEVER activate anything — only this machine's
       // justDown/justUp edges press and release.
-      const ratio = ratioEuro.filter(pinchRatio(h), t);
+      const ratio = ratioEuro.filter(rawRatio, t);
       const st = pinchFsm.update(ratio, t);
 
+      if (!st.pinched && !st.justDown && !closing) {
+        lastOpenTip = live;
+        history.push(live, t);
+      }
+
+      // Locked click/cursor point: last clearly-open landmark-8, else the
+      // ~100 ms lookback, else the current (already-open) tip. Never a
+      // mid-pinch 8/12 swap.
+      const locked = (): P => lastOpenTip ?? history.at(t - HAND_FEEL.freezeLookbackMs) ?? live;
+
       if (st.justDown) {
-        // CURSOR FREEZE: the click target is where the cursor was BEFORE the
-        // fingers started closing, so the pinch motion can't drag it off a
-        // small button. The cursor then stays locked for the whole pinch
-        // (sliders and drag handles excepted — they need live motion).
-        const pre = history.at(t - HAND_FEEL.freezeLookbackMs) ?? p;
-        aim(pre, t);
-        press(true);
+        frozen = locked();
+        aim(frozen, t, t, false); // pinch down: no dwell (pinch is the click)
+        if (interact) press(true);
       } else if (st.pinched) {
-        if (dragging || draggingHandle || textEl) aim(p, t);
-        else if (scrollEl) scrollDrag(p);
+        const hold = frozen ?? locked();
+        if (!interact) {
+          // Two-hand zoom owns this pinch — don't also click on release.
+          if (pinched) { suppressRelease = true; press(false); }
+          aim(hold, t, t, false);
+        } else if (dragging || draggingHandle || textEl) aim(live, t, t, false);
+        else if (scrollEl) scrollDrag(hold);
+        else aim(hold, t, t, false);
         // The cursor stays frozen, but the morph hold's slop check needs the
         // LIVE hand position — drifting past slop must cancel the hold.
-        opts.onPinch?.({ phase: 'move', p, now: t });
+        if (interact) opts.onPinch?.({ phase: 'move', p: live, now: t });
+      } else if (closing && lastOpenTip) {
+        // Pre-engage close: keep showing the last open index tip so a
+        // mid-close landmark swap can't walk the cursor onto the middle finger.
+        // Dwell is off — a coming pinch must not also fire a dwell click.
+        aim(lastOpenTip, t, t, false);
       } else {
-        if (st.justUp) press(false);
-        aim(p, t);
+        if (st.justUp) { press(false); frozen = null; }
+        aim(live, t, t, interact);
       }
     },
     // Mirrors update(): a held pinch over a scroll list drags it (the sim /
@@ -785,5 +915,47 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     setDryRun(on) { dryRun = on; },
     lost,
     destroy() { lost(); if (lostTimer) clearTimeout(lostTimer); frame.remove(); cursor.remove(); },
+  };
+}
+
+/** Public pointer: one coral cursor per foreground hand (max two), each with
+ *  its own pinch-click and fist-drag state. Tests and the sim hook still use
+ *  pointAt/pinch on the first slot. */
+export function createHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
+  const slots = [createOneHandPointer(doc, opts), createOneHandPointer(doc, opts)];
+  const active = [false, false];
+  const prevTips: (P | null)[] = [null, null];
+  const tipOf = (h: readonly LM[]): P | null => {
+    const p = h[INDEX_TIP] ?? h[0];
+    return p ? { x: p.x, y: p.y } : null;
+  };
+  return {
+    update(hands, t) {
+      const fg = pickForegroundHands(hands as readonly (readonly { x: number; y: number }[])[], 2);
+      const assigned = assignHandSlots(fg, prevTips);
+      const twoPinch = assigned.filter((h) => h && classifyGesture(h as unknown as GesturePt[]) === 'pinch').length >= 2;
+      for (let i = 0; i < slots.length; i++) {
+        const h = assigned[i];
+        if (h) {
+          slots[i].update([h], t, { interact: !twoPinch });
+          active[i] = true;
+          prevTips[i] = tipOf(h);
+        } else if (active[i]) {
+          slots[i].lost();
+          active[i] = false;
+          prevTips[i] = null;
+        }
+      }
+    },
+    pointAt(x, y) { return slots[0].pointAt(x, y); },
+    pinch: (down) => slots[0].pinch(down),
+    get target() { return slots[0].target ?? slots[1].target; },
+    get lastActivated() { return slots[0].lastActivated ?? slots[1].lastActivated; },
+    consumedPinch: () => slots[0].consumedPinch() || slots[1].consumedPinch(),
+    surfaceBusy: () => slots[0].surfaceBusy() || slots[1].surfaceBusy(),
+    suppressNextRelease() { slots[0].suppressNextRelease(); slots[1].suppressNextRelease(); },
+    setDryRun(on) { slots[0].setDryRun(on); slots[1].setDryRun(on); },
+    lost() { slots[0].lost(); slots[1].lost(); active[0] = active[1] = false; prevTips[0] = prevTips[1] = null; },
+    destroy() { slots[0].destroy(); slots[1].destroy(); },
   };
 }

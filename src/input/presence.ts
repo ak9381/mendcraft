@@ -28,6 +28,7 @@ export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
 import type { OwnerHands } from './handSignature';
 import { resolveCameraStream } from './cameraShare';
+import { ensureSquareCanvas, unletterboxLandmarks } from './squareFrame';
 
 export type { HandEvent, HandFrame } from './handLogic';
 export type { FaceBox } from './faceLogic';
@@ -38,8 +39,13 @@ const HAND_MODEL_URL =
 const FACE_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
-/** Run face detection on every Nth hand frame to spare laptop GPUs. */
-const FACE_EVERY = 3;
+/** FaceLandmarker interval — a few fps, so the Facing pill stays cheap. */
+export const FACE_INTERVAL_MS = 200;
+
+/** Whether enough time has passed to run another face frame. */
+export function shouldRunFace(now: number, last: number, interval = FACE_INTERVAL_MS): boolean {
+  return now - last >= interval;
+}
 const LOST_TIMEOUT_MS = 2500;
 
 /** Face as drawn by the overlay (box already mirrored to screen space 0..1). */
@@ -127,7 +133,13 @@ export function watchTracksForEnd(
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
-  opts?: { onCameraLost?: () => void; /** When false, skip FaceLandmarker (laptop canvas). Default true. */ detectFaces?: boolean },
+  opts?: {
+    onCameraLost?: () => void;
+    /** When false, skip FaceLandmarker. Default true. */
+    detectFaces?: boolean;
+    /** When false, skip HandLandmarker (phone companion Facing pill). Default true. */
+    detectHands?: boolean;
+  },
 ): PresenceTracker {
   const video = document.createElement('video');
   video.playsInline = true;
@@ -136,13 +148,15 @@ export function createPresenceTracker(
   document.body.appendChild(video);
 
   const wantFaces = opts?.detectFaces !== false;
+  const wantHands = opts?.detectHands !== false;
   let handLm: HandLandmarker | null = null;
+  let squareBuf: HTMLCanvasElement | null = null;
   let faceLm: FaceLandmarker | null = null;
   let stream: MediaStream | null = null;
   let ownsStream = true;
   let rafId = 0;
   let running = false;
-  let frameCount = 0;
+  let lastFaceAt = -Infinity;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
@@ -271,22 +285,48 @@ export function createPresenceTracker(
     });
   }
 
+  function squareSource(): HTMLVideoElement | HTMLCanvasElement {
+    try {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h || w === h) return video;
+      if (!squareBuf) {
+        const doc = video.ownerDocument ?? (typeof document !== 'undefined' ? document : null);
+        if (!doc) return video;
+        squareBuf = doc.createElement('canvas');
+      }
+      return ensureSquareCanvas(video, squareBuf);
+    } catch {
+      return video;
+    }
+  }
+
   function loop(): void {
-    if (!running || !handLm || video.readyState < 2) {
+    if (!running || video.readyState < 2 || (!handLm && !faceLm)) {
       rafId = requestAnimationFrame(loop);
       return;
     }
     ts = performance.now();
     // Timestamps must strictly increase per MediaPipe task.
-    // FaceLandmarker is opt-in: the laptop canvas must not run it (it steals
-    // frames from HandLandmarker and painted a full-screen "Facing" box).
-    if (wantFaces && faceLm && frameCount % FACE_EVERY === 0) {
-      const fr = faceLm.detectForVideo(video, ts);
+    // Face runs at a few fps (FACE_INTERVAL_MS) so the small Facing pill
+    // stays cheap next to the hand tracker.
+    const src = squareSource();
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const usedSquare = src !== video;
+    if (wantFaces && faceLm && shouldRunFace(ts, lastFaceAt)) {
+      lastFaceAt = ts;
+      const fr = faceLm.detectForVideo(src, ts);
+      if (usedSquare && fr.faceLandmarks) {
+        fr.faceLandmarks = fr.faceLandmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
+      }
       updateFaces(fr, ts);
     }
-    const hr = handLm.detectForVideo(video, ts + 0.5);
-    handleHands(hr);
-    frameCount++;
+    if (handLm) {
+      const hr = handLm.detectForVideo(src, ts + 0.5);
+      if (usedSquare && hr.landmarks) {
+        hr.landmarks = hr.landmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
+      }
+      handleHands(hr);
+    }
     rafId = requestAnimationFrame(loop);
   }
 
@@ -311,13 +351,15 @@ export function createPresenceTracker(
       // locked-down GPUs, software renderers) cannot create it, so fall back to the
       // CPU delegate automatically rather than failing the whole camera. Tracking is
       // slower on CPU but still works — far better than no hands/face at all.
-      handLm = await createWithFallback((delegate) =>
-        HandLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-          runningMode: 'VIDEO',
-          numHands: 4,
-        }),
-      );
+      if (wantHands) {
+        handLm = await createWithFallback((delegate) =>
+          HandLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+            runningMode: 'VIDEO',
+            numHands: 4,
+          }),
+        );
+      }
       if (wantFaces) {
         faceLm = await createWithFallback((delegate) =>
           FaceLandmarker.createFromOptions(fileset, {

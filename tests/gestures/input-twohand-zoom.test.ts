@@ -12,13 +12,23 @@ import { createPlanTools, nudgeSelected } from '../../src/plan/tools';
 import { emptyPlan, type Wall } from '../../src/plan/doc';
 import { makeFakeCtx, ptr } from './toolCtxFake';
 
-/** 21 landmarks; wrist->middle MCP = 0.2. `gap` = thumb-index tip distance. */
+/** 21 landmarks; wrist->middle MCP = 0.2. `gap` = thumb-index tip distance.
+ *  The index reaches out (~1.3× palm size) so this is a pinch, not a fist. */
 function hand(cx: number, cy: number, gap: number): Pt[] {
   const pts: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-  pts[0] = { x: cx, y: cy + 0.2 };
-  pts[9] = { x: cx, y: cy };
-  pts[8] = { x: cx, y: cy - 0.05 };
-  pts[4] = { x: cx + gap, y: cy - 0.05 };
+  pts[0] = { x: cx, y: cy + 0.42 }; // wrist
+  pts[5] = { x: cx, y: cy + 0.22 };
+  pts[9] = { x: cx, y: cy + 0.22 }; // middle MCP — palm size 0.2
+  pts[13] = { x: cx + 0.06, y: cy + 0.22 };
+  pts[17] = { x: cx + 0.10, y: cy + 0.22 };
+  pts[8] = { x: cx, y: cy }; // index tip, ~1.3× palm size from the palm
+  pts[6] = { x: cx, y: cy + 0.12 };
+  pts[4] = { x: cx + gap, y: cy };
+  // Other fingertips stay curled at the palm so only the index is reaching.
+  const palmY = cy + 0.26;
+  pts[12] = { x: cx + 0.05, y: palmY };
+  pts[16] = { x: cx + 0.08, y: palmY };
+  pts[20] = { x: cx + 0.12, y: palmY };
   return pts;
 }
 const PINCH_GAP = 0.02;

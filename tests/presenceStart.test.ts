@@ -135,4 +135,34 @@ describe('presence.start camera-before-models ordering', () => {
     expect(vision.FaceLandmarker.createFromOptions).not.toHaveBeenCalled();
     tracker.stop();
   });
+
+  it('loads FaceLandmarker by default (Facing pill path)', async () => {
+    const vision = await import('@mediapipe/tasks-vision');
+    const { createPresenceTracker } = await import('../src/input/presence');
+    const tracker = createPresenceTracker(() => {});
+    await tracker.start();
+    expect(vision.FaceLandmarker.createFromOptions).toHaveBeenCalled();
+    expect(vision.HandLandmarker.createFromOptions).toHaveBeenCalled();
+    tracker.stop();
+  });
+
+  it('does not load HandLandmarker when detectHands is false (phone face-only)', async () => {
+    const vision = await import('@mediapipe/tasks-vision');
+    const { createPresenceTracker } = await import('../src/input/presence');
+    const tracker = createPresenceTracker(() => {}, undefined, { detectHands: false });
+    await tracker.start();
+    expect(vision.FaceLandmarker.createFromOptions).toHaveBeenCalled();
+    expect(vision.HandLandmarker.createFromOptions).not.toHaveBeenCalled();
+    tracker.stop();
+  });
+});
+
+describe('shouldRunFace throttle', () => {
+  it('runs at a few fps, not every frame', async () => {
+    const { shouldRunFace, FACE_INTERVAL_MS } = await import('../src/input/presence');
+    expect(FACE_INTERVAL_MS).toBe(200);
+    expect(shouldRunFace(0, -Infinity)).toBe(true);
+    expect(shouldRunFace(100, 0)).toBe(false);
+    expect(shouldRunFace(200, 0)).toBe(true);
+  });
 });

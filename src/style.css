@@ -55,6 +55,13 @@ body,
   width: 100%;
   max-width: 100%;
   margin: 0;
+  overflow-x: hidden;
+}
+html, body {
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 body {
@@ -4278,3 +4285,41 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
 .mc-hand-select-opt[aria-selected="true"] { font-weight: 700; }
 .mc-ref-nav { min-width: 36px; min-height: 36px; padding: 0 8px; border-radius: 7px; }
 .mc-ref-nav:disabled { opacity: 0.4; }
+
+/* Small "Facing this device" pill — shared so /mobile and the older viewport
+   page can show it without loading canvas.css. Never a full-screen face box. */
+.mc-facing-banner {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: 16px;
+  z-index: 71;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(260px, calc(100vw - 220px));
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  background: rgba(11, 15, 20, 0.82);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+}
+.mc-facing-banner[hidden] { display: none; }
+.mc-facing-banner.is-away { background: rgba(80, 60, 40, 0.88); }
+.mc-facing-banner-hide {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  min-height: 28px;
+  border-radius: 999px;
+}
+.mc-facing-banner-hide:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }

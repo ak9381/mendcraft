@@ -61,6 +61,58 @@ function extended(p: Pt[], finger: readonly [number, number, number]): boolean {
   return dist(w, p[finger[2]]) > dist(w, p[finger[1]]);
 }
 
+const PALM_LMS = [0, 5, 9, 13, 17] as const;
+const FINGER_TIPS = [8, 12, 16, 20] as const;
+/** Max tip→palm distance, as a fraction of palm size (wrist→middle MCP).
+ *  Loosened vs. the old tip-vs-PIP test so a real MediaPipe fist (tips near
+ *  the palm, not folded past their PIP toward the wrist) still counts, but
+ *  tight enough that a pointing index that only dips (air-tap) stays a point.
+ *  A fully extended index is typically ≳ 1.3× palm size away. */
+export const FIST_TIP_RATIO = 0.90;
+/** Thumb must be at least this far from the palm (and raised) to count as
+ *  thumbs-up instead of a fist. */
+const THUMB_UP_RATIO = 1.05;
+
+function palmCenter(p: Pt[]): Pt {
+  let x = 0, y = 0;
+  for (const i of PALM_LMS) { x += p[i].x; y += p[i].y; }
+  return { x: x / PALM_LMS.length, y: y / PALM_LMS.length };
+}
+
+/** True when the four fingertips sit near the palm, measured in palm-size
+ *  ratios — the test that works on real webcam fists, where `extended()`
+ *  often still reads true because the tip is slightly past its PIP. */
+export function isFistPose(p: Pt[]): boolean {
+  if (!p || p.length < 21) return false;
+  const size = handSize(p);
+  const palm = palmCenter(p);
+  return FINGER_TIPS.every((i) => dist(p[i], palm) / size <= FIST_TIP_RATIO);
+}
+
+/** Min index-tip→palm / palm-size for a pose to count as a pinch.
+ *  Below this the index is curling in, so a low thumb–index ratio is a
+ *  fist-in-progress, not a pinch. A pointing or pinching index is typically
+ *  ≳ 1.3× palm size away. */
+export const PINCH_INDEX_REACH = 1.10;
+
+export function tipPalmRatio(p: Pt[], tipIdx: number): number {
+  if (!p || p.length < 21) return 0;
+  return dist(p[tipIdx], palmCenter(p)) / handSize(p);
+}
+
+/** True when the hand is curling into a fist from an open or pointing pose:
+ *  the other fingertips are already in (or coming in), and the index is no
+ *  longer clearly reaching. A deliberate pinch keeps the index stretched
+ *  out, so this stays false. */
+export function isClosingToFist(p: Pt[]): boolean {
+  if (!p || p.length < 21) return false;
+  if (isFistPose(p)) return true;
+  const size = handSize(p);
+  const palm = palmCenter(p);
+  const othersIn = [12, 16, 20].filter((i) => dist(p[i], palm) / size <= PINCH_INDEX_REACH).length;
+  return othersIn >= 3 && tipPalmRatio(p, 8) < PINCH_INDEX_REACH;
+}
+
 export interface FingerStates {
   thumb: boolean;
   index: boolean;
@@ -90,18 +142,25 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   const fingers = Number(s.index) + Number(s.middle) + Number(s.ring) + Number(s.pinky);
   const allOpen = s.index && s.middle && s.ring && s.pinky;
   const ratio = pinchRatio(p);
+  const fistLike = isFistPose(p);
+  const thumbPalm = dist(p[THUMB_TIP], palmCenter(p)) / handSize(p);
 
+  // Palm-normalised fist/thumbs-up BEFORE open-palm and pinch: a real
+  // MediaPipe fist often still has every tip slightly farther from the wrist
+  // than its PIP (so `allOpen` is true) and a low thumb–index ratio (so
+  // pinch would win). Tips near the palm are the reliable signal.
+  if (fistLike && s.thumb && p[THUMB_TIP].y < p[WRIST].y && thumbPalm >= THUMB_UP_RATIO) return 'thumbs-up';
+  if (fistLike) return 'fist';
   // Open palm wins before pinch: splayed fingers shouldn't read as a pinch.
   if (allOpen) return 'open-palm';
-  // Thumb + index tips together *while the index reaches out* → pinch. The index
-  // check separates a pinch from a fist (where a curled index tip also sits near
-  // the thumb).
-  if (ratio < PINCH_CLASSIFY && s.index) return 'pinch';
+  // Thumb + index tips together *while the index clearly reaches out* →
+  // pinch. A curling index (closing toward the palm from open/point) must
+  // not count — that is the path into a fist, and must not fire a pinch click.
+  if (ratio < PINCH_CLASSIFY && s.index && tipPalmRatio(p, 8) >= PINCH_INDEX_REACH && !isClosingToFist(p)) return 'pinch';
   // Only the index extended → pointing.
   if (s.index && fingers === 1) return 'point';
-  // Fingers curled, thumb out and raised above the wrist → thumbs up.
+  // Fallback thumbs-up / fist for poses the palm-ratio test missed.
   if (fingers === 0 && s.thumb && p[THUMB_TIP].y < p[WRIST].y) return 'thumbs-up';
-  // Everything curled → fist / grab.
   if (fingers === 0) return 'fist';
   return 'none';
 }

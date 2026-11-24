@@ -8,6 +8,7 @@ const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 import { createHandsProcessor, type HandEvent, type HandFrame } from './handLogic';
+import { ensureSquareCanvas, unletterboxLandmarks } from './squareFrame';
 
 export type { HandEvent, HandFrame } from './handLogic';
 
@@ -32,6 +33,7 @@ export function createHandTracker(
   let stream: MediaStream | null = null;
   let rafId = 0;
   let running = false;
+  let squareBuf: HTMLCanvasElement | null = null;
   const processor = createHandsProcessor(onEvent);
 
   function setPinchThreshold(on: number, off: number): void {
@@ -52,7 +54,15 @@ export function createHandTracker(
       rafId = requestAnimationFrame(loop);
       return;
     }
-    const result = landmarker.detectForVideo(video, performance.now());
+    let src: HTMLVideoElement | HTMLCanvasElement = video;
+    try {
+      if (!squareBuf) squareBuf = (video.ownerDocument ?? document).createElement('canvas');
+      src = ensureSquareCanvas(video, squareBuf);
+    } catch { /* keep the raw video if the canvas path fails */ }
+    const result = landmarker.detectForVideo(src, performance.now());
+    if (src !== video && result.landmarks) {
+      result.landmarks = result.landmarks.map((lm) => unletterboxLandmarks(lm, video.videoWidth, video.videoHeight));
+    }
     handleResult(result);
     rafId = requestAnimationFrame(loop);
   }

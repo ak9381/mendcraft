@@ -19,6 +19,23 @@ describe('surface plan', () => {
     const many = Array.from({ length: MAX_TILES + 1 }, (_, i) => ({ type: 'lamp', deviceId: `l-${i}` }));
     expect(coerceSurfacePlan({ ...draft, tiles: many }).ok).toBe(false);
   });
+  it('aliases type tab to tabs, and drops unknown siblings with a note instead of refusing the plan', () => {
+    const r = coerceSurfacePlan({
+      kind: 'room',
+      title: 'Studio',
+      tiles: [
+        { type: 'lamp', deviceId: 'wiz-1', label: 'Desk lamp' },
+        { type: 'tab', label: 'Lights', children: [{ type: 'switch', deviceId: 'sw-1', label: 'Switch' }] },
+        { type: 'script', src: 'x' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.tiles.some((t) => t.type === 'lamp')).toBe(true);
+    const tabs = r.value.tiles.find((t) => t.type === 'tabs');
+    expect(tabs && tabs.type === 'tabs' && tabs.tabs[0].label).toBe('Lights');
+    expect(r.notes?.some((n) => /script/i.test(n))).toBe(true);
+  });
   it('strips markup from labels', () => {
     const r = coerceSurfacePlan({ ...draft, tiles: [{ type: 'lamp', deviceId: 'a', label: '<img onerror=x>Lamp' }] });
     expect(r.ok && r.value.tiles[0].type === 'lamp' && r.value.tiles[0].label).toBe('img onerror=xLamp');

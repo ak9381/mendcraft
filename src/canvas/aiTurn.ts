@@ -130,11 +130,37 @@ export interface TurnUi {
   onText?(full: string): void;
   onGhost?(p: PartialPlan): void;
   onError?(why: string): void;
+  /** Soft warnings from a still-valid plan (dropped unknown tiles, etc.). */
+  onNote?(note: string): void;
+}
+
+/** How long a live Gemini stream may sit without finishing before we retry. */
+export const GEMINI_TIMEOUT_MS = 20_000;
+
+/** Run `fn`, retrying once if it rejects or exceeds `timeoutMs`. */
+export async function withTimeoutRetry<T>(
+  fn: () => Promise<T>,
+  opts: { timeoutMs?: number; retries?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? GEMINI_TIMEOUT_MS;
+  const retries = opts.retries ?? 1;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let last: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    let timer: Promise<never> | undefined;
+    try {
+      timer = sleep(timeoutMs).then(() => { throw new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`); });
+      return await Promise.race([fn(), timer]);
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
 }
 
 
 /** Parse a model reply that may be fenced, have leading prose, or use smart quotes.
- *  Then validate it as a surface plan. Unknown widgets fail validation. */
+ *  Then validate it as a surface plan. Unknown tiles are dropped with a note. */
 /** Unwrap common model envelopes and default a missing kind when tiles are present. */
 export function normalizePlanRaw(raw: unknown, depth = 0): unknown {
   if (!raw || typeof raw !== 'object' || depth > 3) return raw;
@@ -149,7 +175,7 @@ export function normalizePlanRaw(raw: unknown, depth = 0): unknown {
   return raw;
 }
 
-export function parseModelPlan(text: string, deviceIdSession?: DeviceIdSession): { ok: true; value: SurfacePlan } | { ok: false; error: string } {
+export function parseModelPlan(text: string, deviceIdSession?: DeviceIdSession): { ok: true; value: SurfacePlan; notes?: string[] } | { ok: false; error: string } {
   const raw = extractJson(text);
   if (raw == null) return { ok: false, error: 'The reply was not a board plan.' };
   const normalized = normalizePlanRaw(raw);
@@ -172,7 +198,7 @@ class MidStreamOffline extends Error {
 }
 
 /** Run one engine over one request. Returns a validated plan or null. */
-export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: { deviceIdSession?: DeviceIdSession; isCancelled?: () => boolean } = {}): Promise<SurfacePlan | null> {
+export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: { deviceIdSession?: DeviceIdSession; isCancelled?: () => boolean; timeoutMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<SurfacePlan | null> {
   const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
   if (engine.routeLine) sent.routeLine = engine.routeLine;
   ui.onSent?.(sent);
@@ -185,8 +211,13 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     const g = parsePartialPlan(full);
     if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
   });
+  const streamMaybeTimed = (eng: SurfaceEngine) => (
+    eng.id === 'gemini' && !eng.sim
+      ? withTimeoutRetry(() => streamOne(eng), { timeoutMs: opts.timeoutMs ?? GEMINI_TIMEOUT_MS, retries: 1, sleep: opts.sleep })
+      : streamOne(eng)
+  );
   try {
-    final = await streamOne(engine);
+    final = await streamMaybeTimed(engine);
     throwIfCancelled();
   } catch (e) {
     if (e instanceof MidStreamOffline) {
@@ -216,6 +247,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   if (g.tiles.length !== ghostCount) ui.onGhost?.(g);
   const plan = parseModelPlan(final, opts.deviceIdSession);
   if (!plan.ok) { ui.onError?.(plan.error.startsWith('The reply') ? plan.error : `Refused the plan: ${plan.error}`); return null; }
+  for (const note of plan.notes ?? []) ui.onNote?.(note);
   return plan.value;
 }
 

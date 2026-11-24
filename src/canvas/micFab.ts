@@ -62,17 +62,33 @@ export function mountMicFab(
 
   let listening = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  const NOTHING_HEARD = 'Stopped listening — nothing heard.';
 
   function showCaption(text: string, kind: 'listen' | 'words' | 'error' | 'clear' = 'words'): void {
+    if (hideTimer) { clearT(hideTimer); hideTimer = null; }
     if (kind === 'clear' || !text) {
       caption.hidden = true;
       caption.textContent = '';
       caption.classList.remove('is-error');
+      syncEmptyCaptions();
       return;
     }
     caption.hidden = false;
     caption.textContent = text;
     caption.classList.toggle('is-error', kind === 'error');
+    syncEmptyCaptions();
+    if (kind === 'error') {
+      hideTimer = setT(() => showCaption('', 'clear'), 4000);
+    }
+  }
+
+  function syncEmptyCaptions(): void {
+    root.querySelectorAll?.<HTMLElement>('.mc-empty-talk-caption')?.forEach((el) => {
+      el.hidden = caption.hidden;
+      el.textContent = caption.textContent;
+      el.classList.toggle('is-error', caption.classList.contains('is-error'));
+    });
   }
 
   function render() {
@@ -94,9 +110,14 @@ export function mountMicFab(
     render();
     // Nothing was heard (no turn replaced the line): don't leave "Listening…"
     // up after the mic is off. A turn's own status is never overwritten.
-    if (opts.getStatus?.() === LISTENING_STATUS) say(timedOut ? 'Stopped listening — nothing heard.' : 'Stopped listening.');
-    if (timedOut) showCaption('Stopped listening — nothing heard.', 'error');
-    else if (!caption.classList.contains('is-error')) showCaption('', 'clear');
+    // Timeouts and a silent stop are shown once, as the small Talk caption
+    // (auto-hides). They must not also write the status toast / top bar.
+    if (opts.getStatus?.() === LISTENING_STATUS) {
+      if (timedOut) showCaption(NOTHING_HEARD, 'error');
+      else showCaption('Stopped listening.', 'error');
+    } else if (!caption.classList.contains('is-error')) {
+      showCaption('', 'clear');
+    }
   }
   function toggle() {
     if (listening) { stop(); return; }
@@ -126,9 +147,9 @@ export function mountMicFab(
     },
     setError(text) {
       stop();
-      say(text);
+      if (text !== NOTHING_HEARD) say(text);
       showCaption(text, 'error');
     },
-    destroy() { stop(); wrap.remove(); },
+    destroy() { stop(); if (hideTimer) clearT(hideTimer); wrap.remove(); },
   };
 }

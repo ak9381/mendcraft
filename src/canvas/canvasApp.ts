@@ -63,7 +63,7 @@ import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, type HandPointer, type HandSurface } from './handPointer';
 import { cameraHandsFromSelfie } from './handSpace';
-import { mountMicFab, type MicFab } from './micFab';
+import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
@@ -236,12 +236,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         <button class="mc-btn mc-dock-unpin" type="button">Unpin</button></div>
       <div class="mc-dock-surface"></div>
     </aside>
+    <div class="mc-ai-scrim" data-hand-dismiss hidden></div>
     <aside class="mc-ai" aria-label="AI activity" hidden>
-      <div class="mc-ai-body">
+      <div class="mc-ai-head">
         <h2 class="mc-ai-h">AI activity</h2>
+        <button type="button" class="mc-ai-close" aria-label="Close AI activity">×</button>
+      </div>
+      <div class="mc-ai-body">
         <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams.</p>
         ${MODEL_PANELS_HTML}
-        <h3 class="mc-ai-h3">History</h3><p class="mc-ai-ledger-total"></p><ol class="mc-ai-history" tabindex="-1"></ol>
+        <h3 class="mc-ai-h3">History</h3>
+        <p class="mc-ai-ledger-total"></p>
+        <p class="mc-ai-history-empty">Turns you keep will show up here.</p>
+        <ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
       <div class="mc-ai-pending">
         <p class="mc-ai-state" aria-live="polite"></p>
@@ -720,9 +727,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.setAttribute('aria-label', `${f.title} board${focused ? ', editing' : ''}`);
       const empty = el.querySelector<HTMLElement>('.mc-empty')!;
       empty.hidden = !!surfaces[f.id];
-      if (!surfaces[f.id] && !empty.childElementCount) {
-        empty.innerHTML = `<p class="mc-empty-lead" data-i18n="emptyLead">Empty board.</p><p>Say “connect everything in this room”, or start with:</p>
-          <div class="mc-row"><button class="mc-btn primary" data-act="connect" data-i18n="emptyConnect">Connect this room</button><button class="mc-btn" data-act="floorplan" data-i18n="emptyFloorplan">Floor plan</button></div>`;
+      if (!surfaces[f.id] && !empty.querySelector(".mc-empty-talk")) {
+        empty.innerHTML = `<p class="mc-empty-lead" data-i18n="emptyLead">What would you like to build on this board?</p>
+          <button type="button" class="mc-btn primary mc-empty-talk" data-act="talk" aria-label="Talk: start listening">${MIC_ICON_SVG}<span>Talk</span></button>
+          <p class="mc-empty-talk-caption" hidden></p>
+          <div class="mc-row"><button class="mc-btn" data-act="connect" data-i18n="emptyConnect">Connect this room</button><button class="mc-btn" data-act="floorplan" data-i18n="emptyFloorplan">Floor plan</button></div>`;
       }
     }
     root.dataset.mode = focusId ? 'focus' : 'overview';
@@ -889,13 +898,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // last keep / drop, so the board gets its full width back (unless she opened it).
   let aiManual = false; let aiHideTimer = 0;
   const autoHideAi = () => { clearTimeout(aiHideTimer); aiHideTimer = window.setTimeout(() => { if (!aiManual && !pending && !reviewDialog.isOpen()) showAi(false); }, 2000); };
+  const aiScrim = root.querySelector<HTMLElement>('.mc-ai-scrim');
+  const closeAi = (): void => { aiManual = false; showAi(false); };
   function showAi(on = true): void {
     clearTimeout(aiHideTimer);
     const changed = aiPanel.hidden === on;
     aiPanel.hidden = !on;
+    if (aiScrim) aiScrim.hidden = !on;
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
     if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(f)); }
   }
+  aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
+  aiScrim?.addEventListener('click', closeAi);
   // sim's scripted engines can resolve near-instantly, which would settle
   // the swarm (and open the review) before a screenshot — or a person — ever
   // sees it mid-flight. Hold it visible for a minimum stretch in sim only;
@@ -1026,6 +1040,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const entries = history.list();
     let lastActive = -1;
     for (let i = entries.length - 1; i >= 0; i--) if (!entries[i].undone) { lastActive = i; break; }
+    const emptyHint = aiPanel.querySelector<HTMLElement>('.mc-ai-history-empty');
+    if (emptyHint) emptyHint.hidden = entries.length > 0;
     aiPanel.querySelector('.mc-ai-history')!.innerHTML = entries.map((h, i) => {
       const who = h.by === 'gemini' ? 'Deep' : h.by === 'nano' ? 'Quick' : 'You';
       const time = new Date(h.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -1059,6 +1075,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
         onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
         onGhost: (g) => ghost(frameId, g),
+        onNote: (note) => {
+          const state = aiPanel.querySelector('.mc-ai-state');
+          if (state) state.textContent = note;
+        },
         onError: (why) => {
           settleSwarm();
           panels.forEngine(engineId).fail(why);
@@ -1936,7 +1956,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const t = e.target as HTMLElement;
     const act = t.closest<HTMLElement>('[data-act]');
     const frame = t.closest<HTMLElement>('.mc-frame')?.dataset.frame;
-    if (act && frame) { if (act.dataset.act === 'connect') void connectRoom(frame); else floorPlan(frame); return; }
+    if (act && frame) {
+      if (act.dataset.act === 'connect') void connectRoom(frame);
+      else if (act.dataset.act === 'talk') micFab?.toggle();
+      else if (act.dataset.act === 'floorplan') floorPlan(frame);
+      return;
+    }
     if (frame && frame !== focusId && !dragged) void focus(frame);
   });
   let drag: { x: number; y: number } | null = null; let dragged = false;
