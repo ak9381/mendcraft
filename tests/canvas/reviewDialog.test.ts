@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
+import { createReviewReceipts, clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
 
 describe('reviewActionFor', () => {
   it('approve maps to keep', () => { expect(reviewActionFor('approve')).toBe('keep'); });
@@ -259,5 +259,78 @@ describe('honesty footer', () => {
   });
   it('unmeasured bytes never invent a number', () => {
     expect(honestyLines({ engine: 'gemini', sentWhat: 'the tile dump' }).left).toBe('What left this device: the tile dump');
+  });
+});
+
+describe('per-turn review receipts (footer never borrows another turn)', () => {
+  it('the Kannada review shows the Kannada turn’s bytes, not the previous dashboard’s', () => {
+    const r = createReviewReceipts();
+    const dashboard = { engine: 'gemini', sent: 'your words, 3 device names', routeLine: 'Gemini · cloud — improve the layout', sim: true };
+    const kannada = { engine: 'gemini', sent: 'the key list and your request.', routeLine: 'SIM · Kannada sentence: Deep understands it better.', sim: true };
+    r.record(dashboard, 2355);
+    r.record(kannada, 385);
+    const f = r.facts(kannada, { youAsked: 'add kannada' });
+    expect(f.bytes).toBe(385);
+    expect(honestyLines(f).left).toBe('What left this device: the key list and your request · 385 B');
+    expect(honestyLines(f).why).toBe('Why Gemini: Kannada sentence: Deep understands it better.');
+  });
+
+  it('a change with no AI call (no token) shows no bytes and says so', () => {
+    const r = createReviewReceipts();
+    r.record({ engine: 'gemini', sent: 'x', routeLine: 'y', sim: false }, 999);
+    const f = r.facts(null, { youAsked: 'make it blue' });
+    expect(f.bytes).toBeUndefined();
+    expect(f.noAiCall).toBe(true);
+    expect(honestyLines(f)).toMatchObject({ why: null, left: 'No AI call for this change.' });
+  });
+
+  it('a retried send in the same turn sums, and an unrecorded turn claims no number', () => {
+    const r = createReviewReceipts();
+    const t = { engine: 'gemini', sent: 'one tile', routeLine: 'z', sim: false };
+    r.record(t, 100); r.record(t, 50);
+    expect(r.facts(t).bytes).toBe(150);
+    expect(r.facts({ ...t }).bytes).toBeUndefined();
+  });
+});
+
+describe('review window keyboard', () => {
+  function withDocListeners() {
+    const docListeners: Record<string, Array<(e: unknown) => void>> = {};
+    const doc = {
+      ...fakeDoc,
+      createElement: (tag: string) => new FakeEl(tag),
+      addEventListener: (type: string, fn: (e: unknown) => void) => { (docListeners[type] ??= []).push(fn); },
+      removeEventListener: () => {},
+    };
+    return { doc, fireDoc: (type: string, e: unknown) => docListeners[type]?.forEach((f) => f(e)) };
+  }
+  const key = (k: string, extra: Record<string, unknown> = {}) => ({ key: k, preventDefault() {}, stopPropagation() {}, ...extra });
+
+  it('Escape closes it wherever focus is, without deciding', () => {
+    const { doc, fireDoc } = withDocListeners();
+    const root = new FakeEl('div');
+    const dialog = mountReviewDialog(root as unknown as HTMLElement, {}, doc as unknown as Document);
+    const { card, wasKept, wasDropped } = fakeCard();
+    dialog.open({ title: 'Review', card });
+    fireDoc('keydown', key('Escape', { target: null }));
+    expect(dialog.isOpen()).toBe(false);
+    expect(wasKept()).toBe(false);
+    expect(wasDropped()).toBe(false);
+  });
+
+  it('Tab wraps over every control in the window: grip, ✕, decisions and the resize corner', () => {
+    const root = new FakeEl('div');
+    const dialog = mountReviewDialog(root as unknown as HTMLElement, {}, fakeDoc as unknown as Document);
+    dialog.open({ title: 'Review', card: fakeCard().card });
+    const dialogEl = root.children.find((c) => c.className === 'mc-review-dialog')!;
+    const drag = root.querySelector('.mc-review-drag') as FakeEl;
+    const close = root.querySelector('.mc-review-close') as FakeEl;
+    const resize = root.querySelector('.mc-review-resize') as FakeEl;
+    resize.focus();
+    dialogEl.fire('keydown', key('Tab'));
+    expect(fakeDoc.activeElement).toBe(drag);
+    dialogEl.fire('keydown', key('Tab', { shiftKey: true }));
+    expect(fakeDoc.activeElement).toBe(resize);
+    expect(close).toBeTruthy();
   });
 });

@@ -21,8 +21,8 @@ describe('diffPlans — the review window’s plan list', () => {
     const changes = diffPlans(null, plan(NANO_ROOM), { devices: { 'wiz-desk': { on: true, brightness: 70 }, 'wiz-ceiling': { on: false, brightness: 40 } } });
     expect(changes).toEqual([
       { op: 'add', label: 'Title', detail: 'This room' },
-      { op: 'add', label: 'Desk lamp', detail: 'lamp · 70%' },
-      { op: 'add', label: 'Ceiling light', detail: 'lamp · off' },
+      { op: 'add', label: 'Desk lamp', detail: 'lamp · currently 70%' },
+      { op: 'add', label: 'Ceiling light', detail: 'lamp · currently off' },
     ]);
   });
 
@@ -31,7 +31,7 @@ describe('diffPlans — the review window’s plan list', () => {
     expect(changes[0]).toEqual({ op: 'change', label: 'Title', detail: 'This room → Living room' });
     expect(changes).toContainEqual({ op: 'change', label: 'Ceiling light', detail: 'renamed to Main light' });
     expect(changes).toContainEqual({ op: 'change', label: 'Desk lamp', detail: 'renamed to Reading lamp' });
-    expect(changes).toContainEqual({ op: 'add', label: 'Speaker', detail: 'music · Morning light' });
+    expect(changes).toContainEqual({ op: 'add', label: 'Speaker', detail: 'music · currently Morning light' });
     expect(changes).toContainEqual({ op: 'add', label: 'Room plan', detail: '1 room (Room)' });
     expect(changes).toContainEqual({ op: 'add', label: 'Connect a device', detail: 'button' });
     expect(changes.some((c) => c.op === 'remove')).toBe(false);
@@ -50,7 +50,7 @@ describe('diffPlans — the review window’s plan list', () => {
     const before: SurfacePlan = { kind: 'room', title: 'Board 3', tiles: [] };
     const after = mergeTiles(before, [mapKindToTile('lamp', 'Reading lamp', 'wiz-desk')]);
     expect(diffPlans(before, after, { devices: { 'wiz-desk': { on: true, brightness: 55 } } })).toEqual([
-      { op: 'add', label: 'Reading lamp', detail: 'lamp · 55%' },
+      { op: 'add', label: 'Reading lamp', detail: 'lamp · currently 55%' },
     ]);
   });
 
@@ -93,6 +93,36 @@ describe('diffPlans — the review window’s plan list', () => {
   it('a stat’s new value is a change, not a remove+add', () => {
     expect(diffTile({ type: 'stat', label: 'Today', value: '4 kWh' }, { type: 'stat', label: 'Today', value: '5 kWh' }))
       .toEqual([{ op: 'change', label: 'Today', detail: 'value 4 kWh → 5 kWh' }]);
+  });
+});
+
+describe('diffPlans — renames and live state', () => {
+  it('a renamed stat / chart reads as one “~ renamed to …”, not − and +', () => {
+    const a: SurfacePlan = { kind: 'room', title: 'R', tiles: [
+      { type: 'stat', label: 'Today', value: '4 kWh' },
+      { type: 'chart', title: 'Usage', chartType: 'bar', series: [{ label: 'Mon', value: 1 }] },
+    ] };
+    const b: SurfacePlan = { kind: 'room', title: 'R', tiles: [
+      { type: 'stat', label: 'Energy today', value: '4 kWh' },
+      { type: 'chart', title: 'Weekly usage', chartType: 'bar', series: [{ label: 'Mon', value: 1 }] },
+    ] };
+    expect(diffPlans(a, b)).toEqual([
+      { op: 'change', label: 'Today', detail: 'renamed to Energy today' },
+      { op: 'change', label: 'Usage', detail: 'renamed to Weekly usage' },
+    ]);
+  });
+
+  it('uneven leftovers of a kind stay honest adds/removes', () => {
+    const a: SurfacePlan = { kind: 'room', title: 'R', tiles: [{ type: 'stat', label: 'A', value: '1' }] };
+    const b: SurfacePlan = { kind: 'room', title: 'R', tiles: [{ type: 'stat', label: 'B', value: '1' }, { type: 'stat', label: 'C', value: '2' }] };
+    const ops = diffPlans(a, b).map((c) => `${c.op} ${c.label}`);
+    expect(ops).toEqual(['add B', 'add C', 'remove A']);
+  });
+
+  it('live lamp state is labelled “currently”, never as part of the change', () => {
+    const p: SurfacePlan = { kind: 'room', title: 'R', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] };
+    const [line] = diffPlans({ ...p, tiles: [] }, p, { devices: { 'wiz-desk': { on: true, brightness: 70 } } });
+    expect(line.detail).toBe('lamp · currently 70%');
   });
 });
 

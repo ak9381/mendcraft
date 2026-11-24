@@ -88,7 +88,7 @@ import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { createReviewReceipts, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
@@ -757,16 +757,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneMenu?.close();
     reviewDialog.open(model);
   }
-  /** The review's honesty footer for a turn: where it ran, why there, and the
-   *  ledger's real byte count for that turn (only when this SentInfo is the
-   *  one the ledger just recorded — never a guess). */
-  let lastSent: { info: SentInfo; bytes: number } | null = null;
-  function reviewFacts(si: SentInfo | null, youAsked?: string): ReviewFacts | null {
-    const s = si ?? lastSent?.info ?? null;
-    if (!s) return null;
-    const bytes = lastSent && lastSent.info === s ? lastSent.bytes : undefined;
-    return { engine: s.engine, sim: s.sim, youAsked, why: s.routeLine, sentWhat: s.sent, bytes };
-  }
+  /** Per-turn ledger receipts: each SentInfo a turn hands to the ledger
+   *  (aiSent / recordSent) is the token that turn later passes to its own
+   *  review, so a footer can only ever show THAT turn's engine, route and
+   *  bytes — never whatever turn happened to run last. */
+  const receipts = createReviewReceipts();
+  /** The review's honesty footer for the turn that owns `si`. No token means
+   *  no AI call made this change: say so, and claim no bytes. */
+  const reviewFacts = (si: SentInfo | null, youAsked?: string): ReviewFacts => receipts.facts(si, { youAsked, sim: opts.sim });
   /** Teach runs on rules/Nano/Gemini; its card already names which. */
   function teachFacts(card: HTMLElement): ReviewFacts {
     const label = card.querySelector('.mc-proposal-engine')?.textContent?.trim() ?? '';
@@ -1325,6 +1323,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
     if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
   }
+  /** One ledger line for a turn, remembered against that turn's SentInfo
+   *  (summed if the same turn sends twice, e.g. a fallback retry). */
+  function recordSent(s: SentInfo, sentText: string, extraBytes = 0): void {
+    const entry = ledger.record({ engine: s.engine, sentText, extraBytes });
+    receipts.record(s, entry.bytes);
+    ledgerTotalRender();
+    panels.setFooterBytes(ledger.totals().aiBytes);
+  }
   function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
@@ -1337,10 +1343,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
     // extraBytes: a photo crop that went with the prompt (point-to-connect).
-    const entry = ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '', extraBytes: s.sent ? ctx.extraBytes : 0 });
-    lastSent = { info: s, bytes: entry.bytes };
-    ledgerTotalRender();
-    panels.setFooterBytes(ledger.totals().aiBytes);
+    recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -2032,7 +2035,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       `UI string keys: ${Object.keys(EN_PACK.strings).join(', ')}.`,
       'Kannada script only, each string ≤80 chars, no markup.',
     ].join('\n');
-    aiSent(utterance, { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim }, { task: 'kannada' });
+    const knSent: SentInfo = { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim };
+    aiSent(utterance, knSent, { task: 'kannada' });
     // The redact-before-handoff invariant: aiSent() above already logged any
     // Nano redaction, so it's safe to announce the handoff now.
     panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
@@ -2077,7 +2081,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     showReview({
       title: 'Add Kannada', card, extra: buildReviewExtra(),
       changes: languagePackChanges('Kannada', swapCount),
-      facts: reviewFacts(null, utterance),
+      facts: reviewFacts(knSent, utterance),
     });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
@@ -3101,12 +3105,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const entries = enumerateMorphTiles(plan);
       for (const target of selectSelfCheckTargets(entries, els, wantPath)) {
         const session = selfCheckFixSession(frameId, target.path);
+        let fixSent: SentInfo | null = null;
         void runSelfCheck({
           host: target.host,
           spec: target.spec,
           tileId: target.id,
           log: tileSelfCheckLog,
-          requestFix: (prompt) => engineFor('gemini', scriptedFixJson(target.spec)).stream(prompt, () => {}),
+          requestFix: async (prompt) => {
+            const eng = engineFor('gemini', scriptedFixJson(target.spec));
+            const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
+            const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
+            recordSent(si, eng.id === 'nano' ? '' : prompt);
+            fixSent = si;
+            try { return await eng.stream(prompt, () => {}); } catch (e) {
+              if (!eng.fallback) throw e;
+              // The prepared draft answered instead: the footer says SIM.
+              si.sim = true;
+              return eng.fallback.stream(prompt, () => {});
+            }
+          },
           applyFix: session.applyFix,
           rollbackFix: session.rollbackFix,
           commitFix: session.commitFix,
@@ -3135,9 +3152,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
               showReview({
                 title: `Fix ${target.label}`, card, extra: buildReviewExtra(),
                 changes: diffTile(original, parsed.value, { devices: store.all() }),
-                // The fix prompt goes straight to the engine (not through the
-                // ledger), so no byte count is claimed here.
-                facts: { engine: 'gemini', sim: !!opts.sim, why: 'a tile failed its own check, so Deep rewrote that one tile', sentWhat: 'the tile dump and the problems' },
+                facts: reviewFacts(fixSent, 'self-check fix'),
               });
             });
           },
@@ -3227,7 +3242,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       supported: () => !!voice?.supported && !opts.sim,
     },
     apply: applyMorph,
-    propose: (fid, patched, summary, path) => new Promise((done) => {
+    propose: (fid, patched, summary, path, turn) => new Promise((done) => {
       const card = renderProposalCard(document, {
         id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
@@ -3238,7 +3253,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       showReview({
         title: summary, card, extra: buildReviewExtra(),
         changes: diffPlans(surfaces[fid] ?? null, patched, { devices: store.all() }),
-        facts: reviewFacts(null, summary),
+        facts: reviewFacts(turn?.sent ?? null, turn?.utterance ?? summary),
       });
     }),
     undo,

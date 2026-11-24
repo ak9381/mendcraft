@@ -34,6 +34,7 @@ interface Item {
   facts: Record<string, string>;
 }
 
+const CONTAINER_KINDS = new Set(['group', 'tabs']);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
 /** "5 rooms (Bedroom 1, …) · 5 doors · 5 windows" for a floor-plan template. */
@@ -52,13 +53,14 @@ export function floorPlanSummary(template: string): string {
 
 function deviceDetail(kind: 'lamp' | 'music' | 'switch', st: Partial<DeviceState> | undefined): string {
   if (kind === 'music') {
-    if (st?.trackTitle) return `music · ${st.trackTitle}`;
+    if (st?.trackTitle) return `music · currently ${st.trackTitle}`;
     return 'music';
   }
   if (!st) return kind;
-  if (st.on === false) return `${kind} · off`;
-  if (kind === 'lamp' && typeof st.brightness === 'number') return `lamp · ${Math.round(st.brightness)}%`;
-  return `${kind} · on`;
+  // Live state, not part of the proposal: worded so it can't read as a change.
+  if (st.on === false) return `${kind} · currently off`;
+  if (kind === 'lamp' && typeof st.brightness === 'number') return `lamp · currently ${Math.round(st.brightness)}%`;
+  return `${kind} · currently on`;
 }
 
 function countLeaves(tiles: TileSpec[]): number {
@@ -99,25 +101,25 @@ function leafItem(t: TileSpec, ctx: PlanDiffContext): Item | null {
     case 'stat':
       return {
         key: `stat:${t.label}`, kind: 'stat', label: t.label, detail: [t.value, t.delta].filter(Boolean).join(' · '),
-        facts: { value: t.value, delta: t.delta ?? '', trend: t.trend ?? '' },
+        facts: { name: t.label, value: t.value, delta: t.delta ?? '', trend: t.trend ?? '' },
       };
     case 'chart':
       return {
         key: `chart:${t.title}`, kind: 'chart', label: t.title, detail: `${t.chartType} chart · ${plural(t.series.length, 'point')}`,
-        facts: { type: t.chartType, data: t.series.map((s) => `${s.label}=${s.value}`).join(', ') },
+        facts: { name: t.title, type: t.chartType, data: t.series.map((s) => `${s.label}=${s.value}`).join(', ') },
       };
     case 'table':
       return {
         key: `table:${t.title}`, kind: 'table', label: t.title, detail: `table · ${plural(t.rows.length, 'row')}`,
-        facts: { columns: t.columns.join(', '), rows: plural(t.rows.length, 'row'), data: JSON.stringify(t.rows) },
+        facts: { name: t.title, columns: t.columns.join(', '), rows: plural(t.rows.length, 'row'), data: JSON.stringify(t.rows) },
       };
     case 'form':
       return {
         key: `form:${t.title}`, kind: 'form', label: t.title, detail: `form · ${plural(t.fields.length, 'field')}`,
-        facts: { fields: t.fields.map((f) => f.label).join(', '), button: t.submitLabel, values: JSON.stringify(t.fields) },
+        facts: { name: t.title, fields: t.fields.map((f) => f.label).join(', '), button: t.submitLabel, values: JSON.stringify(t.fields) },
       };
     case 'visual':
-      return { key: `visual:${t.title}`, kind: 'visual', label: t.title, detail: 'picture', facts: { picture: t.markup } };
+      return { key: `visual:${t.title}`, kind: 'visual', label: t.title, detail: 'picture', facts: { name: t.title, picture: t.markup } };
     default:
       return null;
   }
@@ -204,6 +206,22 @@ export function diffPlans(before: SurfacePlan | null, after: SurfacePlan, ctx: P
     if (matched.has(it)) continue;
     const prev = a.items.find((p) => !usedBefore.has(p) && p.kind === it.kind && p.label === it.label);
     if (prev) { matched.set(it, prev); usedBefore.add(prev); }
+  }
+
+  // Last resort, a renamed titled tile (stat/chart/table/form/visual are keyed
+  // by their own title): when a kind has the same number of leftovers on both
+  // sides, pair them in order — "~ renamed to …", not "− old" + "+ new".
+  const leftovers = (items: Item[], used: (it: Item) => boolean) => {
+    const by = new Map<string, Item[]>();
+    for (const it of items) if (!used(it) && !CONTAINER_KINDS.has(it.kind)) by.set(it.kind, [...(by.get(it.kind) ?? []), it]);
+    return by;
+  };
+  const restA = leftovers(a.items, (p) => usedBefore.has(p));
+  const restB = leftovers(b.items, (it) => matched.has(it));
+  for (const [kind, afters] of restB) {
+    const befores = restA.get(kind) ?? [];
+    if (befores.length !== afters.length) continue;
+    afters.forEach((it, i) => { matched.set(it, befores[i]); usedBefore.add(befores[i]); });
   }
 
   for (const it of b.items) {

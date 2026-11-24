@@ -10,8 +10,10 @@ import { NO_VISIBLE_CHANGE, type PlanChange } from './planDiff';
 //   THE PLAN — + / ~ / − lines of what will change (scrolls on its own)
 //   footer  — why that engine, and what left this device (real ledger bytes)
 //   actions — Approve / Reject / Ask for something else (always visible)
-// Fist-grab or mouse-drag the title bar to move it; drag (or pinch-drag) the
-// bottom-right corner to resize it — the size is remembered. Esc / ✕ close
+// Mouse/touch-drag the title bar to move it, or hold a fist on it (handPointer
+// forwards a held fist on any [data-mc-drag-handle]/[data-mc-resize-handle] as
+// pointer events); the bottom-right corner resizes the same way, or with the
+// arrow keys when focused — the size is remembered. Esc (focus anywhere) / ✕ close
 // WITHOUT deciding — the proposal stays waiting so voice/pinch keep·drop
 // still work. Approve/Reject proxy-click the same .mc-proposal-keep /
 // .mc-proposal-drop buttons on the (hidden) card.
@@ -94,6 +96,27 @@ export interface ReviewFacts {
   sentWhat?: string | null;
   /** Bytes the ledger recorded for this turn; undefined = not measured. */
   bytes?: number;
+  /** No AI call made this change (no ledger token): say so, claim no bytes. */
+  noAiCall?: boolean;
+}
+
+/** What a turn told the ledger (aiTurn's SentInfo shape, kept structural). */
+export interface ReviewTurn { engine: string; sent: string | null; routeLine: string; sim: boolean }
+
+/** Per-turn ledger receipts. The turn that sends records its bytes against
+ *  its own token (its SentInfo object) and later hands that SAME token to its
+ *  review, so a footer can only show that turn's engine, route and bytes —
+ *  never whichever turn happened to run last. No token = no AI call. */
+export function createReviewReceipts() {
+  const bytes = new WeakMap<ReviewTurn, number>();
+  return {
+    /** Add one ledger line's bytes to this turn (a fallback retry sums). */
+    record(turn: ReviewTurn, n: number): void { bytes.set(turn, (bytes.get(turn) ?? 0) + n); },
+    facts(turn: ReviewTurn | null, o: { youAsked?: string; sim?: boolean } = {}): ReviewFacts {
+      if (!turn) return { engine: 'rules', engineLabel: 'On this device', sim: !!o.sim, youAsked: o.youAsked, noAiCall: true };
+      return { engine: turn.engine, sim: turn.sim, youAsked: o.youAsked, why: turn.routeLine, sentWhat: turn.sent, bytes: bytes.get(turn) };
+    },
+  };
 }
 
 export interface ReviewDialogModel {
@@ -143,6 +166,7 @@ const DEFAULT_WHY: Record<string, string> = {
 /** The footer's two honest lines. `leftWhat` + `leftBytes` are `left` split so
  *  the byte count can never be cut off by an ellipsis. */
 export function honestyLines(facts: ReviewFacts): { why: string | null; left: string; leftWhat: string; leftBytes: string } {
+  if (facts.noAiCall) return { why: null, left: 'No AI call for this change.', leftWhat: 'No AI call for this change.', leftBytes: '' };
   const engine = facts.engine.toLowerCase();
   let reason = facts.why ? reasonOnly(facts.why) : '';
   // "nothing left this device" is the next line's job, not a reason.
@@ -225,9 +249,9 @@ export function mountReviewDialog(
   const resize = el(doc, 'span', 'mc-review-resize');
   resize.setAttribute('data-mc-resize-handle', '');
   resize.setAttribute('role', 'button');
-  resize.setAttribute('tabindex', '-1');
-  resize.setAttribute('aria-label', 'Resize review window');
-  resize.setAttribute('title', 'Drag to resize');
+  resize.setAttribute('tabindex', '0');
+  resize.setAttribute('aria-label', 'Resize review window (arrow keys)');
+  resize.setAttribute('title', 'Drag to resize — or focus and use the arrow keys');
 
   let open = false;
   let card: HTMLElement | null = null;
@@ -296,7 +320,7 @@ export function mountReviewDialog(
     const cluster = doc.querySelector?.('.mc-hand-cluster')?.getBoundingClientRect?.();
     const maxRight = cluster && cluster.width > 0 && r.right <= cluster.left ? cluster.left - SCREEN_MARGIN_PX : Infinity;
     resizeStart = { x: e.clientX, y: e.clientY, width: r.width, height: r.height, left: r.left, maxRight };
-    if (e.pointerId != null) resize.setPointerCapture?.(e.pointerId);
+    try { if (e.pointerId != null) resize.setPointerCapture?.(e.pointerId); } catch { /* synthetic (hand) pointer: no capture needed */ }
   }
   function onResizeMove(e: PointerEvent): void {
     if (!resizeStart) return;
@@ -317,11 +341,33 @@ export function mountReviewDialog(
   resize.addEventListener('pointerup', onResizeUp);
   resize.addEventListener('pointercancel', onResizeUp);
 
+  /** Keyboard resize from the focused corner: arrows grow/shrink by 16px. */
+  const KEY_STEP = 16;
+  function onResizeKey(e: KeyboardEvent): void {
+    const d = e.key === 'ArrowRight' ? [KEY_STEP, 0] : e.key === 'ArrowLeft' ? [-KEY_STEP, 0]
+      : e.key === 'ArrowDown' ? [0, KEY_STEP] : e.key === 'ArrowUp' ? [0, -KEY_STEP] : null;
+    if (!d || !live) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = dialog.getBoundingClientRect();
+    const next = clampReviewSize({ width: r.width + d[0], height: r.height + d[1] }, win());
+    applySize(next);
+    saveReviewSize(storage, next);
+  }
+  resize.addEventListener('keydown', onResizeKey as EventListener);
+
+  /** Everything Tab can reach inside the window, in visual order. */
+  function tabbables(): HTMLElement[] {
+    const list: HTMLElement[] = [drag, closeBtn];
+    if (!moreEl.hidden) list.push(moreSum);
+    list.push(approveBtn, rejectBtn, askElseBtn);
+    if (!isPhone()) list.push(resize);
+    return list.filter((x) => !x.hidden);
+  }
   function onKeydown(e: KeyboardEvent): void {
     if (!open) return;
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
     if (e.key === 'Tab') {
-      const items = [approveBtn, rejectBtn, askElseBtn].filter((x) => !x.hidden);
+      const items = tabbables();
       if (!items.length) return;
       const first = items[0]; const last = items[items.length - 1];
       if (e.shiftKey && doc.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -329,6 +375,16 @@ export function mountReviewDialog(
     }
   }
   dialog.addEventListener('keydown', onKeydown);
+  // Escape closes it wherever focus is (e.g. after a click on the board);
+  // keys aimed inside the dialog are already handled above.
+  function onDocKeydown(e: KeyboardEvent): void {
+    if (!open || e.key !== 'Escape') return;
+    const t = e.target as Node | null;
+    if (t && typeof dialog.contains === 'function' && dialog.contains(t)) return;
+    e.preventDefault(); e.stopPropagation();
+    close();
+  }
+  doc.addEventListener?.('keydown', onDocKeydown, true);
 
   function close(): void {
     if (!open) return;
@@ -422,7 +478,9 @@ export function mountReviewDialog(
       resize.removeEventListener('pointermove', onResizeMove as EventListener);
       resize.removeEventListener('pointerup', onResizeUp);
       resize.removeEventListener('pointercancel', onResizeUp);
+      resize.removeEventListener('keydown', onResizeKey as EventListener);
       dialog.removeEventListener('keydown', onKeydown);
+      doc.removeEventListener?.('keydown', onDocKeydown, true);
       dialog.remove();
     },
   };
