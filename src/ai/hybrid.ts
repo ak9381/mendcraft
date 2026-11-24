@@ -1,7 +1,8 @@
-// Firebase AI Logic hybrid wrapper: Gemini Nano on-device when available,
-// gemini-3.5-flash-lite in the cloud otherwise, deterministic rule parser as
-// the always-on floor. Every model response is re-validated with validateOp
-// before it can reach the engine.
+// Firebase AI Logic hybrid wrapper: on-device model when available (Gemini
+// Nano in Chrome, Apple Foundation Models in the iOS Capacitor shell, or
+// Android ML Kit), gemini-3.5-flash-lite in the cloud otherwise,
+// deterministic rule parser as the always-on floor. Every model response is
+// re-validated with validateOp before it can reach the engine.
 
 import { type Op } from '../core/ops';
 import { parseRefinedQuery, refinePrompt } from '../references/query';
@@ -68,6 +69,11 @@ import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, email
 import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
 import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
 import { fillVisible, protectText } from '../privacy/directory';
+import {
+  appleStatusToDevice, appleTextModel, checkAppleAvailability, getAppleAIPlugin,
+  type AppleAIPlugin,
+} from './appleAI';
+import type { OnDeviceKind } from './router';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -277,6 +283,8 @@ export interface ModelOverrides {
   deviceModel?: DeviceModelStatus;
   /** Fake Chrome LanguageModel; null = browser without the Prompt API. */
   languageModel?: LanguageModelProvider | null;
+  /** Fake or injected MendcraftAppleAI Capacitor plugin (iOS on-device model). */
+  appleAI?: AppleAIPlugin | null;
 }
 
 /**
@@ -359,6 +367,8 @@ let testOverrides: ModelOverrides | null = null;
 let cached: Models | null = null;
 let initPromise: Promise<Models | null> | null = null;
 let deviceModelStatus: DeviceModelStatus = 'idle';
+/** Which on-device engine last reported ready (Nano vs Apple). */
+let onDeviceKind: OnDeviceKind | null = null;
 let appCheckState: AppCheckStatus = 'skipped';
 let statusMessage: string | null = null;
 let lastError: string | null = null;
@@ -370,6 +380,7 @@ let warmDevicePromise: Promise<boolean> | null = null;
 
 function resetStatus(): void {
   deviceModelStatus = 'idle';
+  onDeviceKind = null;
   appCheckState = 'skipped';
   statusMessage = null;
   lastError = null;
@@ -546,6 +557,10 @@ export function getDeviceModelStatus(): DeviceModelStatus {
   return deviceModelStatus;
 }
 
+export function getOnDeviceKind(): OnDeviceKind | null {
+  return onDeviceKind;
+}
+
 export function getHybridStatus(): HybridStatus {
   return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError, lastFailKind };
 }
@@ -690,13 +705,14 @@ async function ensureModels(): Promise<Models | null> {
       canvasCloudHedge: testOverrides.canvasCloudHedge ?? null,
     };
   }
-  if (!isEnabled()) {
+  let base: Models | null = null;
+  if (isEnabled()) {
+    if (!cached) initPromise ??= initFirebase();
+    base = cached ?? (await initPromise);
+  } else {
     appCheckState = 'skipped';
-    return null;
   }
-  if (cached) return cached;
-  initPromise ??= initFirebase();
-  return initPromise;
+  return withAppleModels(base);
 }
 
 async function initFirebase(): Promise<Models | null> {
@@ -1018,6 +1034,73 @@ async function initFirebase(): Promise<Models | null> {
   }
 }
 
+function applePlugin(): AppleAIPlugin | null {
+  if (testOverrides && 'appleAI' in testOverrides) return testOverrides.appleAI ?? null;
+  return getAppleAIPlugin();
+}
+
+function blankModels(): Models {
+  return {
+    intent: null,
+    template: null,
+    verify: null,
+    fusion: null,
+    deixis: null,
+    deixisCloud: null,
+    intentCloud: null,
+    verifyCloud: null,
+    fusionCloud: null,
+    fusionLang: null,
+    langDetect: null,
+    a11yExplain: null,
+    a11yExplainHedge: null,
+    handAdapt: null,
+    condense: null,
+    promptTemplate: null,
+    tts: null,
+    deviceSee: null,
+    deviceSeeCloud: null,
+    effectCheck: null,
+    effectCheckCloud: null,
+    connectorWriter: null,
+    refGenerate: null,
+    cadTool: null,
+    cadToolCloud: null,
+    copilotAnswer: null,
+    copilotAnswerHedge: null,
+    copilotEmail: null,
+    copilotEmailHedge: null,
+    copilotMaterials: null,
+    copilotMaterialsHedge: null,
+    canvasCloud: null,
+    canvasCloudHedge: null,
+  };
+}
+
+/** Overlay Apple on-device text models when the iOS plugin is available.
+ *  Image jobs stay on the existing path (on-device Apple is text-only here).
+ *  Does not require Firebase — Quick still works if the cloud path is down. */
+async function withAppleModels(base: Models | null): Promise<Models | null> {
+  const plugin = applePlugin();
+  if (!plugin) return base;
+  const checked = await checkAppleAvailability(plugin);
+  if (checked?.status !== 'available') return base;
+  onDeviceKind = 'apple';
+  deviceModelStatus = 'ready';
+  const modeAi = getActiveMode().ai;
+  const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
+  const overlay: Partial<Models> = {
+    intent: appleTextModel(modeAi.opConstraint, plugin),
+    verify: appleTextModel(modeAi.verifyConstraint, plugin),
+    fusion: appleTextModel(fusionConstraint, plugin),
+    fusionLang: appleTextModel(fusionConstraint, plugin),
+    handAdapt: appleTextModel(PROFILE_CONSTRAINT, plugin),
+    condense: appleTextModel(CONDENSE_CONSTRAINT, plugin),
+    cadTool: appleTextModel(CAD_TOOL_CONSTRAINT, plugin),
+  };
+  return { ...(base ?? blankModels()), ...overlay };
+}
+
 function languageModelProvider(): LanguageModelProvider | null {
   if (testOverrides && 'languageModel' in testOverrides) return testOverrides.languageModel ?? null;
   const lm = (globalThis as Record<string, unknown>).LanguageModel as LanguageModelProvider | undefined;
@@ -1038,16 +1121,32 @@ function mapAvailability(a: string): DeviceModelStatus {
  * Safe to call on page load; updates and returns the device status.
  */
 export async function checkDeviceAvailability(): Promise<DeviceModelStatus> {
+  const preferChrome = Boolean(testOverrides && 'languageModel' in testOverrides);
+  if (!preferChrome) {
+    const plugin = applePlugin();
+    if (plugin) {
+      const checked = await checkAppleAvailability(plugin);
+      const status = checked?.status ?? 'unavailable';
+      deviceModelStatus = appleStatusToDevice(status);
+      onDeviceKind = 'apple';
+      return deviceModelStatus;
+    }
+  }
   const lm = languageModelProvider();
   if (!lm) {
     deviceModelStatus = 'unsupported';
+    onDeviceKind = null;
     return deviceModelStatus;
   }
   try {
     deviceModelStatus = mapAvailability(await lm.availability(ON_DEVICE_CREATE_OPTIONS));
+    onDeviceKind = deviceModelStatus === 'ready' || deviceModelStatus === 'downloadable' || deviceModelStatus === 'downloading'
+      ? 'nano'
+      : null;
   } catch (err) {
     noteError('LanguageModel.availability', err);
     deviceModelStatus = 'unavailable';
+    onDeviceKind = null;
   }
   return deviceModelStatus;
 }
@@ -1083,6 +1182,20 @@ export async function checkLanguageAvailability(langCode: string): Promise<boole
  * alone is not proof.
  */
 export async function initDeviceModel(onProgress?: (p: number) => void): Promise<boolean> {
+  const preferChrome = Boolean(testOverrides && 'languageModel' in testOverrides);
+  const plugin = preferChrome ? null : applePlugin();
+  if (plugin) {
+    const before = await checkDeviceAvailability();
+    if (before === 'unsupported' || before === 'unavailable' || before === 'failed') return false;
+    if (before === 'ready') {
+      try { await plugin.prewarm?.(); } catch (err) { noteError('Apple prewarm', err); }
+      return true;
+    }
+    deviceModelStatus = 'downloading';
+    try { await plugin.prewarm?.(); } catch (err) { noteError('Apple prewarm', err); }
+    const after = await checkDeviceAvailability();
+    return after === 'ready';
+  }
   const before = await checkDeviceAvailability();
   if (before === 'unsupported' || before === 'unavailable') return false;
   const models = await ensureModels();

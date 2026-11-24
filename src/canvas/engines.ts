@@ -1,5 +1,6 @@
 // Which engine really runs each step, with an honest label. Nano runs on the
-// device only when Chrome's Prompt API is here and we're not on a phone;
+// device when Chrome's Prompt API is here and we're not on a phone, or when
+// Android ML Kit / Apple Intelligence is available in the native shell;
 // otherwise the "Nano" step is drafted by Gemini in the cloud and says so.
 // Gemini is real when a cloud TextGenModel is reachable, else a scripted SIM.
 // planEngines() is pure (unit-tested); createEngines() wires the real I/O.
@@ -8,6 +9,7 @@ import { ROUTE_PHONE_NO_NANO, ROUTE_VIA_HUB } from '../ai/privacyRouter';
 
 export const PHONE_NANO_NOTE = ROUTE_PHONE_NO_NANO;
 export const NO_NANO_NOTE = "Gemini · cloud — Nano isn't available here, so Deep drafted it";
+export const APPLE_ON_DEVICE_NOTE = 'Apple · on device — nothing left this device';
 export { ROUTE_VIA_HUB };
 
 export interface EngineEnv {
@@ -21,6 +23,8 @@ export interface EngineEnv {
   sim: boolean;
   /** Android ML Kit GenAI checkStatus reported AVAILABLE. */
   androidNano?: boolean;
+  /** iOS Apple Foundation Models plugin reported available. */
+  appleOnDevice?: boolean;
   /** Desktop Chrome hub is reachable over the sync room or LAN. */
   hubReachable?: boolean;
 }
@@ -37,9 +41,11 @@ export interface EngineChoice {
 export function planEngines(env: EngineEnv): { nano: EngineChoice; gemini: EngineChoice } {
   if (env.sim) return { nano: { engine: 'nano', sim: true }, gemini: { engine: 'gemini', sim: true } };
   const gemini: EngineChoice = { engine: 'gemini', sim: !env.hasCloud };
-  const nanoOnDevice = (env.hasLanguageModel && !env.isPhone) || !!env.androidNano;
+  const nanoOnDevice = (env.hasLanguageModel && !env.isPhone) || !!env.androidNano || !!env.appleOnDevice;
   const nano: EngineChoice = nanoOnDevice
-    ? { engine: 'nano', sim: false }
+    ? (env.appleOnDevice
+      ? { engine: 'nano', sim: false, routeNote: APPLE_ON_DEVICE_NOTE }
+      : { engine: 'nano', sim: false })
     : { engine: 'gemini', sim: !env.hasCloud, routeNote: env.isPhone
       ? (env.hubReachable ? ROUTE_VIA_HUB : PHONE_NANO_NOTE)
       : NO_NANO_NOTE };
@@ -66,6 +72,9 @@ export interface EnginesRuntime {
   isPhone?: boolean;
   sim?: boolean;
   androidNano?: boolean;
+  appleOnDevice?: boolean;
+  /** On-device generate used when the engine is Apple (or another plugin), not Chrome Nano. */
+  onDeviceGenerate?: CloudStream | null;
   hubReachable?: boolean;
 }
 
@@ -99,6 +108,9 @@ function engineFromChoice(choice: EngineChoice, json: string, rt: EnginesRuntime
   if (choice.engine === 'nano' && rt.languageModel) {
     return { ...realNanoEngine(rt.languageModel, choice.routeNote), fallback: scripted };
   }
+  if (choice.engine === 'nano' && rt.onDeviceGenerate) {
+    return { ...cloudEngine('nano', rt.onDeviceGenerate, choice.routeNote), fallback: scripted };
+  }
   if (rt.cloud) return { ...cloudEngine('gemini', rt.cloud, choice.routeNote), fallback: scripted };
   // Promised real but the transport vanished (e.g. cloud dropped): scripted, honest SIM.
   return scripted;
@@ -112,6 +124,7 @@ export function createEngines(rt: EnginesRuntime): Partial<Record<EngineId, (jso
     hasCloud: !!rt.cloud,
     sim: !!rt.sim,
     androidNano: !!rt.androidNano,
+    appleOnDevice: !!rt.appleOnDevice,
     hubReachable: !!rt.hubReachable,
   };
   const plan = planEngines(env);

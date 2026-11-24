@@ -5,6 +5,7 @@ import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano } from '../ai/nanoStatus';
+import { getAppleAIPlugin, generateAppleText } from '../ai/appleAI';
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
@@ -36,11 +37,17 @@ const cloud: CloudStream | undefined = isEnabled()
     }
   : undefined;
 const nano = await checkDeviceNano();
+const appleReady = isPhone && nano.source === 'apple' && hasUsableNano(nano);
+const applePlugin = appleReady ? getAppleAIPlugin() : null;
 const engines = createEngines({
   languageModel: languageModel ?? null,
   cloud: cloud ?? null,
   isPhone,
-  androidNano: isPhone && hasUsableNano(nano),
+  androidNano: isPhone && nano.source !== 'apple' && hasUsableNano(nano),
+  appleOnDevice: appleReady,
+  onDeviceGenerate: applePlugin
+    ? (prompt, onText) => generateAppleText(prompt, onText, applePlugin)
+    : undefined,
   sim: params.has('sim'),
 });
 

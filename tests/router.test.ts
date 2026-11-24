@@ -166,6 +166,9 @@ describe('badgeLabel', () => {
     expect(badgeLabel('rules', 'offline')).toBe('Rules · offline');
     expect(badgeLabel('rules', 'fallback')).toBe('Rules · fallback');
     expect(badgeLabel('cloud', 'handed-off')).toBe('Nano → Gemini');
+    expect(badgeLabel('on-device', 'private', 'apple')).toBe('Apple · on device · private');
+    expect(badgeLabel('cloud', 'handed-off', 'apple')).toBe('Apple → Gemini');
+    expect(badgeLabel('on-device', 'private')).toBe('Gemini Nano · on device · private');
   });
 });
 

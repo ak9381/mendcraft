@@ -1,17 +1,20 @@
-// On-device Nano availability. Android uses ML Kit GenAI checkStatus
-// (MendcraftNano plugin). Chrome uses the Prompt API. Web without either
-// reports unavailable. Pure mapping is in privacyRouter; this file talks to
-// the shell.
+// On-device model availability. Android uses ML Kit GenAI checkStatus
+// (MendcraftNano plugin). Chrome uses the Prompt API. The iOS Capacitor
+// shell uses Apple Foundation Models (MendcraftAppleAI plugin). Web
+// without any of those reports unavailable. Pure mapping is in
+// privacyRouter; this file talks to the shell.
 import {
   labelNanoStatus,
   mapMlKitStatus,
   type NanoStatus,
 } from './privacyRouter';
+import { appleStatusToNano, checkAppleAvailability, getAppleAIPlugin, parseAppleStatus } from './appleAI';
+import { isIosShell } from '../devices/native';
 
 export interface NanoCheck {
   status: NanoStatus;
   label: string;
-  source: 'mlkit' | 'prompt-api' | 'none';
+  source: 'mlkit' | 'prompt-api' | 'apple' | 'none';
   isPhone: boolean;
 }
 
@@ -22,6 +25,9 @@ interface CapacitorGlobal {
     Plugins?: {
       MendcraftNano?: {
         checkStatus: () => Promise<{ status?: number | string }>;
+      };
+      MendcraftAppleAI?: {
+        availability: () => Promise<{ status?: string }>;
       };
     };
   };
@@ -45,7 +51,7 @@ function hasPromptApi(w: unknown): boolean {
     && (w as CapacitorGlobal).LanguageModel != null;
 }
 
-/** Check ML Kit (Android) or Chrome's Prompt API. Never throws. */
+/** Check ML Kit (Android), Apple Intelligence (iOS), or Chrome's Prompt API. Never throws. */
 export async function checkDeviceNano(w: unknown = globalThis): Promise<NanoCheck> {
   const phone = isNativePhone(w);
   if (isAndroidShell(w)) {
@@ -59,6 +65,21 @@ export async function checkDeviceNano(w: unknown = globalThis): Promise<NanoChec
       } catch {
         return { status: 'unavailable', label: labelNanoStatus('unavailable', true), source: 'mlkit', isPhone: true };
       }
+    }
+    return { status: 'unavailable', label: labelNanoStatus('unavailable', true), source: 'none', isPhone: true };
+  }
+  if (isIosShell(w)) {
+    const plugin = getAppleAIPlugin(w);
+    if (plugin?.availability) {
+      const checked = await checkAppleAvailability(plugin);
+      const apple = checked?.status ?? parseAppleStatus(undefined);
+      const status = appleStatusToNano(apple);
+      return {
+        status,
+        label: labelNanoStatus(status, true, 'apple'),
+        source: 'apple',
+        isPhone: true,
+      };
     }
     return { status: 'unavailable', label: labelNanoStatus('unavailable', true), source: 'none', isPhone: true };
   }

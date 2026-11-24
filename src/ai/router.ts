@@ -128,6 +128,14 @@ export const SOURCE_TEXT: Record<Source, string> = {
   rules: 'Rules',
 };
 
+/** Which on-device model actually answered. Default is Chrome/Android Nano. */
+export type OnDeviceKind = 'nano' | 'apple';
+
+export function sourceText(source: Source, kind: OnDeviceKind = 'nano'): string {
+  if (source === 'on-device' && kind === 'apple') return 'Apple · on device';
+  return SOURCE_TEXT[source];
+}
+
 export const REASON_TEXT: Record<RouteReason, string> = {
   exact: 'exact command',
   private: 'private',
@@ -140,11 +148,13 @@ export const REASON_TEXT: Record<RouteReason, string> = {
   'handed-off': 'Nano → Gemini',
 };
 
-/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private", "Rules · exact command".
- *  A Nano-then-Gemini hand-off is labelled plainly as "Nano → Gemini". */
-export function badgeLabel(source: Source, reason: RouteReason): string {
-  if (reason === 'handed-off') return 'Nano → Gemini';
-  return `${SOURCE_TEXT[source]} · ${REASON_TEXT[reason]}`;
+/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private",
+ *  "Apple · on device · private", "Rules · exact command".
+ *  A Nano/Apple-then-Gemini hand-off is labelled plainly as "Nano → Gemini"
+ *  or "Apple → Gemini". */
+export function badgeLabel(source: Source, reason: RouteReason, kind: OnDeviceKind = 'nano'): string {
+  if (reason === 'handed-off') return kind === 'apple' ? 'Apple → Gemini' : 'Nano → Gemini';
+  return `${sourceText(source, kind)} · ${REASON_TEXT[reason]}`;
 }
 
 // ---------------------------------------------------------------------------

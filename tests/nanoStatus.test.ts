@@ -43,6 +43,47 @@ describe('checkDeviceNano', () => {
     });
     expect(r.label).toBe(ROUTE_PHONE_NO_NANO);
     expect(r.source).toBe('none');
+    expect(hasUsableNano(r)).toBe(false);
+  });
+
+  it('an iPhone with Apple Intelligence available reports the Apple source', async () => {
+    const r = await checkDeviceNano({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: { MendcraftAppleAI: { availability: async () => ({ status: 'available' }) } },
+      },
+    });
+    expect(r.status).toBe('available');
+    expect(r.source).toBe('apple');
+    expect(r.label).toBe('Apple Intelligence on this phone');
+    expect(hasUsableNano(r)).toBe(true);
+  });
+
+  it('an iPhone with Apple Intelligence off is unavailable, not a crash', async () => {
+    const r = await checkDeviceNano({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: { MendcraftAppleAI: { availability: async () => ({ status: 'appleIntelligenceNotEnabled' }) } },
+      },
+    });
+    expect(r.status).toBe('unavailable');
+    expect(r.source).toBe('apple');
+    expect(r.label).toBe('Gemini (no Apple Intelligence on this phone)');
+    expect(hasUsableNano(r)).toBe(false);
+  });
+
+  it('an Apple plugin throw is treated as unavailable, not a crash', async () => {
+    const r = await checkDeviceNano({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: { MendcraftAppleAI: { availability: async () => { throw new Error('denied'); } } },
+      },
+    });
+    expect(r.status).toBe('unavailable');
+    expect(r.source).toBe('apple');
   });
 
   it('a plugin throw is treated as unavailable, not a crash', async () => {

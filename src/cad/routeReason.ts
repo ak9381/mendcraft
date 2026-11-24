@@ -23,6 +23,8 @@ export interface RouteInfo {
   model?: string;
   /** Names were put back on this device after a tokenized cloud reply. */
   filledOnDevice?: boolean;
+  /** When the on-device engine was Apple Intelligence, not Gemini Nano. */
+  onDeviceKind?: 'nano' | 'apple';
 }
 
 export const ROUTE_REASON_MAX = 140;
@@ -52,6 +54,7 @@ export function sanitizeRoute(raw: unknown): RouteInfo | undefined {
   if (winners.includes(o.wonBy as RouteWonBy)) route.wonBy = o.wonBy as RouteWonBy;
   if (typeof o.model === 'string' && o.model.trim()) route.model = o.model.trim().slice(0, 80);
   if (o.filledOnDevice === true) route.filledOnDevice = true;
+  if (o.onDeviceKind === 'apple' || o.onDeviceKind === 'nano') route.onDeviceKind = o.onDeviceKind;
   return route;
 }
 
@@ -198,7 +201,7 @@ export function formatRouteLine(route: RouteInfo): string {
   const reason = capRouteReason(route.reason);
   let line: string;
   if (route.tier === 'plan-data') line = `Plan data · on device — ${reason}`;
-  else if (route.tier === 'nano') line = `Nano · on device — ${reason}`;
+  else if (route.tier === 'nano') line = `${route.onDeviceKind === 'apple' ? 'Apple' : 'Nano'} · on device — ${reason}`;
   else if (route.tier === 'offline') line = `Offline — ${reason}`;
   else if (route.tier === 'speculative') line = `Nano's guess — ${reason}`;
   else if (reason.startsWith('Gemini won') || reason.startsWith('Nano unsure')) line = reason;

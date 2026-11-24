@@ -88,10 +88,14 @@ export function decidePrivacyRoute(
   return { action: 'direct-uncleaned', routeLine: ROUTE_DIRECT_UNCLEANED, cleaned: false };
 }
 
-export function labelNanoStatus(status: NanoStatus, isPhone: boolean): string {
+export type OnDeviceKind = 'nano' | 'apple';
+
+export function labelNanoStatus(status: NanoStatus, isPhone: boolean, kind: OnDeviceKind = 'nano'): string {
   if (status === 'available') {
+    if (kind === 'apple') return isPhone ? 'Apple Intelligence on this phone' : 'Apple Intelligence on this device';
     return isPhone ? 'Nano on this phone' : 'Nano on this device';
   }
+  if (kind === 'apple' && isPhone) return 'Gemini (no Apple Intelligence on this phone)';
   return isPhone ? ROUTE_PHONE_NO_NANO : 'Gemini (no Nano on this device)';
 }
 

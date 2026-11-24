@@ -47,6 +47,7 @@ import {
   detectLanguageCloud,
   type DeviceModelStatus,
   type DeixisImage,
+  getOnDeviceKind,
   type FusionContext,
   type Source,
 } from './ai/hybrid';
@@ -70,8 +71,8 @@ import { createVoicePanel } from './ui/voicePanel';
 import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
-  SOURCE_TEXT,
   REASON_TEXT,
+  sourceText,
   finalReason,
   isPointing,
   pickEscalated,
@@ -600,13 +601,17 @@ let lastUtteranceSource: ChangeEntry['source'] = 'rules';
 function setBadge(source: Source, reason?: RouteReason, translated = false, note?: string | null): void {
   lastUtteranceSource = source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules';
   sourceBadge.className = `badge badge-${source}`;
+  const kind = getOnDeviceKind() ?? 'nano';
   const label = reason
-    ? languageBadgeLabel(source, reason, currentLanguage, translated)
-    : SOURCE_TEXT[source];
+    ? languageBadgeLabel(source, reason, currentLanguage, translated, kind)
+    : sourceText(source, kind);
   sourceBadge.textContent = label;
+  const tip = source === 'on-device' && kind === 'apple'
+    ? 'Answered on this iPhone by Apple Intelligence. Nothing left the device.'
+    : SOURCE_TOOLTIP[source];
   const why = reason ? ` Route: ${REASON_TEXT[reason]}${note ? ` (${note})` : ''}.` : '';
-  sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
-  sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
+  sourceBadge.title = `${tip}${why}`;
+  sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${tip}${why}`);
 }
 /** Honest badge when the numbers were read from the drawing, not invented by Nano. */
 function setPlanDataBadge(note?: string): void {

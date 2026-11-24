@@ -182,3 +182,12 @@ describe('filled-on-device suffix', () => {
     expect(sanitizeRoute({ ...base, filledOnDevice: true })?.filledOnDevice).toBe(true);
   });
 });
+
+describe('formatRouteLine — Apple on-device', () => {
+  it('labels an Apple canvas route honestly, and leaves Nano lines unchanged', () => {
+    expect(formatRouteLine(routeNanoCanvas())).toBe('Nano · on device — a canvas action, handled locally');
+    expect(formatRouteLine({ ...routeNanoCanvas(), onDeviceKind: 'apple' })).toBe(
+      'Apple · on device — a canvas action, handled locally',
+    );
+  });
+});

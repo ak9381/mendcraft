@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEngines, planEngines, NO_NANO_NOTE, PHONE_NANO_NOTE } from '../../src/canvas/engines';
+import { createEngines, planEngines, NO_NANO_NOTE, PHONE_NANO_NOTE, APPLE_ON_DEVICE_NOTE } from '../../src/canvas/engines';
 import { ROUTE_VIA_HUB } from '../../src/ai/privacyRouter';
 
 describe('engine selection (honest labels)', () => {
@@ -70,5 +70,35 @@ describe('engine selection — Android Nano and hub', () => {
     const p = planEngines({ hasLanguageModel: false, isPhone: true, hasCloud: true, sim: false, hubReachable: false });
     expect(p.nano.routeNote).toBe(PHONE_NANO_NOTE);
     expect(PHONE_NANO_NOTE).toBe('Gemini (no Nano on this phone)');
+  });
+});
+
+describe('engine selection — Apple on-device', () => {
+  it('uses the on-device Apple path on an iPhone when the plugin is available', () => {
+    const p = planEngines({ hasLanguageModel: false, isPhone: true, hasCloud: true, sim: false, appleOnDevice: true });
+    expect(p.nano).toEqual({ engine: 'nano', sim: false, routeNote: APPLE_ON_DEVICE_NOTE });
+    expect(APPLE_ON_DEVICE_NOTE).toBe('Apple · on device — nothing left this device');
+  });
+
+  it('runs the Apple generate function instead of the cloud when Apple is ready', async () => {
+    let used = '';
+    const engines = createEngines({
+      isPhone: true,
+      appleOnDevice: true,
+      cloud: async () => { used = 'cloud'; return '{"kind":"room","title":"Cloud","tiles":[]}'; },
+      onDeviceGenerate: async (_prompt, onText) => {
+        used = 'apple';
+        const text = '{"kind":"room","title":"Apple","tiles":[]}';
+        onText(text);
+        return text;
+      },
+    });
+    const nano = engines.nano!('{"kind":"room","title":"Draft","tiles":[]}');
+    expect(nano.id).toBe('nano');
+    expect(nano.sim).toBe(false);
+    expect(nano.routeLine).toBe(APPLE_ON_DEVICE_NOTE);
+    const text = await nano.stream('hello', () => undefined);
+    expect(used).toBe('apple');
+    expect(text).toContain('Apple');
   });
 });

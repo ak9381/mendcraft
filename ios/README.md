@@ -39,17 +39,19 @@ The iPhone experience ships two ways:
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
 
-## Add-a-device native plugins (`ios-src/`, not compiled yet)
+## Native plugins (`ios-src/`, not compiled yet)
 
 Written on the Linux build box, **not compiled or run** — no Mac/Xcode here.
-After `npx cap add ios`, copy these three files into `ios/App/App` and add
+After `npx cap add ios`, copy these four files into `ios/App/App` and add
 them to the App target; set the Main storyboard's view controller class to
-`MendcraftViewController`. See `ios-src/README.md`.
+`MendcraftViewController`. See `ios-src/README.md` for the Xcode steps,
+including Apple on-device AI.
 
 ```sh
 cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
 cp ios-src/MendcraftViewController.swift ios/App/App/
 cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
+cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
 ```
 
 - `MendcraftLanPlugin.swift` — UDP/HTTP to private LAN IPs only (same port
@@ -65,5 +67,9 @@ cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
   `#if canImport(DockKit)`; reports `available:false` otherwise. Nothing in
   the flow requires it. The web layer aims at her hands, or in Add a device
   lets her point or nudge and then holds the frame.
-- `MendcraftViewController.swift` — registers both plugins and re-asserts
+- `MendcraftViewController.swift` — registers the plugins and re-asserts
   system tracking off on appear.
+- `MendcraftAppleAIPlugin.swift` — on-device Apple Foundation Models
+  (Apple Intelligence) for Quick draft, small edits, intent and redaction.
+  iOS 26+, behind `#if canImport(FoundationModels)`; reports
+  `unsupported` otherwise. No Firebase iOS SDK. See `ios-src/README.md`.
