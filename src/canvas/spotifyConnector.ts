@@ -31,6 +31,20 @@ export function isSpeakerDevice(deviceId: string): boolean {
   return deviceId.startsWith('speaker-');
 }
 
+/** Words that mean the user is talking to the canvas, not asking for music. */
+const CANVAS_WORDS = /\b(boards?|3d|plans?|layouts?|floors?|canvas|dashboards?|tiles?|rooms?|demo|tour)\b/;
+/** Not a search: transport or vague requests the device-command parser handles. */
+const NOT_A_SEARCH = /^(next|previous|prev|last|again|it|this|that|something|anything|with|back|resume|more)\b/;
+
+/** The Spotify search for a spoken "play ...", or null when it should fall
+ *  through to the normal device commands. Only when Spotify is connected. */
+export function spotifySearchQuery(query: string, connected: boolean): string | null {
+  if (!connected) return null;
+  const q = query.trim().toLowerCase();
+  if (!q || CANVAS_WORDS.test(q) || NOT_A_SEARCH.test(q)) return null;
+  return query.trim();
+}
+
 const MARSHALL = /marshall/i;
 
 export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceConnector {
@@ -83,14 +97,16 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
         try {
           if (intent.next && deps.next) {
             const n = await deps.next();
-            return n?.title ? { playing: true, trackTitle: n.title } : { playing: true };
+            return { playing: true, trackTitle: n?.title ?? '' };
           }
           if (intent.playing === false && deps.pause) { await deps.pause(); return { playing: false }; }
           if (intent.playing === true && deps.resume) { await deps.resume(); return { playing: true }; }
           if (intent.volume !== undefined && deps.setVolume) { await deps.setVolume(intent.volume); return { volume: intent.volume }; }
-        } catch {
+        } catch (err) {
+          // Throw so the store restores the previous state and shows its error
+          // instead of the tile claiming a change that didn't happen.
           deps.say("Spotify didn't respond.");
-          return {};
+          throw err instanceof Error ? err : new Error('Spotify request failed');
         }
       }
       return deps.inner.run(intent);

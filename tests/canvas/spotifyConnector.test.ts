@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSpotifyAwareConnector, NOT_CONNECTED_NOTICE } from '../../src/canvas/spotifyConnector';
+import { createDeviceStore } from '../../src/canvas/deviceActions';
+import { listDevices } from '../../src/music/spotifyApi';
+import { createSpotifyAwareConnector, NOT_CONNECTED_NOTICE, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -80,5 +82,77 @@ describe('createSpotifyAwareConnector', () => {
     await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
     expect(await r.c.run({ deviceId: 'speaker-1', playing: false })).toEqual({ playing: false });
     expect(pause).toHaveBeenCalledOnce();
+  });
+});
+
+describe('spotifyAware connector — fixes', () => {
+  it('transport failure throws (store restores state) and says so', async () => {
+    const r = rig({ pause: async () => { throw new Error('boom'); } });
+    await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
+    await expect(r.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow('boom');
+    expect(r.said.at(-1)).toBe("Spotify didn't respond.");
+  });
+
+  it('next() without a title clears trackTitle', async () => {
+    const r = rig({ next: async () => null });
+    await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
+    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toEqual({ playing: true, trackTitle: '' });
+  });
+
+  it('no-device fallback says so and uses the built-in player', async () => {
+    const r = rig({ listDevices: async () => { throw new Error('x'); }, browserDevice: undefined });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
+    expect(r.said[0]).toBe('No Spotify speaker or browser player is available — playing the built-in track.');
+    expect(ack.trackTitle).toBe('Built-in');
+  });
+
+  it('a slow Spotify play (>3s) still lands on the tile; a failure reverts it', async () => {
+    vi.useFakeTimers();
+    try {
+      const mk = (fail: boolean) => {
+        const slow = rig({
+          searchAndPlay: () => new Promise((res, rej) => setTimeout(() => (fail
+            ? rej(new Error('No Spotify match for “q”'))
+            : res({ hit: { kind: 'track' as const, id: 't', uri: 'u', name: 'Slow Song' }, deviceNote: '' })), 5000)),
+        });
+        const store = createDeviceStore(
+          { 'speaker-1': { on: false, brightness: 0, playing: false, trackTitle: 'Morning light', volume: 40 } },
+          slow.c, () => {}, () => null,
+        );
+        return store.act({ deviceId: 'speaker-1', playing: true, query: 'q' });
+      };
+      const okP = mk(false);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(await okP).toMatchObject({ playing: true, trackTitle: 'Slow Song', error: '' });
+      const badP = mk(true);
+      await vi.advanceTimersByTimeAsync(6000);
+      const bad = await badP;
+      expect(bad.playing).toBe(false);
+      expect(bad.trackTitle).toBe('Morning light');
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('spotifySearchQuery routing', () => {
+  it('searches only when connected and the query is music-like', () => {
+    expect(spotifySearchQuery('jazz', true)).toBe('jazz');
+    expect(spotifySearchQuery('jazz', false)).toBeNull();
+    for (const q of ['the floor plan in 3D', 'with the layout', 'next song', 'it', 'something', 'previous song', 'again', 'my board']) {
+      expect(spotifySearchQuery(q, true), q).toBeNull();
+    }
+  });
+});
+
+describe('spotify api ledger hook', () => {
+  it('records path only, never the bearer token', async () => {
+    const seen: string[] = [];
+    await listDevices({
+      accessToken: 'SECRET-TOKEN',
+      fetchImpl: (async () => ({ ok: true, status: 200, text: async () => '{"devices":[]}' })) as never,
+      onCall: (i) => { seen.push(JSON.stringify(i)); },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('"job":"spotify"');
+    expect(seen[0]).not.toContain('SECRET-TOKEN');
   });
 });

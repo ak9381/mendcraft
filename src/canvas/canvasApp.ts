@@ -33,7 +33,7 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { createSpotifyAwareConnector } from './spotifyConnector';
+import { createSpotifyAwareConnector, spotifySearchQuery } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
@@ -696,7 +696,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })
     : simulatedConnector;
   // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
-  const spOpts = (): spotifyApi.SpotifyApiOptions => ({ onCall: opts.onSpotifyCall });
+  const spOpts = (): spotifyApi.SpotifyApiOptions => ({
+    // Path + short query only (redacted in the api layer); never a token.
+    onCall: opts.onSpotifyCall ?? ((i) => {
+      ledger.record({ engine: 'spotify', sentText: i.sent });
+      activityLog.push({ kind: 'ai', text: `Spotify · ${i.reason}` });
+      ledgerTotalRender();
+    }),
+  });
   let webPlayer: SdkPlayer | null = null;
   const defaultConnector = opts.sim ? lampConnector : createSpotifyAwareConnector({
     inner: lampConnector,
@@ -2186,10 +2193,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // "play <something>" on a speaker: a search, handled by the speaker connector
     // (Spotify when connected, honest built-in fallback otherwise).
     const mi = parseMusicIntent(text);
-    const speaker = mi?.type === 'searchPlay' ? deviceRefs().find((d) => d.kind === 'music') : undefined;
-    if (mi?.type === 'searchPlay' && speaker) {
-      void store.act({ deviceId: speaker.id, playing: true, query: mi.query });
-      say(`Looking for ${mi.query}…`);
+    const spQuery = mi?.type === 'searchPlay' && !opts.sim ? spotifySearchQuery(mi.query, !!loadTokens()) : null;
+    const speaker = spQuery ? deviceRefs().find((d) => d.kind === 'music') : undefined;
+    if (spQuery && speaker) {
+      void store.act({ deviceId: speaker.id, playing: true, query: spQuery });
+      say(`Looking for ${spQuery}…`);
       return true;
     }
 
