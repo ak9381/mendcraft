@@ -1828,7 +1828,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     void finishPoint(pc.frameId, pc.r, { ...pc.o, chosenId: pick.id });
     return true;
   }
-  async function pointTurn(frameId: string): Promise<void> {
+  async function pointTurn(frameId: string, o: { skipIphone?: boolean } = {}): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
     endPointWait();
@@ -1844,7 +1844,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // with its own camera (its gimbal holds), identifies it, and sends back
     // only the identity. Its monitor tab shows what stayed on device.
     const iphone = !phoneShell && hostSession ? phoneSense.get('ios') : undefined;
-    if (iphone?.canPoint && hostSession) {
+    if (!o.skipIphone && iphone?.canPoint && hostSession) {
       if (iphonePoint) clearTimeout(iphonePoint.timer);
       iphonePoint = {
         frameId,
@@ -1854,7 +1854,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       void hostSession.askSensePoint('ios').catch(() => { iphonePoint = null; say('Couldn’t reach the iPhone — say it again, or name the device.'); });
       return;
     }
-    if (!phoneShell && !handsOn && pairFirst.phones().some((p) => isIphoneRow(p))) say(PHONE_POINT_FALLBACK);
+    if (!phoneShell && pairFirst.phones().some((p) => isIphoneRow(p))) say(PHONE_POINT_FALLBACK);
     if (phoneSensor) { await phoneSensorPoint(frameId, false); return; }
     const timer = setTimeout(() => {
       if (pointWait?.frameId !== frameId) return;
@@ -1983,6 +1983,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!res || !wait) return;
     clearTimeout(wait.timer);
     iphonePoint = null;
+    if (!res.ok && res.reason === 'no-camera') {
+      // The iPhone camera is denied / gone: the laptop camera takes over.
+      void pointTurn(wait.frameId, { skipIphone: true });
+      return;
+    }
     if (!res.ok) { say(res.message || 'The iPhone couldn’t identify that — name the device instead.'); return; }
     // Nothing crossed from THIS laptop: the photo stayed on the iPhone (its own
     // ledger + monitor tab books any crop it sent to Gemini).
@@ -2674,8 +2679,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** What this iPhone really has on (for its announce to the laptop). */
   function phoneSenseStatus(): PhoneSenseStatus | null {
     if (!phoneSensor) return null;
-    const tracking = phoneSensor.running() || (gimbalDocked && inputs.gimbal.mode() === 'face');
-    return { gimbal: !gimbalDocked ? 'none' : tracking ? 'tracking' : 'ready', sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: true };
+    // 'tracking' only when docked AND the plugin read back system tracking on
+    // (gimbal mode 'face' is entered only on that confirmation).
+    const mode = inputs.gimbal.mode();
+    const gimbal = !gimbalDocked ? 'none' : mode === 'face' ? 'tracking' : mode === 'hands' && phoneSensor.running() ? 'hands' : 'ready';
+    return { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
   }
   // Native app: watch the stand dock/undock (every 10 s while visible). A
   // false→true flip re-applies face follow (launch race / redock) unless she

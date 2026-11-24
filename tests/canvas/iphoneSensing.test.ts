@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
-  coercePointResult, coerceSenseStatus, encodePointResult, GIMBAL_READY_ROW, HANDS_ON_ROW, NO_GIMBAL_ROW, phoneSubState, TRACKING_ROW,
+  CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FOLLOWING_HANDS_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
+  NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, TRACKING_ROW, type PhoneSenseStatus,
 } from '../../src/canvas/phonePoint';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 import { routeLine } from '../../src/canvas/routeLine';
@@ -16,19 +17,36 @@ import {
 import { validateCommand } from '../../src/relay/protocol';
 import { buildIdentifyPrompt, parseIdentity, type DeviceIdentity } from '../../src/devices/identify';
 
+const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
 const iphone: PairedPhone = { id: 'ios', label: 'iPhone', sim: false };
 const nothing: PairedPhone = { id: 'android', label: 'Nothing phone', sim: false };
 
 describe('connect-devices row: iPhone sub-states', () => {
-  it('ready / tracking / hands / no gimbal — from what the phone reports', () => {
-    expect(phoneSubState({ gimbal: 'ready', sensor: false, hands: false, canPoint: true }, { ios: true })).toBe(GIMBAL_READY_ROW);
-    expect(phoneSubState({ gimbal: 'ready', sensor: true, hands: false, canPoint: true }, { ios: true })).toBe(TRACKING_ROW);
-    expect(phoneSubState({ gimbal: 'tracking', sensor: false, hands: true, canPoint: true }, { ios: true })).toBe(`${TRACKING_ROW} · ${HANDS_ON_ROW}`);
-    expect(phoneSubState({ gimbal: 'none', sensor: false, hands: false, canPoint: true }, { ios: true })).toBe(NO_GIMBAL_ROW);
+  it('ready / tracking / hands / no gimbal — from what the phone reports, never over-claimed', () => {
+    const st = (o: Partial<PhoneSenseStatus>): PhoneSenseStatus => ({ gimbal: 'ready', sensor: false, hands: false, canPoint: true, ...o });
+    expect(phoneSubState(st({}), { ios: true })).toBe(GIMBAL_READY_ROW);
+    // Sensing alone never claims the stand follows.
+    expect(phoneSubState(st({ sensor: true }), { ios: true })).toBe(CAMERA_TRACKING_ROW);
+    expect(phoneSubState(st({ gimbal: 'none', sensor: true }), { ios: true })).toBe(CAMERA_TRACKING_ROW);
+    // "Tracking you" needs docked + DockKit tracking confirmed by the plugin.
+    expect(phoneSubState(st({ gimbal: 'tracking' }), { ios: true })).toBe(TRACKING_ROW);
+    expect(phoneSubState(st({ gimbal: 'hands', sensor: true }), { ios: true })).toBe(FOLLOWING_HANDS_ROW);
+    expect(phoneSubState(st({ gimbal: 'hands', sensor: false }), { ios: true })).toBe(GIMBAL_READY_ROW);
+    expect(phoneSubState(st({ gimbal: 'tracking', hands: true }), { ios: true })).toBe(`${TRACKING_ROW} · ${HANDS_ON_ROW}`);
+    // Undocked: the row matches what the laptop will do when she points.
+    expect(phoneSubState(st({ gimbal: 'none' }), { ios: true })).toBe(NO_GIMBAL_CAN_POINT_ROW);
+    expect(phoneSubState(st({ gimbal: 'none', canPoint: false }), { ios: true })).toBe(NO_GIMBAL_ROW);
+    expect(phoneSubState(st({ canPoint: false }), { ios: true })).toBe(`${GIMBAL_READY_ROW} · ${CAMERA_UNAVAILABLE_ROW}`);
     // An older iPhone build that reports nothing: say so plainly, never "tracking".
     expect(phoneSubState(null, { ios: true })).toBe(NO_GIMBAL_ROW);
-    // Android: nothing extra unless Hands is on.
     expect(phoneSubState(null, { ios: false })).toBe('');
+  });
+
+  it('the laptop asks the iPhone only when it can point; a camera denial falls back to the laptop', () => {
+    expect(app).toMatch(/if \(!o\.skipIphone && iphone\?\.canPoint && hostSession\)/);
+    expect(app).toMatch(/canPoint: opts\.phoneCamera\?\.status\(\) !== 'error'/);
+    expect(app).toMatch(/res\.reason === 'no-camera'\) \{[\s\S]{0,120}pointTurn\(wait\.frameId, \{ skipIphone: true \}\)/);
+    expect(app).toMatch(/gimbal = !gimbalDocked \? 'none' : mode === 'face' \? 'tracking'/);
   });
 
   it('SIM: the iPhone sub-state is labelled SIM', () => {
@@ -157,7 +175,6 @@ describe('point-to-connect: speakers are software tiles, lamps need a device', (
 });
 
 describe('canvas wiring (source checks — the canvas has no mount test)', () => {
-  const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
   it('the iPhone point photo comes from the hub stream: no openCameraOnce on the phone path', () => {
     expect(app).toMatch(/if \(!video && !how\.phone\) \{ once = await openCameraOnce\(\)/);
   });

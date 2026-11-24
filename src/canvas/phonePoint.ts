@@ -6,27 +6,36 @@
 
 import { DEVICE_KINDS, type DeviceIdentity } from '../devices/identify';
 
-export type GimbalState = 'none' | 'ready' | 'tracking';
+/** none = no stand docked / no plugin; ready = docked, not following;
+ *  tracking = docked AND the plugin read back DockKit system tracking ON
+ *  (the only state that may claim the stand follows); hands = docked and our
+ *  own aim follows her hands from live sensing frames. */
+export type GimbalState = 'none' | 'ready' | 'tracking' | 'hands';
 
 export interface PhoneSenseStatus {
-  /** none = no DockKit stand docked / no plugin; ready = docked; tracking =
-   *  sensing or DockKit tracking is really running. */
   gimbal: GimbalState;
   /** The hand-sensing layer is really running (camera live). */
   sensor: boolean;
   /** The facing-gated hand CONTROL layer (Hands pill) is on. */
   hands: boolean;
-  /** This phone can take the point photo (sensing available on it). */
+  /** This phone can take the point photo: sensing exists and its camera is
+   *  not in error (denied, lost). */
   canPoint: boolean;
 }
 
 export const NO_GIMBAL_ROW = 'No gimbal — pointing uses the laptop camera';
+export const NO_GIMBAL_CAN_POINT_ROW = 'No gimbal — the iPhone camera can still point';
+export const CAMERA_UNAVAILABLE_ROW = 'iPhone camera unavailable — pointing uses the laptop camera';
 export const GIMBAL_READY_ROW = 'Gimbal tracking ready';
+/** Docked and DockKit system tracking confirmed on by the plugin. */
 export const TRACKING_ROW = 'Tracking you';
+export const FOLLOWING_HANDS_ROW = 'Following your hands';
+/** Sensing only: the iPhone camera sees her; the stand is not claimed. */
+export const CAMERA_TRACKING_ROW = 'Camera tracking you';
 export const HANDS_ON_ROW = 'Hands: on';
 export const POINT_OUT_OF_FRAME = 'I can’t see what you’re pointing at — move the device into the camera’s view.';
 export const PHONE_POINT_LINE = 'Point at it and hold still — the iPhone camera takes one photo.';
-export const PHONE_POINT_FALLBACK = 'No iPhone tracking here — using the laptop camera. Point at it and hold still.';
+export const PHONE_POINT_FALLBACK = 'The iPhone camera isn’t available for this — using the laptop camera.';
 
 /** Coerce the sensing fields of an untrusted announce body. Null when absent
  *  (an older phone build, or Android). */
@@ -34,7 +43,7 @@ export function coerceSenseStatus(o: unknown): PhoneSenseStatus | null {
   if (!o || typeof o !== 'object') return null;
   const r = o as Record<string, unknown>;
   const g = r.gimbal;
-  if (g !== 'none' && g !== 'ready' && g !== 'tracking') return null;
+  if (g !== 'none' && g !== 'ready' && g !== 'tracking' && g !== 'hands') return null;
   return { gimbal: g, sensor: r.sensor === true, hands: r.hands === true, canPoint: r.canPoint === true };
 }
 
@@ -44,9 +53,12 @@ export function phoneSubState(s: PhoneSenseStatus | null | undefined, opts: { si
   if (opts.sim && opts.ios) return `${sim}${GIMBAL_READY_ROW}`;
   if (!s) return opts.ios ? NO_GIMBAL_ROW : '';
   const parts: string[] = [];
-  if (s.sensor || s.gimbal === 'tracking') parts.push(TRACKING_ROW);
-  else if (s.gimbal === 'ready') parts.push(GIMBAL_READY_ROW);
-  else if (opts.ios) parts.push(NO_GIMBAL_ROW);
+  if (s.gimbal === 'tracking') parts.push(TRACKING_ROW);
+  else if (s.gimbal === 'hands' && s.sensor) parts.push(FOLLOWING_HANDS_ROW);
+  else if (s.sensor) parts.push(CAMERA_TRACKING_ROW);
+  else if (s.gimbal === 'ready' || s.gimbal === 'hands') parts.push(GIMBAL_READY_ROW);
+  else if (opts.ios) parts.push(s.canPoint ? NO_GIMBAL_CAN_POINT_ROW : NO_GIMBAL_ROW);
+  if (s.gimbal !== 'none' && !s.canPoint && opts.ios) parts.push(CAMERA_UNAVAILABLE_ROW);
   if (s.hands) parts.push(HANDS_ON_ROW);
   return parts.length ? sim + parts.join(' · ') : '';
 }
