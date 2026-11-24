@@ -396,7 +396,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       engineBar.set(engine, state, line);
     },
     handoff: (from, to) => engineBar.handoff(from, to),
-    setCloudBytes: (b) => engineBar.setCloudBytes(b),
+    setCloudBytes: (b, sim) => engineBar.setCloudBytes(b, sim),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
   } : undefined, opts.phoneAiFeed ? teeFeed(aiFeed, opts.phoneAiFeed) : aiFeed);
   // A turn ended: the bar and the AI feed (monitor) both stop saying Working.

@@ -124,6 +124,8 @@ describe('A2 SIM bytes are never real bytes', () => {
   it('canvasApp books via the ledger with the turn\'s sim flag', () => {
     expect(canvasSrc).toMatch(/ledger\.record\(\{ engine: s\.engine, extraBytes: [^}]*sim: s\.sim \}\)/);
     expect(canvasSrc).toContain('createCanvasAiFeed(phoneShell, { sim: !!opts.sim })');
+    // the engine bar gets the SIM would-send total too, not just real bytes
+    expect(canvasSrc).toContain('setCloudBytes: (b, sim) => engineBar.setCloudBytes(b, sim)');
   });
 });
 
