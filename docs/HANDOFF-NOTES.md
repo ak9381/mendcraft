@@ -70,3 +70,12 @@ Known flaky under heavy load (pass alone): selfCheckLatency, speculative, surfac
 
 ## Note: iPhone sensor mode as a connect-devices demo moment
 The iPhone (on the gimbal) runs sensor-only hand/face tracking — no UI control. It appears in the connect-devices flow: paired row → "Gimbal tracking ready / Tracking you" → "Point at a device" chip → photo from the iPhone camera → identify → lamp tile review. See docs/plan/2026-11-25-demo-build-design.md (Note, 25 Nov night) and TEST-CHECKLIST section G.
+
+## Status at end of overnight run (25 Nov)
+
+All planned work is merged to sim-main and pushed (reviews passed; final whole-branch review fixes merged; gimbal DockKit follow + iPhone sensing/control layers merged). 3368 tests pass (only goldenTrace8319f68 / poseStabilityReplay fail: fixtures missing). `npm run e2e` (18-step journey) passes in ~80 s.
+Android: latest debug APK built and installed on the Nothing phone (app.mendcraft.relay.sim).
+iPhone: not installed since the last unplug; ios/App/App Swift files already synced from ios-src and verified clean; install steps are in docs/TEST-CHECKLIST.md 0.2 (copy → grep → build → install).
+Preview: NOT redeployed since the Firebase login expired — run `npx firebase-tools login --reauth`, then `npm run build && npx firebase-tools hosting:channel:deploy sim-main --project mendcraft`.
+Known limitations (parked): Track pill needs two taps to retry after a camera error; no pointResult sent if sensing is stopped mid-point; set-orientation awaits have no timeout; teach-with-model not wired to engines; one old tracked file docs/superpowers/plans/2026-11-20-rich-a2ui-layouts.md still begins with an assistant-style header (blocked by the local pre-push guard; ask before scrubbing).
+Unverified without devices: DockKit face follow with the WebView camera, hand-follow axis signs, iPhone-camera pointing at the lamp/Marshall, Spotify on the Marshall, WiZ lamp, chime pairing inside the apps, phone hand fps. See TEST-CHECKLIST sections 0, E, G, P, S.
