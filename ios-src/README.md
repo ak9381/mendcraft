@@ -17,6 +17,10 @@ cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
 cp ios-src/SceneDelegate.swift           ios/App/App/
 ```
 
+Then merge the Info.plist keys and permission strings from
+`ios-src/Info.plist.additions.xml` into `ios/App/App/Info.plist`, and run
+`npx cap sync ios` (full steps: `ios/README.md`).
+
 Then in Xcode:
 
 1. Add those files to the **App** target if they are not already in the project (drag from `ios/App/App` if needed).

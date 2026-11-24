@@ -170,6 +170,8 @@ export interface NextChips {
   steps(): NextStep[];
   /** A one-shot step ran (chip or voice) and worked on this board. */
   markDone(frameId: string, stepId: string): void;
+  /** Remove the chip rows and ignore any Nano pick still in flight. */
+  destroy(): void;
 }
 
 const CACHE_MAX = 32;
@@ -228,6 +230,7 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
 
   const api: NextChips = {
     steps: () => shown,
+    destroy() { seq++; lastSig = ''; shown = []; clear(); },
     markDone(frameId, stepId) {
       if (!ONE_SHOT.has(stepId)) return;
       const set = done.get(frameId) ?? new Set<string>();

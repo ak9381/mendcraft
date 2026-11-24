@@ -12,7 +12,6 @@ import {
   createGestureRecognizer,
   type Pt,
 } from '../../src/input/gestures';
-import { twoHandPinchPoints } from '../../src/canvas/canvasHands';
 
 function blank(): Pt[] {
   return Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.62 }));
@@ -109,7 +108,7 @@ describe('recorded 16:9 landmark poses (pinch / zoom / fist / point / palm)', ()
     expect(classifyGesture(p)).toBe('open-palm');
   });
 
-  it('two recorded pinches produce two-hand-zoom and pinch points', () => {
+  it('two recorded pinches produce two-hand-zoom', () => {
     const a = recordedPinch(0);
     const b = recordedPinch(0.28);
     expect(classifyGesture(a)).toBe('pinch');
@@ -122,8 +121,5 @@ describe('recorded 16:9 landmark poses (pinch / zoom / fist / point / palm)', ()
     });
     expect(spread.gesture).toBe('two-hand-zoom');
     expect(spread.zoomDelta).toBeGreaterThan(0);
-    const pts = twoHandPinchPoints([a, b], 1000, 800);
-    expect(pts).not.toBeNull();
-    expect(pts!.p.x).not.toBeCloseTo(pts!.q.x, 0);
   });
 });

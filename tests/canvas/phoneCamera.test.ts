@@ -298,3 +298,29 @@ describe('mc.phoneHands persistence', () => {
     expect(readPhoneHands(s)).toBe(false);
   });
 });
+
+describe('a start cancelled mid-way is not a failure', () => {
+  it('stop during the tracker start (video.play pending) leaves look-to-edit usable', async () => {
+    const h = harness();
+    let rejectStart: (e: unknown) => void = () => {};
+    h.createTracker.mockImplementationOnce((_e, onFrame, o) => {
+      const m = { opts: o, onFrame, start: vi.fn(() => new Promise<void>((_r, rej) => { rejectStart = rej; })), stop: vi.fn() };
+      h.trackers.push(m as never);
+      return m;
+    });
+    const on = h.cam.setUse('face', true);
+    await h.settle();
+    expect(h.trackers).toHaveLength(1);
+    // The app hides while video.play() is still pending: the camera stops...
+    h.doc.visibilityState = 'hidden';
+    const hide = h.setVisible(false);
+    // ...and the pending play() rejects because it was interrupted.
+    rejectStart(new DOMException('The play() request was interrupted', 'AbortError'));
+    await on; await hide; await h.settle();
+    expect(h.cam.status()).not.toBe('error');
+    expect(h.cam.lastError()).toBeNull();
+    // Shown again: look-to-edit starts for real.
+    await h.setVisible(true);
+    expect(h.cam.status()).toBe('live');
+  });
+});

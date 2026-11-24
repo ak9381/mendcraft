@@ -94,6 +94,14 @@ export function buildMixedSwarmPlan(realEngine: SwarmKind, task: SwarmTask, opts
     ? ['Nano · redaction', 'Nano · device values', 'Nano · labels']
     : ['Nano · labels', 'Nano · device values'];
   const subSteps: SwarmPlanInput['subSteps'] = [];
+  if (realEngine === 'nano') {
+    // The one real call ran on this device: every sub-step is Nano's. No
+    // Gemini cursor may appear next to "0 B sent to cloud".
+    for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'nano', label: `Nano · tile ${i + 1}`, tileIndex: i });
+    for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'nano', label: nanoRoles[i % nanoRoles.length], tileIndex: i });
+    subSteps.push({ kind: 'nano', label: task === 'floorplan' ? 'Nano · layout' : 'Nano · structure' });
+    return { calls, subSteps };
+  }
   // One Gemini "tile N" cursor per tile (frames the tile first)...
   for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'gemini', label: `Gemini · tile ${i + 1}`, tileIndex: i });
   // ...then one Nano labelling cursor per tile (fills it in after).
@@ -127,8 +135,13 @@ function formatBytesShort(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function swarmPillText(s: { agents: number; gemini: number; nano: number; bytes: number }): string {
-  return `${s.agents} agent${s.agents === 1 ? '' : 's'} · Gemini ${s.gemini} · Nano ${s.nano} · ${formatBytesShort(s.bytes)} to cloud`;
+export function swarmPillText(s: { agents: number; gemini: number; nano: number; bytes: number; simBytes?: number }): string {
+  const counts = [s.gemini ? `Gemini ${s.gemini}` : '', s.nano ? `Nano ${s.nano}` : ''].filter(Boolean).join(' · ');
+  const sim = s.simBytes ?? 0;
+  // A SIM turn sent nothing: what it would send is labelled, never "to cloud".
+  const bytes = sim > 0 && s.bytes <= 0 ? `SIM · would send ${formatBytesShort(sim)}`
+    : `${formatBytesShort(s.bytes)} to cloud${sim > 0 ? ` · SIM · would send ${formatBytesShort(sim)}` : ''}`;
+  return `${s.agents} agent${s.agents === 1 ? '' : 's'}${counts ? ` · ${counts}` : ''} · ${bytes}`;
 }
 
 export interface SwarmPose { id: string; x: number; y: number; phase: 'flying' | 'editing' }
@@ -180,7 +193,7 @@ export function poseAt(agent: SwarmAgentSpec, index: number, tMs: number, opts: 
 
 export interface SwarmLayer {
   start(input: SwarmPlanInput, seed?: number): void;
-  reportBytes(bytes: number): void;
+  reportBytes(bytes: number, simBytes?: number): void;
   settle(): void;
   destroy(): void;
 }
@@ -225,12 +238,13 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   let startedAt = 0;
   let seed = 1;
   let bytes = 0;
+  let simBytes = 0;
   let reached = new Set<string>();
 
   function renderPill(): void {
     const gemini = agents.filter((a) => a.kind === 'gemini').length;
     const nano = agents.filter((a) => a.kind === 'nano').length;
-    pill.textContent = swarmPillText({ agents: agents.length, gemini, nano, bytes });
+    pill.textContent = swarmPillText({ agents: agents.length, gemini, nano, bytes, simBytes });
     pill.title = honestyNote(agents);
   }
 
@@ -283,7 +297,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       renderPill();
       if (!opts.reducedMotion && raf) { startedAt = now(); rafId = raf(frame); }
     },
-    reportBytes(b) { bytes = b; renderPill(); },
+    reportBytes(b, sim = 0) { bytes = b; simBytes = sim; renderPill(); },
     settle() {
       if (rafId != null && caf) caf(rafId);
       rafId = null;

@@ -192,6 +192,9 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     const hands = want.has('hands') || want.has('sense');
     if (tracker && trackerHands === hands && streamLive()) return;
     setStatus('starting');
+    // Hoisted so the catch can tell a real failure from a start that was
+    // cancelled (stopped / superseded while `video.play()` was pending).
+    let t: ReturnType<typeof makeTracker> | null = null;
     try {
       if (!streamLive()) { stopStream(); stream = await gum(PHONE_CAMERA_CONSTRAINTS); }
       // A use was turned off or the app hid while the camera opened.
@@ -199,7 +202,7 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
       stopTracker(); // a mode switch: the tracker restarts, the stream stays
       trackerHands = hands;
       lastHandAt = -Infinity;
-      const t = makeTracker(() => undefined, onPresence, {
+      t = makeTracker(() => undefined, onPresence, {
         detectHands: hands,
         detectFaces: true,
         frameIntervalMs: intervalMs,
@@ -213,6 +216,10 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
       error = null;
       setStatus('live');
     } catch (err) {
+      // A start cancelled mid-way (stop() during `await video.play()`) is not
+      // a camera failure: the run that stopped it owns the status. Marking it
+      // failed would leave look-to-edit dead until a reload.
+      if (t && tracker !== t) return;
       error = err;
       failed = true;
       stopTracker();

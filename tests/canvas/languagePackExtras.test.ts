@@ -53,11 +53,11 @@ describe('optional keys: Tools chip and review buttons', () => {
     for (const k of LANG_OPTIONAL_KEYS) expect(/[ಀ-೿]/.test(SCRIPTED_KN_PACK.strings[k] ?? '')).toBe(true);
   });
 
-  it('English labels: Tools / Approve / Reject / Ask for something else, Keep / Drop', () => {
+  it('English labels: Tools / Approve / Reject / Something else, Keep / Drop', () => {
     expect(EN_PACK.strings.tools).toBe('Tools');
     expect(EN_PACK.strings.approve).toBe('Approve');
     expect(EN_PACK.strings.reject).toBe('Reject');
-    expect(EN_PACK.strings.askElse).toBe('Ask for something else');
+    expect(EN_PACK.strings.askElse).toBe('Something else');
     expect(EN_PACK.strings.keep).toBe('Keep');
     expect(EN_PACK.strings.drop).toBe('Drop');
   });

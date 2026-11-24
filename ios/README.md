@@ -1,29 +1,59 @@
-# Mendcraft iOS (Capacitor) — skeleton
+# Mendcraft iOS (Capacitor)
 
-This directory is a **placeholder**. No `.ipa` was built and no Xcode project is
-committed here — the Capacitor iOS platform can only be generated and built on a
-**Mac with Xcode + CocoaPods**, not on this Linux box. Nothing here pretends
-otherwise.
+The Xcode project (`ios/App`) is **generated, not committed**: `npx cap add ios`
+writes it on a Mac with Xcode, and it then holds your signing team
+(`DEVELOPMENT_TEAM`). Never commit `ios/App`. Everything Mendcraft adds to it
+is tracked elsewhere and copied in:
+
+- `ios-src/*.swift` — the native plugins, the view controller and the scene delegate;
+- `ios-src/Info.plist.additions.xml` — the Info.plist keys and permission
+  strings (camera, microphone incl. the pairing chime, speech recognition,
+  local network / Bonjour, the scene manifest).
 
 The iPhone experience ships two ways:
 
-1. **PWA (works today, no Mac needed).** Open the deployed site in iPhone Safari,
-   go to `/phone`, then **Share → Add to Home Screen**. You get a standalone
-   lamp & music remote. This is the recommended path.
-2. **Native wrapper (optional, needs a Mac).** A thin Capacitor shell around the
-   same `dist/` bundle, routing to `/phone`. Generate it on a Mac:
+1. **PWA (no Mac needed).** Open the deployed site in iPhone Safari, go to
+   `/phone`, then **Share → Add to Home Screen** for a standalone lamp & music
+   remote.
+2. **Native app (needs a Mac with Xcode + CocoaPods).** A Capacitor shell
+   around the same `dist/` bundle.
 
-   ```sh
-   npm install
-   npm run build            # produces dist/
-   npx cap add ios          # generates ios/App (Xcode project) — overwrites this skeleton
-   npx cap sync ios
-   npx cap open ios         # opens Xcode; set a signing team, then Run/Archive
-   ```
+## Build the native app (after a fresh clone)
 
-   `@capacitor/ios` is already in `package.json`, and `capacitor.config.ts` has
-   an `ios` section. Build artifacts (`ios/App/Pods`, `ios/App/build`,
-   `DerivedData`, etc.) are git-ignored — see the repo `.gitignore`.
+```sh
+npm ci
+npm run build                 # produces dist/
+npx cap add ios               # generates ios/App (skip if it already exists)
+
+# 1. the Swift sources (plugins, view controller, scene delegate)
+cp ios-src/MendcraftGimbalPlugin.swift   ios/App/App/
+cp ios-src/MendcraftViewController.swift ios/App/App/
+cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
+cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
+cp ios-src/SceneDelegate.swift           ios/App/App/   # replaces Capacitor's, if any
+
+# 2. merge the Info.plist keys: copy every <key>/value pair from
+#    ios-src/Info.plist.additions.xml into the top-level <dict> of
+#    ios/App/App/Info.plist (replace keys Capacitor already wrote).
+open -a Xcode ios/App/App/Info.plist     # or edit it as source
+
+# 3. sync the web bundle and plugins into the project
+npx cap sync ios
+npx cap open ios
+```
+
+Then in Xcode:
+
+1. Add the five Swift files to the **App** target if they are not already in
+   it (drag them from `ios/App/App`).
+2. Set the Main storyboard's view controller class to `MendcraftViewController`
+   (module **App**). `SceneDelegate.swift` roots the window in it; a bare
+   `CAPBridgeViewController` never registers the Mendcraft plugins.
+3. Pick your signing team, then Run on the iPhone.
+
+`ios/README.md` and `ios-src/` are committed; the generated project and all
+build output are git-ignored (see the repo `.gitignore`). Keep `.bak` copies
+of Info.plist or the project out of git.
 
 ## iOS limits (by design)
 
@@ -39,20 +69,10 @@ The iPhone experience ships two ways:
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
 
-## Native plugins (`ios-src/`, not compiled yet)
+## Native plugins (`ios-src/`)
 
-Written on the Linux build box, **not compiled or run** — no Mac/Xcode here.
-After `npx cap add ios`, copy these four files into `ios/App/App` and add
-them to the App target; set the Main storyboard's view controller class to
-`MendcraftViewController`. See `ios-src/README.md` for the Xcode steps,
-including Apple on-device AI.
-
-```sh
-cp ios-src/MendcraftGimbalPlugin.swift    ios/App/App/
-cp ios-src/MendcraftViewController.swift ios/App/App/
-cp ios-src/MendcraftLanPlugin.swift      ios/App/App/
-cp ios-src/MendcraftAppleAIPlugin.swift  ios/App/App/
-```
+Copied into `ios/App/App` by the steps above. See `ios-src/README.md` for
+the Xcode details, including Apple on-device AI.
 
 - `MendcraftLanPlugin.swift` — UDP/HTTP to private LAN IPs only (same port
   allowlist as `src/devices/connector.ts`), WiZ broadcast discovery, Bonjour

@@ -108,6 +108,9 @@ export interface MorphFlow {
   /** Morph-first speech routing: true = consumed (only while the card has a
    *  say in it). "cancel"/"undo" are meta-commands handled locally. */
   handleSpeech(text: string): boolean;
+  /** Pure peek: would handleSpeech(text) consume this line right now? (The
+   *  journey replay's routeOf; no side effects.) */
+  claimsSpeech(text: string): boolean;
   /** Any pointer/pinch down: a quick press outside the open card cancels. */
   pointerDownAt(p: { x: number; y: number }): void;
   /** ?sim=1 replay: same classifier, injected clock, no camera or mic. */
@@ -408,6 +411,11 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     return false;
   }
 
+  function claimsSpeech(text: string): boolean {
+    if (phase === 'asking' || phase === 'working') return true;
+    return phase === 'done' && morphMeta(text) === 'undo';
+  }
+
   function pointerDownAt(p: { x: number; y: number }): void {
     if (!deps.card.isOpen() || phase === 'idle') return;
     const r = deps.card.el.getBoundingClientRect?.();
@@ -454,6 +462,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     isOpen: () => deps.card.isOpen(),
     phase: () => phase,
     handleSpeech,
+    claimsSpeech,
     pointerDownAt,
     simulateHold,
     pulseTarget,

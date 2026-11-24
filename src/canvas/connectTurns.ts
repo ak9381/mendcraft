@@ -290,7 +290,7 @@ export function pointConnectFromIdentity(
   const crop = Math.max(0, Math.round(opts.cropBytes ?? 0));
   const bytes = crop * sends;
   const what = sends > 1 ? `the photo crop of what you pointed at, sent ${sends}× (${fmtBytes(bytes)})` : `1 photo crop of what you pointed at (${fmtBytes(bytes)})`;
-  const sentReceipt = cloud && !opts.viaIphone ? `${what}, not stored` : null;
+  const sentReceipt = cloud && !opts.viaIphone ? `${what}, sent for this answer only; Mendcraft keeps no copy` : null;
   const line = opts.viaIphone
     ? `iPhone camera — identified ${cloud ? 'via Gemini · cloud from the iPhone' : 'on the iPhone'}; nothing left this laptop`
     : cloud
@@ -326,7 +326,7 @@ export function pointFailureReceipt(o: { cropBytes: number; cloudSends: number; 
   if (!sends || !bytes) return { bytes: 0, line: 'Nano · on device — nothing left this device' };
   const times = sends > 1 ? `, ${sends}×` : '';
   return o.cloudAnswered
-    ? { bytes, line: `Gemini · cloud — photo crop (${fmtBytes(bytes)}${times}) sent, not stored` }
+    ? { bytes, line: `Gemini · cloud — photo crop (${fmtBytes(bytes)}${times}) sent for this answer only; Mendcraft keeps no copy` }
     : { bytes, line: `Gemini · cloud — photo crop (${fmtBytes(bytes)}${times}) may have reached Gemini — no answer came back` };
 }
 

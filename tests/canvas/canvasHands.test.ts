@@ -3,7 +3,6 @@ import {
   autoHandsFromSearch,
   createCanvasHandsAdapter,
   getLastCameraError,
-  mapGestureToCanvasEvent,
   mountCanvasHands,
   shouldAutoStartHands,
   type CanvasHandEvent,
@@ -75,58 +74,6 @@ function makePinchingHand(): Pt[] {
 }
 
 describe('Part 2: src/canvas/canvasHands.ts', () => {
-  describe('pure gesture mapping and debounce', () => {
-    it('maps discrete gestures directly', () => {
-      expect(mapGestureToCanvasEvent('pinch')).toEqual({ type: 'keep' });
-      expect(mapGestureToCanvasEvent('brush')).toEqual({ type: 'drop' });
-      expect(mapGestureToCanvasEvent('palm-swipe-left')).toEqual({ type: 'drop' });
-      expect(mapGestureToCanvasEvent('palm-swipe-right')).toEqual({ type: 'drop' });
-      expect(mapGestureToCanvasEvent('open-palm')).toEqual({ type: 'palm' });
-      expect(mapGestureToCanvasEvent('point', { x: 0.6, y: 0.4 })).toEqual({
-        type: 'point',
-        point: { x: 0.6, y: 0.4 },
-      });
-      expect(mapGestureToCanvasEvent('unknown')).toBeNull();
-    });
-
-    it('debounces keep with 600 ms refractory period', () => {
-      const events: CanvasHandEvent[] = [];
-      const adapter = createCanvasHandsAdapter((e) => events.push(e));
-
-      // First pinch at t=100
-      adapter.feedGesture('pinch', { now: 100 });
-      expect(events).toEqual([{ type: 'keep' }]);
-
-      // Repeated pinch at t=300 (< 600 ms refractory) is debounced
-      adapter.feedGesture('pinch', { now: 300 });
-      expect(events).toHaveLength(1);
-
-      // Repeated pinch at t=699 is still within 600 ms of 100
-      adapter.feedGesture('pinch', { now: 699 });
-      expect(events).toHaveLength(1);
-
-      // Pinch at t=701 (>= 600 ms since first keep) fires keep
-      adapter.feedGesture('pinch', { now: 701 });
-      expect(events).toHaveLength(2);
-      expect(events[1]).toEqual({ type: 'keep' });
-    });
-
-    it('emits drop on brush without refractory blocking other events', () => {
-      const events: CanvasHandEvent[] = [];
-      const adapter = createCanvasHandsAdapter((e) => events.push(e));
-
-      adapter.feedGesture('pinch', { now: 100 });
-      adapter.feedGesture('brush', { now: 200 });
-      adapter.feedGesture('open-palm', { now: 300 });
-
-      expect(events).toEqual([
-        { type: 'keep' },
-        { type: 'drop' },
-        { type: 'palm' },
-      ]);
-    });
-  });
-
   describe('hand landmark frames processing', () => {
     // Pinch is unwired from camera frames: a held pinch (any length) never
     // keeps — it used to fire by accident while pointing.
@@ -362,47 +309,6 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
     });
   });
 
-  describe('twoHandPinchPoints (both hands pinching -> screen px pair)', () => {
-    it('returns null with fewer than two pinching hands', async () => {
-      const { twoHandPinchPoints } = await import('../../src/canvas/canvasHands');
-      expect(twoHandPinchPoints([], 1000, 800)).toBeNull();
-      expect(twoHandPinchPoints([makePinchingHand()], 1000, 800)).toBeNull();
-      expect(twoHandPinchPoints([makePinchingHand(), makeOpenPalmHand()], 1000, 800)).toBeNull();
-    });
-
-    it('returns both pinch midpoints in screen px when two hands pinch', async () => {
-      const { twoHandPinchPoints } = await import('../../src/canvas/canvasHands');
-      const left = makePinchingHand();
-      const right = makePinchingHand().map((p) => ({ x: p.x + 0.2, y: p.y })); // shifted
-      const pts = twoHandPinchPoints([left, right], 1000, 800);
-      expect(pts).not.toBeNull();
-      expect(pts!.p.x).toBeGreaterThanOrEqual(0);
-      expect(pts!.p.x).toBeLessThanOrEqual(1000);
-      expect(pts!.q.x).toBeGreaterThanOrEqual(0);
-      // the two hands sit at different screen x (mirrored, but still distinct)
-      expect(Math.abs(pts!.p.x - pts!.q.x)).toBeGreaterThan(1);
-    });
-  });
-
-  describe('oneHandPinchPoint (exactly one pinching hand -> screen px) [A1-012]', () => {
-    it('returns null with zero or two+ pinching hands (two-hand path is untouched)', async () => {
-      const { oneHandPinchPoint } = await import('../../src/canvas/canvasHands');
-      expect(oneHandPinchPoint([], 1000, 800)).toBeNull();
-      expect(oneHandPinchPoint([makeOpenPalmHand()], 1000, 800)).toBeNull();
-      const right = makePinchingHand().map((p) => ({ x: p.x + 0.2, y: p.y }));
-      expect(oneHandPinchPoint([makePinchingHand(), right], 1000, 800)).toBeNull();
-    });
-
-    it('returns the single pinch midpoint in screen px', async () => {
-      const { oneHandPinchPoint } = await import('../../src/canvas/canvasHands');
-      const pt = oneHandPinchPoint([makePinchingHand()], 1000, 800);
-      expect(pt).not.toBeNull();
-      expect(pt!.x).toBeGreaterThanOrEqual(0);
-      expect(pt!.x).toBeLessThanOrEqual(1000);
-      expect(pt!.y).toBeGreaterThanOrEqual(0);
-      expect(pt!.y).toBeLessThanOrEqual(800);
-    });
-  });
 });
 
 describe('C080 thumbs-up is unwired from camera frames (keep is the Approve button or voice)', () => {

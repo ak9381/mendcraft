@@ -608,3 +608,29 @@ describe('activity stream styles', () => {
     expect(sent.text()).toContain('2.2 KB');
   });
 });
+
+describe('SIM canvas: persistent banner, header says SIM, SIM packets', () => {
+  it('a sim-stamped feed shows the banner, never "Live", and a SIM packet with no real bytes', () => {
+    const ch = bus();
+    const root = new FakeEl('main', doc);
+    const feed = createAiFeed({ channel: ch.canvas, sim: true });
+    mountMonitor(root as unknown as HTMLElement, ch.monitor, { keys: null });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'build the living room' });
+    expect(root.find('mon-sim-banner')!.hidden).toBe(false);
+    expect(root.find('mon-live')!.textContent).toBe('SIM');
+    feed.publish({ kind: 'bytes', total: 0, simTotal: 1200 });
+    feed.publish({ kind: 'log', engine: 'gemini', verb: 'received', text: 'the prompt' });
+    const pk = root.find('mon-packet')!;
+    expect(pk.attrs['data-sim']).toBe('true');
+    expect(pk.attrs['data-bytes']).toBeUndefined();
+    expect(pk.text()).toContain('SIM · 1.2 KB');
+    expect(root.find('mon-bytes')!.textContent).toBe('SIM · would send 1.2 KB');
+    expect(root.find('mon-total--cloud')!.find('mon-total-num')!.textContent).toBe('0 B');
+  });
+  it('a real canvas stays "Live" with no banner', () => {
+    const { feed, root } = setup();
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'hi' });
+    expect(root.find('mon-sim-banner')!.hidden).toBe(true);
+    expect(root.find('mon-live')!.textContent).toBe('Live');
+  });
+});

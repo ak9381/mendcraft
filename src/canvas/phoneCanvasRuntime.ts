@@ -28,10 +28,11 @@ const APPLE_REASON: Partial<Record<AppleAvailabilityStatus, string>> = {
 
 export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
   if (input.appleReady) return 'Apple · on device';
-  if (input.sim && input.ios) return 'Apple · on device';
+  // ?sim=1, or no cloud model reachable: the engines are scripted. Say so —
+  // a scripted turn is never shown as a real model or a real send.
+  if (input.sim || !input.cloud) return `SIM · ${input.ios ? 'Apple · on device' : 'Gemini · cloud'}`;
   const why = input.appleReason && APPLE_REASON[input.appleReason];
-  if (input.cloud) return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
-  return input.ios ? 'Apple · on device' : 'Gemini · cloud';
+  return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
 }
 
 export function applyGuestSnapshot(

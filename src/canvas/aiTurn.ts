@@ -126,7 +126,12 @@ export function parsePartialPlan(text: string): PartialPlan {
 }
 
 export interface TurnUi {
+  /** Once per turn, before the real send: book it (ledger, receipts, feed). */
   onSent?(s: SentInfo): void;
+  /** The real model failed and the scripted (SIM) draft takes over: `s` is the
+   *  same SentInfo with its route line updated. Nothing new was sent — book no
+   *  bytes and log no second "received". */
+  onFallback?(s: SentInfo): void;
   onText?(full: string): void;
   onGhost?(p: PartialPlan): void;
   onError?(why: string): void;
@@ -230,7 +235,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     }
     sent.sim = true;
     sent.routeLine = `SIM · ${sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
-    ui.onSent?.(sent);
+    ui.onFallback?.(sent);
     try {
       final = await streamOne(engine.fallback);
       throwIfCancelled();

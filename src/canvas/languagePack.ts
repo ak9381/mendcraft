@@ -49,7 +49,7 @@ export const EN_PACK: LanguagePack = {
     sayPlaceholder: 'Say: new board · show everything · go to floor plan',
     emptyLead: 'What would you like to build on this board?', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
     keep: 'Keep', drop: 'Drop',
-    tools: 'Tools', approve: 'Approve', reject: 'Reject', askElse: 'Ask for something else',
+    tools: 'Tools', approve: 'Approve', reject: 'Reject', askElse: 'Something else',
     go: 'Go', hands: 'Hands',
     simulateOffline: 'Simulate offline', offlineOn: 'Offline (simulated)',
   },
