@@ -1,0 +1,33 @@
+// Pure navigation maths for the infinite canvas: zoom steps, wheel intent.
+import { MAX_Z, MIN_Z, screenToWorld, type Camera, type Viewport } from './camera';
+
+export const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2] as const;
+
+/** Next zoom step strictly above (dir 1) or below (dir -1) `z`, clamped to the range. */
+export function stepZoom(z: number, dir: 1 | -1): number {
+  const eps = 1e-6;
+  if (dir === 1) {
+    for (const s of ZOOM_STEPS) if (s > z + eps) return s;
+    return ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  }
+  for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) if (ZOOM_STEPS[i] < z - eps) return ZOOM_STEPS[i];
+  return ZOOM_STEPS[0];
+}
+
+export type WheelIntent = { kind: 'zoom'; factor: number } | { kind: 'pan'; dx: number; dy: number };
+
+export function wheelIntent(e: { deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; deltaMode: number }): WheelIntent {
+  const k = e.deltaMode === 1 ? 16 : 1;
+  if (e.ctrlKey || e.metaKey) return { kind: 'zoom', factor: Math.exp(-e.deltaY * k * 0.01) };
+  let dx = e.deltaX * k, dy = e.deltaY * k;
+  if (e.shiftKey && e.deltaX === 0) { dx = dy; dy = 0; }
+  return { kind: 'pan', dx, dy };
+}
+
+/** Zoom to `z` about the viewport centre. */
+export function zoomCameraTo(c: Camera, vp: Viewport, z: number): Camera {
+  const nz = Math.min(MAX_Z, Math.max(MIN_Z, z));
+  const mid = { x: vp.w / 2, y: vp.h / 2 };
+  const w = screenToWorld(c, mid);
+  return { x: w.x - mid.x / nz, y: w.y - mid.y / nz, z: nz };
+}
