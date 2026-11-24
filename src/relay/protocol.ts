@@ -176,8 +176,11 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     monitor (engine/verb/short redacted text/state/the phone's own cloud
 //     byte total). Display only: not model inference, never ledgered. Text is
 //     a small JSON object coerced by canvas/phoneAiFeed.ts.
+//   • 'whoIsThere' — host → phones: "announce yourselves again". Sent after a
+//     phone drops (the relay can't say which one), so the phones still here
+//     re-announce. No payload. Phones only honour it from the host.
 export type RelayCommandKind =
-  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent';
+  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere';
 
 export interface RelayCommand {
   kind: RelayCommandKind;
@@ -268,7 +271,7 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
 const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent'];
 

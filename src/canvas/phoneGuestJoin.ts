@@ -95,13 +95,16 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
 export function announcePhone(
   session: Pick<GuestSession, 'sendCommand'>,
   platform: PhonePlatform,
-  extra: { deviceId?: string; native?: boolean } = {},
+  extra: { deviceId?: string; native?: boolean; refresh?: boolean } = {},
 ): void {
   try {
     // deviceId: the laptop keys this phone's AI-monitor events on it.
+    // refresh: a keep-alive re-announce — the laptop only re-learns who this
+    // phone is (no re-placing, no board republish).
     const body: Record<string, unknown> = { platform };
     if (extra.deviceId) body.deviceId = extra.deviceId;
     if (extra.native !== undefined) body.native = extra.native;
+    if (extra.refresh) body.refresh = true;
     void session.sendCommand({ kind: 'announce', text: JSON.stringify(body) }).catch(() => undefined);
   } catch {
     /* a closed session never breaks the join */
@@ -110,4 +113,25 @@ export function announcePhone(
 
 function isShort(raw: string): boolean {
   return normalizeCode(raw).length === 8;
+}
+
+/** Every RE_ANNOUNCE_MS while a session is bound (and at once when the laptop
+ *  asks 'whoIsThere'), re-announce with refresh:true — so a laptop that forgot
+ *  every phone when ONE dropped re-learns the phones that stayed. */
+export const RE_ANNOUNCE_MS = 20_000;
+
+export function keepAnnouncing(
+  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere'>>,
+  platform: PhonePlatform,
+  extra: { deviceId?: string; native?: boolean },
+  timers: { setInterval(fn: () => void, ms: number): unknown; clearInterval(id: unknown): void } = {
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (id) => clearInterval(id as ReturnType<typeof setInterval>),
+  },
+): () => void {
+  let stopped = false;
+  const again = (): void => { if (!stopped) announcePhone(session, platform, { ...extra, refresh: true }); };
+  session.onWhoIsThere?.(again);
+  const id = timers.setInterval(again, RE_ANNOUNCE_MS);
+  return () => { stopped = true; timers.clearInterval(id); };
 }

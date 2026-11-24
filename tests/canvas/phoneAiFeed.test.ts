@@ -21,6 +21,9 @@ import { APPLE_ON_DEVICE_NOTE } from '../../src/canvas/engines';
 import { LAMP_RANGE_REFUSAL } from '../../src/canvas/deviceGuard';
 import { AI_EVENT_JSON_MAX, fitsRoomMessageRules, validateCommand, validateMessage, type RelayCommand } from '../../src/relay/protocol';
 import type { Person } from '../../src/privacy/directory';
+import { announcePhone, keepAnnouncing, RE_ANNOUNCE_MS } from '../../src/canvas/phoneGuestJoin';
+import { createFakeTransport } from '../../src/relay/transport';
+import { createGuestSession, createHostSession } from '../../src/relay/session';
 
 const SHARMA: Person = { id: 'p1', name: 'Sharma', role: 'client', token: '[Client A]', notes: [], createdAt: 0 };
 const people = () => [SHARMA];
@@ -317,5 +320,72 @@ describe('phone forwarder', () => {
     expect(notes).toHaveLength(15); // 5 sent at once + 10 queued
     expect(notes.at(-1)).toBe('n29');
     expect(evs.filter((e) => e.k === 'bytes')).toEqual([{ k: 'bytes', id: IPHONE, bytes: 20 }]);
+  });
+});
+
+describe('re-announce after a drop', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  const TOKEN = 'ABCDEFGHJKMNPQRSTVWXYZ01';
+
+  it('keepAnnouncing re-announces with refresh every 20 s and on whoIsThere, until stopped', () => {
+    const cmds: RelayCommand[] = [];
+    let tick: (() => void) | null = null;
+    let who: (() => void) | null = null;
+    const stop = keepAnnouncing(
+      { sendCommand: async (c) => { cmds.push(c); }, onWhoIsThere: (cb) => { who = cb; } },
+      'ios', { deviceId: IPHONE, native: true },
+      { setInterval: (fn, ms) => { expect(ms).toBe(RE_ANNOUNCE_MS); tick = fn; return 1; }, clearInterval: () => { tick = null; } },
+    );
+    tick!();
+    who!();
+    expect(cmds.map((c) => JSON.parse(c.text!))).toEqual([
+      { platform: 'ios', deviceId: IPHONE, native: true, refresh: true },
+      { platform: 'ios', deviceId: IPHONE, native: true, refresh: true },
+    ]);
+    stop();
+    who!();
+    expect(cmds).toHaveLength(2);
+  });
+
+  it('after one phone drops and the host clears, the phone that stayed is accepted again', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, undefined, { token: TOKEN });
+    const sent: Array<Record<string, unknown>> = [];
+    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } } });
+    // canvasApp's wiring, reduced to the AI-feed parts.
+    host.onCommand((cmd) => {
+      if (cmd.kind === 'announce') {
+        const o = JSON.parse(cmd.text!) as { platform: 'ios' | 'android'; deviceId?: string; native?: boolean };
+        rep.announce(o.platform, o.deviceId, o.native);
+      } else if (cmd.kind === 'aiEvent') rep.handle(cmd.text!);
+    });
+    host.onState((st) => {
+      if (st === 'gone' || st === 'disconnected') { rep.clear(); void host.askWhoIsThere().catch(() => undefined); }
+    });
+    const iphone = await createGuestSession(t, TOKEN);
+    const nothing = await createGuestSession(t, TOKEN);
+    await flush();
+    const noTimers = { setInterval: () => 0, clearInterval: () => {} };
+    const stopNothing = keepAnnouncing(nothing, 'android', { deviceId: NOTHING, native: true }, noTimers);
+    announcePhone(iphone, 'ios', { deviceId: IPHONE, native: true });
+    announcePhone(nothing, 'android', { deviceId: NOTHING, native: true });
+    await flush();
+    const ev = JSON.stringify({ k: 'bytes', id: NOTHING, bytes: 7 });
+    await nothing.sendCommand({ kind: 'aiEvent', text: ev });
+    await flush();
+    expect(sent).toHaveLength(1);
+
+    await iphone.close(); // the relay can't say which phone left → host clears all
+    for (let i = 0; i < 6; i++) await flush();
+    // The Nothing phone answered whoIsThere (hello + refresh announce): accepted again.
+    await nothing.sendCommand({ kind: 'aiEvent', text: ev });
+    await flush();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ kind: 'bytes', total: 7, device: 'android', deviceLabel: 'Nothing phone' });
+    // The phone that left is not re-learned.
+    expect(rep.handle(JSON.stringify({ k: 'bytes', id: IPHONE, bytes: 0 }))).toBe(false);
+    stopNothing();
+    await nothing.close();
+    await host.close();
   });
 });

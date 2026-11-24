@@ -467,16 +467,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       let wantedSide: Side | null = null;
       let deviceId: unknown;
       let native: unknown;
+      let refresh = false;
       try {
-        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown };
+        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown };
         if (o.platform === 'android' || o.platform === 'ios') platform = o.platform;
         if (o.side === 'left' || o.side === 'right') wantedSide = o.side;
         deviceId = o.deviceId;
         native = o.native;
+        refresh = o.refresh === true;
       } catch {
         return;
       }
       if (!platform) return;
+      // A keep-alive re-announce only re-learns who the phone is for the AI
+      // monitor — no re-placing, no board republish every 20 s.
+      if (refresh) { phoneAi.announce(platform, deviceId, native); return; }
       pairFirst.addPhone({ id: platform, label: phoneAi.announce(platform, deviceId, native) });
       // Honour an explicit side; otherwise place it on its default side only if
       // that side is empty — never overwrite a manual swap the user already made.
@@ -1842,8 +1847,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
           // The relay can't say WHICH phone left, so forget every announce
-          // (phones re-announce when they rejoin) — no stale device labels.
+          // — no stale device labels — then ask the phones still here to
+          // re-announce (they also re-announce every 20 s on their own).
           phoneAi.clear();
+          void hostSession?.askWhoIsThere().catch(() => undefined);
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
           // can no longer act on.

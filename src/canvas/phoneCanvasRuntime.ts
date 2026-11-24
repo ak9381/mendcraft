@@ -4,7 +4,7 @@
 
 import type { SurfacePlan } from './surfacePlan';
 import type { ControlSnapshot } from '../relay/controlSnapshot';
-import { joinPhoneAsGuest } from './phoneGuestJoin';
+import { joinPhoneAsGuest, keepAnnouncing } from './phoneGuestJoin';
 import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
@@ -97,7 +97,7 @@ export function startPhoneRelayGuest(
 ): () => void {
   if (opts.sim || typeof window === 'undefined') return () => undefined;
   const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
-  if (storage) ensureDeviceId(storage);
+  const deviceId = storage ? ensureDeviceId(storage) : undefined;
   const platform = opts.platform ?? 'android';
   let stopSession: (() => Promise<void>) | null = null;
 
@@ -105,11 +105,13 @@ export function startPhoneRelayGuest(
     onSnapshot(cb: (snap: ControlSnapshot) => void): void;
     close(): Promise<void>;
     sendCommand(cmd: RelayCommand): Promise<void>;
+    onWhoIsThere?(cb: () => void): void;
   }): void => {
     session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
     // This phone's AI activity now reaches the laptop's monitor (display only).
     opts.aiForwarder?.bind(session);
-    stopSession = () => { opts.aiForwarder?.bind(null); return session.close(); };
+    const stopAnnouncing = keepAnnouncing(session, platform, { deviceId, native: opts.native });
+    stopSession = () => { stopAnnouncing(); opts.aiForwarder?.bind(null); return session.close(); };
   };
 
   const saved = loadPhonePair(storage);

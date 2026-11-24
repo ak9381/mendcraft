@@ -54,6 +54,8 @@ export interface HostSession extends SessionBase {
   onPrivacyAsk(cb: (ask: PrivacyAsk) => void): void;
   /** Return a filled, cleaned answer (and the route line + byte count). */
   sendPrivacyReply(reply: PrivacyReply): Promise<void>;
+  /** Ask every phone still in the room to announce itself again. */
+  askWhoIsThere(): Promise<void>;
 }
 
 /** Read-only-ish /control dashboard view: it reads snapshots, and can REQUEST a run
@@ -78,6 +80,8 @@ export interface GuestSession extends SessionBase {
   onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
   /** Send a raw prompt to the desktop hub; resolves with the filled reply. */
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
+  /** The host asked phones to announce themselves again ('whoIsThere'). */
+  onWhoIsThere(cb: () => void): void;
 }
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
@@ -254,6 +258,8 @@ export async function createHostSession(
     },
     sendPrivacyReply: (reply) =>
       transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
+    askWhoIsThere: () =>
+      transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere' } }),
     publishState,
     close: async () => {
       clearTimeout(aliasTimer);
@@ -271,6 +277,7 @@ export async function createGuestSession(
   const core = makeCore('phone', transport, roomId);
 
   let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
+  let whoCb: (() => void) | null = null;
   // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
   // still sees current state (same late-join contract as ControlSession).
   let lastSnapshot: ControlSnapshot | null = null;
@@ -292,6 +299,12 @@ export async function createGuestSession(
       core.setState(advancePair(core.state, 'peer-hello'));
       lastSnapshot = snap;
       snapshotCb?.(snap);
+    } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'whoIsThere') {
+      // Say hello first: after another phone's bye the host sits in 'gone' and
+      // ignores commands until a hello, so the re-announce would be dropped.
+      void transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' })
+        .catch(() => undefined)
+        .then(() => whoCb?.());
     } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {
@@ -317,6 +330,9 @@ export async function createGuestSession(
     onSnapshot: (cb) => {
       snapshotCb = cb;
       if (lastSnapshot) cb(lastSnapshot);
+    },
+    onWhoIsThere: (cb) => {
+      whoCb = cb;
     },
     sendPrivacyAsk: (ask, timeoutMs = 20000) =>
       new Promise<PrivacyReply>((resolve, reject) => {
