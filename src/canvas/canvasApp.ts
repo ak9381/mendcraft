@@ -62,7 +62,7 @@ import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, type HandPointer, type HandSurface } from './handPointer';
-import { createToggleLatch } from './handFeel';
+import { cameraHandsFromSelfie } from './handSpace';
 import { mountMicFab, type MicFab } from './micFab';
 import { matchPaletteCommand, mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
@@ -207,7 +207,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div><div class="mc-swarm" hidden></div></div>
     <div class="mc-blank" hidden>
       <p class="mc-blank-lead">Let's build something fun.</p>
-      <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or open your palm.</p>
+      <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or pinch Tools.</p>
       <button type="button" class="mc-btn mc-blank-register" data-cmd="register">Register</button>
     </div>
     <header class="mc-bar">
@@ -1520,7 +1520,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : null;
 
   // ---- owner registration: the amber Register button (empty canvas + the
-  // bottom-right Edit/Tools/Talk stack) opens a guided SCAN — face → left
+  // top-right Edit/Tools/Talk cluster) opens a guided SCAN — face → left
   // palm → right palm (scanRegistration.ts state machine, scanPanel.ts UI).
   // Each step averages a geometry signature over a stable hold window; the
   // result is stored for the session and locks presence to that owner (face
@@ -1775,11 +1775,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // hold armed on is the morph's, not a keep.
       keep: () => { if (!morphFlow?.holdActive() && !handPointer?.consumedPinch() && !handPan.panning) keep(); },
       drop,
-      palm: () => toggleTools(),
+      // Tools open only on a pinch or a click (or a spoken "show tools") —
+      // never on hover, dwell, or an open-palm hold. A hovering open palm
+      // was the "it opens just when I hover" bug.
+      palm: () => {},
       pointTarget: () => { const id = focusId ?? lastFocus; if (id) void pointTurn(id); },
       scanFrame: (i) => say(`Scanning the room — photo ${i + 1} of 5.`),
       status: say,
-      frame: (hands, now) => { handleTwoHand(hands, now); handPointer?.update(hands, now); handleHandPan(hands, now); teachPanel.matchFrame(hands, now); },
+      frame: (hands, now) => {
+        // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
+        const cam = cameraHandsFromSelfie(hands);
+        handleTwoHand(cam, now);
+        handPointer?.update(cam, now);
+        handleHandPan(cam, now);
+        teachPanel.matchFrame(hands, now);
+      },
     },
   });
   async function toggleHands(): Promise<void> {
@@ -1909,17 +1919,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
-  const toolsLatch = createToggleLatch();
   function openTools(): void { if (isPhone()) phoneMenu?.open(); else toolPalette.open(); }
   function closeTools(): void { if (isPhone()) phoneMenu?.close(); else toolPalette.close(); }
-  function toggleTools(): void {
-    if (isPhone()) {
-      if (!toolsLatch.allow()) return;
-      if (phoneMenu?.isOpen()) phoneMenu.close(); else phoneMenu?.open();
-      return;
-    }
-    toolPalette.toggle();
-  }
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
     const id = dockEl.dataset.frame; if (!id) return;
     reg.setPinned(id, false); sync(); updateDock(); persist(); say('Unpinned.');
@@ -2074,6 +2075,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
   const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say, { getStatus: () => statusEl.textContent ?? '' }) : null;
   micFabRef = micFab;
+  // Hand-reachable cluster at the TOP RIGHT: Register, Edit, Tools, Talk.
+  // Kept clear of the edges and of the facing banner (top-left).
+  if (typeof document !== 'undefined') {
+    let cluster = root.querySelector<HTMLElement>('.mc-hand-cluster');
+    if (!cluster) {
+      cluster = document.createElement('div');
+      cluster.className = 'mc-hand-cluster';
+      root.append(cluster);
+    }
+    const talk = root.querySelector('.mc-talk-control');
+    const toolsChip = root.querySelector('.mc-tools-chip');
+    const editBtn = root.querySelector('.mc-edit-toggle');
+    const resetBtn = root.querySelector('.mc-edit-reset');
+    const registerBtn = root.querySelector('.mc-register-chip');
+    for (const node of [registerBtn, editBtn, toolsChip, talk, resetBtn]) {
+      if (node) cluster.append(node);
+    }
+  }
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
   // Sim/test hook: feed a raw two-hand landmark frame straight into the same
@@ -2390,6 +2409,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     void toggleHands();
   }
 
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), destroy };
+  function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
+  function setTalkError(text: string): void { micFab?.setError(text); }
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;

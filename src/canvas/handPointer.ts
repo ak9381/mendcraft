@@ -19,6 +19,8 @@ import { createOneEuroFilter } from '../input/oneEuro';
 import { createDragVelocity, createMomentum, scrollableAncestor } from './handScroll';
 import { tooltipTextFor } from '../ui/handHover';
 import { fieldCaretAt } from '../input/caretAt';
+import { INDEX_TIP } from '../input/handLogic';
+import { classifyGesture, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
   createDeadZone,
@@ -278,11 +280,13 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
 
   const frame = doc.createElement('div');
   frame.className = 'mc-hand-frame'; frame.setAttribute('aria-hidden', 'true'); frame.hidden = true;
-  const shadow = doc.createElement('div');
-  shadow.className = 'mc-hand-shadow'; shadow.setAttribute('aria-hidden', 'true'); shadow.hidden = true;
-  const ring = doc.createElement('div');
-  ring.className = 'mc-hand-ring'; ring.setAttribute('aria-hidden', 'true'); ring.hidden = true;
-  doc.body.append(shadow, frame, ring);
+  // Small macOS-style coral arrow (default) / 4-arrow move cursor (fist) —
+  // replaces the old 56px shadow + press ring. Hotspot is the SVG's own
+  // drawn tip (arrow) or its centre (fist, via a CSS -50%/-50% transform),
+  // so no per-frame hotspot math is needed here.
+  const cursor = doc.createElement('div');
+  cursor.className = 'mc-hand-cursor'; cursor.setAttribute('aria-hidden', 'true'); cursor.hidden = true;
+  doc.body.append(frame, cursor);
 
   let controls: HTMLElement[] = []; let controlsAt = -Infinity;
   let target: HTMLElement | null = null;
@@ -303,6 +307,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   let textStart: P = { x: 0, y: 0 };
   let textSelecting = false;
   let pinched = false;
+  // Fist (grab/move): a separate gesture from pinch — tracked on its own so
+  // a fist's naturally-low thumb/index ratio never also engages pinchFsm and
+  // fires a click. Reuses draggingHandle/surface (and their *Start state) for
+  // the live drag itself, same as pinch, but never taps on release.
+  let fisted = false;
   let lastActivated: HTMLElement | null = null;
   let consumedUntil = -Infinity;
   let suppressRelease = false;
@@ -354,29 +363,27 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     return dismiss ?? null;
   }
 
-  // A dismiss scrim is a target but not a "thing": keep the plain cursor ring
-  // at the fingertip instead of framing the whole screen.
+  // A dismiss scrim is a target but not a "thing": keep the plain cursor at
+  // the fingertip instead of framing the whole screen.
   const isDismiss = (el: HTMLElement | null) => !!el && el.getAttribute?.('data-hand-dismiss') != null;
   function paint() {
     if (target && !isDismiss(target)) {
       const r = target.getBoundingClientRect();
-      frame.hidden = false; shadow.hidden = true;
+      frame.hidden = false;
       frame.style.transform = `translate(${r.left - 4}px, ${r.top - 4}px)`;
       frame.style.width = `${r.width + 8}px`; frame.style.height = `${r.height + 8}px`;
       frame.classList.toggle('is-pressed', pinched);
     } else {
       frame.hidden = true;
-      // Over empty space: a soft low-contrast ring (no dot) that tightens
-      // while pinching — see .mc-hand-shadow in canvas.css.
-      shadow.hidden = pt.x < 0;
-      shadow.style.transform = `translate(${pt.x - 28}px, ${pt.y - 28}px)`;
-      shadow.classList.toggle('is-pinched', pinched);
     }
-    ring.hidden = !pinched;
-    if (pinched) {
-      const c = target && !isDismiss(target) ? (() => { const r = target!.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })() : pt;
-      ring.style.transform = `translate(${c.x - 14}px, ${c.y - 14}px)`;
-    }
+    cursor.hidden = pt.x < 0;
+    cursor.classList.toggle('is-pinched', pinched);
+    cursor.classList.toggle('is-fist', fisted);
+    // Fist (move) cursor is centred on the hotspot; the arrow's tip is
+    // already drawn at the SVG's own origin, so it needs no extra offset.
+    cursor.style.transform = fisted
+      ? `translate(${pt.x}px, ${pt.y}px) translate(-50%, -50%)`
+      : `translate(${pt.x}px, ${pt.y}px)`;
   }
 
   function setTarget(el: HTMLElement | null) {
@@ -530,8 +537,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
             surfaceHeld = true;
             // The hold was ours: stop the morph hold arming on the same pinch.
             opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
-            ring.classList.add('mc-hand-ring-held');
-            setTimeout(() => ring.classList.remove('mc-hand-ring-held'), 300);
+            cursor.classList.add('mc-hand-ring-held');
+            setTimeout(() => cursor.classList.remove('mc-hand-ring-held'), 300);
           }
         }, SURFACE_HOLD_MS);
       }
@@ -607,6 +614,37 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     paint();
   }
 
+  /** Fist "down": arm a drag handle or hand surface exactly like a pinch-down
+   *  would, but WITHOUT the tap-on-release behaviour pinch has — a fist that
+   *  never moves must do nothing, never click. Sliders are excluded: those
+   *  stay pinch-only. */
+  function fistDown(p: P): void {
+    const resolved = resolve(p);
+    if (resolved && resolved.matches(DRAG_HANDLE)) {
+      draggingHandle = resolved;
+      dragHandleStart = p;
+      dragHandleMoved = false;
+      dispatchDragEvent(resolved, 'pointerdown', p);
+    } else if (!resolved) {
+      surface = handSurfaceAt(deepElementFromPoint(doc, p.x, p.y));
+      if (surface) { surfaceStart = p; surfaceDragging = false; surfaceHeld = false; }
+    }
+  }
+
+  /** Fist "up": end whatever drag was running — never a tap, never a click. */
+  function fistUp(p: P): void {
+    if (draggingHandle) {
+      dispatchDragEvent(draggingHandle, 'pointerup', p);
+      draggingHandle = null;
+      dragHandleMoved = false;
+    }
+    if (surface) {
+      if (surfaceDragging) surface.endDrag();
+      surface = null; surfaceDragging = false; surfaceHeld = false;
+    }
+    paint();
+  }
+
   function aim(p: P, stickyNow?: number): HTMLElement | null {
     pt = p;
     if (dragging) { dragTo(p.x); paint(); return dragging; }
@@ -658,7 +696,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   }
 
   function lost() {
-    if (pinched) {
+    if (pinched || fisted) {
       if (draggingHandle) dispatchDragEvent(draggingHandle, 'pointercancel', pt);
       // C169: a slider keeps the value it reached (no snap back, no fling) — so
       // finish it like a release does, or 'change' listeners never see it.
@@ -666,7 +704,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (surface && surfaceDragging) surface.endDrag(); // hand left mid-drag: finish, never leave it stuck
       surface = null; surfaceDragging = false; surfaceHeld = false; clearSurfaceHold();
       textEl = null; textSelecting = false; // a hand lost mid-select keeps the range it made
-      pinched = false; dragging = null; pressedOn = null; draggingHandle = null;
+      pinched = false; fisted = false; dragging = null; pressedOn = null; draggingHandle = null;
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
@@ -687,12 +725,25 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (lostTimer) clearTimeout(lostTimer);
       lostTimer = setTimeout(lost, 400);
 
-      // Anchor on the index-MCP/palm-centre blend (not the fingertips, which
-      // jump the moment you pinch), 1-Euro-smoothed, with a micro dead-zone.
-      const anchor = cursorAnchor(h);
-      const s = euro.filter(anchor.x, anchor.y, t);
+      // Hotspot is the INDEX FINGERTIP itself (landmark 8) — not the
+      // MCP/palm-centre blend, which is for gesture stability, not the visible
+      // cursor. 1-Euro-smoothed, with a micro dead-zone, same as before.
+      const tip = h[INDEX_TIP] ?? cursorAnchor(h);
+      const s = euro.filter(tip.x, tip.y, t);
       const p = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
       history.push(p, t);
+
+      // Fist is a distinct gesture from pinch: a fist's curled fingers also
+      // read as a low thumb/index ratio, so it must never reach pinchFsm (it
+      // would otherwise fire a click on every fist). It drags live — no
+      // freeze — and never taps on release.
+      const isFist = classifyGesture(h as unknown as GesturePt[]) === 'fist';
+      if (isFist) {
+        if (!fisted) { fisted = true; fistDown(p); }
+        aim(p, t);
+        return;
+      }
+      if (fisted) { fisted = false; fistUp(p); return; }
 
       // Pinch ratio is smoothed too, then debounced with hysteresis +
       // refractory: hover can NEVER activate anything — only this machine's
@@ -733,6 +784,6 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     suppressNextRelease() { if (pinched) suppressRelease = true; },
     setDryRun(on) { dryRun = on; },
     lost,
-    destroy() { lost(); if (lostTimer) clearTimeout(lostTimer); frame.remove(); shadow.remove(); ring.remove(); },
+    destroy() { lost(); if (lostTimer) clearTimeout(lostTimer); frame.remove(); cursor.remove(); },
   };
 }

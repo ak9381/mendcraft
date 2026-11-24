@@ -9,18 +9,27 @@ import { mountToolPalette } from '../../src/canvas/toolPalette';
 const W = 1000;
 const H = 800;
 
-/** Camera-space hand whose cursorAnchor maps exactly to screen (px, py);
- *  same construction handPointerPipeline.test.ts uses for its real pipeline. */
+/** Camera-space hand whose INDEX_TIP (landmark 8 — the cursor's hotspot)
+ *  maps exactly to screen (px, py); same construction
+ *  handPointerPipeline.test.ts uses for its real pipeline. Index stays
+ *  "extended" and the other three fingers curled, so classifyGesture()
+ *  never reads this as a fist. */
 function synthHand(px: number, py: number, pinched: boolean): Pt[] {
   const cx = 1 - (REACH.x0 + (px / W) * (REACH.x1 - REACH.x0));
   const cy = REACH.y0 + (py / H) * (REACH.y1 - REACH.y0);
   const lm: Pt[] = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
-  const dm = -0.02;
-  lm[0] = { x: cx, y: cy + 9 * -dm };
-  for (const i of [5, 9, 13, 17]) lm[i] = { x: cx, y: cy + dm };
+  lm[8] = { x: cx, y: cy };
+  lm[0] = { x: cx, y: cy + 0.2 };
+  lm[9] = { x: cx, y: cy };
+  lm[5] = { x: cx, y: cy + 0.15 };
+  lm[6] = { x: cx, y: cy + 0.12 };
+  lm[7] = { x: cx, y: cy + 0.06 };
+  lm[10] = { x: cx + 0.05, y: cy + 0.1 }; lm[12] = { x: cx + 0.05, y: cy + 0.18 };
+  lm[13] = { x: cx + 0.1, y: cy + 0.15 }; lm[14] = { x: cx + 0.1, y: cy + 0.1 }; lm[16] = { x: cx + 0.1, y: cy + 0.18 };
+  lm[17] = { x: cx + 0.15, y: cy + 0.15 }; lm[18] = { x: cx + 0.15, y: cy + 0.1 }; lm[20] = { x: cx + 0.15, y: cy + 0.18 };
   const gap = pinched ? 0.05 : 0.16;
-  lm[4] = { x: cx - gap / 2, y: cy + 0.05 };
-  lm[8] = { x: cx + gap / 2, y: cy + 0.05 };
+  lm[1] = { x: cx - gap, y: cy + 0.18 }; lm[2] = { x: cx - gap, y: cy + 0.12 }; lm[3] = { x: cx - gap, y: cy + 0.06 };
+  lm[4] = { x: cx - gap, y: cy };
   return lm;
 }
 

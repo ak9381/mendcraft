@@ -23,20 +23,23 @@ describe('overlays never cover the Talk button', () => {
       [styleCss, '.face-overlay'],
       [canvasCss, '.mc-hand-frame'],
       [canvasCss, '.mc-reg-chip'],
+      [canvasCss, '.mc-facing-banner'],
+      [canvasCss, '.mc-talk-caption'],
     ] as const) {
       const rule = ruleFor(css, cls);
       expect(rule, `${cls} must exist`).not.toBe('');
       expect(rule, `${cls} must be pointer-events: none`).toContain('pointer-events: none');
     }
-    // .mc-hand-shadow and .mc-hand-ring share the .mc-hand-frame rule line.
-    expect(canvasCss).toMatch(/\.mc-hand-frame, \.mc-hand-shadow, \.mc-hand-ring \{[^}]*pointer-events: none/);
+    // .mc-hand-cursor shares the .mc-hand-frame rule line.
+    expect(canvasCss).toMatch(/\.mc-hand-frame, \.mc-hand-cursor \{[^}]*pointer-events: none/);
   });
 
-  it('no solid dark dot cursor: the empty-space cursor is a soft sage ring', () => {
-    const shadow = ruleFor(canvasCss, '.mc-hand-shadow');
-    expect(shadow).not.toContain('radial-gradient'); // the old dark dot
-    expect(shadow).toContain('border: 2px solid rgb(107 143 113'); // warm sage ring
-    expect(ruleFor(canvasCss, '.mc-hand-shadow.is-pinched')).toContain('scale: 0.55'); // tightens on pinch
+  it('no solid dark dot cursor: the empty-space cursor is a small coral arrow, not a dot or a big ring', () => {
+    const cursor = ruleFor(canvasCss, '.mc-hand-cursor');
+    expect(cursor).not.toContain('radial-gradient'); // the old dark dot
+    expect(cursor).not.toContain('border-radius: 50%'); // no circular dot/ring shape
+    expect(cursor).toContain('background-image'); // the small SVG arrow
+    expect(ruleFor(canvasCss, '.mc-hand-cursor.is-pinched')).toContain('scale: 0.78'); // shrinks on pinch
   });
 
   it('clicking Talk starts speech recognition (handler wiring)', () => {
@@ -44,11 +47,12 @@ describe('overlays never cover the Talk button', () => {
     // the Talk regression suite is self-contained.
     const listeners: Record<string, () => void> = {};
     const el = {
-      type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>,
-      classList: { toggle: vi.fn() },
+      type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>, hidden: false,
+      classList: { toggle: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
       setAttribute(k: string, v: string) { this.attrs[k] = v; },
       addEventListener(t: string, f: () => void) { listeners[t] = f; },
       querySelector: () => ({ textContent: '' }),
+      append() {},
       remove: vi.fn(),
     };
     const root = { ownerDocument: { createElement: () => el }, append: vi.fn() } as unknown as HTMLElement;
@@ -107,15 +111,36 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
   });
 });
 
-describe('Edit Reset layout does not cover the Register chip', () => {
-  // Both chips share the right-side column. They used to share bottom: 236px,
-  // so Reset was untappable and Register looked clipped.
-  it('Reset is stacked above Register with a gap at least as tall as the Register chip', () => {
-    const reset = bottomPx('.mc-edit-reset');
-    const register = bottomPx('.mc-register-chip');
-    expect(reset).not.toBeNull();
-    expect(register).not.toBeNull();
-    expect(reset).toBeGreaterThan(register! + 52);
+describe('hand cluster sits at the top right, clear of the facing banner', () => {
+  it('the cluster is a top-right flex column with 48px+ targets', () => {
+    const rule = ruleFor(canvasCss, '.mc-hand-cluster');
+    expect(rule).toContain('position: fixed');
+    expect(rule).toContain('top: calc(10px + env(safe-area-inset-top, 0px))');
+    expect(rule).toContain('right: 16px');
+    expect(rule).toContain('flex-direction: column');
+    expect(rule).toContain('gap: 10px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 48px');
+  });
+
+  it('the facing banner is a small top-left pill and does not cover the cluster', () => {
+    const banner = ruleFor(canvasCss, '.mc-facing-banner');
+    expect(banner).toContain('top: calc(10px + env(safe-area-inset-top, 0px))');
+    expect(banner).toContain('left: 16px');
+    expect(banner).toContain('pointer-events: none');
+    expect(banner).toMatch(/max-width:\s*min\(260px/);
+    expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');
+  });
+});
+
+describe('hand skeleton paints above the tools bar', () => {
+  it('the canvas hand overlay sits above .mc-bar so bones are not hidden behind Tools', () => {
+    const overlayZ = Number(ruleFor(canvasCss, '.mc-canvas .hand-overlay').match(/z-index:\s*(\d+)/)?.[1]);
+    const barZ = zIndex('.mc-bar');
+    const cursorZ = zIndex('.mc-hand-frame');
+    expect(overlayZ).toBeGreaterThan(barZ);
+    expect(cursorZ).toBeGreaterThan(overlayZ);
+    expect(ruleFor(canvasCss, '.mc-canvas .hand-overlay')).toContain('pointer-events: none');
   });
 });
 
@@ -132,11 +157,12 @@ describe('Talk stop clears a stale "Listening…" line (A7-020)', () => {
   function mk(status: { text: string }) {
     const listeners: Record<string, () => void> = {};
     const el = {
-      type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>,
-      classList: { toggle: vi.fn() },
+      type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>, hidden: false,
+      classList: { toggle: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
       setAttribute(k: string, v: string) { this.attrs[k] = v; },
       addEventListener(t: string, f: () => void) { listeners[t] = f; },
       querySelector: () => ({ textContent: '' }),
+      append() {},
       remove: vi.fn(),
     };
     const root = { ownerDocument: { createElement: () => el }, append: vi.fn() } as unknown as HTMLElement;

@@ -576,28 +576,30 @@
 .mc-blank-lead { margin: 0; font-size: 34px; font-weight: 650; color: var(--text); }
 .mc-blank-hint { margin: 0; font-size: 18px; color: var(--text-dim); }
 
-/* Hand pointer feedback (handPointer.ts): no dot. Target frame, faint shadow
-   over empty space, a ring only while pinching. Fixed overlays so they work
-   for controls inside shadow DOM too. */
-.mc-hand-frame, .mc-hand-shadow, .mc-hand-ring { position: fixed; left: 0; top: 0; z-index: 70; pointer-events: none; }
+/* Hand pointer feedback (handPointer.ts): no dot, no big rings. A modest
+   frame on the targeted control, plus a small macOS-style coral arrow that
+   follows the index fingertip everywhere else (a 4-arrow move icon while
+   fisted). Fixed overlays so they work for controls inside shadow DOM too. */
+.mc-hand-frame, .mc-hand-cursor { position: fixed; left: 0; top: 0; z-index: 85; pointer-events: none; }
 .mc-hand-frame { border-radius: 14px; border: 3px solid var(--accent);
   box-shadow: 0 0 0 4px rgb(107 143 113 / 0.18), 0 0 14px rgb(107 143 113 / 0.3); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
 .mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(107 143 113 / 0.3), 0 0 18px rgb(107 143 113 / 0.45); }
-/* Hand cursor over empty space: a soft, low-contrast sage ring in the warm
-   paper palette — never a solid dark dot (Akash: "remove the dot"). It
-   tightens while pinching. */
-.mc-hand-shadow { width: 56px; height: 56px; border-radius: 50%;
-  border: 2px solid rgb(107 143 113 / 0.5); background: rgb(107 143 113 / 0.05);
-  box-shadow: 0 1px 8px rgb(43 43 43 / 0.06); scale: 1; transition: scale 120ms ease, border-color 120ms ease; }
-.mc-hand-shadow.is-pinched { scale: 0.55; border-color: rgb(107 143 113 / 0.85); }
-.mc-hand-ring { width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgb(107 143 113 / 0.9); animation: mc-ring-press 260ms ease-out forwards; }
+/* Small coral arrow — hotspot is the SVG's own drawn tip, which sits at the
+   shape's origin, so translate(x,y) alone puts the tip exactly at the hand's
+   index fingertip. */
+.mc-hand-cursor { width: 15px; height: 19px; background-repeat: no-repeat; background-size: contain;
+  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); transition: scale 90ms ease, filter 90ms ease; scale: 1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 19'%3E%3Cpath d='M1 1 L1 15.2 L4.4 11.8 L7.3 18.2 L9.9 17 L7 10.6 L13.8 10.6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1.1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.mc-hand-cursor.is-pinched { scale: 0.78; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)) brightness(0.72); }
+/* Fist (grab/move): a centred 4-arrow move icon (see paint()'s -50%/-50% transform). */
+.mc-hand-cursor.is-fist { width: 20px; height: 20px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1 L13 6 L11 6 L11 9 L14 9 L14 7 L19 10 L14 13 L14 11 L11 11 L11 14 L13 14 L10 19 L7 14 L9 14 L9 11 L6 11 L6 13 L1 10 L6 7 L6 9 L9 9 L9 6 L7 6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
 /* Pinch-hold on a plan object added it to the selection: a brief amber bloom. */
-.mc-hand-ring.mc-hand-ring-held { border-color: var(--action, #C98B3C); box-shadow: 0 0 0 6px rgb(201 139 60 / 0.25); }
-@keyframes mc-ring-press { from { transform-origin: center; scale: 1.4; opacity: 0.9; } to { scale: 0.7; opacity: 0.6; } }
+.mc-hand-cursor.mc-hand-ring-held { filter: drop-shadow(0 0 7px rgb(201 139 60 / 0.9)); }
 /* Text fields are wide: a 3% grow on a 1200px input spills ~18px over the
    Go button beside it, so the hand (and mouse) then hit the input instead. */
 .hand-hover:not(input, textarea, select, [data-hand-dismiss]) { scale: 1.03; }
-@media (prefers-reduced-motion: reduce) { .mc-hand-frame { transition: none; } .mc-hand-ring { animation: none; } .mc-hand-shadow { transition: none; } .hand-hover { scale: none; } }
+@media (prefers-reduced-motion: reduce) { .mc-hand-frame, .mc-hand-cursor { transition: none; } .hand-hover { scale: none; } }
 
 /* Full-screen review: every Proposal that needs a decision opens here —
    desktop and phone alike — instead of a cramped inline card or sheet. The
@@ -653,7 +655,7 @@
   min-height: 56px; padding: 0 30px; font-size: 17px; font-weight: 600; border-radius: 999px;
   background: var(--action); border-color: var(--action); color: #FFFFFF; }
 
-.mc-scan { position: fixed; inset: 0; z-index: 80; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
+.mc-scan { position: fixed; inset: 0; z-index: 90; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
 .mc-scan[hidden] { display: none; }
 .mc-scan-card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px;
   padding: 28px 32px; width: min(380px, calc(100vw - 48px)); display: grid; gap: 14px;
@@ -799,3 +801,113 @@
 }
 .mc-arrange-laptop { padding: 0.15rem 0.5rem; color: var(--text-dim, #777); }
 .mc-arrange-swap { min-height: 2.2rem; }
+
+/* Hand skeletons must paint ABOVE the tools bar (z 51) and the hand cluster
+   (z 72). pointer-events stay none so pinches still hit the controls underneath. */
+.mc-canvas .hand-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 80;
+}
+
+/* Top-right hand-reachable cluster: Talk, Tools, Edit, Register, Reset.
+   48px+ targets, clear of the viewport edge and of the facing banner (top-left). */
+.mc-hand-cluster {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: 16px;
+  z-index: 72;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+  max-width: min(280px, calc(100vw - 32px));
+}
+.mc-hand-cluster > * { pointer-events: auto; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster { right: calc(min(720px, 46vw) + 24px); }
+
+.mc-hand-cluster .mc-fab-mic,
+.mc-hand-cluster .mc-tools-chip,
+.mc-hand-cluster .mc-edit-toggle,
+.mc-hand-cluster .mc-edit-reset,
+.mc-hand-cluster .mc-register-chip,
+.mc-hand-cluster .mc-talk-control {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  z-index: auto;
+}
+.mc-hand-cluster .mc-fab-mic,
+.mc-hand-cluster .mc-tools-chip,
+.mc-hand-cluster .mc-edit-toggle,
+.mc-hand-cluster .mc-register-chip {
+  min-height: 52px;
+  min-width: 48px;
+}
+.mc-hand-cluster .mc-edit-reset { min-height: 48px; }
+
+.mc-talk-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.mc-talk-caption {
+  margin: 0;
+  max-width: 240px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(11, 15, 20, 0.88);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+}
+.mc-talk-caption.is-error { background: #8b2e2e; }
+.mc-talk-caption[hidden] { display: none; }
+
+/* Small, non-blocking facing pill. Never a full-screen square. */
+.mc-facing-banner {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: 16px;
+  z-index: 71;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(260px, calc(100vw - 220px));
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  background: rgba(11, 15, 20, 0.82);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+}
+.mc-facing-banner[hidden] { display: none; }
+.mc-facing-banner.is-away { background: rgba(80, 60, 40, 0.88); }
+.mc-facing-banner-hide {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+  min-height: 28px;
+  border-radius: 999px;
+}
+.mc-facing-banner-hide:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+

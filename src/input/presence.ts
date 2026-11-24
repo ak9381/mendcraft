@@ -127,7 +127,7 @@ export function watchTracksForEnd(
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
-  opts?: { onCameraLost?: () => void },
+  opts?: { onCameraLost?: () => void; /** When false, skip FaceLandmarker (laptop canvas). Default true. */ detectFaces?: boolean },
 ): PresenceTracker {
   const video = document.createElement('video');
   video.playsInline = true;
@@ -135,6 +135,7 @@ export function createPresenceTracker(
   video.style.display = 'none';
   document.body.appendChild(video);
 
+  const wantFaces = opts?.detectFaces !== false;
   let handLm: HandLandmarker | null = null;
   let faceLm: FaceLandmarker | null = null;
   let stream: MediaStream | null = null;
@@ -271,13 +272,15 @@ export function createPresenceTracker(
   }
 
   function loop(): void {
-    if (!running || !handLm || !faceLm || video.readyState < 2) {
+    if (!running || !handLm || video.readyState < 2) {
       rafId = requestAnimationFrame(loop);
       return;
     }
     ts = performance.now();
     // Timestamps must strictly increase per MediaPipe task.
-    if (frameCount % FACE_EVERY === 0) {
+    // FaceLandmarker is opt-in: the laptop canvas must not run it (it steals
+    // frames from HandLandmarker and painted a full-screen "Facing" box).
+    if (wantFaces && faceLm && frameCount % FACE_EVERY === 0) {
       const fr = faceLm.detectForVideo(video, ts);
       updateFaces(fr, ts);
     }
@@ -315,14 +318,16 @@ export function createPresenceTracker(
           numHands: 4,
         }),
       );
-      faceLm = await createWithFallback((delegate) =>
-        FaceLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
-          runningMode: 'VIDEO',
-          numFaces: 4,
-          outputFacialTransformationMatrixes: true,
-        }),
-      );
+      if (wantFaces) {
+        faceLm = await createWithFallback((delegate) =>
+          FaceLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+            runningMode: 'VIDEO',
+            numFaces: 4,
+            outputFacialTransformationMatrixes: true,
+          }),
+        );
+      }
     } catch (err) {
       // Models/wasm failed: release the camera we may have just opened.
       streamPromise

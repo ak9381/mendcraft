@@ -177,4 +177,23 @@ describe('mountToolPalette', () => {
     expect(tools.hidden).toBe(false); // the explicit open() still holds
     expect(palette.isOpen()).toBe(true);
   });
+
+  it('hovering the Tools chip does not open the palette', () => {
+    const { chip, root, win } = setup(false);
+    const palette = mountToolPalette(root, win);
+    chip.fire('mouseenter');
+    chip.fire('mouseover');
+    chip.fire('pointerenter');
+    chip.fire('pointerover');
+    expect(palette.isOpen()).toBe(false);
+    expect(chip.attrs['aria-expanded']).toBe('false');
+  });
+
+  it('a click (or a pinch that ends in click) does open the palette', () => {
+    const { chip, root, win } = setup(false);
+    const palette = mountToolPalette(root, win);
+    chip.fire('click');
+    expect(palette.isOpen()).toBe(true);
+    expect(chip.attrs['aria-expanded']).toBe('true');
+  });
 });

@@ -125,4 +125,14 @@ describe('presence.start camera-before-models ordering', () => {
     expect(shared.track.stop).not.toHaveBeenCalled();
     expect(getUserMedia).not.toHaveBeenCalled();
   });
+
+  it('does not load FaceLandmarker when detectFaces is false (laptop canvas)', async () => {
+    const vision = await import('@mediapipe/tasks-vision');
+    const { createPresenceTracker } = await import('../src/input/presence');
+    const tracker = createPresenceTracker(() => {}, undefined, { detectFaces: false });
+    await tracker.start();
+    expect(vision.HandLandmarker.createFromOptions).toHaveBeenCalled();
+    expect(vision.FaceLandmarker.createFromOptions).not.toHaveBeenCalled();
+    tracker.stop();
+  });
 });

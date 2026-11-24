@@ -62,10 +62,11 @@ describe('floating mic', () => {
     const listeners: Record<string, () => void> = {};
     const el: any = {
       type: '', className: '', innerHTML: '', attrs: {} as Record<string, string>,
-      classList: { toggle: vi.fn() },
+      classList: { toggle: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false) },
       setAttribute(k: string, v: string) { this.attrs[k] = v; },
       addEventListener(t: string, f: () => void) { listeners[t] = f; },
       querySelector: () => ({ textContent: '' }),
+      append() {},
       remove: vi.fn(),
     };
     const root: any = { ownerDocument: { createElement: () => el }, append: vi.fn() };

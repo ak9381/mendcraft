@@ -53,7 +53,13 @@ const engines = createEngines({
 
 const root = document.getElementById('canvas')!;
 let handle: ReturnType<typeof mountCanvas> | null = null;
-const voice = createVoiceController((t) => handle?.run(t));
+const voice = createVoiceController(
+  (t) => handle?.run(t),
+  {
+    onInterim: (text) => handle?.setTalkCaption(text),
+    onError: (_code, message) => handle?.setTalkError(message),
+  },
+);
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh'), sim: params.has('sim'),
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,

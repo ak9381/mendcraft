@@ -1,6 +1,6 @@
 // ON-CANVAS TOOL PALETTE (desktop/tablet). The toolbar's buttons + say box
 // (`.mc-bar-tools`) start hidden — no fixed chrome at open — and come up on
-// voice ("show tools" / "tools" / "menu"), an open palm, or this module's
+// voice ("show tools" / "tools" / "menu"), a pinch or a click on this module's
 // small always-visible "Tools" chip beside the mic. They go back down on
 // "hide tools", palm again, Esc, or right after a tool runs. Phones keep
 // phoneMenu.ts's own Menu sheet; this module no-ops there so the phone's

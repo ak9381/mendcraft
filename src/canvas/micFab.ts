@@ -12,9 +12,14 @@ export interface MicVoice {
 
 export interface MicFab {
   readonly el: HTMLButtonElement;
+  readonly captionEl: HTMLElement;
   readonly listening: boolean;
   toggle(): void;
   stop(): void;
+  /** Live words (interim) or a cleared caption (`null`). */
+  setCaption(text: string | null): void;
+  /** Visible error; also stops the listening state. */
+  setError(text: string): void;
   destroy(): void;
 }
 
@@ -45,10 +50,30 @@ export function mountMicFab(
   el.className = 'mc-fab-mic';
   el.innerHTML = `${MIC_ICON_SVG}<span class="mc-fab-mic-label"></span>`;
   const label = el.querySelector<HTMLElement>('.mc-fab-mic-label')!;
-  root.append(el);
+  const caption = doc.createElement('p');
+  caption.className = 'mc-talk-caption';
+  caption.setAttribute('role', 'status');
+  caption.setAttribute('aria-live', 'polite');
+  caption.hidden = true;
+  const wrap = doc.createElement('div');
+  wrap.className = 'mc-talk-control';
+  wrap.append(el, caption);
+  root.append(wrap);
 
   let listening = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+
+  function showCaption(text: string, kind: 'listen' | 'words' | 'error' | 'clear' = 'words'): void {
+    if (kind === 'clear' || !text) {
+      caption.hidden = true;
+      caption.textContent = '';
+      caption.classList.remove('is-error');
+      return;
+    }
+    caption.hidden = false;
+    caption.textContent = text;
+    caption.classList.toggle('is-error', kind === 'error');
+  }
 
   function render() {
     const s = micFabState(listening);
@@ -57,6 +82,9 @@ export function mountMicFab(
     el.setAttribute('aria-label', listening ? 'Stop listening' : 'Talk: start listening');
     label.textContent = s.label;
     el.classList.toggle('is-listening', listening);
+    if (listening && (caption.hidden || caption.classList.contains('is-error') || caption.textContent === '')) {
+      showCaption(LISTENING_STATUS, 'listen');
+    }
   }
   function stop(timedOut = false) {
     if (!listening) return;
@@ -67,13 +95,16 @@ export function mountMicFab(
     // Nothing was heard (no turn replaced the line): don't leave "Listening…"
     // up after the mic is off. A turn's own status is never overwritten.
     if (opts.getStatus?.() === LISTENING_STATUS) say(timedOut ? 'Stopped listening — nothing heard.' : 'Stopped listening.');
+    if (timedOut) showCaption('Stopped listening — nothing heard.', 'error');
+    else if (!caption.classList.contains('is-error')) showCaption('', 'clear');
   }
   function toggle() {
     if (listening) { stop(); return; }
     if (!voice?.supported) { say('Voice needs Chrome or the phone app here. You can type in the say box.'); return; }
     listening = true;
-    try { voice.pushToTalkStart(); } catch { listening = false; say('The mic could not start.'); render(); return; }
+    try { voice.pushToTalkStart(); } catch { listening = false; const msg = 'The mic could not start.'; say(msg); showCaption(msg, 'error'); render(); return; }
     say(LISTENING_STATUS);
+    showCaption(LISTENING_STATUS, 'listen');
     timer = setT(() => stop(true), maxMs);
     render();
   }
@@ -82,8 +113,22 @@ export function mountMicFab(
 
   return {
     el,
+    captionEl: caption,
     get listening() { return listening; },
     toggle, stop: () => stop(),
-    destroy() { stop(); el.remove(); },
+    setCaption(text) {
+      if (!text) {
+        if (listening) showCaption(LISTENING_STATUS, 'listen');
+        else showCaption('', 'clear');
+        return;
+      }
+      showCaption(text, 'words');
+    },
+    setError(text) {
+      stop();
+      say(text);
+      showCaption(text, 'error');
+    },
+    destroy() { stop(); wrap.remove(); },
   };
 }

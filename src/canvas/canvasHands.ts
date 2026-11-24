@@ -9,7 +9,10 @@ import { createPresenceTracker, type PresenceFrame, type PresenceTracker } from 
 import { findLiveCameraStream } from '../input/cameraShare';
 import { describeCameraError, INSECURE_CONTEXT_MESSAGE } from '../input/cameraError';
 import { createHandOverlay, type HandOverlay } from '../ui/handOverlay';
-import { createFaceOverlay, type FaceOverlay } from '../ui/faceOverlay';
+import { createFacingBanner, type FacingBanner } from '../ui/facingBanner';
+
+/** Laptop canvas must not run FaceLandmarker (steals frames, huge facing box). */
+export const LAPTOP_DETECT_FACES = false;
 import { HAND_FEEL, createHoldGesture } from './handFeel';
 
 export type CanvasHandEvent =
@@ -228,6 +231,8 @@ export interface MountCanvasHandsOptions {
   suppressMotion?: (id: string) => boolean;
   /** Camera track ended while tracking (unplug / OS revoke) — not a start failure. */
   onCameraLost?: () => void;
+  /** Override FaceLandmarker. Laptop canvas defaults to off. */
+  detectFaces?: boolean;
 }
 
 /** The stop function, plus the presence APIs the owner-registration flow
@@ -283,30 +288,28 @@ export async function mountCanvasHands(
 
   let tracker: PresenceTracker | null = null;
   let overlay: HandOverlay | null = null;
-  let faces: FaceOverlay | null = null;
+  let facing: FacingBanner | null = null;
 
   try {
     const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
     overlay = createHandOverlay(root);
-    // Faces are part of the same presence stream and must be VISIBLE: a soft
-    // bracket per face (glowing for the operator, dim for others) in the warm
-    // paper palette, under the hand skeletons.
-    faces = createFaceOverlay(root, {
-      operatorColor: '#6B8F71',
-      dimColor: '#A8A396',
-    });
+    // A small top pill, never a full-screen face box. FaceLandmarker stays off
+    // on the laptop canvas so the banner typically stays hidden.
+    facing = createFacingBanner(root);
+    const detectFaces = opts.detectFaces ?? LAPTOP_DETECT_FACES;
     tracker = createPresenceTracker(
       () => {},
       (presenceFrame) => {
         overlay?.draw(presenceFrame.hands);
-        faces?.draw(presenceFrame.faces, presenceFrame.rejectedHands);
+        const op = presenceFrame.faces.find((f) => f.isOperator) ?? presenceFrame.faces[0];
+        facing?.set(op ? op.facing : null);
         opts.onPresence?.(presenceFrame);
         adapter.update({
           hands: presenceFrame.hands.map((h) => h.points),
           now: typeof performance !== 'undefined' ? performance.now() : Date.now(),
         });
       },
-      { onCameraLost: opts.onCameraLost },
+      { onCameraLost: opts.onCameraLost, detectFaces },
     );
 
     const live = findLiveCameraStream();
@@ -315,7 +318,7 @@ export async function mountCanvasHands(
     try {
       tracker?.stop();
       overlay?.clear();
-      faces?.clear();
+      facing?.destroy();
     } catch {
       // safe cleanup
     }
@@ -328,7 +331,7 @@ export async function mountCanvasHands(
     try {
       live.stop();
       overlay?.clear();
-      faces?.clear();
+      facing?.destroy();
     } catch {
       // safe cleanup
     }
