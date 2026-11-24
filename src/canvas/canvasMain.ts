@@ -100,6 +100,7 @@ function applyNano(nano: NanoCheck): void {
       ios: capacitor?.getPlatform?.() === 'ios',
       sim: params.has('sim'),
       cloud: !!cloud,
+      appleReason: nano.appleStatus,
     }));
   }
   if (isPhone && !hasUsableNano(nano)) root.dataset.nano = nano.label;

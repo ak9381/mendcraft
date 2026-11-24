@@ -10,18 +10,28 @@ import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
+import type { AppleAvailabilityStatus } from '../ai/appleAI';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
   ios: boolean;
   sim: boolean;
   cloud: boolean;
+  /** Why the Apple model isn't ready, when iOS told us (shown on the badge). */
+  appleReason?: AppleAvailabilityStatus;
 }
+
+const APPLE_REASON: Partial<Record<AppleAvailabilityStatus, string>> = {
+  appleIntelligenceNotEnabled: 'Apple Intelligence is off',
+  modelNotReady: 'Apple model downloading',
+  deviceNotEligible: 'this iPhone has no Apple model',
+};
 
 export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
   if (input.appleReady) return 'Apple · on device';
   if (input.sim && input.ios) return 'Apple · on device';
-  if (input.cloud) return 'Gemini · cloud';
+  const why = input.appleReason && APPLE_REASON[input.appleReason];
+  if (input.cloud) return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
   return input.ios ? 'Apple · on device' : 'Gemini · cloud';
 }
 

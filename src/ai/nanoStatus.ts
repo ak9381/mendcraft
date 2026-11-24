@@ -8,13 +8,15 @@ import {
   mapMlKitStatus,
   type NanoStatus,
 } from './privacyRouter';
-import { appleStatusToNano, checkAppleAvailability, getAppleAIPlugin, parseAppleStatus } from './appleAI';
+import { appleStatusToNano, checkAppleAvailability, getAppleAIPlugin, parseAppleStatus, type AppleAvailabilityStatus } from './appleAI';
 import { isIosShell } from '../devices/native';
 
 export interface NanoCheck {
   status: NanoStatus;
   label: string;
   source: 'mlkit' | 'prompt-api' | 'apple' | 'none';
+  /** Raw Apple Foundation Models availability, when this is the iOS shell. */
+  appleStatus?: AppleAvailabilityStatus;
   isPhone: boolean;
 }
 
@@ -79,6 +81,7 @@ export async function checkDeviceNano(w: unknown = globalThis): Promise<NanoChec
         label: labelNanoStatus(status, true, 'apple'),
         source: 'apple',
         isPhone: true,
+        appleStatus: apple,
       };
     }
     return { status: 'unavailable', label: labelNanoStatus('unavailable', true), source: 'none', isPhone: true };

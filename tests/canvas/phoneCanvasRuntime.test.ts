@@ -24,3 +24,20 @@ describe('applyGuestSnapshot', () => {
     expect(show).toHaveBeenCalledWith(board);
   });
 });
+
+describe('phoneRouteBadge — why Apple is not on device', () => {
+  const base = { appleReady: false, ios: true, sim: false, cloud: true };
+  it('says Apple Intelligence is off', () => {
+    expect(phoneRouteBadge({ ...base, appleReason: 'appleIntelligenceNotEnabled' })).toBe('Gemini · cloud · Apple Intelligence is off');
+  });
+  it('says the Apple model is still downloading', () => {
+    expect(phoneRouteBadge({ ...base, appleReason: 'modelNotReady' })).toBe('Gemini · cloud · Apple model downloading');
+  });
+  it('says the device is not eligible', () => {
+    expect(phoneRouteBadge({ ...base, appleReason: 'deviceNotEligible' })).toBe('Gemini · cloud · this iPhone has no Apple model');
+  });
+  it('stays plain when ready or no reason is known', () => {
+    expect(phoneRouteBadge({ ...base, appleReady: true, appleReason: 'available' })).toBe('Apple · on device');
+    expect(phoneRouteBadge(base)).toBe('Gemini · cloud');
+  });
+});
