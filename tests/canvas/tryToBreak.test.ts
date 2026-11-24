@@ -194,7 +194,9 @@ describe('canvasApp wiring', () => {
   const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
   it('languageTurn settles the engine bar on every exit, like aiTurn (Nano card no longer stuck on Working)', () => {
     const body = src.slice(src.indexOf('async function languageTurn('), src.indexOf('/** A pack phrase (Kannada) routes'));
-    expect(body).toMatch(/finally \{[^}]*engineBar\?\.settle\(\)/);
+    expect(body).toMatch(/finally \{[^}]*settleEngines\(\)/);
+    // settleEngines settles the bar AND tells the AI feed (monitor)
+    expect(src).toMatch(/const settleEngines = \(\): void => \{ engineBar\?\.settle\(\); panels\.settle\(\); \}/);
   });
   it('device and open-ended routes check the attempt before acting', () => {
     expect(src).toContain('breakTurn(');

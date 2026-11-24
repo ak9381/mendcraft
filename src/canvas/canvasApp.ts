@@ -376,6 +376,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     setCloudBytes: (b) => engineBar.setCloudBytes(b),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
   } : undefined, createAiFeed());
+  // A turn ended: the bar and the AI feed (monitor) both stop saying Working.
+  const settleEngines = (): void => { engineBar?.settle(); panels.settle(); };
   // The bar replaces the swarm pill on desktop: mirror its agent summary
   // (minus the bytes tail, which the bar shows from the ledger) into the bar.
   const swarmPillEl = swarmEl.querySelector<HTMLElement>('.mc-swarm-pill');
@@ -1453,7 +1455,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
       return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
-    } finally { turnBusy = false; engineBar?.settle(); autoHideAi(); }
+    } finally { turnBusy = false; settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -1956,7 +1958,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Like aiTurn: whatever way the turn ends, the cards stop saying Working
   // (the Nano card was left on Working after the Kannada handoff).
   async function languageTurn(utterance: string): Promise<void> {
-    try { await languageTurnRun(utterance); } finally { engineBar?.settle(); }
+    try { await languageTurnRun(utterance); } finally { settleEngines(); }
   }
   async function languageTurnRun(utterance: string): Promise<void> {
     const engine = engineFor('gemini', JSON.stringify(SCRIPTED_KN_PACK));
@@ -2381,7 +2383,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
     aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
     say(r.reply);
-    engineBar?.settle();
+    settleEngines();
     autoHideAi();
   }
 
@@ -2394,7 +2396,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
-    } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
+    } finally { settleSwarm(); settleEngines(); autoHideAi(); }
   }
 
   // ---- commands ----
