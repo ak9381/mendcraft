@@ -4,6 +4,7 @@
 // Returns null when nothing device-like is recognised (canvas and CAD parsers
 // get their turn).
 import type { DeviceIntent } from './deviceActions';
+import { lampStep } from './deviceGuard';
 import type { StatusKey } from './languagePack';
 
 export type DeviceKind = 'lamp' | 'music' | 'switch';
@@ -22,8 +23,6 @@ export const BRIGHTNESS_STEP = 20;
 
 const COMMON = new Set(['lamp', 'lamps', 'light', 'lights', 'the', 'a']);
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
-/** A relative step lands in the range a lamp accepts: off (0) or 10..100. */
-const lampStep = (n: number) => { const v = clamp(n); return v > 0 && v < 10 ? 10 : v; };
 
 function norm(text: string): string {
   return text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();

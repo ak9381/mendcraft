@@ -200,3 +200,20 @@ describe('canvasApp wiring', () => {
     expect(src).toContain('breakTurn(');
   });
 });
+
+describe('plain button presses never hit the refusal (lampStep)', () => {
+  const press = async (from: number, delta: number) => {
+    const { lampStep } = await import('../../src/canvas/deviceGuard');
+    const store = createDeviceStore({ l: { on: true, brightness: from } as never }, { run: vi.fn(async (i) => ({ brightness: i.brightness })) }, () => {}, () => 'x');
+    return store.act({ deviceId: 'l', brightness: lampStep(from + delta) });
+  };
+  it('brighter at 90 -> 100', async () => { const s = await press(90, 20); expect(s.brightness).toBe(100); expect(s.error).toBe(''); });
+  it('dimmer at 25 -> 10', async () => { const s = await press(25, -20); expect(s.brightness).toBe(10); expect(s.error).toBe(''); });
+  it('dimmer at 10 -> 10', async () => { const s = await press(10, -20); expect(s.brightness).toBe(10); expect(s.error).toBe(''); });
+  it('the call sites in canvasApp and spikeMain all go through lampStep', () => {
+    for (const f of ['src/canvas/canvasApp.ts', 'src/canvas/spikeMain.ts']) {
+      const src = readFileSync(f, 'utf8');
+      expect(src).not.toMatch(/brightness: (cur\.brightness [+-] 20|Math\.(min|max)\(\d+, cur [+-] 20\))/);
+    }
+  });
+});

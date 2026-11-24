@@ -17,6 +17,7 @@ import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
 import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
@@ -861,8 +862,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
       if (!cur || !id) return;
       if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
-      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
-      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
+      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: lampStep(cur.brightness + 20) });
+      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: lampStep(cur.brightness - 20) });
       if (a.name === 'music.playPause') void store.act({ deviceId: id, playing: !cur.playing });
       if (a.name === 'music.next') void store.act({ deviceId: id, next: true });
       if (a.name === 'music.louder') void store.act({ deviceId: id, volume: Math.min(100, (cur.volume ?? 50) + 10) });
@@ -1846,8 +1847,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           const cur = d.brightness ?? 50;
           if (intent === 'lampOn') void store.act({ deviceId: d.id, on: true });
           else if (intent === 'lampOff') void store.act({ deviceId: d.id, on: false });
-          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: Math.min(100, cur + 20) });
-          else void store.act({ deviceId: d.id, brightness: Math.max(0, cur - 20) });
+          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
+          else void store.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
         say(statusText(sk, pack));

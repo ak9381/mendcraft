@@ -15,3 +15,7 @@ export function levelRefusal(i: { brightness?: number; volume?: number }): strin
   if (i.volume !== undefined && !volumeLevelOk(i.volume)) return VOLUME_RANGE_REFUSAL;
   return null;
 }
+
+/** Where a relative brighter/dimmer step lands: 10..100 (a dimmer at the floor
+ *  stays at 10; off is only ever an explicit "off"). */
+export const lampStep = (n: number): number => Math.max(10, Math.min(100, Math.round(n)));
