@@ -55,13 +55,38 @@
 - [ ] Tests: router sends "check accessibility" to the plan board and the result lists door-width/ramp findings; empty plan → "nothing to check yet" (Review Focus 4); "export dxf" produces a `mendcraft-plan.dxf` download call; Kannada utterance → caption shows heard line + English; no translation → heard line only (Review Focus 5).
 - [ ] Implement (three small buttons on the plan board header: Check, 3D, DXF — ≥52 px so hands can dwell them); full suite; commit `Canvas plan board: accessibility check, 3D, DXF; Kannada caption.`
 
-## Wave 2 (after plan 1 Stream B merges; sequential to avoid canvasApp conflicts)
+## Wave 2 — the integrated journey (re-scoped 25 Nov, see design "Decision")
 
-### Task 4: Remove the on-screen keyboard (DEMO build 7) — exact file/test list in `DEMO.md` §Build list 7.
-### Task 5: Connect devices → pair phones first (DEMO build 2) — `pendingAfterPair`; connected-device row with checks from host session peers; Continue → "What do you want to connect next?" → `connectRoom` only on "build the dashboard".
-### Task 6: Point-to-connect (DEMO build 1) — phrase route before `parseGimbalSpeech`; hold-steady → `captureFullFrame()` → crop along landmarks 5→8 (un-mirror) → `identifyDevice(crop,{pointer})` → `mapKindToTile`; null/low confidence → say so; ledger source honest.
-### Task 7: Spotify speaker tile (DEMO build 3) — `createSpotifyAwareConnector` wrapping the simulated connector; prefer Connect device named like "Marshall"; transfer `play:false` then play; fallback built-in + spoken notice.
-### Task 8: Board → phone on one-fist grab (DEMO build 4) — feed grab midpoint into `edgeIntent`/`evaluateDwell`; commit → `publishBoardTransfer` for the whole board; cancel → snap back.
-### Task 9: Judge replay `?replay=demo` — scripted utterance timeline through `run()` with review auto-approve after 2 s, labelled "Replay"; vitest asserts no dead-end replies and the ledger text is the scripted one.
+Order: 2a (parallel, now) Tasks 4, 5, 6 · 2b (after hands Stream B merges) Tasks 7, 8, 9, 10.
 
-Each Wave 2 task gets its own brief (Files / Interfaces / tests) written when Wave 1 lands, from the then-current code.
+### Task 4: Journey + next-step suggestions
+
+**Files:** Create `src/canvas/journey.ts`, `src/canvas/nextSteps.ts`; Modify `src/canvas/canvasApp.ts` (render chips on the focused board's footer after every keep/undo/focus; chip click → `run(chip.say)`); `src/canvas/canvas.css` (append `.mc-next` rules at end of file); Test `tests/canvas/journey.test.ts`, `tests/canvas/nextSteps.test.ts`.
+**Interfaces — Produces:**
+- `export type JourneyStep = 'empty' | 'devices' | 'dashboard' | 'music' | 'saved' | 'floorplan' | 'checked' | 'language' | 'offline' | 'shared'`
+- `export function journeyStepOf(board: { kind: string; tiles: { kind: string }[]; pinned: boolean }, ctx: { lang: string; online: boolean; phones: number }): JourneyStep`
+- `export interface NextStep { id: string; label: string; say: string }` and `export function ruleSuggestions(step: JourneyStep, ctx): NextStep[]` (2–3, deterministic; e.g. dashboard → Play music / Save / Draw the floor plan; floorplan → Check accessibility / Show 3D / Export DXF; checked → Add Kannada / Send to my phone; empty → Connect this room / Floor plan).
+- `export async function suggestNextSteps(step, ctx, nano?: (prompt: string) => Promise<string>): Promise<{ steps: NextStep[]; source: 'nano' | 'rules' }>` — Nano (on-device only; never cloud) picks/reorders from the rule list by id (prompt lists allowed ids; reply parsed strictly; anything invalid → rules). Under `?sim=1` uses rules and says so.
+- Chips: `.mc-next` row inside the focused board footer, ≥52px targets, label + tiny source tag ("Nano" / "Suggested"); also published to the AI feed as a nano log line.
+- [ ] Tests: step classification for each board shape; rules give 2–3 valid steps whose `say` routes to a real command (assert via `parseCanvasCommand` or the run() routing tests); invalid Nano reply → rules; Nano reply with an unknown id → dropped.
+- [ ] Implement; full suite; commit `Next-step suggestions on every board.`
+
+### Task 5: Connect devices pairs phones first (DEMO build 2)
+
+**Files:** Modify `src/canvas/canvasApp.ts` (the `connect (everything|…|devices?)` branch ~2167 and `connectRoom` ~1368; host pairing flow ~1485–1505), `src/canvas/connectSheet.ts`; Create `src/canvas/pairedRow.ts`; Test `tests/canvas/pairFirst.test.ts`.
+**Behaviour:** "connect devices (and make a dashboard)" → open pairing (chime + typed-code fallback) first; a small connected-device row with a check per joined phone (from host-session peer events; reuse arrange-strip data); "Continue" (or ≥1 phone joined + "next") → status "What do you want to connect next? Point at it, name it, or say build the dashboard."; the lamp dashboard review (`connectRoom`) starts only on "build the dashboard" / "make a dashboard" said afterwards, or immediately when no pairing is possible (sim without relay → say so and continue). Under `?sim=1` the two phones join on a scripted delay, labelled SIM.
+- [ ] Tests: utterance with "and make a dashboard" sets pending and does NOT start connectRoom before pairing completes; joined peers render checks; "build the dashboard" runs connectRoom once.
+- [ ] Commit `Connect devices pairs phones first, then asks what's next.`
+
+### Task 6: Speaker tile → Spotify (DEMO build 3)
+
+**Files:** Create `src/canvas/spotifyConnector.ts`; Modify `src/canvas/canvasApp.ts` (wrap the device connector next to `createWizAwareConnector` usage; route "play …" through `parseMusicIntent`); Test `tests/canvas/spotifyConnector.test.ts`.
+**Interfaces:** `createSpotifyAwareConnector(inner, deps: { session: MusicSession-like; listDevices; transferPlayback; searchAndPlay; isConnected(): boolean; say(t: string): void })` — for `speaker-*` when connected: prefer a Connect device whose name matches /marshall/i, else the browser device; transfer `play:false` then play; tile `trackTitle` = real hit title; ledger job `spotify` via the existing hook. Not connected → inner (built-in player) + say "Spotify isn't connected — playing the built-in track." Never fakes a session.
+- [ ] Tests with fakes: connected + Marshall present → transfer to it then play; no Marshall → browser device; not connected → inner + notice; search miss → notice, no fake title.
+- [ ] Commit `Speaker tile plays through Spotify when connected.`
+
+### Task 7 (2b): Remove the on-screen keyboard — exact list in `DEMO.md` Build list 7.
+### Task 8 (2b): Point-to-connect — recon in workspace `plan2-recon.md` item 1; never defaults to a speaker; honest ledger source.
+### Task 9 (2b): Board → phone on a held-fist board drag reaching a paired edge (recon item 4); cancel snaps back.
+### Task 10 (2b): Journey replay `?replay=demo` + end-to-end test: a timeline of the journey's `say` lines (from Task 4's suggestions) run through `run()`, reviews auto-approved after 2 s with a visible "Replay" label; the same timeline in a vitest asserts every step lands (no "isn't a canvas command", each review kept, final boards present, ledger text SIM-labelled).
+Also in 2b: Nano card settles after the Kannada handoff (languageTurn → settle); wire face click to FaceLandmarker blendshapes if cheap.
