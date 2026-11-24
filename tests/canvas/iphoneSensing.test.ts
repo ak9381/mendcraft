@@ -3,7 +3,8 @@
 // (each routes through routeLine), the point result that rides the relay,
 // the relay kinds, and point-to-connect for speakers.
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS } from '../../src/canvas/phoneCamera';
 import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
   CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FOLLOWING_HANDS_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
@@ -12,7 +13,7 @@ import {
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 import { routeLine } from '../../src/canvas/routeLine';
 import {
-  LAMP_OR_SPEAKER_QUESTION, pickPointChoice, pointConnectFromIdentity, SIM_POINT_IDENTITY, SPEAKER_ADDED_NOTE, SPEAKER_ON_BOARD,
+  LAMP_OR_SPEAKER_QUESTION, pickPointChoice, pointConnectFromIdentity, SIM_POINT_IDENTITY, SPEAKER_ADDED_GENERIC_NOTE, SPEAKER_ADDED_NOTE, SPEAKER_ON_BOARD,
 } from '../../src/canvas/connectTurns';
 import { validateCommand } from '../../src/relay/protocol';
 import { buildIdentifyPrompt, parseIdentity, type DeviceIdentity } from '../../src/devices/identify';
@@ -114,6 +115,8 @@ describe('iPhone point result over the relay', () => {
       expect(out.extraBytes).toBe(0);
       expect(out.turn.sent.sent).toBeNull();
       expect(out.turn.sent.routeLine).toMatch(/^iPhone camera — identified via Gemini · cloud from the iPhone; nothing left this laptop$/);
+      // No Gemini lane / cursors on the laptop for work the iPhone did.
+      expect(out.turn.sent.engine).toBe('nano');
     }
   });
 });
@@ -131,9 +134,10 @@ describe('point-to-connect: speakers are software tiles, lamps need a device', (
     expect(out.note).toBe(SPEAKER_ADDED_NOTE);
     expect(out.note).not.toMatch(/connected to/i);
   });
-  it('a generic speaker → "Speaker"', () => {
+  it('a generic speaker → "Speaker", and the note does not name a Marshall', () => {
     const out = pointConnectFromIdentity({ identity: generic, source: 'on-device' }, { devices: [] });
     expect(out.ok && out.turn.plan.tiles[0]).toEqual({ type: 'music', deviceId: 'speaker-1', label: 'Speaker' });
+    expect(out.ok && out.note).toBe(SPEAKER_ADDED_GENERIC_NOTE);
   });
   it('a speaker already on the board is not added twice', () => {
     const out = pointConnectFromIdentity({ identity: marshall, source: 'on-device' }, { devices: [], onBoard: ['speaker-marshall'] });
@@ -205,5 +209,23 @@ describe('canvas wiring (source checks — the canvas has no mount test)', () =>
     expect(fn).not.toMatch(/forEngine\('nano'\)\.log\('received'/);
     expect(fn).toMatch(/engine: 'rules'/);
     expect(fn).toMatch(/panel: engine \? panels\.forEngine\('nano'\) : rulesPanel/);
+  });
+  it('an iPhone-identified turn runs no swarm on the laptop', () => {
+    expect(app).toMatch(/swarm: o\.viaIphone \? false : undefined/);
+  });
+  it('relay: pointResult only while pending and from an announced iPhone; sensePoint only on the iPhone from the host', () => {
+    expect(app).toMatch(/if \(!res \|\| !wait \|\| !phoneSense\.has\('ios'\)\) return;/);
+    const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(main).toMatch(/phonePlatform === 'ios' && platform === 'ios' && h\.phoneSenseStatus\(\)/);
+    expect(main).toMatch(/constraints: phonePlatform === 'ios' \? IPHONE_CAMERA_CONSTRAINTS : undefined/);
+    const session = readFileSync(new URL('../../src/relay/session.ts', import.meta.url), 'utf8');
+    expect(session).toMatch(/msg\.type === 'cmd' && msg\.from === 'host' && msg\.cmd\.kind === 'sensePoint'/);
+  });
+  it('the iPhone hub asks for a 1280×720 stream', async () => {
+    const gum = vi.fn(async () => ({ getTracks: () => [], getVideoTracks: () => [{ readyState: 'live' }] }) as unknown as MediaStream);
+    const cam = createPhoneCamera({ getUserMedia: gum, createTracker: () => ({ start: async () => undefined, stop: () => undefined }), doc: null, win: null, constraints: IPHONE_CAMERA_CONSTRAINTS });
+    await cam.setUse('sense', true);
+    expect(gum).toHaveBeenCalledWith(IPHONE_CAMERA_CONSTRAINTS);
+    expect((IPHONE_CAMERA_CONSTRAINTS.video as MediaTrackConstraints).width).toEqual({ ideal: 1280 });
   });
 });

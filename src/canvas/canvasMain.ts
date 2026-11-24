@@ -6,7 +6,7 @@ import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
-import { createPhoneCamera, phoneHandsAllowed, phoneSensingAllowed } from './phoneCamera';
+import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS, phoneHandsAllowed, phoneSensingAllowed } from './phoneCamera';
 import { announcePhone } from './phoneGuestJoin';
 import type { PhoneGuestSessionLike } from './laptopLink';
 import { App } from '@capacitor/app';
@@ -117,7 +117,7 @@ const voice = createVoiceController(
 // (Hands pill) is off by default on both and facing-gated; iPhone SENSING
 // never acts on the UI (phoneSensor.ts).
 const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
-  ? createPhoneCamera({ app: isPhone ? App : null })
+  ? createPhoneCamera({ app: isPhone ? App : null, constraints: phonePlatform === 'ios' ? IPHONE_CAMERA_CONSTRAINTS : undefined })
   : undefined;
 // The iPhone's live guest session (null while not joined): it answers the
 // laptop's point request and re-announces its sensing status.
@@ -204,7 +204,9 @@ afterFirstPaint(() => {
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;
-        s?.onSensePoint?.((platform) => { if (platform === phonePlatform) h.pointForLaptop(); });
+        // Only the iPhone, only for its own platform, and only from the host
+        // (the session drops any sensePoint not sent by the host).
+        s?.onSensePoint?.((platform) => { if (phonePlatform === 'ios' && platform === 'ios' && h.phoneSenseStatus()) h.pointForLaptop(); });
       },
       joinExtras: { announceStatus: () => h.phoneSenseStatus() },
     });

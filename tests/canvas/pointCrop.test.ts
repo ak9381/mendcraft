@@ -180,9 +180,11 @@ describe('iPhone pointing crop (lamp beside the face, 0.5–1 m from the phone)'
     const rShort = cropAlongRay(short, W, H, { fraction: phoneCropFraction(short, W, H) });
     expect(rLong.w).toBe(Math.round(0.42 * W));
     expect(rShort.w).toBe(Math.round(0.45 * W));
-    // Portrait (480×640): still a share of the WIDTH.
-    const rPortrait = cropAlongRay(long, 480, 640, { fraction: phoneCropFraction(long, 480, 640) });
-    expect(rPortrait.w).toBe(Math.round(0.42 * 480));
+    // Portrait (720×1280, ~50° across): 60 % of the width ≈ 0.42 m at 0.75 m.
+    const rPortrait = cropAlongRay(long, 720, 1280, { fraction: phoneCropFraction(long, 720, 1280) });
+    expect(rPortrait.w).toBe(Math.round(0.6 * 720));
+    const span = 2 * 0.75 * Math.tan((25 * Math.PI) / 180) * 0.6;
+    expect(span).toBeGreaterThan(0.4);
   });
 
   it('a lamp ~35 cm beside the face at 0.75 m (≈ a third of the frame) is inside the crop', () => {

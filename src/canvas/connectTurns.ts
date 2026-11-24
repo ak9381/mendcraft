@@ -188,6 +188,7 @@ const article = (w: string): string => (/^[aeiou]/i.test(w) && !/^u[a-z]/.test(w
  *  device (e.g. /marshall/i) at play time, so pointing at one proposes the
  *  tile even with no hardware device registered. Never claims a hardware link. */
 export const SPEAKER_ADDED_NOTE = 'Speaker added — it will play through Spotify Connect if your Marshall is awake in Spotify.';
+export const SPEAKER_ADDED_GENERIC_NOTE = 'Speaker added — it will play through Spotify Connect if that speaker is awake in Spotify.';
 export const SPEAKER_ON_BOARD = 'The speaker is already on this board.';
 const isMarshall = (id: Pick<DeviceIdentity, 'brand' | 'label'>): boolean => /marshall/i.test(`${id.brand ?? ''} ${id.label ?? ''}`);
 const LAMP_OR_SPEAKER: DeviceHint[] = [
@@ -297,7 +298,9 @@ export function pointConnectFromIdentity(
       ? `Gemini · cloud — ${sentReceipt}`
       : 'Nano · on device — the photo never left this device';
   const sent: SentInfo = {
-    engine: cloud ? 'gemini' : 'nano',
+    // Identified on the iPhone: nothing ran or left on THIS device, so no
+    // Gemini lane here — the neutral this-device side, with the iPhone route.
+    engine: cloud && !opts.viaIphone ? 'gemini' : 'nano',
     prompt: opts.prompt ?? `Name the device in this photo crop of what she is pointing at.`,
     sent: sentReceipt,
     routeLine: sim ? `SIM · ${line}` : line,
@@ -313,7 +316,7 @@ export function pointConnectFromIdentity(
     identity,
     extraBytes: cloud && !opts.viaIphone ? bytes : 0,
     turn: { sent, json, plan, request, engine: scriptedEngine(sent.engine, json) },
-    ...(software ? { note: SPEAKER_ADDED_NOTE } : {}),
+    ...(software ? { note: /marshall/i.test(tile.label) ? SPEAKER_ADDED_NOTE : SPEAKER_ADDED_GENERIC_NOTE } : {}),
   };
 }
 

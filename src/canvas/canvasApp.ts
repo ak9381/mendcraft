@@ -1678,7 +1678,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
-  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; prebookedBytes?: number; note?: string } = {}): Promise<boolean> {
+  async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; prebookedBytes?: number; note?: string; swarm?: boolean } = {}): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
@@ -1691,7 +1691,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
         turn.sent.sim = engine.sim;
       }
-      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes });
+      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes, swarm: o.swarm });
       if (o.note) panels.forEngine(turn.sent.engine).log('note', o.note);
       if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
       const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
@@ -1978,9 +1978,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Laptop: the iPhone's answer to askSensePoint. */
   function onIphonePointResult(text: string): void {
+    // Only while a point is pending, and only once an iPhone with sensing has
+    // announced itself (the relay cannot say which phone sent a message).
     const res = coercePointResult(text);
     const wait = iphonePoint;
-    if (!res || !wait) return;
+    if (!res || !wait || !phoneSense.has('ios')) return;
     clearTimeout(wait.timer);
     iphonePoint = null;
     if (!res.ok && res.reason === 'no-camera') {
@@ -2024,7 +2026,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
-      { identified: true, extraBytes: pointExtraBytes(out.extraBytes, out.turn.sent.prompt, r, o), prebookedBytes: o.prebooked, photoNote: o.sim, note: idNote ?? undefined });
+      { identified: true, extraBytes: pointExtraBytes(out.extraBytes, out.turn.sent.prompt, r, o), prebookedBytes: o.prebooked, photoNote: o.sim, note: idNote ?? undefined, swarm: o.viaIphone ? false : undefined });
     if (out.note) say(out.note);
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {

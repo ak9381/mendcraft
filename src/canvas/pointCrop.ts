@@ -23,12 +23,18 @@ const INDEX_TIP = 8;
 const finite = (p: Pt | undefined): p is Pt => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
 
 /** iPhone (docked, she looks into the camera and points at a lamp beside her
- *  head, ~0.5–1 m away): the crop is ~42 % of the frame WIDTH, 45 % when the
- *  5→8 ray is short (finger foreshortened toward/away from the lens, so its
- *  direction is least reliable). At 0.75 m a 70° front camera sees ~1.05 m
- *  across, so 42–45 % ≈ 44–47 cm — a lamp within ~40 cm of the face fits. */
+ *  head, ~0.5–1 m away). The crop should span ~0.42–0.45 m at 0.75 m so the
+ *  lamp plus a little aiming error fits:
+ *   - landscape, ~70° horizontal FOV → ~1.05 m across at 0.75 m:
+ *     42 % of the width (45 % when the 5→8 ray is short) ≈ 0.44–0.47 m;
+ *   - portrait, ~50° horizontal FOV → 2·0.75·tan 25° ≈ 0.70 m across:
+ *     60 % of the width (65 % short) ≈ 0.42–0.45 m.
+ *  A short ray = the finger foreshortened toward/away from the lens, so its
+ *  direction is least reliable and the crop grows. FOVs are approximate. */
 export const PHONE_CROP_WIDTH_FRACTION = 0.42;
 export const PHONE_CROP_WIDTH_FRACTION_SHORT = 0.45;
+export const PHONE_CROP_PORTRAIT_FRACTION = 0.6;
+export const PHONE_CROP_PORTRAIT_FRACTION_SHORT = 0.65;
 /** A 5→8 ray shorter than this (fraction of frame width) counts as short. */
 export const SHORT_RAY = 0.05;
 
@@ -79,12 +85,16 @@ export function cropAlongRay(
 }
 
 /** The crop fraction (of the LONG side, as cropAlongRay takes it) that gives
- *  the iPhone's 42 % / 45 %-of-width crop for this frame and hand. */
+ *  the iPhone's width-relative crop (above) for this frame and hand. */
 export function phoneCropFraction(landmarks: readonly Pt[] | null | undefined, frameW: number, frameH: number): number {
   const long = Math.max(frameW, frameH) || 1;
   const mcp = landmarks?.[INDEX_MCP], tip = landmarks?.[INDEX_TIP];
   const short = !finite(mcp) || !finite(tip) || Math.hypot(tip.x - mcp.x, (tip.y - mcp.y) * (frameH / (frameW || 1))) < SHORT_RAY;
-  return ((short ? PHONE_CROP_WIDTH_FRACTION_SHORT : PHONE_CROP_WIDTH_FRACTION) * frameW) / long;
+  const portrait = frameH > frameW;
+  const f = portrait
+    ? (short ? PHONE_CROP_PORTRAIT_FRACTION_SHORT : PHONE_CROP_PORTRAIT_FRACTION)
+    : (short ? PHONE_CROP_WIDTH_FRACTION_SHORT : PHONE_CROP_WIDTH_FRACTION);
+  return (f * frameW) / long;
 }
 
 /** True when the ray's target (fingertip + half a crop along 5→8) lies past

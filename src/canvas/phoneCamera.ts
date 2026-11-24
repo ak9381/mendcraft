@@ -42,6 +42,19 @@ export const PHONE_CAMERA_CONSTRAINTS: MediaStreamConstraints = {
   audio: false,
 };
 
+/** iPhone: a sharper stream, because point-to-connect cuts its photo from it
+ *  (a lamp beside the face is a small part of the frame). The hand model
+ *  still runs on a ~224 px crop, so this costs decode, not inference. */
+export const IPHONE_CAMERA_CONSTRAINTS: MediaStreamConstraints = {
+  video: {
+    facingMode: 'user',
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 30, max: 30 },
+  },
+  audio: false,
+};
+
 /** A camera lost to the OS is retried this many times, this far apart. */
 export const CAMERA_LOST_RETRIES = 3;
 export const CAMERA_LOST_RETRY_MS = 1000;
@@ -77,6 +90,8 @@ export interface AppLifecycle {
 type EventTargetLike = Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
 
 export interface PhoneCameraDeps {
+  /** getUserMedia constraints (default PHONE_CAMERA_CONSTRAINTS). */
+  constraints?: MediaStreamConstraints;
   createTracker?: TrackerFactory;
   getUserMedia?: (c: MediaStreamConstraints) => Promise<MediaStream>;
   doc?: (Pick<Document, 'visibilityState'> & EventTargetLike) | null;
@@ -196,7 +211,7 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     // cancelled (stopped / superseded while `video.play()` was pending).
     let t: ReturnType<typeof makeTracker> | null = null;
     try {
-      if (!streamLive()) { stopStream(); stream = await gum(PHONE_CAMERA_CONSTRAINTS); }
+      if (!streamLive()) { stopStream(); stream = await gum(deps.constraints ?? PHONE_CAMERA_CONSTRAINTS); }
       // A use was turned off or the app hid while the camera opened.
       if (!active()) { stopTracker(); stopStream(); setStatus(idleStatus()); return; }
       stopTracker(); // a mode switch: the tracker restarts, the stream stays
