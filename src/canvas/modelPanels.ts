@@ -6,7 +6,7 @@
 // did the work: only call .log() on the engine that actually ran.
 import { nothingRaw, type Person } from '../privacy/directory';
 import { esc } from '../core/esc';
-import { formatLedgerLine } from './ledger';
+import { formatLedgerLine, formatSimBytes } from './ledger';
 import type { EngineBar, EngineState } from './engineBar';
 import type { AiFeed } from './aiFeed';
 
@@ -171,10 +171,13 @@ export const MODEL_PANELS_HTML = `
 
 /** "412 B sent to cloud" / "1.2 KB sent to cloud" — the footer's live byte
  *  count, generic (no engine name: the footer spans both terminals). */
-export function formatFooterBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB sent to cloud`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB sent to cloud`;
-  return `${Math.max(0, bytes)} B sent to cloud`;
+export function formatFooterBytes(bytes: number, simBytes = 0): string {
+  // A scripted (SIM) turn sent nothing: say what it WOULD send, never as real bytes.
+  if (simBytes > 0 && bytes <= 0) return formatSimBytes(simBytes);
+  const real = bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB sent to cloud`
+    : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB sent to cloud`
+    : `${Math.max(0, bytes)} B sent to cloud`;
+  return simBytes > 0 ? `${real} · ${formatSimBytes(simBytes)}` : real;
 }
 
 export interface EnginePanelUi {
@@ -196,7 +199,7 @@ export interface ModelPanelsUi {
   showHandoff(from: ModelEngine, reason: string): void;
   /** Updates the spanning footer's live "N B sent to cloud" count from the
    *  real cumulative ledger total — never a fabricated number. */
-  setFooterBytes(bytes: number): void;
+  setFooterBytes(bytes: number, simBytes?: number): void;
   /** A turn ended: tell the feed that an engine still Working is Done — the
    *  same rule as the engine bar's settle(), so the monitor doesn't stay on
    *  Working after a handoff. Publishes nothing for an engine not Working. */
@@ -286,7 +289,11 @@ export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document,
       bar?.handoff(from, to);
       feed?.publish({ kind: 'handoff', from, to, text: reason });
     },
-    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); bar?.setCloudBytes(bytes); feed?.publish({ kind: 'bytes', total: bytes }); },
+    setFooterBytes(bytes, simBytes = 0) {
+      footerBytes.textContent = formatFooterBytes(bytes, simBytes);
+      bar?.setCloudBytes(bytes, simBytes);
+      feed?.publish(simBytes > 0 ? { kind: 'bytes', total: bytes, simTotal: simBytes } : { kind: 'bytes', total: bytes });
+    },
     settle() { nano.settleFeed(); gemini.settleFeed(); },
   };
 }

@@ -105,6 +105,7 @@ async function main() {
         lamps,
         ledger: q('.mc-ai-ledger-total'),
         footer: q('.mc-terminal-foot, .mc-ai-footer, .mc-footer'),
+        engineBytes: q('.mc-engine-bytes'),
         simLabels: (document.body.innerText.match(/\bSIM\b/g) || []).length,
         failing: !!document.querySelector('.mc-terminal.is-failing, .is-failing'),
         url: location.search,
@@ -124,6 +125,10 @@ async function main() {
     check(!!desk && desk.brightness >= 10 && desk.brightness <= 100, `desk lamp unchanged by the refused 500 % (brightness ${desk?.brightness})`);
     const num = end.ledger.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB)\b/);
     check(/\d+ AI turns?/.test(end.ledger) && !!num, `ledger total is a real number ("${end.ledger}")`);
+    // SIM: scripted turns send nothing — the ledger and the engine bar say what
+    // they WOULD send, labelled SIM, and never claim real bytes left.
+    check(!/sent to (Gemini|cloud)/i.test(end.ledger) && /SIM · would send \d/.test(end.ledger), `SIM ledger books no real bytes ("${end.ledger}")`);
+    check(!/[1-9][\d.]* ?(B|KB|MB) sent to cloud/.test(end.engineBytes) && /SIM · would send/.test(end.engineBytes), `engine bar shows SIM would-send, not real bytes ("${end.engineBytes}")`);
     check(end.simLabels > 0, `SIM labels on screen (${end.simLabels})`);
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
     check(wall < LIMIT_MS, `completed in ${(wall / 1000).toFixed(1)} s (< 180 s); replay ${(result.ms / 1000).toFixed(1)} s`);

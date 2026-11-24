@@ -10,23 +10,30 @@ export function buildOpenEndedPrompt(text: string): string {
   return `Reply conversationally, in one or two short sentences, to this: "${text}"`;
 }
 
-async function streamOrFallback(engine: SurfaceEngine, prompt: string, onText?: (full: string) => void): Promise<OpenEndedReply> {
+/** Called once per engine actually tried (never for its scripted fallback),
+ *  with the raw prompt; returns the prompt that really goes to that engine —
+ *  the caller redacts and books a cloud engine's send here. */
+export type OpenEndedPrepare = (engine: SurfaceEngine, prompt: string) => string;
+
+async function streamOrFallback(engine: SurfaceEngine, prompt: string, onText?: (full: string) => void, prepare?: OpenEndedPrepare): Promise<OpenEndedReply> {
+  const p = prepare ? prepare(engine, prompt) : prompt;
   try {
-    const reply = await engine.stream(prompt, (full) => onText?.(full));
+    const reply = await engine.stream(p, (full) => onText?.(full));
     return { engineId: engine.id, reply, sim: engine.sim };
   } catch (e) {
-    if (engine.fallback) return streamOrFallback(engine.fallback, prompt, onText);
+    // The prepared (SIM) reply is not a second send: no prepare, no booking.
+    if (engine.fallback) return streamOrFallback(engine.fallback, p, onText);
     throw e;
   }
 }
 
 /** Nano first (and its own SIM fallback, if any); only on a real failure does
  *  this reach for a fresh Gemini engine. */
-export async function openEndedAsk(text: string, nano: SurfaceEngine, gemini: SurfaceEngine, onText?: (full: string) => void): Promise<OpenEndedReply> {
+export async function openEndedAsk(text: string, nano: SurfaceEngine, gemini: SurfaceEngine, onText?: (full: string) => void, prepare?: OpenEndedPrepare): Promise<OpenEndedReply> {
   const prompt = buildOpenEndedPrompt(text);
   try {
-    return await streamOrFallback(nano, prompt, onText);
+    return await streamOrFallback(nano, prompt, onText, prepare);
   } catch {
-    return await streamOrFallback(gemini, prompt, onText);
+    return await streamOrFallback(gemini, prompt, onText, prepare);
   }
 }

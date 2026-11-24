@@ -42,6 +42,9 @@ export interface TeachPanelOptions {
    *  ("Custom gesture <name> triggered -> <action>"). */
   onTriggered(gesture: CustomGesture): void;
   say(s: string): void;
+  /** A model (not the rules) turned her words into the action: the caller
+   *  books what that call sent (Gemini's bytes in the ledger). */
+  onModelSent?(engine: 'nano' | 'gemini', prompt: string): void;
   /** Open the taught-gesture Proposal in the shared full-screen review
    *  (Approve/Reject/Ask for something else) instead of this panel's own
    *  card, so there is one decision surface for every AI proposal. When
@@ -194,6 +197,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
       panel.querySelector('[data-act=close]')!.addEventListener('click', close);
       return;
     }
+    if (parsed.engine !== 'rules' && parsed.prompt) opts.onModelSent?.(parsed.engine, parsed.prompt);
     const conflict = builtinConflict(frames, result.kind);
     const conflictLine = conflict
       ? `<p class="mc-teach-conflict">This looks like the built-in “${esc(conflict.label)}” (${esc(conflict.does)}). Saving will use yours instead when it matches confidently.</p>`

@@ -18,6 +18,8 @@ export interface ParsedGestureAction {
   /** Human-readable summary for the Proposal card / gestures list / history. */
   summary: string;
   engine: ParseEngine;
+  /** The prompt a model engine was sent (absent for rules) — for the ledger. */
+  prompt?: string;
 }
 
 function summarizeCanvasCmd(cmd: CanvasCommand): string {
@@ -80,10 +82,11 @@ export async function resolveGestureAction(
   ];
   for (const [engine, ask] of candidates) {
     if (!ask) continue;
+    const prompt = rewritePrompt(text);
     try {
-      const reply = (await ask(rewritePrompt(text))).trim();
+      const reply = (await ask(prompt)).trim();
       const summary = parseActionText(reply, devices);
-      if (summary) return { text: reply, summary, engine };
+      if (summary) return { text: reply, summary, engine, prompt };
     } catch {
       // try the next engine
     }

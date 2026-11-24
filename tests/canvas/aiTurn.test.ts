@@ -174,10 +174,16 @@ describe('runSurfaceTurn SIM fallback', () => {
       stream: async () => { throw new Error('timed out'); },
       fallback: scriptedEngine('gemini', PLAN, { delayMs: 0 }),
     };
-    const plan = await runSurfaceTurn(req, boom, { onSent: (s) => lines.push(s.routeLine) });
+    let sends = 0;
+    const plan = await runSurfaceTurn(req, boom, {
+      onSent: (s) => { sends++; lines.push(s.routeLine); },
+      onFallback: (s) => lines.push(s.routeLine),
+    });
     expect(plan?.tiles).toHaveLength(2);
     expect(lines.at(-1)).toMatch(/^SIM · /);
     expect(lines.at(-1)).toMatch(/didn’t answer|prepared draft/i);
+    // The real send is booked once; the scripted draft is not a second send.
+    expect(sends).toBe(1);
   });
 });
 

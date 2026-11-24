@@ -96,6 +96,8 @@ export interface ReviewFacts {
   sentWhat?: string | null;
   /** Bytes the ledger recorded for this turn; undefined = not measured. */
   bytes?: number;
+  /** A scripted (SIM) turn: what a real run would have sent (nothing left). */
+  simBytes?: number;
   /** No AI call made this change (no ledger token): say so, claim no bytes. */
   noAiCall?: boolean;
 }
@@ -109,12 +111,17 @@ export interface ReviewTurn { engine: string; sent: string | null; routeLine: st
  *  never whichever turn happened to run last. No token = no AI call. */
 export function createReviewReceipts() {
   const bytes = new WeakMap<ReviewTurn, number>();
+  const simBytes = new WeakMap<ReviewTurn, number>();
   return {
-    /** Add one ledger line's bytes to this turn (a fallback retry sums). */
-    record(turn: ReviewTurn, n: number): void { bytes.set(turn, (bytes.get(turn) ?? 0) + n); },
+    /** Add one ledger line's real bytes (and SIM would-send bytes) to this turn. */
+    record(turn: ReviewTurn, n: number, sim = 0): void {
+      bytes.set(turn, (bytes.get(turn) ?? 0) + n);
+      if (sim > 0) simBytes.set(turn, (simBytes.get(turn) ?? 0) + sim);
+    },
     facts(turn: ReviewTurn | null, o: { youAsked?: string; sim?: boolean } = {}): ReviewFacts {
       if (!turn) return { engine: 'rules', engineLabel: 'On this device', sim: !!o.sim, youAsked: o.youAsked, noAiCall: true };
-      return { engine: turn.engine, sim: turn.sim, youAsked: o.youAsked, why: turn.routeLine, sentWhat: turn.sent, bytes: bytes.get(turn) };
+      const sim = simBytes.get(turn);
+      return { engine: turn.engine, sim: turn.sim, youAsked: o.youAsked, why: turn.routeLine, sentWhat: turn.sent, bytes: bytes.get(turn), ...(sim ? { simBytes: sim } : {}) };
     },
   };
 }
@@ -173,6 +180,12 @@ export function honestyLines(facts: ReviewFacts): { why: string | null; left: st
   if (/^nothing (left|sent)\b/i.test(reason)) reason = '';
   if (!reason) reason = DEFAULT_WHY[engine] ?? '';
   const why = reason ? `Why ${engineName(engine)}: ${reason}` : null;
+  // SIM: nothing left; say what a real run would send, never as real bytes.
+  if (facts.simBytes && facts.simBytes > 0 && !facts.bytes) {
+    const leftWhat = `SIM · nothing left this device; a real run would send ${(facts.sentWhat || 'your request').replace(/\.\s*$/, '')}`;
+    const leftBytes = ` · would send ${formatReviewBytes(facts.simBytes)}`;
+    return { why, left: leftWhat + leftBytes, leftWhat, leftBytes };
+  }
   const nothing = facts.bytes === 0 || (!facts.sentWhat && facts.bytes == null);
   if (nothing) return { why, left: 'Nothing left this device.', leftWhat: 'Nothing left this device.', leftBytes: '' };
   const leftWhat = `What left this device: ${(facts.sentWhat || 'your request').replace(/\.\s*$/, '')}`;

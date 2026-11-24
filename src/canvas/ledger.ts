@@ -4,8 +4,12 @@
 
 export interface LedgerEntry {
   engine: string;
+  /** Bytes that really left this device (0 for a SIM turn). */
   bytes: number;
   at: number;
+  /** A scripted (SIM) turn: nothing left, `simBytes` is what a real run would send. */
+  sim?: boolean;
+  simBytes?: number;
 }
 
 export interface LedgerRecordInput {
@@ -14,6 +18,8 @@ export interface LedgerRecordInput {
   /** Non-text bytes that left with this turn (e.g. a photo crop's decoded size). */
   extraBytes?: number;
   at?: number;
+  /** Scripted (SIM) turn: books 0 real bytes and remembers what it would send. */
+  sim?: boolean;
 }
 
 export interface LedgerTotals {
@@ -26,6 +32,8 @@ export interface LedgerTotals {
   /** Non-AI calls that also left this device (Spotify), counted separately. */
   spotifyBytes: number;
   spotifyCount: number;
+  /** AI turns that ran scripted (SIM): what a real run would have sent. Never real bytes. */
+  simBytes: number;
 }
 
 export const isAiEngine = (engine: string): boolean => engine.toLowerCase() !== 'spotify';
@@ -70,6 +78,19 @@ export function formatLedgerLine(opts: { bytes: number; engine?: string }): stri
   return `${bytes} B sent to ${engineName}`;
 }
 
+/** "412 B" / "1.2 KB" / "1.0 MB". */
+export function formatBytesShort(bytes: number): string {
+  const b = Math.max(0, bytes);
+  if (b >= 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  if (b >= 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${b} B`;
+}
+
+/** What a scripted (SIM) turn would have sent — never shown as real bytes. */
+export function formatSimBytes(simBytes: number): string {
+  return `SIM · would send ${formatBytesShort(simBytes)}`;
+}
+
 export function createCanvasLedger(): CanvasLedger {
   const entriesList: LedgerEntry[] = [];
 
@@ -77,14 +98,12 @@ export function createCanvasLedger(): CanvasLedger {
     record(input: LedgerRecordInput): LedgerEntry {
       const isNano = input.engine.toLowerCase() === 'nano';
       const extra = Number.isFinite(input.extraBytes) ? Math.max(0, Math.round(input.extraBytes!)) : 0;
-      const bytes = isNano ? 0 : utf8ByteLength(input.sentText ?? '') + extra;
+      const would = isNano ? 0 : utf8ByteLength(input.sentText ?? '') + extra;
       const at = input.at ?? (typeof Date !== 'undefined' ? Date.now() : 0);
 
-      const entry: LedgerEntry = {
-        engine: input.engine,
-        bytes,
-        at,
-      };
+      const entry: LedgerEntry = input.sim
+        ? { engine: input.engine, bytes: 0, at, sim: true, simBytes: would }
+        : { engine: input.engine, bytes: would, at };
       entriesList.push(entry);
       return entry;
     },
@@ -95,11 +114,12 @@ export function createCanvasLedger(): CanvasLedger {
       let aiCount = 0;
       let spotifyBytes = 0;
       let spotifyCount = 0;
+      let simBytes = 0;
       const byEngine: Record<string, number> = {};
 
       for (const e of entriesList) {
         totalBytes += e.bytes;
-        if (isAiEngine(e.engine)) { aiBytes += e.bytes; aiCount += 1; } else { spotifyBytes += e.bytes; spotifyCount += 1; }
+        if (isAiEngine(e.engine)) { aiBytes += e.bytes; aiCount += 1; simBytes += e.simBytes ?? 0; } else { spotifyBytes += e.bytes; spotifyCount += 1; }
         byEngine[e.engine] = (byEngine[e.engine] ?? 0) + e.bytes;
       }
 
@@ -111,6 +131,7 @@ export function createCanvasLedger(): CanvasLedger {
         aiCount,
         spotifyBytes,
         spotifyCount,
+        simBytes,
       };
     },
 
@@ -130,7 +151,9 @@ export function createCanvasLedger(): CanvasLedger {
         }
       }
 
-      return formatLedgerLine({ bytes: totalBytes, engine: lastExternalEngine });
+      const line = formatLedgerLine({ bytes: totalBytes, engine: lastExternalEngine });
+      const sim = this.totals().simBytes;
+      return sim > 0 ? `${line} · ${formatSimBytes(sim)}` : line;
     },
 
     formatSpotifyLine(): string {

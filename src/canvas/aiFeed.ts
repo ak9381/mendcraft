@@ -22,12 +22,16 @@ export interface FeedDeviceTag { device?: FeedDevice; deviceLabel?: string }
 
 /** Snapshot `lines` entries are `verb\ttext`; snapshot `lane` entries are
  *  `handoff\tNano → Gemini: reason` or `redact\ttext`. */
-export type AiFeedMsg = { v: 1; sid: string; t: number } & (
+/** `sim` (optional, absent on older senders): the canvas runs scripted (?sim=1)
+ *  — the monitor shows a persistent SIM banner instead of "Live".
+ *  `simTotal` on bytes/snapshot: what scripted (SIM) turns WOULD have sent;
+ *  never counted as real bytes. */
+export type AiFeedMsg = { v: 1; sid: string; t: number; sim?: boolean } & (
   | ({ kind: 'log'; engine: FeedEngine; verb: string; text: string } & FeedDeviceTag)
   | ({ kind: 'state'; engine: FeedEngine; state: EngineState; line?: string } & FeedDeviceTag)
   | ({ kind: 'handoff'; from: FeedEngine; to: FeedEngine; text: string } & FeedDeviceTag)
-  | ({ kind: 'bytes'; total: number } & FeedDeviceTag)
-  | { kind: 'snapshot'; engines: Record<EngineId, { state: EngineState; line?: string; lines: string[] }>; total: number; lane?: string[] }
+  | ({ kind: 'bytes'; total: number; simTotal?: number } & FeedDeviceTag)
+  | { kind: 'snapshot'; engines: Record<EngineId, { state: EngineState; line?: string; lines: string[] }>; total: number; simTotal?: number; lane?: string[] }
   | { kind: 'hello' }
 );
 
@@ -37,7 +41,7 @@ export interface FeedChannel {
 }
 
 export interface AiFeed {
-  publish(m: DistributiveOmit<AiFeedMsg, 'v' | 'sid' | 't'>): void;
+  publish(m: DistributiveOmit<AiFeedMsg, 'v' | 'sid' | 't' | 'sim'>): void;
   onHello(f: () => void): void;
 }
 
@@ -58,6 +62,8 @@ export function isAiFeedMsg(d: unknown): d is AiFeedMsg {
   const tagOk = (m.device === undefined || m.device === 'laptop' || m.device === 'iphone' || m.device === 'android')
     && (m.deviceLabel === undefined || typeof m.deviceLabel === 'string');
   if (!tagOk) return false;
+  if (m.sim !== undefined && typeof m.sim !== 'boolean') return false;
+  if (m.simTotal !== undefined && !(typeof m.simTotal === 'number' && Number.isFinite(m.simTotal))) return false;
   switch (m.kind) {
     case 'log': return eng(m.engine) && typeof m.verb === 'string' && typeof m.text === 'string';
     case 'state': return eng(m.engine) && typeof m.state === 'string';
@@ -86,11 +92,11 @@ function newSid(): string {
  *  messages would be untagged, so a monitor on the same machine (a narrow
  *  browser window acting as a phone) would take it for the laptop. Phone
  *  activity reaches the monitor only via the relay → laptop republish, tagged. */
-export function createCanvasAiFeed(phoneShell: boolean, opts: { channel?: FeedChannel | null } = {}): AiFeed {
+export function createCanvasAiFeed(phoneShell: boolean, opts: { channel?: FeedChannel | null; sim?: boolean } = {}): AiFeed {
   return createAiFeed(phoneShell ? { channel: null } : opts);
 }
 
-export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFeed {
+export function createAiFeed(opts: { channel?: FeedChannel | null; sim?: boolean } = {}): AiFeed {
   const channel = opts.channel === undefined ? defaultChannel() : opts.channel;
   const sid = newSid();
   const engines: Record<EngineId, { state: EngineState; line?: string; lines: string[] }> = {
@@ -98,11 +104,12 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
     gemini: { state: 'idle', lines: [] },
   };
   let total = 0;
+  let simTotal = 0;
   const lane: string[] = [];
   const helloListeners: Array<() => void> = [];
 
-  const send = (m: DistributiveOmit<AiFeedMsg, 'v' | 'sid' | 't'>) => {
-    try { channel?.postMessage({ v: 1, sid, t: Date.now(), ...m }); } catch { /* the feed is best-effort */ }
+  const send = (m: DistributiveOmit<AiFeedMsg, 'v' | 'sid' | 't' | 'sim'>) => {
+    try { channel?.postMessage({ v: 1, sid, t: Date.now(), ...(opts.sim ? { sim: true } : {}), ...m }); } catch { /* the feed is best-effort */ }
   };
   const pushLane = (s: string) => {
     lane.push(s);
@@ -113,7 +120,7 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
     const d = e.data as { kind?: unknown; v?: unknown } | null;
     if (!d || typeof d !== 'object' || d.v !== 1 || d.kind !== 'hello') return;
     const copy = JSON.parse(JSON.stringify(engines)) as typeof engines;
-    send({ kind: 'snapshot', engines: copy, total, lane: [...lane] });
+    send({ kind: 'snapshot', engines: copy, total, ...(simTotal > 0 ? { simTotal } : {}), lane: [...lane] });
     helloListeners.forEach((f) => f());
   });
 
@@ -134,6 +141,7 @@ export function createAiFeed(opts: { channel?: FeedChannel | null } = {}): AiFee
         if (m.line !== undefined) engines[m.engine].line = m.line;
       } else if (m.kind === 'bytes') {
         total = m.total;
+        simTotal = m.simTotal ?? simTotal;
       } else if (m.kind === 'handoff') {
         pushLane(`handoff\t${handoffLabel(m.from, m.to, m.text)}`);
       }
