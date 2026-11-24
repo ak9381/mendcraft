@@ -64,5 +64,7 @@ function escapeHtml(s: string): string {
   ));
 }
 
-/** The AI activity drawer stays visible for the whole session. */
-export const AI_PANEL_ALWAYS_OPEN = true;
+/** The AI activity drawer is not pinned open: it opens while a model works or
+ *  a review waits, and folds away ~3 s after the turn ends. The engine bar
+ *  keeps both engines visible in the meantime. */
+export const AI_PANEL_ALWAYS_OPEN = false;

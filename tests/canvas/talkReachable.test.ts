@@ -112,28 +112,52 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
 });
 
 describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
-  it('the cluster is a vertically-centred inset column with 140×60px equal-width targets', () => {
+  it('the cluster is a vertically-centred inset column with 120×52px equal-width targets, 24px apart', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
     expect(rule).toContain('right: max(180px, 13vw)');
     expect(rule).toContain('flex-direction: column');
-    expect(rule).toContain('gap: 48px');
+    expect(rule).toContain('gap: 24px');
     expect(rule).toContain('align-items: stretch');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 60px');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 140px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 120px');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
-  it('the facing banner is a large readable top-left pill and does not cover the cluster', () => {
-    const banner = ruleFor(canvasCss, '.mc-facing-banner');
-    expect(banner).toContain('left: 50%');
-    expect(banner).toContain('transform: translateX(-50%)');
-    expect(banner).toContain('pointer-events: none');
-    expect(banner).toMatch(/max-width:\s*min\(340px/);
-    expect(banner).toContain('font-size: 16px');
+  it('the facing pill is a small bottom-right chip above the face preview, clear of the AI panel and cluster', () => {
+    const base = ruleFor(canvasCss, '.mc-facing-banner');
+    expect(base).toContain('pointer-events: none');
+    // The later .mc-canvas override moves it to the bottom-right corner.
+    const chip = canvasCss.match(/\.mc-canvas \.mc-facing-banner \{[^}]*\}/)?.[0] ?? '';
+    expect(chip).toContain('top: auto');
+    expect(chip).toMatch(/right:\s*16px/);
+    expect(chip).toMatch(/bottom:\s*calc\(16px/);
+    expect(chip).toMatch(/max-width:\s*200px/);
+    expect(canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0]).toMatch(/right:\s*16px/);
     expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');
+  });
+});
+
+describe('engine bar sits bottom-centre with the phones strip directly above it', () => {
+  it('is a fixed bottom-centre bar, hidden in the phone shell and behind the hand keyboard', () => {
+    const bar = ruleFor(canvasCss, '.mc-engine-bar');
+    expect(bar).toContain('position: fixed');
+    expect(bar).toContain('left: 50%');
+    expect(bar).toContain('bottom: 16px');
+    expect(canvasCss).toMatch(/\.mc-phone-simple \.mc-engine-bar/);
+    expect(canvasCss).toMatch(/body:has\(\.mc-keyboard\.mc-hand-kb:not\(\[hidden\]\)\) \.mc-engine-bar/);
+  });
+
+  it('replaces the swarm pill and lifts the phones strip above the bar', () => {
+    expect(canvasCss).toMatch(/\.mc-canvas:has\(\.mc-engine-bar\) \.mc-swarm-pill \{ display: none/);
+    expect(canvasCss).toMatch(/\.mc-canvas:has\(\.mc-engine-bar\) \.mc-arrange \{ bottom: 92px/);
+  });
+
+  it('Nano and Gemini dots use different colours', () => {
+    expect(canvasCss).toMatch(/\.mc-engine-card\[data-engine="gemini"\] \{ --eng: var\(--accent-2\)/);
+    expect(canvasCss).toMatch(/\.mc-engine-card \{\s*--eng: var\(--accent\)/);
   });
 });
 

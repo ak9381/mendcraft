@@ -45,6 +45,7 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
   chip.setAttribute('aria-expanded', 'false');
   chip.setAttribute('aria-controls', 'mc-tool-palette');
   chip.textContent = 'Tools';
+  chip.setAttribute('data-i18n', 'tools');
   root.append(chip);
 
   let phone = false;

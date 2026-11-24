@@ -241,7 +241,7 @@ try {
         // settle(), so it's still up and overlapping the board right after
         // Undo — wait for it (collectControls filters .mc-edit-move handles
         // underneath it) before the edit-mode walk starts.
-        await page.waitForFunction(() => document.querySelector('.mc-ai')?.hidden === true, { timeout: 3000 }).catch(() => {});
+        await page.waitForFunction(() => document.querySelector('.mc-ai')?.hidden === true, { timeout: 4500 }).catch(() => {});
       }
     }
 

@@ -7,6 +7,7 @@
 import { nothingRaw, type Person } from '../privacy/directory';
 import { esc } from '../core/esc';
 import { formatLedgerLine } from './ledger';
+import type { EngineBar, EngineState } from './engineBar';
 
 export type ModelEngine = 'nano' | 'gemini';
 
@@ -197,7 +198,19 @@ export interface ModelPanelsUi {
   setFooterBytes(bytes: number): void;
 }
 
-function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document): EnginePanelUi {
+/** The slice of the engine bar the terminals mirror their state into. */
+export type EngineBarSink = Pick<EngineBar, 'set' | 'handoff' | 'setCloudBytes' | 'clearQueued'>;
+
+function verbState(verb: LogVerb): EngineState | null {
+  // A trailing note/handoff line must not flip a finished card back to Working.
+  if (verb === 'note' || verb === 'handoff') return null;
+  if (verb === 'fail') return 'failed';
+  if (verb === 'done' || verb === 'replied') return 'done';
+  if (verb === 'queued') return 'queued';
+  return 'working';
+}
+
+function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document, bar?: EngineBarSink): EnginePanelUi {
   const panel = container.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
   const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
   const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
@@ -219,6 +232,8 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
       api.setWorking(!DONE_VERBS.has(verb));
       if (verb === 'fail') panel.classList.add('is-failing');
       else if (DONE_VERBS.has(verb)) panel.classList.remove('is-failing');
+      const st = verbState(verb);
+      if (st) bar?.set(engine, st, detail);
     },
     fail(detail) { api.log('fail', detail); },
     setWorking(working) {
@@ -235,19 +250,19 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document)
         queuedBadge.hidden = n <= 0;
         if (n > 0) queuedBadge.textContent = msg;
       }
-      if (count === null || count <= 0) return;
+      if (count === null || count <= 0) { bar?.clearQueued(engine); return; }
       api.log('queued', msg);
     },
   };
   return api;
 }
 
-export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document): ModelPanelsUi {
+export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document, bar?: EngineBarSink): ModelPanelsUi {
   const panels = aiPanel.querySelector<HTMLElement>('.mc-terminals')!;
   const footer = aiPanel.querySelector<HTMLElement>('.mc-ai-footer')!;
   const footerBytes = footer.querySelector<HTMLElement>('.mc-ai-footer-bytes')!;
-  const nano = enginePanel(aiPanel, 'nano', doc);
-  const gemini = enginePanel(aiPanel, 'gemini', doc);
+  const nano = enginePanel(aiPanel, 'nano', doc, bar);
+  const gemini = enginePanel(aiPanel, 'gemini', doc, bar);
   return {
     show() { panels.hidden = false; footer.hidden = false; },
     forEngine(engine) { return engine === 'nano' ? nano : gemini; },
@@ -255,7 +270,8 @@ export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document)
       const to = otherEngine(from);
       (from === 'nano' ? nano : gemini).log('handoff', `→ ${ENGINE_LABEL[to].toLowerCase()}: ${reason}`);
       (to === 'nano' ? nano : gemini).log('handoff', `← ${ENGINE_LABEL[from].toLowerCase()}: ${reason}`);
+      bar?.handoff(from, to);
     },
-    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); },
+    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); bar?.setCloudBytes(bytes); },
   };
 }

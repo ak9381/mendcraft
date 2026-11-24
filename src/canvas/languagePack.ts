@@ -13,7 +13,10 @@ export const LANG_STRING_KEYS = [
   'keep', 'drop',
   'go', 'hands', 'simulateOffline', 'offlineOn',
 ] as const;
-export type LangStringKey = (typeof LANG_STRING_KEYS)[number];
+/** Strings a pack MAY translate. A live Gemini pack that omits them still
+ *  validates (the English label stays); the scripted Kannada pack has them. */
+export const LANG_OPTIONAL_KEYS = ['tools', 'approve', 'reject', 'askElse'] as const;
+export type LangStringKey = (typeof LANG_STRING_KEYS)[number] | (typeof LANG_OPTIONAL_KEYS)[number];
 
 /** Intents a translated phrase may route to (canvas + device commands). */
 export const INTENT_KEYS = [
@@ -30,7 +33,7 @@ export interface LanguagePack {
 
 export const MAX_STRING = 80;
 const KANNADA = /[ಀ-೿]/;
-const STRING_KEY_SET = new Set<string>(LANG_STRING_KEYS);
+const STRING_KEY_SET = new Set<string>([...LANG_STRING_KEYS, ...LANG_OPTIONAL_KEYS]);
 const INTENT_KEY_SET = new Set<string>(INTENT_KEYS);
 
 /** Polished English baseline. These are the data-i18n defaults; undo restores them. */
@@ -40,7 +43,8 @@ export const EN_PACK: LanguagePack = {
     showEverything: 'Show everything', newBoard: 'New board', save: 'Save', undo: 'Undo', ai: 'AI activity',
     sayPlaceholder: 'Say: new board · show everything · go to floor plan',
     emptyLead: 'What would you like to build on this board?', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
-    keep: 'PINCH  keep', drop: 'BRUSH  drop',
+    keep: 'Keep', drop: 'Drop',
+    tools: 'Tools', approve: 'Approve', reject: 'Reject', askElse: 'Ask for something else',
     go: 'Go', hands: 'Hands',
     simulateOffline: 'Simulate offline', offlineOn: 'Offline (simulated)',
   },
@@ -62,6 +66,10 @@ export const SCRIPTED_KN_PACK: LanguagePack = {
     emptyFloorplan: 'ನೆಲ ನಕ್ಷೆ',
     keep: 'ಇಟ್ಟುಕೋ',
     drop: 'ಬೇಡ',
+    tools: 'ಉಪಕರಣಗಳು',
+    approve: 'ಒಪ್ಪಿಕೊಳ್ಳಿ',
+    reject: 'ತಿರಸ್ಕರಿಸಿ',
+    askElse: 'ಬೇರೆ ಏನಾದರೂ ಕೇಳಿ',
     go: 'ಹೋಗು',
     hands: 'ಕೈ ಸನ್ನೆ',
     simulateOffline: 'ಆಫ್‌ಲೈನ್ ಅನುಕರಿಸು',

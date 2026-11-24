@@ -150,7 +150,7 @@
    inside the visible board area and never fly under it (percentages inside
    .mc-swarm recompute against this narrower box), same shift the Tools chip
    and Talk fab already make for the same reason — see below. */
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
+.mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
 .mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: 16px; bottom: 16px;
   width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
@@ -578,7 +578,7 @@
   .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
   .mc-fab-mic .mc-fab-mic-label { display: none; }
   .mc-fab-mic.is-listening .mc-fab-mic-label { display: inline; }
-  .mc-canvas:has(.mc-ai:not([hidden])) .mc-fab-mic { right: 12px; }
+  .mc-canvas.is-ai-pinned .mc-fab-mic { right: 12px; }
   .mc-menu-open .mc-fab-mic { display: none; }
 }
 
@@ -853,8 +853,8 @@
 
 /* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
    Vertically centred, inset ~13vw (min 180px) from the right edge so a hand
-   cursor does not have to graze the screen edge. Equal-width 140×60px targets,
-   48px gaps. Shifts left of the AI drawer when that is open. */
+   cursor does not have to graze the screen edge. Equal-width 120×52px targets,
+   24px gaps (smaller, calmer; still comfortably dwell-reachable). Shifts left of the AI drawer when that is open. */
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
@@ -865,24 +865,24 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 48px;
+  gap: 24px;
   pointer-events: none;
   width: max-content;
-  min-width: 140px;
+  min-width: 120px;
   max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster {
+.mc-canvas.is-ai-pinned .mc-hand-cluster {
   right: max(max(180px, 13vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 160px)));
 }
 /* Old per-chip `right` offsets are more specific when the AI panel is open
    and would shove relatively-positioned cluster children off the left edge. */
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-fab-mic,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-tools-chip,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-toggle,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-edit-reset,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-register-chip,
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster .mc-talk-control {
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-fab-mic,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-tools-chip,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-toggle,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-reset,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-register-chip,
+.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-talk-control {
   right: auto;
   top: auto;
   bottom: auto;
@@ -907,15 +907,15 @@
 .mc-hand-cluster .mc-edit-toggle,
 .mc-hand-cluster .mc-register-chip,
 .mc-hand-cluster .mc-edit-reset {
-  min-height: 60px;
-  min-width: 140px;
+  min-height: 52px;
+  min-width: 120px;
   width: 100%;
   justify-content: center;
   box-sizing: border-box;
 }
 .mc-hand-cluster .mc-talk-control { align-items: stretch; width: 100%; }
-.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 140px; min-height: 60px; }
-.mc-hand-cluster .mc-edit-reset { min-height: 60px; min-width: 140px; }
+.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 120px; min-height: 52px; }
+.mc-hand-cluster .mc-edit-reset { min-height: 52px; min-width: 120px; }
 
 /* Dwell-click ring: fills around the arrow tip, then the click fires. */
 .mc-hand-dwell {
@@ -1147,6 +1147,7 @@
 .mc-phone-simple .mc-menu-btn,
 .mc-phone-simple .mc-tool-palette,
 .mc-phone-simple .mc-arrange,
+.mc-phone-simple .mc-engine-bar,
 .mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
 .mc-phone-simple .mc-viewport { inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
 .mc-phone-simple .mc-frame.dim { opacity: 1; }
@@ -1180,3 +1181,110 @@
 .mc-phone-simple.is-edit-locked .mc-viewport { cursor: default; }
 .mc-phone-simple.is-edit-locked .mc-frame-body { pointer-events: none; }
 .mc-phone-simple .is-phone-selected { outline: 3px solid var(--action); outline-offset: 3px; border-radius: 14px; }
+
+/* ---- Calmer screen: engine bar, overlay AI panel, corner face chip ------- */
+/* Both engines, always visible, bottom-centre. Nano is green (on this device),
+   Gemini is blue (cloud); the dot, ring and tint follow the engine, and the
+   state overrides (queued amber, failed red, unavailable grey) win over both. */
+.mc-engine-bar {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 48;
+  display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+  max-width: calc(100vw - 32px); padding: 8px 14px 8px 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 22px;
+  box-shadow: 0 10px 28px rgb(43 43 43 / 0.10), 0 1px 0 rgb(255 255 255 / 0.8) inset;
+  font-size: 14px; color: var(--text);
+}
+.mc-engine-card {
+  --eng: var(--accent);
+  flex: 1 1 224px; min-width: 0; width: 232px; min-height: 52px; box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  padding: 7px 14px 7px 12px; border-radius: 15px; text-align: left; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); font: inherit;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.mc-engine-card[data-engine="gemini"] { --eng: var(--accent-2); }
+.mc-engine-card:hover { border-color: var(--eng); }
+.mc-engine-card:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-engine-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mc-engine-name { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
+.mc-engine-where { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.mc-engine-where::before { content: "\00b7\00a0"; }
+.mc-engine-dot {
+  flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid var(--eng); background: transparent; opacity: 0.85;
+}
+.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12.5px; line-height: 1.25; }
+.mc-engine-state { flex: 0 0 auto; font-weight: 650; color: var(--text-dim); }
+.mc-engine-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.mc-engine-line:not([hidden])::before { content: "\00b7\00a0"; }
+.mc-engine-line[hidden] { display: none; }
+
+.mc-engine-card[data-state="working"] { border-color: var(--eng); background: color-mix(in srgb, var(--eng) 9%, var(--panel)); }
+.mc-engine-card[data-state="working"] .mc-engine-dot,
+.mc-engine-card[data-state="done"] .mc-engine-dot { background: var(--eng); opacity: 1; }
+.mc-engine-card[data-state="working"] .mc-engine-state,
+.mc-engine-card[data-state="done"] .mc-engine-state { color: var(--eng); }
+.mc-engine-card[data-state="working"] .mc-engine-line { color: var(--text); }
+.mc-engine-card[data-state="queued"] .mc-engine-dot { background: var(--action); border-color: var(--action); opacity: 1; }
+.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action); }
+.mc-engine-card[data-state="failed"] { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.mc-engine-card[data-state="failed"] .mc-engine-dot { background: var(--danger); border-color: var(--danger); opacity: 1; }
+.mc-engine-card[data-state="failed"] .mc-engine-state { color: var(--danger); }
+.mc-engine-card[data-state="failed"] .mc-engine-line { color: var(--text); }
+.mc-engine-card[data-state="unavailable"] { opacity: 0.7; }
+.mc-engine-card[data-state="unavailable"] .mc-engine-dot { border-style: dashed; border-color: var(--text-dim); opacity: 1; }
+.mc-engine-card[data-state="working"] .mc-engine-dot { animation: mc-engine-pulse 1.5s ease-out infinite; }
+@keyframes mc-engine-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--eng) 55%, transparent); }
+  80%, 100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--eng) 0%, transparent); }
+}
+
+/* Handoff: the arrow between the cards wakes up for 1.2 s and points the way. */
+.mc-engine-link { flex: 0 0 auto; display: flex; align-items: center; width: 40px; color: var(--border); }
+.mc-engine-link-line { flex: 1 1 auto; height: 2px; border-radius: 2px; background: currentColor; background-size: 220% 100%; }
+.mc-engine-link-head { font-size: 10px; line-height: 1; margin-left: -3px; }
+.mc-engine-bar[data-handoff$="-nano"] .mc-engine-link { transform: scaleX(-1); }
+.mc-engine-bar.is-handoff .mc-engine-link { color: var(--accent-2); }
+.mc-engine-bar[data-handoff="gemini-nano"].is-handoff .mc-engine-link { color: var(--accent); }
+.mc-engine-bar.is-handoff .mc-engine-link-line {
+  background-image: linear-gradient(90deg, currentColor 0%, currentColor 40%, color-mix(in srgb, currentColor 25%, transparent) 60%, currentColor 100%);
+  animation: mc-engine-flow 1.2s linear 1;
+}
+.mc-engine-bar.is-handoff .mc-engine-link-head { animation: mc-engine-pop 1.2s ease-out 1; }
+@keyframes mc-engine-flow { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes mc-engine-pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.7); } }
+
+.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
+.mc-engine-agents[hidden] { display: none; }
+@media (max-width: 1100px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
+@media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
+@media (max-width: 600px) { .mc-engine-bar { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .mc-engine-card, .mc-engine-card[data-state="working"] .mc-engine-dot,
+  .mc-engine-bar.is-handoff .mc-engine-link-line, .mc-engine-bar.is-handoff .mc-engine-link-head { animation: none; transition: none; }
+}
+/* The bar replaces the swarm pill on desktop; the phones strip sits directly
+   above it; the hand keyboard owns the bottom edge while it is open. */
+.mc-canvas:has(.mc-engine-bar) .mc-swarm-pill { display: none; }
+.mc-canvas:has(.mc-engine-bar) .mc-arrange { bottom: 92px; }
+body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-engine-bar,
+body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-arrange { display: none; }
+/* The AI panel overlays the boards while a model works. Keep its foot above
+   the engine bar and the corner face chip. */
+@media (min-width: 601px) {
+  .mc-canvas:has(.mc-engine-bar) .mc-ai { bottom: 148px; }
+}
+
+/* Face preview + "Facing" pill: a small chip in the bottom-right corner. */
+.mc-canvas .mc-face-preview {
+  top: auto; left: auto; transform: none;
+  right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  width: 104px; height: 78px; border-radius: 10px; opacity: 0.9; z-index: 70;
+}
+.mc-canvas .mc-facing-banner {
+  top: auto; left: auto; transform: none;
+  right: 16px; bottom: calc(16px + 78px + 8px + env(safe-area-inset-bottom, 0px));
+  max-width: 200px; padding: 5px 6px 5px 12px; gap: 4px; font-size: 13px; z-index: 71;
+}
+.mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
