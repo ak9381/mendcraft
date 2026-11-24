@@ -1,6 +1,5 @@
 // Zoom HUD: bottom-left −  [pct]  +  Fit. Pure view; the app supplies the actions.
 import './zoomHud.css';
-export { isTypingTarget } from './canvasNav';
 
 export interface ZoomHudApi { zoomIn(): void; zoomOut(): void; reset(): void; fit(): void }
 export interface ZoomHud { setZoom(z: number): void; el: HTMLElement }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isTypingTarget, mountZoomHud } from '../../src/canvas/zoomHud';
+import { mountZoomHud } from '../../src/canvas/zoomHud';
+import { isTypingTarget } from '../../src/canvas/canvasNav';
 
 // Tiny fake DOM (the suite runs in node, no jsdom).
 class El {

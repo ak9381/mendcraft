@@ -18,7 +18,10 @@ export type WheelIntent = { kind: 'zoom'; factor: number } | { kind: 'pan'; dx: 
 
 export function wheelIntent(e: { deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; deltaMode: number }): WheelIntent {
   const k = e.deltaMode === 1 ? 16 : 1;
-  if (e.ctrlKey || e.metaKey) return { kind: 'zoom', factor: Math.exp(-e.deltaY * k * 0.01) };
+  if (e.ctrlKey || e.metaKey) {
+    const dy = Math.min(30, Math.max(-30, e.deltaY * k));
+    return { kind: 'zoom', factor: Math.exp(-dy * 0.01) };
+  }
   let dx = e.deltaX * k, dy = e.deltaY * k;
   if (e.shiftKey && e.deltaX === 0) { dx = dy; dy = 0; }
   return { kind: 'pan', dx, dy };

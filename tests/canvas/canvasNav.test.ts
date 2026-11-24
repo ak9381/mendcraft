@@ -14,7 +14,8 @@ describe('stepZoom', () => {
 });
 describe('wheelIntent', () => {
   it('ctrl zooms', () => {
-    expect(wheelIntent({ ...base, deltaY: 100, ctrlKey: true })).toEqual({ kind: 'zoom', factor: Math.exp(-1) });
+    expect(wheelIntent({ ...base, deltaY: 20, ctrlKey: true })).toEqual({ kind: 'zoom', factor: Math.exp(-0.2) });
+    expect(wheelIntent({ ...base, deltaY: 100, ctrlKey: true })).toEqual({ kind: 'zoom', factor: Math.exp(-0.3) });
     expect(wheelIntent({ ...base, deltaY: 100, metaKey: true }).kind).toBe('zoom');
   });
   it('plain pans, shift swaps, lines scale', () => {

@@ -2245,7 +2245,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (mod && !e.altKey && (e.key === '-' || e.key === '_')) { e.preventDefault(); zoomStep(-1); return; }
       if (mod && !e.altKey && e.key === '0') { e.preventDefault(); zoomReset(); return; }
       if (!mod && !e.altKey && e.shiftKey && e.code === 'Digit1') { e.preventDefault(); void overview(); return; }
-      if (e.code === 'Space' && !mod && !e.altKey) {
+      if (e.code === 'Space' && !mod && !e.altKey && !onActivatable(e.target)) {
         // Held Space = pan mode. preventDefault so Space neither scrolls nor clicks a focused button on keyup.
         e.preventDefault();
         if (!spaceHeld) { spaceHeld = true; root.classList.add('mc-space-pan'); }
@@ -2255,8 +2255,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
   };
+  const onActivatable = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest?.('button, a, summary, [role=button]');
   const onWindowKeyup = (e: KeyboardEvent) => {
     if (e.code !== 'Space') return;
+    if (onActivatable(e.target)) return;
     if (spaceHeld) { spaceHeld = false; root.classList.remove('mc-space-pan'); e.preventDefault(); }
     else if (!isTypingTarget(e.target)) e.preventDefault();
   };
@@ -2313,6 +2315,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every zoom path drops focus first: a focused board is 1:1 only.
   const dropFocusForZoom = () => { if (focusId) { focusId = null; sync(); } };
   let zoomGoal: { z: number; at: number } | null = null;
+  let wheelPersistTimer = 0;
   function zoomTo(z: number): void {
     dropFocusForZoom();
     zoomGoal = { z, at: performance.now() };
@@ -2344,8 +2347,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (intent.kind === 'pan') {
       if (canScrollInside(target, intent.dx, intent.dy)) return;
       e.preventDefault();
+      cancelAnimationFrame(flight); zoomGoal = null;
       camera = panBy(camera, -intent.dx, -intent.dy);
-      applyCamera(); persist();
+      applyCamera();
+      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
       return;
     }
     e.preventDefault();
