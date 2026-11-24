@@ -82,7 +82,7 @@ export function recordedFist(ox = 0): Pt[] {
 describe('recorded 16:9 landmark poses (pinch / zoom / fist / point / palm)', () => {
   it('a reaching pinch classifies as pinch, never a fist', () => {
     const p = recordedPinch();
-    expect(pinchRatio(p)).toBeLessThan(0.24);
+    expect(pinchRatio(p)).toBeLessThan(0.20);
     expect(isFistPose(p)).toBe(false);
     expect(isClosingToFist(p)).toBe(false);
     expect(classifyGesture(p)).toBe('pinch');

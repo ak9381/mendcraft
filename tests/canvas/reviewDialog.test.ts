@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mountReviewDialog, reviewActionFor } from '../../src/canvas/reviewDialog';
+import { mountReviewDialog, reviewActionFor, reviewWindowStart, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
 
 describe('reviewActionFor', () => {
   it('approve maps to keep', () => { expect(reviewActionFor('approve')).toBe('keep'); });
@@ -117,16 +117,33 @@ describe('mountReviewDialog', () => {
     expect(wasDropped()).toBe(false);
   });
 
-  it('the ✕ lives outside the action row so it can never cover Approve/Reject/Ask-else [A5-005]', () => {
+  it('the ✕ lives in the header, not the action row, so it can never cover Approve/Reject/Ask-else [A5-005]', () => {
     const { root } = setup();
     mountReviewDialog(root, {}, fakeDoc as unknown as Document);
-    const dialogEl = (root as unknown as FakeEl).children.find((c) => c.className === 'mc-review-dialog')!;
-    // Direct child of the dialog (sibling of the body), not nested in the actions.
-    const closeBtn = dialogEl.children.find((c) => c.className.includes('mc-review-close'));
+    const closeBtn = (root as unknown as FakeEl).querySelector('.mc-review-close');
     expect(closeBtn).toBeTruthy();
     const actions = (root as unknown as FakeEl).querySelector('.mc-review-actions') as FakeEl | null;
     const inActions = actions?.querySelector('.mc-review-close') ?? null;
     expect(inActions).toBeNull();
+    const head = (root as unknown as FakeEl).querySelector('.mc-review-head') as FakeEl | null;
+    expect(head?.querySelector('.mc-review-close')).toBe(closeBtn);
+  });
+
+  it('is a compact window with a fist/mouse drag handle', () => {
+    const { root } = setup();
+    mountReviewDialog(root, {}, fakeDoc as unknown as Document);
+    const dialogEl = (root as unknown as FakeEl).children.find((c) => c.className === 'mc-review-dialog')!;
+    expect(REVIEW_WINDOW_WIDTH).toBe(360);
+    const drag = (root as unknown as FakeEl).querySelector('.mc-review-drag') as FakeEl;
+    expect(drag).toBeTruthy();
+    // data-mc-drag-handle is set so fist-grab shares the mouse drag path.
+    expect(dialogEl).toBeTruthy();
+  });
+
+  it('starts top-right inside the 24px safe zone and clear of the AI drawer', () => {
+    const pos = reviewWindowStart({ width: 1960, height: 993 }, { barH: 80, aiW: 320, aiRight: 16 });
+    expect(pos.top).toBe(104);
+    expect(pos.right).toBe(24 + 320 + 16);
   });
 
   it('close() is a no-op when not open', () => {

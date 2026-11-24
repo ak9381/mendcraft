@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { distToRect, DRAG_HANDLE, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH } from '../../src/canvas/handPointer';
+import { distToRect, DRAG_HANDLE, mapToScreen, nextPinch, pickNearest, pinchRatio, sliderValueAt, REACH, SCREEN_MARGIN_PX } from '../../src/canvas/handPointer';
 import { micFabState, mountMicFab, MIC_LISTENING_LABEL } from '../../src/canvas/micFab';
 
 const hand = (gap: number) => {
@@ -10,19 +10,20 @@ const hand = (gap: number) => {
 };
 
 describe('hand pointer maths', () => {
-  it('maps the mirrored reach box to the full screen', () => {
+  it('maps the mirrored central 80% reach box to the screen, then clamps to the margin', () => {
+    const m = SCREEN_MARGIN_PX;
     const a = mapToScreen({ x: 1 - REACH.x0, y: REACH.y0 }, 1000, 800);
-    expect(a.x).toBeCloseTo(0); expect(a.y).toBeCloseTo(0);
+    expect(a.x).toBeCloseTo(m); expect(a.y).toBeCloseTo(m);
     const b = mapToScreen({ x: 1 - REACH.x1, y: REACH.y1 }, 1000, 800);
-    expect(b.x).toBeCloseTo(1000); expect(b.y).toBeCloseTo(800);
-    expect(mapToScreen({ x: 0.5, y: 0.47 }, 1000, 800).x).toBeCloseTo(500);
-    expect(mapToScreen({ x: -1, y: 5 }, 1000, 800)).toEqual({ x: 1000, y: 800 });
+    expect(b.x).toBeCloseTo(1000 - m); expect(b.y).toBeCloseTo(800 - m);
+    expect(mapToScreen({ x: 0.5, y: 0.5 }, 1000, 800).x).toBeCloseTo(500);
+    expect(mapToScreen({ x: -1, y: 5 }, 1000, 800)).toEqual({ x: 1000 - m, y: 800 - m });
   });
   it('detects pinch with hysteresis, scale-invariant', () => {
     expect(pinchRatio(hand(0.03))).toBeCloseTo(0.1);
-    expect(nextPinch(false, pinchRatio(hand(0.05)))).toBe(true);   // 0.167 < 0.24
+    expect(nextPinch(false, pinchRatio(hand(0.05)))).toBe(true);   // 0.167 < 0.20
     expect(nextPinch(false, pinchRatio(hand(0.084)))).toBe(false); // 0.28, between on/off
-    expect(nextPinch(true, pinchRatio(hand(0.084)))).toBe(true);   // held until > 0.33
+    expect(nextPinch(true, pinchRatio(hand(0.084)))).toBe(true);   // held until > 0.30
     expect(nextPinch(true, pinchRatio(hand(0.12)))).toBe(false);   // 0.40, off
   });
   it('picks the control under the point, else the nearest within the snap radius', () => {

@@ -8,9 +8,23 @@ export function cameraPointFromSelfie<T extends { x: number; y: number }>(p: T):
   return { ...p, x: 1 - p.x };
 }
 
-/** Invert the selfie-mirror applied by createHandsProcessor, per hand. */
+/** MediaPipe "Left"/"Right" stamped on a landmark array (non-enumerable is not required). */
+export function handLabelOf(h: unknown): 'Left' | 'Right' | undefined {
+  const l = (h as { label?: string } | null | undefined)?.label;
+  return l === 'Left' || l === 'Right' ? l : undefined;
+}
+
+export function stampHandLabel<T>(points: T[], label?: string | null): T[] {
+  if (label === 'Left' || label === 'Right') {
+    (points as T[] & { label?: string }).label = label;
+  }
+  return points;
+}
+
+/** Invert the selfie-mirror applied by createHandsProcessor, per hand.
+ *  Copies any MediaPipe handedness label so the pointer can stay left/right aware. */
 export function cameraHandsFromSelfie<T extends { x: number; y: number }>(
   hands: readonly (readonly T[])[],
 ): T[][] {
-  return hands.map((h) => h.map((p) => cameraPointFromSelfie(p)));
+  return hands.map((h) => stampHandLabel(h.map((p) => cameraPointFromSelfie(p)), handLabelOf(h)));
 }

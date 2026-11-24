@@ -10,12 +10,12 @@ import { THUMB_TIP, INDEX_TIP, WRIST, PINCH_LIVE, type Pt } from './handLogic';
 export type { Pt } from './handLogic';
 
 /** Static single-hand poses the classifier can emit. */
-export type StaticGesture = 'pinch' | 'fist' | 'open-palm' | 'point' | 'thumbs-up' | 'none';
+export type StaticGesture = 'pinch' | 'fist' | 'open-palm' | 'point' | 'thumbs-up' | 'scroll' | 'none';
 /** Every recognisable gesture, including temporal / two-hand ones. */
 export type Gesture = StaticGesture | 'double-pinch' | 'two-hand-zoom';
 
 export const ALL_GESTURES: Gesture[] = [
-  'pinch', 'double-pinch', 'fist', 'open-palm', 'point', 'thumbs-up', 'two-hand-zoom', 'none',
+  'pinch', 'double-pinch', 'fist', 'open-palm', 'point', 'thumbs-up', 'scroll', 'two-hand-zoom', 'none',
 ];
 
 export const GESTURE_LABELS: Record<Gesture, string> = {
@@ -25,6 +25,7 @@ export const GESTURE_LABELS: Record<Gesture, string> = {
   'open-palm': 'Open palm',
   point: 'Point',
   'thumbs-up': 'Thumbs up',
+  scroll: 'Scroll (two-finger)',
   'two-hand-zoom': 'Two-hand zoom',
   none: 'None',
 };
@@ -40,7 +41,7 @@ const PINKY = [17, 18, 20] as const;
  *  DEFAULT_PINCH_ON (handLogic.ts) and HAND_FEEL.pinchOn (handFeel.ts) so a
  *  "pinch" means the same thing to the pointer, the keep gesture and the
  *  overlay — a consistency test guards it. */
-export const PINCH_CLASSIFY = 0.24;
+export const PINCH_CLASSIFY = 0.20;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -193,11 +194,202 @@ export function fingerStates(p: Pt[]): FingerStates {
   };
 }
 
+/** MediaPipe handedness ("Left" / "Right") as seen in the incoming frame. */
+export type Handedness = 'Left' | 'Right';
+
+export function parseHandedness(label?: string | null): Handedness | null {
+  return label === 'Left' || label === 'Right' ? label : null;
+}
+
+/** Index and middle tip→palm / hand size must reach this to count as extended. */
+export const SCROLL_FINGER_REACH = 0.70;
+/** Ring and pinky tip→palm / hand size stay under this to count as curled. */
+export const SCROLL_CURL_MAX = 0.95;
+/** Index–middle tip separation / hand size — two distinct fingers, not a point. */
+export const SCROLL_INDEX_MIDDLE_SEP = 0.14;
+/** Thumb tip must sit this close (min of index MCP, middle MCP, palm) / hand size. */
+export const SCROLL_THUMB_TUCK_MAX = 0.55;
+
+/** Closest thumb-tip approach to the palm / index MCP / middle MCP, in hand sizes. */
+export function thumbTuckRatio(p: Pt[]): number {
+  if (!p || p.length < 21) return Infinity;
+  const hs = handSize(p);
+  const tip = p[THUMB_TIP];
+  return Math.min(
+    dist(tip, p[INDEX[0]]) / hs,
+    dist(tip, p[MIDDLE[0]]) / hs,
+    dist(tip, palmCenter(p)) / hs,
+  );
+}
+
+/**
+ * Thumb is tucked against the palm, on the index side (true for both hands).
+ * `handedness` is accepted so left/right callers can share one path; the
+ * anatomical index-vs-pinky test does not depend on a signed x-axis, so it
+ * stays correct after the selfie mirror and for a missing label.
+ */
+export function isThumbTucked(p: Pt[], _handedness?: string | null): boolean {
+  if (!p || p.length < 21) return false;
+  const tuck = thumbTuckRatio(p);
+  if (tuck > SCROLL_THUMB_TUCK_MAX) return false;
+  // Anatomical handedness: a tucked thumb lives nearer the index MCP than
+  // the pinky MCP on both Left and Right hands.
+  const hs = handSize(p);
+  if (dist(p[THUMB_TIP], p[INDEX[0]]) > dist(p[THUMB_TIP], p[PINKY[0]]) + 0.08 * hs) return false;
+  return true;
+}
+
+/**
+ * Two-finger SCROLL: index + middle extended, ring + pinky curled, thumb
+ * tucked. Middle must actually be out and the tips clearly separated so this
+ * never reads as a point (index only) or a pinch (thumb meets index).
+ */
+export function isTwoFingerScrollPose(p: Pt[], handedness?: string | null): boolean {
+  if (!p || p.length < 21) return false;
+  if (isFistPose(p)) return false;
+  const s = fingerStates(p);
+  if (!s.index || !s.middle) return false;
+  if (s.ring || s.pinky) return false;
+  const indexReach = tipPalmRatio(p, 8);
+  const middleReach = tipPalmRatio(p, 12);
+  const ringReach = tipPalmRatio(p, 16);
+  const pinkyReach = tipPalmRatio(p, 20);
+  if (indexReach < SCROLL_FINGER_REACH || middleReach < SCROLL_FINGER_REACH) return false;
+  if (ringReach >= SCROLL_CURL_MAX || pinkyReach >= SCROLL_CURL_MAX) return false;
+  // Middle almost as extended as the index — a pointing hand with a loose
+  // middle finger stays a point.
+  if (middleReach < indexReach - 0.25) return false;
+  const hs = handSize(p);
+  if (dist(p[INDEX_TIP], p[12]) / hs < SCROLL_INDEX_MIDDLE_SEP) return false;
+  if (!isThumbTucked(p, handedness)) return false;
+  // A live pinch (thumb already on the index tip) is a click, not a scroll.
+  if (pinchRatio(p) < (PINCH_LIVE.on ?? PINCH_CLASSIFY)) return false;
+  return true;
+}
+
+/**
+ * Mirror x about the palm centre so a Left hand can be scored with the same
+ * signed thumb/curl tests as a Right hand. Distances are unchanged.
+ */
+export function handednessCanonical(p: Pt[], handedness?: string | null): Pt[] {
+  if (!p || p.length < 21) return p;
+  if (parseHandedness(handedness) !== 'Left') return p;
+  const c = palmCenter(p);
+  return p.map((q) => ({ ...q, x: 2 * c.x - q.x, y: q.y }));
+}
+
+/** Signed thumb position along pinky-MCP → index-MCP, in hand sizes, after
+ *  canonicalizing a Left hand. Positive = thumb/index side of the palm. */
+export function thumbPalmSide(p: Pt[], handedness?: string | null): number {
+  if (!p || p.length < 21) return 0;
+  const q = handednessCanonical(p, handedness);
+  const hs = handSize(q);
+  const pinky = q[PINKY[0]];
+  const index = q[INDEX[0]];
+  const thumb = q[THUMB_TIP];
+  const ax = index.x - pinky.x, ay = index.y - pinky.y;
+  const len = Math.hypot(ax, ay) || 1;
+  return ((thumb.x - pinky.x) * ax + (thumb.y - pinky.y) * ay) / len / hs;
+}
+
+/** True when the index has actually joined a fist — not a pointing finger
+ *  that only dipped toward the palm. Uses the handedness-canonical hand. */
+export function isIndexCurled(p: Pt[], handedness?: string | null): boolean {
+  if (!p || p.length < 21) return false;
+  const q = handednessCanonical(p, handedness);
+  const r = tipPalmRatio(q, 8);
+  if (fingerStates(q).index && r >= OPEN_PALM_REACH) return false;
+  const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+  return r <= FIST_TIP_RATIO && r <= others + 0.08;
+}
+
+/** Point ↔ fist must be held this long before the stable pose flips. */
+export const POINT_FIST_HOLD_MS = 120;
+
+export interface PointFistGate {
+  update(pose: StaticGesture, p: Pt[] | null | undefined, t: number, handedness?: string | null): StaticGesture;
+  reset(): void;
+}
+
+/**
+ * Sticky point/fist gate. A fist is accepted only when the index is actually
+ * curled, and point↔fist flips wait `holdMs`. A clearly reaching index
+ * leaves a fist immediately so a point can still pinch. When `p` is missing
+ * (trace replay with no landmarks), only the time debounce is applied.
+ */
+export function createPointFistGate(holdMs = POINT_FIST_HOLD_MS): PointFistGate {
+  let stable: StaticGesture | null = null;
+  let pending: 'point' | 'fist' | null = null;
+  let since = -1;
+
+  const relabel = (pose: StaticGesture, p: Pt[] | null | undefined, handedness?: string | null): StaticGesture => {
+    if (pose !== 'fist' || !p || p.length < 21) return pose;
+    if (isIndexCurled(p, handedness)) return 'fist';
+    const q = handednessCanonical(p, handedness);
+    const r = tipPalmRatio(q, 8);
+    const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+    if (fingerStates(q).index || r >= OPEN_PALM_REACH || r >= others + 0.18) return 'point';
+    return pose;
+  };
+
+  const clearlyPointing = (p: Pt[] | null | undefined, handedness?: string | null): boolean => {
+    if (!p || p.length < 21) return false;
+    const q = handednessCanonical(p, handedness);
+    const r = tipPalmRatio(q, 8);
+    const others = Math.max(tipPalmRatio(q, 12), tipPalmRatio(q, 16), tipPalmRatio(q, 20));
+    return (fingerStates(q).index || r >= OPEN_PALM_REACH) && r >= others + 0.18;
+  };
+
+  return {
+    update(pose, p, t, handedness) {
+      const next = relabel(pose, p, handedness);
+      if (next !== 'point' && next !== 'fist') {
+        stable = next;
+        pending = null;
+        since = -1;
+        return next;
+      }
+      if (stable !== 'point' && stable !== 'fist') {
+        stable = next;
+        pending = null;
+        since = -1;
+        return next;
+      }
+      if (next === stable) {
+        pending = null;
+        since = -1;
+        return stable;
+      }
+      // A clearly reaching index may leave a fist immediately (pinch from point).
+      if (stable === 'fist' && next === 'point' && clearlyPointing(p, handedness)) {
+        stable = 'point';
+        pending = null;
+        since = -1;
+        return 'point';
+      }
+      if (pending !== next) {
+        pending = next;
+        since = t;
+      }
+      if (since >= 0 && t - since >= holdMs) {
+        stable = next;
+        pending = null;
+        since = -1;
+        return stable;
+      }
+      return stable;
+    },
+    reset() { stable = null; pending = null; since = -1; },
+  };
+}
+
 /**
  * Classify a single hand's static pose from its 21 landmarks (any coordinate
  * convention — only relative distances matter). Pure and deterministic.
+ * `handedness` mirrors thumb/curl tests for a Left hand and is used for
+ * the two-finger scroll thumb-tuck test.
  */
-export function classifyGesture(p: Pt[]): StaticGesture {
+export function classifyGesture(p: Pt[], handedness?: string | null): StaticGesture {
   if (!p || p.length < 21) return 'none';
   const s = fingerStates(p);
   const fingers = Number(s.index) + Number(s.middle) + Number(s.ring) + Number(s.pinky);
@@ -210,7 +402,10 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   // than its PIP (so `allOpen` is true) and a low thumb–index ratio (so
   // pinch would win). Tips near the palm are the reliable signal.
   if (fistLike && s.thumb && p[THUMB_TIP].y < p[WRIST].y && thumbPalm >= THUMB_UP_RATIO) return 'thumbs-up';
-  if (fistLike) return 'fist';
+  // A fist needs the index actually curled. A pointing index (including a
+  // left-hand point with the thumb tucked on the index side of the palm)
+  // must not snap to fist; pinch can still fire from that point.
+  if (fistLike && isIndexCurled(p, handedness)) return 'fist';
   // Restore the 4fefac0 pinch rule (thumb–index gap + reaching index).
   // Do NOT require a large index-to-palm ratio — that stole real webcam
   // pinches (and therefore two-hand zoom) after 1f4f2ec. A tighter
@@ -223,7 +418,10 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   // reaches). Must beat the relaxed-palm test.
   if (fingers === 0 && s.thumb && p[THUMB_TIP].y < p[WRIST].y) return 'thumbs-up';
   if (fingers === 0) return 'fist';
-  // Relaxed open hand (3+ loosely extended fingers, thumb optional) scrolls.
+  // Two-finger scroll beats point (middle is also out) and open-palm.
+  if (isTwoFingerScrollPose(p, handedness)) return 'scroll';
+  // Relaxed open hand (3+ loosely extended fingers, thumb optional).
+  // Open palm no longer scrolls — that trigger moved to 'scroll'.
   if (isRelaxedOpenPalm(p) || isOpenPalmPose(p)) return 'open-palm';
   // Index clearly out, others not: a point. Real MediaPipe often still
   // reports curled fingers as PIP-extended, so don't require fingers === 1,

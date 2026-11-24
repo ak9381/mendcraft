@@ -1,0 +1,70 @@
+// Live activity feed in the AI panel: AI turns plus hand events (pinch
+// clicks, two-finger scrolls, fist grabs). Newest sits at the top; the list
+// is capped so a long session cannot grow without bound.
+
+export const ACTIVITY_LOG_CAP = 40;
+
+export type ActivityKind = 'pinch' | 'scroll' | 'grab' | 'ai';
+
+export interface ActivityEntry {
+  kind: ActivityKind;
+  text: string;
+  at: number;
+  target?: string | null;
+}
+
+export interface ActivityLog {
+  push(entry: Omit<ActivityEntry, 'at'> & { at?: number }): ActivityEntry;
+  list(): ActivityEntry[];
+  clear(): void;
+}
+
+const KIND_LABEL: Record<ActivityKind, string> = {
+  pinch: 'Pinch',
+  scroll: 'Scroll',
+  grab: 'Grab',
+  ai: 'AI',
+};
+
+export function formatActivityLine(entry: ActivityEntry): string {
+  if (entry.kind === 'pinch') {
+    return entry.target ? `Pinch click · ${entry.target}` : 'Pinch click';
+  }
+  if (entry.kind === 'scroll') return entry.text || 'Two-finger scroll';
+  if (entry.kind === 'grab') return entry.target ? `Grab · ${entry.target}` : (entry.text || 'Grab');
+  return entry.text || 'AI activity';
+}
+
+export function createActivityLog(list?: HTMLElement | null, cap = ACTIVITY_LOG_CAP): ActivityLog {
+  const entries: ActivityEntry[] = [];
+
+  function paint(): void {
+    if (!list) return;
+    list.innerHTML = entries.map((e) => {
+      const label = KIND_LABEL[e.kind];
+      const line = formatActivityLine(e);
+      return `<li data-kind="${e.kind}"><span class="mc-ai-live-kind">${escapeHtml(label)}</span> ${escapeHtml(line)}</li>`;
+    }).join('');
+  }
+
+  return {
+    push(entry) {
+      const next: ActivityEntry = { ...entry, at: entry.at ?? Date.now() };
+      entries.unshift(next);
+      if (entries.length > cap) entries.length = cap;
+      paint();
+      return next;
+    },
+    list: () => entries.slice(),
+    clear() { entries.length = 0; paint(); },
+  };
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'
+  ));
+}
+
+/** The AI activity drawer stays visible for the whole session. */
+export const AI_PANEL_ALWAYS_OPEN = true;

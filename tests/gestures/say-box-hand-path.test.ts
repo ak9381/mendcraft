@@ -86,7 +86,7 @@ describe('C026 pinch-release on the say input focuses it, same generic path as a
     feed(500, 400, false, 5);
     feed(160, 50, false, 15); // dwell on the say box
     expect(hp.target).toBe(input);
-    feed(160, 50, true, 3); // deliberate pinch
+    feed(160, 50, true, 4); // deliberate pinch (~80 ms hold)
     feed(160, 50, false, 3); // release
     expect(input.focus).toHaveBeenCalledTimes(1);
     // …and announces a HAND focus so the canvas docks the on-screen keyboard.

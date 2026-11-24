@@ -133,38 +133,48 @@ describe('C202/C203/C204/C205 hand-profile knobs: pinch thresholds, target size,
   });
 });
 
-describe('C207 a very slow, deliberate pinch still engages (no upper time bound)', () => {
-  it('engageFrames consecutive sub-threshold frames engage even spread 10s apart', () => {
+describe('C207 a slow, deliberate pinch still engages once it has been held ~80 ms', () => {
+  it('3 closed frames spread 40 ms apart (80 ms hold) engage; a 10s gap restarts the hold', () => {
     const m = createPinchMachine();
-    expect(m.update(0.03, 0).pinched).toBe(false); // 1st closed frame, one-frame debounce
-    const r = m.update(0.03, 10_000); // 2nd consecutive closed frame, 10s later
+    expect(m.update(0.03, 0).pinched).toBe(false);
+    expect(m.update(0.03, 40).pinched).toBe(false);
+    const r = m.update(0.03, 80);
     expect(r.pinched).toBe(true);
     expect(r.justDown).toBe(true);
+
+    const gapped = createPinchMachine();
+    gapped.update(0.03, 0);
+    gapped.update(0.03, 10_000); // gap > engageMs — hold restarts
+    expect(gapped.update(0.03, 10_040).pinched).toBe(false);
+    expect(gapped.update(0.03, 10_080).pinched).toBe(true);
   });
 });
 
-describe('C209 a fast flick with only 1 qualifying frame never engages — 2 is the real floor, not a time window', () => {
-  it('1 sub-threshold frame does not engage; a 2nd (even just as fast) does', () => {
+describe('C209 a fast flick never engages — 3 frames and ~80 ms is the floor', () => {
+  it('1 or 2 quick closed frames do not engage; 3 frames over 80 ms do', () => {
     const m = createPinchMachine();
     const r1 = m.update(0.03, 0);
-    expect(r1.pinched).toBe(false); // only 1 frame so far
+    expect(r1.pinched).toBe(false);
     m.update(0.8, 5); // opens again — the "flick" ends short
     expect(m.update(0.8, 9).pinched).toBe(false);
 
     const fast = createPinchMachine();
     fast.update(0.03, 100);
-    const r2 = fast.update(0.03, 103); // 2 frames inside 3ms — engages
-    expect(r2.pinched).toBe(true);
+    expect(fast.update(0.03, 103).pinched).toBe(false); // 3 ms hold, 2 frames
+    expect(fast.update(0.03, 140).pinched).toBe(false); // 40 ms, 3 frames, under 80 ms
+    expect(fast.update(0.03, 180).pinched).toBe(true);
   });
 });
 
 describe('C210 the refractory window is shared across targets, not per-target', () => {
   it('releasing a pinch on one target blocks a genuine new pinch on a different target for refractoryMs', () => {
     const m = createPinchMachine(); // one machine == one hand's pinch channel, target-agnostic
-    m.update(0.1, 0); m.update(0.1, 1); m.update(0.1, 2); // engage ("click" target A)
-    m.update(0.6, 3); m.update(0.6, 4); // release (HAND_FEEL.releaseFrames)
-    expect(m.update(0.1, 3 + HAND_FEEL.refractoryMs - 50).pinched).toBe(false); // too soon — meant for target B, but refused
-    expect(m.update(0.1, 3 + HAND_FEEL.refractoryMs - 49).pinched).toBe(false);
+    m.update(0.1, 0); m.update(0.1, 40); m.update(0.1, 80); // engage ("click" target A)
+    m.update(0.6, 100); m.update(0.6, 133); // release (HAND_FEEL.releaseFrames)
+    const tooSoon = 133 + HAND_FEEL.refractoryMs - 90;
+    expect(m.update(0.1, tooSoon).pinched).toBe(false);
+    expect(m.update(0.1, tooSoon + 40).pinched).toBe(false);
+    expect(m.update(0.1, tooSoon + 80).pinched).toBe(false); // still 10 ms inside refractory
   });
 });
 

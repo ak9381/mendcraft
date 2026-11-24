@@ -225,7 +225,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(500, 400, false, 5); // enter mid-screen
     feed(160, 50, false, 15); // move to the control and dwell (top edge: reachable)
     expect(hp.target).toBe(btn);
-    feed(160, 50, true, 3); // deliberate pinch: 3 debounced frames
+    feed(160, 50, true, 4); // deliberate pinch: 3 frames + ~80 ms hold
     feed(160, 50, false, 3); // release → click
     expect(btn.click).toHaveBeenCalledTimes(1);
     feed(160, 50, false, 10); // keep hovering: nothing more
@@ -247,7 +247,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(hp.target).toBe(btn);
     // The hand lurches while closing (typical pinch motion): the frames during
     // the pinch sit far away from the button…
-    feed(420, 260, true, 3);
+    feed(420, 260, true, 4);
     feed(420, 260, false, 3); // release far away too
     // …but the click lands where the hand was BEFORE the pinch began.
     expect(btn.click).toHaveBeenCalledTimes(1);
@@ -304,7 +304,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(160, 50, false, 15);
     const cursor = cursorElOf(doc);
     expect(cursor.classList.contains('is-pinched')).toBe(false);
-    feed(160, 50, true, 3); // debounced into the pinch
+    feed(160, 50, true, 4); // debounced into the pinch (~80 ms)
     expect(cursor.classList.contains('is-pinched')).toBe(true);
     feed(160, 50, false, 3); // release → click
     expect(cursor.classList.contains('is-pinched')).toBe(false);
@@ -710,6 +710,48 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
     const hits = tr.dump().filter((f) => f.clickTarget);
     expect(hits).toHaveLength(1);
+    tr.clear();
+  });
+
+  it('at the camera edge, pose stays frozen, the cursor holds, and a pinch does not click until after the cooldown', () => {
+    const tr = getGestureTrace();
+    tr.enable();
+    tr.clear();
+    feed(160, 50, false, 10);
+    expect(tr.dump().at(-1)?.classification).toBe('point');
+    const cursor = cursorElOf(doc);
+    const held = cursorPos(cursor);
+
+    // Same tip, but a landmark clips the camera frame and the fingers curl
+    // into a fist — must not become a fist or fire a click.
+    for (let i = 0; i < 8; i++) {
+      t += 33;
+      const h = synthFist(160, 50);
+      h[16] = { x: 0.01, y: 0.5 };
+      hp.update([h], t);
+    }
+    const mid = tr.dump().slice(-8);
+    expect(mid.every((f) => f.classification === 'point')).toBe(true);
+    const atEdge = cursorPos(cursor);
+    expect(Math.abs(atEdge.x - held.x)).toBeLessThan(6);
+    expect(Math.abs(atEdge.y - held.y)).toBeLessThan(6);
+
+    // Immediate pinch at the edge, then release: no click.
+    for (let i = 0; i < 6; i++) {
+      t += 33;
+      const h = synthHand(160, 50, true);
+      h[16] = { x: 0.01, y: 0.5 };
+      hp.update([h], t);
+    }
+    feed(160, 50, false, 3);
+    expect(btn.click).not.toHaveBeenCalled();
+
+    // After leaving the edge and waiting out the 300 ms cooldown, a pinch still clicks.
+    t += 400;
+    feed(160, 50, false, 8);
+    feed(160, 50, true, 6);
+    feed(160, 50, false, 3);
+    expect(btn.click).toHaveBeenCalledTimes(1);
     tr.clear();
   });
 });

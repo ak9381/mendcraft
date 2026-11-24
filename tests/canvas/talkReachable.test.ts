@@ -79,7 +79,7 @@ describe('the full-screen review dialog never traps clicks on the Tools bar', ()
   });
 
   it('the review dialog reserves the bar\'s own height instead of running content under it', () => {
-    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('padding-top: var(--mc-bar-h');
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('top: calc(var(--mc-bar-h');
   });
 });
 
@@ -112,17 +112,17 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
 });
 
 describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
-  it('the cluster is a vertically-centred right-edge column with 48px+ equal-width targets', () => {
+  it('the cluster is a vertically-centred inset column with 140×60px equal-width targets', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
-    expect(rule).toContain('right: 16px');
+    expect(rule).toContain('right: max(180px, 13vw)');
     expect(rule).toContain('flex-direction: column');
-    expect(rule).toContain('gap: 12px');
+    expect(rule).toContain('gap: 48px');
     expect(rule).toContain('align-items: stretch');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 52px');
-    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 48px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-height: 60px');
+    expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('min-width: 140px');
     expect(ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic')).toContain('width: 100%');
   });
 
@@ -148,12 +148,11 @@ describe('hand skeleton paints above the tools bar', () => {
   });
 });
 
-describe('on a phone, the review reserves the bottom Tools bar so Approve stays visible', () => {
-  it('the 600px review rule adds padding-bottom: var(--mc-bar-h)', () => {
-    // The phone media block re-declares .mc-review-dialog; ruleFor joins every
-    // rule that mentions the class, so the phone padding-bottom is in the blob.
+describe('on a phone, the floating review stays clear of the bottom Tools bar', () => {
+  it('the 600px review rule caps height above the thumb bar', () => {
     const all = ruleFor(canvasCss, '.mc-review-dialog');
-    expect(all).toContain('padding-bottom: var(--mc-bar-h');
+    expect(all).toContain('max-height: calc(100dvh - var(--mc-bar-h');
+    expect(all).toContain('width: min(360px');
   });
 });
 
@@ -224,5 +223,16 @@ describe('empty board offers a Talk button on the frame', () => {
     const talk = ruleFor(canvasCss, '.mc-empty-talk');
     expect(talk).toContain('min-height: 56px');
     expect(talk).toContain('min-width: 180px');
+  });
+});
+
+describe('review Approve/Reject sit high enough to reach, off the edges', () => {
+  it('keeps Approve/Reject 140×60 and 48px apart inside the floating window', () => {
+    const actions = ruleFor(canvasCss, '.mc-review-actions');
+    expect(ruleFor(canvasCss, '.mc-review-dialog')).toContain('width: min(360px');
+    expect(actions).toContain('gap: 48px');
+    const approve = ruleFor(canvasCss, '.mc-review-approve');
+    expect(approve).toContain('min-height: 60px');
+    expect(approve).toContain('min-width: 140px');
   });
 });

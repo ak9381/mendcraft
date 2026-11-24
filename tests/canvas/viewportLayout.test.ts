@@ -19,7 +19,7 @@ describe('viewport fit (CSS contract — live bbox check runs in Chrome via mac-
   it('the mid-screen cluster is a vertically centred right-edge column that shifts left of the drawer', () => {
     expect(css).toMatch(/\.mc-hand-cluster \{[^}]*top:\s*50%/s);
     expect(css).toMatch(/translateY\(-50%\)/);
-    expect(css).toMatch(/\.mc-canvas:has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*right:\s*min\(/s);
+    expect(css).toMatch(/\.mc-canvas:has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*right:\s*max\(/s);
   });
 
   it('does not shove cluster children with leftover AI-open right offsets', () => {

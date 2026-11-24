@@ -147,8 +147,12 @@ export function createCanvasHandsAdapter(
     if (ev) fire(ev, now);
   }
 
-  function extractPoints(h: { points?: readonly Pt[] } | readonly Pt[]): readonly Pt[] {
-    if ('points' in h && Array.isArray(h.points)) return h.points;
+  function extractPoints(h: { points?: readonly Pt[]; label?: string } | readonly Pt[]): readonly Pt[] {
+    if ('points' in h && Array.isArray(h.points)) {
+      const pts = h.points.slice() as Pt[] & { label?: string };
+      if (h.label === 'Left' || h.label === 'Right') pts.label = h.label;
+      return pts;
+    }
     return h as readonly Pt[];
   }
 
@@ -173,7 +177,7 @@ export function createCanvasHandsAdapter(
     let anyThumb = false;
     for (const h of rawHands) {
       if (!h || h.length < 21) continue;
-      const gesture = classifyGesture(h as Pt[]);
+      const gesture = classifyGesture(h as Pt[], (h as Pt[] & { label?: string }).label);
       if (gesture === 'pinch') {
         anyPinch = true;
       } else if (gesture === 'point') {
@@ -311,7 +315,11 @@ export async function mountCanvasHands(
         facing?.set(op ? op.facing : null);
         opts.onPresence?.(presenceFrame);
         adapter.update({
-          hands: presenceFrame.hands.map((h) => h.points),
+          hands: presenceFrame.hands.map((h) => {
+            const pts = h.points.slice();
+            if (h.label === 'Left' || h.label === 'Right') (pts as typeof pts & { label?: string }).label = h.label;
+            return pts;
+          }),
           now: typeof performance !== 'undefined' ? performance.now() : Date.now(),
         });
       },

@@ -9,7 +9,7 @@
 // Static poses must be HELD (default 400 ms) so tremor and passing shapes don't
 // fire them. Clock is injected through each frame's `now`.
 
-import { classifyGesture, fingerStates, handSize, pinchRatio, PINCH_CLASSIFY, type Pt } from './gestures';
+import { classifyGesture, fingerStates, handSize, isTwoFingerScrollPose, pinchRatio, PINCH_CLASSIFY, type Pt } from './gestures';
 import { INDEX_TIP, THUMB_TIP, WRIST } from './handLogic';
 
 export type Pose = ReturnType<typeof classifyGesture> | 'v-sign' | 'three-fingers';
@@ -20,7 +20,11 @@ export function classifyPose(p: readonly Pt[]): Pose {
   const s = fingerStates(p as Pt[]);
   // Named digit poses beat a relaxed open-palm (3 loosely extended fingers
   // would otherwise swallow "three fingers" and a V as scroll/cancel).
-  if (s.index && s.middle && !s.ring && !s.pinky && pinchRatio(p as Pt[]) >= PINCH_CLASSIFY) return 'v-sign';
+  // Thumb tucked + two fingers is SCROLL, not the V-sign undo hold.
+  if (s.index && s.middle && !s.ring && !s.pinky && pinchRatio(p as Pt[]) >= PINCH_CLASSIFY) {
+    if (isTwoFingerScrollPose(p as Pt[])) return classifyGesture(p as Pt[]);
+    return 'v-sign';
+  }
   if (s.index && s.middle && s.ring && !s.pinky) return 'three-fingers';
   return classifyGesture(p as Pt[]);
 }

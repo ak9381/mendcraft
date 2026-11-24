@@ -4,7 +4,7 @@
 // A real MediaPipe pinch on Akash's Chrome (ed616aa, 240 frames) never went
 // below 0.18 (p1=0.18, p5=0.20, p50=0.50, max=1.26). The earlier 0.045/0.07
 // band was the right formula but the wrong scale for a live hand, so pinch
-// could not fire. Defaults sit just above that measured close (0.24 / 0.33).
+// could not fire. Defaults sit on that measured close (0.20 / 0.30).
 // A rolling per-hand min/open baseline then refines:
 //   enter = min + 0.35 * (open - min), clamped.
 

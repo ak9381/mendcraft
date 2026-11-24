@@ -1,6 +1,6 @@
 // B-012: a tremor tap on the old editor's palette. The hand pointer judges a tap
 // per frame (TAP_MOVE_LIMIT) and debounces the pinch with hysteresis
-// (on 0.24 / off 0.33), so a shaky hand that pinches once on a button still
+// (on 0.20 / off 0.30), so a shaky hand that pinches once on a button still
 // gives exactly one pinch-tap, and a pinch whose ratio flickers inside the
 // hysteresis band doesn't double-press.
 import { describe, expect, it } from 'vitest';
@@ -28,8 +28,8 @@ const OPEN = 0.25; const SHUT = 0.0;
 
 describe('B-012 tremor tap on the palette', () => {
   it('fixture: open is above the release threshold, shut is a pinch', () => {
-    expect(pinchRatio(hand(OPEN))).toBeGreaterThan(0.33);
-    expect(pinchRatio(hand(SHUT))).toBeLessThan(0.24);
+    expect(pinchRatio(hand(OPEN))).toBeGreaterThan(0.30);
+    expect(pinchRatio(hand(SHUT))).toBeLessThan(0.20);
   });
   it('a shaky hand (±1% of the frame per axis, every frame) still taps exactly once', () => {
     const amp = 0.02; // peak-to-peak 2% ≈ 29px on a 1440px screen
@@ -46,7 +46,7 @@ describe('B-012 tremor tap on the palette', () => {
   });
   it('a pinch whose ratio flickers inside the hysteresis band presses once', () => {
     const seq: Pt[][] = [hand(OPEN), hand(OPEN), hand(SHUT)];
-    // flicker the gap so the ratio stays between on (0.24) and off (0.33)
+    // flicker the gap so the ratio stays between on (0.20) and off (0.30)
     let mid = 0.0; while (pinchRatio(hand(mid)) < 0.28) mid += 0.0005;
     for (let i = 0; i < 8; i++) seq.push(hand(i % 2 ? mid : SHUT));
     seq.push(hand(OPEN), hand(OPEN));

@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyGesture,
+  createPointFistGate,
   fingerStates,
   isFistPose,
   isClosingToFist,
+  isIndexCurled,
   isOpenPalmPose,
+  isTwoFingerScrollPose,
   pinchRatio,
+  POINT_FIST_HOLD_MS,
+  thumbPalmSide,
   twoHandSpan,
   createGestureRecognizer,
   type Pt,
@@ -78,8 +83,8 @@ describe('classifyGesture', () => {
     expect(classifyGesture(makeHand({ index: true, thumb: 'pinch' }))).toBe('pinch');
   });
 
-  it('none: two fingers up, not a known pose', () => {
-    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'curled' }))).toBe('none');
+  it('scroll: index + middle extended, ring + pinky curled, thumb tucked', () => {
+    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'curled' }))).toBe('scroll');
   });
 
   it('none: too few landmarks', () => {
@@ -241,5 +246,102 @@ describe('live-style poses (moderate MediaPipe reaches)', () => {
 
   it('treats a relaxed hand with loosely extended fingers as an open palm', () => {
     expect(classifyGesture(handAt({ index: 0.90, middle: 0.85, ring: 0.80, pinky: 0.62, thumb: 0.50 }))).toBe('open-palm');
+  });
+});
+
+describe('two-finger scroll pose', () => {
+  const scroll = () => makeHand({ index: true, middle: true, thumb: 'curled' });
+  const flip = (p: Pt[]): Pt[] => p.map((q) => ({ x: 1 - q.x, y: q.y }));
+
+  it('classifies as scroll for a right hand and a mirrored left hand', () => {
+    expect(classifyGesture(scroll(), 'Right')).toBe('scroll');
+    expect(classifyGesture(flip(scroll()), 'Left')).toBe('scroll');
+    expect(isTwoFingerScrollPose(scroll(), 'Right')).toBe(true);
+    expect(isTwoFingerScrollPose(flip(scroll()), 'Left')).toBe(true);
+  });
+
+  it('never classifies as point or pinch', () => {
+    expect(classifyGesture(scroll())).not.toBe('point');
+    expect(classifyGesture(scroll())).not.toBe('pinch');
+    // Point (index only) and pinch stay themselves.
+    expect(classifyGesture(makeHand({ index: true, thumb: 'curled' }))).toBe('point');
+    expect(classifyGesture(makeHand({ index: true, thumb: 'pinch' }))).toBe('pinch');
+  });
+
+  it('does not fire when the thumb is out (that is a V, not a scroll)', () => {
+    expect(classifyGesture(makeHand({ index: true, middle: true, thumb: 'up' }))).not.toBe('scroll');
+    expect(isTwoFingerScrollPose(makeHand({ index: true, middle: true, thumb: 'up' }))).toBe(false);
+  });
+
+  it('does not fire for an open palm (ring + pinky also out)', () => {
+    const palm = makeHand({ index: true, middle: true, ring: true, pinky: true, thumb: 'up' });
+    expect(classifyGesture(palm)).toBe('open-palm');
+    expect(isTwoFingerScrollPose(palm)).toBe(false);
+  });
+});
+
+describe('handedness-mirrored point and fist', () => {
+  const flip = (p: Pt[]): Pt[] => p.map((q) => ({ x: 1 - q.x, y: q.y }));
+  const cases: Array<{ name: string; spec: HandSpec; pose: string }> = [
+    { name: 'point', spec: { index: true, thumb: 'curled' }, pose: 'point' },
+    { name: 'fist', spec: { thumb: 'curled' }, pose: 'fist' },
+    { name: 'pinch', spec: { index: true, thumb: 'pinch' }, pose: 'pinch' },
+    { name: 'open-palm', spec: { index: true, middle: true, ring: true, pinky: true, thumb: 'up' }, pose: 'open-palm' },
+    { name: 'thumbs-up', spec: { thumb: 'up' }, pose: 'thumbs-up' },
+  ];
+
+  it('classifies a mirrored Left hand the same as the Right original', () => {
+    for (const c of cases) {
+      const right = makeHand(c.spec);
+      const left = flip(right);
+      expect(classifyGesture(right, 'Right'), c.name + ' right').toBe(c.pose);
+      expect(classifyGesture(left, 'Left'), c.name + ' left').toBe(c.pose);
+    }
+  });
+
+  it('a tucked-thumb point is not a fist on either hand', () => {
+    const right = makeHand({ index: true, thumb: 'curled' });
+    const left = flip(right);
+    expect(classifyGesture(right, 'Right')).toBe('point');
+    expect(classifyGesture(left, 'Left')).toBe('point');
+    expect(isIndexCurled(right, 'Right')).toBe(false);
+    expect(isIndexCurled(left, 'Left')).toBe(false);
+    expect(thumbPalmSide(right, 'Right')).toBeGreaterThan(0);
+    expect(thumbPalmSide(left, 'Left')).toBeGreaterThan(0);
+  });
+});
+
+describe('point / fist hysteresis', () => {
+  it('holds 120 ms before entering a fist, and only if the index is curled', () => {
+    expect(POINT_FIST_HOLD_MS).toBe(120);
+    const gate = createPointFistGate();
+    const point = makeHand({ index: true, thumb: 'curled' });
+    const fist = makeHand({ thumb: 'curled' });
+    expect(gate.update('point', point, 0)).toBe('point');
+    // A "fist" label on a still-pointing hand is rejected (index not curled).
+    expect(gate.update('fist', point, 40)).toBe('point');
+    expect(gate.update('fist', fist, 80)).toBe('point'); // curl starts the timer
+    expect(gate.update('fist', fist, 80 + 100)).toBe('point'); // 100 ms, still short
+    expect(gate.update('fist', fist, 80 + 120)).toBe('fist');
+  });
+
+  it('a clearly reaching index leaves a fist immediately so pinch can fire from point', () => {
+    const gate = createPointFistGate();
+    const point = makeHand({ index: true, thumb: 'curled' });
+    const fist = makeHand({ thumb: 'curled' });
+    gate.update('fist', fist, 0);
+    gate.update('fist', fist, 120);
+    expect(gate.update('fist', fist, 200)).toBe('fist');
+    expect(gate.update('point', point, 220)).toBe('point');
+  });
+
+  it('the same 120 ms hold applies to a mirrored left hand', () => {
+    const flip = (p: Pt[]): Pt[] => p.map((q) => ({ x: 1 - q.x, y: q.y }));
+    const gate = createPointFistGate();
+    const point = flip(makeHand({ index: true, thumb: 'curled' }));
+    const fist = flip(makeHand({ thumb: 'curled' }));
+    expect(gate.update('point', point, 0, 'Left')).toBe('point');
+    expect(gate.update('fist', fist, 40, 'Left')).toBe('point');
+    expect(gate.update('fist', fist, 40 + 120, 'Left')).toBe('fist');
   });
 });
