@@ -47,7 +47,7 @@ Note anything off with its number.
 - [ ] P3 iPhone mic: a small request → the monitor's iPhone tab shows it "kept on device · 0 B".
 - [ ] P4 Nothing phone request → monitor's Android tab shows it crossing to Gemini with its bytes.
 - [ ] P5 Drag a laptop board to the iPhone's edge and hold → it appears on the iPhone only.
-- [ ] P6 Phone "Hands" pill → camera prompt → palm cursor + fist tap on the phone; touch still works; app in background turns the camera off.
+- [ ] P6 NOTHING PHONE ONLY (the iPhone is on the gimbal, no hand control there): "Hands" pill → camera prompt → palm cursor + fist tap; touch still works; app in background turns the camera off; a normal grip doesn't lock the hands.
 
 ## S. Spotify / WiZ (only if set up)
 - [ ] S1 "play <song>" → real title on the tile, sound on the Marshall.
