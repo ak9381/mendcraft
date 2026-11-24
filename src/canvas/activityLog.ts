@@ -4,7 +4,7 @@
 
 export const ACTIVITY_LOG_CAP = 40;
 
-export type ActivityKind = 'click' | 'grab' | 'ai';
+export type ActivityKind = 'click' | 'grab' | 'ai' | 'spotify';
 
 export interface ActivityEntry {
   kind: ActivityKind;
@@ -23,6 +23,7 @@ const KIND_LABEL: Record<ActivityKind, string> = {
   click: 'Click',
   grab: 'Grab',
   ai: 'AI',
+  spotify: 'Spotify',
 };
 
 export function formatActivityLine(entry: ActivityEntry): string {

@@ -51,7 +51,7 @@ import { initialDoc } from './firstOpen';
 import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
-import { createCanvasLedger } from './ledger';
+import { createCanvasLedger, ledgerPanelLines } from './ledger';
 import { mountCanvasHands, oneHandPinchPoint, shouldAutoStartHands, twoHandPinchPoints, type CanvasHandsHandle } from './canvasHands';
 import { createHandPan } from './handPan';
 import {
@@ -297,6 +297,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3>
         <p class="mc-ai-ledger-total"></p>
+        <p class="mc-ai-ledger-spotify" hidden></p>
         <p class="mc-ai-history-empty">Turns you keep will show up here.</p>
         <ol class="mc-ai-history" tabindex="-1"></ol>
       </div>
@@ -698,11 +699,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
   const spOpts = (): spotifyApi.SpotifyApiOptions => ({
     // Path + short query only (redacted in the api layer); never a token.
-    onCall: opts.onSpotifyCall ?? ((i) => {
+    onCall: (i) => {
       ledger.record({ engine: 'spotify', sentText: i.sent });
-      activityLog.push({ kind: 'ai', text: `Spotify · ${i.reason}` });
+      activityLog.push({ kind: 'spotify', text: i.reason });
       ledgerTotalRender();
-    }),
+      opts.onSpotifyCall?.(i);
+    },
   });
   let webPlayer: SdkPlayer | null = null;
   const defaultConnector = opts.sim ? lampConnector : createSpotifyAwareConnector({
@@ -1162,7 +1164,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const protect = protectTurn(utterance, s.prompt);
     ledger.record({ engine: s.engine, sentText: s.sent ? protect.promptText : '' });
     ledgerTotalRender();
-    panels.setFooterBytes(ledger.totals().totalBytes);
+    panels.setFooterBytes(ledger.totals().aiBytes);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -1182,7 +1184,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       redactedName: protect.used.length > 0,
     });
     swarm.start(plan, opts.sim ? 1 : Date.now());
-    swarm.reportBytes(ledger.totals().totalBytes);
+    swarm.reportBytes(ledger.totals().aiBytes);
     swarmDock.start(buildSwarmAgents(plan), {
       reducedMotion: reduced,
       payloads: s.engine === 'gemini' ? { gemini: cloudReceivedDetail(protect.promptText, activePeople()) } : {},
@@ -1269,9 +1271,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!w) say('Allow pop-ups to open the AI monitor.');
   }
   function ledgerTotalRender(): void {
-    const t = ledger.totals();
-    aiPanel.querySelector('.mc-ai-ledger-total')!.textContent =
-      `This session: ${t.count} AI turn${t.count === 1 ? '' : 's'} · ${ledger.formatLine()}`;
+    const lines = ledgerPanelLines(ledger);
+    aiPanel.querySelector('.mc-ai-ledger-total')!.textContent = lines.ai;
+    const sp = aiPanel.querySelector<HTMLElement>('.mc-ai-ledger-spotify');
+    if (sp) { sp.textContent = lines.spotify; sp.hidden = !lines.spotify; }
   }
   function historyRender(): void {
     ledgerTotalRender();
