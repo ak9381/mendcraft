@@ -3,6 +3,8 @@
 export type CanvasCommand =
   | { type: 'newFrame' }
   | { type: 'showEverything' }
+  | { type: 'zoom'; dir: 1 | -1 }
+  | { type: 'zoomReset' }
   | { type: 'save' }
   | { type: 'buildNext' }
   | { type: 'back' }
@@ -24,7 +26,10 @@ export function parseCanvasCommand(text: string): CanvasCommand | null {
   const t = normalise(text);
   if (!t) return null;
   if (new RegExp(`\\b(new|another|fresh|blank)\\s+${BOARD}\\b`).test(t)) return { type: 'newFrame' };
-  if (/^(show (me )?(everything|it all|all( of)?( the)?( \w+)?)|zoom (all the way )?out|overview|birds eye( view)?)$/.test(t)) return { type: 'showEverything' };
+  if (/^(show (me )?(everything|it all|all( of)?( the)?( \w+)?)|zoom all the way out|fit( to screen| all)?|overview|birds eye( view)?)$/.test(t)) return { type: 'showEverything' };
+  if (/^zoom in$/.test(t)) return { type: 'zoom', dir: 1 };
+  if (/^zoom out$/.test(t)) return { type: 'zoom', dir: -1 };
+  if (/^(reset zoom|zoom reset|(zoom )?(to )?100( percent)?|actual size)$/.test(t)) return { type: 'zoomReset' };
   if (/^save( (this|it|that|the (board|canvas|dashboard)))?$/.test(t)) return { type: 'save' };
   if (/\bbuild (the )?next\b/.test(t)) return { type: 'buildNext' };
   if (/^(go )?back$/.test(t)) return { type: 'back' };

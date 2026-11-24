@@ -326,7 +326,7 @@
 
 /* Pinned-board dock (left, under the bar): a second A2UI surface showing the
    pinned room's lamp tiles so it stays controllable while editing another board. */
-.mc-dock { position: absolute; z-index: 8; left: 16px; top: var(--mc-bar-h, 132px); width: 260px; max-height: calc(100% - var(--mc-bar-h, 132px) - 16px);
+.mc-dock { position: absolute; z-index: 8; left: 16px; top: var(--mc-bar-h, 132px); width: 260px; max-height: calc(100% - var(--mc-bar-h, 132px) - 84px);
   overflow: auto; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 14px; }
 .mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }

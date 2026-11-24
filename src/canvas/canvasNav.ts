@@ -24,6 +24,18 @@ export function wheelIntent(e: { deltaX: number; deltaY: number; ctrlKey: boolea
   return { kind: 'pan', dx, dy };
 }
 
+/** True when keystrokes belong to a text field (input/textarea/select/contenteditable). */
+export function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as (Partial<HTMLElement> & { closest?: (s: string) => unknown }) | null;
+  if (!el || typeof el !== 'object') return false;
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable === true) return true;
+  const ce = typeof el.getAttribute === 'function' ? el.getAttribute('contenteditable') : null;
+  if (ce !== null && ce !== undefined && ce !== 'false') return true;
+  return typeof el.closest === 'function' && !!el.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+}
+
 /** Zoom to `z` about the viewport centre. */
 export function zoomCameraTo(c: Camera, vp: Viewport, z: number): Camera {
   const nz = Math.min(MAX_Z, Math.max(MIN_Z, z));
