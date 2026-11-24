@@ -8,6 +8,7 @@ import { nothingRaw, type Person } from '../privacy/directory';
 import { esc } from '../core/esc';
 import { formatLedgerLine } from './ledger';
 import type { EngineBar, EngineState } from './engineBar';
+import type { AiFeed } from './aiFeed';
 
 export type ModelEngine = 'nano' | 'gemini';
 
@@ -210,7 +211,7 @@ function verbState(verb: LogVerb): EngineState | null {
   return 'working';
 }
 
-function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document, bar?: EngineBarSink): EnginePanelUi {
+function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document, bar?: EngineBarSink, feed?: AiFeed): EnginePanelUi {
   const panel = container.querySelector<HTMLElement>(`.mc-terminal-${engine}`)!;
   const lines = panel.querySelector<HTMLElement>('.mc-term-lines')!;
   const body = panel.querySelector<HTMLElement>('.mc-term-body')!;
@@ -234,6 +235,8 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       else if (DONE_VERBS.has(verb)) panel.classList.remove('is-failing');
       const st = verbState(verb);
       if (st) bar?.set(engine, st, detail);
+      feed?.publish({ kind: 'log', engine, verb, text: detail });
+      if (st) feed?.publish({ kind: 'state', engine, state: st, line: detail });
     },
     fail(detail) { api.log('fail', detail); },
     setWorking(working) {
@@ -257,12 +260,12 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
   return api;
 }
 
-export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document, bar?: EngineBarSink): ModelPanelsUi {
+export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document, bar?: EngineBarSink, feed?: AiFeed): ModelPanelsUi {
   const panels = aiPanel.querySelector<HTMLElement>('.mc-terminals')!;
   const footer = aiPanel.querySelector<HTMLElement>('.mc-ai-footer')!;
   const footerBytes = footer.querySelector<HTMLElement>('.mc-ai-footer-bytes')!;
-  const nano = enginePanel(aiPanel, 'nano', doc, bar);
-  const gemini = enginePanel(aiPanel, 'gemini', doc, bar);
+  const nano = enginePanel(aiPanel, 'nano', doc, bar, feed);
+  const gemini = enginePanel(aiPanel, 'gemini', doc, bar, feed);
   return {
     show() { panels.hidden = false; footer.hidden = false; },
     forEngine(engine) { return engine === 'nano' ? nano : gemini; },
@@ -271,7 +274,8 @@ export function mountModelPanels(aiPanel: HTMLElement, doc: Document = document,
       (from === 'nano' ? nano : gemini).log('handoff', `→ ${ENGINE_LABEL[to].toLowerCase()}: ${reason}`);
       (to === 'nano' ? nano : gemini).log('handoff', `← ${ENGINE_LABEL[from].toLowerCase()}: ${reason}`);
       bar?.handoff(from, to);
+      feed?.publish({ kind: 'handoff', from, to, text: reason });
     },
-    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); bar?.setCloudBytes(bytes); },
+    setFooterBytes(bytes) { footerBytes.textContent = formatFooterBytes(bytes); bar?.setCloudBytes(bytes); feed?.publish({ kind: 'bytes', total: bytes }); },
   };
 }

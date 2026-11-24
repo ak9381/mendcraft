@@ -17,7 +17,7 @@ export const PHONE_PRIMARY = ['ai', 'new'] as const;
 export const PHONE_GROUPS: ReadonlyArray<{ title: string; cmds: readonly string[] }> = [
   { title: 'Canvas', cmds: ['everything', 'save', 'undo'] },
   { title: 'Hands and gestures', cmds: ['hands', 'reregister', 'teach', 'gestures'] },
-  { title: 'Testing', cmds: ['offline'] },
+  { title: 'Testing', cmds: ['offline', 'monitor'] },
 ];
 
 export type PhoneMenu = { open(): void; close(): void; isOpen(): boolean; destroy(): void };

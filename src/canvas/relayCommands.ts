@@ -48,6 +48,6 @@ export function dispatchRelayCommand(cmd: RelayCommand, handlers: RelayCommandHa
 export const TOOLBAR_CMDS = [
   'everything', 'new', 'save', 'undo',
   'hands', 'register', 'reregister', 'teach', 'gestures',
-  'ai', 'offline',
+  'ai', 'monitor', 'offline',
 ] as const;
 export type ToolbarCmd = (typeof TOOLBAR_CMDS)[number];
