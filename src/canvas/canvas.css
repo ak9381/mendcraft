@@ -1211,7 +1211,7 @@
 .mc-engine-where::before { content: "\00b7\00a0"; }
 .mc-engine-dot {
   flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
-  border: 2px solid var(--eng); background: transparent; opacity: 0.55;
+  border: 2px solid var(--eng); background: transparent; opacity: 0.85;
 }
 .mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12.5px; line-height: 1.25; }
 .mc-engine-state { flex: 0 0 auto; font-weight: 650; color: var(--text-dim); }
