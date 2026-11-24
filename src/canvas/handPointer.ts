@@ -1282,6 +1282,12 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         active[i] = false;
         prevTips[i] = null;
         lastSeen[i] = -Infinity;
+        // The hand left (the 400 ms lost timer, or no frame for SLOT_LOST_MS):
+        // its fist state goes with it, so a hand that comes back open can
+        // never fire a late tap on the old target; and a grab it held ends
+        // cleanly (a handle grab gets its pointerup) instead of hanging on.
+        fist[i] = freshFist();
+        if (grab && (grab.kind === 'zoom' || grab.slot === i)) endGrab();
         opts.onLost?.();
       },
     }) as SlotPointer,
@@ -1405,7 +1411,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         // Opened: a short, still, deliberate fist is a TAP.
         const ft = slots[i].fistTiming();
         const closedMs = ft.openSince - ft.fistStart;
-        if (s.tapArmed && !locked && !s.holding && !s.spent && !grab && closedMs >= HAND_FEEL.tapMinClosedMs && t - lastTapAt >= HAND_FEEL.tapCooldownMs) {
+        if (s.tapArmed && !locked && !s.holding && !s.spent && !grab && closedMs >= HAND_FEEL.tapMinClosedMs
+          && closedMs <= HAND_FEEL.fistTapMs + 100 && t - lastTapAt >= HAND_FEEL.tapCooldownMs) {
           if (slots[i].tapClick(s.closeTarget, t)) lastTapAt = t;
         }
         s.lastWasHold = s.holding || s.spent;
