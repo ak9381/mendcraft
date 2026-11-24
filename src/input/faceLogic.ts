@@ -209,6 +209,58 @@ export function createFacingTracker(opts: FacingOptions = {}): FacingTracker {
   };
 }
 
+// ---- hand gate (canvas hands: "Not facing" locks the hands) ----
+
+/** Looser than the look-to-sync facing thresholds: looking down at the
+ *  keyboard or your own hands must NOT lock the hands. Pitch > 0 is looking
+ *  DOWN (nose toward the chin — headPoseFromLandmarks; the matrix pose uses
+ *  the same Rx convention). Hysteresis: lock past the *Out values, unlock
+ *  inside the *In values. */
+export const HAND_GATE = {
+  yawOut: 30, pitchUpOut: 25, pitchDownOut: 45,
+  yawIn: 25, pitchUpIn: 20, pitchDownIn: 40,
+  /** A change must persist this long (ms). */
+  debounceMs: 250,
+  /** A (re)appearing face reports unknown (null) until seen this long. */
+  settleMs: 500,
+} as const;
+
+/** Pure: is this pose "facing" for the hand gate, given the current state? */
+export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g = HAND_GATE): boolean {
+  const yaw = Math.abs(pose.yaw);
+  if (wasOk) return yaw <= g.yawOut && pose.pitch >= -g.pitchUpOut && pose.pitch <= g.pitchDownOut;
+  return yaw < g.yawIn && pose.pitch > -g.pitchUpIn && pose.pitch < g.pitchDownIn;
+}
+
+export interface HandGate {
+  /** Feed the focus face's pose (null = no face). Returns true (facing),
+   *  false (an actually turned head, debounced) or null (unknown: no face,
+   *  or a face seen for less than settleMs). */
+  update(pose: HeadPose | null, now: number): boolean | null;
+  reset(): void;
+}
+
+export function createHandGate(g = HAND_GATE): HandGate {
+  let seenSince: number | null = null;
+  let ok = true;
+  let pending: boolean | null = null;
+  let pendingSince = 0;
+  return {
+    update(pose, now) {
+      if (!pose) { seenSince = null; pending = null; ok = true; return null; }
+      if (seenSince === null) { seenSince = now; ok = true; pending = null; }
+      const want = handGatePoseOk(pose, ok, g);
+      if (want === ok) pending = null;
+      else {
+        if (pending !== want) { pending = want; pendingSince = now; }
+        if (now - pendingSince >= g.debounceMs) { ok = want; pending = null; }
+      }
+      return now - seenSince >= g.settleMs ? ok : null;
+    },
+    reset() { seenSince = null; ok = true; pending = null; },
+  };
+}
+
 // ---- operator lock (register & track one face) ----
 
 export interface OperatorOptions {

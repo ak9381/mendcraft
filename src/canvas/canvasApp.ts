@@ -74,7 +74,8 @@ import { activePeople, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, type HandPointer } from './handPointer';
+import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
 import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
@@ -1640,6 +1641,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- point-to-connect: hold a point (or click, hands off) → one frame →
   // crop along the finger → identifyDevice (Nano first, Gemini cloud second)
   // → the mapped tile through the normal review. Never a default device.
+  // Intentionally NOT gated on the facing signal (handPointer.setFacing):
+  // you look at the device you point at, not at this screen.
   const POINT_UTTERANCE = 'connect what I am pointing at';
   const POINT_WAIT_MS = 20_000;
   type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string };
@@ -2087,6 +2090,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pill (A1-047 / A5-017).
   // Hover-to-click (dwell) is an opt-in fallback, off unless
   // localStorage mc.dwellClick === '1' (Tools → "Hover to click").
+  // Camera frame height ÷ width (for the pointer's 3D finger-bend test);
+  // updated from presence frames, 16:9 until the first one.
+  let handCameraAspect = 9 / 16;
   const DWELL_KEY = 'mc.dwellClick';
   let dwellClickOn = false;
   try { dwellClickOn = storage.getItem(DWELL_KEY) === '1'; } catch { dwellClickOn = false; }
@@ -2132,6 +2138,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Hover-to-click is an opt-in fallback (Tools → "Hover to click");
         // the fist tap is the click.
         dwellClick: () => dwellClickOn,
+        cameraAspect: () => handCameraAspect,
         onPinch: (ev) => {
           if (!morphFlow) return;
           if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
@@ -2259,8 +2266,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     })();
   }
   function onPresenceFrame(f: PresenceFrame): void {
-    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Hands only act while the user faces this screen: the operator's HAND
+    // GATE, the same signal as the "Facing this device / Not facing" pill.
+    // No face, an unsettled face, or a stranger's face (registered operator
+    // lost) = unknown, which never locks the hands (handPointer adds the
+    // 300 ms hysteresis). Point-to-connect is intentionally NOT gated on
+    // facing: you look at the device you point at, not at this screen.
+    const op = f.faces.find((x) => x.isOperator);
+    handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
+    if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
+    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (pinchTwice.active() && f.hands[0]?.points) {
       const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
       const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
@@ -2327,6 +2343,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        // Draw each glass hand with its palm exactly on its own cursor
+        // (one-to-one, ≤80 px), using this frame's cursors.
+        handAnchors: (hands) => matchCursors(
+          hands.map((points) => mapToScreen(palmCenter(points), innerWidth, innerHeight, false)),
+          handPointer?.cursors?.() ?? [],
+        ),
         onCameraLost: () => {
           if (scanPanel?.isOpen()) closeScan(CAMERA_LOST_REGISTER);
         },

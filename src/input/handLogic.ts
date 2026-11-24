@@ -211,7 +211,12 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       const ratio = pinchGapRatio(lm);
       const strength = pinchStrength(ratio, pinchOn, pinchOff);
       // Mirror x so the overlay matches a front-facing camera.
-      const points = lm.map((p) => ({ x: 1 - p.x, y: p.y }));
+      // z (MediaPipe depth) rides along when present: the hand pointer's
+      // 3D finger-bend test needs it for fingers pointing at the camera.
+      const points = lm.map((p) => {
+        const z = (p as Pt & { z?: number }).z;
+        return typeof z === 'number' ? { x: 1 - p.x, y: p.y, z } : { x: 1 - p.x, y: p.y };
+      });
       const aim = aimPoint(points, pinchOn, pinchOff);
       const x = aim.x;
       const y = aim.y;

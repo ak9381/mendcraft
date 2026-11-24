@@ -14,6 +14,7 @@ import {
   cursorAnchor,
   handScale,
   palmCenter,
+  curlState,
   pickPrimaryHand,
   pickForegroundHands,
   assignHandSlots,
@@ -270,5 +271,58 @@ describe('createToggleLatch (Tools flicker)', () => {
     expect(latch.allow(0)).toBe(true);
     expect(latch.allow(TOOLS_TOGGLE_GAP_MS - 1)).toBe(false);
     expect(latch.allow(TOOLS_TOGGLE_GAP_MS)).toBe(true);
+  });
+});
+
+describe('curlState: fist from finger geometry, thumb ignored', () => {
+  it('closed = all four fingers curled (thumb in or out); relaxed half-curl is in between; point/pinch are open', async () => {
+    const { synthFist, synthThumbOutFist, synthRelaxed, synthHand } = await import('../helpers/synthHands');
+    const { classifyGesture } = await import('../../src/input/gestures');
+    const W = 1000, H = 800;
+    expect(curlState(synthFist(500, 400, W, H))).toBe('closed');
+    const thumbOut = synthThumbOutFist(500, 400, W, H);
+    expect(curlState(thumbOut)).toBe('closed');
+    expect(classifyGesture(thumbOut as Pt[])).not.toBe('fist'); // the label the old rule tripped on
+    expect(curlState(synthRelaxed(500, 400, W, H))).toBe('between');
+    expect(curlState(synthHand(500, 400, false, W, H))).toBe('open');
+    expect(curlState(synthHand(500, 400, true, W, H))).toBe('open');
+    expect(HAND_FEEL.curlOn).toBe(1.0);
+    expect(HAND_FEEL.extendOn).toBe(1.15);
+  });
+
+  it('a lone middle/ring/pinky flick never opens a fist; two fingers or a strong index do', async () => {
+    const { synthFist } = await import('../helpers/synthHands');
+    const flick = (tips: number[], pips: number[], k: number) => {
+      const h = synthFist(500, 400, 1000, 800);
+      const w = h[0];
+      tips.forEach((tip, i) => { const p = h[pips[i]]; h[tip] = { x: w.x + (p.x - w.x) * k, y: w.y + (p.y - w.y) * k }; });
+      return h;
+    };
+    expect(curlState(flick([20], [18], 1.6))).toBe('between'); // lone pinky
+    expect(curlState(flick([12], [10], 1.6))).toBe('between'); // lone middle
+    expect(curlState(flick([16, 20], [14, 18], 1.6))).toBe('open'); // two fingers
+    expect(curlState(flick([8], [6], 1.2))).toBe('between'); // index only a little out
+    expect(curlState(flick([8], [6], 1.4))).toBe('open'); // a point
+    expect(HAND_FEEL.indexOpenOn).toBe(1.25);
+  });
+
+  it('3D PIP bend: a pointing hand foreshortened toward the camera reads open, not a fist (2D alone would say closed)', () => {
+    const lm: (Pt & { z: number })[] = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.6, z: 0 }));
+    lm[0] = { x: 0.5, y: 0.7, z: 0 }; // wrist
+    // Index points AT the camera: in 2D its tip lands just above the PIP.
+    lm[5] = { x: 0.5, y: 0.55, z: 0 }; lm[6] = { x: 0.5, y: 0.53, z: -0.05 }; lm[7] = { x: 0.5, y: 0.535, z: -0.09 }; lm[8] = { x: 0.5, y: 0.54, z: -0.13 };
+    // Middle / ring / pinky genuinely curled.
+    for (const [m, p, d, t, x] of [[9, 10, 11, 12, 0.53], [13, 14, 15, 16, 0.56], [17, 18, 19, 20, 0.59]] as const) {
+      lm[m] = { x, y: 0.55, z: 0 }; lm[p] = { x, y: 0.5, z: -0.03 }; lm[d] = { x, y: 0.56, z: -0.03 }; lm[t] = { x, y: 0.6, z: -0.02 };
+    }
+    expect(curlState(lm)).toBe('open');
+    expect(HAND_FEEL.curlDeg).toBe(90);
+    expect(HAND_FEEL.extendDeg).toBe(35);
+    // Without z the same projection would read as a fist — the 2D fallback.
+    expect(curlState(lm.map(({ x, y }) => ({ x, y })))).toBe('closed');
+    // A real 3D fist (every finger folded) is still closed.
+    const fist = lm.map((p) => ({ ...p }));
+    fist[6] = { x: 0.5, y: 0.5, z: -0.03 }; fist[8] = { x: 0.5, y: 0.6, z: -0.02 };
+    expect(curlState(fist)).toBe('closed');
   });
 });
