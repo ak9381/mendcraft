@@ -159,6 +159,8 @@ html, body { margin: 0; height: 100%; background: var(--ink); color: var(--text)
 .mon-line:last-child { color: rgba(244, 241, 234, 0.78); }
 .mon-verb { display: inline-block; min-width: 7.4em; color: rgba(var(--eng-rgb), 0.85); }
 .mon-line--redact .mon-verb { color: var(--amber); }
+.mon-line--selfok, .mon-line--selfok:last-child { color: var(--faint); }
+.mon-line--selfok .mon-verb { color: rgba(var(--eng-rgb), 0.45); }
 .mon-line--fail .mon-verb, .mon-line--fail .mon-text { color: var(--danger); }
 @keyframes mon-tick { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .mon-half-stat { flex: 0 0 auto; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: clamp(13px, 0.9vw, 17px); color: var(--faint); font-variant-numeric: tabular-nums; }

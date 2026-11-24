@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAiFeed, type FeedChannel } from '../../src/canvas/aiFeed';
 import {
-  createLedger, deriveHeadline, mountMonitor, MONITOR_MAX_LINES, parseDeviceParam, parseRedaction, sentenceCase, stripSim,
+  CARRY_MS, createLedger, deriveHeadline, mountMonitor, MONITOR_MAX_LINES, parseDeviceParam, parseRedaction, sentenceCase, stripSim,
 } from '../../src/monitor/monitorMain';
 
 /** Minimal fake DOM (the suite runs under Vitest's node environment). */
@@ -435,5 +435,105 @@ describe('feed session handling', () => {
     const lines = half('laptop', 'cloud').find('mon-ticker')!.children;
     expect(lines.length).toBe(MONITOR_MAX_LINES);
     expect(lines[0]!.text()).toContain('l15');
+  });
+});
+
+describe('fix round 1', () => {
+  it('self-check notes never take the headline or sub-line, stay off the cloud half, and passing ones collapse', () => {
+    const { feed, half } = setup();
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'connect everything in this room' });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'done', text: '2 tiles filled' });
+    const ok = 'self-check: 3 controls, tap replay ok, 0 overlaps';
+    for (let i = 0; i < 3; i++) {
+      feed.publish({ kind: 'log', engine: 'nano', verb: 'note', text: ok });
+      feed.publish({ kind: 'log', engine: 'gemini', verb: 'note', text: ok });
+    }
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'note', text: 'self-check: fix verified in 0.40s, 0 problems' });
+    const dev = half('laptop', 'device');
+    expect(dev.find('mon-headline')!.textContent).toBe('2 tiles filled');
+    expect(dev.find('mon-sub')!.textContent).toBe('');
+    const lines = dev.find('mon-ticker')!.children;
+    const last = lines[lines.length - 1]!;
+    expect(last.has('mon-line--selfok')).toBe(true);
+    expect(last.attrs['data-n']).toBe('4');
+    expect(last.text()).toContain('×4');
+    expect(half('laptop', 'cloud').text()).not.toContain('self-check');
+    // problems stay visible (and break the collapsed run); still no headline
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'note', text: 'self-check: 1 problem — tile 2 overlaps' });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'note', text: 'self-check: fix declined — last good tile kept' });
+    expect(dev.text()).toContain('1 problem — tile 2 overlaps');
+    expect(dev.text()).toContain('fix declined');
+    expect(dev.find('mon-headline')!.textContent).toBe('2 tiles filled');
+    expect(dev.find('mon-sub')!.textContent).toBe('');
+  });
+
+  it('self-check notes on the cloud half do not disqualify a kept turn', () => {
+    const { feed, find } = setup();
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'start a floor plan' });
+    feed.publish({ kind: 'log', engine: 'gemini', verb: 'note', text: 'self-check: 0 controls, tap replay ok, 0 overlaps' });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'done', text: '1 tile filled' });
+    expect(find('mon-total--kept').find('mon-total-num')!.textContent).toBe('1');
+  });
+
+  it("the cloud's raw prompt is summarised in the ticker; full text only in title", () => {
+    const { feed, half } = setup();
+    const prompt = 'You build one board on a smart canvas. Reply with JSON only, matching:\n{"kind":"room"}';
+    feed.publish({ kind: 'bytes', total: 2306 });
+    feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'connect everything in this room' });
+    feed.publish({ kind: 'log', engine: 'gemini', verb: 'received', text: prompt });
+    const line = half('laptop', 'cloud').find('mon-line--received')!;
+    expect(line.text()).toMatch(/sent: the model prompt \(\d+ B\)/);
+    expect(line.text()).not.toContain('JSON only');
+    expect(line.attrs.title).toBe(prompt);
+    // the packet still carries the real bytes delta
+    expect(half('laptop', 'cloud').find('mon-headline')!.textContent).toBe('Received 2.3 KB');
+    // a short, plain received line is shown as-is
+    const s2 = setup();
+    s2.feed.publish({ kind: 'log', engine: 'gemini', verb: 'received', text: 'plan a reading nook for [Client A]' });
+    expect(s2.half('laptop', 'cloud').find('mon-line--received')!.text()).toContain('plan a reading nook');
+  });
+
+  it("stale or late bytes never become the next turn's packet", () => {
+    const l = createLedger();
+    l.bytes('android', 900, 0);
+    l.log('android', 'gemini', 'received', 'later request', CARRY_MS + 10);
+    expect(l.get('android').pending).toBe(0);
+    expect(l.get('android').lastTotal).toBe(900); // still in the totals
+    // late bytes after the cloud answered do not cross, and don't carry over
+    const k = createLedger();
+    k.bytes('laptop', 400, 0);
+    k.log('laptop', 'nano', 'received', 'a', 1);
+    expect(k.log('laptop', 'gemini', 'received', 'p', 2)).toHaveLength(1);
+    k.log('laptop', 'gemini', 'replied', 'done', 3);
+    expect(k.bytes('laptop', 700, 4)).toEqual([]);
+    k.log('laptop', 'nano', 'received', 'b', 4 + CARRY_MS + 1);
+    expect(k.log('laptop', 'gemini', 'received', 'p', 4 + CARRY_MS + 2)).toEqual([]);
+    // fresh bytes right before a turn still carry into it
+    k.bytes('laptop', 1000, 10_000);
+    k.log('laptop', 'nano', 'received', 'c', 10_001);
+    expect(k.log('laptop', 'gemini', 'received', 'p', 10_002)).toMatchObject([{ bytes: 300 }]);
+  });
+
+  it('a laptop snapshot or tab switch does not wipe the phone tabs', () => {
+    const ch = bus();
+    const root = new FakeEl('main', doc);
+    mountMonitor(root as unknown as HTMLElement, ch.monitor, { keys: null });
+    const iphone = () => root.all().find((x) => x.has('mon-view') && x.attrs['data-device'] === 'iphone')!;
+    ch.toMonitor({ v: 1, sid: 'A', t: 1, kind: 'log', engine: 'nano', verb: 'note', text: 'laptop A' });
+    ch.toMonitor({ v: 1, sid: 'A', t: 2, kind: 'log', engine: 'apple', verb: 'plan', text: 'iphone line', device: 'iphone' });
+    ch.toMonitor({ v: 1, sid: 'B', t: 3, kind: 'log', engine: 'nano', verb: 'note', text: 'laptop B' });
+    expect(iphone().text()).toContain('iphone line');
+    ch.toMonitor({ v: 1, sid: 'B', t: 4, kind: 'snapshot', engines: { nano: { state: 'idle', lines: [] }, gemini: { state: 'idle', lines: [] } }, total: 0 });
+    expect(iphone().text()).toContain('iphone line');
+  });
+
+  it('phone events under another sid are applied and never switch the laptop session', () => {
+    const { ch, half } = setup({ withFeed: false });
+    ch.toMonitor({ v: 1, sid: 'laptop', t: 100, kind: 'log', engine: 'nano', verb: 'note', text: 'laptop line' });
+    ch.toMonitor({ v: 1, sid: 'phone', t: 50, kind: 'log', engine: 'apple', verb: 'plan', text: 'phone line', device: 'iphone' });
+    expect(half('iphone', 'device').text()).toContain('phone line');
+    ch.toMonitor({ v: 1, sid: 'laptop', t: 101, kind: 'log', engine: 'nano', verb: 'note', text: 'still laptop' });
+    expect(half('laptop', 'device').text()).toContain('laptop line');
+    expect(half('laptop', 'device').text()).toContain('still laptop');
   });
 });

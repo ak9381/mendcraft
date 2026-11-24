@@ -12,7 +12,7 @@
 // fake DOM.
 import './monitor.css';
 import {
-  FEED_CHANNEL, isAiFeedMsg, type AiFeedMsg, type FeedChannel, type FeedDevice, type FeedEngine,
+  FEED_CHANNEL, isAiFeedMsg, isPhoneTagged, type AiFeedMsg, type FeedChannel, type FeedDevice, type FeedEngine,
 } from '../canvas/aiFeed';
 import type { EngineState } from '../canvas/engineBar';
 import { formatFooterBytes } from '../canvas/modelPanels';
@@ -36,6 +36,14 @@ const ENGINE_MODEL: Record<Exclude<MonitorEngine, 'gemini'>, string> = {
 const CLOUD_ONLY: ReadonlySet<FeedDevice> = new Set(['android']);
 
 const isCloud = (e: MonitorEngine) => e === 'gemini';
+
+/** selfCheck.ts's tile self-check notes ("self-check: 3 controls, …"). */
+export const isSelfCheck = (verb: string, text: string) => verb === 'note' && /^self-check:/i.test(stripSim(text).text);
+/** A passing self-check (collapsible); problems / declined fixes are not. */
+export const SELF_OK = /tap replay ok, 0 overlaps\s*$|fix verified/i;
+/** A cloud `received` line that is a whole model prompt, not a sentence. */
+export const isRawPrompt = (text: string) => text.length > 120 || /\n/.test(text) || /JSON only/i.test(text);
+const utf8Length = (t: string) => (typeof TextEncoder === 'function' ? new TextEncoder().encode(t).length : t.length);
 
 // ---------------------------------------------------------------------------
 // Pure derivations (exported for tests)
@@ -134,6 +142,12 @@ export function noteLine(rawText: string): string {
 // turn's request (Gemini `received` from that device) and pending > 0 —
 // whichever of the two arrives second triggers it. No delta, no packet.
 //
+// Bytes only carry forward into a turn that opens right after them (the
+// laptop publishes its total just before the turn's `received`): a delta older
+// than CARRY_MS when the next turn opens, or one arriving after the cloud has
+// already answered, belongs to no visible crossing — it still counts in the
+// totals, but it never becomes the next turn's packet.
+//
 // KEPT ON DEVICE: a turn counts once, when its on-device engine logs a
 // terminal line (done / replied / fail) while the turn has sent 0 bytes, has
 // no bytes pending, and Gemini has not touched it (no Gemini line from that
@@ -147,15 +161,22 @@ export type StageEffect =
   | { kind: 'packet'; device: FeedDevice; dir: 'back'; label: string }
   | { kind: 'kept'; device: FeedDevice; refused: boolean };
 
-interface Turn { bytes: number; cloud: boolean; cloudReceived: boolean; redactions: Redaction[]; ended: boolean; counted: boolean }
+interface Turn { bytes: number; cloud: boolean; cloudReceived: boolean; cloudAt: number; redactions: Redaction[]; ended: boolean; counted: boolean }
 
-export interface DeviceLedger { lastTotal: number; pending: number; turn: Turn | null; kept: number }
+export interface DeviceLedger { lastTotal: number; pending: number; pendingAt: number; turn: Turn | null; kept: number }
+export const CARRY_MS = 1500;
 
-const newTurn = (): Turn => ({ bytes: 0, cloud: false, cloudReceived: false, redactions: [], ended: false, counted: false });
+const newTurn = (): Turn => ({ bytes: 0, cloud: false, cloudReceived: false, cloudAt: 0, redactions: [], ended: false, counted: false });
 
 export function createLedger() {
   const devs = {} as Record<FeedDevice, DeviceLedger>;
-  const reset = () => { DEVICES.forEach((d) => { devs[d] = { lastTotal: 0, pending: 0, turn: null, kept: 0 }; }); };
+  const resetDevice = (d: FeedDevice) => { devs[d] = { lastTotal: 0, pending: 0, pendingAt: 0, turn: null, kept: 0 }; };
+  const reset = () => { DEVICES.forEach(resetDevice); };
+  /** A new turn opens: stale pending bytes are not this turn's. */
+  const open = (d: DeviceLedger, at: number) => {
+    if (d.pending > 0 && at - d.pendingAt > CARRY_MS) d.pending = 0;
+    d.turn = newTurn();
+  };
   reset();
 
   const cross = (device: FeedDevice): StageEffect[] => {
@@ -171,30 +192,39 @@ export function createLedger() {
   return {
     get: (device: FeedDevice): Readonly<DeviceLedger> => devs[device],
     reset,
+    resetDevice,
     /** Snapshot baseline: the total so far, without animating it. */
     baseline(device: FeedDevice, total: number) { devs[device].lastTotal = Math.max(0, total); devs[device].pending = 0; },
     keptTotal: () => DEVICES.reduce((n, d) => n + devs[d].kept, 0),
     sentTotal: () => DEVICES.reduce((n, d) => n + devs[d].lastTotal, 0),
-    bytes(device: FeedDevice, total: number): StageEffect[] {
+    bytes(device: FeedDevice, total: number, at: number = Date.now()): StageEffect[] {
       const d = devs[device];
       const delta = total - d.lastTotal;
       d.lastTotal = total;
-      if (delta > 0) d.pending += delta;
-      return cross(device);
+      if (delta > 0) { d.pending += delta; d.pendingAt = at; }
+      // Late bytes cross for the open turn only if its cloud receipt is recent;
+      // otherwise they wait for the turn that is about to open.
+      const t = d.turn;
+      return t && at - t.cloudAt <= CARRY_MS ? cross(device) : [];
     },
-    log(device: FeedDevice, engine: MonitorEngine, verb: string, text: string): StageEffect[] {
+    log(device: FeedDevice, engine: MonitorEngine, verb: string, text: string, at: number = Date.now()): StageEffect[] {
       const d = devs[device];
       if (isCloud(engine)) {
         if (verb === 'received') {
-          if (!d.turn || d.turn.ended || d.turn.cloudReceived) d.turn = newTurn();
-          d.turn.cloud = true;
-          d.turn.cloudReceived = true;
+          if (!d.turn || d.turn.ended || d.turn.cloudReceived) open(d, at);
+          d.turn!.cloud = true;
+          d.turn!.cloudReceived = true;
+          d.turn!.cloudAt = at;
           return cross(device);
         }
-        if (d.turn) d.turn.cloud = true;
+        if (d.turn) {
+          d.turn.cloud = true;
+          // the cloud answered: later bytes are not this turn's crossing
+          if (verb === 'replied' || verb === 'done' || verb === 'fail') d.turn.ended = true;
+        }
         return [];
       }
-      if (verb === 'received') { d.turn = newTurn(); return []; }
+      if (verb === 'received') { open(d, at); return []; }
       const t = d.turn;
       if (!t) return [];
       if (verb === 'redact') {
@@ -505,9 +535,10 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     h.sub.textContent = '';
     h.said = true;
   };
-  const addTick = (h: Half, verb: string, text: string) => {
+  const addTick = (h: Half, verb: string, text: string, title?: string) => {
     const p = make('p', `mon-line mon-line--${verb}`);
     p.append(make('span', 'mon-verb', verb), make('span', 'mon-text', text));
+    if (title !== undefined) p.setAttribute('title', title);
     h.ticker.append(p);
     while (h.ticker.children.length > MONITOR_MAX_LINES) (h.ticker.children[0] as HTMLElement).remove();
   };
@@ -567,17 +598,44 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   };
   const run = (effects: StageEffect[]) => { effects.forEach(launch); updateTotals(); };
 
-  const onLog = (device: FeedDevice, engine: MonitorEngine, verb: string, text: string, animate = true) => {
+  /** Passing self-checks collapse into one dim "self-check ✓ ×N" line. */
+  const tickSelfOk = (h: Half) => {
+    const last = h.ticker.children[h.ticker.children.length - 1] as HTMLElement | undefined;
+    if (last && last.className === 'mon-line mon-line--selfok') {
+      const n = Number(last.getAttribute('data-n') ?? '1') + 1;
+      last.setAttribute('data-n', String(n));
+      (last.children[1] as HTMLElement).textContent = `✓ ×${n}`;
+      return;
+    }
+    const p = make('p', 'mon-line mon-line--selfok');
+    p.setAttribute('data-n', '1');
+    p.append(make('span', 'mon-verb', 'self-check'), make('span', 'mon-text', '✓'));
+    h.ticker.append(p);
+    while (h.ticker.children.length > MONITOR_MAX_LINES) (h.ticker.children[0] as HTMLElement).remove();
+  };
+
+  const onLog = (device: FeedDevice, engine: MonitorEngine, verb: string, text: string, animate = true, at?: number) => {
     const v = views[device];
     const h = isCloud(engine) ? v.cloud : v.device;
+    // Tile self-checks are local checks after a build: never the headline or
+    // sub-line, never on the cloud half, and passing ones collapse to one line.
+    if (isSelfCheck(verb, text)) {
+      if (isCloud(engine)) return;
+      if (SELF_OK.test(text)) tickSelfOk(h); else addTick(h, verb, text);
+      return;
+    }
     setModel(device, engine);
     const sim = stripSim(text).sim;
     if (verb === 'received') {
       setSim(h, sim);
       if (!isCloud(engine)) { clearRedact(h); clearFx(h); h.moment.innerHTML = ''; clearFx(v.cloud); setSim(v.cloud, false); }
     } else if (sim) setSim(h, true);
-    addTick(h, verb, text);
-    const effects = animate ? ledger.log(device, engine, verb, text) : [];
+    if (verb === 'received' && isCloud(engine) && isRawPrompt(text)) {
+      // The cloud's `received` line is the whole (redacted) model prompt:
+      // summarise it; the full text only lives in the title attribute.
+      addTick(h, verb, `sent: the model prompt (${bytesShort(utf8Length(text))})`, text);
+    } else addTick(h, verb, text);
+    const effects = animate ? ledger.log(device, engine, verb, text, at) : [];
     const hl = deriveHeadline(engine, verb, text);
     if (hl) {
       if (verb === 'received' && isCloud(engine)) {
@@ -616,7 +674,9 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     v.cloud.headline.textContent = 'Ready'; v.cloud.sub.textContent = ''; v.cloud.kicker.textContent = 'Gemini';
     v.flight.innerHTML = '';
   };
-  const clear = () => { ledger.reset(); modelSeen.clear(); DEVICES.forEach(resetView); updateTotals(); };
+  /** A new laptop session (tab switch or snapshot) only resets the laptop:
+   *  phone tabs keep their own history. */
+  const clearLaptop = () => { ledger.resetDevice('laptop'); modelSeen.delete('laptop'); resetView('laptop'); updateTotals(); };
   const splitTab = (s: string): [string, string] => {
     const i = s.indexOf('\t');
     return i < 0 ? ['note', s] : [s.slice(0, i), s.slice(i + 1)];
@@ -632,7 +692,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
 
   const apply = (m: AiFeedMsg) => {
     switch (m.kind) {
-      case 'log': onLog(touch(m), m.engine, m.verb, m.text); break;
+      case 'log': onLog(touch(m), m.engine, m.verb, m.text, true, m.t); break;
       case 'state': {
         const d = touch(m);
         if (m.state in STATE_TEXT) setState(d, isCloud(m.engine) ? views[d].cloud : views[d].device, m.state);
@@ -645,11 +705,11 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
         run(ledger.handoff(d, m.from, m.to, m.text));
         break;
       }
-      case 'bytes': run(ledger.bytes(touch(m), m.total)); break;
+      case 'bytes': run(ledger.bytes(touch(m), m.total, m.t)); break;
       case 'snapshot': {
         // Joining mid-session: show the laptop's lines and states and set the
         // byte baseline, but replay no packets and count no turns.
-        clear();
+        clearLaptop();
         setLive('laptop');
         (['nano', 'gemini'] as const).forEach((e) => {
           const s = m.engines[e];
@@ -674,14 +734,16 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     if (!isAiFeedMsg(e.data)) return;
     const m = e.data;
     if (m.kind === 'hello') return;
-    if (currentSid !== m.sid) {
+    // Phone events are keyed by their device tag, not by the sending tab: they
+    // never switch (or get rejected by) the laptop's session.
+    if (!isPhoneTagged(m) && currentSid !== m.sid) {
       if (currentSid !== null && m.t < currentT) return;
       const had = currentSid !== null;
       currentSid = m.sid;
       currentT = 0;
-      if (had) { clear(); if (m.kind !== 'snapshot') hello(); }
+      if (had) { clearLaptop(); if (m.kind !== 'snapshot') hello(); }
     }
-    currentT = Math.max(currentT, m.t);
+    if (!isPhoneTagged(m)) currentT = Math.max(currentT, m.t);
     if (!empty.hidden) {
       empty.hidden = true;
       wrap.setAttribute('data-idle', 'false');
