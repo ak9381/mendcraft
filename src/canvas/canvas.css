@@ -1281,3 +1281,11 @@ body:has(.mc-keyboard.mc-hand-kb:not([hidden])) .mc-arrange { display: none; }
 
 /* The AI monitor is a second-display tool: never offered on a phone. */
 .mc-phone [data-cmd="monitor"] { display: none; }
+
+/* Connected-device row for "connect devices": sits just above the arrangement strip. */
+.mc-paired-row { bottom: 60px; }
+.mc-canvas:has(.mc-engine-bar) .mc-paired-row { bottom: 140px; }
+.mc-paired-chip { padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); }
+.mc-paired-check { color: #1a7f37; font-weight: 700; }
+.mc-paired-wait { color: var(--text-dim, #777); }
+.mc-phone-simple .mc-paired-row { display: none !important; }

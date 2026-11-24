@@ -18,6 +18,7 @@ import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, connectAsk, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
 import { openEndedAsk } from './openEndedAsk';
+import { createPairFirst, pairedRowHtml, parseConnectDevices } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -430,6 +431,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (!platform) return;
+      pairFirst.addPhone({ id: platform, label: platform === 'android' ? 'Nothing phone' : 'iPhone' });
       // Honour an explicit side; otherwise place it on its default side only if
       // that side is empty — never overwrite a manual swap the user already made.
       let next = screenLayout;
@@ -502,6 +504,35 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
   }
   renderArrangeStrip();
+
+  // "Connect devices": pair phones first (connected-device row with a check per
+  // phone), then ask what to connect next. The lamp dashboard review waits for
+  // "build the dashboard" (see pairedRow.ts).
+  const pairedRow = document.createElement('div');
+  pairedRow.className = 'mc-arrange mc-paired-row';
+  pairedRow.setAttribute('aria-label', 'Connected devices');
+  pairedRow.hidden = true;
+  root.appendChild(pairedRow);
+  const pairFirst = createPairFirst({
+    say: (t) => say(t),
+    sim: () => simEnv(),
+    openPairing: async () => {
+      const id = focusId ?? lastFocus;
+      if (!id) return false;
+      openConnectSheet(id);
+      return joinPhone(id);
+    },
+    buildDashboard: () => {
+      const id = focusId ?? lastFocus; // phones stay paired: do not close the pairing card's session
+      if (id) void connectRoom(id);
+    },
+    onChange: () => {
+      const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase());
+      pairedRow.hidden = !html || phoneShell;
+      pairedRow.innerHTML = html;
+      pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
+    },
+  });
 
   // Edit mode: a hand-reachable Edit/Done/Reset trio (near the Tools chip)
   // that lets anything on the focused board — tiles, widgets, floor plans,
@@ -1499,11 +1530,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sheetOpen = { frameId: id, host, sheet };
     say('Connect a device: point at it, say its name, or join a phone.');
   }
-  async function joinPhone(frameId: string): Promise<void> {
-    const open = sheetOpen; if (!open || open.frameId !== frameId) return;
+  async function joinPhone(frameId: string): Promise<boolean> {
+    const open = sheetOpen; if (!open || open.frameId !== frameId) return false;
     if (simEnv() || !net.isOnline()) {
       open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
-      return;
+      return false;
     }
     open.sheet.setStatus('Opening a Relay room…');
     let pairing: PairingView | null = null;
@@ -1512,8 +1543,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // paired (minting a fresh token every time would strand them).
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
-        if (st === 'paired') { pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
+        if (st === 'paired') { pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
         else if (st === 'disconnected' || st === 'gone') {
+          pairFirst.clearReal();
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
           // can no longer act on.
@@ -1548,9 +1580,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     if ('error' in res) {
       if (sheetOpen === open) open.sheet.setStatus('Needs network: the Relay room is not reachable right now.');
-      return;
+      return false;
     }
-    if (sheetOpen !== open) { void res.stop(); return; } // she closed it while we connected
+    if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
     renderArrangeStrip(); // reveal the arrangement strip now a phone is here
@@ -1565,6 +1597,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       note: 'Playing a chime — hold your phone near this laptop. No typing, no scanning. After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
       onClose: () => { if (pairingStop) { void pairingStop(); pairingStop = null; } open.host.hidden = true; },
     });
+    return true;
   }
   // Keep / drop act on the waiting board Proposal, else the waiting language Proposal.
   const waitingBtn = (cls: string) => (pending?.card.querySelector(cls) ?? reviewDialog.currentCard()?.querySelector(cls)) as HTMLButtonElement | null;
@@ -2103,6 +2136,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.
     if (morphFlow?.handleSpeech(text)) return true;
+    // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
+    if (pairFirst.handleSpeech(text)) return true;
     const paletteCmd = matchPaletteCommand(text);
     if (paletteCmd === 'open') { openTools(); return true; }
     if (paletteCmd === 'close') { closeTools(); return true; }
@@ -2164,7 +2199,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return true;
     }
 
-    if (/\bconnect (everything|all|the room|this room|my room|devices?)\b/i.test(text)) {
+    const cd = parseConnectDevices(text);
+    if (cd) {
+      // Phones first; the dashboard review waits for "build the dashboard".
+      const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
+      if (!focusId) { sync(); void focus(target); }
+      void pairFirst.begin(cd); return true;
+    }
+    if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) {
       const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
       if (!focusId) { sync(); void focus(target); }
       void connectRoom(target, text); return true;
