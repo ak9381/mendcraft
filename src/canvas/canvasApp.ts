@@ -214,7 +214,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div><div class="mc-swarm" hidden></div></div>
     <div class="mc-blank" hidden>
       <p class="mc-blank-lead">Let's build something fun.</p>
-      <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or pinch Tools.</p>
+      <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or click Tools.</p>
       <button type="button" class="mc-btn mc-blank-register" data-cmd="register">Register</button>
     </div>
     <header class="mc-bar">
@@ -227,7 +227,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
       <button data-cmd="reregister" class="mc-btn">Re-register</button>
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
-      <button data-cmd="calibrate-pinch" class="mc-btn">Calibrate pinch</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
@@ -253,7 +252,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <div class="mc-ai-body">
         <h3 class="mc-ai-h3">Live</h3>
         <ol class="mc-ai-live-log" aria-live="polite"></ol>
-        <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams. Pinch clicks, two-finger scrolls and grabs show up here too.</p>
+        <p class="mc-ai-empty">When Nano or Gemini works on a board, you see the prompt going in, what left this device, and the reply as it streams. Clicks, hover-selects and two-fist moves show up here too.</p>
         ${MODEL_PANELS_HTML}
         <h3 class="mc-ai-h3">History</h3>
         <p class="mc-ai-ledger-total"></p>
@@ -507,13 +506,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       setLivePinchThresholds(saved.pinchOn, saved.pinchOff);
     }
   }
-  function startPinchCalibrate(): void {
-    if (!handsOn) void toggleHands();
-    pinchTwice.start(typeof performance !== 'undefined' ? performance.now() : Date.now());
-    pinchCalEl.hidden = false;
-    pinchCalEl.textContent = 'Pinch twice…';
-    say('Pinch twice — about three seconds.');
-  }
   function finishPinchCalibrate(ok: boolean): void {
     const band = ok ? pinchTwice.result() : null;
     pinchTwice.reset();
@@ -699,7 +691,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     t.type === 'lamp' || t.type === 'music' || t.type === 'switch' || t.type === 'scene';
   const DOCK_GAP = 24;
   const dockInset = () => (dockEl.hidden ? 0 : (dockEl.offsetWidth || 300) + DOCK_GAP);
-  const insets = () => ({ top: barH(), left: dockInset(), right: 0 });
+  /** Width the right-side hand cluster takes out of the board area (0 when hidden). */
+  const clusterInset = () => {
+    const c = root.querySelector<HTMLElement>('.mc-hand-cluster');
+    if (!c || !c.offsetWidth) return 0;
+    const left = c.getBoundingClientRect().left - viewport.getBoundingClientRect().left;
+    return Math.max(0, vp().w - left + DOCK_GAP);
+  };
+  const insets = () => ({ top: barH(), left: dockInset(), right: clusterInset() });
 
   function clearDock(): void {
     for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
@@ -830,10 +829,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** 1:1 focus camera. A board with content that is wider/taller than the screen
    *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
    *  so its "Connect this room" call-to-action is on screen. */
+  /** Narrow a focused board to the free width between the dock and the hand
+   *  cluster, so nothing on it sits under chrome. Never below 480px. */
+  function fitBoardWidth(f: Frame): Frame {
+    const ins = insets();
+    const free = Math.floor(vp().w - ins.left - ins.right - 32);
+    if (free < 480 || f.rect.w <= free) return f;
+    reg.setRect(f.id, { ...f.rect, w: free });
+    sync(); persist();
+    return reg.get(f.id) ?? f;
+  }
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
-    const f = reg.get(id); if (!f) return;
+    let f = reg.get(id); if (!f) return;
     focusId = id; lastFocus = id; sync(); updateDock();
+    f = fitBoardWidth(f);
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
@@ -879,7 +889,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       sync();
       updateDock();
       persist();
-      void flyTo(focusCam(next));
+      void flyTo(focusCam(fitBoardWidth(next)));
       window.dispatchEvent(new Event('resize'));
       say(msg);
       return;
@@ -951,7 +961,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     aiPanel.hidden = !on;
     if (aiScrim) aiScrim.hidden = true;
     root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
-    if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(f)); }
+    if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).
@@ -1191,7 +1201,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
       showReview({ title: summary, card, extra: buildReviewExtra() });
-      say(`${summary}. Pinch or say “keep”; brush or say “drop”.`);
+      say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
     });
   }
 
@@ -1512,8 +1522,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
       catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
     }, {
-      onKeep: () => { reviewDialog.close(); applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
-      onDrop: () => { reviewDialog.close(); say('Kept English.'); autoHideAi(); },
+      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
+      onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English.'); autoHideAi(); },
     });
     showReview({ title: 'Add Kannada', card, extra: buildReviewExtra() });
   }
@@ -2021,7 +2031,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, 'calibrate-pinch': startPinchCalibrate } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);

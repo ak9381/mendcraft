@@ -639,6 +639,11 @@
   display: flex; flex-direction: column;
   padding: 0; overflow: hidden; }
 .mc-review-dialog.is-floating { right: auto; }
+/* Keep the review window left of the hand cluster (≤160px wide + 24px gap). */
+.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw) + 184px); }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-review-dialog:not(.is-floating) {
+  right: calc(max(max(180px, 13vw), min(var(--mc-ai-w, 320px), 340px) + 24px) + 184px); }
+@media (max-width: 600px) { .mc-review-dialog:not(.is-floating) { right: 24px; } }
 .mc-review-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
   padding: 10px 10px 8px 16px; border-bottom: 1px solid var(--border, #E4E0D8);
   cursor: grab; }
@@ -855,7 +860,8 @@
   top: 50%;
   right: max(180px, 13vw);
   transform: translateY(-50%);
-  z-index: 72;
+  /* Below the review window (50) and modal dialogs, so they're never covered. */
+  z-index: 49;
   display: flex;
   flex-direction: column;
   align-items: stretch;
