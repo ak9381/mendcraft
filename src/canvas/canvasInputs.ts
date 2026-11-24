@@ -125,7 +125,7 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
         ? (gimbal.setKeepAlive?.(cmd === 'keepAliveOn') ?? Promise.resolve({ ok: false, why: NO_GIMBAL_WHY }))
         : cmd === 'scan'
         ? gimbal.scan()
-        : gimbal.setMode(cmd);
+        : gimbal.setMode(cmd, { explicit: true });
     report(action);
     return true;
   }

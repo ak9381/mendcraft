@@ -205,6 +205,26 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(fakePlugin.aim).toHaveBeenCalledTimes(2);
     });
 
+    it('launch dock race: not docked at mount → the plugin reason; docking later turns face follow on', async () => {
+      fakePlugin.isAvailable = vi.fn().mockResolvedValue({ available: false, reason: 'No DockKit stand docked' });
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      const first = await c.setMode('face');
+      expect(first).toEqual({ ok: false, why: 'No DockKit stand docked' });
+      expect(first.why).not.toBe('The gimbal works in the iPhone app');
+      const r = await c.noteDocked!(true); // the 5 s cached false must not block this
+      expect(r).toEqual({ ok: true, status: FACE_ON_STATUS });
+      expect(c.mode()).toBe('face');
+      expect(await c.noteDocked!(true)).toBeNull(); // no repeat while still docked
+    });
+
+    it('redock respects an explicit hold (voice)', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin });
+      await c.setMode('hold', { explicit: true });
+      await c.noteDocked!(false);
+      expect(await c.noteDocked!(true)).toBeNull();
+      expect(c.mode()).toBe('hold');
+    });
+
     it('caches isAvailable() instead of crossing the bridge every frame', async () => {
       let now = 0;
       const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 5000 });

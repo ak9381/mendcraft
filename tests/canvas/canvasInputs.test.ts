@@ -114,16 +114,16 @@ describe('canvasInputs', () => {
 
     // Valid gimbal commands
     expect(inputs.handleSpeech('follow me')).toBe(true);
-    expect(fakeGimbal.setMode).toHaveBeenCalledWith('face');
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('face', { explicit: true });
 
     expect(inputs.handleSpeech('follow my hands')).toBe(true);
-    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hands');
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hands', { explicit: true });
 
     expect(inputs.handleSpeech('stop following')).toBe(true);
-    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hold');
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hold', { explicit: true });
 
     expect(inputs.handleSpeech('connect what I am pointing at')).toBe(true);
-    expect(fakeGimbal.setMode).toHaveBeenCalledWith('point');
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('point', { explicit: true });
 
     expect(inputs.handleSpeech('scan the room')).toBe(true);
     expect(fakeGimbal.scan).toHaveBeenCalled();

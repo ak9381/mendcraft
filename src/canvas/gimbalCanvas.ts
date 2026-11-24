@@ -46,7 +46,7 @@ export interface GimbalCanvasOptions {
 
 export interface GimbalCanvasController {
   mode(): GimbalCanvasMode;
-  setMode(mode: GimbalCanvasMode): Promise<GimbalResult>;
+  setMode(mode: GimbalCanvasMode, o?: { explicit?: boolean }): Promise<GimbalResult>;
   /** A pointing fingertip (point mode only). Holds the stand; never aims. */
   onPoint(pt: { x: number; y: number }, now?: number): Promise<GimbalResult>;
   /** Hand frames in CAMERA space (un-mirrored). Only used in hands mode. */
@@ -56,9 +56,14 @@ export interface GimbalCanvasController {
   release(): Promise<GimbalResult>;
   /** Toggle the opt-in camera keep-alive; re-applies face mode if active. */
   setKeepAlive?(on: boolean): Promise<GimbalResult>;
+  /** The native app saw the stand dock/undock. false→true re-applies face
+   *  (unless she chose hold/hands); returns that result, else null. */
+  noteDocked?(docked: boolean): Promise<GimbalResult | null>;
 }
 
 export const NO_GIMBAL_WHY = 'The gimbal works in the iPhone app';
+/** Inside the native app, when the plugin gives no reason. */
+export const NO_STAND_WHY = 'No DockKit stand docked';
 export const FACE_ON_STATUS = 'DockKit tracking on — needs a camera app/camera running';
 export const FACE_ON_KEEPALIVE_STATUS = 'DockKit tracking on — camera keep-alive running (test option)';
 export const HANDS_NEED_TRACKER = 'Hand following needs a hand tracker — following your face instead';
@@ -133,6 +138,13 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   // Nothing is claimed until the plugin confirms it.
   let currentMode: GimbalCanvasMode = 'hold';
   let avail: { value: boolean; at: number } | null = null;
+  /** The plugin's own "why not" (e.g. "No DockKit stand docked"). */
+  let lastReason = '';
+  /** She explicitly chose this mode by voice (hold / hands are respected on redock). */
+  let explicit: GimbalCanvasMode | null = null;
+  let lastDocked: boolean | null = null;
+  /** Inside the native app the plugin's reason; on the web the generic line. */
+  const why = (): string => (plugin ? lastReason || NO_STAND_WHY : NO_GIMBAL_WHY);
   let availInflight: Promise<boolean> | null = null;
 
   /** isAvailable() at most once per TTL (it crosses the native bridge). */
@@ -143,7 +155,11 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     if (availInflight) return availInflight;
     availInflight = (async () => {
       let value = false;
-      try { value = !!(await plugin.isAvailable()).available; } catch { value = false; }
+      try {
+        const a = await plugin.isAvailable();
+        value = !!a.available;
+        lastReason = value ? '' : (a.reason || NO_STAND_WHY);
+      } catch (e) { value = false; lastReason = e instanceof Error ? e.message : NO_STAND_WHY; }
       avail = { value, at: clock() };
       availInflight = null;
       return value;
@@ -207,9 +223,10 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
   return {
     mode: () => currentMode,
-    async setMode(mode: GimbalCanvasMode): Promise<GimbalResult> {
+    async setMode(mode: GimbalCanvasMode, o?: { explicit?: boolean }): Promise<GimbalResult> {
+      if (o?.explicit) explicit = mode;
       if (!(await checkPlugin())) {
-        return { ok: false, why: NO_GIMBAL_WHY };
+        return { ok: false, why: why() };
       }
       if (mode === 'face') return enterFace();
       if (mode === 'hands') {
@@ -221,7 +238,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
     async onPoint(): Promise<GimbalResult> {
       if (!(await checkPlugin())) {
-        return { ok: false, why: NO_GIMBAL_WHY };
+        return { ok: false, why: why() };
       }
       // Point mode holds the stand still so the captured frame matches what
       // she pointed at. The steady hold + capture belong to canvasApp's
@@ -232,7 +249,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     async onHandsFrame(hands: readonly { points: readonly Pt[] }[], now?: number): Promise<GimbalResult> {
       if (currentMode !== 'hands') return { ok: true };
       if (!(await checkPlugin())) {
-        return { ok: false, why: NO_GIMBAL_WHY };
+        return { ok: false, why: why() };
       }
       gimbalFollow.onFrame(hands, now ?? clock());
       return { ok: true };
@@ -240,7 +257,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
     async scan(): Promise<GimbalResult> {
       if (!(await checkPlugin())) {
-        return { ok: false, why: NO_GIMBAL_WHY };
+        return { ok: false, why: why() };
       }
       return { ok: false, why: SCAN_LIVE_WHY };
     },
@@ -255,9 +272,24 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       }
     },
 
+    async noteDocked(docked: boolean): Promise<GimbalResult | null> {
+      if (!plugin) return null;
+      const was = lastDocked;
+      lastDocked = docked;
+      avail = { value: docked, at: clock() };
+      if (!docked) { lastReason = lastReason || NO_STAND_WHY; return null; }
+      lastReason = '';
+      // Launch race / redock: the stand appeared after the first setMode.
+      // Follow the face again unless she explicitly chose hold or hands.
+      if (was === true) return null;
+      if (explicit === 'hold' || explicit === 'hands') return null;
+      if (currentMode === 'face') return null;
+      return this.setMode('face');
+    },
+
     async setKeepAlive(on: boolean): Promise<GimbalResult> {
       keepAlive = on;
-      if (!(await checkPlugin())) return { ok: false, why: NO_GIMBAL_WHY };
+      if (!(await checkPlugin())) return { ok: false, why: why() };
       if (currentMode === 'face') return enterFace();
       return { ok: true, status: `Camera keep-alive ${on ? 'on' : 'off'} — it runs only while face tracking is on` };
     },

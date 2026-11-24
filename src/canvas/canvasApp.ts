@@ -2677,17 +2677,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const tracking = phoneSensor.running() || (gimbalDocked && inputs.gimbal.mode() === 'face');
     return { gimbal: !gimbalDocked ? 'none' : tracking ? 'tracking' : 'ready', sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: true };
   }
-  if (phoneSensor) {
+  // Native app: watch the stand dock/undock (every 10 s while visible). A
+  // false→true flip re-applies face follow (launch race / redock) unless she
+  // chose hold or hands; docking alone never starts the camera.
+  {
     const plugin = getGimbalPlugin();
     const checkDock = async (): Promise<void> => {
       let docked = false;
       try { docked = !!plugin && !!(await plugin.isAvailable()).available; } catch { docked = false; }
-      // Docking alone never starts the camera (Track / follow / point do).
-      if (docked !== gimbalDocked) gimbalDocked = docked;
+      gimbalDocked = docked;
+      if (!opts.sim) {
+        const r = await inputs.gimbal.noteDocked?.(docked).catch(() => null);
+        if (r) { const t = r.ok ? r.status : r.why; if (t) say(t); }
+      }
       senseChanged();
     };
-    void checkDock();
-    if (plugin) {
+    if (plugin && typeof document !== 'undefined') {
+      setTimeout(() => { void checkDock(); }, 1500);
       const dockTimer = setInterval(() => { if (document.visibilityState !== 'hidden') void checkDock(); }, 10_000);
       addEventListener('pagehide', () => clearInterval(dockTimer), { once: true });
     }
