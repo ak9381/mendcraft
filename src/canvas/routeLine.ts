@@ -46,7 +46,9 @@ export type Route =
   | { name: 'openEnded' };
 export type RouteName = Route['name'];
 
-const POINT_CONNECT_RE = /\bconnect (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b/i;
+// "connect / add (to) what(ever) I'm pointing at", or a bare "connect this"
+// (not "connect this room", which is connectRoom).
+const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
 
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);

@@ -151,39 +151,77 @@ export interface PointIdentifyResult {
 
 export type PointOutcome =
   | { ok: true; turn: ConnectTurnResult; identity: DeviceIdentity; /** Photo bytes that left (0 on device). */ extraBytes: number }
-  | { ok: false; message: string };
+  | { ok: false; message: string; /** Several connected devices fit: ask which one. */ choices?: DeviceHint[] };
 
 export const POINT_UNSURE_MESSAGE = 'I couldn’t tell what you’re pointing at — try naming it.';
 export const POINT_MIN_CONFIDENCE = 0.5;
 
 /** ?sim=1: the scripted identity — a WiZ lamp, never a speaker. */
 export const SIM_POINT_IDENTITY: DeviceIdentity = {
-  kind: 'smart-bulb', brand: 'WiZ', model: '', label: 'WiZ lamp', confidence: 0.92,
+  kind: 'smart-bulb', brand: 'WiZ', model: '', label: 'WiZ desk lamp', confidence: 0.92,
 };
 
-function fmtBytes(n: number): string {
+export function fmtBytes(n: number): string {
   return n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`;
 }
+
+const isWizText = (s: string | undefined): boolean => /\bwiz\b|^wiz-/i.test(s ?? '');
+const isWizIdentity = (id: DeviceIdentity): boolean => isWizText(id.brand) || isWizText(id.label);
+const isWizDevice = (d: DeviceHint): boolean => isWizText(d.id) || isWizText(d.label);
 
 /** Identity → the tile kind mapKindToTile understands, or null when it isn't
  *  something a tile can control. No default: an unknown is never a speaker. */
 function pointKind(id: DeviceIdentity): string | null {
   const k = id.kind.toLowerCase();
-  if (/\bwiz\b/i.test(id.brand) || /\bwiz\b/i.test(id.label)) return 'lamp';
+  if (isWizIdentity(id)) return 'lamp';
   if (k === 'smart-bulb' || k === 'lamp' || k === 'bulb') return 'lamp';
   if (k === 'speaker') return 'speaker';
   if (k === 'plug' || k === 'fan' || k === 'tv' || k === 'ac') return k;
   return null;
 }
 
-/** Turn a pointed-at identification into ONE proposed tile, labelled with
- *  where the identify really ran. Null / low confidence / unknown kind → a
- *  message and no proposal. A known device of the same kind already on the
- *  canvas wins (so the tile drives the real WiZ lamp), preferring one that
- *  isn't on this board yet. */
+const KIND_WORDS: Record<string, string> = { 'smart-bulb': 'smart bulb', tv: 'TV', ac: 'AC' };
+const kindWord = (id: DeviceIdentity): string => KIND_WORDS[id.kind] ?? (isWizIdentity(id) ? 'WiZ light' : id.kind);
+const article = (w: string): string => (/^[aeiou]/i.test(w) && !/^u[a-z]/.test(w) ? 'an' : 'a');
+
+export const notConnectedMessage = (id: DeviceIdentity): string => {
+  const w = kindWord(id);
+  return `I see ${article(w)} ${w}, but it isn’t connected here yet — try adding it as a device.`;
+};
+
+const GENERIC_WORDS = new Set(['the', 'lamp', 'light', 'bulb', 'speaker', 'device', 'smart', 'wiz', 'plug', 'fan', 'one']);
+const words = (s: string): string[] => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
+
+/** Her reply to "desk lamp or ceiling light?": the full label, else a
+ *  distinctive word ("desk") that names exactly one choice. */
+export function pickPointChoice(text: string, choices: readonly DeviceHint[]): DeviceHint | null {
+  const said = text.toLowerCase();
+  const full = choices.filter((c) => c.label && said.includes(c.label.toLowerCase()));
+  if (full.length === 1) return full[0];
+  const heard = new Set(words(text));
+  const hit = choices.filter((c) => words(c.label).some((w) => heard.has(w)));
+  return hit.length === 1 ? hit[0] : null;
+}
+
+export const pointChoiceQuestion = (choices: readonly DeviceHint[]): string => {
+  const names = choices.map((c) => c.label);
+  const list = names.length <= 2 ? names.join(' or ') : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`;
+  return `Which one — ${list}?`;
+};
+
+/** Turn a pointed-at identification into ONE proposed tile bound to a device
+ *  that is really connected here, labelled with where the identify ran.
+ *  - null / low confidence / unknown kind → unsure message, no proposal.
+ *  - no connected device of that kind (a WiZ device only for a WiZ identity
+ *    or a label match) → "isn't connected here yet", no proposal.
+ *  - several fit → `choices` to ask about (pass `chosenId` with the answer).
+ *  Bytes: the crop counts once per cloud send (`cloudSends`). */
 export function pointConnectFromIdentity(
   result: PointIdentifyResult | null,
-  opts: { frameTitle?: string; sim?: boolean; cropBytes?: number; devices?: DeviceHint[]; onBoard?: string[]; prompt?: string } = {},
+  opts: {
+    frameTitle?: string; sim?: boolean; cropBytes?: number; devices?: DeviceHint[]; onBoard?: string[]; prompt?: string;
+    cloudSends?: number; chosenId?: string;
+  } = {},
 ): PointOutcome {
   if (!result || !(result.identity.confidence >= POINT_MIN_CONFIDENCE)) return { ok: false, message: POINT_UNSURE_MESSAGE };
   const { identity } = result;
@@ -191,10 +229,22 @@ export function pointConnectFromIdentity(
   if (!kind) return { ok: false, message: POINT_UNSURE_MESSAGE };
 
   const want = mapKindToTile(kind, identity.label).type;
-  const same = (opts.devices ?? []).filter((d) => mapKindToTile(d.kind, d.label, d.id).type === want);
-  const onBoard = new Set(opts.onBoard ?? []);
-  const known = same.find((d) => !onBoard.has(d.id)) ?? same[0];
-  const tile = known ? mapKindToTile(known.kind, known.label, known.id) : mapKindToTile(kind, identity.label);
+  const idWords = new Set(words(identity.label));
+  const labelMatch = (d: DeviceHint) => words(d.label).some((w) => idWords.has(w));
+  const eligible = (opts.devices ?? []).filter((d) =>
+    mapKindToTile(d.kind, d.label, d.id).type === want && (!isWizDevice(d) || isWizIdentity(identity) || labelMatch(d)));
+  let known: DeviceHint | undefined;
+  if (opts.chosenId) known = eligible.find((d) => d.id === opts.chosenId);
+  if (!known) {
+    const named = eligible.filter(labelMatch);
+    const onBoard = new Set(opts.onBoard ?? []);
+    const offBoard = eligible.filter((d) => !onBoard.has(d.id));
+    const pool = named.length ? named : offBoard.length ? offBoard : eligible;
+    if (pool.length === 0) return { ok: false, message: notConnectedMessage(identity) };
+    if (pool.length > 1) return { ok: false, message: pointChoiceQuestion(pool), choices: pool };
+    known = pool[0];
+  }
+  const tile = mapKindToTile(known.kind, known.label, known.id);
 
   const title = opts.frameTitle ?? 'This room';
   const plan: SurfacePlan = { kind: 'room', title, tiles: [tile] };
@@ -202,8 +252,11 @@ export function pointConnectFromIdentity(
 
   const sim = !!opts.sim;
   const cloud = result.source === 'cloud';
-  const bytes = cloud ? Math.max(0, Math.round(opts.cropBytes ?? 0)) : 0;
-  const sentReceipt = cloud ? `1 photo crop of what you pointed at (${fmtBytes(bytes)}), not stored` : null;
+  const sends = Math.max(cloud ? 1 : 0, Math.round(opts.cloudSends ?? 0));
+  const crop = Math.max(0, Math.round(opts.cropBytes ?? 0));
+  const bytes = crop * sends;
+  const what = sends > 1 ? `the photo crop of what you pointed at, sent ${sends}× (${fmtBytes(bytes)})` : `1 photo crop of what you pointed at (${fmtBytes(bytes)})`;
+  const sentReceipt = cloud ? `${what}, not stored` : null;
   const line = cloud
     ? `Gemini · cloud — ${sentReceipt}`
     : 'Nano · on device — the photo never left this device';
@@ -222,9 +275,22 @@ export function pointConnectFromIdentity(
   return {
     ok: true,
     identity,
-    extraBytes: bytes,
+    extraBytes: cloud ? bytes : 0,
     turn: { sent, json, plan, request, engine: scriptedEngine(sent.engine, json) },
   };
+}
+
+/** Ledger receipt for a point that produced no proposal. `sent` only when a
+ *  cloud model actually answered; a send with no answer "may have reached"
+ *  Gemini; no sends → nothing left. Bytes = crop × sends either way. */
+export function pointFailureReceipt(o: { cropBytes: number; cloudSends: number; cloudAnswered?: boolean }): { bytes: number; line: string } {
+  const sends = Math.max(0, Math.round(o.cloudSends));
+  const bytes = Math.max(0, Math.round(o.cropBytes)) * sends;
+  if (!sends || !bytes) return { bytes: 0, line: 'Nano · on device — nothing left this device' };
+  const times = sends > 1 ? `, ${sends}×` : '';
+  return o.cloudAnswered
+    ? { bytes, line: `Gemini · cloud — photo crop (${fmtBytes(bytes)}${times}) sent, not stored` }
+    : { bytes, line: `Gemini · cloud — photo crop (${fmtBytes(bytes)}${times}) may have reached Gemini — no answer came back` };
 }
 
 /** Scripted 5-photo scan result: a lamp and a speaker. Used in SIM, and as the

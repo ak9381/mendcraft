@@ -14,12 +14,15 @@ export interface CroppedFrame {
   h: number;
 }
 
-/** A <video> already showing a live camera frame (the hand tracker's). */
+const isLiveFrame = (v: HTMLVideoElement): boolean => isLiveVideoStream(v.srcObject) && v.readyState >= 2 && v.videoWidth > 0;
+
+/** A <video> already showing a live camera frame: the hand tracker's own
+ *  (tagged data-mc-hand-tracker, the frame the landmarks came from) first,
+ *  else any other live camera preview. */
 export function findLiveVideo(doc: Document = document): HTMLVideoElement | null {
-  for (const v of Array.from(doc.querySelectorAll('video'))) {
-    if (isLiveVideoStream(v.srcObject) && v.readyState >= 2 && v.videoWidth > 0) return v;
-  }
-  return null;
+  const tracker = Array.from(doc.querySelectorAll<HTMLVideoElement>('video[data-mc-hand-tracker]')).find(isLiveFrame);
+  if (tracker) return tracker;
+  return Array.from(doc.querySelectorAll('video')).find(isLiveFrame) ?? null;
 }
 
 /** Hands off: open the camera for ONE frame. Resolves null if it can't. */

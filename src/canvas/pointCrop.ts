@@ -95,6 +95,15 @@ export function base64ByteLength(b64: string): number {
   return Math.floor((b64.length * 3) / 4) - pad;
 }
 
+/** A point, not a fist or a flat hand curling: the index tip (8) is farther
+ *  from the wrist (0) than its PIP joint (6). Only then does a hold count. */
+export function isIndexExtended(lm: readonly Pt[] | null | undefined): boolean {
+  if (!lm || lm.length <= INDEX_TIP) return false;
+  const w = lm[0], pip = lm[6], tip = lm[INDEX_TIP];
+  if (!finite(w) || !finite(pip) || !finite(tip)) return false;
+  return Math.hypot(tip.x - w.x, tip.y - w.y) > Math.hypot(pip.x - w.x, pip.y - w.y);
+}
+
 export interface SteadyHold {
   /** Feed the palm (normalised) each frame; true exactly once, when it has
    *  stayed within `tolerance` of where it settled for ≥ holdMs. */

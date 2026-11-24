@@ -5,9 +5,11 @@ import {
   cropAlongRay,
   cropAroundPoint,
   fitWithin,
+  isIndexExtended,
   pointerInCrop,
   POINT_CROP_FRACTION,
 } from '../../src/canvas/pointCrop';
+import { classifyGesture, isFistPose } from '../../src/input/gestures';
 
 /** 21 MediaPipe landmarks, all at `rest`, with index MCP (5) and tip (8) set. */
 function hand(mcp: { x: number; y: number }, tip: { x: number; y: number }, rest = { x: 0.5, y: 0.7 }) {
@@ -111,6 +113,40 @@ describe('base64ByteLength', () => {
     expect(base64ByteLength('aGVsbG8h')).toBe(6);
     expect(base64ByteLength('aGk=')).toBe(2);
     expect(base64ByteLength('')).toBe(0);
+  });
+});
+
+/** A pointing hand (index out, the rest curled), camera space. */
+function pointingHand(): { x: number; y: number }[] {
+  const cx = 0.5, cy = 0.45;
+  const lm = Array.from({ length: 21 }, () => ({ x: cx, y: cy }));
+  lm[0] = { x: cx, y: cy + 0.42 };
+  lm[9] = { x: cx, y: cy + 0.22 };
+  lm[5] = { x: cx, y: cy + 0.22 };
+  lm[8] = { x: cx, y: cy };
+  lm[6] = { x: cx, y: cy + 0.12 };
+  lm[7] = { x: cx, y: cy + 0.06 };
+  const palmY = cy + 0.26;
+  lm[10] = { x: cx + 0.05, y: palmY + 0.04 }; lm[11] = { x: cx + 0.05, y: palmY + 0.02 }; lm[12] = { x: cx + 0.05, y: palmY };
+  lm[13] = { x: cx + 0.08, y: cy + 0.22 }; lm[14] = { x: cx + 0.08, y: palmY + 0.04 }; lm[15] = { x: cx + 0.08, y: palmY + 0.02 }; lm[16] = { x: cx + 0.08, y: palmY };
+  lm[17] = { x: cx + 0.12, y: cy + 0.22 }; lm[18] = { x: cx + 0.12, y: palmY + 0.04 }; lm[19] = { x: cx + 0.12, y: palmY + 0.02 }; lm[20] = { x: cx + 0.12, y: palmY };
+  lm[1] = { x: cx - 0.16, y: cy + 0.18 }; lm[2] = { x: cx - 0.16, y: cy + 0.12 }; lm[3] = { x: cx - 0.16, y: cy + 0.06 };
+  lm[4] = { x: cx - 0.16, y: cy };
+  return lm;
+}
+
+describe('isIndexExtended (a hold only counts while pointing)', () => {
+  it('a point is extended — and the hand pointer never reads it as a fist', () => {
+    const p = pointingHand();
+    expect(isIndexExtended(p)).toBe(true);
+    expect(classifyGesture(p)).toBe('point');
+    expect(isFistPose(p)).toBe(false);
+  });
+  it('an index curled back toward the palm is not', () => {
+    const p = pointingHand();
+    p[8] = { x: 0.5, y: 0.45 + 0.20 }; // tip folded below the PIP, near the palm
+    expect(isIndexExtended(p)).toBe(false);
+    expect(isIndexExtended(null)).toBe(false);
   });
 });
 

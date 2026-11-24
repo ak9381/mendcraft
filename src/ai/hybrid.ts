@@ -2030,10 +2030,11 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
 
 export interface FrameImage { mimeType: string; dataBase64: string }
 
-/** Set by a vision call when the photo may have left the device (cloud route
- *  or cloud twin tried) — so a caller's ledger stays honest even when the
- *  answer is unusable and identifyDevice returns null. */
-export interface VisionTrace { cloudTried?: boolean }
+/** Filled in by a vision call: how many times the photo may have left the
+ *  device (the hybrid model routed to the cloud, and/or the cloud twin was
+ *  tried), and whether a cloud model actually answered — so the caller's
+ *  ledger counts every send, even when the answer is unusable. */
+export interface VisionTrace { cloudSends: number; cloudAnswered?: boolean }
 
 /** Multimodal hybrid call: PREFER_ON_DEVICE first, cloud twin if it throws. */
 async function callVision(
@@ -2046,18 +2047,20 @@ async function callVision(
   if (hybridModel) {
     try {
       const { response } = await withTimeout(hybridModel.generateContent(parts), ON_DEVICE_TIMEOUT_MS, label);
-      if (trace && sourceOf(response) === 'cloud') trace.cloudTried = true;
+      if (trace && sourceOf(response) === 'cloud') { trace.cloudSends += 1; trace.cloudAnswered = true; }
       return response;
     } catch (err) {
-      // PREFER_ON_DEVICE without a ready Nano already went to the cloud.
-      if (trace && deviceModelStatus !== 'ready') trace.cloudTried = true;
+      // PREFER_ON_DEVICE without a ready Nano routes to the cloud: the photo
+      // may have left even though no answer came back (e.g. our timeout).
+      if (trace && deviceModelStatus !== 'ready') trace.cloudSends += 1;
       noteError(`${label} (hybrid)`, err);
     }
   }
   if (!cloud) return null;
-  if (trace) trace.cloudTried = true;
+  if (trace) trace.cloudSends += 1;
   try {
     const r = await withTimeout(cloud.generateContent(parts), CLOUD_GENERATE_TIMEOUT_MS * 2, `${label} cloud`);
+    if (trace) trace.cloudAnswered = true;
     return { text: () => r.response.text(), inferenceSource: 'in_cloud' };
   } catch (err) {
     noteError(`${label} (cloud)`, err);
