@@ -30,7 +30,8 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
   if (input.appleReady) return 'Apple · on device';
   // ?sim=1, or no cloud model reachable: the engines are scripted. Say so —
   // a scripted turn is never shown as a real model or a real send.
-  if (input.sim || !input.cloud) return `SIM · ${input.ios ? 'Apple · on device' : 'Gemini · cloud'}`;
+  // On an iPhone whose Apple model isn't running, never name Apple.
+  if (input.sim || !input.cloud) return `SIM · ${input.ios ? 'scripted' : 'Gemini · cloud'}`;
   const why = input.appleReason && APPLE_REASON[input.appleReason];
   return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
 }

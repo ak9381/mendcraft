@@ -397,6 +397,8 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   const live = make('div', 'mon-live', 'Waiting');
   right.append(followBtn, live);
   let simMode = false;
+  /** Devices whose latest feed message was SIM-stamped. */
+  const simDevices = new Set<string>();
   const simBanner = make('div', 'mon-sim-banner', 'SIM · scripted run — no real model calls, nothing leaves this device');
   simBanner.setAttribute('role', 'status');
   simBanner.hidden = true;
@@ -852,14 +854,18 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       if (had) { clearLaptop(); if (m.kind !== 'snapshot') hello(); }
     }
     if (!isPhoneTagged(m)) currentT = Math.max(currentT, m.t);
-    if (m.sim && !simMode) {
-      // The canvas runs scripted (?sim=1): a persistent banner, and the
-      // header never says Live — nothing here is a real model or a real send.
-      simMode = true;
-      simBanner.hidden = false;
-      wrap.setAttribute('data-sim', 'true');
-      live.textContent = 'SIM';
-      live.setAttribute('data-sim', 'true');
+    // The canvas runs scripted (?sim=1): a banner, and the header never says
+    // Live — nothing here is a real model or a real send. Tracked per device:
+    // a later non-SIM message from that device (it reloaded live) clears it.
+    const dev = isPhoneTagged(m) ? String((m as { device?: unknown }).device) : 'laptop';
+    if (m.sim) simDevices.add(dev); else simDevices.delete(dev);
+    const nowSim = simDevices.size > 0;
+    if (nowSim !== simMode) {
+      simMode = nowSim;
+      simBanner.hidden = !nowSim;
+      wrap.setAttribute('data-sim', String(nowSim));
+      live.setAttribute('data-sim', String(nowSim));
+      if (empty.hidden || nowSim) live.textContent = nowSim ? 'SIM' : 'Live';
     }
     if (!empty.hidden) {
       empty.hidden = true;

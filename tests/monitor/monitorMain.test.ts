@@ -627,6 +627,18 @@ describe('SIM canvas: persistent banner, header says SIM, SIM packets', () => {
     expect(root.find('mon-bytes')!.textContent).toBe('SIM · would send 1.2 KB');
     expect(root.find('mon-total--cloud')!.find('mon-total-num')!.textContent).toBe('0 B');
   });
+  it('the SIM banner clears when that device later sends a real (non-SIM) message', () => {
+    const ch = bus();
+    const root = new FakeEl('main', doc);
+    mountMonitor(root as unknown as HTMLElement, ch.monitor, { keys: null });
+    const simFeed = createAiFeed({ channel: ch.canvas, sim: true });
+    simFeed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'scripted' });
+    expect(root.find('mon-sim-banner')!.hidden).toBe(false);
+    const liveFeed = createAiFeed({ channel: ch.canvas });
+    liveFeed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'real' });
+    expect(root.find('mon-sim-banner')!.hidden).toBe(true);
+    expect(root.find('mon-live')!.textContent).toBe('Live');
+  });
   it('a real canvas stays "Live" with no banner', () => {
     const { feed, root } = setup();
     feed.publish({ kind: 'log', engine: 'nano', verb: 'received', text: 'hi' });

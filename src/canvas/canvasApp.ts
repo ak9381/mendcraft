@@ -1772,6 +1772,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     o.prebooked = entry.bytes;
     renderBytes();
   }
+  /** Bytes beyond one copy of the prompt for a point turn that sent `sends`
+   *  times: the crop each time AND the prompt again on every extra send — the
+   *  same sum bookPointSends puts in the ledger, so the review footer
+   *  ("What left this device") matches the ledger total. */
+  function pointExtraBytes(cropTotal: number, prompt: string, r: PointIdentifyResult | null, o: PointOpts): number {
+    if (cropTotal <= 0) return cropTotal;
+    const sends = Math.max(r?.source === 'cloud' ? 1 : 0, o.cloudSends ?? 0);
+    return cropTotal + utf8ByteLength(prompt) * Math.max(0, sends - 1);
+  }
   function endPointWait(): void {
     if (!pointWait) return;
     clearTimeout(pointWait.timer);
@@ -2010,7 +2019,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
-      { identified: true, extraBytes: out.extraBytes, prebookedBytes: o.prebooked, photoNote: o.sim, note: idNote ?? undefined });
+      { identified: true, extraBytes: pointExtraBytes(out.extraBytes, out.turn.sent.prompt, r, o), prebookedBytes: o.prebooked, photoNote: o.sim, note: idNote ?? undefined });
     if (out.note) say(out.note);
   }
   async function nameTurn(frameId: string, name: string): Promise<void> {
@@ -2765,16 +2774,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const engine = breakEngine(engineFor('nano', scriptedReply(attempt)), !!opts.sim);
     if (engine) {
       aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Nano · on this device — checked here. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
-    } else {
-      // No model, no ledger turn, no swarm: the Nano terminal (this device's
-      // side) shows the received line and the rules' verdict.
-      showAi(true);
-      aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
-      panels.show();
-      panels.forEngine('nano').log('received', text);
     }
+    // No model ran: nothing is logged as Nano. The fixed-limit check reports
+    // under 'rules' (the monitor's Rules lane); the verdict is said aloud.
+    const rulesPanel = {
+      log: (verb: string, detail: string) => { aiFeed.publish({ kind: 'log', engine: 'rules', verb, text: detail }); },
+      fail: (detail: string) => { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: `refused: ${detail}` }); },
+    };
+    if (!engine) rulesPanel.log('received', text);
     try {
-      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally { settleSwarm(); settleEngines(); autoHideAi(); }
   }
@@ -3107,8 +3116,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
-    // Pending writes and timers go first, so nothing fires into a torn-down canvas.
-    clearTimeout(persistTimer);
+    // Pending writes and timers go first, so nothing fires into a torn-down
+    // canvas — but a pending board write is flushed, not dropped (the last
+    // edit must survive).
+    if (persistTimer) persist(true);
     clearTimeout(wheelPersistTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }

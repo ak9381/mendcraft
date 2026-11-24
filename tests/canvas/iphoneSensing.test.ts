@@ -176,4 +176,17 @@ describe('canvas wiring (source checks — the canvas has no mount test)', () =>
     const cap = app.slice(app.indexOf('async function capturePoint'), app.indexOf('async function phoneSensorPoint'));
     expect(cap).toMatch(/if \(how\.remote\) \{[\s\S]*ledgerPointFailure\(r, o, idNote\)/);
   });
+  it('a point sent N times books the prompt N times in the review footer too (matches the ledger)', () => {
+    expect(app).toMatch(/extraBytes: pointExtraBytes\(out\.extraBytes, out\.turn\.sent\.prompt, r, o\)/);
+    const fn = app.slice(app.indexOf('function pointExtraBytes'), app.indexOf('function endPointWait'));
+    expect(fn).toMatch(/utf8ByteLength\(prompt\) \* Math\.max\(0, sends - 1\)/);
+    const book = app.slice(app.indexOf('function bookPointSends'), app.indexOf('function pointExtraBytes'));
+    expect(book).toMatch(/utf8ByteLength\(prompt\) \* \(sends - 1\)/);
+  });
+  it('a rules-only try-to-break logs nothing as Nano', () => {
+    const fn = app.slice(app.indexOf('async function breakTurn'), app.indexOf('// ---- commands ----'));
+    expect(fn).not.toMatch(/forEngine\('nano'\)\.log\('received'/);
+    expect(fn).toMatch(/engine: 'rules'/);
+    expect(fn).toMatch(/panel: engine \? panels\.forEngine\('nano'\) : rulesPanel/);
+  });
 });
