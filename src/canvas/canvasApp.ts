@@ -92,7 +92,7 @@ import {
   phoneDropLine, saveSpokenLine, tryWriteStorage,
 } from './failLines';
 import { isPhoneCanvasShell } from './iphoneShell';
-import { LOOK_TO_EDIT_HINT, nextPhoneEditLock } from './phoneEditLock';
+import { LOOK_TO_EDIT_HINT, nextPhoneEditLock, readLookToEdit } from './phoneEditLock';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -133,6 +133,8 @@ export interface CanvasOptions {
   now?: () => number;
   /** Look-away re-lock delay in ms (tests). */
   lookAwayMs?: number;
+  /** Opt-in look-to-edit (default: persisted mc.lookToEdit, off). */
+  lookToEdit?: boolean;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -228,13 +230,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewportWidth: window.innerWidth,
   }));
   const nowFn = opts.now ?? (() => Date.now());
-  let editUnlocked = false;
+  // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
+  // unknown face signal (null) never locks.
+  let editUnlocked = true;
   let awaySince: number | null = null;
-  let facingNow = false;
+  let facingNow: boolean | null = null;
+  let faceSeen = false;
+  const lookToEdit = opts.lookToEdit ?? readLookToEdit();
   let lockTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedTileHost: HTMLElement | null = null;
   root.classList.add('mc-canvas');
-  if (phoneShell) root.classList.add('mc-phone-simple', 'is-edit-locked');
+  if (phoneShell) root.classList.add('mc-phone-simple');
   root.innerHTML = `
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div><div class="mc-swarm" hidden></div></div>
     <div class="mc-blank" hidden>
@@ -301,6 +307,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     hint.className = 'mc-look-hint';
     hint.setAttribute('role', 'status');
     hint.textContent = LOOK_TO_EDIT_HINT;
+    hint.hidden = true; // only shown while actually locked
     root.append(badge, hint);
   }
   function setRouteBadge(text: string): void {
@@ -2462,11 +2469,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function applyEditLock(): void {
     if (!phoneShell) return;
     const r = nextPhoneEditLock({
-      unlocked: editUnlocked, facing: facingNow, now: nowFn(), awaySince,
+      unlocked: editUnlocked, enabled: lookToEdit, facing: facingNow, faceSeen, now: nowFn(), awaySince,
       awayMs: opts.lookAwayMs,
     });
     editUnlocked = r.unlocked;
     awaySince = r.awaySince;
+    faceSeen = r.faceSeen;
     root.classList.toggle('is-edit-locked', !editUnlocked);
     const hint = root.querySelector<HTMLElement>('.mc-look-hint');
     if (hint) {
@@ -2481,12 +2489,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       clearPhoneSelection();
     }
     if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
-    if (editUnlocked && !facingNow && awaySince != null) {
+    if (editUnlocked && facingNow === false && awaySince != null) {
       const left = (opts.lookAwayMs ?? 3000) - (nowFn() - awaySince);
       if (left > 0) lockTimer = setTimeout(() => applyEditLock(), left);
     }
   }
-  function setFacing(facing: boolean): void {
+  function setFacing(facing: boolean | null): void {
     facingNow = facing;
     applyEditLock();
   }
@@ -2505,7 +2513,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sync();
     persist();
     if (phoneShell) {
-      if (!facingNow) { editUnlocked = false; awaySince = null; }
       applyEditLock();
       fitPhone();
     }
