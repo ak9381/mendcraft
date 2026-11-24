@@ -352,3 +352,18 @@ describe('EnginePanelUi.fail (blink red)', () => {
     expect(lines.children[0].innerHTML).toContain('Went offline mid-request');
   });
 });
+
+describe('mountModelPanels — settle() tells the AI feed', () => {
+  it('publishes Done only for an engine the feed last saw Working, once', () => {
+    const sent: Array<{ kind: string; engine?: string; state?: string }> = [];
+    const feed = { publish: (m: { kind: string }) => { sent.push(m as never); }, onHello: () => {} };
+    const panels = mountModelPanels(fakePanel(), fakeDoc, undefined, feed);
+    panels.forEngine('nano').log('received', 'add kannada');
+    panels.forEngine('gemini').log('replied', 'Kannada pack ready · 19 swaps');
+    sent.length = 0;
+    panels.settle();
+    expect(sent).toEqual([{ kind: 'state', engine: 'nano', state: 'done' }]);
+    panels.settle();
+    expect(sent).toHaveLength(1);
+  });
+});

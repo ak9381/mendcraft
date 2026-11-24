@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startPhoneJoin } from '../../src/canvas/phoneJoin';
-import { joinPhoneAsGuest } from '../../src/canvas/phoneGuestJoin';
+import { joinPhoneAsGuest, joinPhoneSession } from '../../src/canvas/phoneGuestJoin';
+import type { RelayCommand } from '../../src/relay/protocol';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createFakeTransport } from '../../src/relay/transport';
 import { createHostSession } from '../../src/relay/session';
 import { loadPhonePair, type StorageLike } from '../../src/relay/pairingStore';
@@ -101,5 +104,54 @@ describe('joinPhoneAsGuest', () => {
       probe: async () => ({ ok: false as const, reason: 'Offline' }),
     });
     expect(result).toEqual({ error: 'needs network' });
+  });
+});
+
+describe('joinPhoneSession (every join path: chime, typed code, saved pair)', () => {
+  it('a chime first-join binds the AI forwarder and starts the re-announce; stop() tears both down', async () => {
+    const transport = createFakeTransport();
+    const host = await startPhoneJoin({ transport });
+    if ('error' in host) throw new Error('host');
+    const cmds: RelayCommand[] = [];
+    host.session.onCommand((c) => { cmds.push(c); });
+    const binds: unknown[] = [];
+    let tick: (() => void) | null = null;
+    let cleared = false;
+    const storage = memoryStorage();
+    const res = await joinPhoneSession({
+      code: host.code, // what the chime decodes
+      transport,
+      storage,
+      platform: 'ios',
+      native: true,
+      aiForwarder: { bind: (s) => { binds.push(s); } },
+      keepAliveTimers: { setInterval: (fn) => { tick = fn; return 1; }, clearInterval: () => { cleared = true; } },
+    });
+    if ('error' in res) throw new Error(res.error);
+    expect(binds).toEqual([res.session]);
+    await new Promise((r) => setTimeout(r, 20));
+    // First announce from the join, then a refresh on the 20 s tick and on whoIsThere.
+    tick!();
+    await host.session.askWhoIsThere();
+    await new Promise((r) => setTimeout(r, 20));
+    const announces = cmds.filter((c) => c.kind === 'announce').map((c) => JSON.parse(c.text!));
+    expect(announces[0]).toMatchObject({ platform: 'ios', native: true });
+    expect(announces[0].deviceId).toBe(loadPhonePair(storage)?.deviceId);
+    expect(announces.filter((a) => a.refresh === true)).toHaveLength(2);
+
+    await res.stop();
+    expect(binds).toEqual([res.session, null]);
+    expect(cleared).toBe(true);
+    await res.stop(); // idempotent
+    expect(binds).toHaveLength(2);
+    await host.stop();
+  });
+
+  it('the chime page and the phone-shell canvas both join through joinPhoneSession', () => {
+    for (const f of ['src/canvas/mobileMain.ts', 'src/canvas/laptopLink.ts']) {
+      const src = readFileSync(resolve(__dirname, '../..', f), 'utf8');
+      expect(src, f).toMatch(/joinPhoneSession/);
+      expect(src, f).not.toMatch(/joinPhoneAsGuest\(/);
+    }
   });
 });

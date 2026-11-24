@@ -1,11 +1,9 @@
-// Phone-simple canvas runtime: look-to-edit (reuse face-only presence) and
-// Relay guest join (reuse joinPhoneAsGuest) so a board dragged from the
-// laptop arrives on this phone. No hand tracking, no new protocol.
+// Phone-simple canvas runtime: look-to-edit (reuse face-only presence), the
+// route badge, and applying a board the laptop sent. The Relay join itself
+// (saved-pair rejoin + first-time chime) lives in laptopLink.ts.
 
 import type { SurfacePlan } from './surfacePlan';
 import type { ControlSnapshot } from '../relay/controlSnapshot';
-import { joinPhoneAsGuest } from './phoneGuestJoin';
-import { ensureDeviceId, loadPhonePair } from '../relay/pairingStore';
 import { createPresenceTracker } from '../input/presence';
 import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
@@ -86,42 +84,5 @@ export function startPhoneLookToEdit(
     cancelled = true;
     document.removeEventListener('visibilitychange', onVis);
     stop();
-  };
-}
-
-export function startPhoneRelayGuest(
-  handle: { showRemoteBoard(plan: SurfacePlan): void },
-  opts: { sim?: boolean; storage?: Storage | null; platform?: PhonePlatform } = {},
-): () => void {
-  if (opts.sim || typeof window === 'undefined') return () => undefined;
-  const storage = opts.storage ?? ((): Storage | null => { try { return localStorage; } catch { return null; } })();
-  if (storage) ensureDeviceId(storage);
-  const platform = opts.platform ?? 'android';
-  let stopSession: (() => Promise<void>) | null = null;
-
-  const bindSession = (session: { onSnapshot(cb: (snap: ControlSnapshot) => void): void; close(): Promise<void> }): void => {
-    session.onSnapshot((snap) => { applyGuestSnapshot(snap, handle.showRemoteBoard, platform); });
-    stopSession = () => session.close();
-  };
-
-  const saved = loadPhonePair(storage);
-  if (saved?.token) {
-    const join = async (): Promise<void> => {
-      const res = await joinPhoneAsGuest({
-        code: saved.token,
-        storage,
-        platform,
-        hubName: 'the laptop',
-      });
-      if ('error' in res) return;
-      bindSession(res.session);
-    };
-    void join();
-  }
-  // Do not open the pairing-chime microphone at launch — that getUserMedia
-  // call can stall or blank iOS WKWebView before the canvas is up.
-
-  return () => {
-    void stopSession?.();
   };
 }

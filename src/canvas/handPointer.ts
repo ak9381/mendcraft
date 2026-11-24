@@ -49,6 +49,7 @@ import {
   HAND_FEEL,
   createDeadZone,
   palmCenter,
+  curlState,
   pickPrimaryHand,
   pickForegroundHands,
   assignHandSlots,
@@ -306,6 +307,12 @@ export interface HandPointerOptions {
    *  dwell/ring/click/hover stays off, so dragging a board across the
    *  right-side buttons never glitches a hover or fires a stray click. */
   isGrabActive?: () => boolean;
+  /** Slot hook (plural createHandPointer only): true while the hands are
+   *  locked because the user is not facing the screen — no target, dwell or
+   *  click, and the cursor is dimmed. */
+  handsLocked?: () => boolean;
+  /** Camera frame height ÷ width (for 3D finger angles). Default 9/16. */
+  cameraAspect?: () => number;
   /** Hover-to-click (dwell) on/off, read every frame. The fist tap is the
    *  primary click; the app turns dwell on only as an opt-in fallback.
    *  Default (option absent): on. When off there is no ring, but the magnet
@@ -351,6 +358,11 @@ export function confirmLabelFor(el: HTMLElement): string {
 
 /** A dropped hand stays assigned this long so a 1-frame dropout does not reset it. */
 const SLOT_LOST_MS = 400;
+/** "Not facing" must hold this long before the hands lock (a glance
+ *  doesn't flicker it)… */
+export const FACING_LOCK_MS = 300;
+/** …and this long before a running grab is ended. */
+export const FACING_GRAB_END_MS = 400;
 /** Wrist + finger MCPs: the landmarks the camera-edge test watches. */
 const PALM_IDS = [0, 5, 9, 13, 17] as const;
 
@@ -373,6 +385,8 @@ interface SlotPointer extends HandPointer {
   mappedPalm(): P;
   /** How long the current target has been the target (0 if none). */
   lockAge(t: number): number;
+  /** The drawn cursor point (magnet-eased), client px. */
+  cursorPoint(): P;
   /** Click `el` as a tap (fist tap / face click). Confirm actions need a
    *  direct hit; the edge guard can veto. True if it clicked. */
   tapClick(el: HTMLElement | null, t: number): boolean;
@@ -415,6 +429,14 @@ export interface HandPointer {
   /** Click whatever the cursor currently targets, as a fist tap would (the
    *  hook for other click triggers, e.g. a face click). True if it clicked. */
   clickTarget(): boolean;
+  /** The facing signal: false = explicitly NOT facing this screen (locks
+   *  the hands after FACING_LOCK_MS), true / null (unknown) = allowed. */
+  setFacing?(facing: boolean | null, now: number): void;
+  /** True while the hands are locked for "not facing". */
+  handsLocked?(): boolean;
+  /** Each tracked hand's palm mapped to the screen (unsmoothed) and its
+   *  drawn cursor point (client px) — the glass-hand overlay anchors to it. */
+  cursors?(): { palm: P; cursor: P }[];
 }
 
 function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
@@ -491,6 +513,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let grabbing = false;
   let releasing = false;
   let fistStartT = -1;
+  let geoClosed = false;
+  let looseSince = -1;
   let targetSince = 0;
   let lastMapped: P = { x: -1, y: -1 };
   let lastHandedness: string | null = null;
@@ -586,6 +610,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     cursor.hidden = pt.x < 0;
     cursor.classList.toggle('is-pinched', pinched);
     cursor.classList.toggle('is-fist', fisted);
+    cursor.classList.toggle('is-away', !!opts.handsLocked?.());
     if (dwellRing) {
       dwellRing.hidden = dwellProgress <= 0;
       const style = dwellRing.style as CSSStyleDeclaration & { setProperty?: (k: string, v: string) => void };
@@ -950,7 +975,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // this hand's own fist: no hover, no ring, no dwell, no click, while the
     // board drags under the cursor — across the right-side buttons, to the
     // edge, or onto another device.
-    if (opts.isGrabActive?.()) {
+    if (opts.isGrabActive?.() || opts.handsLocked?.()) {
       if (target) setTarget(null);
       if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
       resetDwell();
@@ -996,7 +1021,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     }
     setTarget(null); pt = { x: -1, y: -1 };
     resetDwell(); dwellFiredFor = null;
-    fisted = false; fistRun = 0; openRun = 0; openSince = -1; fistStartT = -1; releasing = false;
+    fisted = false; fistRun = 0; openRun = 0; openSince = -1; fistStartT = -1; geoClosed = false; looseSince = -1; releasing = false;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
     euro.reset(); deadZone.reset(); pointFist.reset(); clickTraceId = null;
     edge.markLeave(clock || now(), pt.x >= 0 ? pt : null);
@@ -1048,13 +1073,25 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       lastClass = pose;
       lastMapped = mappedLive;
 
-      // Fisted: shown as the move cursor; never dwells. Frame-counted
-      // hysteresis: closed after fistCloseFrames fist frames; open after
-      // fistOpenFrames non-fist frames — or, while this hand drives a grab,
-      // only after the release grace (releaseGraceMs AND releaseGraceFrames),
-      // using the edge guard's frozen pose, so a loose fist flickering to
-      // 'none' or a camera-edge clip never drops the board.
-      const rawFist = pose === 'fist' && (grabbing || !edge.atEdge);
+      // Fisted: shown as the move cursor; never dwells. Decided from finger
+      // GEOMETRY (all four fingers curled; thumb ignored), not the classifier
+      // label — a natural quick fist with the thumb out reads thumbs-up /
+      // pinch for a frame and used to break the fist run. A loose,
+      // half-curled hand ('between') keeps the previous state. Frame-counted
+      // hysteresis on top: closed after fistCloseFrames closed frames; open
+      // after fistOpenFrames — or, while this hand drives a grab, only after
+      // the release grace (releaseGraceMs AND releaseGraceFrames). At the
+      // camera edge a grabbing hand stays closed (distorted landmarks).
+      const aspect = opts.cameraAspect?.() ?? HAND_FEEL.cameraAspect;
+      const cs = curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
+      if (cs !== 'between') { geoClosed = cs === 'closed'; looseSince = -1; }
+      else {
+        // A loosened fist held half-open while grabbing counts as open
+        // after grabLooseOpenMs — the board drops instead of sticking.
+        if (looseSince < 0) looseSince = t;
+        if (grabbing && geoClosed && t - looseSince >= HAND_FEEL.grabLooseOpenMs) geoClosed = false;
+      }
+      const rawFist = edge.atEdge ? grabbing && fisted : geoClosed;
       if (rawFist) { if (fistRun === 0) fistStartT = t; fistRun += 1; openRun = 0; openSince = -1; }
       else { openRun += 1; fistRun = 0; if (openSince < 0) openSince = t; }
       releasing = false;
@@ -1092,6 +1129,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     isFisted: () => fisted,
     rawPoint: () => ({ ...pt }),
     controlAt: (p: P) => rawInteractiveHit(p),
+    cursorPoint: () => (pt.x < 0 ? { ...pt } : displayPoint(pt)),
     setGrabbing(on: boolean) { grabbing = on; if (!on) releasing = false; },
     fistTiming: () => ({ fistStart: fistStartT, openSince, openRun }),
     mappedPalm: () => ({ ...lastMapped }),
@@ -1147,6 +1185,9 @@ interface FistState {
   prevMapped: P | null;
   prevT: number;
   speed: number;
+  speeds: number[];
+  /** The previous close was a hold / grab (not a tap). */
+  lastWasHold: boolean;
 }
 
 const defaultCanvasBackground = (el: Element | null): boolean =>
@@ -1176,17 +1217,52 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const lastSeen = [-Infinity, -Infinity];
   const freshFist = (): FistState => ({
     closedAt: null, closeP: { x: -1, y: -1 }, closeTarget: null, holding: false, blocked: false, spent: false, wasFisted: false,
-    tapArmed: false, closeRaw: { x: -1, y: -1 }, openRun: 0, openSince: -1, startSpeed: Infinity, startLock: 0, prevMapped: null, prevT: 0, speed: 0,
+    tapArmed: false, closeRaw: { x: -1, y: -1 }, openRun: 0, openSince: -1, startSpeed: Infinity, startLock: 0, prevMapped: null, prevT: 0, speed: 0, speeds: [], lastWasHold: false,
   });
   const fist: FistState[] = [freshFist(), freshFist()];
   let lastTapAt = -Infinity;
   let grab: GrabMode | null = null;
+  // Facing gate: only an explicit "not facing" (held FACING_LOCK_MS) locks
+  // the hands; unknown (no face tracker / face not visible) never does.
+  let awaySince: number | null = null;
+  let locked = false;
+  let resumeAt = -Infinity;
+  // "Look at the screen to use hands": created the first time it's needed.
+  let hint: HTMLElement | null = null;
+  function evalFacing(t: number): void {
+    const next = awaySince !== null && t - awaySince >= FACING_LOCK_MS;
+    if (locked && !next) {
+      // Resume immediately, with the tap guards (open-before, target lock)
+      // restarted and any fist that is closed right now spent until it opens.
+      resumeAt = t;
+      for (let i = 0; i < 2; i++) if (fist[i].wasFisted) fist[i].spent = true;
+    }
+    locked = next;
+  }
+  function paintHint(): void {
+    const i = active[0] ? 0 : active[1] ? 1 : -1;
+    const show = locked && i >= 0;
+    if (!hint && show) {
+      hint = doc.createElement('div');
+      hint.className = 'mc-hand-away-hint';
+      hint.setAttribute('aria-hidden', 'true');
+      hint.textContent = 'Look at the screen to use hands';
+      doc.body?.append?.(hint);
+    }
+    if (!hint) return;
+    hint.hidden = !show;
+    if (show) {
+      const p = slots[i].rawPoint();
+      hint.style.transform = `translate(${p.x + 18}px, ${p.y + 22}px)`;
+    }
+  }
   const isBackground = opts.isCanvasBackground ?? defaultCanvasBackground;
   const slots: SlotPointer[] = [0, 1].map((i) =>
     createOneHandPointer(doc, {
       ...opts,
       // Read fresh each call: true from the frame a grab starts until it ends.
       isGrabActive: () => !!grab,
+      handsLocked: () => locked,
       onLost() {
         active[i] = false;
         prevTips[i] = null;
@@ -1275,11 +1351,13 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     for (let i = 0; i < 2; i++) {
       const s = fist[i];
       const fisted = active[i] && slots[i].isFisted();
-      if (!active[i]) { s.prevMapped = null; s.openRun = 0; s.openSince = -1; }
+      if (!active[i]) { s.prevMapped = null; s.speeds.length = 0; s.openRun = 0; s.openSince = -1; }
       else {
-        // Unfiltered palm speed, frame to frame (px/ms).
+        // Unfiltered palm speed, averaged over the last 3 frames (px/ms).
         const m = slots[i].mappedPalm();
-        s.speed = s.prevMapped && t > s.prevT ? Math.hypot(m.x - s.prevMapped.x, m.y - s.prevMapped.y) / (t - s.prevT) : 0;
+        const v = s.prevMapped && t > s.prevT ? Math.hypot(m.x - s.prevMapped.x, m.y - s.prevMapped.y) / (t - s.prevT) : 0;
+        s.speeds.push(v); if (s.speeds.length > 3) s.speeds.shift();
+        s.speed = s.speeds.reduce((a, b) => a + b, 0) / s.speeds.length;
         s.prevMapped = m; s.prevT = t;
         const ft = slots[i].fistTiming();
         if (ft.openRun > 0) { s.openRun = ft.openRun; s.openSince = ft.openSince; }
@@ -1291,17 +1369,21 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         s.holding = false; s.blocked = false; s.spent = false;
         // A tap only arms from a deliberately open, still hand on a target it
         // has rested on — a relaxed hand drifting through a fist shape never clicks.
-        s.tapArmed = s.openRun >= HAND_FEEL.tapMinOpenBeforeFrames
-          && s.openSince >= 0 && ft.fistStart - s.openSince >= HAND_FEEL.tapMinOpenBeforeMs
+        // Both guards restart when hands resume after "not facing".
+        const openFrom = Math.max(s.openSince, resumeAt);
+        const needOpen = s.lastWasHold ? HAND_FEEL.tapAfterHoldOpenMs : HAND_FEEL.tapMinOpenBeforeMs;
+        s.tapArmed = !locked
+          && s.openSince >= 0 && ft.fistStart - openFrom >= needOpen
           && s.startSpeed < HAND_FEEL.tapMaxPalmSpeed
-          && s.startLock >= HAND_FEEL.tapMinLockMs;
+          && Math.min(s.startLock, ft.fistStart - resumeAt) >= HAND_FEEL.tapMinLockMs;
       } else if (!fisted && s.wasFisted) {
         // Opened: a short, still, deliberate fist is a TAP.
         const ft = slots[i].fistTiming();
         const closedMs = ft.openSince - ft.fistStart;
-        if (s.tapArmed && !s.holding && !s.spent && !grab && closedMs >= HAND_FEEL.tapMinClosedMs && t - lastTapAt >= HAND_FEEL.tapCooldownMs) {
+        if (s.tapArmed && !locked && !s.holding && !s.spent && !grab && closedMs >= HAND_FEEL.tapMinClosedMs && t - lastTapAt >= HAND_FEEL.tapCooldownMs) {
           if (slots[i].tapClick(s.closeTarget, t)) lastTapAt = t;
         }
+        s.lastWasHold = s.holding || s.spent;
         s.closedAt = null; s.closeTarget = null; s.holding = false; s.blocked = false; s.spent = false; s.tapArmed = false;
       } else if (fisted && !s.holding && s.closedAt !== null) {
         const m = slots[i].mappedPalm();
@@ -1312,6 +1394,15 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   }
   function updateGrabs(t: number): void {
     updateFists(t);
+    if (locked) {
+      // Not facing the screen: nothing new starts; a running grab ends
+      // cleanly ('end', position kept) once facing has been lost long enough.
+      if (grab && awaySince !== null && t - awaySince >= FACING_GRAB_END_MS) {
+        endGrab();
+        for (let i = 0; i < 2; i++) if (fist[i].wasFisted) fist[i].spent = true;
+      }
+      if (!grab) return;
+    }
     const fisted = [0, 1].map((i) => fist[i].wasFisted);
     const ready = [0, 1].map((i) => fisted[i] && fist[i].holding && !fist[i].spent);
 
@@ -1354,6 +1445,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   }
   return {
     update(hands, t) {
+      evalFacing(t); // before the slots aim, so a lock silences this very frame
       // Each slot is an independent FSM. Feed every present hand with its
       // own pose/dwell state; never reset or steal the other.
       const fg = pickForegroundHands(hands as readonly (readonly { x: number; y: number }[])[], 2);
@@ -1372,6 +1464,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         }
       }
       updateGrabs(t);
+      paintHint();
     },
     pointAt(x, y) { return slots[0].pointAt(x, y); },
     pinch: (down) => slots[0].pinch(down),
@@ -1387,9 +1480,17 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       active[0] = active[1] = false; prevTips[0] = prevTips[1] = null; lastSeen[0] = lastSeen[1] = -Infinity;
       fist[0] = freshFist(); fist[1] = freshFist();
     },
-    destroy() { endGrab(); slots[0].destroy(); slots[1].destroy(); },
+    destroy() { endGrab(); slots[0].destroy(); slots[1].destroy(); hint?.remove?.(); },
     isBoardGrabbed: () => grab?.kind === 'board',
     isGrabActive: () => !!grab,
-    clickTarget: () => (grab ? false : (slots[0].target ? slots[0].clickTarget() : slots[1].clickTarget())),
+    setFacing(f: boolean | null, t: number) {
+      if (f === false) { if (awaySince === null) awaySince = t; }
+      else awaySince = null;
+      evalFacing(t);
+      paintHint();
+    },
+    handsLocked: () => locked,
+    cursors: () => [0, 1].filter((i) => active[i]).map((i) => ({ palm: slots[i].mappedPalm(), cursor: slots[i].cursorPoint() })),
+    clickTarget: () => locked ? false : (grab ? false : (slots[0].target ? slots[0].clickTarget() : slots[1].clickTarget())),
   };
 }

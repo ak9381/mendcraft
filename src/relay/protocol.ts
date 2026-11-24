@@ -172,8 +172,15 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     text is a serialized TileTransfer (see canvas/tileTransfer.ts).
 //   • 'announce' — a phone telling the hub who it is (deviceId/platform/side):
 //     text is a small JSON object the hub coerces.
+//   • 'aiEvent' — a phone's compact AI-activity line for the laptop's AI
+//     monitor (engine/verb/short redacted text/state/the phone's own cloud
+//     byte total). Display only: not model inference, never ledgered. Text is
+//     a small JSON object coerced by canvas/phoneAiFeed.ts.
+//   • 'whoIsThere' — host → phones: "announce yourselves again". Sent after a
+//     phone drops (the relay can't say which one), so the phones still here
+//     re-announce. No payload. Phones only honour it from the host.
 export type RelayCommandKind =
-  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce';
+  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere';
 
 export interface RelayCommand {
   kind: RelayCommandKind;
@@ -190,6 +197,8 @@ export const CMD_TEXT_MAX = 500;
 /** Max length of a 'transfer'/'announce' JSON blob carried in `cmd.text`. Well
  *  under the room-message document limit; a tile spec is far smaller. */
 export const CMD_JSON_MAX = 16_000;
+/** Max length of an 'aiEvent' JSON blob — one short activity line. */
+export const AI_EVENT_JSON_MAX = 600;
 
 /** The phone's in-app music player state, relayed to the host so it can appear
  *  on the /control dashboard. Carries only title/playing/volume — no audio. */
@@ -262,9 +271,9 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
-const JSON_KINDS: readonly string[] = ['transfer', 'announce'];
+const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent'];
 
 function isUnit(n: unknown): boolean {
   return n === undefined || n === -1 || n === 0 || n === 1;
@@ -278,6 +287,7 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (c.kind === 'command' && (typeof c.text !== 'string' || !c.text.trim() || c.text.length > CMD_TEXT_MAX)) return null;
   // 'transfer'/'announce' require a non-empty, size-capped JSON blob in `text`.
   if (JSON_KINDS.includes(c.kind) && (typeof c.text !== 'string' || !c.text || c.text.length > CMD_JSON_MAX)) return null;
+  if (c.kind === 'aiEvent' && (c.text as string).length > AI_EVENT_JSON_MAX) return null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;

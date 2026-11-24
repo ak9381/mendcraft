@@ -88,3 +88,27 @@ export function synthHand(px: number, py: number, pinched: boolean, W: number, H
 export function synthFist(px: number, py: number, W: number, H: number): Pt[] {
   return placePalm(fistShape(), px, py, W, H);
 }
+
+/** A natural quick fist with the THUMB OUT (all four fingers curled; the
+ *  classifier often reads this as thumbs-up). */
+export function synthThumbOutFist(px: number, py: number, W: number, H: number): Pt[] {
+  const lm = fistShape();
+  const w = lm[0];
+  lm[1] = { x: w.x - 0.06, y: w.y - 0.06 };
+  lm[2] = { x: w.x - 0.11, y: w.y - 0.12 };
+  lm[3] = { x: w.x - 0.15, y: w.y - 0.18 };
+  lm[4] = { x: w.x - 0.18, y: w.y - 0.24 };
+  return placePalm(lm, px, py, W, H);
+}
+
+/** A RELAXED, half-curled hand: every finger's tip sits just past its PIP
+ *  (tip→wrist ≈ 1.06 × PIP→wrist) — neither curled nor extended. */
+export function synthRelaxed(px: number, py: number, W: number, H: number): Pt[] {
+  const lm = fistShape();
+  const w = lm[0];
+  for (const [pip, tip] of [[6, 8], [10, 12], [14, 16], [18, 20]] as const) {
+    const v = { x: lm[pip].x - w.x, y: lm[pip].y - w.y };
+    lm[tip] = { x: w.x + v.x * 1.06 + 0.01, y: w.y + v.y * 1.06 };
+  }
+  return placePalm(lm, px, py, W, H);
+}

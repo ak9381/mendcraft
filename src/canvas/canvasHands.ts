@@ -226,6 +226,9 @@ export interface MountCanvasHandsOptions {
   suppressMotion?: (id: string) => boolean;
   /** Camera track ended while tracking (unplug / OS revoke) — not a start failure. */
   onCameraLost?: () => void;
+  /** The glass-hand overlay's anchors: each present hand's cursor (client
+   *  px), so the drawn palm sits on it (see HandOverlayOptions.anchors). */
+  handAnchors?: (hands: readonly (readonly Pt[])[]) => ({ x: number; y: number } | null)[];
   /** Override FaceLandmarker. Laptop canvas defaults to off. */
   detectFaces?: boolean;
 }
@@ -288,7 +291,7 @@ export async function mountCanvasHands(
 
   try {
     const adapter = createCanvasHandsAdapter(onEvent, { suppressMotion: opts.suppressMotion });
-    overlay = createHandOverlay(root);
+    overlay = createHandOverlay(root, { anchors: opts.handAnchors });
     // Compact face brackets at the top + a larger facing pill. FaceLandmarker
     // stays throttled (FACE_INTERVAL_MS) so this doesn't steal the hand tracker.
     facing = createFacingBanner(root);
@@ -297,10 +300,12 @@ export async function mountCanvasHands(
     tracker = createPresenceTracker(
       () => {},
       (presenceFrame) => {
-        overlay?.draw(presenceFrame.hands);
         faces?.draw(presenceFrame.faces, presenceFrame.hands.map((h) => h.points));
-        const op = presenceFrame.faces.find((f) => f.isOperator) ?? presenceFrame.faces[0];
-        facing?.set(op ? op.facing : null);
+        // The pill shows the canvas HAND GATE (the operator only; a stranger
+        // or an unsettled face is unknown → hidden), so "Not facing" on
+        // screen always means the hands are locked.
+        const op = presenceFrame.faces.find((f) => f.isOperator);
+        facing?.set(op?.handGate ?? null);
         opts.onPresence?.(presenceFrame);
         adapter.update({
           hands: presenceFrame.hands.map((h) => {
@@ -310,6 +315,9 @@ export async function mountCanvasHands(
           }),
           now: typeof performance !== 'undefined' ? performance.now() : Date.now(),
         });
+        // Drawn AFTER the pointer update, so each glass hand anchors to this
+        // frame's cursors, not last frame's.
+        overlay?.draw(presenceFrame.hands);
       },
       { onCameraLost: opts.onCameraLost, detectFaces },
     );

@@ -74,7 +74,8 @@ import { activePeople, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, type HandPointer } from './handPointer';
+import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
 import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
@@ -91,7 +92,8 @@ import { mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
-import { createAiFeed } from './aiFeed';
+import { createCanvasAiFeed, type AiFeed } from './aiFeed';
+import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
 import { routeLine, type RouteWorld } from './routeLine';
@@ -132,6 +134,9 @@ export interface CanvasOptions {
   sim?: boolean;
   /** Desktop hub: run Gemini on a redacted prompt for a connected phone. */
   privacyGemini?: (redacted: string) => Promise<string>;
+  /** Phone shell only: a tap that forwards this phone's AI terminal activity
+   *  to the paired laptop's AI monitor (see phoneAiFeed.ts). */
+  phoneAiFeed?: AiFeed;
   /** Real WiZ bridge client; defaults to one pointed at the configured bridge
    *  URL/token. Pass a fake in tests. Unused when `sim` is set. */
   wizClient?: WizClient;
@@ -367,6 +372,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // engine also pins the AI panel open so the reason stays readable.
   // Engines whose failure/queued state must keep the AI panel open (with the reason).
   const aiHold = new Set<EngineId>();
+  // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
+  // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
+  const aiFeed = createCanvasAiFeed(phoneShell);
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
@@ -376,7 +384,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handoff: (from, to) => engineBar.handoff(from, to),
     setCloudBytes: (b) => engineBar.setCloudBytes(b),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
-  } : undefined, createAiFeed());
+  } : undefined, opts.phoneAiFeed ? teeFeed(aiFeed, opts.phoneAiFeed) : aiFeed);
+  // A turn ended: the bar and the AI feed (monitor) both stop saying Working.
+  const settleEngines = (): void => { engineBar?.settle(); panels.settle(); };
   // The bar replaces the swarm pill on desktop: mirror its agent summary
   // (minus the bytes tail, which the bar shows from the ledger) into the bar.
   const swarmPillEl = swarmEl.querySelector<HTMLElement>('.mc-swarm-pill');
@@ -445,21 +455,39 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     publishBoardTransfer(frameId, next, t);
   }
 
-  /** A phone 'announce' (which side it is on) or 'transfer' (a tile sent back),
-   *  intercepted before dispatchRelayCommand. Both carry JSON in cmd.text. */
-  function handlePhoneDeviceCommand(kind: 'announce' | 'transfer', text: string): void {
+  // Phones that announced themselves → their AI activity on the laptop's monitor.
+  const phoneAi = createPhoneAiRepublisher({ feed: aiFeed });
+  /** A phone 'announce' (which side it is on), 'transfer' (a tile sent back) or
+   *  'aiEvent' (its AI activity line), intercepted before dispatchRelayCommand.
+   *  All carry JSON in cmd.text. */
+  function handlePhoneDeviceCommand(kind: 'announce' | 'transfer' | 'aiEvent', text: string): void {
+    if (kind === 'aiEvent') {
+      // Tagged by device; display only — never ledgered, never counted in the
+      // laptop's cloud total.
+      phoneAi.handle(text);
+      return;
+    }
     if (kind === 'announce') {
       let platform: PhonePlatform | null = null;
       let wantedSide: Side | null = null;
+      let deviceId: unknown;
+      let native: unknown;
+      let refresh = false;
       try {
-        const o = JSON.parse(text) as { platform?: unknown; side?: unknown };
+        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown };
         if (o.platform === 'android' || o.platform === 'ios') platform = o.platform;
         if (o.side === 'left' || o.side === 'right') wantedSide = o.side;
+        deviceId = o.deviceId;
+        native = o.native;
+        refresh = o.refresh === true;
       } catch {
         return;
       }
       if (!platform) return;
-      pairFirst.addPhone({ id: platform, label: platform === 'android' ? 'Nothing phone' : 'iPhone' });
+      // A keep-alive re-announce only re-learns who the phone is for the AI
+      // monitor — no re-placing, no board republish every 20 s.
+      if (refresh) { phoneAi.announce(platform, deviceId, native); return; }
+      pairFirst.addPhone({ id: platform, label: phoneAi.announce(platform, deviceId, native) });
       // Honour an explicit side; otherwise place it on its default side only if
       // that side is empty — never overwrite a manual swap the user already made.
       let next = screenLayout;
@@ -1477,7 +1505,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
       return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
-    } finally { turnBusy = false; engineBar?.settle(); autoHideAi(); }
+    } finally { turnBusy = false; settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -1643,6 +1671,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- point-to-connect: hold a point (or click, hands off) → one frame →
   // crop along the finger → identifyDevice (Nano first, Gemini cloud second)
   // → the mapped tile through the normal review. Never a default device.
+  // Intentionally NOT gated on the facing signal (handPointer.setFacing):
+  // you look at the device you point at, not at this screen.
   const POINT_UTTERANCE = 'connect what I am pointing at';
   const POINT_WAIT_MS = 20_000;
   type PointOpts = { cropBytes: number; sim: boolean; cloudSends?: number; cloudAnswered?: boolean; prompt?: string; chosenId?: string };
@@ -1825,11 +1855,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairingStop) { void pairingStop(); pairingStop = null; }
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
+    phoneAi.clear();
   }
   /** The relay is kept while the pair-first flow still has phones (live/asking). */
   const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
-    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); }
+    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); }
     if (!sheetOpen) return;
     sheetOpen.sheet.unmount();
     sheetOpen.host.hidden = true;
@@ -1870,6 +1901,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (st === 'paired') { pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
+          // The relay can't say WHICH phone left, so forget every announce
+          // — no stale device labels — then ask the phones still here to
+          // re-announce (they also re-announce every 20 s on their own).
+          phoneAi.clear();
+          void hostSession?.askWhoIsThere().catch(() => undefined);
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
           // can no longer act on.
@@ -1887,7 +1923,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // on) and 'transfer' (a tile sent back from a phone). Both carry JSON in
         // cmd.text; the host applies the transfer and republishes via state so
         // the OTHER phone sees it too.
-        if (cmd.kind === 'announce' || cmd.kind === 'transfer') {
+        if (cmd.kind === 'announce' || cmd.kind === 'transfer' || cmd.kind === 'aiEvent') {
           handlePhoneDeviceCommand(cmd.kind, cmd.text ?? '');
           return;
         }
@@ -1986,7 +2022,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Like aiTurn: whatever way the turn ends, the cards stop saying Working
   // (the Nano card was left on Working after the Kannada handoff).
   async function languageTurn(utterance: string): Promise<void> {
-    try { await languageTurnRun(utterance); } finally { engineBar?.settle(); }
+    try { await languageTurnRun(utterance); } finally { settleEngines(); }
   }
   async function languageTurnRun(utterance: string): Promise<void> {
     const engine = engineFor('gemini', JSON.stringify(SCRIPTED_KN_PACK));
@@ -2088,6 +2124,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pill (A1-047 / A5-017).
   // Hover-to-click (dwell) is an opt-in fallback, off unless
   // localStorage mc.dwellClick === '1' (Tools → "Hover to click").
+  // Camera frame height ÷ width (for the pointer's 3D finger-bend test);
+  // updated from presence frames, 16:9 until the first one.
+  let handCameraAspect = 9 / 16;
   const DWELL_KEY = 'mc.dwellClick';
   let dwellClickOn = false;
   try { dwellClickOn = storage.getItem(DWELL_KEY) === '1'; } catch { dwellClickOn = false; }
@@ -2133,6 +2172,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Hover-to-click is an opt-in fallback (Tools → "Hover to click");
         // the fist tap is the click.
         dwellClick: () => dwellClickOn,
+        cameraAspect: () => handCameraAspect,
         onPinch: (ev) => {
           if (!morphFlow) return;
           if (ev.phase === 'down') { morphFlow.pointerDownAt(ev.p); morphFlow.beginHold(ev.p, 'hand'); }
@@ -2260,8 +2300,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     })();
   }
   function onPresenceFrame(f: PresenceFrame): void {
-    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Hands only act while the user faces this screen: the operator's HAND
+    // GATE, the same signal as the "Facing this device / Not facing" pill.
+    // No face, an unsettled face, or a stranger's face (registered operator
+    // lost) = unknown, which never locks the hands (handPointer adds the
+    // 300 ms hysteresis). Point-to-connect is intentionally NOT gated on
+    // facing: you look at the device you point at, not at this screen.
+    const op = f.faces.find((x) => x.isOperator);
+    handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
+    if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
+    if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (pinchTwice.active() && f.hands[0]?.points) {
       const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
       const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
@@ -2328,6 +2377,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        // Draw each glass hand with its palm exactly on its own cursor
+        // (one-to-one, ≤80 px), using this frame's cursors.
+        handAnchors: (hands) => matchCursors(
+          hands.map((points) => mapToScreen(palmCenter(points), innerWidth, innerHeight, false)),
+          handPointer?.cursors?.() ?? [],
+        ),
         onCameraLost: () => {
           if (scanPanel?.isOpen()) closeScan(CAMERA_LOST_REGISTER);
         },
@@ -2415,7 +2470,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
     aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
     say(r.reply);
-    engineBar?.settle();
+    settleEngines();
     autoHideAi();
   }
 
@@ -2428,7 +2483,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
-    } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
+    } finally { settleSwarm(); settleEngines(); autoHideAi(); }
   }
 
   // ---- commands ----

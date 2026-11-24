@@ -1306,7 +1306,7 @@
 .mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
 .mc-engine-agents[hidden] { display: none; }
-@media (max-width: 1100px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
+@media (max-width: 1240px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
 @media (prefers-reduced-motion: reduce) {
@@ -1327,14 +1327,35 @@
 .mc-canvas .mc-face-preview {
   top: auto; left: auto; transform: none;
   right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  width: 104px; height: 78px; border-radius: 10px; opacity: 0.9; z-index: 70;
+  /* Big enough to read at a glance while gesturing at the camera. */
+  width: 200px; height: 150px; border-radius: 14px; opacity: 1; z-index: 70;
+  border: 3px solid #ffffff; box-shadow: 0 0 0 2px #0b0f14, 0 10px 24px rgb(0 0 0 / 0.35);
 }
 .mc-canvas .mc-facing-banner {
   top: auto; left: auto; transform: none;
-  right: 16px; bottom: calc(16px + 78px + 8px + env(safe-area-inset-bottom, 0px));
-  max-width: 200px; padding: 5px 6px 5px 12px; gap: 4px; font-size: 13px; z-index: 71;
+  right: 16px; bottom: calc(16px + 150px + 10px + env(safe-area-inset-bottom, 0px));
+  max-width: 300px; padding: 10px 10px 10px 18px; gap: 8px; z-index: 71;
+  font-size: 20px; font-weight: 700; line-height: 1.2;
+  background: #0b0f14; color: #ffffff; border: 2px solid #ffffff;
+  box-shadow: 0 0 0 2px #0b0f14, 0 10px 24px rgb(0 0 0 / 0.35);
 }
-.mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
+.mc-canvas .mc-facing-banner.is-facing { background: #0f5132; }
+.mc-canvas .mc-facing-banner.is-away { background: #8a2c0d; }
+.mc-canvas .mc-facing-banner-hide { font-size: 16px; font-weight: 700; min-height: 36px; padding: 6px 10px; }
+/* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
+@media (max-width: 1240px) {
+  .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas .mc-facing-banner { bottom: calc(96px + 150px + 10px + env(safe-area-inset-bottom, 0px)); }
+}
+/* Hands locked while not facing the screen: dimmed cursor + a small hint. */
+.mc-hand-cursor.is-away { opacity: 0.35; filter: grayscale(1); }
+.mc-hand-away-hint {
+  position: fixed; left: 0; top: 0; z-index: 86; pointer-events: none;
+  padding: 6px 12px; border-radius: 999px; background: #0b0f14; color: #ffffff;
+  font: 700 15px/1.2 system-ui, sans-serif; white-space: nowrap;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.3);
+}
+.mc-hand-away-hint[hidden] { display: none; }
 
 /* Plan board header: Check / 3D / DXF. >= 52px so a hand can dwell them. */
 .mc-plan-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -1365,3 +1386,37 @@
   border-color: var(--border); font-size: 18px; }
 .mc-next-chip.mc-btn:hover { border-color: var(--accent); }
 .mc-next-chip.mc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Join laptop (phone shell): empty-state prompt, Laptop pill, join panel.
+   The phone shell hides the tools menu, so the pill is the persistent entry. */
+.mc-join-prompt, .mc-join-pill, .mc-join-panel { display: none; }
+.mc-phone-simple .mc-join-prompt:not([hidden]) {
+  display: flex; align-items: center; gap: 12px; position: fixed; z-index: 61;
+  left: 16px; right: 16px; top: calc(48px + env(safe-area-inset-top, 0px));
+  padding: 12px 14px; border-radius: 16px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+}
+.mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
+.mc-phone-simple .mc-join-pill:not([hidden]) {
+  display: inline-flex; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+}
+.mc-phone-simple .mc-join-panel:not([hidden]) {
+  display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
+  left: 16px; right: 16px; bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  padding: 16px; border-radius: 18px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
+}
+.mc-join-status { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; }
+.mc-join-code summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--accent-2); font-weight: 600; }
+.mc-join-code-form { display: flex; gap: 8px; }
+.mc-join-code-in {
+  flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; font-size: 18px; letter-spacing: 0.08em;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text);
+}
+.mc-join-close { align-self: flex-end; min-height: 44px; }
+.mc-join-dismiss {
+  min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; border: 0; background: transparent;
+  color: var(--text-dim); font-size: 22px; line-height: 1; cursor: pointer;
+}

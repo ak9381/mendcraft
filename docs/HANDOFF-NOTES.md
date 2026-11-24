@@ -56,3 +56,7 @@ Sim tests use synthetic landmarks; none of this is proven until tried on the Mac
 8. **Hover to click (opt-in)** — Tools → "Hover to click": resting the palm on a button fills the ring and clicks at ~0.8 s; easing from Reject to Approve never fires Reject. Toggle it off: no ring, the hover outline stays.
 9. **Pinch** does nothing anywhere (no keep, no pan, no zoom, no click).
 10. **Camera edge** — at the frame edge the cursor holds and nothing clicks; coming back in eases with no jump; a board being dragged stays grabbed.
+11. **First-try tap** (25 Nov fix) — a natural quick fist, thumb in or out, clicks on the FIRST try from a resting open hand. A relaxed, half-curled hand never clicks.
+12. **Glass hand on the cursor** — the drawn hand's palm sits on the coral cursor (no below-left offset), for both hands.
+13. **Facing gate** — turn your head away (pill says "Not facing"): within ~0.3 s the cursor dims, "Look at the screen to use hands" shows, and taps / grabs / pan / zoom do nothing; a board being dragged is dropped where it is. Look back: hands work at once. With no face in view (pill hidden), hands still work.
+14. **Facing pill + face chip** — readable from the chair (large pill, ~200×150 chip, bottom-right), not covering the engine bar or the cluster.

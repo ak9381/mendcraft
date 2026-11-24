@@ -4,13 +4,17 @@ import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
-import { phoneRouteBadge, startPhoneLookToEdit, startPhoneRelayGuest } from './phoneCanvasRuntime';
+import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
+import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
 import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
+import { activePeople } from '../privacy/directory';
+import { createPhoneAiForwarder } from './phoneAiFeed';
+import { ensureDeviceId } from '../relay/pairingStore';
 import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
 import { mountReplayBanner } from './replayBanner';
 
@@ -79,6 +83,19 @@ const engines = createEngines({
   sim: params.has('sim'),
 });
 
+// Phone shell: forward this phone's AI terminal activity to the paired
+// laptop's AI monitor (compact, redacted, ≤5/s; dropped with no session).
+// The "nano" terminal is Apple on an iPhone with Apple Intelligence, the
+// Android on-device model when ML Kit has one, else no model ('rules').
+const phonePlatform = capacitor?.getPlatform?.() === 'ios' ? 'ios' as const : 'android' as const;
+const phoneAiFeed = phoneShell
+  ? createPhoneAiForwarder({
+      deviceId: ensureDeviceId((() => { try { return localStorage; } catch { return null; } })()),
+      localEngine: () => (apple.ready ? 'apple' : apple.androidNano ? 'nano' : 'rules'),
+      people: () => activePeople(),
+    })
+  : undefined;
+
 const root = document.getElementById('canvas')!;
 let handle: ReturnType<typeof mountCanvas> | null = null;
 const voice = createVoiceController(
@@ -94,6 +111,7 @@ handle = mountCanvas(root, {
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
   autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
   phoneShell,
+  phoneAiFeed,
   routeBadge: phoneShell
     ? phoneRouteBadge({
         appleReady: !!apple.plugin,
@@ -149,10 +167,34 @@ function afterFirstPaint(fn: () => void): void {
 afterFirstPaint(() => {
   if (phoneShell && handle) {
     startPhoneLookToEdit(handle, { sim: params.has('sim') });
-    startPhoneRelayGuest(handle, {
-      sim: params.has('sim'),
-      platform: capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android',
+    // Join laptop: a remembered pair rejoins silently (no mic); otherwise the
+    // phone shows "Join laptop", which opens the mic only when tapped and
+    // joins by the laptop's chime (or a typed code). Every join binds the AI
+    // feed forwarder and the re-announce (joinPhoneSession).
+    const h = handle;
+    const sim = params.has('sim');
+    let ui: { update(): void } | null = null;
+    const link = createLaptopLink({
+      storage: (() => { try { return localStorage; } catch { return null; } })(),
+      platform: phonePlatform,
+      native: isPhone,
+      sim,
+      aiForwarder: phoneAiFeed,
+      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform); },
+      onChange: () => ui?.update(),
     });
+    ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });
+    void link.rejoinSaved();
+    // Native webviews rarely fire pagehide on backgrounding: close the mic when
+    // hidden (a connected session stays), and rejoin a remembered pair when
+    // we come back if it dropped meanwhile.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') link.cancel();
+      else void link.resume();
+    });
+    window.addEventListener('pagehide', () => { void link.stop(); });
+    // Restored from the back/forward cache after pagehide closed the session.
+    window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) void link.resume(); });
   }
 });
 (window as unknown as { __canvas: unknown }).__canvas = handle;
