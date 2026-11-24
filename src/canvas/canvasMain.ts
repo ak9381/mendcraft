@@ -183,9 +183,18 @@ afterFirstPaint(() => {
       onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform); },
       onChange: () => ui?.update(),
     });
-    ui = mountLaptopLinkUi(root, link, { sim });
+    ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });
     void link.rejoinSaved();
+    // Native webviews rarely fire pagehide on backgrounding: close the mic when
+    // hidden (a connected session stays), and rejoin a remembered pair when
+    // we come back if it dropped meanwhile.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') link.cancel();
+      else void link.resume();
+    });
     window.addEventListener('pagehide', () => { void link.stop(); });
+    // Restored from the back/forward cache after pagehide closed the session.
+    window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) void link.resume(); });
   }
 });
 (window as unknown as { __canvas: unknown }).__canvas = handle;

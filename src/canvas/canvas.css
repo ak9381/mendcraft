@@ -1319,3 +1319,7 @@
   border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text);
 }
 .mc-join-close { align-self: flex-end; min-height: 44px; }
+.mc-join-dismiss {
+  min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; border: 0; background: transparent;
+  color: var(--text-dim); font-size: 22px; line-height: 1; cursor: pointer;
+}

@@ -15,8 +15,14 @@ import { loadPhonePair, type StorageLike } from '../relay/pairingStore';
 import type { ControlSnapshot } from '../relay/controlSnapshot';
 import type { PhoneAiForwarder } from './phoneAiFeed';
 import type { PhonePlatform } from './screenLayout';
+import type { PairState } from '../relay/protocol';
 
 export type LinkState = 'idle' | 'listening' | 'joining' | 'connected' | 'error' | 'sim';
+
+/** Stop listening for the chime after this long (mic closed, plain message). */
+export const LISTEN_TIMEOUT_MS = 60_000;
+/** How long a failed saved-pair rejoin's message shows before resetting. */
+export const SAVED_FAIL_SHOW_MS = 8_000;
 
 export const LINK_LINES = {
   idle: 'Not connected to a laptop.',
@@ -30,6 +36,8 @@ export const LINK_LINES = {
   micDenied: 'Microphone permission is off, so this phone cannot hear the chime. Type the code from the laptop instead.',
   micUnsupported: 'This phone cannot open a microphone here. Type the code from the laptop instead.',
   savedFailed: "Couldn't reach the laptop. Tap Join laptop to pair again.",
+  timeout: "Didn't hear the laptop chime. Tap Join laptop to listen again, or type the code.",
+  lost: 'Lost the laptop connection. Tap Join laptop to reconnect.',
   sim: 'Pairing needs a real laptop session. Open the app without ?sim=1 and play the chime on the laptop.',
 } as const;
 
@@ -42,10 +50,13 @@ export interface LaptopLinkDeps {
   /** A board the laptop sent to this phone. */
   onSnapshot(snap: ControlSnapshot): void;
   onChange?(s: { state: LinkState; message: string }): void;
-  /** Injectables (tests): the chime listener, the join, and join extras such as a fake transport. */
+  /** Injectables (tests): the chime listener, the join, join extras such as a
+   *  fake transport, and timers. */
   createListener?: (opts: Parameters<typeof createChimeListener>[0]) => ChimeListener;
   join?: (deps: PhoneSessionDeps) => Promise<PhoneGuestJoinResult>;
   joinExtras?: Partial<PhoneSessionDeps>;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (id: unknown) => void;
 }
 
 export interface LaptopLink {
@@ -55,27 +66,39 @@ export interface LaptopLink {
   startJoin(): Promise<void>;
   /** A decoded chime code, or the typed fallback. */
   joinWithCode(code: string, typed?: boolean): Promise<void>;
-  /** Stop listening (the panel was closed). */
+  /** Stop listening (panel closed / app backgrounded); a connected session stays. */
   cancel(): void;
   /** Rejoin a remembered pair without opening the mic. */
   rejoinSaved(): Promise<boolean>;
+  /** Foreground again / restored from bfcache: rejoin a remembered pair if it
+   *  is not connected (never opens the mic). */
+  resume(): Promise<boolean>;
   stop(): Promise<void>;
 }
 
 export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
   const makeListener = deps.createListener ?? createChimeListener;
   const join = deps.join ?? joinPhoneSession;
+  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const clearTimer = deps.clearTimer ?? ((id: unknown) => clearTimeout(id as ReturnType<typeof setTimeout>));
   let state: LinkState = deps.sim ? 'sim' : 'idle';
   let message: string = deps.sim ? LINK_LINES.sim : LINK_LINES.idle;
   let listener: ChimeListener | null = null;
+  let listenTimer: unknown = null;
+  let resetTimer: unknown = null;
   let current: { stop(): Promise<void> } | null = null;
   let attempt = 0;
 
   const set = (s: LinkState, m: string): void => {
+    if (resetTimer !== null) { clearTimer(resetTimer); resetTimer = null; }
     state = s; message = m;
     deps.onChange?.({ state, message });
   };
-  const stopListening = (): void => { listener?.stop(); listener = null; };
+  const stopListening = (): void => {
+    if (listenTimer !== null) { clearTimer(listenTimer); listenTimer = null; }
+    listener?.stop();
+    listener = null;
+  };
 
   async function connect(code: string, joiningLine: string, failLine?: string): Promise<boolean> {
     const mine = ++attempt;
@@ -83,6 +106,14 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     const prev = current;
     current = null;
     await prev?.stop();
+    // The session's pair state drives the pill: a drop reverts "Laptop ✓", a
+    // recovery (the laptop said hello again) restores it.
+    let live = false;
+    const onState = (st: PairState): void => {
+      if (!live || mine !== attempt) return;
+      if (st === 'gone' || st === 'disconnected') set('error', LINK_LINES.lost);
+      else if (st === 'paired' && state !== 'connected') set('connected', LINK_LINES.connected);
+    };
     const res = await join({
       code,
       storage: deps.storage,
@@ -90,6 +121,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       native: deps.native,
       hubName: 'the laptop',
       aiForwarder: deps.aiForwarder,
+      onState,
       ...deps.joinExtras,
     });
     if (mine !== attempt) { if (!('error' in res)) void res.stop(); return false; }
@@ -100,8 +132,24 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     }
     res.session.onSnapshot((snap) => deps.onSnapshot(snap));
     current = res;
+    live = true;
     set('connected', LINK_LINES.connected);
     return true;
+  }
+
+  async function rejoinSaved(): Promise<boolean> {
+    if (deps.sim) return false;
+    const saved = loadPhonePair(deps.storage);
+    if (!saved?.token) return false;
+    const ok = await connect(saved.token, LINK_LINES.typed, LINK_LINES.savedFailed);
+    if (!ok && state === 'error' && message === LINK_LINES.savedFailed) {
+      // Show why, then fall back to the plain "not connected" prompt.
+      resetTimer = setTimer(() => {
+        resetTimer = null;
+        if (message === LINK_LINES.savedFailed) set('idle', LINK_LINES.idle);
+      }, SAVED_FAIL_SHOW_MS);
+    }
+    return ok;
   }
 
   return {
@@ -112,14 +160,25 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       stopListening();
       const l = makeListener({
         onCode: (code) => { stopListening(); void connect(code, LINK_LINES.heard); },
-        onError: (reason) => set('error', reason === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported),
+        onError: (reason) => {
+          if (listener === l) set('error', reason === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
+        },
       });
       listener = l;
       set('listening', LINK_LINES.listening);
+      listenTimer = setTimer(() => {
+        listenTimer = null;
+        if (listener !== l) return;
+        stopListening();
+        set('error', LINK_LINES.timeout);
+      }, LISTEN_TIMEOUT_MS);
       const r = await l.start();
-      if (listener !== l) return;
-      if (r === 'denied') set('error', LINK_LINES.micDenied);
-      else if (r === 'unsupported') set('error', LINK_LINES.micUnsupported);
+      // Cancelled (or restarted) while the mic permission prompt was up.
+      if (listener !== l) { l.stop(); return; }
+      if (r === 'denied' || r === 'unsupported') {
+        stopListening();
+        set('error', r === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
+      }
     },
     async joinWithCode(code, typed = true) {
       if (deps.sim) { set('sim', LINK_LINES.sim); return; }
@@ -127,34 +186,43 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       await connect(code.trim(), typed ? LINK_LINES.typed : LINK_LINES.heard);
     },
     cancel() {
+      const wasListening = listener !== null;
       stopListening();
-      if (state === 'listening') set('idle', LINK_LINES.idle);
+      if (wasListening && state === 'listening') set('idle', LINK_LINES.idle);
     },
-    async rejoinSaved() {
-      if (deps.sim) return false;
-      const saved = loadPhonePair(deps.storage);
-      if (!saved?.token) return false;
-      return connect(saved.token, LINK_LINES.typed, LINK_LINES.savedFailed);
+    rejoinSaved,
+    async resume() {
+      if (deps.sim || state === 'connected' || state === 'joining' || state === 'listening') return false;
+      return rejoinSaved();
     },
     async stop() {
       attempt++;
       stopListening();
       const prev = current;
       current = null;
+      // Not connected any more, so a later resume() (pageshow) rejoins.
+      if (!deps.sim && state !== 'idle') set('idle', LINK_LINES.idle);
       await prev?.stop();
     },
   };
 }
 
-/** The phone UI: an empty-state "Join laptop" prompt while not connected, a
- *  small persistent Laptop pill (the phone shell hides the tools menu), and a
- *  join panel with the status line and the typed-code fallback. */
-export function mountLaptopLinkUi(root: HTMLElement, link: LaptopLink, opts: { sim?: boolean } = {}): { update(): void; destroy(): void } {
+/** The phone UI: an empty-state "Join laptop" prompt while not connected
+ *  (dismissable, and gone once a board is on screen), a small persistent
+ *  Laptop pill (the phone shell hides the tools menu), and a join panel with
+ *  the status line and the typed-code fallback. */
+export function mountLaptopLinkUi(
+  root: HTMLElement,
+  link: LaptopLink,
+  opts: { sim?: boolean; hasBoard?: () => boolean } = {},
+): { update(): void; destroy(): void } {
   const doc = root.ownerDocument;
   const prompt = doc.createElement('div');
   prompt.className = 'mc-join-prompt';
-  prompt.innerHTML = `<p class="mc-join-prompt-text">${LINK_LINES.idle}</p>
-    <button type="button" class="mc-btn mc-join-btn" data-join-laptop>Join laptop</button>`;
+  prompt.innerHTML = `<p class="mc-join-prompt-text"></p>
+    <button type="button" class="mc-btn mc-join-btn" data-join-laptop>Join laptop</button>
+    <button type="button" class="mc-join-dismiss" aria-label="Dismiss">×</button>`;
+  const promptText = prompt.querySelector<HTMLElement>('.mc-join-prompt-text')!;
   const pill = doc.createElement('button');
   pill.type = 'button';
   pill.className = 'mc-btn mc-join-pill';
@@ -173,11 +241,14 @@ export function mountLaptopLinkUi(root: HTMLElement, link: LaptopLink, opts: { s
   root.append(prompt, pill, panel);
   const status = panel.querySelector<HTMLElement>('.mc-join-status')!;
   let hideTimer = 0;
+  let dismissed = false;
 
   const update = (): void => {
     const s = link.state();
     status.textContent = link.message();
-    prompt.hidden = opts.sim === true || !(s === 'idle' || s === 'error') || !panel.hidden;
+    promptText.textContent = link.message();
+    prompt.hidden = opts.sim === true || dismissed || !(s === 'idle' || s === 'error')
+      || !panel.hidden || (opts.hasBoard?.() ?? false);
     pill.textContent = s === 'connected' ? 'Laptop ✓' : 'Join laptop';
     if (s === 'connected' && !panel.hidden) {
       clearTimeout(hideTimer);
@@ -188,6 +259,7 @@ export function mountLaptopLinkUi(root: HTMLElement, link: LaptopLink, opts: { s
 
   const onClick = (e: Event): void => {
     const t = e.target as HTMLElement;
+    if (t.closest('.mc-join-dismiss')) { dismissed = true; update(); return; }
     if (t.closest('[data-join-laptop]')) { openPanel(); void link.startJoin().then(update); return; }
     if (t.closest('.mc-join-close')) { link.cancel(); panel.hidden = true; update(); }
   };
@@ -202,11 +274,16 @@ export function mountLaptopLinkUi(root: HTMLElement, link: LaptopLink, opts: { s
   pill.addEventListener('click', onClick);
   panel.addEventListener('click', onClick);
   panel.addEventListener('submit', onSubmit);
+  // A board appearing (a local turn or one sent from the laptop) hides the prompt.
+  const world = root.querySelector('.mc-world');
+  const observer = world && typeof MutationObserver !== 'undefined' ? new MutationObserver(() => update()) : null;
+  if (observer && world) observer.observe(world, { childList: true });
   update();
   return {
     update,
     destroy() {
       clearTimeout(hideTimer);
+      observer?.disconnect();
       prompt.remove(); pill.remove(); panel.remove();
     },
   };

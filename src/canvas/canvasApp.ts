@@ -90,7 +90,7 @@ import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './edi
 import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
-import { createAiFeed, type AiFeed } from './aiFeed';
+import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, planExtraRan, type NextChips } from './nextSteps';
@@ -372,7 +372,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const aiHold = new Set<EngineId>();
   // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
   // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
-  const aiFeed = createAiFeed();
+  const aiFeed = createCanvasAiFeed(phoneShell);
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
