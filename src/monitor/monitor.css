@@ -1,0 +1,58 @@
+/* AI monitor: dark, big type, readable from across a room on a 1920x1080
+   external display (and still fine at 1470x800). Engine colours match the
+   canvas engine bar: Nano = --accent (sage), Gemini = --accent-2 (blue). */
+:root {
+  --m-bg: #14130F;
+  --m-panel: #1D1B16;
+  --m-border: #34312A;
+  --m-text: #F2EEE6;
+  --m-dim: #A39D90;
+  --m-nano: #6B8F71;
+  --m-gemini: #5A7BA6;
+  --m-action: #C98B3C;
+  --m-danger: #D8695C;
+}
+html, body { margin: 0; background: var(--m-bg); color: var(--m-text); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.mon { display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; padding: 24px 32px 28px; gap: 16px; }
+.mon-top { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 0 0 auto; }
+.mon-title { font-size: 18px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--m-dim); }
+.mon-bytes { font-size: clamp(40px, 5.2vw, 84px); font-weight: 750; line-height: 1.05; color: var(--m-action); font-variant-numeric: tabular-nums; }
+.mon-empty { margin: 0; text-align: center; font-size: 26px; color: var(--m-dim); flex: 0 0 auto; }
+.mon-stage { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1fr minmax(240px, 24%) 1fr; gap: 20px; }
+.mon-col {
+  --eng: var(--m-nano);
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  background: var(--m-panel); border: 1px solid var(--m-border); border-top: 6px solid var(--eng); border-radius: 18px; overflow: hidden;
+}
+.mon-col[data-engine="gemini"] { --eng: var(--m-gemini); }
+.mon-head { display: flex; align-items: center; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--m-border); flex: 0 0 auto; }
+.mon-dot { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--m-dim); box-sizing: border-box; flex: 0 0 auto; }
+.mon-col[data-state="working"] .mon-dot, .mon-col[data-state="done"] .mon-dot { background: var(--eng); border-color: var(--eng); }
+.mon-col[data-state="working"] .mon-dot { animation: mon-pulse 1.4s ease-out infinite; }
+.mon-col[data-state="queued"] .mon-dot { background: var(--m-action); border-color: var(--m-action); }
+.mon-col[data-state="failed"] .mon-dot { background: var(--m-danger); border-color: var(--m-danger); }
+.mon-col[data-state="unavailable"] .mon-dot { border-style: dashed; }
+@keyframes mon-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--eng) 70%, transparent); } 100% { box-shadow: 0 0 0 18px transparent; } }
+.mon-names { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.mon-name { font-size: 36px; line-height: 1.1; color: var(--eng); }
+.mon-where { font-size: 22px; color: var(--m-dim); }
+.mon-state { font-size: 24px; font-weight: 650; color: var(--m-dim); }
+.mon-col[data-state="working"] .mon-state { color: var(--eng); }
+.mon-col[data-state="failed"] .mon-state { color: var(--m-danger); }
+.mon-lines { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 24px 20px; }
+.mon-line { margin: 0 0 10px; font: 22px/1.35 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.mon-verb { display: inline-block; min-width: 5.5em; margin-right: 12px; color: var(--eng); font-weight: 700; }
+.mon-text { color: var(--m-text); }
+.mon-line--fail .mon-verb, .mon-line--fail .mon-text { color: var(--m-danger); }
+.mon-line--redact .mon-verb { color: var(--m-action); }
+.mon-line--done .mon-verb, .mon-line--replied .mon-verb { color: var(--m-dim); }
+.mon-lane { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 8px 4px; }
+.mon-note { margin: 0; padding: 14px 16px; border-radius: 14px; font-size: 22px; line-height: 1.3; background: var(--m-panel); border: 1px dashed var(--m-border); color: var(--m-text); overflow-wrap: anywhere; }
+.mon-note--handoff { border-style: solid; border-color: var(--m-action); }
+.mon-note--redact { border-color: var(--m-action); color: var(--m-action); font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+@media (max-width: 1500px) {
+  .mon { padding: 16px 20px 20px; gap: 10px; }
+  .mon-name { font-size: 30px; }
+  .mon-head { padding: 12px 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .mon-col[data-state="working"] .mon-dot { animation: none; } }

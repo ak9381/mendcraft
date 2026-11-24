@@ -230,6 +230,7 @@ export default defineConfig({
         canvas: path.join(root, 'canvas.html'),
         spike: path.join(root, 'spike.html'),
         mobile: path.join(root, 'mobile.html'),
+        monitor: path.join(root, 'monitor.html'),
       },
     },
   },

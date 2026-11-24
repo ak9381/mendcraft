@@ -81,6 +81,7 @@ import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './edi
 import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
+import { createAiFeed } from './aiFeed';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -261,6 +262,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
       <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
+      <button data-cmd="monitor" class="mc-btn">AI monitor</button>
       <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
       </div>
       <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
@@ -299,6 +301,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // review window — the board stays visible behind it.
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   if (phoneShell) {
+    root.querySelector('[data-cmd=monitor]')?.remove();
     const badge = document.createElement('div');
     badge.className = 'mc-route-badge';
     badge.setAttribute('role', 'status');
@@ -353,7 +356,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handoff: (from, to) => engineBar.handoff(from, to),
     setCloudBytes: (b) => engineBar.setCloudBytes(b),
     clearQueued: (engine) => { aiHold.delete(engine); engineBar.clearQueued(engine); },
-  } : undefined);
+  } : undefined, createAiFeed());
   // The bar replaces the swarm pill on desktop: mirror its agent summary
   // (minus the bytes tail, which the bar shows from the ledger) into the bar.
   const swarmPillEl = swarmEl.querySelector<HTMLElement>('.mc-swarm-pill');
@@ -1225,6 +1228,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       timers.push(window.setTimeout(() => revealGhostTile(tileEl, 'labels'), 420 + i * 110));
     });
     ghostTimers.set(frameId, timers);
+  }
+  function openMonitor(): void {
+    if (phoneShell) return;
+    const w = window.open('/monitor.html', 'mendcraft-monitor');
+    if (!w) say('Allow pop-ups to open the AI monitor.');
   }
   function ledgerTotalRender(): void {
     const t = ledger.totals();
@@ -2101,6 +2109,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
     if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true, true); return true; }
+    if (/^\s*(open\s+)?(the\s+)?ai\s+monitor\s*$/i.test(text)) { openMonitor(); return true; }
     if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
@@ -2193,7 +2202,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
