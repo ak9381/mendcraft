@@ -640,9 +640,7 @@
   padding: 0; overflow: hidden; }
 .mc-review-dialog.is-floating { right: auto; }
 /* Keep the review window left of the hand cluster (≤160px wide + 24px gap). */
-.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw) + 184px); }
-.mc-canvas:has(.mc-ai:not([hidden])) .mc-review-dialog:not(.is-floating) {
-  right: calc(max(max(180px, 13vw), min(var(--mc-ai-w, 320px), 340px) + 24px) + 184px); }
+.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) + 184px); }
 @media (max-width: 600px) { .mc-review-dialog:not(.is-floating) { right: 24px; } }
 .mc-review-head { display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
   padding: 10px 10px 8px 16px; border-bottom: 1px solid var(--border, #E4E0D8);
@@ -858,7 +856,9 @@
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
-  right: max(180px, 13vw);
+  /* Always left of the AI panel's slot (open or closed) so an auto-open never
+     covers it and clusterInset() stays constant. */
+  right: max(180px, 13vw, calc(min(var(--mc-ai-w, 320px), 340px) + 40px));
   transform: translateY(-50%);
   /* Below the review window (50) and modal dialogs, so they're never covered. */
   z-index: 49;
@@ -872,23 +872,6 @@
   max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
-.mc-canvas.is-ai-pinned .mc-hand-cluster {
-  right: max(max(180px, 13vw), min(calc(min(var(--mc-ai-w, 320px), 340px) + 24px), calc(100vw - 160px)));
-}
-/* Old per-chip `right` offsets are more specific when the AI panel is open
-   and would shove relatively-positioned cluster children off the left edge. */
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-fab-mic,
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-tools-chip,
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-toggle,
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-edit-reset,
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-register-chip,
-.mc-canvas.is-ai-pinned .mc-hand-cluster .mc-talk-control {
-  right: auto;
-  top: auto;
-  bottom: auto;
-  left: auto;
-}
-
 .mc-hand-cluster .mc-fab-mic,
 .mc-hand-cluster .mc-tools-chip,
 .mc-hand-cluster .mc-edit-toggle,
