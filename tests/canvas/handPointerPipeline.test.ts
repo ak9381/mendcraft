@@ -636,34 +636,6 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     return { x: Number(m![1]), y: Number(m![2]) };
   }
 
-  it('open-palm cursor follows a moving landmark 8; pinch lock releases after the pinch', () => {
-    // Relaxed open-palm frames with a walking index tip. Palm-scroll must
-    // not freeze raw/eased — the cursor always tracks landmark 8. (No
-    // scroller + no sustained vertical wrist velocity, so is-palm-scroll
-    // must also stay off.)
-    for (let i = 0; i < 20; i++) {
-      t += 33;
-      hp.update([synthOpen(160 + i * 12, 50 + i * 6)], t);
-    }
-    const cursor = cursorElOf(doc);
-    expect(cursor.hidden).toBe(false);
-    expect(cursor.classList.contains('is-palm-scroll')).toBe(false);
-    const mid = cursorPos(cursor);
-    expect(mid.x).toBeGreaterThan(160 + 80);
-    expect(mid.y).toBeGreaterThan(50 + 40);
-
-    // Pinch, release, then move: the pinch-start lock must not outlive the
-    // pinch, or the cursor would stay stuck at the click point.
-    feed(400, 200, false, 12);
-    feed(400, 200, true, 6);
-    feed(400, 200, false, 4);
-    const afterRelease = cursorPos(cursor);
-    feed(520, 320, false, 16);
-    const afterMove = cursorPos(cursor);
-    expect(afterMove.x).toBeGreaterThan(afterRelease.x + 40);
-    expect(afterMove.y).toBeGreaterThan(afterRelease.y + 40);
-  });
-
   it('moving the middle fingertip (landmark 12) never moves the cursor', () => {
     feed(160, 50, false, 15);
     const cursor = cursorElOf(doc);

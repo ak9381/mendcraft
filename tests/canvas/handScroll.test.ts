@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, palmCentroid, createCriticalSpring, createPalmScroll, PALM_GAIN, PALM_HOLD_MS, PALM_INTENT_MS, PALM_STILL_MS, PALM_DEADZONE_PX } from '../../src/canvas/handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, palmCentroid, createCriticalSpring, createPalmScroll, PALM_GAIN, PALM_HOLD_MS, PALM_DEADZONE_PX } from '../../src/canvas/handScroll';
 
 // Node-env fake (the suite doesn't use jsdom): just the layout props + the
 // getComputedStyle path that scrollableAncestor reads.
@@ -129,10 +129,8 @@ describe('handScroll — drag velocity + momentum fling (A2-025 / C156)', () => 
 });
 
 describe('palm scroll smoothness', () => {
-  it('engages on ~80 ms of vertical motion, not pose alone, and uses 3× gain with a small deadzone', () => {
-    expect(PALM_INTENT_MS).toBe(80);
-    expect(PALM_HOLD_MS).toBe(PALM_INTENT_MS);
-    expect(PALM_STILL_MS).toBe(250);
+  it('engages quickly (~100 ms) and uses 3× gain with a small deadzone', () => {
+    expect(PALM_HOLD_MS).toBe(100);
     expect(PALM_GAIN).toBe(3);
     expect(PALM_DEADZONE_PX).toBeLessThanOrEqual(6);
   });

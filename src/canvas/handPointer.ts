@@ -20,7 +20,7 @@
 // a control activates it (click / focus); pinch on a range slider drags it.
 
 import { createOneEuroFilter } from '../input/oneEuro';
-import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, PALM_INTENT_MS, PALM_STILL_MS, PALM_INTENT_VY, palmCentroid, createPalmScroll } from './handScroll';
+import { createDragVelocity, createMomentum, scrollableAncestor, pickPalmScroller, PALM_HOLD_MS, palmCentroid, createPalmScroll } from './handScroll';
 import { magnetPull, tooltipTextFor } from '../ui/handHover';
 import { getGestureTrace, targetIdOf } from './gestureTrace';
 import { fieldCaretAt } from '../input/caretAt';
@@ -403,13 +403,9 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let dwellProgress = 0;
   let pinchHeld = false;
   let pinchDownTs: number | null = null;
-  let palmIntentSince = 0;
-  let palmStillSince = 0;
-  let palmY: number | null = null;
-  let palmYt = 0;
+  let palmSince = 0;
   let palmScrolling = false;
   const palmMotion = createPalmScroll();
-  let lastRaw: P = { x: -1, y: -1 };
   let pinchFocus: HTMLElement | null = null;
   let confirmStarted = 0;
   let fistScrolling = false;
@@ -652,31 +648,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     if (!palmScrolling) return;
     const vy = palmMotion.release();
     palmScrolling = false;
-    palmIntentSince = 0;
-    palmStillSince = 0;
-    palmY = null;
+   
+    palmSince = 0;
     if (flingRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(flingRaf); flingRaf = 0; }
     startFling({ vx: 0, vy });
-  }
-
-  function scrollerAt(p: P): HTMLElement | null {
-    const hit = deepElementFromPoint(doc, p.x, p.y);
-    return pickPalmScroller(hit, [
-      (hit as HTMLElement | null)?.closest?.('.mc-review-body'),
-      (hit as HTMLElement | null)?.closest?.('.mc-ai-body'),
-      (hit as HTMLElement | null)?.closest?.('.mc-term-body'),
-      (hit as HTMLElement | null)?.closest?.('.mc-frame-body'),
-      ...palmFallbacks(),
-    ]);
-  }
-
-  /** Cursor / click locks that must not survive a pose change or hand loss.
-   *  The pinch-start freeze is the only one allowed, and only while pinched. */
-  function clearLocksUnlessPinching() {
-    if (pinched || pinchHeld) return;
-    frozen = null;
-    pinchAnchor = null;
-    pinchFocus = null;
   }
 
   function press(down: boolean) {
@@ -990,7 +965,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       scrollEl = null; scrolled = false; cancelFling(); dragVel.reset();
       suppressRelease = false;
       pinchHeld = false; pinchDownTs = null;
-      palmScrolling = false; palmIntentSince = 0; palmStillSince = 0; palmY = null; palmMotion.reset();
+      palmScrolling = false; palmSince = 0; palmMotion.reset(); palmMotion.reset();
       pinchFocus = null; confirmStarted = 0; fistScrolling = false;
       paintConfirm(null, false);
       liftTile(null, false);
@@ -1003,7 +978,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
     euro.reset(); ratioEuro.reset(); deadZone.reset(); pinchFsm.reset(); pinchBase.reset(); history.reset(); sticky.reset(); clickTraceId = null;
     pinchHeld = false; pinchDownTs = null;
-    palmScrolling = false; palmIntentSince = 0; palmStillSince = 0; palmY = null; palmMotion.reset();
+    palmScrolling = false; palmSince = 0; palmMotion.reset();
     paint();
     opts.onLost?.();
   }
@@ -1048,9 +1023,6 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       const pose = classifyGesture(h as unknown as GesturePt[]);
       lastClass = pose;
       lastRatio = pinchRatio(h);
-      // Landmark 8 in screen space — always recorded, never held at a palm freeze.
-      lastRaw = deadZone.apply(mapToScreen(tip, innerWidth, innerHeight));
-      clearLocksUnlessPinching();
       const isFist = pose === 'fist';
       const closingToFist = isFist || isClosingToFist(h as unknown as GesturePt[]);
       const rawRatio = pinchRatio(h);
@@ -1059,16 +1031,16 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         ? Math.min(rawRatio, pinchRatioTo(h, pinchAnchor))
         : rawRatio;
       const closing = !isFist && !closingToFist && fsmRatio < PINCH_LIVE.off;
-      // The cursor always tracks landmark 8, except during an active pinch
-      // when frozen holds the pre-pinch click point (8↔12 swap).
-      const pinchLock = !!(frozen && (pinched || pinchHeld));
-      const feedFilter = isFist || !pinchLock;
+      // While the hand is closing or already pinched, do not feed live tips
+      // into the 1-Euro filter — MediaPipe often swaps landmark 8 with 12
+      // (middle) mid-pinch, which would drag the cursor and the click.
+      const feedFilter = isFist || (!closing && !frozen);
       let live: P;
       if (feedFilter) {
         const s = euro.filter(tip.x, tip.y, t);
         live = deadZone.apply(mapToScreen(s, innerWidth, innerHeight));
       } else {
-        live = frozen ?? lastRaw;
+        live = frozen ?? lastOpenTip ?? deadZone.apply(mapToScreen(tip, innerWidth, innerHeight));
       }
 
       // A fist (or a hand mid-curl into one) must never start or finish a
@@ -1087,6 +1059,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         history.push(live, t);
         pinchHeld = false; pinchDownTs = null;
         if (palmScrolling) endPalmScroll();
+        palmSince = 0;
         cancelPinchWithoutClick();
         if (interact) {
           if (!fisted) {
@@ -1102,59 +1075,51 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         return;
       }
 
-      // Palm scroll: intent by motion, never by pose alone, and NEVER freeze
-      // the cursor. Landmark 8 always drives aim(); only a pinch-start lock
-      // may hold the click point, and only while pinched.
+      // Relaxed open-palm swipe: ~100 ms hold on 3+ loosely extended fingers,
+      // then the wrist+MCP centroid drives a 3×-gained, spring-smoothed scroll
+      // applied on animation frames (not camera frames). Fist already returned
+      // above so it always wins.
       const gp = h as unknown as GesturePt[];
       const openPalm = pose === 'open-palm' || isRelaxedOpenPalm(gp) || isOpenPalmPose(gp);
-      const palmPt = mapToScreen(palmCentroid(h), innerWidth, innerHeight);
-      let palmVy = 0;
-      if (palmY != null && t > palmYt) palmVy = (palmPt.y - palmY) / (t - palmYt);
-      palmY = palmPt.y;
-      palmYt = t;
-      const overScroll = scrollerAt(live);
-      const moving = Math.abs(palmVy) >= PALM_INTENT_VY;
-      if (openPalm && overScroll && moving) {
-        if (!palmIntentSince) palmIntentSince = t;
-        palmStillSince = 0;
-        if (!palmScrolling && t - palmIntentSince >= PALM_INTENT_MS) {
+      if (openPalm) {
+        if (!palmSince) palmSince = t;
+        if (t - palmSince >= PALM_HOLD_MS) {
           cancelPressWithoutClick();
           if (fisted) { fisted = false; fistUp(live); }
           pinchHeld = false; pinchDownTs = null;
-          palmScrolling = true;
-          cancelFling();
-          palmMotion.reset();
-          scrollEl = overScroll;
-          scrollAxes = { x: false, y: true };
-          palmMotion.sample(palmPt.y, t);
-          if (scrollEl && !dryRun) ensurePalmRaf();
-        } else if (palmScrolling) {
-          if (overScroll !== scrollEl) scrollEl = overScroll;
-          palmMotion.sample(palmPt.y, t);
-          if (!rafAvailable && scrollEl && !dryRun) scrollEl.scrollTop -= palmMotion.tick(33);
+          frozen = frozen ?? lastOpenTip ?? live;
+          lastOpenTip = frozen;
+          const c = mapToScreen(palmCentroid(h), innerWidth, innerHeight);
+          if (!palmScrolling) {
+            palmScrolling = true;
+            cancelFling();
+            palmMotion.reset();
+            {
+              const hit = deepElementFromPoint(doc, frozen.x, frozen.y);
+              scrollEl = pickPalmScroller(hit, [
+                (hit as HTMLElement | null)?.closest?.('.mc-review-body'),
+                (hit as HTMLElement | null)?.closest?.('.mc-ai-body'),
+                (hit as HTMLElement | null)?.closest?.('.mc-term-body'),
+                (hit as HTMLElement | null)?.closest?.('.mc-frame-body'),
+                ...palmFallbacks(),
+              ]);
+            }
+            scrollAxes = { x: false, y: true };
+            palmMotion.sample(c.y, t);
+            if (scrollEl && !dryRun) ensurePalmRaf();
+          } else {
+            palmMotion.sample(c.y, t);
+            if (!rafAvailable && scrollEl && !dryRun) {
+              scrollEl.scrollTop -= palmMotion.tick(33);
+            }
+          }
+          aim(frozen, t, t, false);
+          return;
         }
       } else if (palmScrolling) {
-        // Pose change or leaving the panel drops immediately; a still wrist
-        // waits ~250 ms so a brief pause mid-swipe does not cancel the fling.
-        const poseGone = !openPalm;
-        const leftPanel = !overScroll;
-        if (!moving && !palmStillSince) palmStillSince = t;
-        if (moving) palmStillSince = 0;
-        if (poseGone || leftPanel || (palmStillSince && t - palmStillSince >= PALM_STILL_MS)) {
-          endPalmScroll();
-        } else if (openPalm) {
-          palmMotion.sample(palmPt.y, t);
-          if (!rafAvailable && scrollEl && !dryRun) scrollEl.scrollTop -= palmMotion.tick(33);
-        }
+        endPalmScroll();
       } else {
-        palmIntentSince = 0;
-        palmStillSince = 0;
-      }
-      // Cursor always follows landmark 8 here — even while palm-scrolling.
-      if (palmScrolling) {
-        lastOpenTip = live;
-        aim(live, t, t, false);
-        return;
+        palmSince = 0;
       }
 
       // Only a confirmed curl (and only when the thumb–index gap is not already
@@ -1217,10 +1182,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         // LIVE hand position — drifting past slop must cancel the hold.
         if (interact) opts.onPinch?.({ phase: 'move', p: live, now: t });
       } else if (closing && lastOpenTip) {
+        // Pre-engage close: keep showing the last open index tip so a
+        // mid-close landmark swap can't walk the cursor onto the middle finger.
         // Dwell is off — a coming pinch must not also fire a dwell click.
-        // The cursor still tracks landmark 8; lastOpenTip is only used as
-        // the pinch-start click lock, and only once the pinch engages.
-        aim(live, t, t, false);
+        aim(lastOpenTip, t, t, false);
       } else {
         if (st.justUp) { press(false); frozen = null; pinchAnchor = null; pinchFocus = null; confirmStarted = 0; paintConfirm(null, false); }
         aim(live, t, t, interact);
@@ -1252,7 +1217,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       return {
         classification: lastClass,
         pinchDistance: lastRatio,
-        raw: { ...lastRaw },
+        raw: { ...pt },
         eased: displayPoint(pt),
         focusedTargetId: targetIdOf(target ?? pinchFocus),
         clickTarget,

@@ -94,15 +94,8 @@ export function createMomentum(opts: { friction?: number; minSpeed?: number } = 
   };
 }
 
-/** Vertical wrist velocity must stay above PALM_INTENT_VY for this long to
- *  count as a scroll (intent by motion, not pose alone). */
-export const PALM_INTENT_MS = 80;
-/** Keep the old name as an alias so existing imports stay valid. */
-export const PALM_HOLD_MS = PALM_INTENT_MS;
-/** Disengage palm scroll after the wrist has been still this long. */
-export const PALM_STILL_MS = 250;
-/** Min |vy| (screen px/ms) to count as a vertical scroll intent. */
-export const PALM_INTENT_VY = 0.08;
+/** Open-palm swipe: short hold so a relaxed hand engages without strain. */
+export const PALM_HOLD_MS = 100;
 /** Ignore small wrist jitter on the palm centroid (screen px). */
 export const PALM_DEADZONE_PX = 2;
 /** Ignore wrist velocity under this (px/ms) — ~2 px per 50 ms. */
