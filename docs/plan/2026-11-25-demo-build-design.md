@@ -38,3 +38,15 @@ Optional build-list item 8 (gimbal photo ID, dashboard-from-collected-devices, r
 | BroadcastChannel between two windows of the same origin | Zero infra, offline, instant; same machine only | **Yes** (external display) |
 | Relay/Firestore guest page | Works on iPad; needs pairing + network | Later, same page |
 | Move the AI panel itself to a popup window | Couples layout; breaks when popup blocked | No |
+
+## Decision (25 Nov): one integrated journey, not demo beats
+
+Akash: features should be truly integrated end to end, not separate things to demo. Ruling:
+
+- **One journey** is the product spine: empty canvas → connect (phones pair, point at the lamp) → room dashboard → music on the speaker → save → floor plan → accessibility check / 3D / DXF → Kannada → offline + reconnect → board to phone. Every step is reachable from the previous one in the UI, not only by a demo phrase.
+- **Next-step suggestions** on each board: 2–3 context chips generated on device by Nano (rules fallback when Nano is absent; labelled honestly) — e.g. lamp dashboard → "Play music", "Save", "Draw the floor plan"; floor plan → "Check accessibility", "Show 3D". Chips are dwell/voice/mouse targets.
+- **Judge replay = the same journey played by the product** (`?replay=demo`), using real reviews and engines (SIM-labelled under `?sim=1`). The same timeline drives an end-to-end test that fails if any step breaks.
+- **No faked rollback.** Undo is real and part of the journey.
+- **Cut:** on-screen keyboard (removed), gimbal photo ID (optional, not planned).
+
+Wave 2 of the plan is re-scoped to: journey state + next-step suggestions, then each build-list item as a journey step (pair-first connect, point-to-connect, Spotify, board-to-phone), then replay + end-to-end test.
