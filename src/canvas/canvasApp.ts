@@ -17,7 +17,9 @@ import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
 import { createCanvasHistory, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pointConnect, roomScan, type ConnectTurnResult } from './connectTurns';
+import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
+import { breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -860,8 +862,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
       if (!cur || !id) return;
       if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
-      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: cur.brightness + 20 });
-      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: cur.brightness - 20 });
+      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: lampStep(cur.brightness + 20) });
+      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: lampStep(cur.brightness - 20) });
       if (a.name === 'music.playPause') void store.act({ deviceId: id, playing: !cur.playing });
       if (a.name === 'music.next') void store.act({ deviceId: id, next: true });
       if (a.name === 'music.louder') void store.act({ deviceId: id, volume: Math.min(100, (cur.volume ?? 50) + 10) });
@@ -1772,7 +1774,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     void languageTurn('add kannada');
   }
+  // Like aiTurn: whatever way the turn ends, the cards stop saying Working
+  // (the Nano card was left on Working after the Kannada handoff).
   async function languageTurn(utterance: string): Promise<void> {
+    try { await languageTurnRun(utterance); } finally { engineBar?.settle(); }
+  }
+  async function languageTurnRun(utterance: string): Promise<void> {
     const engine = engineFor('gemini', JSON.stringify(SCRIPTED_KN_PACK));
     const prompt = [
       'Translate the smart-canvas UI into Kannada. Reply with JSON only:',
@@ -1840,8 +1847,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           const cur = d.brightness ?? 50;
           if (intent === 'lampOn') void store.act({ deviceId: d.id, on: true });
           else if (intent === 'lampOff') void store.act({ deviceId: d.id, on: false });
-          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: Math.min(100, cur + 20) });
-          else void store.act({ deviceId: d.id, brightness: Math.max(0, cur - 20) });
+          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
+          else void store.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
         say(statusText(sk, pack));
@@ -2198,6 +2205,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     autoHideAi();
   }
 
+  /** An impossible request: Nano proposes (scripted + SIM in ?sim=1), real
+   *  validation refuses, Nano's terminal fails red, and nothing is applied. */
+  async function breakTurn(text: string, attempt: Attempt, frameId: string | null): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const engine = engineFor('nano', scriptedReply(attempt));
+    aiSent(text, { engine: 'nano', prompt: breakPrompt(text), sent: null, routeLine: `${engine.sim ? 'SIM · ' : ''}Checked on this device. Nothing sent.`, sim: engine.sim }, { task: 'generic' });
+    try {
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: panels.forEngine('nano'), say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
+    } finally { settleSwarm(); engineBar?.settle(); autoHideAi(); }
+  }
+
   // ---- commands ----
   /** Kannada heard line + English on the Talk caption. The English comes only
    *  from the active pack's own intent map (local); no translation → heard only. */
@@ -2277,6 +2296,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       case 'device': {
         const dc = r.result;
+        // An impossible level is refused by validation, never clamped.
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
@@ -2317,7 +2339,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         void nameTurn(id, text);
         return true;
       }
-      case 'openEnded': break;
+      case 'openEnded': {
+        // "add a control for the oven" with no oven connected: refused, not chatted about.
+        const attempt = impossibleAttempt(text, deviceRefs());
+        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        break;
+      }
     }
     void openEndedTurn(text);
     return true;
@@ -2995,6 +3022,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ctx: () => ({
       lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
       pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      lampLabel: deviceRefs().find((d) => d.kind === 'lamp')?.label,
       savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
     }),
     nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },

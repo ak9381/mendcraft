@@ -1,6 +1,7 @@
 // Tile action -> intent -> connector. The device store is the source of truth;
 // the tile only ever shows what the store projects. Optimistic pending state,
 // confirmed on ack, rolled back with an error on failure or timeout.
+import { levelRefusal } from './deviceGuard';
 import { deviceUpdate, type A2uiMessage, type DeviceState } from './surfacePlan';
 
 export type LampIntent = { deviceId: string; on?: boolean; brightness?: number };
@@ -48,6 +49,13 @@ export function createDeviceStore(
     async act(intent) {
       const prev = state[intent.deviceId];
       if (!prev) throw new Error(`unknown device ${intent.deviceId}`);
+      // Refuse, never clamp: an out-of-range level changes nothing and says why.
+      const refusal = levelRefusal(intent);
+      if (refusal) {
+        state[intent.deviceId] = { ...prev, pending: false, error: refusal };
+        publish(intent.deviceId);
+        return state[intent.deviceId];
+      }
 
       const brightness = intent.brightness === undefined
         ? prev.brightness

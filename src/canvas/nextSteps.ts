@@ -15,6 +15,8 @@ export interface NextStepCtx extends JourneyCtx {
   savedRoom?: boolean;
   /** ?sim=1: rules only, and labelled so. */
   sim?: boolean;
+  /** Label of a connected lamp, so "Try to break it" names one that exists. */
+  lampLabel?: string;
 }
 
 export interface NextStepsResult { steps: NextStep[]; source: 'nano' | 'rules'; sim?: boolean }
@@ -39,6 +41,8 @@ const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
   everything: { label: 'Show everything', say: 'show everything' },
   'new-board': { label: 'New board', say: 'new board' },
   undo: { label: 'Undo', say: 'undo' },
+  // A real safety-net beat: the request breaks a limit, validation refuses it.
+  'try-to-break': { label: 'Try to break it', say: 'set the desk lamp to 500% brightness' },
 };
 
 // Not here yet because run() has no route for them in this build:
@@ -48,7 +52,7 @@ const RULES: Record<JourneyStep, string[]> = {
   devices: ['connect-room', 'connect-device', 'floorplan'],
   dashboard: ['connect-speaker', 'save', 'floorplan'],
   music: ['play-music', 'save', 'floorplan'],
-  saved: ['floorplan', 'kannada', 'everything'],
+  saved: ['floorplan', 'try-to-break', 'kannada'],
   floorplan: ['check', '3d', 'dxf'],
   checked: ['kannada', '3d', 'dxf'],
   language: ['3d', 'dxf', 'everything'],
@@ -59,9 +63,13 @@ const FILLERS = ['everything', 'new-board'];
 
 /** Steps whose effect the board shape can't show; once run on a board (by
  *  chip or by voice, and only when it worked) they are not offered there again. */
-export const ONE_SHOT: ReadonlySet<string> = new Set(['check', '3d', 'dxf', 'play-music']);
+export const ONE_SHOT: ReadonlySet<string> = new Set(['check', '3d', 'dxf', 'play-music', 'try-to-break']);
 
-const step = (id: string): NextStep => ({ id, ...CATALOG[id] });
+const step = (id: string, ctx?: NextStepCtx): NextStep => {
+  const s: NextStep = { id, ...CATALOG[id] };
+  if (id === 'try-to-break') s.say = `set the ${ctx?.lampLabel?.toLowerCase() || 'lamp'} to 500% brightness`;
+  return s;
+};
 
 /** The deterministic 2–3 steps for this journey step. */
 export function ruleSuggestions(at: JourneyStep, ctx: NextStepCtx): NextStep[] {
@@ -72,7 +80,7 @@ export function ruleSuggestions(at: JourneyStep, ctx: NextStepCtx): NextStep[] {
   if (ctx.lang && ctx.lang !== 'en') skip.add('kannada');
   const out = ids.filter((id) => !skip.has(id));
   for (const f of FILLERS) if (out.length < 2 && !out.includes(f)) out.push(f);
-  return out.slice(0, MAX_NEXT_STEPS).map(step);
+  return out.slice(0, MAX_NEXT_STEPS).map((id) => step(id, ctx));
 }
 
 /** A CAD extra's reply line that means it actually ran (not "Nothing to …"). */
@@ -228,7 +236,7 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
       const d = done.get(f.id) ?? new Set<string>();
       const ctx: NextStepCtx = { ...host.ctx(), done: [...d], checked: d.has('check') };
       const at = journeyStepOf(f.board, ctx);
-      const sig = JSON.stringify([at, ctx.done, ctx.lang, ctx.online, !!ctx.savedRoom, !!ctx.pairing, !!ctx.sim]);
+      const sig = JSON.stringify([at, ctx.done, ctx.lang, ctx.online, !!ctx.savedRoom, !!ctx.pairing, !!ctx.sim, ctx.lampLabel]);
       if (sig === lastSig && f.el.querySelector(':scope > .mc-next')) return;
       lastSig = sig;
       const mine = ++seq;
