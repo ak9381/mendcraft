@@ -25,7 +25,7 @@ export function makeHand(spec: HandSpec): Pt[] {
   p[2] = { x: 0.4, y: 0.8 };
   p[3] = { x: 0.37, y: 0.72 };
   if (spec.thumb === 'up') p[4] = { x: 0.3, y: 0.5 };
-  else if (spec.thumb === 'pinch') p[4] = { x: p[TIP.index].x - 0.01, y: p[TIP.index].y + 0.01 };
+  else if (spec.thumb === 'pinch') p[4] = { x: p[TIP.index].x - 0.002, y: p[TIP.index].y + 0.002 };
   else p[4] = { x: 0.45, y: 0.78 };
   return p;
 }

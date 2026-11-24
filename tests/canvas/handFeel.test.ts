@@ -49,31 +49,29 @@ describe('one pinch definition everywhere', () => {
 
 describe('pinch machine (debounce + hysteresis + refractory)', () => {
   const OPEN = 0.8;
-  const CLOSED = 0.2;
+  const CLOSED = 0.02;
   const BETWEEN = (HAND_FEEL.pinchOn + HAND_FEEL.pinchOff) / 2;
 
   it('needs engageFrames consecutive closed frames to engage', () => {
     const m = createPinchMachine();
-    expect(m.update(CLOSED, 0).pinched).toBe(false);
-    expect(m.update(CLOSED, 33).pinched).toBe(false);
-    const third = m.update(CLOSED, 66);
-    expect(third.pinched).toBe(true);
-    expect(third.justDown).toBe(true);
+    expect(m.update(CLOSED, 0).pinched).toBe(false); // one-frame debounce
+    const second = m.update(CLOSED, 33);
+    expect(second.pinched).toBe(true);
+    expect(second.justDown).toBe(true);
   });
 
   it('a 1–2 frame dip never engages (no click from tracking noise)', () => {
     const m = createPinchMachine();
     m.update(CLOSED, 0);
-    m.update(CLOSED, 33);
-    m.update(OPEN, 66); // dip broken before the third frame
-    m.update(CLOSED, 100);
-    const r = m.update(CLOSED, 133);
+    m.update(OPEN, 33); // dip broken before the confirming frame
+    m.update(CLOSED, 66);
+    const r = m.update(OPEN, 100);
     expect(r.pinched).toBe(false);
   });
 
   it('does not chatter around the threshold (hysteresis band holds)', () => {
     const m = createPinchMachine();
-    for (const t of [0, 33, 66]) m.update(CLOSED, t);
+    for (const t of [0, 33]) m.update(CLOSED, t);
     expect(m.pinched).toBe(true);
     // Drifting into the between-band must NOT release…
     for (const t of [100, 133, 166, 200]) expect(m.update(BETWEEN, t).pinched).toBe(true);
@@ -86,12 +84,12 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
 
   it('refractory: no new engage right after a click', () => {
     const m = createPinchMachine();
-    for (const t of [0, 33, 66]) m.update(CLOSED, t);
+    for (const t of [0, 33]) m.update(CLOSED, t);
     m.update(OPEN, 100);
     m.update(OPEN, 133); // released → click at t=133
     for (const t of [166, 200, 233, 266]) m.update(CLOSED, t);
     expect(m.pinched).toBe(false); // still inside refractoryMs
-    for (const t of [700, 733, 766]) m.update(CLOSED, t);
+    for (const t of [700, 733]) m.update(CLOSED, t);
     expect(m.pinched).toBe(true); // refractory over
   });
 });
@@ -109,8 +107,8 @@ describe('cursor smoothing + dead zone', () => {
     expect(max - min).toBeLessThan(0.12 * 0.7); // ≥30% jitter reduction
     expect(min).toBeGreaterThan(HAND_FEEL.pinchOff); // never dips toward "pinch"
     // A deliberate close still comes through within a couple of frames.
-    f.filter(0.2, 61 * 33);
-    expect(f.filter(0.2, 62 * 33)).toBeLessThan(HAND_FEEL.pinchOn);
+    f.filter(0.02, 61 * 33);
+    expect(f.filter(0.02, 62 * 33)).toBeLessThan(HAND_FEEL.pinchOn);
   });
 
   it('a single-frame ratio spike cannot engage the pinch machine', () => {

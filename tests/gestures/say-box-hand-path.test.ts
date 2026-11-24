@@ -28,7 +28,7 @@ function synthHand(px: number, py: number, pinched: boolean): Pt[] {
   lm[10] = { x: cx + 0.05, y: palmY + 0.04 }; lm[12] = { x: cx + 0.05, y: palmY };
   lm[13] = { x: cx + 0.08, y: cy + 0.22 }; lm[14] = { x: cx + 0.08, y: palmY + 0.04 }; lm[16] = { x: cx + 0.08, y: palmY };
   lm[17] = { x: cx + 0.12, y: cy + 0.22 }; lm[18] = { x: cx + 0.12, y: palmY + 0.04 }; lm[20] = { x: cx + 0.12, y: palmY };
-  const gap = pinched ? 0.05 : 0.16;
+  const gap = pinched ? 0.006 : 0.16;
   lm[1] = { x: cx - gap, y: cy + 0.18 }; lm[2] = { x: cx - gap, y: cy + 0.12 }; lm[3] = { x: cx - gap, y: cy + 0.06 };
   lm[4] = { x: cx - gap, y: cy };
   return lm;

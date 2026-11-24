@@ -19,7 +19,7 @@ function hand(cx: number, cy: number, gap: number): Pt[] {
   return pts;
 }
 const OPEN = 0.15;
-const PINCH = 0.02;
+const PINCH = 0.006;
 
 describe('C192 a hand that re-enters the frame after leaving resumes cleanly', () => {
   it('a slot forgotten on exit is freely reassigned (with a tracking event) when the hand comes back', () => {
@@ -134,30 +134,27 @@ describe('C202/C203/C204/C205 hand-profile knobs: pinch thresholds, target size,
 });
 
 describe('C207 a very slow, deliberate pinch still engages (no upper time bound)', () => {
-  it('3 consecutive sub-threshold frames engage even spread 10s apart', () => {
+  it('engageFrames consecutive sub-threshold frames engage even spread 10s apart', () => {
     const m = createPinchMachine();
-    expect(m.update(0.1, 0).pinched).toBe(false);
-    expect(m.update(0.1, 10_000).pinched).toBe(false);
-    const r = m.update(0.1, 20_000); // 3rd consecutive closed frame, 20s after the first
+    expect(m.update(0.03, 0).pinched).toBe(false); // 1st closed frame, one-frame debounce
+    const r = m.update(0.03, 10_000); // 2nd consecutive closed frame, 10s later
     expect(r.pinched).toBe(true);
     expect(r.justDown).toBe(true);
   });
 });
 
-describe('C209 a fast flick with only 2 qualifying frames never engages — 3 is the real floor, not a time window', () => {
-  it('2 sub-threshold frames inside 10ms do not engage; a 3rd (even just as fast) does', () => {
+describe('C209 a fast flick with only 1 qualifying frame never engages — 2 is the real floor, not a time window', () => {
+  it('1 sub-threshold frame does not engage; a 2nd (even just as fast) does', () => {
     const m = createPinchMachine();
-    m.update(0.1, 0);
-    const r2 = m.update(0.1, 5);
-    expect(r2.pinched).toBe(false); // only 2 frames so far
-    m.update(0.6, 8); // opens again — the "flick" ends short
-    expect(m.update(0.6, 9).pinched).toBe(false);
+    const r1 = m.update(0.03, 0);
+    expect(r1.pinched).toBe(false); // only 1 frame so far
+    m.update(0.8, 5); // opens again — the "flick" ends short
+    expect(m.update(0.8, 9).pinched).toBe(false);
 
     const fast = createPinchMachine();
-    fast.update(0.1, 100);
-    fast.update(0.1, 103);
-    const r3 = fast.update(0.1, 106); // 3 frames inside 6ms — still engages
-    expect(r3.pinched).toBe(true);
+    fast.update(0.03, 100);
+    const r2 = fast.update(0.03, 103); // 2 frames inside 3ms — engages
+    expect(r2.pinched).toBe(true);
   });
 });
 

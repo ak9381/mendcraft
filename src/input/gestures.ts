@@ -40,7 +40,7 @@ const PINKY = [17, 18, 20] as const;
  *  DEFAULT_PINCH_ON (handLogic.ts) and HAND_FEEL.pinchOn (handFeel.ts) so a
  *  "pinch" means the same thing to the pointer, the keep gesture and the
  *  overlay — a consistency test guards it. */
-export const PINCH_CLASSIFY = 0.38;
+export const PINCH_CLASSIFY = 0.045;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -124,12 +124,15 @@ export function isClosingToFist(p: Pt[]): boolean {
   return reach(8) <= othersMax + 0.28;
 }
 
-const OPEN_TIPS = [4, 8, 12, 16, 20] as const;
-/** Min tip→palm / palm-size for a finger to count as open (inverse of fist curl). */
-export const OPEN_PALM_REACH = 1.15;
+/** Fingers that must be stretched for an open palm (thumb is optional —
+ *  a real webcam palm often has a relaxed, only slightly-extended thumb). */
+const OPEN_PALM_TIPS = [8, 12, 16, 20] as const;
+/** Min tip→palm / palm-size for a finger to count as open. Loosened so a
+ *  real open hand (not a fully-splayed demo pose) still classifies. */
+export const OPEN_PALM_REACH = 0.95;
 
-/** All five fingertips stretched away from the palm — not a pointing hand
- *  (only the index out) and not a fist. */
+/** Four fingertips stretched away from the palm — not a pointing hand
+ *  (only the index out) and not a fist. Thumb extension is optional. */
 export function isOpenPalmPose(p: Pt[]): boolean {
   if (!p || p.length < 21) return false;
   if (isFistPose(p) || isClosingToFist(p)) return false;
@@ -138,7 +141,7 @@ export function isOpenPalmPose(p: Pt[]): boolean {
   if (pinchRatio(p) < PINCH_CLASSIFY) return false;
   const size = handSize(p);
   const palm = palmCenter(p);
-  return OPEN_TIPS.every((i) => dist(p[i], palm) / size >= OPEN_PALM_REACH);
+  return OPEN_PALM_TIPS.every((i) => dist(p[i], palm) / size >= OPEN_PALM_REACH);
 }
 
 export interface FingerStates {
@@ -168,7 +171,6 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   if (!p || p.length < 21) return 'none';
   const s = fingerStates(p);
   const fingers = Number(s.index) + Number(s.middle) + Number(s.ring) + Number(s.pinky);
-  const allOpen = s.index && s.middle && s.ring && s.pinky;
   const ratio = pinchRatio(p);
   const fistLike = isFistPose(p);
   const thumbPalm = dist(p[THUMB_TIP], palmCenter(p)) / handSize(p);
@@ -185,12 +187,15 @@ export function classifyGesture(p: Pt[]): StaticGesture {
   // isClosingToFist still blocks the last frames of a curl-into-fist so
   // those don't fire a pinch click.
   if (ratio < PINCH_CLASSIFY && s.index && !isClosingToFist(p)) return 'pinch';
-  // Open palm: five-finger palm-normalised test, with the legacy
-  // all-four-extended check as a fallback for synthetic fixtures.
-  // Only after pinch, so a pinch with splayed fingers still zooms.
-  if (isOpenPalmPose(p) || allOpen) return 'open-palm';
-  // Only the index extended → pointing.
+  // Open palm is the palm-normalised four-finger test only. The legacy
+  // all-four-PIP-extended check (`allOpen`) is too loose on a pointing hand
+  // (curled middle/ring/pinky often still sit past their PIP).
+  if (isOpenPalmPose(p)) return 'open-palm';
+  // Index reaching, other fingertips not open: a point, even if the PIP
+  // test still calls some curled fingers "extended".
   if (s.index && fingers === 1) return 'point';
+  if (s.index && tipPalmRatio(p, 8) >= OPEN_PALM_REACH
+      && [12, 16, 20].every((i) => tipPalmRatio(p, i) < OPEN_PALM_REACH)) return 'point';
   // Fallback thumbs-up / fist for poses the palm-ratio test missed.
   if (fingers === 0 && s.thumb && p[THUMB_TIP].y < p[WRIST].y) return 'thumbs-up';
   if (fingers === 0) return 'fist';

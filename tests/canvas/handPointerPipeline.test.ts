@@ -127,7 +127,7 @@ function synthHand(px: number, py: number, pinched: boolean, opts?: { middle?: {
 
   // Thumb closes IN toward the (still) index tip: 0.8 open, 0.25 pinched —
   // so the cursor-freeze test still proves the click lands pre-pinch.
-  const gap = pinched ? 0.05 : 0.16;
+  const gap = pinched ? 0.006 : 0.16;
   lm[1] = { x: cx - gap, y: cy + 0.18 }; lm[2] = { x: cx - gap, y: cy + 0.12 }; lm[3] = { x: cx - gap, y: cy + 0.06 };
   lm[4] = { x: cx - gap, y: cy };
   const toCam = (sx: number, sy: number) => ({
@@ -255,7 +255,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
 
   it('1–2 frame pinch blips while hovering never click', () => {
     feed(160, 50, false, 6);
-    feed(160, 50, true, 2); // blip shorter than engageFrames
+    feed(160, 50, true, 1); // blip shorter than engageFrames
     feed(160, 50, false, 2);
     feed(160, 50, true, 1);
     feed(160, 50, false, 4);
@@ -578,6 +578,55 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     feed(70, 50, false, 3);
     expect(btn.click).toHaveBeenCalledTimes(1);
     expect(other.click).not.toHaveBeenCalled();
+  });
+
+  it('a pinch clicks the control under the RAW fingertip, not a sticky/magnet neighbour', () => {
+    // Close neighbours (8px gap) so the old 14px sticky margin would keep the left control.
+    btn = fakeButton({ left: 100, top: 30, width: 120, height: 40 });
+    (btn as FakeBtn & { getAttribute: (n: string) => string | null }).getAttribute = (n: string) => n === 'aria-label' ? 'Left control' : null;
+    other = fakeButton({ left: 228, top: 30, width: 120, height: 40 });
+    (other as FakeBtn & { getAttribute: (n: string) => string | null }).getAttribute = (n: string) => n === 'aria-label' ? 'Right control' : null;
+    hp.destroy();
+    doc = fakeDoc([btn, other]);
+    hp = createHandPointer(doc, {});
+    t = 0;
+    // Hover left, then move onto the right control and pinch immediately (inside stickyMs).
+    feed(160, 50, false, 6);
+    expect(hp.target).toBe(btn);
+    feed(280, 50, false, 2);
+    expect(hp.target).toBe(other); // raw hit on the right control wins
+    feed(280, 50, true, 4);
+    feed(280, 50, false, 3);
+    expect(other.click).toHaveBeenCalledTimes(1);
+    expect(btn.click).not.toHaveBeenCalled();
+  });
+
+  it('a short pinch on Approve does not fire; a ~300 ms held pinch does, after showing the name', () => {
+    const approve = fakeButton({ left: 100, top: 30, width: 120, height: 40 });
+    (approve as FakeBtn & { getAttribute: (n: string) => string | null }).getAttribute = (n: string) => n === 'aria-label' ? 'Approve' : null;
+    (approve as unknown as { textContent: string }).textContent = 'Approve';
+    const d2 = fakeDoc([approve]);
+    const hp2 = createHandPointer(d2, {});
+    let t2 = 0;
+    const feed2 = (pinch: boolean, n: number, step = 33) => {
+      for (let i = 0; i < n; i++) { t2 += step; hp2.update([synthHand(160, 50, pinch)], t2); }
+    };
+    try {
+      feed2(false, 6);
+      feed2(true, 4);           // ~132 ms — too short
+      feed2(false, 3);
+      expect(approve.click).not.toHaveBeenCalled();
+      // Leave the button so confirm-dwell cannot fire, then come back
+      // after the click refractory.
+      for (let i = 0; i < 8; i++) { t2 += 33; hp2.update([synthHand(500, 400, false)], t2); }
+      t2 += 600;
+      feed2(false, 6);
+      feed2(true, 12);          // ~400 ms hold
+      feed2(false, 3);
+      expect(approve.click).toHaveBeenCalledTimes(1);
+    } finally {
+      hp2.destroy();
+    }
   });
 
   function cursorPos(c: FakeOverlayEl): { x: number; y: number } {

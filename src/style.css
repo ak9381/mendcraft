@@ -1048,20 +1048,29 @@ input.hand-hover, textarea.hand-hover, select.hand-hover { transform: none; }
   pointer-events: none;
   z-index: 2;
 }
-.face-overlay.face-overlay--compact {
+.mc-face-preview {
   position: fixed;
-  top: calc(8px + env(safe-area-inset-top, 0px));
+  top: calc(10px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);
-  width: min(180px, 36vw);
-  height: min(120px, 18vh);
-  inset: auto;
+  width: 144px;
+  height: 108px;
   pointer-events: none;
   z-index: 70;
   border-radius: 12px;
-  background: rgba(11, 15, 20, 0.28);
-  box-shadow: 0 6px 16px rgb(0 0 0 / 0.16);
+  overflow: hidden;
+  background: #0b0f14;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.28);
 }
+.mc-face-preview-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.mc-face-preview-box { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 .resume-hint {
   position: absolute;
@@ -4304,8 +4313,9 @@ body.mc-voice-sleep #listen-chip { outline: 2px solid var(--border); }
    page can show it without loading canvas.css. Never a full-screen face box. */
 .mc-facing-banner {
   position: fixed;
-  top: calc(10px + env(safe-area-inset-top, 0px));
-  left: 16px;
+  top: calc(10px + 108px + 8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 71;
   pointer-events: none;
   display: inline-flex;

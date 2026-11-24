@@ -30,8 +30,8 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
 // bug); 0.38/0.52 is back near the original M1 feel (0.35/0.48), deliberate
 // but still forgiving of an incomplete close. Calibration and the
 // interaction profile may tighten or loosen these per user.
-export const DEFAULT_PINCH_ON = 0.38;
-export const DEFAULT_PINCH_OFF = 0.52;
+export const DEFAULT_PINCH_ON = 0.045;
+export const DEFAULT_PINCH_OFF = 0.07;
 /** Movement (in mirrored screen units) that disqualifies a pinch from being a tap. */
 export const TAP_MOVE_LIMIT = 0.045;
 

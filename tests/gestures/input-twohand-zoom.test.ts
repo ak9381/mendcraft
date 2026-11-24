@@ -31,7 +31,7 @@ function hand(cx: number, cy: number, gap: number): Pt[] {
   pts[20] = { x: cx + 0.12, y: palmY };
   return pts;
 }
-const PINCH_GAP = 0.02;
+const PINCH_GAP = 0.006;
 
 describe('B-147 keyboard +/- zoom has no lone one-hand gesture equivalent', () => {
   it('only the two-hand-zoom gesture maps to the zoom action; no single-hand pose does', () => {

@@ -39,10 +39,10 @@ describe('B-011 pose conflict near the palette', () => {
     expect(evs).not.toContain('pinch-start');
     expect(evs).not.toContain('pinch-tap');
   });
-  it('a closing fist is a grab on the pinch pointer (presses, like the mapped fist→drag)', () => {
+  it('a closing fist is not a pinch click (grab is the fist pointer, not pinch-start)', () => {
     expect(classifyGesture(hand('fist'))).toBe('fist');
     const evs = run([hand('open'), hand('fist'), hand('fist'), hand('open')]);
-    expect(evs).toContain('pinch-start');
-    expect(evs).toContain('pinch-end');
+    expect(evs).not.toContain('pinch-start');
+    expect(evs).not.toContain('pinch-tap');
   });
 });

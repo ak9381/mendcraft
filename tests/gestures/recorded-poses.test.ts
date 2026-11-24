@@ -41,8 +41,8 @@ export function recordedPoint(ox = 0): Pt[] {
 /** Same reach as recordedPoint, but the thumb sits on the index tip. */
 export function recordedPinch(ox = 0): Pt[] {
   const p = recordedPoint(ox);
-  p[4] = { x: p[8].x - 0.01, y: p[8].y + 0.01 };
-  p[3] = { x: p[8].x - 0.02, y: p[8].y + 0.06 };
+  p[4] = { x: p[8].x - 0.002, y: p[8].y + 0.002 };
+  p[3] = { x: p[8].x - 0.01, y: p[8].y + 0.04 };
   return p;
 }
 
@@ -82,7 +82,7 @@ export function recordedFist(ox = 0): Pt[] {
 describe('recorded 16:9 landmark poses (pinch / zoom / fist / point / palm)', () => {
   it('a reaching pinch classifies as pinch, never a fist', () => {
     const p = recordedPinch();
-    expect(pinchRatio(p)).toBeLessThan(0.38);
+    expect(pinchRatio(p)).toBeLessThan(0.045);
     expect(isFistPose(p)).toBe(false);
     expect(isClosingToFist(p)).toBe(false);
     expect(classifyGesture(p)).toBe('pinch');

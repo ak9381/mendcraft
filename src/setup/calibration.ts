@@ -97,8 +97,10 @@ export function pinchFromRatios(ratios: readonly number[]): { pinchOn: number; p
   const closed = finite[Math.floor(finite.length * 0.1)];
   const open = finite[Math.floor(finite.length * 0.9)];
   if (open - closed < 0.08) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
-  const on = clamp(closed + (open - closed) * 0.4, 0.25, 0.6);
-  return { pinchOn: round3(on), pinchOff: round3(clamp(on + 0.12, on + 0.05, 0.8)) };
+  // On-threshold sits just above her firm close so a relaxed open hand
+  // is never a pinch. When she can close tightly this lands near 0.045.
+  const on = clamp(closed + 0.02, 0.03, 0.6);
+  return { pinchOn: round3(on), pinchOff: round3(clamp(on + 0.025, on + 0.015, 0.8)) };
 }
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -130,7 +132,8 @@ export function coerceCalibration(raw: unknown): Calibration | null {
   const num = (v: unknown, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : null);
   const reach = r.reach as Record<string, unknown> | undefined;
   const x0 = num(reach?.x0, 0, 1), y0 = num(reach?.y0, 0, 1), x1 = num(reach?.x1, 0, 1), y1 = num(reach?.y1, 0, 1);
-  const pinchOn = num(r.pinchOn, 0.15, 0.8), pinchOff = num(r.pinchOff, 0.2, 0.9);
+  // Live tight band is 0.045 / 0.07; still accept older looser calibrations.
+  const pinchOn = num(r.pinchOn, 0.02, 0.8), pinchOff = num(r.pinchOff, 0.03, 0.9);
   const tremor = num(r.tremor, 0, 1), smoothing = num(r.smoothing, 0, 0.95), dwellMs = num(r.dwellMs, 300, 2500);
   if ([x0, y0, x1, y1, pinchOn, pinchOff, tremor, smoothing, dwellMs].some((v) => v === null)) return null;
   if (x1! - x0! < MIN_REACH_SPAN - 1e-6 || y1! - y0! < MIN_REACH_SPAN - 1e-6) return null;

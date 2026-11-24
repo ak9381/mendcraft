@@ -20,10 +20,10 @@ describe('hand pointer maths', () => {
   });
   it('detects pinch with hysteresis, scale-invariant', () => {
     expect(pinchRatio(hand(0.03))).toBeCloseTo(0.1);
-    expect(nextPinch(false, pinchRatio(hand(0.03)))).toBe(true);
-    expect(nextPinch(false, pinchRatio(hand(0.12)))).toBe(false); // 0.4: not yet
-    expect(nextPinch(true, pinchRatio(hand(0.12)))).toBe(true);   // held until > 0.45
-    expect(nextPinch(true, pinchRatio(hand(0.2)))).toBe(false);
+    expect(nextPinch(false, pinchRatio(hand(0.009)))).toBe(true);  // 0.03 < 0.045
+    expect(nextPinch(false, pinchRatio(hand(0.018)))).toBe(false); // 0.06, between on/off
+    expect(nextPinch(true, pinchRatio(hand(0.018)))).toBe(true);   // held until > 0.07
+    expect(nextPinch(true, pinchRatio(hand(0.03)))).toBe(false);   // 0.10, off
   });
   it('picks the control under the point, else the nearest within the snap radius', () => {
     const items = [

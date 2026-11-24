@@ -933,8 +933,9 @@
 /* Small, non-blocking facing pill. Never a full-screen square. */
 .mc-facing-banner {
   position: fixed;
-  top: calc(10px + env(safe-area-inset-top, 0px));
-  left: 16px;
+  top: calc(10px + 108px + 8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 71;
   pointer-events: none;
   display: inline-flex;
@@ -989,20 +990,37 @@
 .mc-term-empty { margin: 12px 14px; font-size: 13px; color: #C8C6BF; }
 .mc-term-body { min-height: 48px; }
 
-/* Compact face preview: the original AF brackets, smaller, pinned to the top. */
-.face-overlay.face-overlay--compact {
+/* Small top-centre camera preview with the original green face box. */
+.mc-face-preview {
   position: fixed;
-  top: calc(8px + env(safe-area-inset-top, 0px));
+  top: calc(10px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translateX(-50%);
-  width: min(180px, 36vw);
-  height: min(120px, 18vh);
-  inset: auto;
+  width: 144px;
+  height: 108px;
   pointer-events: none;
   z-index: 70;
   border-radius: 12px;
-  background: rgba(11, 15, 20, 0.28);
-  box-shadow: 0 6px 16px rgb(0 0 0 / 0.16);
+  overflow: hidden;
+  background: #0b0f14;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.28);
+  opacity: 0.92;
+}
+.mc-face-preview-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  background: #0b0f14;
+}
+.mc-face-preview-box {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .mc-hand-cursor.is-palm-scroll::after {
   content: '';
@@ -1042,3 +1060,21 @@
   z-index: 6;
   transition: box-shadow 120ms ease, transform 120ms ease;
 }
+
+.mc-hand-confirm {
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 86;
+  pointer-events: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(11, 15, 20, 0.88);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.25);
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+.mc-hand-confirm[hidden] { display: none; }

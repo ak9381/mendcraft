@@ -174,7 +174,7 @@ function synthHandAt(cx: number, cy: number, pinched: boolean): Pt[] {
   const dm = -0.02;
   lm[0] = { x: cx, y: cy + 9 * -dm };
   for (const i of [5, 9, 13, 17]) lm[i] = { x: cx, y: cy + dm };
-  const gap = pinched ? 0.05 : 0.16;
+  const gap = pinched ? 0.006 : 0.16;
   lm[4] = { x: cx - gap / 2, y: cy + 0.05 };
   lm[8] = { x: cx + gap / 2, y: cy + 0.05 };
   return lm;
