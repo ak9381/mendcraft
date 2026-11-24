@@ -102,3 +102,29 @@ describe('engine selection — Apple on-device', () => {
     expect(text).toContain('Apple');
   });
 });
+
+describe('createEngines — late Apple plugin', () => {
+  it('uses onDeviceGenerate on the next turn after appleOnDevice becomes true', async () => {
+    const calls: string[] = [];
+    const rt = {
+      isPhone: true,
+      hasCloud: true,
+      sim: false,
+      appleOnDevice: false,
+      onDeviceGenerate: async (prompt: string, onText: (t: string) => void) => {
+        calls.push(prompt);
+        onText('{"kind":"room","title":"On device","tiles":[]}');
+        return '{"kind":"room","title":"On device","tiles":[]}';
+      },
+      cloud: async () => '{"kind":"room","title":"Cloud","tiles":[]}',
+    };
+    const engines = createEngines(rt);
+    const first = engines.nano!('{"kind":"room","title":"Draft","tiles":[]}');
+    expect(first.id).toBe('gemini');
+    rt.appleOnDevice = true;
+    const second = engines.nano!('{"kind":"room","title":"Draft","tiles":[]}');
+    expect(second.id).toBe('nano');
+    await second.stream('make a board', () => undefined);
+    expect(calls).toEqual(['make a board']);
+  });
+});

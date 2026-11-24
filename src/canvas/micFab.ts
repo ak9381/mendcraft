@@ -40,7 +40,7 @@ export function mountMicFab(
   root: HTMLElement,
   voice: MicVoice | null,
   say: (text: string) => void,
-  opts: { maxMs?: number; setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout; getStatus?: () => string } = {},
+  opts: { maxMs?: number; setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout; getStatus?: () => string; holdToTalk?: boolean } = {},
 ): MicFab {
   const doc = root.ownerDocument;
   const maxMs = opts.maxMs ?? 15000;
@@ -129,7 +129,18 @@ export function mountMicFab(
     timer = setT(() => stop(true), maxMs);
     render();
   }
-  el.addEventListener('click', toggle);
+  if (opts.holdToTalk) {
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      try { el.setPointerCapture(e.pointerId); } catch { /* jsdom */ }
+      if (!listening) toggle();
+    });
+    const endHold = (): void => { if (listening) stop(); };
+    el.addEventListener('pointerup', endHold);
+    el.addEventListener('pointercancel', endHold);
+  } else {
+    el.addEventListener('click', toggle);
+  }
   render();
 
   return {

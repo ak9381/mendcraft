@@ -87,6 +87,8 @@ import {
   CAMERA_LOST_REGISTER, INCOMPLETE_KN_LINE, MORPH_UNVERIFIED_LINE,
   phoneDropLine, saveSpokenLine, tryWriteStorage,
 } from './failLines';
+import { isPhoneCanvasShell } from './iphoneShell';
+import { LOOK_TO_EDIT_HINT, nextPhoneEditLock } from './phoneEditLock';
 
 export const STORAGE_KEY = 'mc.canvas.v1';
 
@@ -119,6 +121,14 @@ export interface CanvasOptions {
   /** Hands + face tracking start automatically on mount (default). ?hands=0
    *  opts out. Where getUserMedia doesn't exist (jsdom) it is a silent no-op. */
   autoHands?: boolean;
+  /** Phone-simple shell: canvas + mic + route badge only (iOS/Android / <600px). */
+  phoneShell?: boolean;
+  /** Initial routing badge, e.g. 'Apple · on device'. */
+  routeBadge?: string;
+  /** Clock for the look-to-edit re-lock timer (tests). */
+  now?: () => number;
+  /** Look-away re-lock delay in ms (tests). */
+  lookAwayMs?: number;
 }
 
 const STUB_DEVICES: Record<string, DeviceState> = {
@@ -209,7 +219,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
 
+  const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
+    capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
+    viewportWidth: window.innerWidth,
+  }));
+  const nowFn = opts.now ?? (() => Date.now());
+  let editUnlocked = false;
+  let awaySince: number | null = null;
+  let facingNow = false;
+  let lockTimer: ReturnType<typeof setTimeout> | null = null;
+  let selectedTileHost: HTMLElement | null = null;
   root.classList.add('mc-canvas');
+  if (phoneShell) root.classList.add('mc-phone-simple', 'is-edit-locked');
   root.innerHTML = `
     <div class="mc-viewport" tabindex="-1"><div class="mc-world"></div><div class="mc-swarm" hidden></div></div>
     <div class="mc-blank" hidden>
@@ -266,6 +287,35 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every Proposal that needs a decision opens in the compact floating
   // review window — the board stays visible behind it.
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
+  if (phoneShell) {
+    const badge = document.createElement('div');
+    badge.className = 'mc-route-badge';
+    badge.setAttribute('role', 'status');
+    if (opts.routeBadge) badge.textContent = opts.routeBadge;
+    else badge.hidden = true;
+    const hint = document.createElement('p');
+    hint.className = 'mc-look-hint';
+    hint.setAttribute('role', 'status');
+    hint.textContent = LOOK_TO_EDIT_HINT;
+    root.append(badge, hint);
+  }
+  function setRouteBadge(text: string): void {
+    const badge = root.querySelector<HTMLElement>('.mc-route-badge');
+    if (!badge) return;
+    badge.hidden = !text;
+    badge.textContent = text;
+  }
+  function phoneLocked(): boolean { return phoneShell && !editUnlocked; }
+  function clearPhoneSelection(): void {
+    selectedTileHost = null;
+    root.querySelectorAll('.is-phone-selected').forEach((n) => n.classList.remove('is-phone-selected'));
+  }
+  function selectPhoneTile(el: HTMLElement): void {
+    const host = el.closest<HTMLElement>('[data-mc-tile]') ?? el;
+    clearPhoneSelection();
+    selectedTileHost = host;
+    host.classList.add('is-phone-selected');
+  }
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const swarmEl = root.querySelector<HTMLElement>('.mc-swarm')!;
@@ -403,7 +453,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.appendChild(arrangeStrip);
   const platformLabel = (p: PhonePlatform | null): string => (p === 'android' ? 'Nothing' : p === 'ios' ? 'iPhone' : 'none');
   function renderArrangeStrip(): void {
-    arrangeStrip.hidden = !(opts.sim || hostSession);
+    arrangeStrip.hidden = phoneShell || !(opts.sim || hostSession);
     arrangeStrip.innerHTML = `
       <span class="mc-arrange-label">Phones</span>
       <span class="mc-arrange-slot" data-side="left">◀ ${platformLabel(screenLayout.left)} · left</span>
@@ -698,7 +748,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const left = c.getBoundingClientRect().left - viewport.getBoundingClientRect().left;
     return Math.max(0, vp().w - left + DOCK_GAP);
   };
-  const insets = () => ({ top: barH(), left: dockInset(), right: clusterInset() });
+  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset() });
 
   function clearDock(): void {
     for (const sid of [...live]) if (sid.endsWith('-dock')) { live.delete(sid); deviceSurfaces.untrack(sid); }
@@ -780,6 +830,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyStrings();
     applyCamera();
     editBoard.setFocus(focusId, !!focusId && !!surfaces[focusId]?.tiles.length);
+    if (phoneShell && focusId) stampMorphTiles(focusId);
   }
 
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
@@ -793,8 +844,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.dataset.zoom = camera.z.toFixed(2);
   }
 
-  const vp = (): Viewport => ({ w: (viewport.clientWidth || innerWidth) - (aiPanel.hidden ? 0 : aiPanel.offsetWidth + 24), h: viewport.clientHeight || innerHeight });
-  const barH = () => (root.querySelector<HTMLElement>('.mc-bar')!.offsetHeight + 32);
+  const vp = (): Viewport => {
+    const w = viewport.clientWidth || innerWidth;
+    const h = viewport.clientHeight || innerHeight;
+    if (phoneShell) return { w, h };
+    return { w: w - (aiPanel.hidden ? 0 : aiPanel.offsetWidth + 24), h };
+  };
+  const barH = () => phoneShell ? 0 : (root.querySelector<HTMLElement>('.mc-bar')!.offsetHeight + 32);
+  function fitPhone(): void {
+    const list = reg.list();
+    if (!list.length) return;
+    camera = fitRects(list.map((f) => f.rect), vp(), 28);
+    applyCamera();
+  }
 
   let flight = 0;
   function flyTo(target: Camera): Promise<void> {
@@ -997,6 +1059,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       engine: s.engine, utterance, used: protect.used, people: activePeople(), cloudPayload: protect.promptText,
     });
     if (s.routeLine) panels.forEngine(s.engine).log('note', s.routeLine);
+    if (phoneShell) {
+      const line = s.routeLine || '';
+      setRouteBadge(/apple/i.test(line) ? 'Apple · on device' : s.engine === 'gemini' ? 'Gemini · cloud' : line || 'On device');
+    }
     // Swarm cursors spin up for this real call — a mix of Gemini (planning,
     // layout, tile frames) and Nano (labels, device values, redaction/Kannada
     // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls.
@@ -2058,6 +2124,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       else if (act.dataset.act === 'floorplan') floorPlan(frame);
       return;
     }
+    if (phoneLocked()) return;
+    if (phoneShell && focusId && frame === focusId) {
+      const tile = t.closest<HTMLElement>('[data-mc-tile], .mc-edit-item');
+      if (tile) { selectPhoneTile(tile); return; }
+    }
     if (frame && frame !== focusId && !dragged) void focus(frame);
   });
   let drag: { x: number; y: number } | null = null; let dragged = false;
@@ -2090,6 +2161,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (r.ended) { if (touchGrab) persist(); touchGrab = null; }
   }
   viewport.addEventListener('pointerdown', (e) => {
+    if (phoneLocked()) return;
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return;
     if (e.pointerType === 'touch') {
       touchPts.set(e.pointerId, vpPoint(e));
@@ -2110,6 +2182,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // at z=1 — a phone can reach every tile of a board wider than the screen.
     // elementFromPoint / native clicks hit-test in screen space, so the pan
     // never shifts what a pinch or tap lands on (P2-4).
+    if (phoneLocked()) return;
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
@@ -2138,7 +2211,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (e.key !== 'Escape') return;
     if (focusId) { e.preventDefault(); void overview(); return; }
   };
-  const onWindowResize = () => { if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
@@ -2157,6 +2230,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   function destroy(): void {
+    if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
     phoneMenu?.destroy();
     toolPalette.destroy();
     micFab?.destroy();
@@ -2182,6 +2256,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     barRo?.disconnect();
   }
   viewport.addEventListener('wheel', (e) => {
+    if (phoneLocked()) return;
     if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return; // the board's own zoom
     e.preventDefault();
     if (focusId) { focusId = null; sync(); }
@@ -2193,11 +2268,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const voice = opts.voice ?? null;
 
   // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
-  const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say, { getStatus: () => statusEl.textContent ?? '' }) : null;
+  const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say, { getStatus: () => statusEl.textContent ?? '', holdToTalk: phoneShell }) : null;
   micFabRef = micFab;
   // Hand-reachable cluster at the TOP RIGHT: Register, Edit, Tools, Talk.
   // Kept clear of the edges and of the facing banner (top-left).
-  if (typeof document !== 'undefined') {
+  // The phone-simple shell leaves the mic in the root so CSS can pin it
+  // to the bottom centre — no Register/Edit/Tools cluster on phones.
+  if (typeof document !== 'undefined' && !phoneShell) {
     let cluster = root.querySelector<HTMLElement>('.mc-hand-cluster');
     if (!cluster) {
       cluster = document.createElement('div');
@@ -2213,6 +2290,59 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (node) cluster.append(node);
     }
   }
+
+  function applyEditLock(): void {
+    if (!phoneShell) return;
+    const r = nextPhoneEditLock({
+      unlocked: editUnlocked, facing: facingNow, now: nowFn(), awaySince,
+      awayMs: opts.lookAwayMs,
+    });
+    editUnlocked = r.unlocked;
+    awaySince = r.awaySince;
+    root.classList.toggle('is-edit-locked', !editUnlocked);
+    const hint = root.querySelector<HTMLElement>('.mc-look-hint');
+    if (hint) {
+      hint.hidden = !r.hint;
+      if (r.hint) hint.textContent = r.hint;
+    }
+    if (editUnlocked) {
+      editBoard.setEditing(true);
+    } else {
+      editBoard.setEditing(false);
+      micFab?.stop();
+      clearPhoneSelection();
+    }
+    if (lockTimer) { clearTimeout(lockTimer); lockTimer = null; }
+    if (editUnlocked && !facingNow && awaySince != null) {
+      const left = (opts.lookAwayMs ?? 3000) - (nowFn() - awaySince);
+      if (left > 0) lockTimer = setTimeout(() => applyEditLock(), left);
+    }
+  }
+  function setFacing(facing: boolean): void {
+    facingNow = facing;
+    applyEditLock();
+  }
+  function showRemoteBoard(plan: SurfacePlan): void {
+    let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
+    if (!id) {
+      const f = reg.add('note', plan.title || 'Board');
+      id = f.id;
+    } else if (plan.title) {
+      reg.rename(id, plan.title);
+    }
+    surfaces[id] = plan;
+    focusId = id;
+    lastFocus = id;
+    renderSurface(id);
+    sync();
+    persist();
+    if (phoneShell) {
+      if (!facingNow) { editUnlocked = false; awaySince = null; }
+      applyEditLock();
+      fitPhone();
+    }
+  }
+
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
   // Sim/test hook: feed a raw two-hand landmark frame straight into the same
@@ -2369,7 +2499,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
   }
   const morphDisabled = (): boolean =>
-    !focusId || editBoard.editing || reviewBusy() || (scanPanel?.isOpen() ?? false);
+    !focusId || (!phoneShell && editBoard.editing) || reviewBusy() || (scanPanel?.isOpen() ?? false) || phoneLocked();
   const morphResolve = (pt: { x: number; y: number }): MorphTargetRef | null => {
     const fid = focusId;
     const plan = fid ? surfaces[fid] : null;
@@ -2494,7 +2624,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // under the finger (the mouse/touch adapter swallows its own click).
     onFired: () => handPointer?.suppressNextRelease(),
   });
-  const detachMorphPointers = attachMorphPointers(root, morphFlow, document);
+  const detachMorphPointers = phoneShell ? () => undefined : attachMorphPointers(root, morphFlow, document);
+  if (phoneShell && micFab) {
+    micFab.el.addEventListener('pointerdown', () => {
+      if (phoneLocked() || !selectedTileHost || !focusId) return;
+      stampMorphTiles(focusId);
+      const id = selectedTileHost.getAttribute('data-mc-tile');
+      const host = id ? root.querySelector<HTMLElement>(`[data-mc-tile="${CSS.escape(id)}"]`) : selectedTileHost;
+      if (!host) return;
+      const target = morphResolve({
+        x: host.getBoundingClientRect().left + host.getBoundingClientRect().width / 2,
+        y: host.getBoundingClientRect().top + host.getBoundingClientRect().height / 2,
+      });
+      if (target) morphFlow.ask(target, { startMic: false });
+    });
+  }
   // ?sim=1: the deterministic replay — same classifier on an injected clock,
   // scripted Gemini, injected utterance; no camera or mic anywhere.
   if (opts.sim && typeof window !== 'undefined') {
@@ -2519,18 +2663,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   updateDock();
   refreshRegisterLabels();
   if (loadOwner(regStorage)) setRegChip('Registered'); // survives a reload within the session
-  if (focusId) void focus(focusId); else if (!stored) void overview();
+  if (phoneShell) {
+    if (focusId) stampMorphTiles(focusId);
+    applyEditLock();
+    fitPhone();
+  } else if (focusId) {
+    void focus(focusId);
+  } else if (!stored) {
+    void overview();
+  }
 
   // Hands + face are ON BY DEFAULT: the camera prompt appears right away and
   // tracking starts with no click; the Hands button still toggles off/on.
   // Opt out with ?hands=0. Silent no-op where getUserMedia doesn't exist
   // (jsdom / unit tests), so a failure message never appears without a camera.
-  if (shouldAutoStartHands(opts.autoHands, typeof navigator !== 'undefined' ? navigator : null)) {
+  // Phone-simple shells never start hand tracking (touch only; face-only
+  // look-to-edit is started from canvasMain, not here).
+  if (!phoneShell && shouldAutoStartHands(opts.autoHands, typeof navigator !== 'undefined' ? navigator : null)) {
     void toggleHands();
   }
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, destroy };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;
