@@ -290,8 +290,9 @@ export interface HandPointerOptions {
   /** One-fist board move (see createHandPointer): 'start' once a fist held
    *  GRAB_HOLD_MS starts over a board (hit by frame rects), 'move' with the
    *  fist's screen-space delta (CSS px) each frame after, 'end' when the
-   *  fist opens, the hand is lost, or a second fist takes over (zoom). */
-  onBoardMove?: (ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number }) => void;
+   *  fist opens, the hand is lost, or a second fist takes over (zoom).
+   *  `x`/`y` is the fist's current screen point (CSS px), for edge transfer. */
+  onBoardMove?: (ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number; x?: number; y?: number }) => void;
   /** One fist over empty canvas: "grab the world" — screen-px deltas, 1:1. */
   onWorldPan?: (ev: { phase: 'start' | 'move' | 'end'; dx: number; dy: number }) => void;
   /** Two fists: anchored zoom. `a`/`b` are the two fists' screen points
@@ -1229,7 +1230,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     const g = grab;
     if (!g) return;
     setGrab(null);
-    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0 });
+    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
     else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
     else opts.onWorldZoom?.({ phase: 'end', a: g.a, b: g.b });
   }
@@ -1256,7 +1257,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (frameId && frameId !== focused) {
       setGrab({ kind: 'board', slot: i, frameId, last: p });
       opts.onHandEvent?.({ type: 'grab', target: frameId });
-      opts.onBoardMove?.({ phase: 'start', frameId, dx: 0, dy: 0 });
+      opts.onBoardMove?.({ phase: 'start', frameId, dx: 0, dy: 0, x: p.x, y: p.y });
     } else {
       setGrab({ kind: 'pan', slot: i, last: p });
       opts.onWorldPan?.({ phase: 'start', dx: 0, dy: 0 });
@@ -1270,7 +1271,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     const dx = p.x - g.last.x, dy = p.y - g.last.y;
     g.last = p;
     if (!dx && !dy) return;
-    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'move', frameId: g.frameId, dx, dy });
+    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'move', frameId: g.frameId, dx, dy, x: p.x, y: p.y });
     else opts.onWorldPan?.({ phase: 'move', dx, dy });
   }
   function updateFists(t: number): void {

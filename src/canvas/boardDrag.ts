@@ -4,9 +4,10 @@
 export interface BoardDragOpts {
   frameId: string;
   getZoom(): number;
-  /** World-space delta since the previous call. */
-  onMove(id: string, dxWorld: number, dyWorld: number): void;
-  onEnd(id: string): void;
+  /** World-space delta since the previous call, plus the pointer's client point. */
+  onMove(id: string, dxWorld: number, dyWorld: number, clientX: number, clientY: number): void;
+  /** `cancelled` is true for pointercancel (no deliberate release). */
+  onEnd(id: string, cancelled: boolean): void;
   threshold?: number;
 }
 
@@ -32,7 +33,7 @@ export function attachBoardDrag(title: HTMLElement, opts: BoardDragOpts): () => 
     }
     const z = opts.getZoom() || 1;
     active.x = e.clientX; active.y = e.clientY;
-    if (dx || dy) opts.onMove(opts.frameId, dx / z, dy / z);
+    if (dx || dy) opts.onMove(opts.frameId, dx / z, dy / z, e.clientX, e.clientY);
   };
   const finish = (e: PointerEvent) => {
     if (!active || e.pointerId !== active.id) return;
@@ -40,7 +41,7 @@ export function attachBoardDrag(title: HTMLElement, opts: BoardDragOpts): () => 
     active = null;
     try { title.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
     if (moved) {
-      opts.onEnd(opts.frameId);
+      opts.onEnd(opts.frameId, e.type === 'pointercancel');
       // The click that follows pointerup is swallowed; clear the flag afterwards.
       setTimeout(() => { delete title.dataset.dragged; }, 0);
     }

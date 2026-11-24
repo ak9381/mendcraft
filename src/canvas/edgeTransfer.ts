@@ -14,6 +14,7 @@
 import {
   edgeIntent, evaluateDwell, phoneExitIntent,
   INITIAL_DWELL, type DwellState, type EdgeIntent, type ScreenLayout, type Side, type EdgeTuning,
+  type PhonePlatform,
 } from './screenLayout';
 import { enterEdgeForExit, findTile, type TileTransfer, type TransferEndpoint } from './tileTransfer';
 import type { SurfacePlan } from './surfacePlan';
@@ -105,6 +106,133 @@ export function createEdgeTransferController(deps: EdgeTransferDeps): EdgeTransf
       reset();
     },
   };
+}
+
+// ---- whole-board path ---------------------------------------------------------
+// A whole board dragged (one held fist, or the mouse by its title) to a paired
+// phone's edge and HELD there for the same dwell goes to that phone; the laptop
+// board snaps back to where the drag began. Same edgeIntent glow and
+// evaluateDwell guard as the tile path, but a board only commits on a HOLD:
+// releasing early, leaving the edge, or losing the hand sends nothing.
+
+export interface BoardDragEdgeEvent {
+  frameId: string;
+  phase: 'start' | 'move' | 'end' | 'cancel';
+  clientX: number;
+  clientY: number;
+}
+
+export interface BoardRect { x: number; y: number; w: number; h: number }
+
+export interface BoardSend {
+  frameId: string;
+  board: SurfacePlan;
+  side: Side;
+  target: PhonePlatform;
+}
+
+export interface BoardEdgeDeps {
+  getViewportWidth: () => number;
+  /** Only the sides where a phone is actually paired (see pairedEdgeLayout). */
+  getLayout: () => ScreenLayout;
+  getRect: (frameId: string) => BoardRect | null;
+  /** Snap the board back (world rect) after a send. */
+  restoreRect: (frameId: string, rect: BoardRect) => void;
+  getBoard: (frameId: string) => SurfacePlan | null;
+  onGlow: (glow: EdgeGlow) => void;
+  onCommit: (send: BoardSend) => void;
+  now: () => number;
+  dwellMs?: number;
+  tuning?: EdgeTuning;
+}
+
+export interface BoardEdgeTransferController {
+  /** Returns true when the caller should apply this move to the board. */
+  handleBoardDrag(ev: BoardDragEdgeEvent): boolean;
+  /** Boards sent to a phone this session (the journey's 'shared' step). */
+  sharedBoards(): ReadonlySet<string>;
+  reset(): void;
+}
+
+export function createBoardEdgeTransferController(deps: BoardEdgeDeps): BoardEdgeTransferController {
+  let dwell: DwellState = INITIAL_DWELL;
+  let drag: { frameId: string; start: BoardRect | null; committed: boolean } | null = null;
+  const shared = new Set<string>();
+
+  function reset(): void {
+    if (drag) deps.onGlow(CLEAR);
+    dwell = INITIAL_DWELL;
+    drag = null;
+  }
+
+  function begin(frameId: string): { frameId: string; start: BoardRect | null; committed: boolean } {
+    if (!drag || drag.frameId !== frameId) {
+      dwell = INITIAL_DWELL;
+      drag = { frameId, start: deps.getRect(frameId), committed: false };
+    }
+    return drag;
+  }
+
+  return {
+    reset,
+    sharedBoards: () => shared,
+    handleBoardDrag(ev) {
+      if (ev.phase === 'end' || ev.phase === 'cancel') { reset(); return false; }
+      const d = begin(ev.frameId);
+      if (ev.phase === 'start') return false;
+      if (d.committed) return false; // sent: the board stays put until the fist opens
+      if (!Number.isFinite(ev.clientX)) return true;
+      const intent = edgeIntent(ev.clientX, deps.getViewportWidth(), deps.getLayout(), deps.tuning);
+      deps.onGlow({ side: intent.side, glow: intent.glow });
+      const res = evaluateDwell(dwell, intent, deps.now(), deps.dwellMs);
+      dwell = res.state;
+      if (!res.commit || !intent.side || !intent.target) return true;
+      const board = deps.getBoard(ev.frameId);
+      if (!board) return true;
+      d.committed = true;
+      deps.onGlow(CLEAR);
+      if (d.start) deps.restoreRect(ev.frameId, d.start);
+      shared.add(ev.frameId);
+      deps.onCommit({ frameId: ev.frameId, board, side: intent.side, target: intent.target });
+      return false;
+    },
+  };
+}
+
+/** A joined phone as the pair-first row knows it. */
+export interface KnownPhone { id: string; label: string; sim: boolean }
+
+function phonePlatform(p: KnownPhone): PhonePlatform | null {
+  if (p.id === 'android' || /nothing|android/i.test(p.label)) return 'android';
+  if (p.id === 'ios' || /iphone/i.test(p.label)) return 'ios';
+  return null;
+}
+
+/**
+ * The edges a board may be sent to: the arrangement strip's layout, limited to
+ * phones that are actually paired. Live (host session): a named phone restricts
+ * to its side; an unnamed one (paired by chime, platform not yet announced)
+ * trusts the strip. Not live: only SIM phones from the scripted pairing count.
+ */
+export function pairedEdgeLayout(
+  layout: ScreenLayout,
+  phones: readonly KnownPhone[],
+  o: { live: boolean },
+): ScreenLayout {
+  const pool = phones.filter((p) => p.sim !== o.live);
+  if (o.live && (pool.length === 0 || pool.some((p) => !phonePlatform(p)))) return { left: layout.left, right: layout.right };
+  const have = new Set(pool.map(phonePlatform).filter((x): x is PhonePlatform => !!x));
+  return {
+    left: layout.left && have.has(layout.left) ? layout.left : null,
+    right: layout.right && have.has(layout.right) ? layout.right : null,
+  };
+}
+
+const PHONE_NAME: Record<PhonePlatform, string> = { ios: 'iPhone', android: 'Nothing phone' };
+
+/** Status line for a board send (not an AI action: never goes to the AI feed). */
+export function boardSendLine(target: PhonePlatform, title: string, live: boolean): string {
+  return live ? `Sent ${title || 'the board'} to the ${PHONE_NAME[target]}.` : `Sent to ${PHONE_NAME[target]} (SIM).`;
 }
 
 // ---- phone side -------------------------------------------------------------

@@ -22,7 +22,7 @@ import { createPairFirst, pairedRowHtml, parseConnectDevices } from './pairedRow
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
-import { createEdgeTransferController } from './edgeTransfer';
+import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
 import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
@@ -488,6 +488,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
   });
 
+  // Whole board → phone: a board dragged (held fist or mouse title) to a PAIRED
+  // phone's edge and held for the dwell goes to that phone over the same `state`
+  // snapshot; the laptop board snaps back. SIM phones: same glow, no network.
+  // Not an AI action, so it never reaches the AI feed — status line only.
+  const boardEdge = createBoardEdgeTransferController({
+    getViewportWidth: () => viewport.getBoundingClientRect().width || (typeof window !== 'undefined' ? window.innerWidth : 0),
+    getLayout: () => pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession }),
+    getRect: (id) => { const f = reg.get(id); return f ? { ...f.rect } : null; },
+    restoreRect: (id, rect) => { reg.setRect(id, rect); sync(); persist(); },
+    getBoard: (id) => surfaces[id] ?? null,
+    onGlow: (g) => setEdgeGlow(g.side, g.glow),
+    onCommit: (s) => {
+      if (hostSession) publishBoardTransfer(s.frameId, s.board, null);
+      say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
+    },
+    now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+  });
+
   // Screen-arrangement strip (set once, remembered): Left | This laptop | Right,
   // showing which phone is on which side with a Swap button. Hand-reachable
   // normal buttons (pinch-click). Shown in sim (so judges/audits see it) or once
@@ -915,13 +933,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
         frameId: f.id,
         getZoom: () => camera.z,
-        onMove: (id, dx, dy) => {
+        onMove: (id, dx, dy, clientX, clientY) => {
+          if (!boardEdge.handleBoardDrag({ frameId: id, phase: 'move', clientX, clientY })) return;
           const cur = reg.get(id); if (!cur) return;
           reg.setRect(id, { ...cur.rect, x: cur.rect.x + dx, y: cur.rect.y + dy });
           const moved = reg.get(id); if (!moved) return;
           el!.style.left = `${moved.rect.x}px`; el!.style.top = `${moved.rect.y}px`;
         },
-        onEnd: () => { sync(); persist(); },
+        onEnd: (id, cancelled) => {
+          boardEdge.handleBoardDrag({ frameId: id, phase: cancelled ? 'cancel' : 'end', clientX: NaN, clientY: NaN });
+          sync(); persist();
+        },
       });
       if (surfaces[f.id]) queueMicrotask(() => {
         renderSurface(f.id);
@@ -1836,9 +1858,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // One-fist board move: a fist held over a board drags it (screen px)
         // until the hand opens. Frame rects are world-space, so the screen
         // delta scales by 1/camera.z. Persisted on 'end'.
+        // Held at a paired phone's edge, the board is sent there (boardEdge).
         onBoardMove: (ev) => {
-          if (ev.phase === 'end') { persist(); return; }
+          const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
+          if (ev.phase === 'start') { boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return; }
+          if (ev.phase === 'end') { boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
           if (ev.phase !== 'move' || (!ev.dx && !ev.dy)) return;
+          if (!boardEdge.handleBoardDrag({ ...at, phase: 'move' })) return;
           const f = reg.get(ev.frameId);
           if (!f) return;
           reg.setRect(ev.frameId, { ...f.rect, x: f.rect.x + ev.dx / camera.z, y: f.rect.y + ev.dy / camera.z });
@@ -2961,6 +2987,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
-  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, destroy };
+  return { run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), destroy };
 }
 export type CanvasHandle = ReturnType<typeof mountCanvas>;
