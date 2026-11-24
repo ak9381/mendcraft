@@ -667,9 +667,6 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     }
     if (el.matches('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable=true]')) {
       el.focus({ preventScroll: true });
-      // Tell the canvas a HAND focused this field (mouse focus never fires
-      // this) so it can dock the on-screen keyboard — see handKeyboard.ts.
-      el.dispatchEvent(new CustomEvent('mc-hand-text-focus', { bubbles: true, composed: true }));
       return;
     }
     // SVGElement (VisualTile's promoted [data-action] zones) has no .click().
@@ -769,7 +766,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       }
       else if (!target) {
         // A mouse press on empty space blurs the focused text field; a pinch
-        // on empty space does the same (and so closes the hand keyboard).
+        // on empty space does the same.
         if (!dryRun) {
           const a = doc.activeElement as HTMLElement | null;
           if (a?.matches?.('input, textarea, [contenteditable=true]')) a.blur();

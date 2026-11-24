@@ -141,13 +141,12 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
 });
 
 describe('engine bar sits bottom-centre with the phones strip directly above it', () => {
-  it('is a fixed bottom-centre bar, hidden in the phone shell and behind the hand keyboard', () => {
+  it('is a fixed bottom-centre bar, hidden in the phone shell', () => {
     const bar = ruleFor(canvasCss, '.mc-engine-bar');
     expect(bar).toContain('position: fixed');
     expect(bar).toContain('left: 50%');
     expect(bar).toContain('bottom: 16px');
     expect(canvasCss).toMatch(/\.mc-phone-simple \.mc-engine-bar/);
-    expect(canvasCss).toMatch(/body:has\(\.mc-keyboard\.mc-hand-kb:not\(\[hidden\]\)\) \.mc-engine-bar/);
   });
 
   it('replaces the swarm pill and lifts the phones strip above the bar', () => {

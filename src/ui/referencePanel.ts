@@ -344,9 +344,9 @@ export function createReferencePanel(opts: ReferencePanelOptions = {}): Referenc
   // Escape closes the panel — the topmost layer — and nothing else: it runs in
   // the capture phase so the plan underneath never also sees it (a wall being
   // drawn stays in progress). It yields to layers drawn above it (menus, the
-  // hand picker, modal dialogs, the on-screen keyboard) and to a text field
+  // hand picker, modal dialogs) and to a text field
   // elsewhere that owns Escape.
-  const LAYERS_ABOVE = '[role="menu"], .mc-hand-select, [aria-modal="true"], .mc-keyboard';
+  const LAYERS_ABOVE = '[role="menu"], .mc-hand-select, [aria-modal="true"]';
   const onKey = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || root.hidden || e.defaultPrevented) return;
     const a = document.activeElement as HTMLElement | null;

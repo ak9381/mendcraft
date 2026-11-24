@@ -16,7 +16,6 @@ import { createTwoHandGesture, incrementalZoomPan, midpoint, IDENTITY, type Simi
 import { detectTwoHandStretch, twoHandStretchOps, detectTwoHandFixture, twoHandFixtureOp, type TwoHandStretch, type TwoHandFixture } from './plan/twoHandEdit';
 import type { GestureAction } from './input/gestureMap';
 import { createGesturesPanel } from './ui/gesturesPanel';
-import { createOnScreenKeyboard } from './ui/onscreenKeyboard';
 import { createReferencePanel } from './ui/referencePanel';
 import { createOverflowMenu, type OverflowMenu } from './ui/overflowMenu';
 import { SIM_ACTIVE, createSimPlayback, demoFor, mountSimCursor, playDemo, type SimStep } from './sim';
@@ -392,7 +391,6 @@ app.innerHTML = `
         <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">Pointer comfort</button>
         <button id="btn-voice" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pick the voice that speaks replies (voices already on this device)">Spoken voice</button>
         <button id="btn-directory" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="People directory: names stay on this device and are replaced with tokens before anything goes to Gemini">Directory</button>
-        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
         <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
         <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
         <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
@@ -900,18 +898,13 @@ function renderWarnings(): void {
   }
 }
 
-// ---- input extras: custom gestures, on-screen keyboard, reference panel ----
+// ---- input extras: custom gestures, reference panel ----
 
 const btnGestures = el<HTMLButtonElement>('btn-gestures');
-const btnKeyboard = el<HTMLButtonElement>('btn-keyboard');
 const btnReference = el<HTMLButtonElement>('btn-reference');
 const btnRouting = el<HTMLButtonElement>('btn-routing');
 const btnLedger = el<HTMLButtonElement>('btn-ledger');
 
-// On-screen keyboard lives at the bottom of the page (fixed), so elementFromPoint
-// hit-testing works for the hand pointer; the float panels sit over the canvas.
-const keyboard = createOnScreenKeyboard();
-document.body.appendChild(keyboard.element);
 // Chrome extension bridge: detect, show "Chrome extension connected", and
 // route copy/paste/tab intents. Replies are treated as data only.
 const chromeBridge = createExtensionBridge();
@@ -1029,10 +1022,6 @@ function applyActiveProfile(adaptation: ProfileAdaptation): void {
   const cal = setupData.calibration;
   tracker?.setPinchThreshold(cal ? cal.pinchOn : activeProfile.pinchOn, cal ? cal.pinchOff : activeProfile.pinchOff);
   document.documentElement.style.setProperty('--mc-target-scale', String(activeProfile.targetScale));
-  // The on-screen keyboard's hover-dwell follows the same per-profile dwell as
-  // the canvas dwell (assist 900 / standard 700 / precise 600), honouring a
-  // calibrated dwell when one exists.
-  keyboard.setDwellMs(cal ? cal.dwellMs : activeProfile.dwellMs);
   handsPanel.setAdaptation(resolved);
 }
 
@@ -1464,11 +1453,7 @@ function handClickable(clientX: number, clientY: number): HTMLElement | null {
 function activateControl(ctl: HTMLElement): void {
   // C172–C175: a native popup is out of the hand's reach — open the in-page list.
   if (ctl instanceof HTMLSelectElement) { ctl.focus(); openHandSelect(ctl); }
-  else if (ctl instanceof HTMLInputElement && ctl.type === 'text') {
-    ctl.focus();
-    // A hand has no keys: a pinch on a text field brings up the on-screen keyboard for it.
-    keyboard.open(ctl); toggleButton(btnKeyboard, keyboard.isOpen());
-  }
+  else if (ctl instanceof HTMLInputElement && ctl.type === 'text') ctl.focus();
   else ctl.click();
 }
 
@@ -1480,12 +1465,6 @@ btnHands.addEventListener('click', () => {
   handsPanel.setMetrics(metricsSampler.snapshot());
   handsPanel.toggle();
   toggleButton(btnHands, handsPanel.isOpen());
-});
-btnKeyboard.addEventListener('click', () => {
-  if (keyboard.isOpen()) keyboard.close();
-  else keyboard.open();
-  toggleButton(btnKeyboard, keyboard.isOpen());
-  say(keyboard.isOpen() ? 'On-screen keyboard shown.' : 'On-screen keyboard hidden.');
 });
 btnReference.addEventListener('click', () => {
   referencePanel.toggle();
@@ -5028,15 +5007,6 @@ btnRedo.addEventListener('click', () => {
   controller.applyOp({ op: 'redo' });
   renderAll();
 });
-// Escape closes the on-screen keyboard first when it is open (topmost layer),
-// before any panel under it.
-window.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || e.defaultPrevented || !keyboard.isOpen() || document.querySelector('.mc-hand-select')) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  keyboard.close();
-  toggleButton(btnKeyboard, false);
-}, true);
 // B-142: keyboard Undo/Redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y), the same op as the buttons.
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
@@ -5381,8 +5351,6 @@ function handleHandEvent(raw: HandEvent): void {
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
       driveRefsHand(e);
       refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY });
-      // When the on-screen keyboard is up, an open hand over it dwells on keys.
-      if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
       // Dwell is a first-class click, equal to pinch and voice (a pinch can
       // hurt). Hover a button or a canvas object and wait for the ring to fill.
       if (!resting) {
@@ -5439,8 +5407,6 @@ function handleHandEvent(raw: HandEvent): void {
       if (overflowMenu.isOpen() && !overflowMenu.contains(document.elementFromPoint(aimed.clientX, aimed.clientY))) overflowMenu.close();
       const consumed = (): void => { clickCooldown.arm(now); };
       if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) { consumed(); break; }
-      // A pinch over the on-screen keyboard presses the key under the cursor.
-      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) { consumed(); break; }
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
       const ctl = handClickable(aimed.clientX, aimed.clientY);
       // A click lands only where the press began (mouse semantics): a hold that
@@ -5505,7 +5471,6 @@ function handleHandEvent(raw: HandEvent): void {
       handPressEl = null;
       handRangeEnd(); // C169 parity: a slider keeps the value it reached
       if (handDragEl) { const el = handDragEl; handDragEl = null; handDragPointer('pointercancel', el, 0, 0); }
-      keyboard.cancelDwell(); // a pending hover-dwell must not fire after the hand is gone
       viewport.endDrag?.();
       break;
   }
@@ -5621,8 +5586,6 @@ async function enableCamera(): Promise<boolean> {
     btnCamera.textContent = 'Camera on';
     clearFail('fail-camera');
     syncOperatorButtons();
-    // Hands mode on: focusing a text field now raises the on-screen keyboard.
-    keyboard.setAutoOpen(true);
     announceStatus('Camera on.');
     applyActiveProfile(lastAdaptation);
     if (!setupData.completed && !SIM_ACTIVE && !setupPanel.isOpen()) {
@@ -5657,7 +5620,6 @@ function disableCamera(): void {
   btnCamera.textContent = 'Camera';
   handCursor.hidden = true;
   syncOperatorButtons();
-  keyboard.setAutoOpen(false);
   resetPresenceStatus();
   say('Camera off.');
 }

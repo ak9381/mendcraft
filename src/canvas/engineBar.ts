@@ -5,7 +5,7 @@
 // ledger (the caller passes them in); this module never invents any.
 //
 // Built with createElement only (no innerHTML) so it runs under the suite's
-// node-only fake DOM. Hidden in the phone shell and behind the hand keyboard
+// node-only fake DOM. Hidden in the phone shell
 // by CSS (canvas.css).
 import type { EngineId } from './aiTurn';
 import { formatFooterBytes } from './modelPanels';
