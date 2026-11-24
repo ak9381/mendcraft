@@ -1,3 +1,7 @@
+// UNWIRED OPT-IN DETECTOR — nothing in the app imports this module today; it
+// is kept (with its tests) for a later Project-Gameface-style click. See the
+// TODO(wiring) note below before relying on it.
+//
 // FACE CLICK (opt-in, after Google's Project Gameface): open the mouth
 // (`jawOpen`) or raise the inner brows (`browInnerUp`) and hold it briefly to
 // click whatever the hand cursor targets — a click that never moves the hand.

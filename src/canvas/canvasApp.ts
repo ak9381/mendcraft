@@ -79,9 +79,7 @@ import { mountPhoneHands } from './phoneHands';
 import type { PhoneCamera } from './phoneCamera';
 import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
-import { pinchRatio as pinchGapRatio } from '../input/handMetrics';
-import { createPinchTwiceSession, PINCH_TWICE_MS } from '../input/pinchBaseline';
-import { loadSetup, saveSetup } from '../setup/setupState';
+import { loadSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
@@ -721,29 +719,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
   };
 
-  const pinchTwice = createPinchTwiceSession();
-  const pinchCalEl = document.createElement('div');
-  pinchCalEl.className = 'mc-pinch-cal';
-  pinchCalEl.hidden = true;
-  pinchCalEl.setAttribute('role', 'status');
-  root.appendChild(pinchCalEl);
   {
     const saved = loadSetup()?.calibration;
     if (saved && saved.pinchOn >= 0.16 && saved.pinchOn <= 0.40 && saved.pinchOff > saved.pinchOn) {
       setLivePinchThresholds(saved.pinchOn, saved.pinchOff);
     }
-  }
-  function finishPinchCalibrate(ok: boolean): void {
-    const band = ok ? pinchTwice.result() : null;
-    pinchTwice.reset();
-    pinchCalEl.hidden = true;
-    if (!band) { say("Didn't catch a pinch — try Calibrate pinch again."); return; }
-    setLivePinchThresholds(band.pinchOn, band.pinchOff);
-    const data = loadSetup();
-    if (data?.calibration) {
-      saveSetup({ ...data, calibration: { ...data.calibration, pinchOn: band.pinchOn, pinchOff: band.pinchOff } });
-    }
-    say(`Pinch saved at ${band.pinchOn.toFixed(2)} / ${band.pinchOff.toFixed(2)}.`);
   }
 
   // The floating mic is mounted later; "ask for something else" starts it.
@@ -2407,12 +2387,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
-    if (pinchTwice.active() && f.hands[0]?.points) {
-      const st = pinchTwice.push(pinchGapRatio(f.hands[0].points), now);
-      const left = Math.max(0, Math.ceil((PINCH_TWICE_MS - st.elapsed) / 1000));
-      pinchCalEl.textContent = st.count >= 2 ? 'Pinch saved.' : `Pinch twice… ${left}s`;
-      if (st.done) finishPinchCalibrate(st.ready);
-    }
     if (scanPanel?.isOpen()) {
       const op = f.faces.find((x) => x.isOperator) ?? f.faces[0] ?? null;
       const st = scanFlow.update({
@@ -2513,7 +2487,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // grab (board move / pan) and two-fist zoom.
         const cam = cameraHandsFromSelfie(hands);
         handPointer?.update(cam, now);
-        teachPanel.matchFrame(hands, now);
+        // Taught gestures obey the same guards as built-ins: never while the
+        // hands are locked (not facing the screen) or a fist grab is running.
+        if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive()) teachPanel.matchFrame(hands, now);
         feedPointWait(cam, now);
       },
     },

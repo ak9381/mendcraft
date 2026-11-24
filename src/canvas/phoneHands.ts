@@ -1,4 +1,5 @@
-// Hand control on the phone shell (iPhone / Android app). The same pointer as
+// Hand control on the phone shell (Android app only; the iPhone app has no
+// phone hands). The same pointer as
 // the laptop — palm cursor, fist TAP = click, held fist + move = move board /
 // pan, two fists = zoom, facing gate — fed from the shared FRONT camera
 // (phoneCamera.ts; look-to-edit rides the same stream and tracker).
