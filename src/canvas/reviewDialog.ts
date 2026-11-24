@@ -282,7 +282,7 @@ export function mountReviewDialog(
   }
   const approveBtn = btn(doc, 'mc-review-approve', 'Approve', () => run('approve'), 'approve');
   const rejectBtn = btn(doc, 'mc-review-reject', 'Reject', () => run('reject'), 'reject');
-  const askElseBtn = btn(doc, 'mc-review-ask-else', 'Ask for something else', () => run('ask-else'), 'askElse');
+  const askElseBtn = btn(doc, 'mc-review-ask-else', 'Something else', () => run('ask-else'), 'askElse');
   actions.append(approveBtn, rejectBtn, askElseBtn);
   // A visible, pinch-sized ✕ that maps to Escape semantics (A5-005): closes
   // WITHOUT deciding, so the proposal stays waiting and voice/pinch keep·drop

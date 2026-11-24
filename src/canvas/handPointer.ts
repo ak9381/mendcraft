@@ -357,7 +357,7 @@ export function isConfirmAction(el: HTMLElement | null | undefined): boolean {
   if (!el) return false;
   try { if (el.matches?.(CONFIRM_ACTION)) return true; } catch { /* ignore */ }
   const name = `${el.getAttribute?.('aria-label') || ''} ${el.textContent || ''}`.toLowerCase();
-  return /\b(approve|reject|ask for something else|delete|trash)\b/.test(name);
+  return /\b(approve|reject|ask for something else|something else|delete|trash)\b/.test(name);
 }
 
 export function confirmLabelFor(el: HTMLElement): string {

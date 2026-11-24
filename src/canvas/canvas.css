@@ -724,6 +724,7 @@
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else {
   min-height: 60px; min-width: 140px; font-size: 18px; font-weight: 600;
   padding: 0 24px; box-sizing: border-box; border-radius: 14px;
+  white-space: nowrap; /* a label never wraps inside its button */
 }
 .mc-review-approve { flex: 1.4 1 0; background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
 .mc-review-reject { flex: 1 1 0; background: #FFFFFF; }
