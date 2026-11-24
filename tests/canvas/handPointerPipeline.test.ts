@@ -113,6 +113,7 @@ function fakeDoc(buttons: FakeBtn[], frames: FakeFrame[] = []) {
     body: { append: () => {} },
     querySelectorAll: (sel: string) => {
       if (sel === '*' || sel === '[aria-modal=true]') return [];
+      if (sel === '.mc-frame') return frames;
       return sel.split(',').some((s) => s.trim().startsWith('button')) ? buttons : [];
     },
     elementFromPoint: (x: number, y: number) =>
@@ -252,7 +253,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('no one-fist drag: a fist over a drag handle never dispatches pointerdown or clicks', () => {
+  it('a fist over a control (a drag handle) never dispatches pointerdown or clicks — fists only grab boards/canvas', () => {
     const rect = { left: 100, top: 30, width: 120, height: 40, right: 220, bottom: 70 };
     const listeners: Record<string, Array<(e: unknown) => void>> = {};
     const handle = {
@@ -476,7 +477,7 @@ describe('hand pointer real pipeline (synthetic frames)', () => {
   });
 });
 
-describe('two-fist board move', () => {
+describe('fist grabs (one fist moves a board / pans, two fists zoom)', () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>).innerWidth = W;
     (globalThis as Record<string, unknown>).innerHeight = H;
@@ -501,75 +502,79 @@ describe('two-fist board move', () => {
     }
   };
 
-  it('both fists on the same board drag it by their midpoint until either hand opens', () => {
+  it('two fists on the same board zoom (they no longer drag it); opening either ends it', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const doc = fakeDoc([], [board]);
     const moves: Array<{ phase: string; frameId: string; dx: number; dy: number }> = [];
-    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
+    const zooms: Array<{ phase: string }> = [];
+    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
       feedPair(hp, () => t, (v) => (t = v), { x: 150, y: 150 }, { x: 350, y: 250 }, 10);
-      expect(moves.some((m) => m.phase === 'start' && m.frameId === 'f1')).toBe(true);
-      expect(hp.isBoardGrabbed()).toBe(true);
-
-      moves.length = 0;
-      // Shift both fists by the same (dx, dy): the midpoint follows exactly.
-      feedPair(hp, () => t, (v) => (t = v), { x: 190, y: 170 }, { x: 390, y: 270 }, 10);
-      const totalDx = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dx, 0);
-      const totalDy = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dy, 0);
-      expect(totalDx).toBeGreaterThan(30);
-      expect(totalDx).toBeLessThan(50);
-      expect(totalDy).toBeGreaterThan(10);
-      expect(totalDy).toBeLessThan(30);
-
-      // Opening one fist ends the move.
-      moves.length = 0;
-      t += 33;
-      hp.update([synthHand(190, 170, false), synthFist(390, 270)], t);
-      expect(moves.some((m) => m.phase === 'end')).toBe(true);
+      expect(zooms[0]?.phase).toBe('start');
+      expect(hp.isGrabActive()).toBe(true);
       expect(hp.isBoardGrabbed()).toBe(false);
 
-      // Further joint movement after the open does nothing.
-      moves.length = 0;
-      feedPair(hp, () => t, (v) => (t = v), { x: 250, y: 250 }, { x: 450, y: 350 }, 5);
-      expect(moves.some((m) => m.phase === 'move')).toBe(false);
+      // Shift both fists by the same (dx, dy): a zoom 'move', never a board move.
+      feedPair(hp, () => t, (v) => (t = v), { x: 190, y: 170 }, { x: 390, y: 270 }, 10);
+      expect(zooms.some((z) => z.phase === 'move')).toBe(true);
+      expect(moves).toHaveLength(0);
+
+      // Opening one fist ends the zoom.
+      t += 33;
+      hp.update([synthHand(190, 170, false), synthFist(390, 270)], t);
+      expect(zooms.at(-1)?.phase).toBe('end');
+      expect(hp.isGrabActive()).toBe(false);
+
+      // Further joint movement after the open does nothing until both re-close.
+      const n = zooms.length;
+      t += 33;
+      hp.update([synthHand(250, 250, false), synthFist(450, 350)], t);
+      expect(zooms).toHaveLength(n);
+      expect(moves).toHaveLength(0);
     } finally {
       hp.destroy();
     }
   });
 
-  it('one fist alone over a board never grabs it', () => {
+  it('one fist alone over a board grabs it and moves it', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const doc = fakeDoc([], [board]);
-    const moves: Array<{ phase: string }> = [];
+    const moves: Array<{ phase: string; dx: number }> = [];
     const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
     let t = 0;
     try {
       for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(200, 200)], t); }
-      expect(moves.length).toBe(0);
-      expect(hp.isBoardGrabbed()).toBe(false);
+      expect(moves[0]?.phase).toBe('start');
+      expect(hp.isBoardGrabbed()).toBe(true);
+      for (let i = 0; i < 30; i++) { t += 33; hp.update([synthFist(240, 200)], t); }
+      const dx = moves.filter((m) => m.phase === 'move').reduce((s, m) => s + m.dx, 0);
+      expect(dx).toBeGreaterThan(35);
+      expect(dx).toBeLessThan(45);
     } finally {
       hp.destroy();
     }
   });
 
-  it('fists on two different boards never grab either', () => {
+  it('fists on two different boards zoom the world and move neither board', () => {
     const boardA = fakeFrame({ left: 0, top: 0, width: 200, height: 200 }, 'fA');
     const boardB = fakeFrame({ left: 600, top: 0, width: 200, height: 200 }, 'fB');
     const doc = fakeDoc([], [boardA, boardB]);
     const moves: Array<{ phase: string }> = [];
-    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev) });
+    const zooms: Array<{ phase: string }> = [];
+    const hp = createHandPointer(doc, { onBoardMove: (ev) => moves.push(ev), onWorldZoom: (ev) => zooms.push(ev) });
     let t = 0;
     try {
       feedPair(hp, () => t, (v) => (t = v), { x: 100, y: 100 }, { x: 700, y: 100 }, 10);
       expect(moves.length).toBe(0);
       expect(hp.isBoardGrabbed()).toBe(false);
+      expect(zooms[0]?.phase).toBe('start');
     } finally {
       hp.destroy();
     }
   });
 
-  it('a two-fist grab silences dwell on a button under the cursor; dwell works again once a fist opens', () => {
+  it('a two-fist zoom silences dwell on a button under the cursor; dwell works again once a fist opens', () => {
     const board = fakeFrame({ left: 100, top: 100, width: 400, height: 300 }, 'f1');
     const insideBtn = fakeButton({ left: 250, top: 200, width: 80, height: 40 });
     // The button sits inside the board, so its own frame lookup still finds f1.
@@ -579,18 +584,18 @@ describe('two-fist board move', () => {
     const hp = createHandPointer(doc, {});
     let t = 0;
     try {
-      // Both fists land on the board, right over the button — a grab starts.
+      // Both fists land on the board, right over the button — a zoom starts.
       for (let i = 0; i < 10; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
-      expect(hp.isBoardGrabbed()).toBe(true);
+      expect(hp.isGrabActive()).toBe(true);
       // Resting there well past the 800 ms dwell window: isGrabActive silences
       // this slot's target/dwell even with the button sitting right under it.
       for (let i = 0; i < 60; i++) { t += 33; hp.update([synthFist(270, 220), synthFist(310, 220)], t); }
       expect(insideBtn.click).not.toHaveBeenCalled();
       expect(hp.target).toBeNull();
 
-      // One fist opens: the grab ends.
+      // One fist opens: the zoom ends.
       t += 33; hp.update([synthHand(270, 220, false), synthFist(310, 220)], t);
-      expect(hp.isBoardGrabbed()).toBe(false);
+      expect(hp.isGrabActive()).toBe(false);
 
       // Only the open hand remains, resting on the same button: dwell works again.
       for (let i = 0; i < 35; i++) { t += 33; hp.update([synthHand(270, 220, false)], t); }

@@ -18,11 +18,14 @@
 // HAND_FEEL.dwellMs (800 ms) — jitter inside the lock never restarts it —
 // then the control is clicked. A board is focused by dwelling on its title
 // (a button); resting on a board's body does nothing. After a click there is
-// a short cooldown and the cursor must leave the control to re-arm. No
-// pinch-click, no pinch-drag, no two-finger scroll. The only other gesture
-// is a two-fist BOARD MOVE, handled by the plural createHandPointer() below:
-// both hands fisted with both cursors over the SAME board drags that board
-// by the fists' midpoint until either hand opens.
+// a short cooldown and the cursor must leave the control to re-arm.
+//
+// The only other gestures are fists, handled by the plural
+// createHandPointer() below: ONE fist (held GRAB_HOLD_MS) grabs — over a
+// board it moves the board, over empty canvas it pans the world, over a
+// button it does nothing; TWO fists zoom the world about their midpoint.
+// Pinch does nothing in the live pipeline: no pinch-click, no pinch-drag, no
+// pinch-zoom, no pinch-to-keep, and no two-finger scroll.
 //
 // `pinch()`/`pointAt()` remain as a direct, non-gesture "simulate a press"
 // API for tests and selfCheck.ts's reachability replay — unrelated to the
@@ -277,20 +280,34 @@ export interface HandPointerOptions {
   onTooltip?: (text: string | null, el: HTMLElement | null) => void;
   /** Slot hook: the hand was lost (camera stop or sticky timeout). */
   onLost?: () => void;
-  /** Live activity feed: dwell clicks (with target) and two-fist board grabs. */
+  /** Live activity feed: dwell clicks (with target) and one-fist board grabs. */
   onHandEvent?: (ev: { type: 'click' | 'grab'; target?: string | null }) => void;
-  /** Two-fist board move (see createHandPointer): 'start' fires once when
-   *  both fists land on the same board, 'move' with the screen-space delta
-   *  (CSS px) of the fists' midpoint each frame after, 'end' when either
-   *  fist opens or the fists part onto different boards. */
+  /** One-fist board move (see createHandPointer): 'start' once a fist held
+   *  GRAB_HOLD_MS starts over a board (hit by frame rects), 'move' with the
+   *  fist's screen-space delta (CSS px) each frame after, 'end' when the
+   *  fist opens, the hand is lost, or a second fist takes over (zoom). */
   onBoardMove?: (ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number }) => void;
-  /** Slot hook (plural createHandPointer only): true while a two-fist board
-   *  grab is active, on ANY slot — not just this hand's own fist pose. While
-   *  true this slot's dwell/ring/click/hover all stay off, so dragging a
-   *  board across the right-side buttons (or to the edge, onto another
-   *  device) never glitches a hover or fires a stray click underneath. */
+  /** One fist over empty canvas: "grab the world" — screen-px deltas, 1:1. */
+  onWorldPan?: (ev: { phase: 'start' | 'move' | 'end'; dx: number; dy: number }) => void;
+  /** Two fists: anchored zoom. `a`/`b` are the two fists' screen points
+   *  (CSS px); the caller zooms by |b−a| / |b0−a0| about their midpoint. */
+  onWorldZoom?: (ev: { phase: 'start' | 'move' | 'end'; a: P; b: P }) => void;
+  /** The board in focus mode (if any): one fist on THAT board pans instead
+   *  of moving it. */
+  focusedFrameId?: () => string | null;
+  /** Slot hook (plural createHandPointer only): true while ANY grab (board
+   *  move, pan, zoom) is running, on any slot. While true every slot's
+   *  dwell/ring/click/hover stays off, so dragging a board across the
+   *  right-side buttons never glitches a hover or fires a stray click. */
   isGrabActive?: () => boolean;
 }
+
+/** A fist must be held this long (after the 120 ms point/fist gate) before it
+ *  grabs, pans or zooms — a hand passing through a fist shape does nothing. */
+export const GRAB_HOLD_MS = 150;
+/** A fist over one of these (a board's title) moves the board, even though it
+ *  is a control; a fist over any other control does nothing. */
+const BOARD_HANDLE = '.mc-frame-title, [data-mc-board-handle]';
 
 /** Magnetic focus: capture radius (a control within this many px of the
  *  cursor captures it) and the ease of the drawn cursor toward its centre.
@@ -321,10 +338,11 @@ const SLOT_LOST_MS = 400;
 
 interface SlotPointer extends HandPointer {
   isFisted(): boolean;
-  /** The raw screen-space cursor point (CSS px; {x:-1,y:-1} when lost) — used
-   *  by the plural createHandPointer() to hit-test both fists against the
-   *  same board for a two-fist move. */
+  /** The screen-space cursor point (CSS px; {x:-1,y:-1} when lost) — the
+   *  plural createHandPointer() reads grab positions and deltas from it. */
   rawPoint(): P;
+  /** The control directly under a point (no magnet) — a fist over one never grabs. */
+  controlAt(p: P): HTMLElement | null;
   cancelPressWithoutClick(): void;
   snapshot(): {
     classification: string;
@@ -357,8 +375,10 @@ export interface HandPointer {
   setDryRun(on: boolean): void;
   lost(): void;
   destroy(): void;
-  /** True while a two-fist board move is active (see createHandPointer). */
+  /** True while a one-fist board move is active (see createHandPointer). */
   isBoardGrabbed(): boolean;
+  /** True while any grab — board move, world pan, two-fist zoom — is active. */
+  isGrabActive(): boolean;
 }
 
 function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
@@ -412,7 +432,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let textSelecting = false;
   let pinched = false;
   // Fisted hand: shown as the move cursor, never clicks or dwells. Only the
-  // plural createHandPointer() gives it meaning (a two-fist board move).
+  // plural createHandPointer() gives it meaning (grab / pan / two-fist zoom).
   let fisted = false;
   let lastActivated: HTMLElement | null = null;
   let clickTraceId: string | null = null;
@@ -523,7 +543,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       else (style as unknown as Record<string, string>)['--mc-dwell'] = String(dwellProgress);
     }
     // Visual cursor eases toward the focused target centre (the magnet).
-    // Hit-testing and pinch/dwell still use the raw fingertip `pt` + snap.
+    // Hit-testing and dwell still use the un-eased palm point `pt` + magnet.
     paintConfirm(target, !!(pinched || (dwellProgress > 0 && isConfirmAction(target))));
     const shown = displayPoint(pt);
     cursor.style.transform = fisted
@@ -849,10 +869,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       paint();
       return draggingHandle;
     }
-    // A two-fist board grab is active (on any slot, not just this hand's own
-    // fist): no hover, no ring, no dwell, no click, while the board drags
-    // under the cursor — across the right-side buttons, to the edge, or onto
-    // another device.
+    // A fist grab (board move, pan or zoom) is active on any slot, not just
+    // this hand's own fist: no hover, no ring, no dwell, no click, while the
+    // board drags under the cursor — across the right-side buttons, to the
+    // edge, or onto another device.
     if (opts.isGrabActive?.()) {
       if (target) setTarget(null);
       if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
@@ -967,8 +987,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     lost,
     destroy() { lost(); if (lostTimer) clearTimeout(lostTimer); frame.remove(); cursor.remove(); confirmEl.remove(); },
     isBoardGrabbed: () => false,
+    isGrabActive: () => false,
     isFisted: () => fisted,
     rawPoint: () => ({ ...pt }),
+    controlAt: (p: P) => rawInteractiveHit(p),
     cancelPressWithoutClick,
     snapshot: () => {
       const clickTarget = clickTraceId;
@@ -986,26 +1008,38 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   } as SlotPointer;
 }
 
+type GrabMode =
+  | { kind: 'board'; slot: number; frameId: string; last: P }
+  | { kind: 'pan'; slot: number; last: P }
+  | { kind: 'zoom'; a: P; b: P };
+
 /** Public pointer: one coral cursor per foreground hand (max two), each with
- *  its own pinch-click and fist-drag state. Tests and the sim hook still use
- *  pointAt/pinch on the first slot. */
+ *  its own dwell state, plus the fist grabs that need both slots:
+ *
+ *  - ONE fist held GRAB_HOLD_MS: decided once, at grab start, from the fist's
+ *    palm point — a control under it → nothing (the fist is spent until it
+ *    opens); a board (by frame RECT, so chrome over the board can't drop it;
+ *    the focused board in focus mode pans instead) → move that board; empty
+ *    canvas → pan the world. While the grab runs there are no hit-tests.
+ *  - TWO fists held → anchored zoom. A second fist arriving ends a running
+ *    board move / pan ('end') before the zoom starts.
+ *  Opening the fist (or losing the hand) ends the grab; a fist still closed
+ *  when its grab ended (a zoom partner opened) is spent until it opens.
+ *  Total latency from a closed hand to a grab: the 120 ms point/fist gate +
+ *  GRAB_HOLD_MS. Tests and the sim hook still use pointAt/pinch on slot 0. */
 export function createHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
   getGestureTrace();
   const active = [false, false];
   const prevTips: (P | null)[] = [null, null];
   const lastSeen = [-Infinity, -Infinity];
-  // Two-fist board move: both fists' raw cursors over the SAME board. The
-  // grabbed frame id and the fists' last midpoint (screen px) while active.
-  let grabFrameId: string | null = null;
-  let grabMid: P | null = null;
+  const fistSince: (number | null)[] = [null, null];
+  const spent = [false, false];
+  let grab: GrabMode | null = null;
   const slots: SlotPointer[] = [0, 1].map((i) =>
     createOneHandPointer(doc, {
       ...opts,
-      // Read fresh each call: true from the moment both fists land on the
-      // same board (set at the bottom of update() below) until either opens
-      // or they part — one frame behind the grab's own start/end, same as
-      // every other cross-slot signal here (bothFisted, sameBoard).
-      isGrabActive: () => !!grabFrameId,
+      // Read fresh each call: true from the frame a grab starts until it ends.
+      isGrabActive: () => !!grab,
       onLost() {
         active[i] = false;
         prevTips[i] = null;
@@ -1018,16 +1052,96 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     const p = h[INDEX_TIP] ?? h[0];
     return p ? { x: p.x, y: p.y } : null;
   };
+  const inside = (p: P, r: Rect) => p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height;
+  /** The board under a point by its RECT (topmost: the focused board, then
+   *  later in document order) — never elementFromPoint, so a chip or panel
+   *  drawn over the board doesn't hide it. */
   const frameIdAt = (p: P): string | null => {
     if (p.x < 0) return null;
-    const raw = deepElementFromPoint(doc, p.x, p.y);
-    return ((raw as HTMLElement | null)?.closest?.('.mc-frame') as HTMLElement | null)?.dataset.frame ?? null;
+    const els = Array.from(doc.querySelectorAll?.('.mc-frame') ?? []) as HTMLElement[];
+    const focused = opts.focusedFrameId?.() ?? null;
+    if (focused) {
+      const f = els.find((el) => el.dataset?.frame === focused);
+      if (f && inside(p, f.getBoundingClientRect())) return focused;
+    }
+    for (let i = els.length - 1; i >= 0; i--) {
+      const id = els[i].dataset?.frame;
+      if (id && inside(p, els[i].getBoundingClientRect())) return id;
+    }
+    return null;
   };
   function endGrab(): void {
-    if (!grabFrameId) return;
-    opts.onBoardMove?.({ phase: 'end', frameId: grabFrameId, dx: 0, dy: 0 });
-    grabFrameId = null;
-    grabMid = null;
+    const g = grab;
+    if (!g) return;
+    grab = null;
+    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0 });
+    else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
+    else opts.onWorldZoom?.({ phase: 'end', a: g.a, b: g.b });
+  }
+  /** A single held fist on slot i starts its grab (order: control → board → pan). */
+  function startOneFist(i: number): void {
+    const p = slots[i].rawPoint();
+    if (p.x < 0) return;
+    const control = slots[i].controlAt(p);
+    const onHandle = !!control && !!control.matches?.(BOARD_HANDLE);
+    if (control && !onHandle) { spent[i] = true; return; } // a fist on a button: nothing, until it opens
+    const handleFrame = onHandle ? ((control!.closest?.('.mc-frame') as HTMLElement | null)?.dataset?.frame ?? null) : null;
+    const frameId = handleFrame ?? frameIdAt(p);
+    const focused = opts.focusedFrameId?.() ?? null;
+    if (frameId && frameId !== focused) {
+      grab = { kind: 'board', slot: i, frameId, last: p };
+      opts.onHandEvent?.({ type: 'grab', target: frameId });
+      opts.onBoardMove?.({ phase: 'start', frameId, dx: 0, dy: 0 });
+    } else {
+      grab = { kind: 'pan', slot: i, last: p };
+      opts.onWorldPan?.({ phase: 'start', dx: 0, dy: 0 });
+    }
+  }
+  function updateGrabs(t: number): void {
+    const fisted = [0, 1].map((i) => active[i] && slots[i].isFisted());
+    for (let i = 0; i < 2; i++) {
+      if (!fisted[i]) { fistSince[i] = null; spent[i] = false; }
+      else if (fistSince[i] === null) fistSince[i] = t;
+    }
+    const held = [0, 1].map((i) => fisted[i] && !spent[i] && t - (fistSince[i] ?? t) >= GRAB_HOLD_MS);
+
+    if (grab?.kind === 'zoom') {
+      if (fisted[0] && fisted[1]) {
+        const a = slots[0].rawPoint(), b = slots[1].rawPoint();
+        grab = { kind: 'zoom', a, b };
+        opts.onWorldZoom?.({ phase: 'move', a, b });
+        return;
+      }
+      endGrab();
+      for (let i = 0; i < 2; i++) if (fisted[i]) spent[i] = true;
+      return;
+    }
+    if (grab) {
+      const g = grab;
+      if (!fisted[g.slot]) { endGrab(); return; }
+      if (held[1 - g.slot]) {
+        endGrab(); // a second fist takes over: finish the move/pan, then zoom below
+      } else {
+        const p = slots[g.slot].rawPoint();
+        const dx = p.x - g.last.x, dy = p.y - g.last.y;
+        g.last = p;
+        if (dx || dy) {
+          if (g.kind === 'board') opts.onBoardMove?.({ phase: 'move', frameId: g.frameId, dx, dy });
+          else opts.onWorldPan?.({ phase: 'move', dx, dy });
+        }
+        return;
+      }
+    }
+    if (held[0] && held[1]) {
+      const a = slots[0].rawPoint(), b = slots[1].rawPoint();
+      grab = { kind: 'zoom', a, b };
+      opts.onWorldZoom?.({ phase: 'start', a, b });
+      return;
+    }
+    // One fist held while the other hand is closing too: wait for it, never
+    // start a pan the second fist would cut off a frame later.
+    if (held[0] && !(fisted[1] && !spent[1])) startOneFist(0);
+    else if (held[1] && !(fisted[0] && !spent[0])) startOneFist(1);
   }
   return {
     update(hands, t) {
@@ -1048,27 +1162,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
           slots[i].lost();
         }
       }
-
-      const bothFisted = slots[0].isFisted() && slots[1].isFisted();
-      const p0 = slots[0].rawPoint();
-      const p1 = slots[1].rawPoint();
-      const sameBoard = bothFisted ? frameIdAt(p0) : null;
-      const onSameBoard = bothFisted && sameBoard && sameBoard === frameIdAt(p1) ? sameBoard : null;
-      if (onSameBoard) {
-        const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
-        if (grabFrameId !== onSameBoard) {
-          grabFrameId = onSameBoard;
-          grabMid = mid;
-          opts.onHandEvent?.({ type: 'grab', target: onSameBoard });
-          opts.onBoardMove?.({ phase: 'start', frameId: onSameBoard, dx: 0, dy: 0 });
-        } else if (grabMid) {
-          const dx = mid.x - grabMid.x, dy = mid.y - grabMid.y;
-          grabMid = mid;
-          if (dx || dy) opts.onBoardMove?.({ phase: 'move', frameId: onSameBoard, dx, dy });
-        }
-      } else {
-        endGrab();
-      }
+      updateGrabs(t);
     },
     pointAt(x, y) { return slots[0].pointAt(x, y); },
     pinch: (down) => slots[0].pinch(down),
@@ -1078,8 +1172,14 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     surfaceBusy: () => slots[0].surfaceBusy() || slots[1].surfaceBusy(),
     suppressNextRelease() { slots[0].suppressNextRelease(); slots[1].suppressNextRelease(); },
     setDryRun(on) { slots[0].setDryRun(on); slots[1].setDryRun(on); },
-    lost() { endGrab(); slots[0].lost(); slots[1].lost(); active[0] = active[1] = false; prevTips[0] = prevTips[1] = null; lastSeen[0] = lastSeen[1] = -Infinity; },
-    destroy() { slots[0].destroy(); slots[1].destroy(); },
-    isBoardGrabbed: () => !!grabFrameId,
+    lost() {
+      endGrab();
+      slots[0].lost(); slots[1].lost();
+      active[0] = active[1] = false; prevTips[0] = prevTips[1] = null; lastSeen[0] = lastSeen[1] = -Infinity;
+      fistSince[0] = fistSince[1] = null; spent[0] = spent[1] = false;
+    },
+    destroy() { endGrab(); slots[0].destroy(); slots[1].destroy(); },
+    isBoardGrabbed: () => grab?.kind === 'board',
+    isGrabActive: () => !!grab,
   };
 }

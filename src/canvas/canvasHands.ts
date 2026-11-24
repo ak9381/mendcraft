@@ -1,6 +1,10 @@
-// Canvas hands adapter: maps the on-device hand gesture stream to canvas events:
-// 'keep' on pinch, 'drop' on brush/swipe, 'point' with normalised fingertip,
-// and 'palm' for open palm. Includes 600 ms refractory debounce for 'keep'.
+// Canvas hands adapter: maps the on-device hand gesture stream to canvas events.
+// From camera frames: 'frame' (raw landmarks, every frame — the hand pointer's
+// dwell / fist-grab / two-fist zoom run off this), 'point' with the
+// normalised fingertip, and 'palm' for a held open palm. Pinch → 'keep',
+// thumbs-up → 'keep' and palm swipe → 'drop' are no longer wired from frames.
+// mapGestureToCanvasEvent / feedGesture (no live caller) still map named
+// gestures, with a 600 ms refractory debounce for 'keep'.
 import { classifyGesture, type Pt } from '../input/gestures';
 import { INDEX_TIP, THUMB_TIP } from '../input/handLogic';
 import { mapToScreen } from './handPointer';
@@ -122,13 +126,12 @@ export function createCanvasHandsAdapter(
   // the old per-frame 'palm' event toggled it every single frame the pose was
   // visible, which is the "glitches when I hover" bug.
   const palmHold = createHoldGesture(HAND_FEEL.palmHoldMs, HAND_FEEL.palmRefractoryMs);
-  // C080: a HELD thumbs-up (the catalog's "confirm") keeps the pending
-  // proposal, the same as the Approve button — held like the palm so a
-  // passing thumb can't approve anything.
-  const thumbHold = createHoldGesture(HAND_FEEL.palmHoldMs, HAND_FEEL.palmRefractoryMs);
-  // 'keep' needs N consecutive pinch-pose frames, so a 1-frame tracking dip
-  // over the canvas can never keep a proposal.
-  let pinchFrames = 0;
+  // Live hand gestures are point (dwell), fist (grab/pan) and two fists
+  // (zoom) — all in handPointer.ts. Pinch → keep, a held thumbs-up → keep
+  // and a palm swipe → drop are NOT wired from camera frames any more: they
+  // fired by accident while pointing and grabbing. Keep/drop stay on the
+  // review card's buttons (dwell-clickable) and voice. The motion recognizer
+  // still runs so suppressMotion keeps seeing its ids (taught gestures).
 
   function fire(ev: CanvasHandEvent, now: number): void {
     if (ev.type === 'keep') {
@@ -163,37 +166,24 @@ export function createCanvasHandsAdapter(
 
     const rawHands = handList.map(extractPoints);
     onEvent({ type: 'frame', hands: rawHands, now });
-    const motionEvents = motion
+    // Consulted (so a morph hold / taught gesture can still claim an id) but
+    // no motion id maps to a canvas event any more — palm swipe is unwired.
+    motion
       .update({ hands: rawHands as Pt[][], now })
       .filter((mev) => !opts.suppressMotion?.(mev.id));
-    for (const mev of motionEvents) {
-      if (mev.id === 'palm-swipe-left' || mev.id === 'palm-swipe-right') {
-        fire({ type: 'drop' }, now);
-      }
-    }
 
-    let anyPinch = false;
     let anyPalm = false;
-    let anyThumb = false;
     for (const h of rawHands) {
       if (!h || h.length < 21) continue;
       const gesture = classifyGesture(h as Pt[], (h as Pt[] & { label?: string }).label);
-      if (gesture === 'pinch') {
-        anyPinch = true;
-      } else if (gesture === 'point') {
+      if (gesture === 'point') {
         const tip = h[INDEX_TIP];
         if (tip) fire({ type: 'point', point: { x: tip.x, y: tip.y } }, now);
       } else if (gesture === 'open-palm') {
         anyPalm = true;
-      } else if (gesture === 'thumbs-up') {
-        anyThumb = true;
       }
     }
-    pinchFrames = anyPinch ? pinchFrames + 1 : 0;
-    if (pinchFrames === HAND_FEEL.keepFrames) fire({ type: 'keep' }, now);
     if (palmHold.update(anyPalm, now)) fire({ type: 'palm' }, now);
-    // A taught custom gesture that claims thumbs-up wins (suppressMotion).
-    if (thumbHold.update(anyThumb, now) && !opts.suppressMotion?.('thumbs-up')) fire({ type: 'keep' }, now);
   }
 
   return {
@@ -203,8 +193,6 @@ export function createCanvasHandsAdapter(
       lastKeepAt = -Infinity;
       motion.reset();
       palmHold.reset();
-      thumbHold.reset();
-      pinchFrames = 0;
     },
   };
 }
