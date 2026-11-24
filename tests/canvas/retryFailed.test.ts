@@ -15,7 +15,7 @@ describe('Retry after a mid-request failure (A7-024)', () => {
     expect(body).toContain('offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });');
   });
   it('any later status line hides it, and it is at least 44px tall', () => {
-    expect(src).toContain('const say = (t: string) => { statusEl.textContent = t; hideRetry(); };');
+    expect(src).toMatch(/const say = \(t: string\) => \{\s*statusEl\.textContent = t; hideRetry\(\);/);
     expect(css).toMatch(/\.mc-retry \{ min-height: 44px; min-width: 44px;/);
   });
 });
