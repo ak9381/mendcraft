@@ -115,6 +115,8 @@ export interface MorphFlow {
   pulseTarget(): void;
   /** Card timers ran out (done/empty/error states auto-dismissed). */
   onCardAutoClosed(): void;
+  /** Open the morph card on a already-resolved tile (phone tap-to-select + mic). */
+  ask(target: MorphTargetRef, opts?: { startMic?: boolean }): boolean;
   cancel(): void;
   destroy(): void;
 }
@@ -194,19 +196,21 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
   }
   deps.doc.addEventListener?.('keydown', onEsc, true);
 
-  function fire(): void {
+  function fire(opts?: { startMic?: boolean }): void {
     stopTicker();
     hideRing();
     const t = target!;
     phase = 'asking';
     (t.host as unknown as HTMLElement).classList?.add('mc-morph-target');
     deps.onFired?.(t);
-    const listening = deps.mic.supported();
+    const startMic = opts?.startMic !== false;
+    const listening = startMic && deps.mic.supported();
     deps.card.open({ label: t.label, rect: t.rect, listening });
     if (listening) deps.mic.start();
-    else deps.typing?.(true);
-    // Nothing spoken by the cap: close the mic, say so, make no model call.
+    else if (startMic) deps.typing?.(true);
     clearListenTimer();
+    if (!startMic) return;
+    // Nothing spoken by the cap: close the mic, say so, make no model call.
     listenTimer = setT(() => {
       if (phase !== 'asking') return;
       deps.mic.stop();
@@ -215,6 +219,16 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
       phase = 'idle';
       deps.card.showEmpty();
     }, MORPH_LISTEN_MS);
+  }
+
+  function ask(resolved: MorphTargetRef, opts?: { startMic?: boolean }): boolean {
+    if (phase !== 'idle' || hold.armed || deps.disabled()) return false;
+    const fid = deps.frameId();
+    if (!fid) return false;
+    target = resolved;
+    frameId = fid;
+    fire({ startMic: opts?.startMic !== false });
+    return true;
   }
 
   function handleHoldEvent(ev: 'none' | 'fired' | 'cancelled'): void {
@@ -443,6 +457,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     simulateHold,
     pulseTarget,
     onCardAutoClosed: finishAfterCard,
+    ask,
     cancel,
     destroy() {
       gen++;

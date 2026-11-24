@@ -3,6 +3,8 @@ import '../style.css';
 import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
+import { isPhoneCanvasShell } from './iphoneShell';
+import { phoneRouteBadge, startPhoneLookToEdit, startPhoneRelayGuest } from './phoneCanvasRuntime';
 import { createEngines, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText } from '../ai/appleAI';
@@ -27,7 +29,9 @@ bindDirectory(createDirectory(directoryStore));
 // Honest engine selection: real Nano needs Chrome's Prompt API (and not a phone);
 // real Gemini needs Firebase AI Logic. ?sim=1 forces the scripted box engines.
 const languageModel = (globalThis as Record<string, unknown>).LanguageModel as PromptApi | undefined;
-const isPhone = !!(window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.();
+const capacitor = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null;
+const isPhone = !!capacitor?.isNativePlatform?.();
+const phoneShell = isPhoneCanvasShell({ capacitor, viewportWidth: window.innerWidth });
 const cloud: CloudStream | undefined = isEnabled()
   ? async (prompt, onText) => {
       const text = await streamCanvasPlan(prompt, onText);
@@ -63,11 +67,27 @@ const voice = createVoiceController(
 handle = mountCanvas(root, {
   voice, engines, seed: params.has('seed'), fresh: params.has('fresh'), sim: params.has('sim'),
   showcase: params.get('showcase') === 'energy' ? 'energy' : undefined,
-  autoHands: autoHandsFromSearch(location.search),
+  autoHands: phoneShell ? false : autoHandsFromSearch(location.search),
+  phoneShell,
+  routeBadge: phoneShell
+    ? phoneRouteBadge({
+        appleReady,
+        ios: capacitor?.getPlatform?.() === 'ios',
+        sim: params.has('sim'),
+        cloud: !!cloud,
+      })
+    : undefined,
   privacyGemini: cloud
     ? (redacted) => cloud(redacted, () => undefined)
     : undefined,
 });
+if (phoneShell && handle) {
+  startPhoneLookToEdit(handle, { sim: params.has('sim') });
+  startPhoneRelayGuest(handle, {
+    sim: params.has('sim'),
+    platform: capacitor?.getPlatform?.() === 'ios' ? 'ios' : 'android',
+  });
+}
 if (isPhone && !hasUsableNano(nano)) {
   // Status chip in the AI panel uses the engine route note; this keeps
   // the same wording on the document title bar for a quick read.

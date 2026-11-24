@@ -1118,3 +1118,59 @@
   transform: translate(-50%, calc(-100% - 8px));
 }
 .mc-hand-confirm[hidden] { display: none; }
+
+/* ---- Phone-simple shell (iOS / Android app, or <600px): canvas only, one
+   bottom-centre push-to-talk mic, a small route badge top centre. ---- */
+.mc-phone-simple .mc-bar,
+.mc-phone-simple .mc-ai,
+.mc-phone-simple .mc-ai-scrim,
+.mc-phone-simple .mc-dock,
+.mc-phone-simple .mc-blank,
+.mc-phone-simple .mc-swarm,
+.mc-phone-simple .mc-hand-cluster,
+.mc-phone-simple .mc-tools-chip,
+.mc-phone-simple .mc-edit-toggle,
+.mc-phone-simple .mc-edit-reset,
+.mc-phone-simple .mc-register-chip,
+.mc-phone-simple .mc-reg-chip,
+.mc-phone-simple .mc-facing-banner,
+.mc-phone-simple .hand-overlay,
+.mc-phone-simple .mc-mini-terminal,
+.mc-phone-simple .mc-swarm-dock,
+.mc-phone-simple .mc-phone-menu,
+.mc-phone-simple .mc-menu-btn,
+.mc-phone-simple .mc-tool-palette,
+.mc-phone-simple .mc-arrange,
+.mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
+.mc-phone-simple .mc-viewport { inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.mc-phone-simple .mc-frame.dim { opacity: 1; }
+.mc-phone-simple .mc-talk-control {
+  position: fixed; left: 50%; right: auto; top: auto; transform: translateX(-50%);
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; z-index: 60; width: auto;
+}
+.mc-phone-simple .mc-fab-mic {
+  position: static; width: 84px; height: 84px; min-width: 84px; min-height: 84px; padding: 0;
+  border-radius: 50%; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none;
+  box-shadow: 0 10px 26px rgb(0 0 0 / 0.22);
+}
+.mc-phone-simple .mc-fab-mic svg { width: 36px; height: 36px; }
+.mc-phone-simple .mc-fab-mic .mc-fab-mic-label { display: none; }
+.mc-phone-simple .mc-talk-caption { max-width: calc(100vw - 48px); text-align: center; }
+.mc-phone-simple.is-edit-locked .mc-fab-mic { opacity: 0.45; pointer-events: none; }
+.mc-route-badge {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  padding: 5px 12px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
+  font-size: 13px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
+}
+.mc-look-hint {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); margin: 0;
+  bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 18px; border-radius: 999px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+  font-size: 16px; font-weight: 650; white-space: nowrap; pointer-events: none;
+}
+.mc-phone-simple.is-edit-locked .mc-viewport { cursor: default; }
+.mc-phone-simple.is-edit-locked .mc-frame-body { pointer-events: none; }
+.mc-phone-simple .is-phone-selected { outline: 3px solid var(--action); outline-offset: 3px; border-radius: 14px; }

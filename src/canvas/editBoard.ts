@@ -507,6 +507,8 @@ export interface EditBoardOptions {
 
 export interface EditBoardController {
   readonly editing: boolean;
+  /** Turn edit (drag/resize) chrome on or off from the host. */
+  setEditing(on: boolean): void;
   /** Call whenever the focused frame (or its availability) changes. */
   setFocus(frameId: string | null, available: boolean): void;
   /** Two-hand anchored tile resize while editing, in Akash's corner-tracking
@@ -714,6 +716,13 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
 
   return {
     get editing() { return editing; },
+    setEditing(on: boolean) {
+      if (on && !available) return;
+      if (editing === on) return;
+      editing = on;
+      applyFrame();
+      renderButtons();
+    },
     setFocus(frameId, avail) {
       const switching = frameId !== currentFrameId;
       if (switching && editing) { editing = false; applyFrame(); } // hide chrome on the frame being left
