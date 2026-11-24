@@ -10,7 +10,7 @@
 // Room scan is not available on live runs (SIM keeps its scripted flow in canvasApp).
 // Web fallback: { ok: false, why: NO_GIMBAL_WHY }.
 import { aimAngles, getGimbalPlugin, type GimbalPlugin } from '../devices/native';
-import { createGimbalFollow, type GimbalFollow } from '../devices/gimbalFollow';
+import { createGimbalFollow, FOLLOW_INTERVAL_MS, type GimbalFollow } from '../devices/gimbalFollow';
 import type { Pt } from '../input/handLogic';
 
 export type GimbalCanvasMode = 'face' | 'hands' | 'hold' | 'point';
@@ -37,6 +37,8 @@ export interface GimbalCanvasOptions {
   handsRunning?: () => boolean;
   /** Opt-in native camera keep-alive while face tracking is on (test option). */
   keepAlive?: boolean;
+  /** Hands-follow move spacing (ms); never below FOLLOW_INTERVAL_MS. */
+  followIntervalMs?: number;
   /** How long one isAvailable() answer is reused (ms). Default 5000. */
   availabilityTtlMs?: number;
   now?: () => number;
@@ -150,6 +152,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   }
 
   const gimbalFollow: GimbalFollow = createGimbalFollow({
+    intervalMs: Math.max(FOLLOW_INTERVAL_MS, opts.followIntervalMs ?? FOLLOW_INTERVAL_MS),
     aim: async (box) => {
       if (!plugin) return false;
       const { yaw, pitch } = aimAngles(box);

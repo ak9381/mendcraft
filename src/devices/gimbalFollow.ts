@@ -11,6 +11,9 @@ import { aimAngles, DEFAULT_FOV } from './native';
 export type FollowMode = 'hands' | 'point' | 'hold';
 export type NudgeDir = 'left' | 'right' | 'up' | 'down';
 
+/** Minimum time between two hands-follow moves. */
+export const FOLLOW_INTERVAL_MS = 700;
+
 /** One 8° nudge — enough to reframe, small enough not to whip the stand. */
 export const NUDGE_RAD = (8 * Math.PI) / 180;
 
@@ -73,7 +76,9 @@ export function createGimbalFollow(opts: {
   intervalMs?: number;
   fov?: { h: number; v: number };
 }): GimbalFollow {
-  const interval = opts.intervalMs ?? 450;
+  // ≥ 700 ms between moves by default: native aim() resolves only after the
+  // move completes, and the `inflight` flag below keeps moves from stacking.
+  const interval = opts.intervalMs ?? FOLLOW_INTERVAL_MS;
   const fov = opts.fov ?? DEFAULT_FOV;
   let mode: FollowMode = 'hands';
   let lastAimAt = 0;

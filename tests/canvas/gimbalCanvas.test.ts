@@ -182,6 +182,29 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(aimCalls).toEqual([]);
     });
 
+    it('hands moves never stack: none while one is in flight, and ≥ 700 ms apart', async () => {
+      let release: (() => void) | null = null;
+      fakePlugin.aim = vi.fn(() => new Promise<{ ok: boolean }>((r) => { release = () => r({ ok: true }); }));
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, followIntervalMs: 100 });
+      await c.setMode('hands');
+      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      expect(fakePlugin.aim).toHaveBeenCalledTimes(1);
+      now += 800;
+      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now); // first move still in flight
+      expect(fakePlugin.aim).toHaveBeenCalledTimes(1);
+      release!();
+      await Promise.resolve(); await Promise.resolve();
+      now += 300; // only 300 ms after the last attempt window opened… but 1100 since the first move
+      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      expect(fakePlugin.aim).toHaveBeenCalledTimes(2);
+      now += 400; // < 700 ms since the second move: no third (followIntervalMs 100 is clamped up)
+      release!();
+      await Promise.resolve(); await Promise.resolve();
+      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      expect(fakePlugin.aim).toHaveBeenCalledTimes(2);
+    });
+
     it('caches isAvailable() instead of crossing the bridge every frame', async () => {
       let now = 0;
       const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 5000 });

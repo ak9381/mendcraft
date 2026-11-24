@@ -308,13 +308,26 @@ actor DockWatcher {
         let target = Vector3D(x: pitch, y: yaw, z: 0)
         let ms = Int64(max(0.3, min(4.0, seconds)) * 1000)
         do {
-            _ = try await acc.setOrientation(target, duration: .milliseconds(ms), relative: true)
+            // setOrientation returns a Progress when the move STARTS: wait for
+            // it to finish (or its duration + a margin) before tracking is
+            // restored and the web layer may send the next move.
+            let progress = try await acc.setOrientation(target, duration: .milliseconds(ms), relative: true)
+            await DockWatcher.waitForMove(progress, maxMs: ms + 400)
         } catch {
             if movesInFlight == 1, wanted == true { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
             throw error
         }
         if movesInFlight == 1, wanted == true { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
         return true
+    }
+
+    /// Poll the move's Progress until it finishes, at most `maxMs`.
+    static func waitForMove(_ progress: Progress, maxMs: Int64) async {
+        let start = Date()
+        while !progress.isFinished && !progress.isCancelled {
+            if Date().timeIntervalSince(start) * 1000 >= Double(maxMs) { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 }
 #endif
