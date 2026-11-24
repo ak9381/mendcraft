@@ -125,6 +125,18 @@ export function clearHostToken(storage: StorageLike | null | undefined): void {
   remove(storage, K_HOST_TOKEN);
 }
 
+const K_LAYOUT = 'mc.relay.layout';
+
+/** The laptop's remembered screen arrangement (which phone is on which side).
+ *  Stored as the raw {left,right} shape; defaults to the empty layout. */
+export function loadLayout(storage: StorageLike | null | undefined): { left: unknown; right: unknown } | null {
+  return parse(read(storage, K_LAYOUT)) as { left: unknown; right: unknown } | null;
+}
+
+export function saveLayout(storage: StorageLike | null | undefined, layout: { left: unknown; right: unknown }): void {
+  write(storage, K_LAYOUT, JSON.stringify({ left: layout.left ?? null, right: layout.right ?? null }));
+}
+
 /** A stable per-device id (survives reloads), generated once and remembered. The
  *  id is opaque and non-identifying — it only lets the hub tell two phones apart
  *  (e.g. which side each is on). `gen` is injectable for deterministic tests. */

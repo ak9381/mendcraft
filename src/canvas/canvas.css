@@ -769,3 +769,33 @@
   .mc-hand-kb .mc-key { height: 44px; font-size: 17px; border-radius: 7px; padding: 0; }
   .mc-hand-kb .mc-key-ctl { font-size: 12px; }
 }
+
+/* ---- cross-device: edge glow + screen-arrangement strip -------------------
+   The viewport edge lights up as a tile nears the side where a phone is paired
+   (see setEdgeGlow in canvasApp). The arrangement strip remembers which phone
+   is on which side. */
+.mc-viewport::before,
+.mc-viewport::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 24px;
+  pointer-events: none; opacity: 0; transition: opacity 120ms ease; z-index: 30;
+}
+.mc-viewport::before { left: 0; background: linear-gradient(to right, var(--accent), transparent); }
+.mc-viewport::after { right: 0; background: linear-gradient(to left, var(--accent), transparent); }
+.mc-viewport.mc-edge-glow-left::before { opacity: 0.85; }
+.mc-viewport.mc-edge-glow-right::after { opacity: 0.85; }
+
+.mc-arrange {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
+  display: flex; align-items: center; gap: 0.5rem; z-index: 40;
+  padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  font-size: 0.85rem; color: var(--text);
+}
+.mc-arrange[hidden] { display: none; }
+.mc-arrange-label { font-weight: 600; color: var(--text-dim, #777); }
+.mc-arrange-slot {
+  padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.mc-arrange-laptop { padding: 0.15rem 0.5rem; color: var(--text-dim, #777); }
+.mc-arrange-swap { min-height: 2.2rem; }
