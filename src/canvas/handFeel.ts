@@ -174,6 +174,78 @@ export const HAND_FEEL: HandFeelConfig = {
   releaseGraceFrames: 3,
 };
 
+// ---------------------------------------------------------------- phone profile
+
+/** Reach box shape (normalised camera units), as in HandFeelConfig.reach. */
+export type ReachBox = HandFeelConfig['reach'];
+
+/**
+ * PHONE HAND FEEL: the phone shell (iPhone / Android app, portrait) drives
+ * the same pointer pipeline from the FRONT camera. Everything not listed
+ * here is the laptop HAND_FEEL (tap, grab, curl, filters).
+ *
+ * Geometry it is tuned for: the phone held or propped 30–40 cm from the
+ * user, in portrait. A front camera's frame in portrait spans roughly
+ * 60–65° across the short side and 75–80° along the long side, so at
+ * ~35 cm the frame covers about 42 cm (x) × 55 cm (y) of space in front of
+ * the user. The face sits in the upper half of that frame and the hands
+ * come up in front of the chest, so the box sits lower than the laptop's.
+ *
+ *  - At that distance a palm (wrist → knuckles ≈ 10 cm) is ~0.18 of the
+ *    frame's height, so the wrist sits ~0.15 below the palm centre. The
+ *    camera-edge guard (CAMERA_EDGE_EPS 0.06) treats a wrist past 0.94 as
+ *    clipped, so the palm centre must stay above ~0.79.
+ *  - reachPortrait x 0.22–0.78 → ~23 cm of hand travel across 390 px
+ *    (~17 px/cm); y 0.28–0.78 → ~27 cm along 844 px (~31 px/cm). The
+ *    screen is 2.2× taller than wide; the hand travels a little further
+ *    vertically than across — a compromise between equal px/cm and an arm
+ *    at full stretch. The bottom (0.78) keeps the wrist inside the frame;
+ *    the top (0.28) is about chin height, so the bottom pills and mic are
+ *    reached with the hand in front of the chest.
+ *  - reachLandscape: a webview that delivers a landscape frame while the
+ *    phone is upright (some Android cameras): the frame is ~55 × 42 cm, the
+ *    palm a larger share of its height — narrower x (0.30–0.70 ≈ 22 cm),
+ *    y 0.22–0.72 so the wrist still stays inside.
+ *  - magnetCapturePx 48: phone controls are physically small and the
+ *    cursor moves more px per cm than on a laptop, so the magnet reaches
+ *    further (release keeps the laptop's +20 px hysteresis → 68).
+ *  - Tracking rate: ~30 fps (activeIntervalMs 33, never above the camera's
+ *    own 30 fps) while a hand was seen in the last idleAfterMs; 10 fps
+ *    (idleIntervalMs 100) once no hand has been seen for 2 s — still quick
+ *    enough to notice a raised hand within ~100 ms.
+ *  - Dwell (hover-to-click) stays opt-in, as on the laptop: the fist tap is
+ *    the click.
+ *
+ * Starting numbers from geometry, not from the real phones — verify on an
+ * iPhone 16 Pro Max and a Nothing Phone 3a.
+ */
+export const PHONE_HAND_FEEL = {
+  reachPortrait: { x0: 0.22, x1: 0.78, y0: 0.28, y1: 0.78 } as ReachBox,
+  reachLandscape: { x0: 0.3, x1: 0.7, y0: 0.22, y1: 0.72 } as ReachBox,
+  magnetCapturePx: 48,
+  magnetReleasePx: 68,
+  activeIntervalMs: 33,
+  idleIntervalMs: 100,
+  idleAfterMs: 2000,
+  /** Front-camera frames arrive un-mirrored; the selfie view is mirrored. */
+  mirror: true,
+} as const;
+
+/** The phone reach box for the camera frame's aspect (height ÷ width): a
+ *  portrait frame uses reachPortrait, a landscape one (< 1) reachLandscape.
+ *  Unknown aspect assumes portrait — the phone shell is portrait. */
+export function phoneReach(aspect: number | null | undefined): ReachBox {
+  if (typeof aspect === 'number' && aspect > 0 && aspect < 1) return PHONE_HAND_FEEL.reachLandscape;
+  return PHONE_HAND_FEEL.reachPortrait;
+}
+
+/** Phone tracking interval (ms): the full rate while a hand was seen within
+ *  idleAfterMs, the idle rate otherwise (and always with no hand use). */
+export function phoneTrackIntervalMs(now: number, lastHandAt: number, handsWanted = true): number {
+  if (!handsWanted) return PHONE_HAND_FEEL.idleIntervalMs;
+  return now - lastHandAt <= PHONE_HAND_FEEL.idleAfterMs ? PHONE_HAND_FEEL.activeIntervalMs : PHONE_HAND_FEEL.idleIntervalMs;
+}
+
 // ---------------------------------------------------------------- curl
 
 /** [MCP, PIP, TIP] for index, middle, ring, pinky. The thumb is ignored: a

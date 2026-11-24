@@ -9,6 +9,7 @@ import { hasLiveCameraStream } from '../input/cameraShare';
 import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
+import type { PhoneCamera } from './phoneCamera';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -47,11 +48,30 @@ export function applyGuestSnapshot(
 
 export function startPhoneLookToEdit(
   handle: { setFacing(facing: boolean | null): void },
-  opts: { sim?: boolean; enabled?: boolean } = {},
+  opts: { sim?: boolean; enabled?: boolean; camera?: PhoneCamera } = {},
 ): () => void {
   // Look-to-edit is opt-in: when off, never open the front camera for it.
   if (!(opts.enabled ?? readLookToEdit())) return () => undefined;
   if (opts.sim || typeof document === 'undefined') return () => undefined;
+  // The phone shell's shared front camera (phoneCamera.ts): one stream and
+  // one tracker for look-to-edit AND hands. It also handles hide/show.
+  const cam = opts.camera;
+  if (cam) {
+    let last: boolean | null | undefined;
+    const report = (f: boolean | null): void => { if (f !== last) { last = f; handle.setFacing(f); } };
+    const offFrame = cam.onFrame((f) => report(f.facing === true));
+    const offStatus = cam.onStatus((s) => { if (s !== 'live') report(null); });
+    let armed = true;
+    const arm = (): void => { if (armed) void cam.setUse('face', true); };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(arm, 400));
+    else setTimeout(arm, 400);
+    return () => {
+      armed = false;
+      offFrame(); offStatus();
+      void cam.setUse('face', false);
+      report(null);
+    };
+  }
   let tracker: ReturnType<typeof createPresenceTracker> | null = null;
   let cancelled = false;
   const start = async (): Promise<void> => {

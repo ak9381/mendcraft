@@ -148,6 +148,10 @@ export function createPresenceTracker(
     detectFaces?: boolean;
     /** When false, skip HandLandmarker (phone companion Facing pill). Default true. */
     detectHands?: boolean;
+    /** Minimum ms between tracking runs, read every animation frame (the
+     *  phone throttles to ~10 fps with no hand in view). Default 0: every
+     *  animation frame. */
+    frameIntervalMs?: () => number;
   },
 ): PresenceTracker {
   const video = document.createElement('video');
@@ -168,6 +172,7 @@ export function createPresenceTracker(
   let rafId = 0;
   let running = false;
   let lastFaceAt = -Infinity;
+  let lastRunAt = -Infinity;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
@@ -323,15 +328,24 @@ export function createPresenceTracker(
       rafId = requestAnimationFrame(loop);
       return;
     }
-    ts = performance.now();
+    const at = performance.now();
+    const minGap = opts?.frameIntervalMs?.() ?? 0;
+    if (minGap > 0 && at - lastRunAt < minGap) {
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+    lastRunAt = at;
+    ts = at;
     // Timestamps must strictly increase per MediaPipe task.
     // Face runs at a few fps (FACE_INTERVAL_MS) so the small Facing pill
     // stays cheap next to the hand tracker.
     const src = squareSource();
     const vw = video.videoWidth, vh = video.videoHeight;
     const usedSquare = src !== video;
+    let ranFace = false;
     if (wantFaces && faceLm && shouldRunFace(ts, lastFaceAt)) {
       lastFaceAt = ts;
+      ranFace = true;
       const fr = faceLm.detectForVideo(src, ts);
       if (usedSquare && fr.faceLandmarks) {
         fr.faceLandmarks = fr.faceLandmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
@@ -344,6 +358,10 @@ export function createPresenceTracker(
         hr.landmarks = hr.landmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
       }
       handleHands(hr);
+    } else if (ranFace) {
+      // Face-only (phone look-to-edit): still emit a frame per face run, or
+      // onFrame subscribers would never see the facing signal.
+      handleHands({ landmarks: [], worldLandmarks: [], handedness: [], handednesses: [] } as unknown as HandLandmarkerResult);
     }
     rafId = requestAnimationFrame(loop);
   }
