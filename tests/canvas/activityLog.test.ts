@@ -32,13 +32,25 @@ describe('activity log', () => {
   });
 });
 
-describe('AI activity stays open', () => {
-  it('is flagged always-open and the canvas markup starts visible', () => {
-    expect(AI_PANEL_ALWAYS_OPEN).toBe(true);
+describe('AI activity opens only while a model works', () => {
+  it('is not pinned open: the panel starts hidden and its close button is visible', () => {
+    expect(AI_PANEL_ALWAYS_OPEN).toBe(false);
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/<aside class="mc-ai" aria-label="AI activity">/);
-    expect(src).not.toMatch(/<aside class="mc-ai" aria-label="AI activity" hidden>/);
+    expect(src).toMatch(/<aside class="mc-ai" aria-label="AI activity" hidden>/);
     expect(src).toContain('mc-ai-live-log');
-    expect(src).toContain('class="mc-ai-close" hidden');
+    expect(src).toMatch(/class="mc-ai-close" aria-label="Close AI activity"/);
+    expect(src).not.toContain('class="mc-ai-close" hidden');
+  });
+
+  it('auto-hides ~3 s after a turn, re-checking review/failure state when the timer fires', () => {
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const AI_HIDE_MS = 3000');
+    expect(src).toMatch(/if \(reviewBusy\(\) \|\| aiFailed \|\| !aiAuto\) return;/);
+  });
+
+  it('an auto-opened panel overlays: vp() ignores it and only a user-pinned open re-flies', () => {
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/aiPanel\.hidden \|\| aiAuto \? 0 :/);
+    expect(src).toContain('if (insetBefore !== insetAfter && focusId)');
   });
 });

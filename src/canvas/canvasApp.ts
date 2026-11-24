@@ -76,6 +76,7 @@ import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { mountReviewDialog } from './reviewDialog';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
+import { mountEngineBar, type EngineBar } from './engineBar';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -265,10 +266,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <div class="mc-dock-surface"></div>
     </aside>
     <div class="mc-ai-scrim" data-hand-dismiss hidden></div>
-    <aside class="mc-ai" aria-label="AI activity">
+    <aside class="mc-ai" aria-label="AI activity" hidden>
       <div class="mc-ai-head">
         <h2 class="mc-ai-h">AI activity</h2>
-        <button type="button" class="mc-ai-close" hidden aria-label="Close AI activity">×</button>
+        <button type="button" class="mc-ai-close" aria-label="Close AI activity">×</button>
       </div>
       <div class="mc-ai-body">
         <h3 class="mc-ai-h3">Live</h3>
@@ -327,7 +328,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const activityLog = createActivityLog(aiPanel.querySelector<HTMLElement>('.mc-ai-live-log'));
-  const panels = mountModelPanels(aiPanel);
+  // Engine bar: Nano + Gemini always visible (desktop only; CSS also hides it
+  // in the phone shell). The terminals mirror their state into it; a failed
+  // engine also pins the AI panel open so the reason stays readable.
+  let aiFailed = false;
+  const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
+  const panels = mountModelPanels(aiPanel, document, engineBar ? {
+    set: (engine, state, line) => {
+      if (state === 'failed') { aiFailed = true; showAi(true); } else if (state === 'working') aiFailed = false;
+      engineBar.set(engine, state, line);
+    },
+    handoff: (from, to) => engineBar.handoff(from, to),
+    setCloudBytes: (b) => engineBar.setCloudBytes(b),
+  } : undefined);
+  // The bar replaces the swarm pill on desktop: mirror its agent summary
+  // (minus the bytes tail, which the bar shows from the ledger) into the bar.
+  const swarmPillEl = swarmEl.querySelector<HTMLElement>('.mc-swarm-pill');
+  const swarmPillObserver = engineBar && swarmPillEl && typeof MutationObserver !== 'undefined'
+    ? new MutationObserver(() => engineBar.setAgents(swarmPillEl.hidden ? '' : (swarmPillEl.textContent ?? '').replace(/\s*·\s*[^·]*to cloud\s*$/, '')))
+    : null;
+  if (swarmPillObserver && swarmPillEl) swarmPillObserver.observe(swarmPillEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
   // ---- cross-device screen arrangement + edge tile transfer ----------------
   // The laptop remembers which phone sits on which side (Nothing left, iPhone
   // right by default). A one-hand/mouse MOVE drag past the viewport's left/right
@@ -844,11 +864,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.dataset.zoom = camera.z.toFixed(2);
   }
 
+  let aiAuto = false; // the AI panel is open because a turn opened it (overlay)
   const vp = (): Viewport => {
     const w = viewport.clientWidth || innerWidth;
     const h = viewport.clientHeight || innerHeight;
     if (phoneShell) return { w, h };
-    return { w: w - (aiPanel.hidden ? 0 : aiPanel.offsetWidth + 24), h };
+    // An auto-opened panel overlays the boards (no re-fly, no narrowing);
+    // only a panel the user opened takes its width out of the board area.
+    return { w: w - (aiPanel.hidden || aiAuto ? 0 : aiPanel.offsetWidth + 24), h };
   };
   const barH = () => phoneShell ? 0 : (root.querySelector<HTMLElement>('.mc-bar')!.offsetHeight + 32);
   function fitPhone(): void {
@@ -1009,25 +1032,40 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // morph / Kannada / self-check-fix / teach reviews that never set `pending`.
   const reviewBusy = (): boolean => turnBusy || !!pending || reviewDialog.isOpen();
 
-  // The AI activity drawer stays open for the session so hand events and
-  // model turns are always visible. The scrim is never shown — it would
-  // hide the board.
+  // The AI activity drawer opens by itself while a model works or a review
+  // waits, overlaying the boards, and folds away ~3 s after the turn ends. A
+  // panel the user opened (engine card, "show ai", Tools button) stays until
+  // they close it and takes its width out of the board area like before.
+  const AI_HIDE_MS = 3000;
   let aiHideTimer = 0;
-  const autoHideAi = (): void => { clearTimeout(aiHideTimer); };
-  const aiScrim = root.querySelector<HTMLElement>('.mc-ai-scrim');
-  const closeAi = (): void => { showAi(true); };
-  function showAi(on = true): void {
+  function autoHideAi(): void {
     clearTimeout(aiHideTimer);
-    if (AI_PANEL_ALWAYS_OPEN) on = true;
-    const changed = aiPanel.hidden === on;
+    if (!aiAuto || aiPanel.hidden) return;
+    aiHideTimer = window.setTimeout(() => {
+      // Re-check at fire time: a new turn, a waiting review or a failure must keep it open.
+      if (reviewBusy() || aiFailed || !aiAuto) return;
+      showAi(false);
+    }, AI_HIDE_MS);
+  }
+  const aiScrim = root.querySelector<HTMLElement>('.mc-ai-scrim');
+  const closeAi = (): void => { aiFailed = false; showAi(false, true); };
+  /** `pin` marks a user action (stays open, takes layout width); without it
+   *  an open is an overlay that autoHideAi() may fold away again. */
+  function showAi(on = true, pin = false): void {
+    clearTimeout(aiHideTimer);
+    if (AI_PANEL_ALWAYS_OPEN) { on = true; pin = true; }
+    const insetBefore = !aiPanel.hidden && !aiAuto;
+    aiAuto = on && !pin && (!!aiPanel.hidden || aiAuto);
     aiPanel.hidden = !on;
     if (aiScrim) aiScrim.hidden = true;
-    root.querySelector('[data-cmd=ai]')!.setAttribute('aria-expanded', String(on));
-    if (changed && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
+    root.querySelector('[data-cmd=ai]')?.setAttribute('aria-expanded', String(on));
+    // Only a layout-changing (user-pinned) toggle re-flies; an overlay never moves the camera.
+    const insetAfter = on && !aiAuto;
+    if (insetBefore !== insetAfter && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).
-  showAi(true);
+  showAi(AI_PANEL_ALWAYS_OPEN, true);
   // sim's scripted engines can resolve near-instantly, which would settle
   // the swarm (and open the review) before a screenshot — or a person — ever
   // sees it mid-flight. Hold it visible for a minimum stretch in sim only;
@@ -1173,7 +1211,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }).reverse().join('');
   }
   function openHistory(): void {
-    showAi(true);
+    showAi(true, true);
     historyRender();
     const list = aiPanel.querySelector<HTMLElement>('.mc-ai-history')!;
     list.scrollIntoView?.({ block: 'end' });
@@ -1211,7 +1249,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
       return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
-    } finally { turnBusy = false; }
+    } finally { turnBusy = false; autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -2003,6 +2041,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
     aiPanel.querySelector('.mc-ai-state')!.textContent = r.reply;
     say(r.reply);
+    autoHideAi();
   }
 
   // ---- commands ----
@@ -2016,8 +2055,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (paletteCmd === 'close') { closeTools(); return true; }
     if (/^\s*teach a gesture\s*$/i.test(text)) { openTeach(); return true; }
     if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) { openTeachList(); return true; }
-    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true); return true; }
-    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { showAi(true); say('AI activity stays open.'); return true; }
+    if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) { showAi(true, true); return true; }
+    if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) { aiFailed = false; showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true; }
     // Active language pack: a spoken phrase routes to the same intents first.
     if (pack) { const intent = routePackPhrase(text, pack); if (intent) return runIntent(intent); }
     // Gimbal phrases next: follow my hands / hold still / point / scan the room.
@@ -2097,7 +2136,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root);
@@ -2242,6 +2281,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     reviewDialog.destroy();
     swarm.destroy();
     swarmDock.destroy();
+    swarmPillObserver?.disconnect();
     scanPanel?.destroy();
     registerChip?.remove();
     regChip?.remove();

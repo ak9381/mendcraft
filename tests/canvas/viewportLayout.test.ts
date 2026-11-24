@@ -31,3 +31,20 @@ describe('viewport fit (CSS contract — live bbox check runs in Chrome via mac-
     expect(css).toMatch(/\.mc-canvas:has\(\.mc-empty:not\(\[hidden\]\)\) \.mc-swarm/);
   });
 });
+
+describe('calmer screen layout', () => {
+  it('the cluster is 120×52 with 24px gaps', () => {
+    expect(css).toMatch(/\.mc-hand-cluster \{[^}]*gap:\s*24px/s);
+    expect(css).toMatch(/\.mc-hand-cluster \.mc-fab-mic,[^{]*\{[^}]*min-height:\s*52px/s);
+    expect(css).toMatch(/\.mc-hand-cluster \.mc-fab-mic,[^{]*\{[^}]*min-width:\s*120px/s);
+  });
+
+  it('on desktop the AI panel stops above the engine bar and the corner face chip', () => {
+    expect(css).toMatch(/@media \(min-width: 601px\) \{\s*\.mc-canvas:has\(\.mc-engine-bar\) \.mc-ai \{ bottom: 148px/);
+  });
+
+  it('the engine bar never shows in the phone shell or on a narrow viewport', () => {
+    expect(css).toMatch(/\.mc-phone-simple \.mc-engine-bar/);
+    expect(css).toMatch(/@media \(max-width: 600px\) \{ \.mc-engine-bar \{ display: none/);
+  });
+});
