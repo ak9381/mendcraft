@@ -5,12 +5,10 @@ import {
   fingerStates,
   isFistPose,
   isClosingToFist,
-  isIndexCurled,
   isOpenPalmPose,
   isTwoFingerScrollPose,
   pinchRatio,
   POINT_FIST_HOLD_MS,
-  thumbPalmSide,
   twoHandSpan,
   createGestureRecognizer,
   type Pt,
@@ -280,6 +278,15 @@ describe('two-finger scroll pose', () => {
   });
 });
 
+describe('no mirroring helpers', () => {
+  it('handednessCanonical / parseHandedness / thumbPalmSide / isIndexCurled are no longer exported', async () => {
+    const mod = await import('../src/input/gestures');
+    for (const name of ['handednessCanonical', 'parseHandedness', 'thumbPalmSide', 'isIndexCurled', 'Handedness']) {
+      expect((mod as unknown as Record<string, unknown>)[name]).toBeUndefined();
+    }
+  });
+});
+
 describe('handedness-mirrored point and fist', () => {
   const flip = (p: Pt[]): Pt[] => p.map((q) => ({ x: 1 - q.x, y: q.y }));
   const cases: Array<{ name: string; spec: HandSpec; pose: string }> = [
@@ -304,10 +311,6 @@ describe('handedness-mirrored point and fist', () => {
     const left = flip(right);
     expect(classifyGesture(right, 'Right')).toBe('point');
     expect(classifyGesture(left, 'Left')).toBe('point');
-    expect(isIndexCurled(right, 'Right')).toBe(false);
-    expect(isIndexCurled(left, 'Left')).toBe(false);
-    expect(thumbPalmSide(right, 'Right')).toBeGreaterThan(0);
-    expect(thumbPalmSide(left, 'Left')).toBeGreaterThan(0);
   });
 });
 

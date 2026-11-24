@@ -1,10 +1,10 @@
-// Live activity feed in the AI panel: AI turns plus hand events (pinch
-// clicks, two-finger scrolls, fist grabs). Newest sits at the top; the list
-// is capped so a long session cannot grow without bound.
+// Live activity feed in the AI panel: AI turns plus hand events (dwell
+// clicks, two-fist board grabs). Newest sits at the top; the list is capped
+// so a long session cannot grow without bound.
 
 export const ACTIVITY_LOG_CAP = 40;
 
-export type ActivityKind = 'pinch' | 'scroll' | 'grab' | 'ai';
+export type ActivityKind = 'click' | 'grab' | 'ai';
 
 export interface ActivityEntry {
   kind: ActivityKind;
@@ -20,17 +20,15 @@ export interface ActivityLog {
 }
 
 const KIND_LABEL: Record<ActivityKind, string> = {
-  pinch: 'Pinch',
-  scroll: 'Scroll',
+  click: 'Click',
   grab: 'Grab',
   ai: 'AI',
 };
 
 export function formatActivityLine(entry: ActivityEntry): string {
-  if (entry.kind === 'pinch') {
-    return entry.target ? `Pinch click · ${entry.target}` : 'Pinch click';
+  if (entry.kind === 'click') {
+    return entry.target ? `Click · ${entry.target}` : 'Click';
   }
-  if (entry.kind === 'scroll') return entry.text || 'Two-finger scroll';
   if (entry.kind === 'grab') return entry.target ? `Grab · ${entry.target}` : (entry.text || 'Grab');
   return entry.text || 'AI activity';
 }

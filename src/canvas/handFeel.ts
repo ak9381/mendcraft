@@ -58,7 +58,8 @@ export interface HandFeelConfig {
   palmRefractoryMs: number;
   /** Consecutive pinch-pose frames before "keep" fires on empty canvas. */
   keepFrames: number;
-  /** Dwell-click: rest the index-tip cursor on a control this long to click. */
+  /** Dwell-click: rest the index-tip cursor on a control or board this long
+   *  (~3s) to click/select it — the only way to click in the live pipeline. */
   dwellMs: number;
   /** Movement (px) allowed during a dwell without restarting the timer. */
   dwellSlopPx: number;
@@ -82,7 +83,7 @@ export const HAND_FEEL: HandFeelConfig = {
   palmHoldMs: 600,
   palmRefractoryMs: 1500,
   keepFrames: 3,
-  dwellMs: 500,
+  dwellMs: 3000,
   dwellSlopPx: 12,
 };
 

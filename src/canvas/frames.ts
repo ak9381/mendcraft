@@ -40,6 +40,8 @@ export function createFrameRegistry(initial: readonly Frame[] = []) {
       return copy(f);
     },
     rename(id: string, title: string) { const f = find(id); if (f) f.title = cleanTitle(title); },
+    /** Two-fist board move: set a board's world-space position directly. */
+    setRect(id: string, rect: Rect) { const f = find(id); if (f) f.rect = { ...rect }; },
     setPinned(id: string, on: boolean) { const f = find(id); if (f) f.pinned = on; },
     setKind(id: string, kind: FrameKind) { const f = find(id); if (f) f.kind = kind; },
     remove(id: string) { const i = frames.findIndex((f) => f.id === id); if (i < 0) return false; frames.splice(i, 1); return true; },

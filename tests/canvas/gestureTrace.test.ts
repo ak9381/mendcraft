@@ -5,7 +5,7 @@ import {
   targetIdOf,
   TRACE_CAP,
 } from '../../src/canvas/gestureTrace';
-import { isConfirmAction, CONFIRM_PINCH_MS, CONFIRM_DWELL_MS } from '../../src/canvas/handPointer';
+import { isConfirmAction, CONFIRM_DWELL_MS } from '../../src/canvas/handPointer';
 
 describe('gesture trace', () => {
   it('is off by default and enables for ?debug=gestures or a pre-set flag', () => {
@@ -57,7 +57,6 @@ describe('confirm-action gates', () => {
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Ask for something else', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction({ matches: () => false, getAttribute: () => 'Delete tile', textContent: '' } as unknown as HTMLElement)).toBe(true);
     expect(isConfirmAction(cancel)).toBe(false);
-    expect(CONFIRM_PINCH_MS).toBe(300);
-    expect(CONFIRM_DWELL_MS).toBe(400);
+    expect(CONFIRM_DWELL_MS).toBe(3000);
   });
 });

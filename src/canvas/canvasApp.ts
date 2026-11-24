@@ -1563,9 +1563,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
         onHandEvent: (ev) => {
-          if (ev.type === 'pinch-click') activityLog.push({ kind: 'pinch', text: ev.target ? `Pinch click · ${ev.target}` : 'Pinch click', target: ev.target });
-          else if (ev.type === 'scroll') activityLog.push({ kind: 'scroll', text: 'Two-finger scroll' });
+          if (ev.type === 'click') activityLog.push({ kind: 'click', text: ev.target ? `Click · ${ev.target}` : 'Click', target: ev.target });
           else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
+        },
+        // Two-fist board move: both fists land on the same board and drag
+        // it by their midpoint (screen px) until either hand opens. Frame
+        // rects are world-space, so the screen delta scales by 1/camera.z.
+        onBoardMove: (ev) => {
+          if (ev.phase === 'end') { persist(); return; }
+          if (ev.phase !== 'move' || (!ev.dx && !ev.dy)) return;
+          const f = reg.get(ev.frameId);
+          if (!f) return;
+          reg.setRect(ev.frameId, { ...f.rect, x: f.rect.x + ev.dx / camera.z, y: f.rect.y + ev.dy / camera.z });
+          sync();
         },
         onPinch: (ev) => {
           if (!morphFlow) return;

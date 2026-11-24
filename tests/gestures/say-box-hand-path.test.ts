@@ -66,7 +66,7 @@ function fakeDoc(input: ReturnType<typeof fakeSayInput>) {
   } as unknown as Document;
 }
 
-describe('C026 pinch-release on the say input focuses it, same generic path as any control', () => {
+describe('C026 a dwell-click on the say input focuses it, same generic path as any control', () => {
   beforeEach(() => {
     (globalThis as Record<string, unknown>).innerWidth = W;
     (globalThis as Record<string, unknown>).innerHeight = H;
@@ -76,24 +76,20 @@ describe('C026 pinch-release on the say input focuses it, same generic path as a
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  it('a deliberate pinch-hold-release over the say box calls focus(), not click() — handPointer.ts:311-313', () => {
+  it('a ~3s dwell on the say box calls activate() -> focus(), not click()', () => {
     const input = fakeSayInput({ left: 100, top: 30, width: 200, height: 40 });
     const hp: HandPointer = createHandPointer(fakeDoc(input), {});
     let t = 0;
-    const feed = (px: number, py: number, pinched: boolean, frames: number) => {
-      for (let i = 0; i < frames; i++) { t += 33; hp.update([synthHand(px, py, pinched)], t); }
+    const feed = (px: number, py: number, frames: number) => {
+      for (let i = 0; i < frames; i++) { t += 33; hp.update([synthHand(px, py, false)], t); }
     };
-    feed(500, 400, false, 5);
-    feed(160, 50, false, 15); // dwell on the say box
+    feed(500, 400, 5);
+    feed(160, 50, 115); // settle + ~3s dwell on the say box
     expect(hp.target).toBe(input);
-    feed(160, 50, true, 4); // deliberate pinch (~80 ms hold)
-    feed(160, 50, false, 3); // release
     expect(input.focus).toHaveBeenCalledTimes(1);
     // …and announces a HAND focus so the canvas docks the on-screen keyboard.
     const types = input.dispatchEvent.mock.calls.map((c) => (c[0] as Event).type);
     expect(types.filter((t) => t === 'mc-hand-text-focus')).toHaveLength(1);
-    // The press itself is announced too (the hand's stand-in for pointerdown).
-    expect(types).toContain('mc-hand-press');
     hp.destroy();
   });
 });
