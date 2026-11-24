@@ -6,7 +6,7 @@ Target runtime: uncut is about **5:40** (5s title + body + 5s end card). It will
 
 Recorded on the sim-main preview (https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1), plus live camera, phones, WiZ, and Spotify when those are proven.
 
-Every change on the canvas goes through the same review (**Approve** / **Reject** / **Ask for something else**). Nothing is built until Approve. Reject leaves the canvas unchanged.
+Every change on the canvas goes through the same review (**Approve** / **Reject** / **Something else**). Nothing is built until Approve. Reject leaves the canvas unchanged.
 
 Gestures in the current build: **point with your palm**, **tap a fist to click** (close and open quickly), **hold a fist and move** to drag a board or pan the canvas, and **two fists** to zoom. **Hover to click** (rest the palm ~0.8 s) is an opt-in fallback in Tools for anyone who can't close their hand. Do not say “pinch.” Other buttons stay quiet while a grab is on. There is **no on-screen keyboard** in this demo (see the build-list task to remove it from the app).
 
@@ -50,7 +50,7 @@ Badge text, from `src/ai/router.ts` `badgeLabel` / `sourceText`: **Gemini Nano �
 ## Shot 2 — Connect devices, two reviews, dashboard (0:18–0:58) — FF the swarm / model stream
 
 **Akash does / says:** Hover-selects **Talk** and says: “Connect devices and make a dashboard to control them.” When the first review opens, hover-selects **Approve**. When the second review opens, hover-selects **Approve** again. Then opens **What left this device**.
-**On screen:** The **AI activity** panel stays open. A swarm of small colour-coded agent cursors (Gemini blue, Nano green) moves across the canvas. Two live terminals — “nano · on this device” and “gemini · cloud” — log their own steps. Mid-build pill, in the sim walk: **“15 agents · Gemini 7 · Nano 8 · 0 B to cloud.”** Use the live pill and footer if the counts differ. The **floating review window** opens: **“Draft: 2 lamps found in this room”**, with **Approve**, **Reject**, and **Ask for something else**. After the first Approve, **“Better: grouped lights + a room plan.”** After the second Approve, the Living room dashboard lands: lamp tiles, a speaker tile, a small room plan, a connect tile. Sage self-check marks may already sit on healthy tiles. The ledger lists each cloud call and its bytes.
+**On screen:** The **AI activity** panel stays open. A swarm of small colour-coded agent cursors (Gemini blue, Nano green) moves across the canvas. Two live terminals — “nano · on this device” and “gemini · cloud” — log their own steps. Mid-build pill, in the sim walk: **“15 agents · Gemini 7 · Nano 8 · SIM · would send 1.2 KB.”** (SIM sends nothing; a live run shows the real bytes, e.g. “· 1.2 KB to cloud”.) Use the live pill and footer if the counts differ. The **floating review window** opens: **“Draft: 2 lamps found in this room”**, with **Approve**, **Reject**, and **Something else**. After the first Approve, **“Better: grouped lights + a room plan.”** After the second Approve, the Living room dashboard lands: lamp tiles, a speaker tile, a small room plan, a connect tile. Sage self-check marks may already sit on healthy tiles. The ledger lists each cloud call and its bytes.
 **VO:** “I say ‘Connect devices and make a dashboard to control them.’ A swarm of cursors — Gemini blue, Nano green — walks the real steps, logged in two terminals. The pill is honest about the mix. Every change waits for me. I approve the on-device draft, then Gemini’s tighter grouping. Only then does the dashboard land. And this ledger is the privacy note — what ran on this device, and what went to the cloud.”
 **Caption:** Swarm + two reviews (Draft, then Better). Nothing is built until Approve. Ledger open.
 
@@ -184,7 +184,7 @@ The bilingual caption bar (her words beside the English translation — `buildCa
 ## Shot 10 — Morph a tile, review, undo (4:16–4:40)
 
 **Akash does / says:** Hover-holds a lamp tile for about a second (a quick hover-select is just a tap). Says or types: “change the color to warm amber.” Hover-selects **Approve**. Then hover-selects **Undo** on the morph card (or says “undo”).
-**On screen:** Morph card on the tile: “Desk lamp — what do you want to do?” then “Changing Desk lamp…”. Review title: **“morph: Desk lamp — change the color to warm amber.”** Approve / Reject / Ask for something else. After Approve, the card reads **“Changed.”** with **Undo** and **Close**. After Undo, the tile is back.
+**On screen:** Morph card on the tile: “Desk lamp — what do you want to do?” then “Changing Desk lamp…”. Review title: **“morph: Desk lamp — change the color to warm amber.”** Approve / Reject / Something else. After Approve, the card reads **“Changed.”** with **Undo** and **Close**. After Undo, the tile is back.
 **VO:** “Hold a tile to morph it. I say ‘change the color to warm amber.’ The same review opens before anything is spliced. I approve, the tile changes, and Undo is right on the card.”
 **Caption:** Hover-hold to morph; review before the splice; Approve; Undo on the card.
 **Status: WORKS.**
@@ -239,7 +239,7 @@ Uncut, this is about **5:40**. FF the marked waits and the edit can sit nearer 3
 - Tools are a **chip + top toolbar**, not a radial arc around the hand.
 - Hover-select is **1.5 s**; two fists move a board. Do not say “pinch.”
 - “save” **pins** the board as **Living room**; it does not only write a file.
-- Reject / Ask for something else is always available; Reject leaves the canvas unchanged (useful B-roll if you want a beat of “nothing was built”).
+- Reject / Something else is always available; Reject leaves the canvas unchanged (useful B-roll if you want a beat of “nothing was built”).
 - If a post-Approve build fails, the last good board is restored and the responsible terminal blinks red with a one-line reason. Optional B-roll; not in the main VO unless rehearsed.
 - **WiZ (Shot 2b):** only claim the physical bulb when the bridge is up. **Spotify / Marshall (Shot 2d):** only claim them when the canvas tile is wired and the speaker is a Connect device.
 - Live camera register, live thumbs-up after teach, chime pairing, edge drag, look-to-sync, and the iPhone’s **Apple · on device** badge are filming-day bits; a `?sim=1` walk uses scripted stand-ins.
