@@ -872,6 +872,10 @@
    pass. pointer-events: none so it never blocks the real hit-test it is
    itself verifying. No new colours: reuses --action/--accent/--danger. */
 .mc-self-check { position: fixed; z-index: 47; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+/* Inside the canvas world: moves with its board; a passed mark fades out. */
+.mc-self-check.is-anchored { position: absolute; z-index: 3; transition: opacity 400ms ease-out; }
+.mc-self-check.is-gone { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .mc-self-check.is-anchored { transition: none; } }
 .mc-self-check.is-checking { background: var(--action, #C98B3C); }
 .mc-self-check.is-passed { background: var(--accent, #6B8F71); }
 .mc-self-check.is-warning { background: var(--danger, #B5453A); }
