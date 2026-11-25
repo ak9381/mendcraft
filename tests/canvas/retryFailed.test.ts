@@ -11,8 +11,9 @@ describe('Retry after a mid-request failure (A7-024)', () => {
     expect(src).toContain('<button class="mc-btn mc-retry" type="button" hidden aria-label="Retry the request that failed">Retry</button>');
   });
   it('a turn error offers Retry that re-runs the same turn', () => {
-    const body = src.slice(src.indexOf('async function aiTurn('), src.indexOf('async function proposePlan('));
-    expect(body).toContain('offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });');
+    const body = src.slice(src.indexOf('async function streamTurn('), src.indexOf('async function proposePlan('));
+    expect(body).toContain('offerRetry(retry);');
+    expect(body).toContain('() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });');
   });
   it('any later status line hides it, and it is at least 44px tall', () => {
     expect(src).toMatch(/const say = \(t: string\) => \{\s*statusEl\.textContent = t; hideRetry\(\);/);
