@@ -30,3 +30,31 @@ Hybrid:
 - **Everything else: open palm.** No free cursor for pressing: the palm moves a highlight that snaps to the nearest button (sticky with hysteresis; slower in crowded areas; a crowded group magnifies into a spaced row after ~0.5 s hover). The highlighted button shows its name large. Hold thumbs up 2 s to press it; thumbs down 2 s = back/cancel.
 - While a review is open, thumbs up = Approve (the review is modal).
 - Held fist drag for boards, pan and two-fist zoom stay as they are. Facing gate applies to all of it.
+
+## Fixed gesture table (26 Nov, Akash: "as many fixed as possible", demo-first)
+Shapes: thumbs up (TU), thumbs down (TD), 1 finger (index up), peace (index+middle), 3 fingers (index+middle+ring). L/R from MediaPipe handedness (cross-checked by hand x vs face x). An open palm is NEVER a fixed gesture (it drives the highlight). Hold 2 s, still, facing.
+
+| Gesture | Action | Demo beat |
+|---|---|---|
+| R thumbs up | Approve / Yes — or press the palm-highlighted button when nothing is under review | every review |
+| R thumbs down | Decline / No / Close the open dialog or menu | refusal, closing |
+| R 1 finger | Next-step chip 1 | journey runs on chips |
+| R peace | Next-step chip 2 | |
+| R 3 fingers | Next-step chip 3 | |
+| L thumbs up | Save | save the room |
+| L thumbs down | Undo | rollback |
+| L 1 finger | New board | |
+| L peace | Tools | |
+| L 3 fingers | Talk (mic) | |
+| Both thumbs up | Open AI monitor | the hybrid story |
+| Both thumbs down | Simulate offline on/off | offline beat |
+| Both 1 finger | Point at a device | point-to-connect |
+| Both peace | Register / Re-register | opening |
+| Both 3 fingers | Edit / Done on the active board | |
+Badges: yellow, animated hand of the shape with an L/R/2-hand mark, on each of these buttons (and on chips 1–3). Everything else = open-palm highlight + R thumbs up.
+
+## AI activity vs AI monitor
+Two names for two views (in-app drawer vs second-display page) confuse. Ruling: remove the "AI activity" button from the bar; the drawer still opens by itself while a model works and from the Nano/Gemini engine bar; "AI monitor" is the one named entry.
+
+## Phones
+Android (and the iPhone control layer) get the same shapes behind the Hands pill: R/L TU/TD map to Approve/Decline/Undo/Save in the phone shell; the open-palm highlight works on the phone's buttons.
