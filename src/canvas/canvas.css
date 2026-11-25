@@ -153,7 +153,9 @@
    and Talk fab already make for the same reason — see below. */
 .mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
 .mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: 16px; bottom: 16px;
+/* Starts under the bar/toast (--mc-bar-h already includes the gap) so the
+   panel's title and close button are never covered. */
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: max(16px, var(--mc-bar-h, 80px)); bottom: 16px;
   width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
   overflow: hidden; padding: 12px 14px 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); font-size: 16px; display: flex; flex-direction: column; min-height: 0; }
@@ -320,6 +322,15 @@
 .mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mc-status-row .mc-canvas-status { flex: 1 1 auto; min-width: 0; }
+/* Tools closed (desktop): the status line is a dark centred toast that fades
+   ~6 s after the last line (say() clears it), not a permanent full-width pill. */
+@media (min-width: 601px) {
+  .mc-bar:has(.mc-bar-tools[hidden]) { left: 50%; right: auto; transform: translateX(-50%); width: max-content;
+    max-width: min(720px, calc(100vw - 32px)); padding: 8px 18px; border-radius: 999px; border-color: transparent;
+    background: rgb(43 43 43 / 0.88); backdrop-filter: none; box-shadow: 0 6px 18px rgb(0 0 0 / 0.16); }
+  .mc-bar:has(.mc-bar-tools[hidden]) .mc-canvas-status { color: #FFFFFF; }
+  .mc-bar:has(.mc-bar-tools[hidden]):has(.mc-canvas-status:empty):has(.mc-retry[hidden]) { display: none; }
+}
 .mc-retry { min-height: 44px; min-width: 44px; padding: 0 16px; }
 .mc-retry[hidden] { display: none; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

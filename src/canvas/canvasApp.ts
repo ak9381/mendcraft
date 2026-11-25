@@ -89,7 +89,7 @@ import { loadSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
-import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
+import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
 import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
@@ -407,7 +407,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
-      if (state === 'failed' || state === 'queued') { aiHold.add(engine); showAi(true); } else aiHold.delete(engine);
+      // Only a failure opens the drawer by itself (the reason must be readable);
+      // a queued turn is shown on the engine bar and the AI monitor.
+      if (state === 'failed' || state === 'queued') { aiHold.add(engine); if (state === 'failed') showAi(true); } else aiHold.delete(engine);
       engineBar.set(engine, state, line);
     },
     handoff: (from, to) => engineBar.handoff(from, to),
@@ -748,10 +750,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every status line, in order (the journey replay reads what each step said).
   const statusLog: string[] = [];
   let statusBase = 0;
+  // The status line is a toast, not permanent chrome: it fades ~6 s after the
+  // last line, except while a review waits, a Retry is offered or the mic
+  // listens (those lines stay until something replaces them).
+  const STATUS_FADE_MS = 6000;
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  const fadeStatus = (t: string): void => {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
+    if (!t || typeof window === 'undefined') return;
+    statusTimer = setTimeout(() => {
+      statusTimer = null;
+      if (statusEl.textContent !== t) return;
+      if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
+      statusEl.textContent = '';
+    }, STATUS_FADE_MS);
+  };
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
+    fadeStatus(t);
   };
 
   {
@@ -1385,7 +1404,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     swarm.reportBytes(t.aiBytes, t.simBytes);
   }
   function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean } = {}): void {
-    showAi(true);
+    // No auto-open: the engine bar shows the turn (click it for the drawer)
+    // and the AI monitor carries the full story; the canvas stays clean.
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
     aiPanel.dataset.engine = s.engine;
@@ -2220,7 +2240,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pack?.lang === 'kn') { say('Kannada is already on. Say “undo” for English.'); return; }
     if (!net.isOnline()) {
       net.queueLater('add kannada');
-      showAi(true); panels.show();
+      panels.show();
       panels.forEngine('nano').setQueued(net.laterCount());
       aiHold.add('gemini'); // the Kannada pack waits on Gemini; keep the reason on screen
       say(`${LATER_LIST_PROMISE}.`);
@@ -2762,7 +2782,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     btn.setAttribute('aria-pressed', 'true');
     gestures?.setActive(true);
     restoreOwnerLock();
-    say('Hands on: point with your palm, tap a fist to click. Hold a fist to move a board or pan; two fists to zoom.');
+    say('Hands on. Palm to point · fist to click · hold a fist to move.');
   }
 
   // ---- offline (simulate + real) ----
@@ -2788,7 +2808,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const OPEN_ENDED_SIM_REPLY = "I'm listening — tell me what to build, or ask me anything.";
   async function openEndedTurn(text: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    showAi(true);
     const nano = engineFor('nano', OPEN_ENDED_SIM_REPLY);
     const gemini = engineFor('gemini', OPEN_ENDED_SIM_REPLY);
     // Each engine really tried goes through the ledger like any AI turn. A
@@ -3186,6 +3205,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // edit must survive).
     if (persistTimer) persist(true);
     clearTimeout(wheelPersistTimer);
+    if (statusTimer) clearTimeout(statusTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }
     hostSession = null;
