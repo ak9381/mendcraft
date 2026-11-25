@@ -1109,8 +1109,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!surfaces[f.id] && !empty.querySelector(".mc-empty-talk")) {
         empty.innerHTML = `<p class="mc-empty-lead" data-i18n="emptyLead">What would you like to build on this board?</p>
           <button type="button" class="mc-btn primary mc-empty-talk" data-act="talk" aria-label="Talk: start listening">${MIC_ICON_SVG}<span>Talk</span></button>
-          <p class="mc-empty-talk-caption" hidden></p>
-          <div class="mc-row"><button class="mc-btn" data-act="connect" data-i18n="emptyConnect">Connect this room</button><button class="mc-btn" data-act="floorplan" data-i18n="emptyFloorplan">Floor plan</button></div>`;
+          <p class="mc-empty-talk-caption" hidden></p>`;
       }
     }
     root.dataset.mode = focusId ? 'focus' : 'overview';
@@ -1183,7 +1182,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- navigation ----
   /** 1:1 focus camera. A board with content that is wider/taller than the screen
    *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
-   *  so its "Connect this room" call-to-action is on screen. */
+   *  so its Talk call-to-action is on screen. */
   /** Narrow a focused board to the free width between the dock and the hand
    *  cluster, so nothing on it sits under chrome. Never below 480px.
    *  Display-only: the board's own size (registry + storage) is never
@@ -2358,11 +2357,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Open-palm highlight (palmHighlight.ts): the palm moves a sticky highlight
   // over the buttons; R thumbs-up (2 s) presses it, a fist tap clicks it.
   const palmHighlight = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
-    ? createPalmHighlight({ root, ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}) })
+    ? createPalmHighlight({
+        root,
+        // The control under the hand that DRIVES the highlight (nearest pointer slot).
+        directAt: (p) => handPointer?.directHit?.(p) ?? null,
+        ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
+      })
     : null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
         targetOverride: (now) => palmHighlight?.forced(now) ?? null,
+        // Thumbs up / down veto fist starts and taps only while button
+        // gestures are on — with Hands' gestures off a thumb-up grip still pans.
+        fixedShapeVeto: () => !!gestures?.isActive(),
         onHandEvent: (ev) => {
           if (ev.type === 'click') activityLog.push({ kind: 'click', text: ev.target ? `Click · ${ev.target}` : 'Click', target: ev.target });
           else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
@@ -2459,7 +2466,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     handPointer?.update(cam, now);
     gestures?.frame(hands, now, {
       facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
-      suppressCounts: countsSuppressed(), direct: handPointer?.directHit?.() ?? null,
+      suppressCounts: countsSuppressed(),
     });
     if (!hands.length) return;
     // Taught gestures obey the same guards as built-ins: never while the
@@ -2484,6 +2491,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onAspect: (a) => { phoneCamAspect = a; handCameraAspect = a; },
         gestures,
         gesturesBlocked,
+        countsSuppressed,
         cameraAspect: () => handCameraAspect,
       })
     : null;
@@ -3337,6 +3345,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     undoBtn.className = 'mc-cluster-undo';
     undoBtn.dataset.cmd = 'undo';
     undoBtn.textContent = 'Undo';
+    undoBtn.dataset.i18n = 'undo';
     for (const node of [registerBtn, editBtn, toolsChip, talk, undoBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
