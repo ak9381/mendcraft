@@ -135,8 +135,8 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(chip).toMatch(/right:\s*16px/);
     expect(chip).toMatch(/bottom:\s*calc\(16px/);
     expect(chip).toMatch(/max-width:\s*220px/);
-    // Quiet small pill (13px); a large 288×216 camera preview.
-    expect(chip).toMatch(/font-size:\s*13px/);
+    // Quiet pill at the 15px text floor; a large 288×216 camera preview.
+    expect(chip).toMatch(/font-size:\s*15px/);
     const face = canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0] ?? '';
     expect(face).toMatch(/right:\s*16px/);
     expect(face).toMatch(/width:\s*288px/);

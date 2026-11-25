@@ -99,7 +99,7 @@
 /* Register chip already occupies this column's next slot up from Edit
    (same right edge). Stack Reset one chip above Register so both stay
    tappable in Edit mode. */
-.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 13px; }
+.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 15px; }
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-edit-toggle[aria-pressed=true] { background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
 /* A greyed Edit on an empty canvas reads as broken on camera: hide it until there is a board to edit. */
@@ -153,7 +153,7 @@
    views of the same agent read as one thing. */
 .mc-swarm-cursor.is-dock-open { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 4px; }
 .mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
-  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
 /* The terminal column is reserved: cursors and the pill they summarise stay
    inside the visible board area and never fly under it (percentages inside
@@ -175,26 +175,26 @@
   border: 0; border-radius: 999px; background: var(--panel-2, #F1EEE6); color: var(--text); font-size: 22px;
   line-height: 1; cursor: pointer; }
 .mc-ai-close:focus-visible { outline: 3px solid var(--focus, #C98B3C); outline-offset: 2px; }
-.mc-ai-history-empty { color: var(--text-dim); font-size: 13px; margin: 4px 0 8px; }
+.mc-ai-history-empty { color: var(--text-dim); font-size: 15px; margin: 4px 0 8px; }
 .mc-ai-history-empty[hidden] { display: none; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
 .mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
 .mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
-.mc-ai-h3 { margin: 16px 0 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.mc-ai-h3 { margin: 16px 0 6px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
 .mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
-.mc-ai-ledger-total { font-size: 13px; }
+.mc-ai-ledger-total { font-size: 15px; }
 .mc-ai-state { color: var(--text-dim); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
-  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
+  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 15px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
 /* History stays discreet — a quiet trailing log, not a second focal point
    next to the live terminals. */
-.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; opacity: 0.85; }
-.mc-ai-live-log { list-style: none; margin: 0 0 12px; padding: 0; font-size: 13px; color: var(--text); }
+.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 15px; opacity: 0.85; }
+.mc-ai-live-log { list-style: none; margin: 0 0 12px; padding: 0; font-size: 15px; color: var(--text); }
 .mc-ai-live-log li { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--border, #E4E0D8); line-height: 1.4; }
 .mc-ai-live-log .mc-ai-live-kind { display: inline-block; min-width: 3.6em; font-weight: 650; letter-spacing: 0.04em;
-  text-transform: uppercase; font-size: 10px; color: var(--text-dim); margin-right: 6px; }
+  font-size: 15px; color: var(--text-dim); margin-right: 6px; }
 .mc-ai-close[hidden] { display: none !important; }
 .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 
@@ -207,9 +207,9 @@
 .mc-terminal { position: relative; border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 /* Bottom-right corner resize grip (A6-008): mouse/touch drag or a virtual-hand
    pinch-drag (it's a [data-mc-resize-handle]) grows/shrinks the terminal. Sized
-   generously (24px) for a less-precise hand pointer; the diagonal lines read as
+   generously (44px) for a less-precise hand pointer; the diagonal lines read as
    the usual resize affordance. */
-.mc-term-resize { position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; z-index: 2;
+.mc-term-resize { position: absolute; right: 0; bottom: 0; width: 44px; height: 44px; z-index: 2;
   cursor: nwse-resize; touch-action: none;
   background:
     linear-gradient(135deg, transparent 0 50%, #6B6761 50% 58%, transparent 58% 66%, #6B6761 66% 74%, transparent 74%); }
@@ -234,7 +234,7 @@
 .mc-terminal.is-floating { position: fixed; z-index: 46; width: min(460px, calc(100% - 48px)); max-height: 60vh; }
 .mc-terminal.is-floating .mc-term-body { max-height: calc(60vh - 40px); }
 .mc-terminal-spacer { height: 0; }
-.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 13px; color: #D8D4CC; }
+.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 15px; color: #D8D4CC; }
 .mc-term-drag { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; cursor: grab; touch-action: none; border-radius: 6px; }
 .mc-term-drag:active { cursor: grabbing; }
 .mc-term-drag:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
@@ -250,10 +250,10 @@
 /* Lives in the terminal's head, not its scrolling body — stays visible and
    stable (for a screenshot or a glance) however many lines log afterward,
    until reconnecting actually clears the queue. */
-.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 12px; padding: 3px 9px; border-radius: 999px;
+.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 15px; padding: 3px 9px; border-radius: 999px;
   background: rgb(201 139 60 / 0.22); color: #E7B274; }
 .mc-term-body { position: relative; padding: 12px 14px; font-family: ui-monospace, 'DejaVu Sans Mono', Consolas, monospace;
-  font-size: 12.5px; line-height: 1.7; max-height: 220px; overflow: auto; }
+  font-size: 15px; line-height: 1.7; max-height: 220px; overflow: auto; }
 .mc-term-lines { display: flex; flex-direction: column; }
 .mc-term-line { margin: 0; color: #D8D4CC; white-space: pre-wrap; word-break: break-word; }
 .mc-term-mark { display: inline-block; width: 1.1em; color: inherit; }
@@ -271,23 +271,23 @@
 .mc-term-dock { margin: 0; }
 .mc-term-dock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px 4px 8px;
-  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 12px; cursor: pointer; }
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 15px; cursor: pointer; }
 .mc-dock-chip-cursor { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color, var(--accent)); flex: 0 0 auto; }
 .mc-dock-chip.is-working { border-color: var(--chip-color, var(--accent)); }
-.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 1.1s ease-in-out infinite; }
+.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 2.4s ease-in-out infinite; }
 .mc-dock-chip.is-done { opacity: 0.7; }
 .mc-dock-chip.is-done .mc-dock-chip-cursor { background: transparent; border: 1px solid var(--chip-color, var(--accent)); }
 .mc-dock-chip-mark { color: var(--chip-color, var(--accent)); font-size: 11px; font-weight: 700; }
 .mc-dock-chip[aria-pressed=true] { outline: 2px solid var(--chip-color, var(--accent)); outline-offset: 2px; }
 .mc-dock-chip-overflow { color: var(--text-dim); }
-@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.35); } }
+@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.15); } }
 @media (prefers-reduced-motion: reduce) { .mc-dock-chip.is-working .mc-dock-chip-cursor { animation: none; } }
 
 /* Every past turn's chips, kept for the whole session but folded away by
    default so the dock never grows taller than one row until she opens it. */
 .mc-term-dock-history { margin-top: 6px; }
 .mc-term-dock-history summary { min-height: 44px; display: inline-flex; align-items: center; padding: 2px 10px;
-  border-radius: 999px; color: var(--text-dim); font-size: 12px; cursor: pointer; list-style: none; }
+  border-radius: 999px; color: var(--text-dim); font-size: 15px; cursor: pointer; list-style: none; }
 .mc-term-dock-history summary::-webkit-details-marker { display: none; }
 .mc-term-dock-history summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .mc-term-dock-history[open] summary { color: var(--text); }
@@ -309,9 +309,9 @@
 
 /* One compact bar spanning under both terminals: what stayed on this device
    vs. what actually left it, as real bytes — never a fabricated number. */
-.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-dim); }
+.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
 
-.mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-eyebrow { margin: 0; font-size: 15px; font-weight: 650; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
 .mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
   padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px);
@@ -340,6 +340,11 @@
 .mc-bar-tools.mc-bar-tools-peek .mc-bar-btns { display: none; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
 .mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
+/* Quiet hover and a small press, so a click visibly lands (scale, not
+   transform: positioned buttons keep their own transforms). */
+.mc-btn:hover:not(:disabled) { border-color: var(--text-dim); }
+.mc-btn:active:not(:disabled) { scale: 0.97; transition: scale 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .mc-btn:active:not(:disabled) { scale: none; } }
 .mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
 .mc-say input { flex: 1; min-width: 0; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--panel); color: var(--text); font-size: 18px; text-overflow: ellipsis; }
@@ -369,7 +374,7 @@
 .mc-dock-surface { display: grid; gap: 12px; }
 .mc-btn[aria-pressed=true] { border-color: var(--accent-ink); background: var(--panel-2); color: var(--accent-ink); }
 .mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
-.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
+.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 44px; font-size: 15px; padding: 4px 10px; }
 
 /* Author display rules must never beat the hidden attribute. */
 .mc-canvas [hidden] { display: none !important; }
@@ -472,7 +477,7 @@
   margin: 4px 0 10px;
 }
 .mc-pair-note {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-dim);
   text-align: center;
   margin: 8px 0 0;
@@ -561,15 +566,15 @@
   font-size: 20px;
   cursor: pointer;
 }
-.mc-teach-note { font-size: 13px; opacity: 0.7; margin: 0 28px 12px 0; }
+.mc-teach-note { font-size: 15px; opacity: 0.7; margin: 0 28px 12px 0; }
 .mc-teach-count { font-size: 28px; font-weight: 600; margin: 8px 0; }
-.mc-teach-conflict { color: #b5651d; font-size: 13px; }
+.mc-teach-conflict { color: #b5651d; font-size: 15px; }
 .mc-teach-describe { display: flex; gap: 8px; }
 .mc-teach-describe input { flex: 1; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; }
 .mc-teach-list { list-style: none; margin: 0; padding: 0; }
 .mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.mc-teach-meter { font-size: 12px; opacity: 0.75; }
-.mc-proposal-engine { font-size: 12px; opacity: 0.7; margin-left: 8px; }
+.mc-teach-meter { font-size: 15px; opacity: 0.75; }
+.mc-proposal-engine { font-size: 15px; opacity: 0.7; margin-left: 8px; }
 
 /* Phone tools menu (phoneMenu.ts). iOS: bottom sheet with a grabber.
    Android: Material 3 modal sheet with 28dp top corners and tonal buttons. */
@@ -713,10 +718,10 @@
 .mc-review-title { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; color: #2B2B2B; }
 .mc-review-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mc-review-engine, .mc-review-sim { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px;
-  border-radius: 999px; font-size: 13px; font-weight: 600; line-height: 1; white-space: nowrap; }
+  border-radius: 999px; font-size: 15px; font-weight: 600; line-height: 1; white-space: nowrap; }
 .mc-review-engine { background: rgb(107 143 113 / 0.16); color: #3D6145; }
 .mc-review-engine[data-engine="gemini"] { background: rgb(90 123 166 / 0.14); color: #3A5679; }
-.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 11px; }
+.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 15px; }
 .mc-review-engine[hidden], .mc-review-sim[hidden] { display: none; }
 .mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; margin: 0; box-sizing: border-box;
   display: flex; flex-direction: column; overflow: hidden; padding: 0 24px 20px; }
@@ -750,14 +755,14 @@
    here; the review's own Approve/Reject/Ask buttons are the only visible
    decision controls. */
 .mc-review-card-host .mc-proposal-actions { display: none; }
-.mc-review-more { margin-top: 10px; font-size: 14px; color: #6E6A63; }
+.mc-review-more { margin-top: 10px; font-size: 15px; color: #6E6A63; }
 .mc-review-more[hidden] { display: none; }
 .mc-review-more > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
 .mc-review-extra:empty { display: none; }
 /* Honesty footer: why this engine, and exactly what left this device. */
 .mc-review-honesty { flex: 0 0 auto; margin: 12px 2px 0; display: flex; flex-direction: column; gap: 2px; }
 .mc-review-honesty[hidden] { display: none; }
-.mc-review-honesty p { margin: 0; font-size: 14px; line-height: 1.4; color: #5E5A54; }
+.mc-review-honesty p { margin: 0; font-size: 15px; line-height: 1.4; color: #5E5A54; }
 .mc-review-honesty p[hidden] { display: none; }
 .mc-review-why { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 /* The byte count never shrinks or ellipsizes; only the "what" text does. */
@@ -795,7 +800,7 @@
 
 .mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 49;
   background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
-  border-radius: 999px; padding: 6px 14px; font-size: 13px;
+  border-radius: 999px; padding: 6px 14px; font-size: 15px;
   box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
 .mc-reg-chip[hidden] { display: none; }
 
@@ -828,7 +833,7 @@
 .mc-scan.is-done .mc-scan-ring-fill { stroke: var(--accent); }
 .mc-scan-prompt { margin: 0; font-size: 15px; color: var(--text); min-height: 1.4em; }
 .mc-scan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: start; }
-.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 14px; }
+.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 15px; }
 .mc-scan-steps li.is-active { color: var(--text); font-weight: 600; }
 .mc-scan-steps li.is-done { color: var(--text); }
 .mc-scan-tick { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
@@ -854,13 +859,13 @@
 .mc-morph-card[hidden] { display: none; }
 .mc-morph-card-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
 .mc-morph-card-title strong { font-weight: 700; }
-.mc-morph-card-line { margin: 0; font-size: 14px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
+.mc-morph-card-line { margin: 0; font-size: 15px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
 .mc-morph-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .mc-morph-dot.is-sage { background: #6B8F71; }
 .mc-morph-dot.is-amber { background: #C98B3C; }
 .mc-morph-chips { display: flex; flex-wrap: wrap; gap: 10px; }
 .mc-morph-cancel, .mc-morph-undo { min-height: 44px; padding: 0 16px; border-radius: 999px;
-  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 14px; font-weight: 600; cursor: pointer; }
+  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 15px; font-weight: 600; cursor: pointer; }
 .mc-morph-cancel:hover, .mc-morph-undo:hover { filter: brightness(0.97); }
 .mc-morph-undo { border-color: #C98B3C; color: #C98B3C; }
 
@@ -904,7 +909,7 @@
   max-width: min(260px, calc(100vw - 16px));
   padding: 4px 8px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.3;
   white-space: normal;
   background: rgb(20 20 24 / 0.92);
@@ -1050,7 +1055,7 @@
   border-radius: 10px;
   background: rgba(11, 15, 20, 0.88);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
   pointer-events: none;
@@ -1089,7 +1094,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   padding: 6px 8px;
@@ -1202,7 +1207,7 @@
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.88);
   color: #fff;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: 0.01em;
   box-shadow: 0 4px 12px rgb(0 0 0 / 0.25);
@@ -1379,9 +1384,9 @@
   top: auto; left: auto; transform: none;
   right: 16px; bottom: calc(16px + 216px + 8px + env(safe-area-inset-bottom, 0px));
   max-width: 220px; padding: 5px 6px 5px 12px; gap: 4px; z-index: 71;
-  font-size: 13px; font-weight: 600; line-height: 1.2;
+  font-size: 15px; font-weight: 600; line-height: 1.2;
 }
-.mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
+.mc-canvas .mc-facing-banner-hide { font-size: 15px; min-height: 44px; min-width: 44px; padding: 4px 8px; }
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
   .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
@@ -1430,7 +1435,7 @@
 .mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
   border-radius: 0 0 18px 18px; }
-.mc-next-src { font-size: 13px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.mc-next-src { font-size: 15px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
 .mc-next[data-source=nano] .mc-next-src { color: var(--accent-ink); }
 .mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
   border-color: var(--border); font-size: 18px; }
@@ -1562,7 +1567,7 @@
   padding: 6px 14px 6px; border-radius: 14px; background: #2B2B2B; color: #FFFFFF; box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); white-space: nowrap; }
 .mc-highlight-label.below { translate: -50% 0; }
 .mc-highlight-name { font: 700 26px/1.15 system-ui, sans-serif; }
-.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 13px/1 system-ui, sans-serif; color: #FFC83D; }
+.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 15px/1 system-ui, sans-serif; color: #FFC83D; }
 .mc-highlight-how .mc-gi { width: 18px; height: 18px; }
 .mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
   border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }
