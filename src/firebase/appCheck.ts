@@ -4,6 +4,7 @@
 
 import type { FirebaseApp } from 'firebase/app';
 import { env, PLACEHOLDER_RE } from './app';
+import { isDebugTokenShape } from './debugToken';
 
 export type AppCheckStatus = 'skipped' | 'ready' | 'failed';
 
@@ -23,6 +24,8 @@ export interface AppCheckDebugOpts {
   dev?: boolean;
   hostname?: string;
   search?: string;
+  /** Test seam: the VITE_APPCHECK_DEBUG_TOKEN value (null = not set). */
+  envToken?: string | null;
 }
 
 function isLocalHostname(host: string): boolean {
@@ -65,10 +68,41 @@ export function applyAppCheckDebugToken(opts: AppCheckDebugOpts = {}): boolean {
     return true;
   }
   if (isViteDev(opts.dev)) {
-    target.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    // A stable token from the env beats an SDK-generated one: the generated
+    // token is different for every origin (localhost vs 127.0.0.1 vs a port),
+    // and each one would have to be registered by hand.
+    const fromEnv = opts.envToken !== undefined ? opts.envToken : env().VITE_APPCHECK_DEBUG_TOKEN;
+    target.FIREBASE_APPCHECK_DEBUG_TOKEN = isDebugTokenShape(fromEnv) ? fromEnv.trim() : true;
     return true;
   }
   return false;
+}
+
+/** How this page's App Check debug token was chosen (for the status line). */
+export function appCheckDebugKind(): 'stable' | 'generated' | 'none' {
+  const g = globalThis as Record<string, unknown>;
+  const v = ((g.self as Record<string, unknown> | undefined) ?? g).FIREBASE_APPCHECK_DEBUG_TOKEN;
+  return typeof v === 'string' && v ? 'stable' : v === true ? 'generated' : 'none';
+}
+
+let appCheckInstance: unknown = null;
+
+/** Ask App Check for a token now. Resolves null when one was issued, or the
+ *  error when it was refused (e.g. HTTP 403: the debug token of this address
+ *  is not registered). Used to explain a failed Gemini call plainly. */
+export async function appCheckTokenError(timeoutMs = 4000): Promise<unknown | null> {
+  if (!appCheckInstance) return null;
+  try {
+    const { getToken } = await import('firebase/app-check');
+    // A slow answer proves nothing either way: only a refusal is reported.
+    await Promise.race([
+      getToken(appCheckInstance as Parameters<typeof getToken>[0], false),
+      new Promise<void>((resolve) => { setTimeout(resolve, timeoutMs); }),
+    ]);
+    return null;
+  } catch (error) {
+    return error ?? new Error('App Check token refused');
+  }
 }
 
 /**
@@ -85,7 +119,7 @@ export async function initAppCheck(app: FirebaseApp): Promise<AppCheckResult> {
   try {
     applyAppCheckDebugToken();
     const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import('firebase/app-check');
-    initializeAppCheck(app, {
+    appCheckInstance = initializeAppCheck(app, {
       provider: new ReCaptchaEnterpriseProvider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });

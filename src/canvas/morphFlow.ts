@@ -18,7 +18,7 @@ import {
   parseMorphTile, scriptedMorphJson,
 } from '../ai/morphEdit';
 import { protectText } from '../privacy/directory';
-import type { SentInfo, SurfaceEngine } from './aiTurn';
+import { geminiFailLine, type SentInfo, type SurfaceEngine } from './aiTurn';
 import type { SurfacePlan } from './surfacePlan';
 import type { DeviceIdSession } from '../privacy/deviceRedact';
 import type { LogVerb } from './modelPanels';
@@ -37,6 +37,10 @@ export interface MorphUiHooks {
    *  morphed tile. Implemented by the host so the privacy-order invariant
    *  stays in one place. */
   sent(s: SentInfo, o: { utterance: string; tileIndex: number; label: string }): void;
+  /** One cloud call of that turn really left this device (book its bytes). */
+  cloudSent?(s: SentInfo): void;
+  /** That call turned out never to have left (un-book it). */
+  cloudRetract?(s: SentInfo): void;
   log(engine: 'nano' | 'gemini', verb: LogVerb, detail: string): void;
   handoff(reason: string): void;
   /** Settle the swarm (the host may hold it on screen a minimum in sim). */
@@ -314,10 +318,12 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
   async function settleFail(why: string): Promise<void> {
     await deps.ui.settle();
     deps.ui.log('gemini', 'note', why);
-    deps.ui.state("Couldn't make that change.");
+    // A named cloud failure (App Check 403, offline…) is said where she looks.
+    const line = /^Gemini/.test(why) ? `Couldn't make that change. ${why}` : "Couldn't make that change.";
+    deps.ui.state(line);
     clearOutline();
     phase = 'idle';
-    deps.card.showError("Couldn't make that change.");
+    deps.card.showError(line);
   }
 
   async function runTurn(utterance: string): Promise<void> {
@@ -349,10 +355,11 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     deps.ui.log('gemini', 'plan', `revise ${t.label}; everything else stays put`);
     let full = '';
     try {
-      full = await engine.stream(prompt, () => {});
-    } catch {
+      full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => deps.ui.cloudSent?.(sent), onCloudRetract: () => deps.ui.cloudRetract?.(sent) });
+    } catch (e) {
       if (g !== gen) return;
-      if (!engine.fallback) { await settleFail('the model didn’t answer'); return; }
+      // Live: no prepared edit — say why Gemini couldn't do it.
+      if (!engine.fallback) { await settleFail(geminiFailLine(e)); return; }
       deps.ui.log('gemini', 'note', 'SIM · the model didn’t answer, so a prepared edit is waiting');
       try { full = await engine.fallback.stream(prompt, () => {}); }
       catch { if (g === gen) await settleFail('the model didn’t answer'); return; }

@@ -4,25 +4,28 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { assertFirebaseBuildEnv } from './src/firebase/envGuard';
+import { NO_DEBUG_TOKEN_HINT, resolveAppCheckDebugToken } from './src/firebase/debugToken';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
-function loadLocalDebugToken(): string | null {
-  const fromEnv = process.env.APPCHECK_DEBUG_TOKEN?.trim();
-  if (fromEnv) return fromEnv;
-  const files = [
-    path.join(os.homedir(), '.secrets', 'mendcraft-appcheck-debug'),
-    path.join(root, '.secrets', 'mendcraft-appcheck-debug'),
-  ];
-  for (const file of files) {
-    try {
-      const value = fs.readFileSync(file, 'utf8').trim();
-      if (value) return value;
-    } catch {
-      // missing or unreadable — try the next source
-    }
+/** One stable debug token for every local address: process env, then the
+ *  .env files (APPCHECK_DEBUG_TOKEN or VITE_APPCHECK_DEBUG_TOKEN), then the
+ *  secrets file. Logs where it came from, never the value. */
+function loadLocalDebugToken(mode: string, log: boolean): string | null {
+  const got = resolveAppCheckDebugToken({
+    envs: [process.env, loadEnv(mode, root, ['APPCHECK_', 'VITE_APPCHECK_'])],
+    files: [
+      path.join(os.homedir(), '.secrets', 'mendcraft-appcheck-debug'),
+      path.join(root, '.secrets', 'mendcraft-appcheck-debug'),
+    ],
+    readFile: (file) => fs.readFileSync(file, 'utf8'),
+  });
+  if (log) {
+    for (const where of got.rejected) console.warn(`[mendcraft] App Check: the debug token in ${where} is not a UUID — ignored.`);
+    if (got.token) console.info(`[mendcraft] App Check: using the debug token from ${got.source} (it must be registered in the Firebase console).`);
+    else console.warn(NO_DEBUG_TOKEN_HINT);
   }
-  return null;
+  return got.token;
 }
 
 function isLocalHost(hostHeader: string | undefined): boolean {
@@ -43,8 +46,8 @@ function injectDebugToken(html: string, token: string): string {
 /** Inject the box App Check debug token into HTML for local dev, and for
  *  `vite preview` only when the request is localhost + `?debug`. The token
  *  is never written into `dist` during `vite build`. */
-function appCheckDebugLocalPlugin(): Plugin {
-  const token = loadLocalDebugToken();
+function appCheckDebugLocalPlugin(mode: string, command: 'build' | 'serve'): Plugin {
+  const token = command === 'serve' ? loadLocalDebugToken(mode, mode !== 'test') : null;
   return {
     name: 'appcheck-debug-local-only',
     transformIndexHtml: {
@@ -220,8 +223,13 @@ function firebaseEnvGuardPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin()],
+export default defineConfig(({ mode, command }) => {
+  // A debug token must never be inlined into a production bundle: Vite inlines
+  // every VITE_* value it finds, and an already-set process value wins over
+  // the .env files, so blank it for `vite build`.
+  if (command === 'build') process.env.VITE_APPCHECK_DEBUG_TOKEN = '';
+  return {
+  plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin(mode, command)],
   build: {
     rollupOptions: {
       // sim-main: the smart canvas and the A2UI spike ship as extra pages.
@@ -234,4 +242,5 @@ export default defineConfig({
       },
     },
   },
+  };
 });

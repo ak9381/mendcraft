@@ -22,7 +22,7 @@ export interface EngineBar {
   clearQueued(engine: EngineId): void;
   /** A turn ended: any card still Working is finished, so it reads Done. */
   settle(): void;
-  /** Swarm summary ("6 agents · Gemini 3 · Nano 3"); '' hides it. */
+  /** Swarm summary ("Nano · 1 call"); '' hides it. */
   setAgents(text: string): void;
   el: HTMLElement;
 }

@@ -42,7 +42,10 @@ import {
   type DeviceIdentity, type EffectVerdict, type IdentifyHint,
 } from '../devices/identify';
 import { coerceConnector, type Connector } from '../devices/connector';
-import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
+import { appCheckTokenError, initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
+import { cloudCallError, explainCloudFailure, GEMINI_NOT_SET_UP, type CloudFailure } from './cloudErrors';
+import { nanoQueue, NanoQueueSkipped } from './nanoQueue';
+import { nanoTrace } from './nanoTrace';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import {
   classifyCloudFailure,
@@ -280,6 +283,8 @@ export interface ModelOverrides {
   copilotMaterialsHedge?: TextGenModel | null;
   canvasCloud?: TextGenModel | null;
   canvasCloudHedge?: TextGenModel | null;
+  /** Fake for the per-turn ONLY_ON_DEVICE model (streamOnDevice). */
+  onDeviceModel?: ((params: OnDeviceModelParams) => TextGenModel) | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
@@ -367,6 +372,9 @@ function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
 // seam, status, and routing.
 
 let testOverrides: ModelOverrides | null = null;
+/** Builds a Firebase AI Logic ONLY_ON_DEVICE model for one call (set by
+ *  initFirebase). Null until Firebase AI Logic has started. */
+let onDeviceFactory: ((params: OnDeviceModelParams) => TextGenModel) | null = null;
 let cached: Models | null = null;
 let initPromise: Promise<Models | null> | null = null;
 let deviceModelStatus: DeviceModelStatus = 'idle';
@@ -417,6 +425,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
       (e) => { clearTimeout(t); reject(e); },
     );
   });
+}
+
+/** How long an on-device call may wait for the model before it gives up
+ *  (and its caller falls back to rules or its redacted cloud twin). */
+export const ON_DEVICE_MAX_WAIT_MS = 6000;
+/** The longest one SDK on-device call may hold the model's slot. */
+export const ON_DEVICE_MAX_RUN_MS = 20_000;
+
+/** Route a model's calls through the shared Nano queue: one on-device prompt
+ *  at a time, and a call that waited too long is never started. A streamed
+ *  call holds its slot until the stream has finished. */
+export function queueOnDevice<T extends object>(model: T, queue = nanoQueue, maxWaitMs = ON_DEVICE_MAX_WAIT_MS, maxRunMs = ON_DEVICE_MAX_RUN_MS): T {
+  const m = model as Record<string, unknown>;
+  // The SDK's on-device call can't be aborted, so a call that never settles
+  // must not hold the one slot for ever: it gives it back after maxRunMs.
+  const bounded = <R,>(p: Promise<R>): Promise<R> => withTimeout(p, maxRunMs, 'on-device call');
+  const once = m.generateContent;
+  if (typeof once === 'function') {
+    m.generateContent = (...args: unknown[]) => queue.run(() => bounded((once as (...a: unknown[]) => Promise<unknown>).apply(model, args)), { maxWaitMs });
+  }
+  const streamed = m.generateContentStream;
+  if (typeof streamed === 'function') {
+    m.generateContentStream = (...args: unknown[]) => new Promise((resolve, reject) => {
+      queue.run(async () => {
+        const started = await bounded((streamed as (...a: unknown[]) => Promise<{ response?: Promise<unknown> }>).apply(model, args));
+        resolve(started);
+        try { await bounded(Promise.resolve(started.response)); } catch { /* the reader sees the error */ }
+      }, { maxWaitMs }).catch(reject);
+    });
+  }
+  return model;
 }
 
 type ModelResponse = { text: () => string; inferenceSource?: string };
@@ -495,6 +534,24 @@ export async function generateWithBudget(
   return { response };
 }
 
+/** What a canvas cloud call is expected to return: a board plan, any JSON
+ *  object (a language pack, one revised tile), or a short plain-text reply
+ *  (the model is JSON-only, so the words arrive as a JSON string or inside
+ *  a one-field object). */
+export type CanvasReplyShape = 'board' | 'json' | 'text';
+
+const TEXT_KEYS = ['reply', 'response', 'answer', 'text', 'message'];
+export function acceptCanvasReply(raw: unknown, shape: CanvasReplyShape): unknown | null {
+  if (shape === 'board') return looksLikeSurfacePlan(raw) ? raw : null;
+  if (shape === 'json') return raw && typeof raw === 'object' && Object.keys(raw as object).length ? raw : null;
+  if (typeof raw === 'string') return raw.trim() || null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  for (const k of TEXT_KEYS) if (typeof o[k] === 'string' && (o[k] as string).trim()) return (o[k] as string).trim();
+  const strings = Object.values(o).filter((v): v is string => typeof v === 'string' && !!v.trim());
+  return strings.length === 1 ? strings[0].trim() : null;
+}
+
 /** A canvas reply worth racing on: an object with a `tiles` list at the top
  *  or one envelope down (e.g. {"plan":{...}}), which the canvas layer unwraps.
  *  A bare `{}` or tile-less object must NOT win the hedge race — it made the
@@ -507,22 +564,86 @@ export function looksLikeSurfacePlan(raw: unknown, depth = 0): boolean {
   return Object.values(o).some((v) => looksLikeSurfacePlan(v, depth + 1));
 }
 
-/**
- * Smart-canvas seam: stream a surface-plan prompt through the cloud (Firebase AI
- * Logic) and resolve the full text. Returns null when no cloud model is reachable
- * (the canvas then falls back to a scripted SIM engine). Re-validation of the
- * returned JSON happens in the canvas layer (coerceSurfacePlan / gate).
- */
-export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void): Promise<string | null> {
+/** How long after a cloud call starts we take its request as issued when
+ *  nothing has come back either way. An App Check token failure — the one
+ *  thing that stops a call before its fetch — arrives well inside this. */
+export const SEND_ASSUMED_AFTER_MS = 2500;
+
+/** Tell `onSend` once per model call whose request was issued: at its first
+ *  chunk, when it resolves, when it fails with anything but a pre-fetch
+ *  error, or SEND_ASSUMED_AFTER_MS into a call still waiting (a timeout, a
+ *  cancelled hedge). A call that fails before its fetch (no App Check token)
+ *  is not a send — and if that failure arrives after the call was already
+ *  assumed sent, `onRetract` takes it back. Hedge and retry calls each count. */
+export function countingSends(model: TextGenModel, onSend: () => void, onRetract?: () => void, assumeAfterMs = SEND_ASSUMED_AFTER_MS): TextGenModel {
+  const each = () => {
+    let state: 'open' | 'sent' | 'not-sent' = 'open';
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => { timer = null; sent(); }, assumeAfterMs);
+    const tidy = (): void => { if (timer) { clearTimeout(timer); timer = null; } };
+    function sent(): void { tidy(); if (state === 'open') { state = 'sent'; try { onSend(); } catch { /* bookkeeping only */ } } }
+    function failed(e: unknown): void {
+      tidy();
+      if (!explainCloudFailure(e).nothingSent) { sent(); return; }
+      if (state === 'sent') { try { onRetract?.(); } catch { /* bookkeeping only */ } }
+      state = 'not-sent';
+    }
+    return { sent, failed };
+  };
+  const out: TextGenModel = {
+    async generateContent(request) {
+      const call = each();
+      try { const r = await model.generateContent(request); call.sent(); return r; }
+      catch (e) { call.failed(e); throw e; }
+    },
+  };
+  if (typeof model.generateContentStream === 'function') {
+    out.generateContentStream = async (request) => {
+      const call = each();
+      let started: Awaited<ReturnType<NonNullable<TextGenModel['generateContentStream']>>>;
+      try { started = await model.generateContentStream!(request); }
+      catch (e) { call.failed(e); throw e; }
+      call.sent(); // the SDK resolves once the response has started: the request went out
+      const stream = (async function* () {
+        try { for await (const chunk of started.stream) yield chunk; }
+        catch (e) { call.failed(e); throw e; }
+      })();
+      const response = started.response?.then((r) => r, (e) => { call.failed(e); throw e; });
+      response?.catch(() => undefined);
+      return { stream, response };
+    };
+  }
+  return out;
+}
+
+export interface CanvasCloudHooks {
+  /** One model call's request was issued (see countingSends). */
+  onSend?: () => void;
+  /** A call counted as sent turned out to have failed before its fetch. */
+  onRetract?: () => void;
+}
+type CanvasCloudResult = { ok: true; text: string } | { ok: false; why: string; kind: CloudFailKind | null };
+
+/** The cloud board call with its own failure record (two overlapping calls
+ *  never read each other's error). */
+async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) | undefined, shape: CanvasReplyShape, hooks: CanvasCloudHooks): Promise<CanvasCloudResult> {
   const models = await ensureModels();
   // Never use the copilot/template/intent models: those have their own response
   // schemas and will ignore a surface-plan prompt. The canvas model is JSON-only.
-  const primary = models?.canvasCloud ?? null;
-  const backup = models?.canvasCloudHedge ?? null;
-  if (!primary) return null;
+  let primary = models?.canvasCloud ?? null;
+  let backup = models?.canvasCloudHedge ?? null;
+  if (!primary) {
+    const why = appCheckState === 'failed' ? `AppCheck: ${statusMessage ?? 'failed to start'}` : !isEnabled() ? GEMINI_NOT_SET_UP : 'no cloud model answered';
+    return { ok: false, why, kind: null };
+  }
+  if (hooks.onSend) {
+    primary = countingSends(primary, hooks.onSend, hooks.onRetract);
+    backup = backup ? countingSends(backup, hooks.onSend, hooks.onRetract) : null;
+  }
   // Same privacy path as the rest of hybrid: directory tokens, then rules-first
   // redaction. The canvas ledger should record this redacted payload.
   const sent = protectText(prompt);
+  let failKind: CloudFailKind | null = null;
+  let failWhy = '';
   try {
     const got = await requestHedgedJson(
       primary,
@@ -530,22 +651,269 @@ export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) 
       sent.text,
       cloudBudgetMs('long'),
       'canvas plan',
-      (raw) => (looksLikeSurfacePlan(raw) ? raw : null),
-      onChunk,
+      (raw) => acceptCanvasReply(raw, shape),
+      shape === 'text' ? undefined : onChunk,
+      // The primary's reason wins; a backup failure only fills a gap.
+      (kind, detail) => { if (!failWhy) { failKind = kind; failWhy = `canvas plan: ${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`; } },
     );
-    if (!got) return null;
-    const visible = fillVisible(JSON.stringify(got.value));
+    if (!got) return { ok: false, why: failWhy || 'no cloud model answered', kind: failKind };
+    const visible = fillVisible(typeof got.value === 'string' ? got.value : JSON.stringify(got.value));
     try { onChunk?.(visible.text); } catch { /* UI preview must not fail the call */ }
-    return visible.text;
+    return { ok: true, text: visible.text };
   } catch (err) {
     noteError('canvas plan', err);
-    return null;
+    return { ok: false, why: err instanceof Error ? err.message : String(err), kind: null };
   }
+}
+
+/**
+ * Smart-canvas seam: stream a surface-plan prompt through the cloud (Firebase AI
+ * Logic) and resolve the full text. Returns null when no cloud model is reachable
+ * or the call failed. Re-validation of the returned JSON happens in the canvas
+ * layer (coerceSurfacePlan / gate).
+ */
+export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void, shape: CanvasReplyShape = 'board'): Promise<string | null> {
+  const got = await runCanvasCloud(prompt, onChunk, shape, {});
+  return got.ok ? got.text : null;
+}
+
+/**
+ * The same cloud board call, but a failure is an error that says why in plain
+ * words (App Check 403, no connection, quota, …) instead of a silent null —
+ * the canvas shows that line and offers Retry; it never substitutes a draft.
+ */
+export async function streamCanvasPlanOrThrow(prompt: string, onChunk?: (text: string) => void, shape: CanvasReplyShape = 'board', hooks: CanvasCloudHooks = {}): Promise<string> {
+  const got = await runCanvasCloud(shape === 'text' ? `${prompt}\nReply as JSON: {"reply": string}` : prompt, onChunk, shape, hooks);
+  if (got.ok) return got.text;
+  const source = got.kind === 'parse' || got.kind === 'empty' ? 'parse' : got.why;
+  throw await cloudCallError(source, testOverrides ? undefined : appCheckTokenError);
+}
+
+// ---------------------------------------------------------------------------
+// ON-DEVICE BOARD CALLS, through Firebase AI Logic (ONLY_ON_DEVICE).
+
+/** What the SDK hands to Chrome's Prompt API for one on-device model. */
+export interface OnDeviceModelParams {
+  createOptions: Record<string, unknown>;
+  promptOptions?: { responseConstraint?: Record<string, unknown> };
+}
+
+export interface OnDeviceStreamRequest {
+  /** Fixed instructions: ride in the session's `initialPrompts`. */
+  system?: string;
+  /** This turn's prompt. */
+  prompt: string;
+  /** JSON schema the reply must match (`responseConstraint`). */
+  constraint?: Record<string, unknown>;
+  /** Stop: the wait ends at once and the session is destroyed. */
+  signal?: AbortSignal;
+  onChunk?: (full: string) => void;
+  /** The queue gave this call the model: the caller's deadline starts now. */
+  onStart?: () => void;
+  /** Injectable for tests. */
+  queue?: typeof nanoQueue;
+  yieldToPage?: () => Promise<void>;
+  now?: () => number;
+}
+
+/** Text in, text out, English. */
+export const NANO_CREATE_OPTIONS = ON_DEVICE_CREATE_OPTIONS;
+/** How long a board call may wait for the one model before it gives up
+ *  (and the turn goes to Gemini). */
+export const ON_DEVICE_BOARD_MAX_WAIT_MS = 15_000;
+/** How long a burst of buffered chunks may run before the page gets a turn. */
+const ON_DEVICE_YIELD_EVERY_MS = 24;
+
+/** The SDK's on-device path cannot be aborted, and (measured on real Chrome)
+ *  aborting the signal given to create() does not stop a prompt that is
+ *  already running. The SDK does keep the session it made on the model's
+ *  Chrome adapter, so stopping also destroys that session directly. */
+function destroySdkSession(model: unknown): void {
+  try {
+    const session = (model as { chromeAdapter?: { oldSession?: { destroy?: () => void } } } | null)?.chromeAdapter?.oldSession;
+    session?.destroy?.();
+  } catch { /* already gone */ }
+}
+
+/** Has the SDK already created this model's session (its create() resolved)? */
+function sdkSessionReady(model: unknown): boolean {
+  try { return !!(model as { chromeAdapter?: { oldSession?: unknown } } | null)?.chromeAdapter?.oldSession; } catch { return false; }
+}
+
+/** Destroys the previous call's session (the SDK keeps each model's last
+ *  session alive; one finished board session is enough to keep Nano loaded). */
+let lastOnDeviceStop: (() => void) | null = null;
+
+function onDeviceModelFor(params: OnDeviceModelParams): TextGenModel {
+  const make = testOverrides ? testOverrides.onDeviceModel ?? null : onDeviceFactory;
+  if (!make) throw new Error(isEnabled() ? 'Firebase AI Logic didn’t start, so the on-device model can’t be used' : 'Firebase AI Logic isn’t set up, so the on-device model can’t be used');
+  return make(params);
+}
+
+/**
+ * ONE on-device prompt through Firebase AI Logic: a per-call ONLY_ON_DEVICE
+ * model (so the reply schema can name this turn's devices), streamed, through
+ * the page's one Nano queue. The source is re-checked on every chunk — text
+ * that did not come from the device is refused.
+ *
+ * Stopping: the SDK's on-device path takes no abort signal, so stopping means
+ * (1) the caller stops waiting at once and the queue slot is freed, (2) the
+ * stream iterator is returned, and (3) the AbortSignal given to the session's
+ * create() is aborted, which is how the Prompt API destroys a session.
+ */
+export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string> {
+  const queue = req.queue ?? nanoQueue;
+  const now = req.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const yieldToPage = req.yieldToPage ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
+  await ensureModels();
+  const asked = Date.now();
+  return queue.run(async () => {
+    if (req.signal?.aborted) throw new Error('stopped');
+    const t0 = Date.now();
+    nanoTrace(`on-device call: waited ${t0 - asked} ms for the model's queue`);
+    try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
+    lastOnDeviceStop?.();
+    const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let iterator: AsyncIterator<{ text: () => string; inferenceSource?: string }> | null = null;
+    let model: TextGenModel | null = null;
+    const stop = (): void => {
+      try { void iterator?.return?.(); } catch { /* already done */ }
+      session?.abort();
+      destroySdkSession(model);
+    };
+    model = onDeviceModelFor({
+      createOptions: {
+        ...ON_DEVICE_CREATE_OPTIONS,
+        ...(req.system ? { initialPrompts: [{ role: 'system', content: [{ type: 'text', value: req.system }] }] } : {}),
+        ...(session ? { signal: session.signal } : {}),
+      },
+      ...(req.constraint ? { promptOptions: { responseConstraint: req.constraint } } : {}),
+    });
+    let onAbort: (() => void) | null = null;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => { stop(); reject(new Error('stopped')); };
+      req.signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    aborted.catch(() => undefined);
+    const work = (async (): Promise<string> => {
+      let full = '';
+      const take = (chunk: { text: () => string; inferenceSource?: string }): void => {
+        if (sourceOf(chunk) !== 'on-device') throw new Error('the reply did not come from the on-device model');
+        let piece = '';
+        try { piece = chunk.text(); } catch { piece = ''; }
+        if (!piece) return;
+        // Deltas (current Chrome) or the text so far (older builds). A delta
+        // that repeats the tail ("ro" + "o") is still new text.
+        full = full && piece.length > full.length && piece.startsWith(full) ? piece : full + piece;
+        try { req.onChunk?.(full); } catch (e) { if (e instanceof Error && e.name === 'MidStreamOffline') throw e; }
+      };
+      if (typeof model.generateContentStream === 'function') {
+        const started = await model.generateContentStream(req.prompt);
+        started.response?.catch(() => undefined);
+        iterator = started.stream[Symbol.asyncIterator]();
+        let lastYield = now();
+        for (;;) {
+          const step = await iterator.next();
+          if (step.done) break;
+          if (req.signal?.aborted) throw new Error('stopped');
+          take(step.value);
+          // Buffered chunks resolve back to back as microtasks: hand the page
+          // a frame so a long reply can never freeze it.
+          if (now() - lastYield >= ON_DEVICE_YIELD_EVERY_MS) { await yieldToPage(); lastYield = now(); }
+        }
+      } else {
+        const { response } = await model.generateContent(req.prompt);
+        take(response);
+      }
+      if (req.signal?.aborted) throw new Error('stopped');
+      return full;
+    })();
+    work.catch(() => undefined);
+    let finished = false;
+    try {
+      // maxRun: a call Chrome never settles still gives the slot back.
+      const text = await withTimeout(Promise.race([work, aborted]), ON_DEVICE_MAX_RUN_MS, 'on-device call')
+        .catch((e) => { throw /timed out after/.test(e instanceof Error ? e.message : '') ? new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`) : e; });
+      finished = true;
+      recordInference('on-device', 'board', Date.now() - t0);
+      nanoTrace(`on-device call: done in ${Date.now() - t0} ms, output ${text.length} chars`);
+      // Keep this finished session (it keeps Nano loaded) until the next call.
+      const kept = model;
+      lastOnDeviceStop = () => { session?.abort(); destroySdkSession(kept); };
+      return text;
+    } finally {
+      if (onAbort) req.signal?.removeEventListener('abort', onAbort);
+      if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms`); stop(); }
+    }
+  }, { priority: 10, signal: req.signal, maxWaitMs: ON_DEVICE_BOARD_MAX_WAIT_MS });
+}
+
+/** The warm-up's reply schema (kept to keywords Chrome accepts). */
+export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
+let boardWarm: Promise<boolean> | null = null;
+/** The warm-up's model while it runs (to see whether its session exists yet). */
+let warming: TextGenModel | null = null;
+/**
+ * Load Nano ahead of the first board turn: one tiny on-device prompt through
+ * the same SDK path, so the cold start (about 14 s on the laptop measured)
+ * is paid right after load and not by her first request. It runs below every
+ * real job. If a request arrives while it is still creating its session it
+ * steps aside (session destroyed, slot freed); once the session exists the
+ * model is loaded and only a ~10-character reply is left, so it is allowed to
+ * finish — aborting then would throw the load away and make the turn pay it
+ * again.
+ */
+export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
+  boardWarm ??= (async () => {
+    await ensureModels();
+    try {
+      await queue.run(async (ctx) => {
+        const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        let model: TextGenModel | null = null;
+        ctx.signal?.addEventListener('abort', () => { session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request'); }, { once: true });
+        model = onDeviceModelFor({
+          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
+          promptOptions: { responseConstraint: WARM_CONSTRAINT },
+        });
+        warming = model;
+        nanoTrace('warm-up: started');
+        const kept = model;
+        try {
+          await withTimeout(model.generateContent('Reply with JSON only: {"ok":true}'), ON_DEVICE_TIMEOUT_MS, 'on-device warm-up');
+        } catch (e) {
+          // Timed out (or failed): its session must not keep generating.
+          session?.abort(); destroySdkSession(kept);
+          nanoTrace('warm-up: stopped (timed out or failed)');
+          throw e;
+        }
+        lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(kept); };
+      }, { priority: -1, preemptible: () => !sdkSessionReady(warming), maxWaitMs: 0 });
+      nanoTrace('warm-up: done — the model is loaded');
+      return true;
+    } catch {
+      boardWarm = null; // stepped aside or not ready: a later idle moment may try again
+      return false;
+    }
+  })();
+  return boardWarm;
+}
+
+/** Is this address unable to pass App Check right now? Null when a token was
+ *  issued (or App Check isn't running). Asks App Check only — no model call. */
+export async function cloudAccessProblem(): Promise<CloudFailure | null> {
+  if (testOverrides || !isEnabled() || appCheckState !== 'ready') return null;
+  const refused = await appCheckTokenError();
+  if (!refused) return null;
+  const f = explainCloudFailure(`AppCheck: ${refused instanceof Error ? refused.message : String(refused)}`);
+  return f.kind === 'app-check-403' || f.kind === 'app-check' ? f : null;
 }
 
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
 export function setModelsForTest(overrides: ModelOverrides | null): void {
   testOverrides = overrides;
+  onDeviceFactory = null;
+  lastOnDeviceStop = null;
+  boardWarm = null;
   cached = null;
   initPromise = null;
   resetStatus();
@@ -759,6 +1127,16 @@ async function initFirebase(): Promise<Models | null> {
     const templateSchema = toFirebaseSchema(modeAi.generateConstraint, Schema);
     // Intent fusion: the same op vocabulary + a confidence field, one source of
     // truth (the mode's opConstraint) for both the Nano and cloud schemas.
+    // Every ONLY_ON_DEVICE model shares the page's one Nano queue (see
+    // queueOnDevice): Nano is a single model, and the SDK's Chrome adapter
+    // destroys a model's previous session when a new call starts.
+    const onDeviceModel = (params: Parameters<typeof getGenerativeModel>[1]) => queueOnDevice(getGenerativeModel(ai, params));
+    // Per-call on-device models (streamOnDevice): same SDK, same mode, built
+    // per turn because the reply schema names this turn's devices.
+    onDeviceFactory = (onDeviceParams) => getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: onDeviceParams as never,
+    }) as unknown as TextGenModel;
     const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
     const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
 
@@ -769,7 +1147,7 @@ async function initFirebase(): Promise<Models | null> {
     // via callWithCloudRetry) only runs on a thrown error. ONLY_ON_DEVICE
     // removes the silent path entirely; the explicit retry still carries the
     // redacted prompt.
-    const intent = getGenerativeModel(ai, {
+    const intent = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
@@ -802,7 +1180,7 @@ async function initFirebase(): Promise<Models | null> {
     // leaves the device), which PREFER_ON_DEVICE's silent cloud fallback would
     // defeat. The explicit forceCloud/retry paths keep using fusionCloud with
     // the redacted prompt.
-    const fusion = getGenerativeModel(ai, {
+    const fusion = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
@@ -817,7 +1195,7 @@ async function initFirebase(): Promise<Models | null> {
     // sends the raw utterance AND the camera crop image here; a silent
     // PREFER_ON_DEVICE cloud fallback would leak both. deixisCloud below
     // still serves the explicit retry-on-throw path with redacted parts.
-    const deixis = getGenerativeModel(ai, {
+    const deixis = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: DEIXIS_CREATE_OPTIONS,
@@ -849,7 +1227,7 @@ async function initFirebase(): Promise<Models | null> {
     // Nano with non-English input (en/es/ja). Same schema as `fusion`; the
     // caller only routes here after checkLanguageAvailability() said yes.
     // ONLY_ON_DEVICE, same reasoning as `fusion` above.
-    const fusionLang = getGenerativeModel(ai, {
+    const fusionLang = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_LANG_CREATE_OPTIONS,
@@ -879,7 +1257,7 @@ async function initFirebase(): Promise<Models | null> {
     // uploaded. This is stronger than PREFER_ON_DEVICE, which can silently fall
     // back to the cloud. adaptHandProfile() still gates on Nano being ready so
     // the ONLY_ON_DEVICE "not ready" error never fires in normal use.
-    const handAdapt = getGenerativeModel(ai, {
+    const handAdapt = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
@@ -890,7 +1268,7 @@ async function initFirebase(): Promise<Models | null> {
     // Ramble condenser (ai/condense): ONLY_ON_DEVICE like handAdapt — the long
     // natural ramble must never ride this call to the cloud. A miss keeps her
     // raw words everywhere and the route line unchanged.
-    const condense = getGenerativeModel(ai, {
+    const condense = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
@@ -899,7 +1277,7 @@ async function initFirebase(): Promise<Models | null> {
     });
     // Next-step chips: ONLY_ON_DEVICE with no cloud params — the pick is a
     // convenience, so a missing Nano means the rule list, never a cloud call.
-    const nextSteps = getGenerativeModel(ai, {
+    const nextSteps = getGenerativeModel(ai, { // queued per call in pickNextStepsOnDevice, with its own short max run
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
@@ -988,7 +1366,7 @@ async function initFirebase(): Promise<Models | null> {
     // ONLY_ON_DEVICE, same reasoning as `intent`/`fusion`/`deixis` above —
     // pickCadTool() sends the raw utterance here; cadToolCloud below still
     // serves the explicit retry-on-throw path with a redacted prompt.
-    const cadTool = getGenerativeModel(ai, {
+    const cadTool = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: { createOptions: ON_DEVICE_CREATE_OPTIONS, promptOptions: { responseConstraint: CAD_TOOL_CONSTRAINT } },
     });
@@ -1252,6 +1630,17 @@ function sourceOf(resp: { inferenceSource?: string }): Source {
  * `cloudPrompt` (the caller's REDACTED rebuild — see ai/redact), never the raw
  * on-device prompt, so her words don't ride a failure path to the cloud.
  */
+const nanoBusyListeners = new Set<(label: string) => void>();
+/** Hear about an on-device job that went to the cloud twin because the one
+ *  on-device model was busy (the canvas shows "Nano busy → Gemini"). */
+export function onNanoBusyHandoff(cb: (label: string) => void): () => void {
+  nanoBusyListeners.add(cb);
+  return () => { nanoBusyListeners.delete(cb); };
+}
+function tellNanoBusy(label: string): void {
+  for (const cb of nanoBusyListeners) { try { cb(label); } catch { /* a listener must not fail the call */ } }
+}
+
 async function callWithCloudRetry(
   hybrid: TextGenModel,
   cloud: TextGenModel | null,
@@ -1266,6 +1655,7 @@ async function callWithCloudRetry(
   } catch (err) {
     noteError(`${label} (hybrid)`, err);
     if (!cloud) throw err;
+    if (err instanceof NanoQueueSkipped) tellNanoBusy(label);
     // The cloud retry needs its own hard timeout just like every other cloud
     // call here: if it hangs (slow network / stalled AI-Logic stream) the caller
     // would otherwise never resolve OR reject, so the rules-floor fallback never
@@ -1723,7 +2113,7 @@ export async function generatePlan(prompt: string, opts?: { planNames?: string[]
 /** Cloud explanations (and optional alternative fixes) for a11y issues. */
 function logCloudFail(label: string, kind: CloudFailKind, detail = ''): void {
   lastFailKind = kind;
-  noteError(label, new Error(`${kind}${detail ? `: ${detail.slice(0, 240)}` : ''}`));
+  noteError(label, new Error(`${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`));
 }
 
 /**
@@ -1737,6 +2127,7 @@ async function requestJson<T>(
   label: string,
   coerce: (raw: unknown) => T | null,
   onChunk?: (text: string) => void,
+  onFail?: (kind: CloudFailKind, detail: string) => void,
 ): Promise<{ value: T; source: Source } | null> {
   const run = async (): Promise<{ value: T | null; kind: CloudFailKind | null; source: Source; detail: string }> => {
     try {
@@ -1766,6 +2157,7 @@ async function requestJson<T>(
   }
   if (!result.value) {
     logCloudFail(label, result.kind ?? 'other', result.detail);
+    try { onFail?.(result.kind ?? 'other', result.detail); } catch { /* reporting only */ }
     return null;
   }
   lastFailKind = null;
@@ -1782,14 +2174,15 @@ async function requestHedgedJson<T>(
   label: string,
   coerce: (raw: unknown) => T | null,
   onChunk?: (text: string) => void,
+  onFail?: (kind: CloudFailKind, detail: string) => void,
 ): Promise<{ value: T; source: Source; model: string; ms: number } | null> {
   if (!primary) return null;
   const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
   const raced = await raceHedged({
-    primary: () => requestJson(primary, prompt, budgetMs, label, coerce, onChunk)
+    primary: () => requestJson(primary, prompt, budgetMs, label, coerce, onChunk, onFail)
       .then((got) => got ?? null),
     backup: backup
-      ? () => requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce)
+      ? () => requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce, undefined, onFail)
         .then((got) => got ?? null)
       : undefined,
     hedgeAfterMs: HEDGE_AFTER_MS,
@@ -1997,7 +2390,9 @@ export const NEXT_STEPS_CONSTRAINT: Record<string, unknown> = {
   properties: { ids: { type: 'array', items: { type: 'string' } } },
   required: ['ids'],
 };
-const NEXT_STEPS_TIMEOUT_MS = 2000;
+/** A pick is a convenience that runs while the page is idle, so it gets a
+ *  generous budget — the rule chips are already on screen meanwhile. */
+export const NEXT_STEPS_TIMEOUT_MS = 8000;
 
 /**
  * NEXT-STEP CHIPS (on-device only). Nano reorders a fixed list of step ids;
@@ -2011,8 +2406,30 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
   if (!models?.nextSteps) return null;
   if (deviceModelStatus === 'idle') await checkDeviceAvailability();
   if (deviceModelStatus !== 'ready') return null;
+  // Never compete with a board turn (or anything else) for the one model.
+  if (!testOverrides && !nanoQueue.idle()) return null;
+  const budget = opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS;
+  // A per-call model with its own session: when the pick runs out of time (or
+  // fails) that session is destroyed, so Nano is not left generating a reply
+  // nobody will read while the next real request waits behind it.
+  const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let own: TextGenModel | null = null;
+  let done = false;
   try {
-    const { response } = await withTimeout(models.nextSteps.generateContent(prompt), opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS, 'next steps');
+    let response: ModelResponse;
+    if (testOverrides) {
+      ({ response } = await withTimeout(models.nextSteps.generateContent(prompt), budget, 'next steps'));
+    } else {
+      // Never waits in line, and holds the model's slot for its budget at most.
+      ({ response } = await nanoQueue.run(() => {
+        own = onDeviceModelFor({
+          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
+          promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
+        });
+        return withTimeout(own.generateContent(prompt), budget, 'next steps');
+      }, { maxWaitMs: 0 }));
+    }
+    done = true;
     if (sourceOf(response) !== 'on-device') {
       noteError('next steps', new Error('resolved off-device; using the rule list'));
       return null;
@@ -2020,8 +2437,15 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
     recordInference('on-device', 'next-steps', Date.now() - t0);
     return response.text();
   } catch (err) {
+    // A slow or busy model is expected here and the rule chips already show:
+    // not an error worth a console warning on every load.
+    if (err instanceof NanoQueueSkipped || /timed out/i.test(err instanceof Error ? err.message : '')) return null;
     noteError('next steps', err);
     return null;
+  } finally {
+    // Timed out or failed: stop the session. A finished pick's session is
+    // dropped too — a chip pick is not worth keeping a session alive for.
+    if (own) { if (!done) nanoTrace('next steps: stopped (timed out or failed)'); session?.abort(); destroySdkSession(own); }
   }
 }
 

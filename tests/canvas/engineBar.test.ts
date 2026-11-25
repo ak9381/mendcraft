@@ -136,9 +136,9 @@ describe('engine bar', () => {
   it('setAgents mirrors the swarm summary and hides when empty', () => {
     const { bar, q } = mount();
     expect(q('.mc-engine-agents').hidden).toBe(true);
-    bar.setAgents('6 agents · Gemini 3 · Nano 3');
+    bar.setAgents('Nano · 1 call');
     expect(q('.mc-engine-agents').hidden).toBe(false);
-    expect(q('.mc-engine-agents').textContent).toBe('6 agents · Gemini 3 · Nano 3');
+    expect(q('.mc-engine-agents').textContent).toBe('Nano · 1 call');
     bar.setAgents('');
     expect(q('.mc-engine-agents').hidden).toBe(true);
   });
