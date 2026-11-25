@@ -48,6 +48,9 @@
 .mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
 .mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+/* More below the fold: the last 24px fade out instead of a hard cut, so a
+   clipped tile reads as "scroll for more". */
+.mc-frame.focused .mc-frame-body { mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
 .mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
 
 /* Edit mode (editBoard.ts): every tile pulled into its own absolutely

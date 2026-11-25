@@ -1012,7 +1012,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!plan) return false;
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
-      ...expandPlan(plan, id, store.all()),
+      // The frame head already shows the title: no second heading inside.
+      ...expandPlan(plan, id, store.all(), { heading: false }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
@@ -1068,7 +1069,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const dockPlan: SurfacePlan = { kind: 'room', title: plan.title, tiles };
     const msgs: A2uiMessage[] = [
       ...(live.has(sid) ? [{ version: 'v0.9', deleteSurface: { surfaceId: sid } } as A2uiMessage] : []),
-      ...expandPlan(dockPlan, sid, store.all()),
+      ...expandPlan(dockPlan, sid, store.all(), { heading: false }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) return;
@@ -1134,7 +1135,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const w = fit?.w ?? f.rect.w, h = fit?.h ?? f.rect.h;
       Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: `${h}px` });
       el.querySelector('.mc-frame-title')!.textContent = f.title;
-      el.querySelector('.mc-chip')!.textContent = f.pinned ? `${labelFor(f)} · pinned` : labelFor(f);
+      // The kind chip only when it says something the title doesn't ("Floor plan" twice did not).
+      const chip = el.querySelector<HTMLElement>('.mc-chip')!;
+      const kindLabel = labelFor(f);
+      chip.textContent = f.pinned ? `${kindLabel} · pinned` : kindLabel;
+      chip.hidden = !f.pinned && kindLabel.trim().toLowerCase() === f.title.trim().toLowerCase();
       const focused = focusId === f.id;
       el.classList.toggle('focused', focused);
       el.classList.toggle('dim', focusId !== null && !focused);
@@ -3047,6 +3052,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
+        revealDeviceTiles(dc.intents.map((i) => i.deviceId));
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
         if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
@@ -3520,6 +3526,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (el) { el.setAttribute('data-mc-tile', entry.id); el.setAttribute('data-mc-frame', frameId); }
     });
     return els;
+  }
+  /** A spoken device command changed these devices: scroll the first of
+   *  their tiles on the focused board into view, so "play music" visibly
+   *  does something even when the Speaker sat below the board's fold. */
+  function revealDeviceTiles(deviceIds: readonly string[]): void {
+    const id = focusId;
+    const plan = id ? surfaces[id] : undefined;
+    if (!id || !plan || !deviceIds.length) return;
+    const want = new Set(deviceIds);
+    const els = stampMorphTiles(id);
+    const i = enumerateMorphTiles(plan).findIndex((e) => want.has((e.spec as { deviceId?: string }).deviceId ?? ''));
+    const el = i >= 0 ? els[i] : null;
+    // Scroll only the board body (scrollIntoView would also scroll the
+    // overflow-hidden viewport and knock the camera off).
+    const body = el?.closest<HTMLElement>('.mc-frame-body');
+    if (!el || !body || !body.clientHeight) return;
+    const er = el.getBoundingClientRect();
+    const br = body.getBoundingClientRect();
+    const scale = br.height / body.clientHeight || 1;
+    const pad = 16 * scale;
+    let dy = 0;
+    if (er.bottom > br.bottom - pad) dy = Math.min(er.bottom - br.bottom + pad, er.top - br.top - pad);
+    else if (er.top < br.top) dy = er.top - br.top - pad;
+    if (Math.abs(dy) > 1) body.scrollBy?.({ top: dy / scale, behavior: reduced ? 'auto' : 'smooth' });
   }
   function tileSelfCheckLog(engine: 'nano' | 'gemini', _verb: string, detail: string): void {
     panels.forEngine(engine).log('note', detail);
