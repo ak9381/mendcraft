@@ -39,3 +39,9 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 - Spotify on the preview: log in once there (redirect URI https://mendcraft--sim-main-o8jrlskh.web.app/spotify must be in the Spotify app).
 - Hands (E) and gestures: thumbs up/down, 1/2/3 fingers, both hands — only you can do these.
 - Gimbal nod / shake / wakeup (G17–G21).
+
+## Run 2 — Nothing phone (real Gemini)
+- Paired by typed code: phone "Laptop ✓", laptop "✓ Nothing phone".
+- "connect everything in this room" on the phone → review on the phone, Approve by a real tap → full-width readable board (lamp + speaker tiles). 
+- Glitches (sent to the phone builder): AI monitor's Android tab never shows the phone's activity ("Not connected"); "make a dashboard…" routed to chat and the reply never showed; Gemini called twice on the phone (draft + improve, 4.6 KB); review sheet under the status bar, a truncated "What left" line, mic overlapping the sheet; white status-bar icons; empty status after "turn on the desk lamp".
+- AI monitor (laptop tab) works: history, refusal, "Sent again: 2 calls, 770 B in all" for the Kannada retry.
