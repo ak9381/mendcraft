@@ -179,34 +179,52 @@ export function isFixedShape(shape: HandShape | undefined): boolean {
 export type LabelPolarity = 'unknown' | 'normal' | 'flipped';
 
 /** Learns whether MediaPipe's Left/Right labels match the user's hands on
- *  THIS camera: a hand clearly to one side of the face (more than
- *  marginScales hand scales) votes; a steady majority the other way flips
- *  every label. Hysteresis: it changes only past ±minVotes. */
+ *  THIS camera. Only unambiguous frames vote: TWO hands, labelled one Left
+ *  and one Right, each clearly on its own side of the face (more than
+ *  marginScales hand scales) — a single hand reaching across the body never
+ *  votes. Flipping needs a long, steady majority (minVotes ≈ 1.5 s of such
+ *  frames); without votes the score decays back toward MediaPipe's own
+ *  labels (the default). */
 export interface HandPolarity {
-  observe(lm: readonly Pt[], label: string | undefined, faceX: number | null | undefined, mirrored?: boolean): void;
+  /** One frame's hands (selfie space unless mirrored=false). */
+  observeFrame(hands: readonly { lm: readonly Pt[]; label: string | undefined }[], faceX: number | null | undefined, mirrored?: boolean): void;
   correct(label: string | undefined): string | undefined;
   readonly polarity: LabelPolarity;
   readonly score: number;
   reset(): void;
 }
 
-export function createHandPolarity(opts: { minVotes?: number; marginScales?: number; cap?: number } = {}): HandPolarity {
-  const minVotes = opts.minVotes ?? 8;
+export function createHandPolarity(opts: { minVotes?: number; marginScales?: number; cap?: number; decay?: number } = {}): HandPolarity {
+  const minVotes = opts.minVotes ?? 45;
   const margin = opts.marginScales ?? 1;
-  const cap = opts.cap ?? 30;
+  const cap = opts.cap ?? 90;
+  const decay = opts.decay ?? 0.02;
   let score = 0;
   let polarity: LabelPolarity = 'unknown';
+  function settle(): void {
+    if (score >= minVotes) polarity = 'normal';
+    else if (score <= -minVotes) polarity = 'flipped';
+    else if (Math.abs(score) < minVotes / 2) polarity = 'unknown'; // decayed: back to MediaPipe's labels
+  }
   return {
-    observe(lm, label, faceX, mirrored = true) {
-      if ((label !== 'Left' && label !== 'Right') || typeof faceX !== 'number' || !lm || lm.length < 21) return;
-      const s = Math.max(0.02, handScale(lm));
-      const dx = (lm[0].x - faceX) * (mirrored ? 1 : -1);
-      if (Math.abs(dx) <= margin * s) return;
-      const posR = dx > 0;
-      const labelR = label === 'Right';
-      score = Math.max(-cap, Math.min(cap, score + (posR === labelR ? 1 : -1)));
-      if (score >= minVotes) polarity = 'normal';
-      else if (score <= -minVotes) polarity = 'flipped';
+    observeFrame(hands, faceX, mirrored = true) {
+      const valid = hands.filter((h) => h.lm && h.lm.length >= 21);
+      let voted = false;
+      if (typeof faceX === 'number' && valid.length === 2 && valid[0].label !== valid[1].label
+        && (valid[0].label === 'Left' || valid[0].label === 'Right') && (valid[1].label === 'Left' || valid[1].label === 'Right')) {
+        const side = valid.map((h) => {
+          const sc = Math.max(0.02, handScale(h.lm));
+          const dx = (h.lm[0].x - faceX) * (mirrored ? 1 : -1);
+          return Math.abs(dx) > margin * sc ? (dx > 0 ? 'R' : 'L') : null;
+        });
+        if (side[0] && side[1] && side[0] !== side[1]) {
+          const agree = valid.every((h, i) => (h.label === 'Right') === (side[i] === 'R'));
+          score = Math.max(-cap, Math.min(cap, score + (agree ? 1 : -1)));
+          voted = true;
+        }
+      }
+      if (!voted) score = score > 0 ? Math.max(0, score - decay) : Math.min(0, score + decay);
+      settle();
     },
     correct(label) {
       if (polarity !== 'flipped') return label;

@@ -225,23 +225,29 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   }
 
   type Read = { shape: HandShape; side: HandSide };
-  function readOne(h: readonly Pt[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): Read {
-    const raw = (h as { label?: string }).label;
-    polarity.observe(h, raw, ctx.faceX ?? null, true);
-    const r = classifyHandShape(h, polarity.correct(raw), ctx.faceX ?? null, { mirrored: true, cameraAspect: ctx.cameraAspect });
-    return { shape: r.shape, side: r.hand };
+  /** The frame's shape read: one polarity observation for the frame, then
+   *  each hand classified with the corrected label. */
+  function readAll(hands: readonly (readonly Pt[])[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): (Read | null)[] {
+    const label = (h: readonly Pt[]) => (h as { label?: string }).label;
+    polarity.observeFrame(hands.filter((h) => h && h.length >= 21).map((h) => ({ lm: h, label: label(h) })), ctx.faceX ?? null, true);
+    return hands.map((h) => {
+      if (!h || h.length < 21) return null;
+      const r = classifyHandShape(h, polarity.correct(label(h)), ctx.faceX ?? null, { mirrored: true, cameraAspect: ctx.cameraAspect });
+      return { shape: r.shape, side: r.hand };
+    });
   }
   function read(hands: readonly (readonly Pt[])[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): void {
-    for (const h of hands) {
-      if (!h || h.length < 21) continue;
-      const r = readOne(h, ctx);
-      stampShape(h as Pt[], r.shape);
-      (h as { side?: HandSide }).side = r.side;
-    }
+    readAll(hands, ctx).forEach((r, i) => {
+      if (!r) return;
+      stampShape(hands[i] as Pt[], r.shape);
+      (hands[i] as { side?: HandSide }).side = r.side;
+    });
   }
-  function stamped(h: readonly Pt[], ctx: GestureFrameContext): Read {
-    const st = h as { shape?: HandShape; side?: HandSide };
-    return st.shape && st.side ? { shape: st.shape, side: st.side } : readOne(h, ctx);
+  /** Stamped reads (from read()), or read now when the caller skipped read(). */
+  function readsFor(hands: readonly (readonly Pt[])[], ctx: GestureFrameContext): (Read | null)[] {
+    const all = hands.every((h) => !h || h.length < 21 || ((h as { shape?: HandShape }).shape && (h as { side?: HandSide }).side));
+    if (all) return hands.map((h) => (!h || h.length < 21 ? null : { shape: (h as { shape?: HandShape }).shape!, side: (h as { side?: HandSide }).side! }));
+    return readAll(hands, ctx);
   }
 
   function clearOverlays(): void {
@@ -263,9 +269,13 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     let palm: readonly Pt[] | null = null;
     let palmOpen = false;
     let palmRank = -1;
-    for (const h of hands) {
-      if (!h || h.length < 21) continue;
-      let { shape, side } = stamped(h, ctx);
+    const reads = readsFor(hands, ctx);
+    for (let k = 0; k < hands.length; k++) {
+      const h = hands[k];
+      const rd = reads[k];
+      if (!h || !rd) continue;
+      let { shape } = rd;
+      const { side } = rd;
       if (ctx.suppressCounts && COUNT_SHAPES.includes(shape)) shape = 'other';
       shapes.push({ shape, hand: side });
       handsRead.push({ shape, hand: side, palm: palmCenter(h), scale: handScale(h) });
@@ -307,6 +317,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (badgeTimer) clearInterval(badgeTimer);
       badgeTimer = null;
       engine.reset();
+      shapes = [];
       clearOverlays();
       if (staleTimer) { clearTimeout(staleTimer); staleTimer = null; }
       for (const b of badges.values()) b.hidden = true;

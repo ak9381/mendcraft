@@ -335,6 +335,9 @@ export interface HandPointerOptions {
    *  fist tap (the backup click) presses what is highlighted. A control
    *  directly under the raw point still wins over it. */
   targetOverride?: (now: number) => HTMLElement | null;
+  /** Fixed button shapes (thumbs up / down…) veto fist starts and taps —
+   *  only while button gestures are on. Default: on. */
+  fixedShapeVeto?: () => boolean;
 }
 
 /** A fist closed this long (or moved HAND_FEEL.fistMovePx while closed)
@@ -388,6 +391,8 @@ interface SlotPointer extends HandPointer {
   rawPoint(): P;
   /** The control directly under a point (no magnet) — a fist over one never grabs. */
   controlAt(p: P): HTMLElement | null;
+  /** The current fist has shown a fixed button shape: it never taps or grabs. */
+  fixedInFist(): boolean;
   /** The plural pointer marks a slot that drives a running grab: its fist
    *  then only opens after the release grace (HAND_FEEL.releaseGrace*). */
   setGrabbing(on: boolean): void;
@@ -452,8 +457,9 @@ export interface HandPointer {
   /** Each tracked hand's palm mapped to the screen (unsmoothed) and its
    *  drawn cursor point (client px) — the glass-hand overlay anchors to it. */
   cursors?(): { palm: P; cursor: P }[];
-  /** The control directly under a tracked hand's raw point (no magnet). */
-  directHit?(): HTMLElement | null;
+  /** The control directly under a tracked hand's raw point (no magnet) —
+   *  the hand nearest `near` (screen px) when two are tracked. */
+  directHit?(near?: P): HTMLElement | null;
 }
 
 function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
@@ -537,6 +543,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let lastHandedness: string | null = null;
   // The open-palm highlight owns the target this frame (opts.targetOverride).
   let overridden = false;
+  /** This fist (closed or grabbing) has shown a fixed button shape. */
+  let fixedInFist = false;
   let lastDirect: HTMLElement | null = null;
   // The gate only relabels (a fist needs a curled index); its point↔fist
   // time debounce is 0 here because the frame-counted fist hysteresis below
@@ -1109,10 +1117,19 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // camera edge a grabbing hand stays closed (distorted landmarks).
       const aspect = opts.cameraAspect?.() ?? HAND_FEEL.cameraAspect;
       // A held button gesture (thumbs up / down — four fingers curled, thumb
-      // out) is NEVER a fist: no grab, no pan, no two-fist zoom, no tap. The
-      // frame's shared shape read is used when stamped (gestureControl).
-      const shape = stampedShape(h) ?? classifyHandShape(h as readonly { x: number; y: number; z?: number }[], undefined, null, { mirrored: false, cameraAspect: aspect }).shape;
-      const cs = isFixedShape(shape) ? 'open' : curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
+      // out) never STARTS a fist: no grab, no pan, no two-fist zoom. Once a
+      // fist is closed (or grabbing) a fixed shape is a HOLD state
+      // ('between'): it never opens the fist — so it is never the "open" end
+      // of a tap, and a thumb popping up mid-drag never drops the board — and
+      // a fist that shows a fixed shape is spent (fixedInFist: no tap, no
+      // grab). The frame's shared shape read is used when stamped.
+      // Only while button gestures are on (fixedShapeVeto).
+      const veto = opts.fixedShapeVeto?.() ?? true;
+      const shape = veto ? (stampedShape(h) ?? classifyHandShape(h as readonly { x: number; y: number; z?: number }[], undefined, null, { mirrored: false, cameraAspect: aspect }).shape) : undefined;
+      const fixed = veto && isFixedShape(shape);
+      const closedNow = fisted || grabbing || geoClosed;
+      if (fixed && closedNow) fixedInFist = true;
+      const cs = fixed ? (closedNow ? 'between' : 'open') : curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
       if (cs !== 'between') { geoClosed = cs === 'closed'; looseSince = -1; }
       else {
         // A loosened fist held half-open while grabbing counts as open
@@ -1132,6 +1149,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
           : openRun >= HAND_FEEL.fistOpenFrames;
         if (open) fisted = false; else releasing = grabbing;
       }
+      if (!fisted && !geoClosed) fixedInFist = false;
 
       let live: P;
       if (edge.atEdge || (edge.blockClicks(t) && wasEdge)) {
@@ -1159,6 +1177,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     rawPoint: () => ({ ...pt }),
     controlAt: (p: P) => rawInteractiveHit(p),
     directHit: () => (pt.x < 0 ? null : lastDirect),
+    fixedInFist: () => fixedInFist,
     cursorPoint: () => (pt.x < 0 ? { ...pt } : displayPoint(pt)),
     setGrabbing(on: boolean) { grabbing = on; if (!on) releasing = false; },
     fistTiming: () => ({ fistStart: fistStartT, openSince, openRun }),
@@ -1443,6 +1462,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         const m = slots[i].mappedPalm();
         if (t - s.closedAt >= HAND_FEEL.fistTapMs || Math.hypot(m.x - s.closeRaw.x, m.y - s.closeRaw.y) >= HAND_FEEL.fistMovePx) s.holding = true;
       }
+      // A fist that turned into a button gesture (thumbs up after closing)
+      // is spent: it never taps and never starts a grab. A grab it already
+      // drives keeps going.
+      const drives = !!grab && (grab.kind === 'zoom' || grab.slot === i);
+      if (fisted && slots[i].fixedInFist() && !drives) { s.spent = true; s.tapArmed = false; }
       s.wasFisted = fisted;
     }
   }
@@ -1545,10 +1569,15 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     },
     handsLocked: () => locked,
     cursors: () => [0, 1].filter((i) => active[i]).map((i) => ({ palm: slots[i].mappedPalm(), cursor: slots[i].cursorPoint() })),
-    directHit: () => {
-      const a = active[0] ? slots[0].directHit?.() : undefined;
-      if (a) return a;
-      return (active[1] ? slots[1].directHit?.() : undefined) ?? null;
+    directHit: (near?: P) => {
+      const live = [0, 1].filter((i) => active[i]);
+      if (!live.length) return null;
+      let i = live[0];
+      if (near && live.length === 2) {
+        const d = (k: number) => { const r = slots[k].rawPoint(); return Math.hypot(r.x - near.x, r.y - near.y); };
+        i = d(0) <= d(1) ? 0 : 1;
+      }
+      return slots[i].directHit?.() ?? null;
     },
     clickTarget: () => locked ? false : (grab ? false : (slots[0].target ? slots[0].clickTarget() : slots[1].clickTarget())),
   };

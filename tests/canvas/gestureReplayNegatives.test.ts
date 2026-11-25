@@ -46,8 +46,8 @@ function run(frames: Hand[][], faceX: number | null = 0.5) {
   const fired: string[] = [];
   const seen = new Set<HandShape>();
   frames.forEach((hands, i) => {
+    polarity.observeFrame(hands.map((h) => ({ lm: h, label: h.label })), faceX);
     const read: GestureHand[] = hands.map((h) => {
-      polarity.observe(h, h.label, faceX);
       const r = classifyHandShape(h, polarity.correct(h.label), faceX);
       seen.add(r.shape);
       return { shape: r.shape, hand: r.hand, palm: palmCenter(h), scale: handScale(h) };

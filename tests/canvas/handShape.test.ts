@@ -174,42 +174,66 @@ describe('classifyHandShape — pointing is not "1"', () => {
 
 describe('createHandPolarity — learns whether MediaPipe Left/Right is flipped', () => {
   const FACE = 0.5;
-  it('labels that agree with the side of the face → normal; labels untouched', () => {
+  const R = (label: string, x = 0.8) => ({ lm: syntheticHand('open', 'R', { at: { x, y: 0.7 } }), label });
+  const L = (label: string, x = 0.2) => ({ lm: syntheticHand('open', 'L', { at: { x, y: 0.7 } }), label });
+  const frames = (n: number, fn: () => void) => { for (let i = 0; i < n; i++) fn(); };
+
+  it('two hands, labels agreeing with their sides of the face → normal; labels untouched', () => {
     const p = createHandPolarity();
-    for (let i = 0; i < 12; i++) {
-      p.observe(syntheticHand('open', 'R', { at: { x: 0.8, y: 0.7 } }), 'Right', FACE);
-      p.observe(syntheticHand('open', 'L', { at: { x: 0.2, y: 0.7 } }), 'Left', FACE);
-    }
+    frames(60, () => p.observeFrame([R('Right'), L('Left')], FACE));
     expect(p.polarity).toBe('normal');
     expect(p.correct('Right')).toBe('Right');
   });
 
-  it('labels consistently the wrong way round → flipped; every label is swapped', () => {
+  it('two hands, labels consistently the wrong way round for ~1.5 s → flipped; labels swapped', () => {
     const p = createHandPolarity();
-    for (let i = 0; i < 12; i++) {
-      p.observe(syntheticHand('open', 'R', { at: { x: 0.8, y: 0.7 } }), 'Left', FACE);
-      p.observe(syntheticHand('open', 'L', { at: { x: 0.2, y: 0.7 } }), 'Right', FACE);
-    }
+    frames(30, () => p.observeFrame([R('Left'), L('Right')], FACE));
+    expect(p.polarity).toBe('unknown'); // not yet: 1 s is not enough
+    frames(30, () => p.observeFrame([R('Left'), L('Right')], FACE));
     expect(p.polarity).toBe('flipped');
     expect(p.correct('Left')).toBe('Right');
     expect(p.correct('Right')).toBe('Left');
-    // A hand right in front of the face (position cannot tell) now reads right.
     const front = syntheticHand('thumbsUp', 'R', { at: { x: 0.52, y: 0.7 }, label: 'Left' });
     expect(classifyHandShape(front, p.correct('Left'), FACE).hand).toBe('R');
   });
 
-  it('hands near the face never vote; a few odd frames never flip it', () => {
+  it('a single hand reaching across the body never flips it (0.3–2 s, any number of times)', () => {
     const p = createHandPolarity();
-    for (let i = 0; i < 40; i++) p.observe(syntheticHand('open', 'R', { at: { x: 0.53, y: 0.7 } }), 'Left', FACE);
+    // The RIGHT hand (labelled Right) pointing across to the LEFT of the face.
+    for (const n of [9, 30, 60]) frames(n, () => p.observeFrame([R('Right', 0.2)], FACE));
     expect(p.polarity).toBe('unknown');
-    for (let i = 0; i < 20; i++) p.observe(syntheticHand('open', 'R', { at: { x: 0.8, y: 0.7 } }), 'Right', FACE);
-    for (let i = 0; i < 5; i++) p.observe(syntheticHand('open', 'R', { at: { x: 0.8, y: 0.7 } }), 'Left', FACE);
-    expect(p.polarity).toBe('normal');
+    expect(p.correct('Right')).toBe('Right');
+    expect(p.score).toBe(0);
+  });
+
+  it('two hands crossed briefly do not flip an established normal', () => {
+    const p = createHandPolarity();
+    frames(90, () => p.observeFrame([R('Right'), L('Left')], FACE));
+    frames(60, () => p.observeFrame([R('Right', 0.2), L('Left', 0.8)], FACE)); // arms crossed 2 s
+    expect(p.polarity).not.toBe('flipped');
+  });
+
+  it('without votes the score decays back toward MediaPipe\'s labels', () => {
+    const p = createHandPolarity({ decay: 1 });
+    frames(60, () => p.observeFrame([R('Left'), L('Right')], FACE));
+    expect(p.polarity).toBe('flipped');
+    frames(60, () => p.observeFrame([R('Right')], FACE));
+    expect(p.polarity).toBe('unknown');
+    expect(p.correct('Left')).toBe('Left');
+  });
+
+  it('hands near the face never vote', () => {
+    const p = createHandPolarity();
+    frames(120, () => p.observeFrame([R('Left', 0.55), L('Right', 0.45)], FACE));
+    expect(p.polarity).toBe('unknown');
   });
 
   it('mirrored=false (raw camera space) learns the same way', () => {
     const p = createHandPolarity();
-    for (let i = 0; i < 12; i++) p.observe(mirrorHand(syntheticHand('open', 'R', { at: { x: 0.8, y: 0.7 } })), 'Left', 1 - FACE, false);
+    frames(60, () => p.observeFrame([
+      { lm: mirrorHand(R('x').lm), label: 'Left' },
+      { lm: mirrorHand(L('x').lm), label: 'Right' },
+    ], 1 - FACE, false));
     expect(p.polarity).toBe('flipped');
   });
 });

@@ -229,6 +229,9 @@ export interface PalmHighlightOptions {
   /** Hands gone this long → the highlight clears. */
   lostMs?: number;
   config?: Partial<HighlightConfig>;
+  /** The control directly under the pointer of the hand nearest this screen
+   *  point (the hand driving the highlight). Wins over ctx.direct. */
+  directAt?: (p: Pt) => HTMLElement | null;
 }
 
 /** Button-like controls only: no text fields, sliders or our own layers. */
@@ -341,14 +344,16 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
       if (ctx.anyHand) lastHandAt = now;
       else if (now - lastHandAt > lostMs) { if (core.view.current) clear(); return; }
       refreshTargets(now);
-      // The cursor is directly on a control the highlight isn't on: adopt it.
-      if (openPalm && ctx.direct && !core.view.expanded && ctx.direct !== core.view.current && highlightable(ctx.direct)) core.adopt(ctx.direct);
       let p: Pt | null = null;
       if (openPalm) {
         lastPalmAt = now;
         // Selfie space → camera space → the same reach-box map the pointer uses.
         const pc = palmCenter(openPalm);
         const raw = mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, opts.reach?.());
+        // The cursor of THIS hand is directly on a control the highlight
+        // isn't on: adopt it (ring and cursor never disagree).
+        const direct = opts.directAt ? opts.directAt(raw) : (ctx.direct ?? null);
+        if (direct && !core.view.expanded && direct !== core.view.current && highlightable(direct)) core.adopt(direct);
         smooth = smooth ? { x: smooth.x + (raw.x - smooth.x) * 0.5, y: smooth.y + (raw.y - smooth.y) * 0.5 } : raw;
         p = smooth;
       }

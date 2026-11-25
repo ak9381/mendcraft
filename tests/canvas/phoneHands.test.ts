@@ -56,7 +56,7 @@ const frame = (opts: { hands?: number; handGate?: boolean | null; face?: boolean
   facing: true, registered: false, paused: false, aspect: 640 / 480,
 });
 
-function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean; startGate?: Promise<void>; gestures?: { read: ReturnType<typeof vi.fn>; frame: ReturnType<typeof vi.fn>; setActive: ReturnType<typeof vi.fn>; lost: ReturnType<typeof vi.fn> }; gesturesBlocked?: () => boolean } = {}) {
+function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean; startGate?: Promise<void>; gestures?: { read: ReturnType<typeof vi.fn>; frame: ReturnType<typeof vi.fn>; setActive: ReturnType<typeof vi.fn>; lost: ReturnType<typeof vi.fn> }; gesturesBlocked?: () => boolean; countsSuppressed?: () => boolean } = {}) {
   const getUserMedia = vi.fn(async () => { if (opts.gumFails) throw opts.gumFails; return fakeStream(); });
   let feed: ((f: PresenceFrame) => void) | null = null;
   let lost: (() => void) | null = null;
@@ -79,7 +79,7 @@ function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error
   const hands = mountPhoneHands(root as unknown as HTMLElement, {
     camera, pointer, reach: () => phoneReach(null), storage, say, overlay: false,
     locked: opts.locked, onAspect: (a) => aspects.push(a), now: () => 1000,
-    gestures: opts.gestures as never, gesturesBlocked: opts.gesturesBlocked,
+    gestures: opts.gestures as never, gesturesBlocked: opts.gesturesBlocked, countsSuppressed: opts.countsSuppressed,
   });
   return {
     hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, timers,
@@ -449,6 +449,18 @@ describe('phone button gestures (behind the Hands pill)', () => {
     s.feed(frame());
     expect(g.read).toHaveBeenCalledTimes(1);
     expect(g.read.mock.invocationCallOrder[0]).toBeLessThan(s.pointer.update.mock.invocationCallOrder[0]);
+  });
+
+  it('finger counts are suppressed on phones too while a point capture is armed', async () => {
+    const g = stub();
+    let pointing = true;
+    const s = setup({ gestures: g, countsSuppressed: () => pointing });
+    await s.hands.setOn(true);
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].suppressCounts).toBe(true);
+    pointing = false;
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].suppressCounts).toBe(false);
   });
 
   it('off: no frames reach the gestures', async () => {

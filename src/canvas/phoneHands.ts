@@ -55,6 +55,8 @@ export interface PhoneHandsDeps {
   gesturesBlocked?: () => boolean;
   /** Camera frame height ÷ width (for the shape classifier's 3D bend). */
   cameraAspect?: () => number;
+  /** Finger counts off (a point capture armed or just ended). */
+  countsSuppressed?: () => boolean;
 }
 
 export interface PhoneHands {
@@ -155,6 +157,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       faceX: op ? op.box.cx : null,
       blocked: g || !!deps.gesturesBlocked?.(),
       cameraAspect: deps.cameraAspect?.(),
+      suppressCounts: !!deps.countsSuppressed?.(),
     });
     overlay?.draw(f.hands);
   }
