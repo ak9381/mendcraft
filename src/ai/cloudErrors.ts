@@ -106,6 +106,9 @@ export class CloudCallError extends Error {
 export async function cloudCallError(
   lastError: unknown,
   probeAppCheck?: () => Promise<unknown | null>,
+  /** What the real fetch showed: true = no request of this call was
+   *  delivered, false = one was. Overrides the guess from the error text. */
+  nothingSent?: boolean,
 ): Promise<CloudCallError> {
   let f = explainCloudFailure(lastError);
   if (probeAppCheck && f.kind === 'unknown') {
@@ -119,5 +122,5 @@ export async function cloudCallError(
       }
     } catch { /* the probe is a best effort */ }
   }
-  return new CloudCallError(f);
+  return new CloudCallError(nothingSent === undefined ? f : { ...f, nothingSent });
 }

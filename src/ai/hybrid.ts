@@ -46,6 +46,7 @@ import { appCheckTokenError, initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStat
 import { cloudCallError, explainCloudFailure, GEMINI_NOT_SET_UP, type CloudFailure } from './cloudErrors';
 import { nanoQueue, NanoQueueSkipped } from './nanoQueue';
 import { nanoTrace } from './nanoTrace';
+import { watchCloudFetch } from './cloudFetchWatch';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import {
   classifyCloudFailure,
@@ -564,64 +565,20 @@ export function looksLikeSurfacePlan(raw: unknown, depth = 0): boolean {
   return Object.values(o).some((v) => looksLikeSurfacePlan(v, depth + 1));
 }
 
-/** How long after a cloud call starts we take its request as issued when
- *  nothing has come back either way. An App Check token failure — the one
- *  thing that stops a call before its fetch — arrives well inside this. */
-export const SEND_ASSUMED_AFTER_MS = 2500;
-
-/** Tell `onSend` once per model call whose request was issued: at its first
- *  chunk, when it resolves, when it fails with anything but a pre-fetch
- *  error, or SEND_ASSUMED_AFTER_MS into a call still waiting (a timeout, a
- *  cancelled hedge). A call that fails before its fetch (no App Check token)
- *  is not a send — and if that failure arrives after the call was already
- *  assumed sent, `onRetract` takes it back. Hedge and retry calls each count. */
-export function countingSends(model: TextGenModel, onSend: () => void, onRetract?: () => void, assumeAfterMs = SEND_ASSUMED_AFTER_MS): TextGenModel {
-  const each = () => {
-    let state: 'open' | 'sent' | 'not-sent' = 'open';
-    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => { timer = null; sent(); }, assumeAfterMs);
-    const tidy = (): void => { if (timer) { clearTimeout(timer); timer = null; } };
-    function sent(): void { tidy(); if (state === 'open') { state = 'sent'; try { onSend(); } catch { /* bookkeeping only */ } } }
-    function failed(e: unknown): void {
-      tidy();
-      if (!explainCloudFailure(e).nothingSent) { sent(); return; }
-      if (state === 'sent') { try { onRetract?.(); } catch { /* bookkeeping only */ } }
-      state = 'not-sent';
-    }
-    return { sent, failed };
-  };
-  const out: TextGenModel = {
-    async generateContent(request) {
-      const call = each();
-      try { const r = await model.generateContent(request); call.sent(); return r; }
-      catch (e) { call.failed(e); throw e; }
-    },
-  };
-  if (typeof model.generateContentStream === 'function') {
-    out.generateContentStream = async (request) => {
-      const call = each();
-      let started: Awaited<ReturnType<NonNullable<TextGenModel['generateContentStream']>>>;
-      try { started = await model.generateContentStream!(request); }
-      catch (e) { call.failed(e); throw e; }
-      call.sent(); // the SDK resolves once the response has started: the request went out
-      const stream = (async function* () {
-        try { for await (const chunk of started.stream) yield chunk; }
-        catch (e) { call.failed(e); throw e; }
-      })();
-      const response = started.response?.then((r) => r, (e) => { call.failed(e); throw e; });
-      response?.catch(() => undefined);
-      return { stream, response };
-    };
-  }
-  return out;
-}
-
 export interface CanvasCloudHooks {
-  /** One model call's request was issued (see countingSends). */
+  /** The real fetch was called for one Gemini request of this call (a hedge or a
+   *  retry is another one). Seen on the real fetch — see cloudFetchWatch. */
   onSend?: () => void;
-  /** A call counted as sent turned out to have failed before its fetch. */
+  /** That request failed with no response at all: the network never
+   *  delivered it. */
   onRetract?: () => void;
 }
-type CanvasCloudResult = { ok: true; text: string } | { ok: false; why: string; kind: CloudFailKind | null };
+type CanvasCloudResult =
+  | { ok: true; text: string }
+  | { ok: false; why: string; kind: CloudFailKind | null;
+      /** Known for certain from the real fetch: no request of this call was
+       *  delivered. Undefined when fetch could not be watched. */
+      nothingSent?: boolean };
 
 /** The cloud board call with its own failure record (two overlapping calls
  *  never read each other's error). */
@@ -633,15 +590,15 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
   let backup = models?.canvasCloudHedge ?? null;
   if (!primary) {
     const why = appCheckState === 'failed' ? `AppCheck: ${statusMessage ?? 'failed to start'}` : !isEnabled() ? GEMINI_NOT_SET_UP : 'no cloud model answered';
-    return { ok: false, why, kind: null };
-  }
-  if (hooks.onSend) {
-    primary = countingSends(primary, hooks.onSend, hooks.onRetract);
-    backup = backup ? countingSends(backup, hooks.onSend, hooks.onRetract) : null;
+    return { ok: false, why, kind: null, nothingSent: true }; // no model to call: nothing was even tried
   }
   // Same privacy path as the rest of hybrid: directory tokens, then rules-first
   // redaction. The canvas ledger should record this redacted payload.
   const sent = protectText(prompt);
+  // Bytes are booked on the REAL fetch: while this call runs, requests to the
+  // Gemini endpoint that carry this prompt are counted as they are issued.
+  const watch = watchCloudFetch(sent.text, { onIssued: hooks.onSend, onUndelivered: hooks.onRetract });
+  const nothingSent = (): boolean | undefined => (watch.active ? watch.delivered() === 0 : undefined);
   let failKind: CloudFailKind | null = null;
   let failWhy = '';
   try {
@@ -656,13 +613,15 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
       // The primary's reason wins; a backup failure only fills a gap.
       (kind, detail) => { if (!failWhy) { failKind = kind; failWhy = `canvas plan: ${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`; } },
     );
-    if (!got) return { ok: false, why: failWhy || 'no cloud model answered', kind: failKind };
+    if (!got) return { ok: false, why: failWhy || 'no cloud model answered', kind: failKind, nothingSent: nothingSent() };
     const visible = fillVisible(typeof got.value === 'string' ? got.value : JSON.stringify(got.value));
     try { onChunk?.(visible.text); } catch { /* UI preview must not fail the call */ }
     return { ok: true, text: visible.text };
   } catch (err) {
     noteError('canvas plan', err);
-    return { ok: false, why: err instanceof Error ? err.message : String(err), kind: null };
+    return { ok: false, why: err instanceof Error ? err.message : String(err), kind: null, nothingSent: nothingSent() };
+  } finally {
+    watch.stop();
   }
 }
 
@@ -686,7 +645,7 @@ export async function streamCanvasPlanOrThrow(prompt: string, onChunk?: (text: s
   const got = await runCanvasCloud(shape === 'text' ? `${prompt}\nReply as JSON: {"reply": string}` : prompt, onChunk, shape, hooks);
   if (got.ok) return got.text;
   const source = got.kind === 'parse' || got.kind === 'empty' ? 'parse' : got.why;
-  throw await cloudCallError(source, testOverrides ? undefined : appCheckTokenError);
+  throw await cloudCallError(source, testOverrides ? undefined : appCheckTokenError, got.nothingSent);
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +795,7 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
         .catch((e) => { throw /timed out after/.test(e instanceof Error ? e.message : '') ? new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`) : e; });
       finished = true;
       recordInference('on-device', 'board', Date.now() - t0);
+      onDeviceLoaded = true;
       nanoTrace(`on-device call: done in ${Date.now() - t0} ms, output ${text.length} chars`);
       // Keep this finished session (it keeps Nano loaded) until the next call.
       const kept = model;
@@ -853,17 +813,30 @@ export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', proper
 let boardWarm: Promise<boolean> | null = null;
 /** The warm-up's model while it runs (to see whether its session exists yet). */
 let warming: TextGenModel | null = null;
+/** Once the warm-up's session exists, its ~10-character reply gets this long. */
+export const WARM_PROMPT_TIMEOUT_MS = 5000;
+/** How often the warm-up looks whether its session has been created. */
+const WARM_SESSION_POLL_MS = 100;
+/** An on-device call has finished on this page: the model is in memory. */
+let onDeviceLoaded = false;
+export const onDeviceModelLoaded = (): boolean => onDeviceLoaded;
+
 /**
  * Load Nano ahead of the first board turn: one tiny on-device prompt through
  * the same SDK path, so the cold start (about 14 s on the laptop measured)
- * is paid right after load and not by her first request. It runs below every
- * real job. If a request arrives while it is still creating its session it
- * steps aside (session destroyed, slot freed); once the session exists the
- * model is loaded and only a ~10-character reply is left, so it is allowed to
- * finish — aborting then would throw the load away and make the turn pay it
- * again.
+ * is paid by the page and not by her first request. It runs below every real
+ * job.
+ *
+ * create() is NOT timed: it is where the cold load happens, it can be long,
+ * and while it runs the warm-up is pre-emptible (a request pushes it aside:
+ * session destroyed, slot freed). Once the session exists the model is
+ * loaded, only the tiny reply is left, and that gets WARM_PROMPT_TIMEOUT_MS;
+ * from then on the warm-up is left to finish rather than thrown away.
+ * Resolves true when the model is loaded (also when a real call already
+ * loaded it). A false result may be retried — see ai/nanoWarm.
  */
-export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
+export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: number } = {}): Promise<boolean> {
+  if (onDeviceLoaded) return Promise.resolve(true);
   boardWarm ??= (async () => {
     await ensureModels();
     try {
@@ -878,21 +851,41 @@ export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
         warming = model;
         nanoTrace('warm-up: started');
         const kept = model;
+        const t0 = Date.now();
+        let poll: ReturnType<typeof setInterval> | null = null;
+        let deadline: ReturnType<typeof setTimeout> | null = null;
+        // The prompt's clock starts when the session exists, never before.
+        const promptTimedOut = new Promise<never>((_, reject) => {
+          const arm = (): void => {
+            if (deadline || !sdkSessionReady(kept)) return;
+            if (poll) { clearInterval(poll); poll = null; }
+            nanoTrace(`warm-up: session created after ${Date.now() - t0} ms`);
+            deadline = setTimeout(() => reject(new Error('on-device warm-up prompt timed out')), opts.promptTimeoutMs ?? WARM_PROMPT_TIMEOUT_MS);
+          };
+          poll = setInterval(arm, WARM_SESSION_POLL_MS);
+          arm();
+        });
+        promptTimedOut.catch(() => undefined);
         try {
-          await withTimeout(model.generateContent('Reply with JSON only: {"ok":true}'), ON_DEVICE_TIMEOUT_MS, 'on-device warm-up');
+          await Promise.race([model.generateContent('Reply with JSON only: {"ok":true}'), promptTimedOut]);
         } catch (e) {
           // Timed out (or failed): its session must not keep generating.
           session?.abort(); destroySdkSession(kept);
           nanoTrace('warm-up: stopped (timed out or failed)');
           throw e;
+        } finally {
+          if (poll) clearInterval(poll);
+          if (deadline) clearTimeout(deadline);
         }
         lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(kept); };
       }, { priority: -1, preemptible: () => !sdkSessionReady(warming), maxWaitMs: 0 });
+      onDeviceLoaded = true;
       nanoTrace('warm-up: done — the model is loaded');
       return true;
     } catch {
-      boardWarm = null; // stepped aside or not ready: a later idle moment may try again
       return false;
+    } finally {
+      boardWarm = null; // a later attempt starts fresh (and returns at once when loaded)
     }
   })();
   return boardWarm;
@@ -914,6 +907,7 @@ export function setModelsForTest(overrides: ModelOverrides | null): void {
   onDeviceFactory = null;
   lastOnDeviceStop = null;
   boardWarm = null;
+  onDeviceLoaded = false;
   cached = null;
   initPromise = null;
   resetStatus();

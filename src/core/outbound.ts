@@ -95,7 +95,7 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
       'src/references/search.ts',
     ],
     leavesDevice: true,
-    note: 'The only fetch() call sites: the LAN lamp bridge (does not leave the LAN), Spotify (see the spotify kind), and Openverse / Wikimedia Commons reference search (search text only). A new fetch() must be added here and documented.',
+    note: 'The only fetch() call sites: the LAN lamp bridge (does not leave the LAN), Spotify (see the spotify kind), and Openverse / Wikimedia Commons reference search (search text only). A new fetch() must be added here and documented. (src/ai/cloudFetchWatch.ts wraps the global fetch while a Gemini call runs, only to count that call\'s requests for the byte ledger: it issues none, reads only the URL host and whether the body carries that call\'s prompt, and restores the original afterwards.)',
   },
   {
     kind: 'firestore-relay',
