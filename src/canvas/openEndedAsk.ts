@@ -18,7 +18,7 @@ export type OpenEndedPrepare = (engine: SurfaceEngine, prompt: string) => string
 async function streamOrFallback(engine: SurfaceEngine, prompt: string, onText?: (full: string) => void, prepare?: OpenEndedPrepare): Promise<OpenEndedReply> {
   const p = prepare ? prepare(engine, prompt) : prompt;
   try {
-    const reply = await engine.stream(p, (full) => onText?.(full));
+    const reply = await engine.stream(p, (full) => onText?.(full), { shape: 'text' });
     return { engineId: engine.id, reply, sim: engine.sim };
   } catch (e) {
     // The prepared (SIM) reply is not a second send: no prepare, no booking.

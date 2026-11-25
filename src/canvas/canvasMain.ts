@@ -10,10 +10,10 @@ import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS, phoneHandsAllowed, phoneS
 import { announcePhone } from './phoneGuestJoin';
 import type { PhoneGuestSessionLike } from './laptopLink';
 import { App } from '@capacitor/app';
-import { createEngines, type CloudStream, type PromptApi } from './engines';
+import { createEngines, createNanoRunner, NANO_CREATE_OPTIONS, type CloudStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
-import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
+import { cloudAccessProblem, isEnabled, prepareHybrid, streamCanvasPlanOrThrow } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 import { activePeople } from '../privacy/directory';
@@ -60,13 +60,16 @@ const capacitor = (window as unknown as { Capacitor?: { isNativePlatform?: () =>
 const isPhone = !!capacitor?.isNativePlatform?.();
 const phoneShell = isPhoneCanvasShell({ capacitor, viewportWidth: window.innerWidth });
 const cloud: CloudStream | undefined = isEnabled()
-  ? async (prompt, onText) => {
-      const text = await streamCanvasPlan(prompt, onText);
-      if (text == null) throw new Error('cloud unavailable');
+  ? async (prompt, onText, o) => {
+      // A failure throws with its plain reason (App Check 403, offline, …).
+      const text = await streamCanvasPlanOrThrow(prompt, onText, o?.shape);
       onText(text);
       return text;
     }
   : undefined;
+// The page's ONE on-device runner: every Nano board turn is a single queued
+// prompt against a warm session, however many cursors the canvas draws.
+const nanoRunner = languageModel && !isPhone && !params.has('sim') ? createNanoRunner(languageModel) : null;
 
 const apple = {
   ready: false,
@@ -75,6 +78,7 @@ const apple = {
 };
 const engines = createEngines({
   languageModel: languageModel ?? null,
+  nanoRunner,
   cloud: cloud ?? null,
   isPhone,
   get androidNano() { return apple.androidNano; },
@@ -248,7 +252,29 @@ if (params.has('sim') && params.get('demo') === 'morph') {
 // auto-generated preview channel domain is often not in the App Check /
 // reCAPTCHA authorized-domains list, so this call alone can 403 there for no
 // reason a sim run needs to care about.
-if (!params.has('sim')) void prepareHybrid();
+if (!params.has('sim')) {
+  void prepareHybrid().then(async () => {
+    // Say it once, up front, when this address can't pass App Check — rather
+    // than leaving it to be discovered on the first Gemini turn.
+    const blocked = await cloudAccessProblem();
+    if (blocked) console.warn(`[mendcraft] ${blocked.line}. ${blocked.hint ?? ''}`);
+  });
+}
+
+// Load Nano and its fixed instructions while the page is idle, so the first
+// board turn doesn't pay for a cold session. Only when the model is already
+// on this machine: warming must never start a download.
+if (nanoRunner && languageModel) {
+  const lm = languageModel as PromptApi & { availability?: (o?: unknown) => Promise<string> };
+  const warm = (): void => {
+    void (async () => {
+      try { if (lm.availability && (await lm.availability(NANO_CREATE_OPTIONS)) !== 'available') return; } catch { return; }
+      await nanoRunner.warm();
+    })();
+  };
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  afterFirstPaint(() => { if (ric) ric(warm, { timeout: 4000 }); else setTimeout(warm, 1500); });
+}
 
 // ?replay=demo: play the journey once the canvas has painted. The outcome is
 // also on window.__replay for scripts/e2e-journey.mjs.

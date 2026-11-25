@@ -134,9 +134,14 @@ describe('A3 a fallback draft is not a second send', () => {
     const fb = canvasSrc.slice(canvasSrc.indexOf('function aiFellBack('), canvasSrc.indexOf('function aiFellBack(') + 400);
     expect(fb).not.toMatch(/recordSent|ledger\.record|logTurnReceipt|swarm\.start/);
     expect(canvasSrc).toContain('onFallback: aiFellBack');
-    // the connect path's fallback, too
+    // the connect path's fallback, too: its SIM relabel books nothing. The one
+    // other send there is the handoff to the REAL Gemini engine after an
+    // on-device failure — a genuine second send, so it is booked.
     const connect = canvasSrc.slice(canvasSrc.indexOf('async function connectTurn('), canvasSrc.indexOf('// ---- point-to-connect'));
-    expect(connect.match(/aiSent\(/g)).toHaveLength(1);
+    expect(connect.match(/aiSent\(/g)).toHaveLength(2);
+    expect(connect).toMatch(/aiSent\(utterance, handed,/);
+    const simRelabel = connect.slice(connect.indexOf('turn.sent.sim = true;'), connect.indexOf('const parsed = parseModelPlan('));
+    expect(simRelabel).not.toMatch(/aiSent\(|recordSent|ledger\.record/);
   });
 });
 
