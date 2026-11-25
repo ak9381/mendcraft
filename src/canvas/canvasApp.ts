@@ -2491,12 +2491,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (text) regChip.textContent = text;
   }
   function refreshRegisterLabels(): void {
-    const label = registerButtonLabel(loadOwner(regStorage));
-    if (registerChip) registerChip.textContent = label;
+    const owner = loadOwner(regStorage);
+    const label = registerButtonLabel(owner);
+    // One Register on screen: the cluster chip (or the empty-state button)
+    // until someone registers; after that only Tools > More > Hands offers
+    // "Register again" (voice "register" works either way).
+    if (registerChip) { registerChip.textContent = label; registerChip.hidden = !!owner; }
     const blankBtn = root.querySelector<HTMLElement>('.mc-blank-register');
     if (blankBtn) blankBtn.textContent = label;
     const toolbarBtn = root.querySelector<HTMLElement>('[data-cmd=reregister]');
-    if (toolbarBtn) toolbarBtn.textContent = label;
+    if (toolbarBtn) toolbarBtn.hidden = !owner;
   }
   function applyOwnerLock(owner: OwnerRecord): void {
     handsHandle?.presence?.registerSignature(owner.face);

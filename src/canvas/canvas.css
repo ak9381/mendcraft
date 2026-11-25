@@ -94,7 +94,8 @@
 .mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 13px; }
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
-.mc-edit-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A greyed Edit on an empty canvas reads as broken on camera: hide it until there is a board to edit. */
+.mc-edit-toggle:disabled { display: none; }
 /* Cluster owns placement — do not set `right` on these chips when the AI drawer is open. */
 @media (max-width: 600px) { .mc-edit-toggle, .mc-edit-reset { display: none; } }
 .mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
@@ -917,15 +918,16 @@
 }
 
 /* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
-   Vertically centred, inset ~13vw (min 180px) from the right edge so a hand
-   cursor does not have to graze the screen edge. Equal-width 120×52px targets,
-   24px gaps (smaller, calmer; still comfortably dwell-reachable). Shifts left of the AI drawer when that is open. */
+   Docked to the right edge (24px) so it never sits on top of a board: Fit
+   and the overview take clusterInset() out of the board area. The hand
+   reach box maps to the full screen (handPointer.mapToScreen), so the edge
+   column is reachable without a full arm stretch. Equal-width 120×52px
+   targets, 24px gaps. Moves left of the AI drawer only while that is open
+   (the drawer no longer opens by itself during a turn, only on a failure). */
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
-  /* Always left of the AI panel's slot (open or closed) so an auto-open never
-     covers it and clusterInset() stays constant. */
-  right: max(180px, 13vw, calc(min(var(--mc-ai-w, 320px), 340px) + 40px));
+  right: 24px;
   transform: translateY(-50%);
   /* Below the review window (50) and modal dialogs, so they're never covered. */
   z-index: 49;
@@ -939,6 +941,10 @@
   max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster { right: calc(min(var(--mc-ai-w, 320px), 340px) + 40px); }
+/* One Register on screen: the empty-state button owns it while the blank
+   canvas shows; after registration it lives under Tools > More > Hands. */
+.mc-canvas:has(.mc-blank:not([hidden])) .mc-hand-cluster .mc-register-chip { display: none; }
 .mc-hand-cluster .mc-fab-mic,
 .mc-hand-cluster .mc-tools-chip,
 .mc-hand-cluster .mc-edit-toggle,
