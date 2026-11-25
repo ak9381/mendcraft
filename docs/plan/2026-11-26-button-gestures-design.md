@@ -23,3 +23,10 @@ Mendcraft is for people with arthritis. Pointing + fist tap is one way to press 
 
 ## Done means
 Unit tests for the classifier (each shape from recorded landmark fixtures, both hands, mirrored), the binder (no duplicate gestures in a context), the 2 s hold (cancel on release/motion/not facing), and an e2e that fires Approve via a scripted thumbs-up. Then a full UI/UX review pass using the installed design skills (impeccable critique/audit, web-design-guidelines, emil-design-eng, design-taste-frontend, ui-ux-pro-max) and fixes.
+
+## Decision (26 Nov, Akash) — supersedes rulings 1–2 above
+Hybrid:
+- **Fixed gestures with yellow animated hand badges** on the always-on buttons (Tools, Register, Edit, Talk, Undo) and on Approve / Decline in the review. Approve = right thumbs up, Decline = right thumbs down. Held 2 s, button fills, then presses. Easy shapes only (thumbs up/down, 1 finger, peace, 3 fingers, flat palm held still; left/right distinct). No fist, no ILoveYou, no 4 fingers.
+- **Everything else: open palm.** No free cursor for pressing: the palm moves a highlight that snaps to the nearest button (sticky with hysteresis; slower in crowded areas; a crowded group magnifies into a spaced row after ~0.5 s hover). The highlighted button shows its name large. Hold thumbs up 2 s to press it; thumbs down 2 s = back/cancel.
+- While a review is open, thumbs up = Approve (the review is modal).
+- Held fist drag for boards, pan and two-fist zoom stay as they are. Facing gate applies to all of it.
