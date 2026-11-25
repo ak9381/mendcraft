@@ -76,9 +76,10 @@ import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { createHandPointer, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
+import { createPalmHighlight } from './palmHighlight';
 import { LAPTOP_GESTURES, PHONE_GESTURES } from './gestureBindings';
 import { syntheticHand } from './handShapeFixtures';
 import type { PhoneCamera } from './phoneCamera';
@@ -2350,8 +2351,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   setDwellClick(dwellClickOn);
   const handTip = typeof document !== 'undefined' ? document.createElement('div') : null;
   if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
+  // Open-palm highlight (palmHighlight.ts): the palm moves a sticky highlight
+  // over the buttons; R thumbs-up (2 s) presses it, a fist tap clicks it.
+  const palmHighlight = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
+    ? createPalmHighlight({ root, ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}) })
+    : null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
+        targetOverride: () => palmHighlight?.current() ?? null,
         onHandEvent: (ev) => {
           if (ev.type === 'click') activityLog.push({ kind: 'click', text: ev.target ? `Click · ${ev.target}` : 'Click', target: ev.target });
           else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
@@ -2424,6 +2431,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         run: (text) => { run(text); },
         say,
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
+        highlight: palmHighlight,
       })
     : null;
   /** Gestures are paused while something else owns the hands: a fist grab,
@@ -3360,6 +3368,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // the badges on as if Hands were on; feed() runs one selfie-space frame
   // through the real classifier → hold engine → button path; hand() builds
   // synthetic landmarks for a shape (handShapeFixtures).
+  /** Sim: the wrist (selfie space) of a synthetic right open hand whose palm
+   *  centre maps to screen (x, y) through the laptop reach box. */
+  const palmFor = (x: number, y: number): { x: number; y: number } => ({
+    x: REACH.x0 + (x / innerWidth) * (REACH.x1 - REACH.x0) + 0.001,
+    y: REACH.y0 + (y / innerHeight) * (REACH.y1 - REACH.y0) + 0.074,
+  });
   if (opts.sim && typeof window !== 'undefined' && gestures) {
     (window as unknown as { __mcGestures?: unknown }).__mcGestures = {
       show: (on: boolean) => gestures.setActive(on),
@@ -3367,6 +3381,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         gestures.frame(hands, now, { facing, faceX: 0.5, blocked: gesturesBlocked() }),
       hand: syntheticHand,
       shapes: () => gestures.lastShapes(),
+      highlighted: () => palmHighlight?.current() ?? null,
+      /** Selfie-space wrist position that puts the PALM at screen (x, y). */
+      palmFor: (x: number, y: number) => palmFor(x, y),
     };
   }
   // Sim/test hook: drive the hand pointer without a camera.

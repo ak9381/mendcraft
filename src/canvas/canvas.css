@@ -1483,3 +1483,23 @@
    drawer opens by itself while a model works, or from the engine bar. The
    phone layout keeps its primary AI button (it lives in .mc-phone-actions). */
 .mc-bar-btns > [data-cmd=ai] { display: none; }
+
+/* Open-palm highlight (palmHighlight.ts): a thick yellow ring on the button
+   the palm is on, its name large above it, and, for a crowded group, a
+   spaced magnified row the palm moves across. Never takes pointer input. */
+.mc-highlight-layer { position: fixed; inset: 0; pointer-events: none; z-index: 79; }
+.mc-highlight-layer[hidden], .mc-highlight-row[hidden] { display: none; }
+.mc-highlight-ring { position: absolute; left: 0; top: 0; border: 4px solid #E0A800; border-radius: 16px;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.85), 0 0 18px rgb(224 168 0 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-highlight-label { position: absolute; left: 0; top: 0; translate: -50% -100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 14px 6px; border-radius: 14px; background: #2B2B2B; color: #FFFFFF; box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); white-space: nowrap; }
+.mc-highlight-label.below { translate: -50% 0; }
+.mc-highlight-name { font: 700 26px/1.15 system-ui, sans-serif; }
+.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 13px/1 system-ui, sans-serif; color: #FFC83D; }
+.mc-highlight-how .mc-gi { width: 18px; height: 18px; }
+.mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
+  border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }
+.mc-highlight-slot { position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px;
+  border-radius: 16px; background: #FFFFFF; color: #2B2B2B; font: 700 20px/1.15 system-ui, sans-serif; overflow: hidden; }
+.mc-highlight-slot.is-current { background: #FFC83D; }
+@media (prefers-reduced-motion: reduce) { .mc-highlight-ring { transition: none; } }

@@ -328,6 +328,10 @@ export interface HandPointerOptions {
   /** Reach box (camera units → the full screen), read every frame. Default
    *  HAND_FEEL.reach (laptop); the phone shell passes phoneReach(aspect). */
   reach?: () => typeof REACH;
+  /** The open-palm highlight (palmHighlight.ts): while it returns a control,
+   *  that control is the target — no magnet, no own frame drawn — so a fist
+   *  tap (the backup click) presses exactly what is highlighted. */
+  targetOverride?: () => HTMLElement | null;
 }
 
 /** A fist closed this long (or moved HAND_FEEL.fistMovePx while closed)
@@ -526,6 +530,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let targetSince = 0;
   let lastMapped: P = { x: -1, y: -1 };
   let lastHandedness: string | null = null;
+  // The open-palm highlight owns the target this frame (opts.targetOverride).
+  let overridden = false;
   // The gate only relabels (a fist needs a curled index); its point↔fist
   // time debounce is 0 here because the frame-counted fist hysteresis below
   // (fistCloseFrames / fistOpenFrames / release grace) replaces it — a quick
@@ -606,7 +612,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   // the fingertip instead of framing the whole screen.
   const isDismiss = (el: HTMLElement | null) => !!el && el.getAttribute?.('data-hand-dismiss') != null;
   function paint() {
-    if (target && !isDismiss(target)) {
+    if (target && !isDismiss(target) && !overridden) {
       const r = target.getBoundingClientRect();
       frame.hidden = false;
       frame.style.transform = `translate(${r.left - 4}px, ${r.top - 4}px)`;
@@ -635,7 +641,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   }
 
   function displayPoint(p: P): P {
-    if (fisted || !target || isDismiss(target)) return p;
+    if (fisted || !target || isDismiss(target) || overridden) return p;
     const r = target.getBoundingClientRect();
     return magnetPull(p, { x: r.left, y: r.top, width: r.width, height: r.height }, MAGNET_PULL);
   }
@@ -998,9 +1004,12 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // A board BODY is never a target (resting on a board must not fly it
     // into focus); its title is a <button> and so a control like any other.
     // `live` is false for the pointAt() sim path: no lock there.
-    const direct = rawInteractiveHit(p);
+    const forced = opts.targetOverride?.() ?? null;
+    overridden = !!forced;
+    const direct = forced ? null : rawInteractiveHit(p);
     let next: HTMLElement | null;
-    if (direct) next = direct;
+    if (forced) next = forced;
+    else if (direct) next = direct;
     else if (live && target && !isDismiss(target) && lockHolds(target, p)) next = target;
     else next = snapNear(p);
     setTarget(next);

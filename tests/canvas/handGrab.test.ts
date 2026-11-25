@@ -96,6 +96,25 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(pans).toHaveLength(0);
   });
 
+  it('with the open-palm highlight on, a fist tap clicks the HIGHLIGHTED button (targetOverride)', () => {
+    const under = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    const highlighted = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
+    mount([under, highlighted], [], [], { targetOverride: () => highlighted as unknown as HTMLElement });
+    tap(500, 400);
+    expect(highlighted.click).toHaveBeenCalledTimes(1);
+    expect(under.click).not.toHaveBeenCalled();
+  });
+
+  it('the highlight never stops a fist on bare canvas from panning', () => {
+    const highlighted = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
+    mount([highlighted], [], [], { targetOverride: () => highlighted as unknown as HTMLElement });
+    open(300, 400, 8);
+    fist(300, 400, HOLD);
+    fist(340, 400, 6);
+    expect(sum(pans, 'dx')).toBeGreaterThan(20);
+    expect(highlighted.click).not.toHaveBeenCalled();
+  });
+
   it('a deliberate ~120 ms tap from a still open hand clicks', () => {
     const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     mount([btn], []);
