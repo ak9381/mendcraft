@@ -57,6 +57,30 @@ registering by hand. Use one stable token instead:
   `VITE_APPCHECK_DEBUG_TOKEN`, and the injection only happens in a running
   local server. A value that is not a UUID is ignored.
 
+## Other devices on the LAN (a phone opening the dev server)
+
+`npm run dev -- --host` serves the canvas on the machine's LAN address
+(for example `http://192.168.1.20:5173`), and a phone on the same Wi-Fi can
+open it.
+
+- The **same** stable token is injected there too: the dev server adds it to
+  every HTML page it serves, whatever host name the page was opened with. So
+  one registered token covers `localhost`, `127.0.0.1` and the LAN address;
+  there is nothing extra to register for the phone.
+- That also means anyone on the network who can reach the dev server can read
+  the token from the page source. Only run `--host` on a network you trust,
+  stop the server when you are done, and delete the token from the console
+  (**Manage debug tokens**) after a session on shared Wi-Fi.
+- Without a configured token, each LAN address is a new origin and the SDK
+  generates a different token for it (printed in that device's console, which
+  is awkward to read on a phone). Configure the stable token instead.
+- A plain-`http` LAN address is not a secure context: the camera and
+  microphone are unavailable there, and so is on-device Nano. Gemini calls
+  still work once the token is registered. The native phone shells do not use
+  debug tokens at all.
+- `vite preview` injects the token only for `localhost` + `?debug`, never for
+  a LAN address.
+
 ## Rules
 
 - A debug token lets a browser skip reCAPTCHA for this project. Treat it like a

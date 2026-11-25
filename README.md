@@ -18,8 +18,8 @@ Built for Google **#BuildHybridAI**.
 3. **Say "save"** — the dashboard is pinned to the side of the canvas.
 4. **Build the CAD plan** — a floor-plan board appears next to the pinned
    dashboard; DXF export works.
-5. **Say "add Kannada"** — Gemini plans the change, Nano carries it out on
-   device, and a **Proposal card** (Keep / Drop) waits for human approval.
+5. **Say "add Kannada"** — Gemini drafts the language pack, and a **Proposal
+   card** (Keep / Drop) waits for human approval before anything changes.
 
 The camera gimbal (iPhone app) follows you while a board is being built; on the
 web it soft-fails with a clear note.
@@ -29,12 +29,22 @@ web it soft-fails with a clear note.
 - **Firebase AI Logic** (`firebase/ai`) with Gemini Nano in Chrome for fast,
   private drafts and cloud Gemini (with a lite-model hedge) for bigger plans.
   Nano-only jobs use `ONLY_ON_DEVICE`; anything that may reach the cloud is
-  redacted first.
+  redacted first. Every Nano prompt, board drafts included, is a `firebase/ai`
+  call in `ONLY_ON_DEVICE` mode — Chrome's `LanguageModel` global is only
+  asked whether the model is available. One on-device prompt runs at a time.
+- **Nano first, Gemini second, never a stand-in.** A board draft is one short
+  on-device call with a JSON-schema reply. If Nano errors, takes longer than
+  20 s or returns an invalid plan, Gemini makes the board and the review says
+  so, with the bytes sent. If Gemini fails too, the canvas shows the reason
+  (for example `Gemini blocked: App Check 403`) and a Retry. Scripted drafts
+  exist only under `?sim=1`.
 - **The model never emits raw UI.** Every plan passes the surface-plan validator
   (whitelisted tile types, safe ids) before A2UI renders it with Lit, and lands
   in the Proposal keep/drop buffer first.
 - **Byte ledger** — every cloud round trip is logged with its byte size, so the
-  canvas shows exactly what left the machine.
+  canvas shows exactly what left the machine. Bytes are booked when a call
+  really leaves (a hedge or retry counts again); a call refused before it
+  left books nothing and says "Nothing was sent."
 - **App Check** (reCAPTCHA Enterprise) runs before any AI call.
 
 ## Privacy router: phones go through the desktop hub

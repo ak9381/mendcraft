@@ -19,7 +19,8 @@ in a real Chrome, with **no `?sim=1`**. About ten minutes.
 
 1. Load the page, wait ~5 s (Nano warms while idle).
 2. In the console, count on-device prompts (sessions are `LanguageModel`
-   instances, so the prototype sees every one, warm clones included):
+   instances, so the prototype sees every one — the Firebase AI Logic SDK
+   calls it for each on-device request):
 
    ```js
    (() => { const p = LanguageModel.prototype.promptStreaming; let n = 0;
@@ -34,6 +35,9 @@ Expect:
 - First ghost tiles / the review in **under 15 s** (typically 3–8 s warm).
 - Exactly **one** `Nano prompt #…` line for the turn (two only if the first
   reply was refused and repaired). Never one per tile, never 14.
+- The pill / engine bar reads `Nano · 1 call`. There is one Nano cursor for
+  the call plus one per tile as each tile appears — never more cursors than
+  tiles, and no Gemini cursor.
 - The page stays responsive while Nano works: the hand cursor / mouse hover
   keeps moving, and `await new Promise(r => setTimeout(r, 0))` in the console
   returns at once.
@@ -69,8 +73,17 @@ Expect:
 - Nano terminal: `couldn’t finish: …` and a handoff line.
 - The review is by Deep/Gemini and its route line reads
   `Gemini · cloud — Nano couldn’t finish (…), so Gemini made this · 1.2 KB sent`
-  (the size will differ; it must not be 0 B).
+  (the size will differ; it must not be 0 B). The Gemini terminal has a
+  `sent 1.2 KB` line.
 - No SIM label, no “prepared draft”.
+- On “connect everything in this room”, after you approve this Gemini-made
+  draft there is **no** second “Better” Gemini turn (one cloud send): the
+  Gemini terminal says `Gemini made this draft, so there is no second pass.`
+- After the page was idle for a while, also check the abort really stops
+  Nano: with the hang override, once the handoff has happened, `chrome://on-device-internals`
+  (or the GPU load) should show the model go quiet. The SDK cannot abort an
+  on-device call, so the app destroys the session through the signal it gave
+  to `create()`; if Nano keeps running after the handoff, note it.
 
 To check the **timeout** instead of an error, make Nano hang:
 
@@ -96,10 +109,18 @@ Reload the page afterwards to restore the real `LanguageModel`.
 Expect:
 
 - One status line with both reasons, e.g.
-  `Nano couldn’t finish (probe: forced failure). Gemini blocked: App Check 403 (this address isn’t registered)`
-  or `… Gemini couldn’t be reached: no connection`.
+  `Nano couldn’t finish (probe: forced failure). Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.`
+  or `… Gemini couldn’t be reached: no connection. Nothing was sent.`
+- The byte total does **not** go up for that turn.
 - A **Retry** button. No review opens. No draft appears. Nothing says SIM.
 - Unblock the domain, press Retry: the turn succeeds.
+
+## 4b. A busy Nano is said out loud
+
+Start a Nano board turn and, while it is working, speak a canvas command
+that needs the intent model. If that job goes to Gemini because the one
+on-device model is busy, both terminals show a handoff line
+`Nano busy → Gemini (…)`.
 
 ## 5. Next-step chips don’t spend Nano on load
 
@@ -129,6 +150,9 @@ Enterprise key’s allowed domains.
 | Nano “connect everything” → review | < 15 s | |
 | Nano “draw the floor plan” → review | < 15 s | |
 | Nano prompts per turn | 1 | |
+| Pill during a Nano turn | `Nano · 1 call`, cursors ≤ tiles | |
+| Nano really stops after a 20 s handoff | yes | |
+| Bytes after a refused Gemini call | unchanged, “Nothing was sent.” | |
 | Page responsive during Nano | yes | |
 | Gemini on 127.0.0.1 | replies, no 403 | |
 | Nano forced fail → Gemini | review says Gemini made it + bytes | |
