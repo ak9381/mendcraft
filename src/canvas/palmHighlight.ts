@@ -8,15 +8,15 @@
 //    flickers between neighbours.
 //  - Slower where targets are dense: the palm's motion is scaled down
 //    (denseGain) near a crowd, so small targets are easier to land on.
-//  - A crowded group (≥ crowdMin targets within crowdPx) hovered for
-//    expandAfterMs magnifies into a spaced row; the palm then moves across
+//  - A crowded group (≥ crowdMin targets within crowdPx) hovered with an
+//    OPEN palm for the whole expandAfterMs magnifies into a spaced row; the palm then moves across
 //    that row, and pressing a row slot presses the real button.
 //
 // The core is pure (rects in, choice out) and unit-tested; the DOM wrapper
 // below draws the ring, the large name label and the magnified row.
 
 import type { Pt } from '../input/handLogic';
-import { collectControls, distToRect, mapToScreen, type HandPointerOptions } from './handPointer';
+import { collectControls, distToRect, mapToScreen } from './handPointer';
 import { palmCenter, type ReachBox } from './handFeel';
 import { handIconSvg } from './gestureIcons';
 import type { HighlightHook } from './gestureControl';
@@ -61,8 +61,8 @@ export const PALM_HIGHLIGHT: HighlightConfig = {
   denseGain3: 0.55,
   denseGain2: 0.8,
   leak: 0.12,
-  crowdPx: 60,
-  crowdMin: 3,
+  crowdPx: 48,
+  crowdMin: 4,
   expandAfterMs: 500,
   slotW: 168,
   slotH: 76,
@@ -89,7 +89,12 @@ export function targetScore(p: Pt, r: Rect): number {
 }
 
 export interface HighlightCore<T> {
-  update(p: Pt | null, targets: readonly HighlightTarget<T>[], now: number, viewport?: { w: number; h: number }): HighlightView<T>;
+  /** `open`: the palm is an open palm (a loose hand still moves the
+   *  highlight, but only an open palm held still can magnify a crowd). */
+  update(p: Pt | null, targets: readonly HighlightTarget<T>[], now: number, viewport?: { w: number; h: number }, open?: boolean): HighlightView<T>;
+  /** The pointer is directly over this control: highlight it (ring and
+   *  cursor never disagree). Collapses a magnified row. */
+  adopt(item: T): void;
   reset(): void;
   readonly view: HighlightView<T>;
 }
@@ -137,7 +142,7 @@ export function createHighlightCore<T>(cfg: Partial<HighlightConfig> = {}): High
     return targets.find((t) => t.item === item)?.rect ?? null;
   }
 
-  function update(p: Pt | null, targets: readonly HighlightTarget<T>[], now: number, viewport = { w: Infinity, h: Infinity }): HighlightView<T> {
+  function update(p: Pt | null, targets: readonly HighlightTarget<T>[], now: number, viewport = { w: Infinity, h: Infinity }, open = true): HighlightView<T> {
     // A target that left the screen is dropped (and a row whose buttons went).
     if (expanded && !expanded.items.every((it) => targets.some((t) => t.item === it))) { expanded = null; crowdSince = null; }
     if (current !== null && !expanded && !targets.some((t) => t.item === current)) { current = null; crowdSince = null; }
@@ -179,7 +184,7 @@ export function createHighlightCore<T>(cfg: Partial<HighlightConfig> = {}): High
     const prev = current;
     current = pick(eff, targets);
     if (current !== prev) crowdSince = null;
-    if (current !== null) {
+    if (current !== null && open) {
       const crowd = targets.filter((t) => distToRect(eff!, t.rect) <= c.crowdPx);
       if (crowd.length >= c.crowdMin) {
         if (crowdSince === null) crowdSince = now;
@@ -196,13 +201,17 @@ export function createHighlightCore<T>(cfg: Partial<HighlightConfig> = {}): High
           eff = centre(slots[i]); // the palm continues from the highlighted slot
         }
       } else crowdSince = null;
-    }
+    } else crowdSince = null;
     view = { current, point: eff, rect: rectOf(current, targets), expanded };
     return view;
   }
 
   return {
     update,
+    adopt(item) {
+      if (current === item && !expanded) return;
+      current = item; expanded = null; crowdSince = null;
+    },
     reset() {
       current = null; eff = null; prevRaw = null; resumed = false; crowdSince = null; expanded = null;
       view = { current: null, point: null, rect: null, expanded: null };
@@ -229,13 +238,24 @@ function highlightable(el: HTMLElement): boolean {
   return true;
 }
 
-export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook & { view(): HighlightView<HTMLElement>; core: HighlightCore<HTMLElement> } {
+/** The pointer honours the highlight only this long after the last frame
+ *  in which the palm drove it (so a fist tap right after aiming works, but a
+ *  stale highlight never steals a click). */
+export const HIGHLIGHT_FORCE_MS = 300;
+
+export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook & {
+  view(): HighlightView<HTMLElement>;
+  core: HighlightCore<HTMLElement>;
+  /** For handPointer.targetOverride: the highlight, while fresh. */
+  forced(now: number): HTMLElement | null;
+} {
   const { root } = opts;
   const doc = root.ownerDocument;
   const core = createHighlightCore<HTMLElement>(opts.config);
   const lostMs = opts.lostMs ?? 1200;
   let active = false;
   let lastHandAt = -Infinity;
+  let lastPalmAt = -Infinity;
   let smooth: Pt | null = null;
   let targets: HighlightTarget<HTMLElement>[] = [];
   let targetsAt = -Infinity;
@@ -311,7 +331,7 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
   }
 
   function clear(): void {
-    core.reset(); smooth = null; render(core.view);
+    core.reset(); smooth = null; lastPalmAt = -Infinity; render(core.view);
   }
 
   return {
@@ -321,27 +341,25 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
       if (ctx.anyHand) lastHandAt = now;
       else if (now - lastHandAt > lostMs) { if (core.view.current) clear(); return; }
       refreshTargets(now);
+      // The cursor is directly on a control the highlight isn't on: adopt it.
+      if (openPalm && ctx.direct && !core.view.expanded && ctx.direct !== core.view.current && highlightable(ctx.direct)) core.adopt(ctx.direct);
       let p: Pt | null = null;
       if (openPalm) {
+        lastPalmAt = now;
         // Selfie space → camera space → the same reach-box map the pointer uses.
         const pc = palmCenter(openPalm);
         const raw = mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, opts.reach?.());
         smooth = smooth ? { x: smooth.x + (raw.x - smooth.x) * 0.5, y: smooth.y + (raw.y - smooth.y) * 0.5 } : raw;
         p = smooth;
       }
-      render(core.update(p, targets, now, { w: innerWidth, h: innerHeight }));
+      render(core.update(p, targets, now, { w: innerWidth, h: innerHeight }, ctx.open));
     },
     current: () => (active ? core.view.current : null),
+    forced: (now) => (active && now - lastPalmAt <= HIGHLIGHT_FORCE_MS ? core.view.current : null),
     lost: clear,
     setActive(on) { active = on; if (!on) clear(); else refreshTargets(0, true); },
     destroy() { clear(); layer.remove(); },
     view: () => core.view,
     core,
   };
-}
-
-/** For the hand pointer: while the palm highlight holds a target, that is
- *  the pointer's target too (so a fist tap clicks what is highlighted). */
-export function highlightOverride(h: { current(): HTMLElement | null }): NonNullable<HandPointerOptions['targetOverride']> {
-  return () => h.current();
 }

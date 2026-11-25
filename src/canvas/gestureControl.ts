@@ -8,7 +8,7 @@
 // button, or a line for the app's run() router where no button exists.
 
 import type { Pt } from '../input/handLogic';
-import { classifyHandShape, type HandShape } from './handShape';
+import { classifyHandShape, createHandPolarity, isFixedShape, stampShape, type HandShape, type HandSide, type LabelPolarity } from './handShape';
 import { createHoldEngine, type FixedShape, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
 import {
   CLOSER_SELECTORS, gestureName, resolveGesture,
@@ -25,12 +25,18 @@ export interface GestureFrameContext {
   /** A fist grab / pan / zoom is running, or the hands are locked. */
   blocked?: boolean;
   cameraAspect?: number;
+  /** Finger counts (1 / 2 / 3) are off: a point-at-device step is armed or
+   *  just ended — a natural pointing hand must never press a chip. */
+  suppressCounts?: boolean;
+  /** The control directly under the hand pointer's raw point (if any): the
+   *  highlight adopts it so the ring and the cursor never disagree. */
+  direct?: HTMLElement | null;
 }
 
 /** The open-palm highlight (palmHighlight.ts) as the controller sees it. */
 export interface HighlightHook {
   /** Feed the open palm (selfie-space landmarks) or null (no open palm this frame). */
-  update(openPalm: readonly Pt[] | null, now: number, ctx: { blocked: boolean; anyHand: boolean }): void;
+  update(palm: readonly Pt[] | null, now: number, ctx: { blocked: boolean; anyHand: boolean; open: boolean; direct?: HTMLElement | null }): void;
   current(): HTMLElement | null;
   lost(): void;
   setActive(on: boolean): void;
@@ -50,8 +56,17 @@ export interface GestureControlOptions {
 }
 
 export interface GestureControl {
-  /** Selfie-space hands (each array may carry MediaPipe's `.label`). */
+  /** The frame's ONE shape read: classifies each selfie-space hand and
+   *  stamps `.shape` / `.side` on its array (the hand pointer reuses it, so a
+   *  thumbs-up is never also a fist). frame() reads it again if not stamped. */
+  read(hands: readonly (readonly Pt[])[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): void;
+  /** Selfie-space hands (each array may carry MediaPipe's `.label`). Empty
+   *  frames matter: they cancel holds and clear the overlays. */
   frame(hands: readonly (readonly Pt[])[], now: number, ctx: GestureFrameContext): HoldState;
+  /** A fixed hold is running, or a hand shows a fixed shape right now (the
+   *  taught-gesture matcher stands down). */
+  busy(): boolean;
+  debug(): { polarity: LabelPolarity; polarityScore: number; shapes: { shape: HandShape; hand: HandSide }[]; key: GestureKey | null; progress: number };
   setActive(on: boolean): void;
   isActive(): boolean;
   /** Re-place the badges now (layout changed). */
@@ -65,6 +80,11 @@ export interface GestureControl {
 }
 
 const PRESSED_MS = 220;
+/** No frame for this long (wall clock) = the hands are gone. */
+export const GESTURE_STALE_MS = 500;
+/** While a review is open (it is modal) only these act. */
+const REVIEW_KEYS: readonly GestureKey[] = ['R:thumbsUp', 'R:thumbsDown', 'L:thumbsDown'];
+const COUNT_SHAPES: readonly HandShape[] = ['one', 'peace', 'three'];
 const BADGE_REFRESH_MS = 300;
 
 function isVisible(el: HTMLElement): boolean {
@@ -98,7 +118,9 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const byKey = new Map<GestureKey, GestureBinding>(bindings.map((b) => [b.key, b]));
   const env = createDomGestureEnv(root, () => opts.highlight?.current() ?? null);
   let active = false;
-  let shapes: { shape: HandShape; hand: 'L' | 'R' }[] = [];
+  let shapes: { shape: HandShape; hand: HandSide }[] = [];
+  const polarity = createHandPolarity();
+  let staleTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ---- layers: badges + the hold HUD
   const layer = doc.createElement('div');
@@ -176,9 +198,10 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     const hit = doc.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return !hit || el === hit || el.contains(hit) || hit.contains(el);
   }
-  /** The review is modal: while it is open only its own gestures act. */
+  /** The review is modal: while it is open only Approve / Reject (close) /
+   *  Undo act — Save, New, Tools, chips, Register… wait behind it. */
   function resolve(b: GestureBinding): GestureAction {
-    if (!b.context && !b.say && b.targets.some((t) => t.startsWith('.mc-next')) && env.visible('.mc-review-approve')) {
+    if (!REVIEW_KEYS.includes(b.key) && env.visible('.mc-review-approve')) {
       return { kind: 'none', label: b.label, why: 'Finish the review first: thumbs up to approve, thumbs down to reject.' };
     }
     return resolveGesture(b, env);
@@ -201,25 +224,63 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     opts.onFire?.({ key, name: gestureName(key), label: a.label === 'Press' ? `Press ${target}` : a.label, target });
   }
 
-  function frame(hands: readonly (readonly Pt[])[], now: number, ctx: GestureFrameContext): HoldState {
-    if (!active) return engine.state;
-    const read: GestureHand[] = [];
-    shapes = [];
-    let open: readonly Pt[] | null = null;
+  type Read = { shape: HandShape; side: HandSide };
+  function readOne(h: readonly Pt[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): Read {
+    const raw = (h as { label?: string }).label;
+    polarity.observe(h, raw, ctx.faceX ?? null, true);
+    const r = classifyHandShape(h, polarity.correct(raw), ctx.faceX ?? null, { mirrored: true, cameraAspect: ctx.cameraAspect });
+    return { shape: r.shape, side: r.hand };
+  }
+  function read(hands: readonly (readonly Pt[])[], ctx: Pick<GestureFrameContext, 'faceX' | 'cameraAspect'>): void {
     for (const h of hands) {
       if (!h || h.length < 21) continue;
-      const r = classifyHandShape(h, undefined, ctx.faceX ?? null, { mirrored: true, cameraAspect: ctx.cameraAspect });
-      shapes.push({ shape: r.shape, hand: r.hand });
-      read.push({ shape: r.shape, hand: r.hand, palm: palmCenter(h), scale: handScale(h) });
-      // The open palm drives the highlight; with two open palms the right one does.
-      if (r.shape === 'open' && (!open || r.hand === 'R')) open = h;
+      const r = readOne(h, ctx);
+      stampShape(h as Pt[], r.shape);
+      (h as { side?: HandSide }).side = r.side;
+    }
+  }
+  function stamped(h: readonly Pt[], ctx: GestureFrameContext): Read {
+    const st = h as { shape?: HandShape; side?: HandSide };
+    return st.shape && st.side ? { shape: st.shape, side: st.side } : readOne(h, ctx);
+  }
+
+  function clearOverlays(): void {
+    light(null, 0);
+    hudShow(null, null, 0);
+  }
+  function armStale(): void {
+    if (staleTimer) clearTimeout(staleTimer);
+    // Belt and braces: if frames simply stop (camera stall, tab hidden), the
+    // hold cancels and the overlays clear on their own.
+    staleTimer = setTimeout(() => { staleTimer = null; if (active) api.lost(); }, GESTURE_STALE_MS);
+  }
+
+  function frame(hands: readonly (readonly Pt[])[], now: number, ctx: GestureFrameContext): HoldState {
+    if (!active) return engine.state;
+    armStale();
+    const handsRead: GestureHand[] = [];
+    shapes = [];
+    let palm: readonly Pt[] | null = null;
+    let palmOpen = false;
+    let palmRank = -1;
+    for (const h of hands) {
+      if (!h || h.length < 21) continue;
+      let { shape, side } = stamped(h, ctx);
+      if (ctx.suppressCounts && COUNT_SHAPES.includes(shape)) shape = 'other';
+      shapes.push({ shape, hand: side });
+      handsRead.push({ shape, hand: side, palm: palmCenter(h), scale: handScale(h) });
+      // The highlight follows an open palm (or a loose, unclassified hand);
+      // only a fixed shape or a fist freezes it. Open beats other; R beats L.
+      if (shape === 'open' || shape === 'other') {
+        const rank = (shape === 'open' ? 2 : 0) + (side === 'R' ? 1 : 0);
+        if (rank > palmRank) { palm = h; palmOpen = shape === 'open'; palmRank = rank; }
+      }
     }
     const blocked = !!ctx.blocked || ctx.facing === false;
-    opts.highlight?.update(blocked ? null : open, now, { blocked, anyHand: read.length > 0 });
-    const s = engine.update({ hands: read, facing: ctx.facing, now, blocked: ctx.blocked });
+    opts.highlight?.update(blocked ? null : palm, now, { blocked, anyHand: handsRead.length > 0, open: palmOpen, direct: ctx.direct ?? null });
+    const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked });
     if (s.fired) {
-      light(null, 0);
-      hudShow(null, null, 0);
+      clearOverlays();
       act(s.fired);
     } else if (s.key) {
       const b = byKey.get(s.key);
@@ -227,8 +288,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       light(a?.kind === 'click' ? a.el : null, s.progress);
       hudShow(b ? s.key : null, a, s.progress);
     } else {
-      light(null, 0);
-      hudShow(null, null, 0);
+      clearOverlays();
     }
     placeBadges(s.key);
     return s;
@@ -247,21 +307,24 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (badgeTimer) clearInterval(badgeTimer);
       badgeTimer = null;
       engine.reset();
-      light(null, 0);
-      hudShow(null, null, 0);
+      clearOverlays();
+      if (staleTimer) { clearTimeout(staleTimer); staleTimer = null; }
       for (const b of badges.values()) b.hidden = true;
     }
   }
 
-  return {
+  const api: GestureControl = {
+    read,
     frame,
+    busy: () => !!engine.state.key || shapes.some((x) => isFixedShape(x.shape)),
+    debug: () => ({ polarity: polarity.polarity, polarityScore: polarity.score, shapes: shapes.slice(), key: engine.state.key, progress: engine.state.progress }),
     setActive,
     isActive: () => active,
     refresh: () => placeBadges(engine.state.key),
     lost() {
       engine.reset();
-      light(null, 0);
-      hudShow(null, null, 0);
+      shapes = [];
+      clearOverlays();
       opts.highlight?.lost();
     },
     env,
@@ -272,6 +335,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       layer.remove();
     },
   };
+  return api;
 }
 
 /** A button's visible name, short. */

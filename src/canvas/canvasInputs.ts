@@ -79,7 +79,9 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     } else if (ev.type === 'point') {
       void gimbal.onPoint(ev.point).catch(() => {});
     } else if (ev.type === 'frame') {
-      if (gimbal.mode() === 'hands') {
+      // Empty frames (hands gone) still reach on.frame — button gestures
+      // cancel on them — but the gimbal follow only gets real hands.
+      if (gimbal.mode() === 'hands' && ev.hands.length) {
         void gimbal.onHandsFrame(cameraHandsFromSelfie(ev.hands).map((points) => ({ points })), ev.now).catch(() => {});
       }
       on.frame?.(ev.hands, ev.now);

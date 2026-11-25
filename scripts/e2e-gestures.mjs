@@ -6,7 +6,13 @@
 //   - a left thumbs-up held 2 s presses Save;
 //   - an open palm highlights the nearest button, and a right thumbs-up then
 //     presses it;
-//   - badges are only on screen while the gesture layer is on.
+//   - badges are only on screen while the gesture layer is on;
+//   - through the REAL camera path (canvasHands adapter → inputs → the shared
+//     shape read → hand pointer + gestures): a held thumbs-up approves with
+//     no pan / zoom / board move, both thumbs up open the AI monitor with no
+//     zoom, and a hand that leaves mid-hold cancels it (no fire on return)
+//     and clears the light-up, HUD and highlight;
+//   - while a review is open, Save (left thumbs-up) waits behind it.
 //
 //   npx vite --port 5173 &
 //   E2E_URL=http://localhost:5173 node scripts/e2e-gestures.mjs
@@ -63,8 +69,28 @@ async function main() {
       const hands = spec.map(([shape, side, opts]) => g.hand(shape, side, opts));
       let fired = null;
       for (let t = from; t <= from + ms; t += 33) { const s = g.feed(hands, t); if (s.fired) fired = s.fired; }
+      window.__litAfterHold = !!document.querySelector('.mc-review-approve.mc-gesture-target');
       return fired;
     }, spec, from, ms);
+    // The same, but through the camera path (g.presence): every frame goes
+    // canvasHands adapter → canvasInputs → onHandFrame, like a real camera.
+    const presenceHold = (spec, from, ms) => page.evaluate((spec, from, ms) => {
+      const g = window.__mcGestures;
+      const hands = spec.map(([shape, side, opts]) => g.hand(shape, side, opts));
+      for (let t = from; t <= from + ms; t += 33) g.presence(hands, t);
+      return g.state();
+    }, spec, from, ms);
+    const presenceEmpty = (from, ms) => page.evaluate((from, ms) => {
+      const g = window.__mcGestures;
+      for (let t = from; t <= from + ms; t += 33) g.presence([], t);
+      return g.state();
+    }, from, ms);
+    const boards = () => page.evaluate(() => JSON.stringify(window.__canvas.snapshot().frames.map((f) => f.rect)));
+    const overlaysClear = () => page.evaluate(() => ({
+      lit: document.querySelectorAll('.mc-gesture-target').length,
+      hud: !document.querySelector('.mc-gesture-hud')?.hidden,
+      ring: !document.querySelector('.mc-highlight-layer')?.hidden,
+    }));
     const release = (from) => page.evaluate((from) => { const g = window.__mcGestures; for (let t = from; t <= from + 600; t += 33) g.feed([], t); }, from);
     const visible = (sel) => page.evaluate((sel) => { const el = document.querySelector(sel); if (!el || el.closest('[hidden]')) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }, sel);
 
@@ -73,6 +99,12 @@ async function main() {
     await wait(400);
     const badgeCount = await page.evaluate(() => [...document.querySelectorAll('.mc-gesture-badge')].filter((b) => !b.hidden).length);
     check(badgeCount >= 3, `badges on the bound buttons while Hands is on (${badgeCount})`);
+    const undoBadge = await page.evaluate(() => {
+      const u = document.querySelector('.mc-hand-cluster .mc-cluster-undo');
+      const b = document.querySelector('.mc-gesture-badge[data-key="L:thumbsDown"]');
+      return !!u && u.getBoundingClientRect().width > 0 && !!b && !b.hidden;
+    });
+    check(undoBadge, 'an always-visible Undo in the hand cluster carries the left thumbs-down badge');
 
     // 1) A review: ask for a floor plan.
     await page.evaluate(() => {
@@ -86,9 +118,14 @@ async function main() {
     check(approveBadge, 'Approve carries the right thumbs-up badge');
 
     let t = 10_000;
+    // M2: the review is modal — a left thumbs-up (Save) waits behind it.
+    const blockedSave = await holdShape([['thumbsUp', 'L']], t - 5000, 2100);
+    const st0 = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
+    check(blockedSave === 'L:thumbsUp' && !/^Saved/.test(st0) && await visible('.mc-review-approve'), `Save waits while the review is open ("${st0}")`);
+    await release(t - 2800);
     const short = await holdShape([['thumbsUp', 'R']], t, 1000);
     check(short === null && await visible('.mc-review-approve'), 'a 1 s thumbs-up does not approve');
-    const lit = await page.evaluate(() => document.querySelector('.mc-review-approve')?.classList.contains('mc-gesture-target'));
+    const lit = await page.evaluate(() => window.__litAfterHold);
     check(!!lit, 'Approve lights up while the thumbs-up is held');
     await release(t + 1100);
     t += 2000;
@@ -100,8 +137,38 @@ async function main() {
     check(moving === null, 'a thumbs-up moving across the frame never fires');
     await release(t + 3100);
     t += 4000;
-    const fired = await holdShape([['thumbsUp', 'R']], t, 2100);
-    check(fired === 'R:thumbsUp', `a 2 s right thumbs-up fires (${fired})`);
+    // C2: through the camera path — hold 1.5 s, the hand leaves, comes back
+    // at the same spot: the old hold is gone (no instant fire), and the
+    // overlays cleared while it was away.
+    await presenceHold([['thumbsUp', 'R']], t, 1500);
+    const litBefore = await overlaysClear();
+    check(litBefore.lit === 1 && litBefore.hud, 'camera path: Approve lights up during the hold');
+    await presenceEmpty(t + 1533, 1200);
+    const away = await overlaysClear();
+    check(away.lit === 0 && !away.hud && !away.ring, `hand gone: light-up, HUD and highlight clear within 1.2 s (${JSON.stringify(away)})`);
+    await presenceHold([['thumbsUp', 'R']], t + 2766, 600);
+    check(await visible('.mc-review-approve'), 'the hand returns mid-way: no fire (the old hold did not survive)');
+    // …and if frames simply STOP (no empty frames either), a wall-clock timeout clears it.
+    await presenceHold([['thumbsUp', 'R']], t + 3400, 900);
+    await wait(700);
+    const stalled = await overlaysClear();
+    check(stalled.lit === 0 && !stalled.hud, `frames stop: the light-up clears on its own (${JSON.stringify(stalled)})`);
+    await presenceEmpty(t + 4400, 600);
+    t += 6000;
+    // C1: the held thumbs-up goes through the hand pointer too — and is never a fist.
+    const cam0 = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+    const boards0 = await boards();
+    let grabbed = false;
+    // 1.9 s of the hold (not yet fired): nothing may have moved.
+    for (let k = 0; k < 6; k++) { const st = await presenceHold([['thumbsUp', 'R']], t + k * 330, 300); grabbed = grabbed || st.grab; }
+    const approvedState = await page.evaluate(() => window.__mcGestures.state());
+    const boards1 = await boards();
+    check(await visible('.mc-review-approve'), 'camera path: not approved before 2 s');
+    // …then the last stretch fires it (approval itself may re-fit the camera).
+    await presenceHold([['thumbsUp', 'R']], t + 6 * 330, 400);
+    check(!grabbed && JSON.stringify(approvedState.camera) === cam0 && boards1 === boards0,
+      `a held thumbs-up never grabs: no pan, no zoom, no board move (grab ${grabbed}; camera ${cam0} → ${JSON.stringify(approvedState.camera)}; boards ${boards0} → ${boards1})`);
+    t += 2500;
     check(await waitFor(page, () => { const d = document.querySelector('.mc-review-dialog'); return !d || d.hidden; }, 5000), 'the review closed');
     const kept = await page.evaluate(() => {
       const doc = window.__canvas.snapshot();
@@ -110,6 +177,21 @@ async function main() {
     check(kept, 'the floor plan was approved (kept on its board)');
     const logged = await page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
     check(/Gesture\s*Right thumbs up → Approve/.test(logged), 'the activity log says the gesture approved it');
+
+    // C1 (two hands): both thumbs up = AI monitor, and never a two-fist zoom.
+    await presenceEmpty(t, 600);
+    t += 700;
+    await page.evaluate(() => { window.__opened = []; window.open = (u) => { window.__opened.push(String(u)); return {}; }; });
+    const camB = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+    const boardsB = await boards();
+    let grabbedB = false;
+    for (let k = 0; k < 8; k++) { const st = await presenceHold([['thumbsUp', 'L'], ['thumbsUp', 'R']], t + k * 330, 300); grabbedB = grabbedB || st.grab; }
+    const opened = await page.evaluate(() => window.__opened);
+    const camB2 = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+    check(opened.some((u) => /monitor/.test(u)), `both thumbs up opened the AI monitor (${JSON.stringify(opened)})`);
+    check(!grabbedB && camB === camB2 && await boards() === boardsB, 'both thumbs up never zoom, pan or move a board');
+    await presenceEmpty(t + 2700, 600);
+    t += 3500;
 
     // 2) Left thumbs-up = Save (the button lives in the closed Tools palette).
     await release(t + 2200);

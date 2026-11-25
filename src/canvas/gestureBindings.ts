@@ -35,7 +35,7 @@ export const LAPTOP_GESTURES: readonly GestureBinding[] = [
   { key: 'R:peace', label: 'Next step 2', targets: [chip(2)] },
   { key: 'R:three', label: 'Next step 3', targets: [chip(3)] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
-  { key: 'L:thumbsDown', label: 'Undo', targets: ['[data-cmd=undo]'] },
+  { key: 'L:thumbsDown', label: 'Undo', targets: ['.mc-cluster-undo', '[data-cmd=undo]'] },
   { key: 'L:one', label: 'New board', targets: ['[data-cmd=new]'] },
   { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'] },
   { key: 'L:three', label: 'Talk', targets: ['.mc-fab-mic'] },
@@ -106,13 +106,15 @@ export function resolveGesture<E>(binding: GestureBinding, env: GestureEnv<E>): 
 
 /** Selectors, in priority order, for "close what's open" (R thumbs down). */
 export const CLOSER_SELECTORS: readonly string[] = [
-  '.mc-tools-chip[aria-expanded="true"]',
-  '.mc-menu-close',
+  // Dialogs and sheets on top first …
   '.mc-scan-cancel',
   '.mc-teach-close',
   '.mc-connect-close',
+  '.mc-menu-close',
   '[role=dialog] [data-act=close]',
   '[role=dialog]:not(.mc-review-dialog) [aria-label^="Close"]',
+  // … then the Tools palette, then the AI drawer.
+  '.mc-tools-chip[aria-expanded="true"]',
   '.mc-ai-close',
 ];
 

@@ -43,6 +43,7 @@ import { magnetPull, tooltipTextFor } from '../ui/handHover';
 import { getGestureTrace, targetIdOf } from './gestureTrace';
 import { createEdgeGuard, isEdgeFrame, SCREEN_MARGIN_PX } from './handEdge';
 import { handLabelOf } from './handSpace';
+import { classifyHandShape, isFixedShape, stampedShape } from './handShape';
 import { fieldCaretAt } from '../input/caretAt';
 import { INDEX_TIP } from '../input/handLogic';
 import { classifyGesture, createPointFistGate, type Pt as GesturePt } from '../input/gestures';
@@ -328,10 +329,12 @@ export interface HandPointerOptions {
   /** Reach box (camera units → the full screen), read every frame. Default
    *  HAND_FEEL.reach (laptop); the phone shell passes phoneReach(aspect). */
   reach?: () => typeof REACH;
-  /** The open-palm highlight (palmHighlight.ts): while it returns a control,
-   *  that control is the target — no magnet, no own frame drawn — so a fist
-   *  tap (the backup click) presses exactly what is highlighted. */
-  targetOverride?: () => HTMLElement | null;
+  /** The open-palm highlight (palmHighlight.ts), given the frame time: while
+   *  it returns a control (it does only shortly after the palm last drove
+   *  it), that control is the target — no magnet, no own frame drawn — so a
+   *  fist tap (the backup click) presses what is highlighted. A control
+   *  directly under the raw point still wins over it. */
+  targetOverride?: (now: number) => HTMLElement | null;
 }
 
 /** A fist closed this long (or moved HAND_FEEL.fistMovePx while closed)
@@ -449,6 +452,8 @@ export interface HandPointer {
   /** Each tracked hand's palm mapped to the screen (unsmoothed) and its
    *  drawn cursor point (client px) — the glass-hand overlay anchors to it. */
   cursors?(): { palm: P; cursor: P }[];
+  /** The control directly under a tracked hand's raw point (no magnet). */
+  directHit?(): HTMLElement | null;
 }
 
 function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
@@ -532,6 +537,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let lastHandedness: string | null = null;
   // The open-palm highlight owns the target this frame (opts.targetOverride).
   let overridden = false;
+  let lastDirect: HTMLElement | null = null;
   // The gate only relabels (a fist needs a curled index); its point↔fist
   // time debounce is 0 here because the frame-counted fist hysteresis below
   // (fistCloseFrames / fistOpenFrames / release grace) replaces it — a quick
@@ -1004,9 +1010,11 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // A board BODY is never a target (resting on a board must not fly it
     // into focus); its title is a <button> and so a control like any other.
     // `live` is false for the pointAt() sim path: no lock there.
-    const forced = opts.targetOverride?.() ?? null;
+    const direct = rawInteractiveHit(p);
+    lastDirect = direct;
+    const offered = opts.targetOverride?.(clock || now()) ?? null;
+    const forced = offered && (!direct || direct === offered) ? offered : null;
     overridden = !!forced;
-    const direct = forced ? null : rawInteractiveHit(p);
     let next: HTMLElement | null;
     if (forced) next = forced;
     else if (direct) next = direct;
@@ -1100,7 +1108,11 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // the release grace (releaseGraceMs AND releaseGraceFrames). At the
       // camera edge a grabbing hand stays closed (distorted landmarks).
       const aspect = opts.cameraAspect?.() ?? HAND_FEEL.cameraAspect;
-      const cs = curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
+      // A held button gesture (thumbs up / down — four fingers curled, thumb
+      // out) is NEVER a fist: no grab, no pan, no two-fist zoom, no tap. The
+      // frame's shared shape read is used when stamped (gestureControl).
+      const shape = stampedShape(h) ?? classifyHandShape(h as readonly { x: number; y: number; z?: number }[], undefined, null, { mirrored: false, cameraAspect: aspect }).shape;
+      const cs = isFixedShape(shape) ? 'open' : curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
       if (cs !== 'between') { geoClosed = cs === 'closed'; looseSince = -1; }
       else {
         // A loosened fist held half-open while grabbing counts as open
@@ -1146,6 +1158,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     isFisted: () => fisted,
     rawPoint: () => ({ ...pt }),
     controlAt: (p: P) => rawInteractiveHit(p),
+    directHit: () => (pt.x < 0 ? null : lastDirect),
     cursorPoint: () => (pt.x < 0 ? { ...pt } : displayPoint(pt)),
     setGrabbing(on: boolean) { grabbing = on; if (!on) releasing = false; },
     fistTiming: () => ({ fistStart: fistStartT, openSince, openRun }),
@@ -1532,6 +1545,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     },
     handsLocked: () => locked,
     cursors: () => [0, 1].filter((i) => active[i]).map((i) => ({ palm: slots[i].mappedPalm(), cursor: slots[i].cursorPoint() })),
+    directHit: () => {
+      const a = active[0] ? slots[0].directHit?.() : undefined;
+      if (a) return a;
+      return (active[1] ? slots[1].directHit?.() : undefined) ?? null;
+    },
     clickTarget: () => locked ? false : (grab ? false : (slots[0].target ? slots[0].clickTarget() : slots[1].clickTarget())),
   };
 }

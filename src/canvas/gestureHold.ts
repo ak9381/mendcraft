@@ -120,7 +120,9 @@ export function createHoldEngine(cfg: Partial<HoldConfig> = {}): HoldEngine {
     }
     if (input.facing === false || input.blocked) { cancel(); return out(null, now); }
 
-    const gesturing = seen ? input.hands.filter((h) => isFixed(h.shape)) : [];
+    // Sorted by side (L, R) so the stillness anchors follow each HAND, not
+    // its position in this frame's array (the tracker may swap the order).
+    const gesturing = seen ? input.hands.filter((h) => isFixed(h.shape)).sort((a, b) => (a.hand < b.hand ? -1 : a.hand > b.hand ? 1 : 0)) : [];
     const palms = gesturing.map((h) => h.palm);
     const scale = Math.max(1e-6, ...gesturing.map((h) => h.scale));
 

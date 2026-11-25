@@ -11,6 +11,7 @@ import { createHandPointer, GRAB_HOLD_MS, type HandPointer, type HandPointerOpti
 import { HAND_FEEL } from '../../src/canvas/handFeel';
 import { synthFist, synthHand, synthRelaxed, synthThumbOutFist } from '../helpers/synthHands';
 import { fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
+import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 
 const W = 1000;
 const H = 800;
@@ -96,13 +97,45 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(pans).toHaveLength(0);
   });
 
-  it('with the open-palm highlight on, a fist tap clicks the HIGHLIGHTED button (targetOverride)', () => {
+  it('with the open-palm highlight on, a fist tap over empty space clicks the HIGHLIGHTED button (targetOverride)', () => {
+    const highlighted = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
+    mount([highlighted], [], [], { targetOverride: () => highlighted as unknown as HTMLElement });
+    tap(560, 400); // 140 px from it: outside the pointer's own magnet
+    expect(highlighted.click).toHaveBeenCalledTimes(1);
+  });
+
+  it('a control DIRECTLY under the raw point wins over the highlight', () => {
     const under = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     const highlighted = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
     mount([under, highlighted], [], [], { targetOverride: () => highlighted as unknown as HTMLElement });
     tap(500, 400);
-    expect(highlighted.click).toHaveBeenCalledTimes(1);
-    expect(under.click).not.toHaveBeenCalled();
+    expect(under.click).toHaveBeenCalledTimes(1);
+    expect(highlighted.click).not.toHaveBeenCalled();
+  });
+
+  it('a stale highlight (override returns null) never steals the tap', () => {
+    const under = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    const highlighted = fakeButton({ left: 700, top: 370, width: 100, height: 60 });
+    mount([under, highlighted], [], [], { targetOverride: () => null });
+    tap(560, 400);
+    expect(highlighted.click).not.toHaveBeenCalled();
+  });
+
+  it('a held thumbs-up (four fingers curled, thumb up) is never a fist: no tap, no pan, no zoom', () => {
+    const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
+    mount([btn], []);
+    const thumb = (x: number, y: number) => {
+      // Camera space: the synthetic selfie hand mirrored (x → 1 − x).
+      const h = syntheticHand('thumbsUp', 'R', { at: { x: 1 - x / W, y: y / H } }).map((p) => ({ ...p, x: 1 - p.x }));
+      return h;
+    };
+    for (let i = 0; i < 70; i++) { t += FRAME; hp.update([thumb(300, 600)], t); }
+    for (let i = 0; i < 70; i++) { t += FRAME; hp.update([thumb(300, 600), thumb(700, 600)], t); }
+    expect(pans).toHaveLength(0);
+    expect(zooms).toHaveLength(0);
+    expect(board).toHaveLength(0);
+    expect(hp.isGrabActive()).toBe(false);
+    expect(btn.click).not.toHaveBeenCalled();
   });
 
   it('the highlight never stops a fist on bare canvas from panning', () => {

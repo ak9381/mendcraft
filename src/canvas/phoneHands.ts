@@ -50,7 +50,7 @@ export interface PhoneHandsDeps {
   /** Draw the glass-hand overlay (default true; tests pass false). */
   overlay?: boolean;
   /** Button gestures + open-palm highlight, fed from the same frames. */
-  gestures?: Pick<GestureControl, 'frame' | 'setActive' | 'lost'> | null;
+  gestures?: Pick<GestureControl, 'read' | 'frame' | 'setActive' | 'lost'> | null;
   /** Something else owns the hands (a grab, a point capture): no gestures. */
   gesturesBlocked?: () => boolean;
   /** Camera frame height ÷ width (for the shape classifier's 3D bend). */
@@ -115,6 +115,8 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     pill.classList.toggle('is-gated', on && gateLocked);
     root.classList.toggle('is-phone-hands', on);
     const s = deps.camera.status();
+    // Button gestures (and their badges) only while the camera is really live.
+    deps.gestures?.setActive(on && s === 'live');
     indicator.dataset.state = s;
     indicator.hidden = !(s === 'live' || s === 'starting');
     // The first start downloads the hand model (~11 MB): say so.
@@ -137,6 +139,9 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     if (g !== gateLocked) { gateLocked = g; paint(); }
     if (deps.locked?.()) { release(); return; }
     const selfie = f.hands.map((h) => stampHandLabel(h.points.slice(), h.label));
+    // The frame's ONE shape read, shared with the pointer (cameraHandsFromSelfie
+    // copies it): a held thumbs-up is never also a fist grab or tap.
+    deps.gestures?.read(selfie, { faceX: op ? op.box.cx : null, cameraAspect: deps.cameraAspect?.() });
     if (f.hands.length) {
       // Presence hands are selfie-mirrored; the pointer expects camera space
       // and mirrors once itself (the front camera's frames are un-mirrored).
@@ -179,7 +184,6 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     on = next;
     gateLocked = false;
     writePhoneHands(next, deps.storage);
-    deps.gestures?.setActive(next);
     paint();
     if (next) {
       ensureOverlay();

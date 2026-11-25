@@ -1503,3 +1503,9 @@
   border-radius: 16px; background: #FFFFFF; color: #2B2B2B; font: 700 20px/1.15 system-ui, sans-serif; overflow: hidden; }
 .mc-highlight-slot.is-current { background: #FFC83D; }
 @media (prefers-reduced-motion: reduce) { .mc-highlight-ring { transition: none; } }
+
+/* Small always-visible Undo in the hand cluster (its left thumbs-down
+   gesture badge is then always on screen). Same data-cmd as the bar's Undo. */
+.mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
+  border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
+.mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }

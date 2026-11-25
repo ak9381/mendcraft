@@ -60,7 +60,7 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
+import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
   type OwnerRecord,
@@ -1751,6 +1751,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** phone: the frames come from the iPhone's own sensing camera (bigger
    *  crop, out-of-frame check). remote: the laptop asked for this photo —
    *  send the identity back instead of proposing here. */
+  /** When the last point-to-connect capture ended (finger-count gestures
+   *  stay off for POINT_COUNT_QUIET_MS after it: the pointing hand lingers). */
+  let pointWaitEndedAt = -Infinity;
   let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void; phone?: boolean; remote?: boolean } | null = null;
   /** Laptop: waiting for the iPhone's point photo result. */
   let iphonePoint: { frameId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1790,6 +1793,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     clearTimeout(pointWait.timer);
     pointWait.cleanup();
     pointWait = null;
+    pointWaitEndedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   }
   /** Fed from the hand frame loop (raw camera-space hands) while a point is
    *  armed. Only a hand that is actually pointing (index extended) counts. */
@@ -2358,7 +2362,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
-        targetOverride: () => palmHighlight?.current() ?? null,
+        targetOverride: (now) => palmHighlight?.forced(now) ?? null,
         onHandEvent: (ev) => {
           if (ev.type === 'click') activityLog.push({ kind: 'click', text: ev.target ? `Click · ${ev.target}` : 'Click', target: ev.target });
           else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
@@ -2437,6 +2441,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Gestures are paused while something else owns the hands: a fist grab,
    *  the not-facing lock, or the point-to-connect capture step. */
   const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
+  /** Finger counts (1/2/3) are off while a point capture is armed and for a
+   *  second after it: a natural pointing hand must never press a chip. */
+  const POINT_COUNT_QUIET_MS = 1000;
+  const countsSuppressed = (): boolean => !!pointWait
+    || (typeof performance !== 'undefined' ? performance.now() : Date.now()) - pointWaitEndedAt < POINT_COUNT_QUIET_MS;
+  /** One laptop hand frame (selfie-space hands; may be EMPTY — an empty frame
+   *  cancels a hold and lets the overlays clear): the ONE shape read, then
+   *  the pointer (which reuses it: a thumbs-up is never a fist), then the
+   *  button gestures, then the taught-gesture matcher and point capture. */
+  function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
+    gestures?.read(hands, { faceX: gestureFaceX, cameraAspect: handCameraAspect });
+    // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
+    // The pointer owns every live hand gesture: dwell-click, one-fist
+    // grab (board move / pan) and two-fist zoom.
+    const cam = cameraHandsFromSelfie(hands);
+    handPointer?.update(cam, now);
+    gestures?.frame(hands, now, {
+      facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
+      suppressCounts: countsSuppressed(), direct: handPointer?.directHit?.() ?? null,
+    });
+    if (!hands.length) return;
+    // Taught gestures obey the same guards as built-ins: never while the
+    // hands are locked (not facing the screen) or a fist grab is running —
+    // and never over a fixed button gesture (held, or its shape showing).
+    if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive() && !gestures?.busy()) teachPanel.matchFrame(hands, now);
+    feedPointWait(cam, now);
+  }
 
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —
   // a Hands pill next to Join laptop, persisted, off on first run. Same
@@ -2668,18 +2699,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // was the "it opens just when I hover" bug.
       palm: () => {},
       status: say,
-      frame: (hands, now) => {
-        // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
-        // The pointer owns every live hand gesture: dwell-click, one-fist
-        // grab (board move / pan) and two-fist zoom.
-        const cam = cameraHandsFromSelfie(hands);
-        handPointer?.update(cam, now);
-        gestures?.frame(hands, now, { facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect });
-        // Taught gestures obey the same guards as built-ins: never while the
-        // hands are locked (not facing the screen) or a fist grab is running.
-        if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive()) teachPanel.matchFrame(hands, now);
-        feedPointWait(cam, now);
-      },
+      frame: (hands, now) => onHandFrame(hands, now),
     },
   });
   // iPhone SENSING layer (phoneSensor.ts): same phone camera/tracker as the
@@ -3310,7 +3330,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const editBtn = root.querySelector('.mc-edit-toggle');
     const resetBtn = root.querySelector('.mc-edit-reset');
     const registerBtn = root.querySelector('.mc-register-chip');
-    for (const node of [registerBtn, editBtn, toolsChip, talk, resetBtn]) {
+    // A small, always-visible Undo beside Tools / Talk (its left thumbs-down
+    // badge is always on screen); same data-cmd as the bar's Undo.
+    const undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'mc-cluster-undo';
+    undoBtn.dataset.cmd = 'undo';
+    undoBtn.textContent = 'Undo';
+    for (const node of [registerBtn, editBtn, toolsChip, talk, undoBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
   }
@@ -3378,6 +3405,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     y: REACH.y0 + (y / innerHeight) * (REACH.y1 - REACH.y0) + 0.074,
   });
   if (opts.sim && typeof window !== 'undefined' && gestures) {
+    const simAdapter = createCanvasHandsAdapter((ev) => inputs.handEvent(ev));
     (window as unknown as { __mcGestures?: unknown }).__mcGestures = {
       show: (on: boolean) => gestures.setActive(on),
       feed: (hands: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null = true) =>
@@ -3385,6 +3413,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       hand: syntheticHand,
       shapes: () => gestures.lastShapes(),
       highlighted: () => palmHighlight?.current() ?? null,
+      /** A presence frame through the REAL camera path: the canvasHands
+       *  adapter → canvasInputs → onHandFrame (shape read, pointer, gestures).
+       *  `hands` may be empty — exactly what the camera sends when hands leave. */
+      presence: (hands: readonly (readonly { x: number; y: number }[])[], now: number) => {
+        simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
+      },
+      /** For assertions: camera, any grab running, debug state. */
+      state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
       /** Selfie-space wrist position that puts the PALM at screen (x, y). */
       palmFor: (x: number, y: number) => palmFor(x, y),
     };
