@@ -95,7 +95,7 @@ import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { createReviewReceipts, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
@@ -1652,12 +1652,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Stream one model turn into the ghost; the plan and its ledger receipt,
    *  or null (failed / cancelled — the reason was already said). */
   async function streamTurn(frameId: string, engineId: EngineId, utterance: string, script: string, task: SwarmTask, goal: string | undefined,
-    current: SurfacePlan | null, retry: () => void): Promise<{ plan: SurfacePlan; si: SentInfo } | null> {
+    current: SurfacePlan | null, retry: () => void, onSi?: (si: SentInfo) => void): Promise<{ plan: SurfacePlan; si: SentInfo } | null> {
     const f = reg.get(frameId); if (!f) return null;
     const engine = engineFor(engineId, script.replace('BOARD', frameId));
     let sentInfo: SentInfo | null = null;
     const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current }, engine, {
-      onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
+      onSent: (s) => { sentInfo = s; onSi?.(s); aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
       onFallback: aiFellBack,
       onGhost: (g) => ghost(frameId, g),
       onNote: (note) => {
@@ -1675,7 +1675,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return plan && si ? { plan, si } : null;
   }
 
-  interface TurnDraft { plan: SurfacePlan; si: SentInfo; summary: string; status: ProposalStatus }
+  interface TurnDraft { plan: SurfacePlan; si: SentInfo; summary: string; status: ProposalStatus; fellBack?: boolean }
+  /** How a review's facts combine two engine steps (see combineFacts). */
+  type FactsLink = { si: SentInfo; kind: 'improved' | 'fallback'; retry?: () => void };
   /** `improve`: this turn improves an unreviewed draft (its plan is the
    *  model's starting point). If the turn fails, the draft itself goes to
    *  review — one request, one review, whichever engine finished it. */
@@ -1684,13 +1686,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     turnBusy = true;
     try {
       if (!reg.get(frameId)) return false;
+      let attempt: SentInfo | null = null;
       const out = await streamTurn(frameId, engineId, utterance, script, task, goal, improve ? improve.plan : surfaces[frameId] ?? null,
-        () => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });
+        () => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); }, (si) => { attempt = si; });
       if (!out) {
         settleSwarm(); ghost(frameId, null);
-        return improve ? await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status) : false;
+        if (!improve) return false;
+        // The improvement failed: review the draft, counting whatever the
+        // failed attempt already sent, and keep a Retry for the whole request.
+        improve.fellBack = true;
+        const tried = attempt as SentInfo | null;
+        return await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status,
+          tried ? { si: tried, kind: 'fallback', retry: () => { drop(); setTimeout(() => { void connectRoom(frameId, utterance); }, 0); } } : undefined);
       }
-      return await proposePlan(frameId, utterance, out.plan, out.si, summary, status);
+      return await proposePlan(frameId, utterance, out.plan, out.si, summary, status, improve ? { si: improve.si, kind: 'improved' } : undefined);
     } finally { turnBusy = false; settleEngines(); autoHideAi(); }
   }
 
@@ -1715,7 +1724,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -1772,9 +1781,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // A blank board still has a name ("Board 3"): diff against it, so the
         // plan says "Board 3 → This room" — or nothing when the name stays.
         changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
-        facts: reviewFacts(si, utterance),
+        // A two-step change (draft + improvement, or a draft after a failed
+        // improvement) names both steps and counts both steps' bytes.
+        facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance),
       });
-      say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
+      if (link?.kind === 'fallback') {
+        say(`${engineName(link.si.engine)} didn’t answer — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
+        if (link.retry) offerRetry(link.retry);
+      } else say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
     });
   }
 
@@ -1795,17 +1809,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const DRAFT = 'Draft: 2 lamps found in this room';
     if (net.isOnline()) {
-      // One request, one review: Nano drafts on this device (shown in the
-      // ghost, not reviewed on its own), Gemini improves that draft, and the
-      // person approves the result once. The review's footer names Gemini
-      // and what it sent; the draft itself sent nothing.
+      // One request, one review: Nano drafts (shown in the ghost, not
+      // reviewed on its own), Gemini improves that draft, and the person
+      // approves the result once. The review's footer names both steps and
+      // counts both steps' bytes (a phone's "Nano" draft step may itself
+      // run in the cloud).
       const draft = await draftTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, DRAFT, 'guess');
       if (!draft) return;
       panels.showHandoff('nano', 'group the lights and add a room plan');
       // Tell Deep what the handoff line promises (only in the prompt; her card
       // still shows her own words) — without it the live model never added the
       // room plan: 0/3 → 7/7 boards with it (live-build study).
-      await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Room dashboard: grouped lights + a room plan', 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
+      const kept = await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Room dashboard: grouped lights + a room plan', 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
+      // The network dropped between the draft and Gemini: the kept draft gets
+      // its Deep pass on reconnect, as on the offline path.
+      if (kept && draft.fellBack && !net.isOnline() && !deepLater.some((d) => d.frameId === frameId)) {
+        deepLater.push({ frameId, utterance });
+        panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
+        say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
+      }
       return;
     }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, DRAFT, 'guess');

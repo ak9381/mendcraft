@@ -13,7 +13,7 @@ describe('Retry after a mid-request failure (A7-024)', () => {
   it('a turn error offers Retry that re-runs the same turn', () => {
     const body = src.slice(src.indexOf('async function streamTurn('), src.indexOf('async function proposePlan('));
     expect(body).toContain('offerRetry(retry);');
-    expect(body).toContain('() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });');
+    expect(body).toContain('() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); }');
   });
   it('any later status line hides it, and it is at least 44px tall', () => {
     expect(src).toMatch(/const say = \(t: string\) => \{\s*statusEl\.textContent = t; hideRetry\(\);/);
