@@ -26,5 +26,11 @@ export function stampHandLabel<T>(points: T[], label?: string | null): T[] {
 export function cameraHandsFromSelfie<T extends { x: number; y: number }>(
   hands: readonly (readonly T[])[],
 ): T[][] {
-  return hands.map((h) => stampHandLabel(h.map((p) => cameraPointFromSelfie(p)), handLabelOf(h)));
+  return hands.map((h) => {
+    const out = stampHandLabel(h.map((p) => cameraPointFromSelfie(p)), handLabelOf(h));
+    // The frame's shared shape read (handShape.stampShape) is mirror-safe.
+    const shape = (h as { shape?: string }).shape;
+    if (shape) (out as T[] & { shape?: string }).shape = shape;
+    return out;
+  });
 }

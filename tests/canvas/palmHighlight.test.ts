@@ -8,8 +8,13 @@ const box = (item: string, left: number, top: number, width = 100, height = 52):
 
 /** Two buttons with a 10 px gap, far from anything else. */
 const PAIR = [box('A', 400, 400), box('B', 510, 400)];
-/** Five 40 px icon buttons 8 px apart (a dense toolbar). */
-const DENSE = ['a', 'b', 'c', 'd', 'e'].map((id, i) => box(id, 600 + i * 48, 200, 40, 40));
+/** Two rows of five 40 px icon buttons, 8 px apart (a dense icon grid). */
+const DENSE = [
+  ...['a', 'b', 'c', 'd', 'e'].map((id, i) => box(id, 600 + i * 48, 200, 40, 40)),
+  ...['f', 'g', 'h', 'i', 'j'].map((id, i) => box(id, 600 + i * 48, 248, 40, 40)),
+];
+/** A toolbar: 100 px buttons, 10 px gaps — not a crowd. */
+const TOOLBAR = ['n', 's', 'u', 'h', 'd'].map((id, i) => box(id, 200 + i * 110, 30, 100, 52));
 
 describe('createHighlightCore — picking', () => {
   it('snaps to the nearest button, even from outside it', () => {
@@ -77,10 +82,10 @@ describe('createHighlightCore — dense areas are slower', () => {
     const sparse = createHighlightCore<string>();
     const dense = createHighlightCore<string>({ expandAfterMs: 1e9 });
     sparse.update({ x: 300, y: 600 }, PAIR, 0, VP);
-    dense.update({ x: 620, y: 220 }, DENSE, 0, VP);
+    dense.update({ x: 620, y: 238 }, DENSE, 0, VP);
     for (let k = 1; k <= 10; k++) {
       sparse.update({ x: 300 + k * 5, y: 600 }, PAIR, k * 16, VP);
-      dense.update({ x: 620 + k * 5, y: 220 }, DENSE, k * 16, VP);
+      dense.update({ x: 620 + k * 5, y: 238 }, DENSE, k * 16, VP);
     }
     const sparseMoved = sparse.view.point!.x - 300;
     const denseMoved = dense.view.point!.x - 620;
@@ -90,13 +95,13 @@ describe('createHighlightCore — dense areas are slower', () => {
 });
 
 describe('createHighlightCore — crowded group magnifies', () => {
-  it('≥3 targets within 60 px, hovered 500 ms → a spaced row', () => {
+  it('≥4 targets within 48 px, hovered with an open palm 500 ms → a spaced row', () => {
     const h = createHighlightCore<string>();
-    let v = h.update({ x: 668, y: 220 }, DENSE, 0, VP);
+    let v = h.update({ x: 668, y: 238 }, DENSE, 0, VP);
     expect(v.expanded).toBeNull();
-    v = h.update({ x: 668, y: 220 }, DENSE, 300, VP);
+    v = h.update({ x: 668, y: 238 }, DENSE, 300, VP);
     expect(v.expanded).toBeNull();
-    v = h.update({ x: 668, y: 220 }, DENSE, 520, VP);
+    v = h.update({ x: 668, y: 238 }, DENSE, 520, VP);
     expect(v.expanded).not.toBeNull();
     const slots = v.expanded!.slots;
     expect(slots.length).toBeGreaterThanOrEqual(3);
@@ -110,7 +115,7 @@ describe('createHighlightCore — crowded group magnifies', () => {
 
   it('the palm then moves across the row: one slot per slot-width of motion', () => {
     const h = createHighlightCore<string>();
-    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 220 }, DENSE, t, VP);
+    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 238 }, DENSE, t, VP);
     const v0 = h.view;
     const items = v0.expanded!.items;
     const i0 = items.indexOf(v0.current!);
@@ -118,18 +123,40 @@ describe('createHighlightCore — crowded group magnifies', () => {
     let t = 560;
     // Move right by ~1.2 slot pitches.
     const pitch = PALM_HIGHLIGHT.slotW + PALM_HIGHLIGHT.slotGap;
-    for (let k = 0; k < 24; k++) h.update({ x: (x += pitch * 1.2 / 24), y: 220 }, DENSE, (t += 16), VP);
+    for (let k = 0; k < 24; k++) h.update({ x: (x += pitch * 1.2 / 24), y: 238 }, DENSE, (t += 16), VP);
     expect(items.indexOf(h.view.current!)).toBe(i0 + 1);
     expect(h.view.expanded).not.toBeNull();
   });
 
   it('moving well away from the row collapses it', () => {
     const h = createHighlightCore<string>();
-    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 220 }, DENSE, t, VP);
+    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 238 }, DENSE, t, VP);
     let y = 220;
     let t = 560;
     for (let k = 0; k < 30; k++) h.update({ x: 668, y: (y += 12) }, DENSE, (t += 16), VP);
     expect(h.view.expanded).toBeNull();
+  });
+
+  it('a loose (not open) hand never magnifies, nor does an open palm that was not open the whole 500 ms', () => {
+    const h = createHighlightCore<string>();
+    for (let t = 0; t <= 2000; t += 40) h.update({ x: 668, y: 238 }, DENSE, t, VP, false);
+    expect(h.view.expanded).toBeNull();
+    const g = createHighlightCore<string>();
+    for (let t = 0; t <= 2000; t += 40) g.update({ x: 668, y: 238 }, DENSE, t, VP, t % 400 !== 0);
+    expect(g.view.expanded).toBeNull();
+  });
+
+  it('a normal toolbar (100 px buttons, 10 px gaps) never magnifies', () => {
+    const h = createHighlightCore<string>();
+    for (let t = 0; t <= 2000; t += 40) h.update({ x: 360, y: 56 }, TOOLBAR, t, VP);
+    expect(h.view.expanded).toBeNull();
+  });
+
+  it('adopt: the cursor directly on a control takes the highlight there', () => {
+    const h = createHighlightCore<string>();
+    h.update({ x: 450, y: 426 }, PAIR, 0, VP);
+    h.adopt('B');
+    expect(h.update(null, PAIR, 16, VP).current).toBe('B');
   });
 
   it('a sparse pair never magnifies', () => {
@@ -140,7 +167,7 @@ describe('createHighlightCore — crowded group magnifies', () => {
 
   it('reset clears everything', () => {
     const h = createHighlightCore<string>();
-    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 220 }, DENSE, t, VP);
+    for (let t = 0; t <= 520; t += 40) h.update({ x: 668, y: 238 }, DENSE, t, VP);
     h.reset();
     expect(h.view).toEqual({ current: null, point: null, rect: null, expanded: null });
   });

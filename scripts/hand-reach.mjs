@@ -6,7 +6,7 @@
 // centre, checks the hand resolves to it, pinches and releases, and checks the
 // click reached it (dry-run: delivered, then stopped before app handlers so
 // the walk doesn't change state). Separately it does REAL hand activations:
-// Connect this room, Keep, a lamp tile, the menu, the mic.
+// Talk on the empty board, Keep, a lamp tile, the menu, the mic.
 //
 //   node scripts/hand-reach.mjs        (BASE=http://localhost:5191 to reuse a server)
 // Writes a JSON report + screenshots to screens/sim-main/hand-reach/.
@@ -173,7 +173,17 @@ try {
     real.push({ device: d.name, step: 'New board (hand)', ...await handPress(page, (el) => el.dataset?.cmd === 'new') });
     await sleep(300);
 
-    real.push({ device: d.name, step: 'Connect this room', ...await handPress(page, (el, l) => /connect this room/i.test(l)) });
+    // The empty board offers only its heading and Talk (no Connect / Floor
+    // plan buttons): reach Talk by hand, then ask for the room the way the
+    // sim would hear it — through the say box.
+    real.push({ device: d.name, step: 'Talk on the empty board (hand)', ...await handPress(page, (el) => el.classList.contains('mc-empty-talk')) });
+    await sleep(300);
+    await page.evaluate(() => {
+      const i = document.querySelector('#mc-say-in');
+      if (!i) return;
+      i.value = 'connect this room';
+      document.querySelector('.mc-say')?.requestSubmit();
+    });
     // Every decision — desktop or phone — opens the same full-screen review;
     // its own Approve/Reject are the only visible decision controls (the
     // underlying Proposal's Keep/Drop stay in the DOM, hidden, for Approve

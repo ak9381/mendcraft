@@ -165,4 +165,12 @@ describe('createHoldEngine', () => {
     e.reset();
     expect(hold(e, () => [hand('thumbsUp', 'R')], 2133, 4200).fired).toEqual(['R:thumbsUp']);
   });
+
+  it('two-hand stillness follows each HAND, not its slot in the frame array (the tracker may swap them)', () => {
+    const e = createHoldEngine();
+    const L = hand('thumbsUp', 'L', 0.3), R = hand('thumbsUp', 'R', 0.7);
+    // The array order flips every frame; the hands themselves never move.
+    const { fired } = hold(e, (t) => (Math.round(t / 33) % 2 ? [L, R] : [R, L]), 0, 2100);
+    expect(fired).toEqual(['2:thumbsUp']);
+  });
 });
