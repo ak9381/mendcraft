@@ -567,7 +567,11 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
     DEVICES.forEach((d) => {
       const l = ledger.get(d);
       views[d].device.stat.textContent = `${l.kept} task${l.kept === 1 ? '' : 's'} kept on this device`;
-      views[d].cloud.stat.textContent = `${bytesShort(l.lastTotal)} sent to cloud from ${views[d].label}`;
+      // SIM sends nothing: say what it would send, so the footer never reads
+      // "0 B sent" beside a packet that crossed (labelled SIM) above it.
+      views[d].cloud.stat.textContent = l.lastTotal <= 0 && l.lastSimTotal > 0
+        ? `SIM · would send ${bytesShort(l.lastSimTotal)} from ${views[d].label} (nothing sent)`
+        : `${bytesShort(l.lastTotal)} sent to cloud from ${views[d].label}`;
     });
   };
   const setLabel = (device: FeedDevice, label?: string) => {
