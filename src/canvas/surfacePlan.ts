@@ -352,6 +352,9 @@ export function expandPlan(
   plan: SurfacePlan,
   surfaceId: string,
   devices: Record<string, DeviceState>,
+  /** heading: false leaves out the board-title heading (the canvas frame
+   *  head already shows the same title). */
+  o: { heading?: boolean } = {},
 ): A2uiMessage[] {
   const components: Record<string, unknown>[] = [];
   const deviceData: Record<string, DeviceState> = {};
@@ -490,7 +493,8 @@ export function expandPlan(
   }
 
   const tileIds = plan.tiles.map((t, i) => expandNode(t, [i]));
-  components.unshift(
+  if (o.heading === false) components.unshift({ id: 'root', component: 'Column', children: tileIds });
+  else components.unshift(
     { id: 'root', component: 'Column', children: ['title', ...tileIds] },
     { id: 'title', component: 'Text', text: plan.title, variant: 'h2' },
   );

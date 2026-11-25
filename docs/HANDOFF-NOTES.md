@@ -79,3 +79,10 @@ iPhone: not installed since the last unplug; ios/App/App Swift files already syn
 Preview: NOT redeployed since the Firebase login expired — run `npx firebase-tools login --reauth`, then `npm run build && npx firebase-tools hosting:channel:deploy sim-main --project mendcraft`.
 Known limitations (parked): Track pill needs two taps to retry after a camera error; no pointResult sent if sensing is stopped mid-point; set-orientation awaits have no timeout; teach-with-model not wired to engines; one old tracked file docs/superpowers/plans/2026-11-20-rich-a2ui-layouts.md still begins with an assistant-style header (blocked by the local pre-push guard; ask before scrubbing).
 Unverified without devices: DockKit face follow with the WebView camera, hand-follow axis signs, iPhone-camera pointing at the lamp/Marshall, Spotify on the Marshall, WiZ lamp, chime pairing inside the apps, phone hand fps. See TEST-CHECKLIST sections 0, E, G, P, S.
+
+## 26 Nov overnight status (usage limit reached mid-run)
+Merged to sim-main: button gestures (2 fix rounds), gimbal nod/shake/wakeup, live Nano/Gemini (Nano via Firebase AI Logic, live-verified 6.5 s room draft), UI/UX fix wave.
+Waiting, not merged: branch `live-ai-2` (real WiZ bulbs replace seeded lamps; bytes booked on the real fetch; Nano warm-up) — needs review, then merge (merges clean).
+Small to-dos: review title "Better: …" in the one-review path should read "This room: …"; offline fallback line should say "You're offline — this is Nano's draft".
+Not yet done: full end-to-end demo on both phones (chime pairing, Spotify on the preview origin, board to phone), phone UI review on real devices, docs/DEMO-REVIEW.md.
+For Akash: real Gemini works only on the sim-main preview (App Check); register a local debug token (docs/app-check-local-dev.md) to use it on 127.0.0.1. Spotify login exists only on 127.0.0.1. Android "stay awake" is on — revert with `adb shell svc power stayon false`. Live-test hands (E) and gimbal (G, G17–G21).

@@ -112,12 +112,12 @@ describe('chrome stacking: canvas bits stay under a full-screen review', () => {
 });
 
 describe('hand cluster sits mid-screen on the right, clear of the tools bar', () => {
-  it('the cluster is a vertically-centred inset column with 120×52px equal-width targets, 24px apart', () => {
+  it('the cluster is a vertically-centred column docked to the right edge with 120×52px equal-width targets, 24px apart', () => {
     const rule = ruleFor(canvasCss, '.mc-hand-cluster');
     expect(rule).toContain('position: fixed');
     expect(rule).toContain('top: 50%');
     expect(rule).toContain('transform: translateY(-50%)');
-    expect(rule).toContain('right: max(180px, 13vw, calc(min(var(--mc-ai-w, 320px), 340px) + 40px))');
+    expect(rule).toContain('right: 24px');
     expect(rule).toContain('flex-direction: column');
     expect(rule).toContain('gap: 24px');
     expect(rule).toContain('align-items: stretch');
@@ -135,8 +135,8 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(chip).toMatch(/right:\s*16px/);
     expect(chip).toMatch(/bottom:\s*calc\(16px/);
     expect(chip).toMatch(/max-width:\s*220px/);
-    // Quiet small pill (13px); a large 288×216 camera preview.
-    expect(chip).toMatch(/font-size:\s*13px/);
+    // Quiet pill at the 15px text floor; a large 288×216 camera preview.
+    expect(chip).toMatch(/font-size:\s*15px/);
     const face = canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0] ?? '';
     expect(face).toMatch(/right:\s*16px/);
     expect(face).toMatch(/width:\s*288px/);
@@ -243,8 +243,7 @@ describe('AI activity drawer stays compact and closable, cluster stays on screen
   it('when the AI panel is open, cluster children keep right: auto so they stay in the viewport', () => {
     const blob = ruleFor(canvasCss, '.mc-hand-cluster .mc-fab-mic');
     expect(blob).toContain('right: auto');
-    const cluster = ruleFor(canvasCss, '.mc-hand-cluster');
-    expect(cluster).toContain('var(--mc-ai-w');
+    expect(canvasCss).toMatch(/\.mc-canvas:has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster \{ right: calc\(min\(var\(--mc-ai-w, 320px\), 340px\) \+ 40px\); \}/);
   });
 });
 

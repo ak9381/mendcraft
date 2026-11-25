@@ -34,7 +34,10 @@ export function mountPhoneMenu(root: HTMLElement, win: Window = window): PhoneMe
   const doc = root.ownerDocument;
   const bar = root.querySelector<HTMLElement>('.mc-bar')!;
   const btns = root.querySelector<HTMLElement>('.mc-bar-btns')!;
-  const original = Array.from(btns.children) as HTMLElement[];
+  // Every tool button, wherever it sits on desktop (the bar row or the More
+  // menu's groups), and where to put it back.
+  const original = Array.from(btns.querySelectorAll<HTMLElement>('[data-cmd]'));
+  const homes = new Map(original.map((b) => [b, b.parentElement ?? btns] as const));
   const byCmd = (c: string) => original.find((b) => b.dataset.cmd === c);
 
   const style = sheetStyle(win.navigator?.userAgent ?? '', new URLSearchParams(win.location?.search ?? '').get('platform'));
@@ -101,7 +104,7 @@ export function mountPhoneMenu(root: HTMLElement, win: Window = window): PhoneMe
       root.classList.add('mc-phone');
     } else {
       close();
-      original.forEach((b) => btns.append(b));
+      original.forEach((b) => (homes.get(b) ?? btns).append(b));
       actions.remove();
       root.classList.remove('mc-phone');
     }

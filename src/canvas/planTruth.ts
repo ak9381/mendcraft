@@ -89,6 +89,12 @@ export function betterSummary(plan: SurfacePlan): string {
   return `Better: ${parts.join(' + ')}`;
 }
 
+/** The one review of a room (Nano draft + Gemini improve shown together):
+ *  no earlier draft was reviewed, so no "Better:" comparison. */
+export function roomSummary(plan: SurfacePlan): string {
+  return betterSummary(plan).replace(/^Better: /, 'This room: ');
+}
+
 const TEMPLATE_WORDS: Record<string, string> = { studio: 'a studio', oneRoom: 'one room', twoBedroom: 'two bedrooms' };
 
 export function floorPlanSummary(plan: SurfacePlan): string {

@@ -1470,3 +1470,12 @@ describe('D: titles and counts come from the plan', () => {
     expect(src).toContain('tilesFilledLine(plan)');
   });
 });
+
+describe('one-review room title', () => {
+  it('reads "This room:" rather than "Better:" when no draft was reviewed first', async () => {
+    const { roomSummary, betterSummary } = await import('../../src/canvas/planTruth');
+    const plan = { kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] } as never;
+    expect(betterSummary(plan)).toMatch(/^Better: /);
+    expect(roomSummary(plan)).toMatch(/^This room: /);
+  });
+});

@@ -63,10 +63,9 @@ describe('AI panel holds', () => {
     expect(src).toContain('aiHold.size > 0');
     expect(src).toContain("aiHold.add('gemini')");
   });
-  it('an auto-open is a pure overlay: the cluster/swarm shift keys on is-ai-pinned', () => {
+  it('the edge-docked cluster steps left of any open drawer (it would sit on the panel otherwise)', () => {
     expect(src).toContain("root.classList.toggle('is-ai-pinned', on && !aiAuto)");
     const css = readFileSync(new URL('../../src/canvas/canvas.css', import.meta.url), 'utf8');
-    expect(css).not.toContain('.mc-canvas.is-ai-pinned .mc-hand-cluster');
-    expect(css).not.toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster/);
+    expect(css).toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster/);
   });
 });

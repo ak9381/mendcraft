@@ -87,3 +87,20 @@ describe('routeLine: the table run() switches on', () => {
     expect(cd).toEqual({ name: 'connectDevices', dashboard: true });
   });
 });
+
+describe('routeLine: Tools > More by voice', () => {
+  const table: [string, string][] = [
+    ['hands on', 'handsOn'], ['turn off hands', 'handsOff'], ['hover to click', 'dwell'],
+    ['register again', 'register'], ['simulate offline', 'offline'], ['back online', 'online'],
+    ['swap phone sides', 'swap'],
+  ];
+  for (const [text, tool] of table) {
+    it(`"${text}" → ${tool}`, () => {
+      expect(routeLine(text, base)).toEqual({ name: 'tool', tool });
+    });
+  }
+  it('device and gimbal phrases still fall through', () => {
+    expect(routeLine('follow my hands', base).name).not.toBe('tool');
+    expect(routeLine('turn on the desk lamp', base).name).toBe('device');
+  });
+});

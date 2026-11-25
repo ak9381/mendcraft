@@ -182,7 +182,8 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
 export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase, subOf?: (p: PairedPhone) => string): string {
   if (phase === 'idle') return '';
   const sub = (p: PairedPhone): string => {
-    const t = subOf?.(p) ?? '';
+    // The row's own SIM chip already says these phones are simulated: no second "SIM ·".
+    const t = (subOf?.(p) ?? '').replace(/^SIM · /, '');
     return t ? ` <span class="mc-paired-sub" data-phone-sub="${esc(p.id)}">${esc(t)}</span>` : '';
   };
   if (phase === 'live' || phase === 'asking') {

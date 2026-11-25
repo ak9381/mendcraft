@@ -1,11 +1,12 @@
-// Small yellow hand icons for the gesture badges (≈20 px). One inline SVG per
+// Small hand icons for the gesture badges (≈18 px on the amber circle). One inline SVG per
 // fixed shape; the moving part (thumb / raised fingers) is its own group so
 // CSS can animate just that (and stop it under prefers-reduced-motion).
 
 import type { FixedShape } from './gestureHold';
 import type { HandSide } from './handShape';
 
-const FILL = '#FFC83D';
+// Cream on the amber badge (and on the dark HUD / highlight label), dark ink outline.
+const FILL = '#FFF8E6';
 const INK = '#2B2B2B';
 const S = `fill="${FILL}" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"`;
 

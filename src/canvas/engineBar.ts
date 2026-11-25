@@ -41,7 +41,9 @@ export function clipLine(s: string, max = ENGINE_LINE_MAX): string {
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
 
-export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineId): void }): EngineBar {
+export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineId): void; sim?: boolean }): EngineBar {
+  // SIM before anything ran: still say SIM, so the canvas always shows one marker.
+  const bytesText = (n: number, sim = 0): string => (opts.sim && n <= 0 && sim <= 0 ? 'SIM · nothing sent' : formatFooterBytes(n, sim));
   const doc = root.ownerDocument;
   const make = <T extends HTMLElement>(tag: string, cls: string, text?: string): T => {
     const e = doc.createElement(tag) as T;
@@ -80,7 +82,7 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
   link.setAttribute('aria-hidden', 'true');
   link.append(make('span', 'mc-engine-link-line'), make('span', 'mc-engine-link-head', '▶'));
 
-  const bytes = make('span', 'mc-engine-bytes', formatFooterBytes(0));
+  const bytes = make('span', 'mc-engine-bytes', bytesText(0));
   bytes.setAttribute('role', 'status');
   bytes.title = 'Total bytes that actually left this device, from the ledger';
   const agents = make('span', 'mc-engine-agents', '');
@@ -125,7 +127,7 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
       cards[engine].card.setAttribute('data-state', 'idle');
       cards[engine].state.textContent = STATE_TEXT.idle;
     },
-    setCloudBytes(n, sim = 0) { bytes.textContent = formatFooterBytes(n, sim); },
+    setCloudBytes(n, sim = 0) { bytes.textContent = bytesText(n, sim); },
     setAgents(text) { agents.textContent = text; agents.hidden = !text; },
   };
 }

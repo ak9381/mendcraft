@@ -153,7 +153,10 @@ export async function suggestNextSteps(
 
 // ---- chips on the focused board -------------------------------------------
 
-export const SOURCE_TAG = { nano: 'Nano · on device', rules: 'Suggested', sim: 'Suggested · SIM' } as const;
+// One SIM marker per screen (the engine bar's would-send line): rule
+// suggestions are labelled "Suggested" with or without SIM — they never
+// claim a model picked them.
+export const SOURCE_TAG = { nano: 'Nano · on device', rules: 'Suggested', sim: 'Suggested' } as const;
 
 export function sourceTag(r: Pick<NextStepsResult, 'source' | 'sim'>): string {
   return r.sim ? SOURCE_TAG.sim : SOURCE_TAG[r.source];
