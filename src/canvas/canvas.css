@@ -1509,22 +1509,25 @@
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
 
-/* ---- Button gestures (gestureControl.ts): yellow animated hand badges on
-   the bound buttons, only while Hands is on; the bound button fills while a
+/* ---- Button gestures (gestureControl.ts): amber 24px hand badges on the
+   bound buttons (top-right, -8px), only while Hands is on; the bound button fills while a
    2 s hold runs; a small HUD names what the held shape will press. */
 .mc-gesture-layer { position: fixed; inset: 0; pointer-events: none; z-index: 80; }
 .mc-gesture-layer[hidden], .mc-gesture-badge[hidden], .mc-gesture-hud[hidden] { display: none; }
-.mc-gesture-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
-  padding: 2px 3px 1px; border-radius: 8px; background: #2B2B2B; box-shadow: 0 1px 3px rgb(0 0 0 / 0.3); }
-.mc-gesture-badge .mc-gi { display: block; width: 22px; height: 22px; }
-.mc-gesture-side { font: 700 9px/1 system-ui, sans-serif; color: #FFC83D; letter-spacing: 0.02em; margin-top: 1px; }
+.mc-gesture-badge { position: absolute; left: 0; top: 0; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%;
+  display: grid; place-items: center; background: #F2C14E; border: 1.5px solid #9A5F1C; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  animation: mc-badge-in 400ms ease-out both; }
+.mc-gesture-badge .mc-gi { display: block; width: 18px; height: 18px; }
+/* Which hand (L, R, L+R): a small dark tab on the circle's lower-left edge. */
+.mc-gesture-side { position: absolute; left: -7px; bottom: -6px; min-width: 14px; height: 14px; box-sizing: border-box; padding: 0 3px;
+  border-radius: 7px; background: #2B2B2B; color: #F2C14E; font: 700 9px/14px system-ui, sans-serif; text-align: center; white-space: nowrap; }
 .mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
-.mc-gi-thumbsUp .mc-gi-move, .mc-gi-thumbsDown .mc-gi-move { animation: mc-gi-thumb 1.8s ease-in-out infinite; }
-.mc-gi-one .mc-gi-move, .mc-gi-peace .mc-gi-move, .mc-gi-three .mc-gi-move { animation: mc-gi-raise 1.8s ease-in-out infinite; }
-.mc-gesture-badge.is-holding { background: #6B4E00; box-shadow: 0 0 0 3px #FFC83D; }
-.mc-gesture-badge.is-holding .mc-gi-move { animation-duration: 0.6s; }
-@keyframes mc-gi-thumb { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-1.5px) rotate(-6deg); } }
-@keyframes mc-gi-raise { 0%, 60%, 100% { transform: scaleY(1); } 30% { transform: scaleY(0.82); } }
+/* Holding its gesture: the badge darkens (the bound button fills, below). */
+.mc-gesture-badge.is-holding { background: #9A5F1C; box-shadow: 0 0 0 3px #F2C14E; }
+/* Appears once (scale 0.9 → 1 + fade, ≤ 600 ms), then stays still. The
+   placement transform is inline, so the entrance uses the separate scale. */
+@keyframes mc-badge-in { from { opacity: 0; scale: 0.9; } to { opacity: 1; scale: 1; } }
+@keyframes mc-badge-fade { from { opacity: 0; } to { opacity: 1; } }
 /* The bound button while its gesture is held: a yellow fill grows left to
    right with the 2 s hold, inside a ring that tightens toward done. */
 .mc-gesture-target { outline: 3px solid #E0A800; outline-offset: calc(6px - 4px * var(--mc-gesture-progress, 0));
@@ -1540,7 +1543,7 @@
 .mc-gesture-hud.is-none .mc-gesture-hud-bar { display: none; }
 @media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 15px; } }
 @media (prefers-reduced-motion: reduce) {
-  .mc-gi-move, .mc-gesture-badge.is-holding .mc-gi-move { animation: none; }
+  .mc-gesture-badge { animation: mc-badge-fade 400ms ease-out both; }
   .mc-gesture-pressed { scale: none; transition: none; }
 }
 /* "AI monitor" is the one named AI entry on the laptop bar: the in-app

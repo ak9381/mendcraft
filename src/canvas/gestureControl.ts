@@ -150,7 +150,8 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (!el || !onTop(el)) { badge.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       badge.hidden = false;
-      badge.style.transform = `translate(${Math.round(r.right - 16)}px, ${Math.round(r.top - 12)}px)`;
+      // 24px circle at the button's top-right corner, 8px outside it.
+      badge.style.transform = `translate(${Math.round(r.right - 16)}px, ${Math.round(r.top - 8)}px)`;
       badge.classList.toggle('is-holding', holding === b.key);
     }
   }
