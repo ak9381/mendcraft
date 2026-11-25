@@ -19,7 +19,7 @@ import type { PairState } from '../relay/protocol';
 import type { GuestSession } from '../relay/session';
 
 /** The bit of the guest session iPhone sensing needs. */
-export type PhoneGuestSessionLike = Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onSensePoint'>>;
+export type PhoneGuestSessionLike = Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onSensePoint' | 'onGimbalCue'>>;
 
 export type LinkState = 'idle' | 'listening' | 'joining' | 'connected' | 'error' | 'sim';
 

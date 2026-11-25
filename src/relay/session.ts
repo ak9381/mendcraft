@@ -5,7 +5,11 @@
 
 import {
   advancePair,
+  createCueLimiter,
   cryptoRandom,
+  GIMBAL_CUE_RECEIVE_GAP_MS,
+  isGimbalCue,
+  type GimbalCueKind,
   generateRoomToken,
   shortCodeOf,
   type MusicStatus,
@@ -58,6 +62,12 @@ export interface HostSession extends SessionBase {
   askWhoIsThere(): Promise<void>;
   /** Ask the phone of `platform` to take the point-to-connect photo. */
   askSensePoint(platform: 'ios' | 'android'): Promise<void>;
+  /** Ask the phones to play a DockKit body-language move (an allow-listed word,
+   *  no user content). At most one per GIMBAL_CUE_MIN_GAP_MS (a 'no' right
+   *  after a 'yes' may follow at once): resolves false when dropped by the rate
+   *  limit or not paired, true once published. A failed publish rejects and
+   *  does not start a gap. */
+  sendGimbalCue(kind: GimbalCueKind): Promise<boolean>;
 }
 
 /** Read-only-ish /control dashboard view: it reads snapshots, and can REQUEST a run
@@ -86,6 +96,8 @@ export interface GuestSession extends SessionBase {
   onWhoIsThere(cb: () => void): void;
   /** The host asked this phone to take the point-to-connect photo. */
   onSensePoint(cb: (platform: string) => void): void;
+  /** The host asked for a gimbal body-language move (validated, rate-limited). */
+  onGimbalCue(cb: (kind: GimbalCueKind) => void): void;
 }
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
@@ -147,6 +159,8 @@ export interface CreateHostOptions {
    *  at) instead of minting a fresh one. Must be a 24-char token; ignored
    *  otherwise. This is what lets a laptop reload keep remembered phones paired. */
   token?: string;
+  /** Clock for the gimbal-cue rate limit (tests). */
+  now?: () => number;
 }
 
 const RESUME_TOKEN_RE = /^[0-9A-Z]{24}$/;
@@ -175,6 +189,8 @@ export async function createHostSession(
   let runCb: ((run: RelayRunRequest) => void) | null = null;
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
+  const cueLimiter = createCueLimiter(undefined, opts.now);
+  let cueInflight = false;
   // The most recent snapshot, re-sent whenever a /control dashboard announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -266,6 +282,20 @@ export async function createHostSession(
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere' } }),
     askSensePoint: (platform) =>
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'sensePoint', text: JSON.stringify({ platform }) } }),
+    sendGimbalCue: async (kind) => {
+      if (!isGimbalCue(kind) || core.state !== 'paired') return false;
+      if (cueInflight || !cueLimiter.ready(kind)) return false;
+      // Stamp the gap only once the cue really went out: a failed publish
+      // doesn't block the next cue.
+      cueInflight = true;
+      try {
+        await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalCue', text: kind } });
+      } finally {
+        cueInflight = false;
+      }
+      cueLimiter.mark(kind);
+      return true;
+    },
     publishState,
     close: async () => {
       clearTimeout(aliasTimer);
@@ -279,12 +309,16 @@ export async function createHostSession(
 export async function createGuestSession(
   transport: RelayTransport,
   roomId: string,
+  opts: { now?: () => number } = {},
 ): Promise<GuestSession> {
   const core = makeCore('phone', transport, roomId);
 
   let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
   let whoCb: (() => void) | null = null;
   let senseCb: ((platform: string) => void) | null = null;
+  let cueCb: ((kind: GimbalCueKind) => void) | null = null;
+  // The receiver enforces its own gap (1.5 s, jitter-tolerant), whatever the sender does.
+  const cueLimiter = createCueLimiter(GIMBAL_CUE_RECEIVE_GAP_MS, opts.now);
   // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
   // still sees current state (same late-join contract as ControlSession).
   let lastSnapshot: ControlSnapshot | null = null;
@@ -316,6 +350,9 @@ export async function createGuestSession(
       let platform = '';
       try { const o = JSON.parse(msg.cmd.text ?? '{}') as { platform?: unknown }; if (typeof o.platform === 'string') platform = o.platform; } catch { /* malformed */ }
       if (platform) senseCb?.(platform);
+    } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'gimbalCue') {
+      const kind = msg.cmd.text;
+      if (isGimbalCue(kind) && cueCb && cueLimiter.allow(kind)) cueCb(kind);
     } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {
@@ -344,6 +381,9 @@ export async function createGuestSession(
     },
     onSensePoint: (cb) => {
       senseCb = cb;
+    },
+    onGimbalCue: (cb) => {
+      cueCb = cb;
     },
     onWhoIsThere: (cb) => {
       whoCb = cb;
