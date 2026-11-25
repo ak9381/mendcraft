@@ -112,10 +112,19 @@ export function tilesFilledLine(plan: SurfacePlan): string {
   return c.leaves !== c.top ? `${filled} in ${n(c.top, 'group')}` : filled;
 }
 
-/** A stat tile that claims connection state. No model on this canvas is given
+/** A stat tile that claims device state. No model on this canvas is given
  *  live device telemetry, so such a tile is made up — and it contradicted the
- *  real controls next to it. */
-const STATUS_CLAIM = /\b(dis)?connected\b|\bonline\b|\boffline\b|\bdevice status\b|\bdevices? (found|online|connected|paired)\b|\bconnection\b/i;
+ *  real controls next to it. Three shapes: a status/connection word anywhere
+ *  ("Desk Lamp Status", "Connected"), a device count ("Devices 3", "3
+ *  devices"), and a bare state as the value ("on", "Off", "playing"). */
+const STATUS_WORD = /\bstatus\b|\b(dis)?connected\b|\bonline\b|\boffline\b|\bconnection\b|\bpaired\b|\breachable\b/i;
+const DEVICE_COUNT = /\bdevices?\s*:?\s*\d|\b\d+\s+devices?\b|\bdevices? (found|online|connected|paired|active)\b/i;
+const STATE_VALUE = /^(on|off|playing|paused|stopped|idle|active|inactive|ready|standby|ok|yes|no)$/i;
+/** Does this stat tile claim live device state the model was never given? */
+export function isStatusClaim(label: string, value: string): boolean {
+  const both = `${label} ${value}`;
+  return STATUS_WORD.test(both) || DEVICE_COUNT.test(both) || STATE_VALUE.test(value.trim());
+}
 /** A connect BUTTON must read as the action it performs. */
 const CONNECT_AS_STATUS = /\b(all|already|is|are)\b.*\bconnected\b|^connected$|\ball set\b|\bdone\b/i;
 export const CONNECT_LABEL = 'Connect a device';
@@ -128,7 +137,7 @@ export function dropUnbackedClaims(plan: SurfacePlan): { plan: SurfacePlan; note
   const clean = (tiles: TileSpec[]): TileSpec[] => {
     const out: TileSpec[] = [];
     for (const t of tiles) {
-      if (t.type === 'stat' && STATUS_CLAIM.test(`${t.label} ${t.value}`)) {
+      if (t.type === 'stat' && isStatusClaim(t.label, t.value)) {
         notes.push(`Dropped a made-up status tile (“${t.label}”).`);
         continue;
       }
