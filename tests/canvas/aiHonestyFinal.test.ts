@@ -44,8 +44,8 @@ describe('A1 try-to-break: no cloud call behind a "Nano" label', () => {
   });
 
   it('a real on-device Nano is asked; ?sim=1 keeps the SIM script; a scripted stand-in is not a model', () => {
-    const lm = { create: async () => ({ promptStreaming: async function* () { yield '{}'; } }) };
-    const realNano = createEngines({ languageModel: lm }).nano!('{}');
+    const realNano = createEngines({ languageModel: {}, nanoStream: async () => '{}' }).nano!('{}');
+    expect(realNano.id).toBe('nano');
     expect(breakEngine(realNano, false)).toBe(realNano);
     const sim = createEngines({ sim: true }).nano!('{}');
     expect(breakEngine(sim, true)).toBe(sim);
@@ -79,7 +79,7 @@ describe('A2 SIM bytes are never real bytes', () => {
   });
 
   it('swarm pill', () => {
-    expect(swarmPillText({ agents: 3, gemini: 2, nano: 1, bytes: 0, simBytes: 2048 })).toBe('3 agents · Gemini 2 · Nano 1 · SIM · would send 2.0 KB');
+    expect(swarmPillText({ gemini: 1, nano: 0, bytes: 0, simBytes: 2048 })).toBe('Gemini · 1 call · SIM · would send 2.0 KB');
   });
 
   it('review footer: SIM says "would send", never "What left this device"', () => {
@@ -134,21 +134,29 @@ describe('A3 a fallback draft is not a second send', () => {
     const fb = canvasSrc.slice(canvasSrc.indexOf('function aiFellBack('), canvasSrc.indexOf('function aiFellBack(') + 400);
     expect(fb).not.toMatch(/recordSent|ledger\.record|logTurnReceipt|swarm\.start/);
     expect(canvasSrc).toContain('onFallback: aiFellBack');
-    // the connect path's fallback, too
+    // the connect path's fallback, too: its SIM relabel books nothing. The one
+    // other send there is the handoff to the REAL Gemini engine after an
+    // on-device failure — a genuine second send, so it is booked.
     const connect = canvasSrc.slice(canvasSrc.indexOf('async function connectTurn('), canvasSrc.indexOf('// ---- point-to-connect'));
-    expect(connect.match(/aiSent\(/g)).toHaveLength(1);
+    expect(connect).toContain('onFallback: aiFellBack,');
+    // three opens: the replayed identity, the turn itself, and the handoff —
+    // and the two model turns only book when a call really leaves (defer).
+    expect(connect.match(/aiSent\(/g)).toHaveLength(3);
+    expect(connect.match(/defer: true/g)).toHaveLength(2);
   });
 });
 
 describe('A4 swarm cursors follow the engine that really ran', () => {
   it('a Nano call shows no Gemini cursor', () => {
     for (const task of ['dashboard', 'floorplan', 'kannada', 'generic'] as const) {
-      const agents = buildSwarmAgents(buildMixedSwarmPlan('nano', task));
+      const agents = buildSwarmAgents(buildMixedSwarmPlan('nano', task, { tileCount: 5 }));
       expect(agents.some((a) => a.kind === 'gemini')).toBe(false);
-      expect(agents.length).toBeGreaterThanOrEqual(10);
-      expect(agents.length).toBeLessThanOrEqual(20);
+      expect(agents.filter((a) => a.real)).toHaveLength(1);
+      expect(agents.length).toBe(1 + 5); // the call + one per tile, never a fixed mob
     }
-    expect(swarmPillText({ agents: 10, gemini: 0, nano: 10, bytes: 0 })).toBe('10 agents · Nano 10 · 0 B to cloud');
+    // ...and a Gemini call shows no Nano cursor either
+    expect(buildSwarmAgents(buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 5 })).some((a) => a.kind === 'nano')).toBe(false);
+    expect(swarmPillText({ gemini: 0, nano: 1, bytes: 0 })).toBe('Nano · 1 call · 0 B to cloud');
   });
 });
 

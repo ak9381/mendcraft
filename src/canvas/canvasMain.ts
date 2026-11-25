@@ -10,12 +10,13 @@ import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS, phoneHandsAllowed, phoneS
 import { announcePhone } from './phoneGuestJoin';
 import type { PhoneGuestSessionLike } from './laptopLink';
 import { App } from '@capacitor/app';
-import { createEngines, type CloudStream, type PromptApi } from './engines';
+import { createEngines, type CloudStream, type OnDeviceStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
-import { isEnabled, prepareHybrid, streamCanvasPlan } from '../ai/hybrid';
+import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
+import { installNanoTrace } from '../ai/nanoTrace';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
@@ -56,17 +57,49 @@ bindDirectory(createDirectory(directoryStore));
 // Do not await Apple/ML Kit availability before first paint — a hanging plugin
 // left the iOS WKWebView on the dark body background (a black screen).
 const languageModel = (globalThis as Record<string, unknown>).LanguageModel as PromptApi | undefined;
+// ?nanoTrace=1: log every on-device create/prompt with its timings and sizes
+// (never content), measured at LanguageModel itself, under the SDK.
+if (params.get('nanoTrace') === '1' && languageModel) installNanoTrace(languageModel);
 const capacitor = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null;
 const isPhone = !!capacitor?.isNativePlatform?.();
 const phoneShell = isPhoneCanvasShell({ capacitor, viewportWidth: window.innerWidth });
 const cloud: CloudStream | undefined = isEnabled()
-  ? async (prompt, onText) => {
-      const text = await streamCanvasPlan(prompt, onText);
-      if (text == null) throw new Error('cloud unavailable');
+  ? async (prompt, onText, o) => {
+      // A failure throws with its plain reason (App Check 403, offline, …).
+      const text = await streamCanvasPlanOrThrow(prompt, onText, o?.shape, { onSend: o?.onSend, onRetract: o?.onRetract });
       onText(text);
       return text;
     }
   : undefined;
+// On-device Nano goes through Firebase AI Logic (ONLY_ON_DEVICE), like every
+// other model call: one queued prompt per turn, however many cursors the
+// canvas draws. Chrome's LanguageModel global is only checked for presence
+// and availability. No Firebase config, a phone, or ?sim=1 means Nano is off.
+const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !params.has('sim') && isEnabled()
+  ? (prompt, onText, o) => streamOnDevice({
+      system: o?.system && o.user ? o.system : undefined,
+      prompt: o?.system && o.user ? o.user : prompt,
+      constraint: o?.constraint,
+      signal: o?.signal,
+      onChunk: onText,
+      onStart: o?.onStart,
+    })
+  : null;
+
+let nanoAvailable = false;
+/** Ask Chrome whether Nano can answer right now; re-asked until it can. */
+async function refreshNanoAvailable(): Promise<boolean> {
+  const lm = languageModel as (PromptApi & { availability?: (o?: unknown) => Promise<string> }) | undefined;
+  if (!nanoStream || !lm?.availability) { nanoAvailable = false; return false; }
+  try { nanoAvailable = (await lm.availability(NANO_CREATE_OPTIONS)) === 'available'; } catch { nanoAvailable = false; }
+  return nanoAvailable;
+}
+if (nanoStream) {
+  void refreshNanoAvailable().then((ok) => {
+    if (ok) return;
+    const again = setInterval(() => { void refreshNanoAvailable().then((now) => { if (now) clearInterval(again); }); }, 15_000);
+  });
+}
 
 const apple = {
   ready: false,
@@ -75,6 +108,10 @@ const apple = {
 };
 const engines = createEngines({
   languageModel: languageModel ?? null,
+  // Nano is chosen for a turn only while Chrome says the model is
+  // 'available' — never 'downloadable' or 'downloading' (a turn must not
+  // start, or wait on, a multi-gigabyte download).
+  get nanoStream() { return nanoAvailable ? nanoStream : null; },
   cloud: cloud ?? null,
   isPhone,
   get androidNano() { return apple.androidNano; },
@@ -251,7 +288,25 @@ if (params.has('sim') && params.get('demo') === 'morph') {
 // auto-generated preview channel domain is often not in the App Check /
 // reCAPTCHA authorized-domains list, so this call alone can 403 there for no
 // reason a sim run needs to care about.
-if (!params.has('sim')) void prepareHybrid();
+if (!params.has('sim')) {
+  void prepareHybrid().then(async () => {
+    // Say it once, up front, when this address can't pass App Check — rather
+    // than leaving it to be discovered on the first Gemini turn.
+    const blocked = await cloudAccessProblem();
+    if (blocked) console.warn(`[mendcraft] ${blocked.line}. ${blocked.hint ?? ''}`);
+  });
+}
+
+// Load Nano while the page is idle, so the first board turn doesn't pay for a
+// cold model. Only when the model is already on this machine (warming must
+// never start a download), and the warm-up steps aside for any real request.
+if (nanoStream && languageModel) {
+  const warm = (): void => { void (async () => { if (await refreshNanoAvailable()) await warmBoardOnDevice(); })(); };
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  // Soon after load, not "whenever idle": hand tracking keeps the page busy,
+  // and the cold start must be over before her first request.
+  afterFirstPaint(() => { if (ric) ric(warm, { timeout: 1200 }); else setTimeout(warm, 600); });
+}
 
 // ?replay=demo: play the journey once the canvas has painted. The outcome is
 // also on window.__replay for scripts/e2e-journey.mjs.

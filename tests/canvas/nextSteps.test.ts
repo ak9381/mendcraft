@@ -145,7 +145,7 @@ const fakeDoc = { createElement: (): FakeEl => new FakeEl(fakeDoc) };
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('createNextStepChips', () => {
-  function setup(nano?: (p: string) => Promise<string>, runWorks = true) {
+  function setup(nano?: (p: string) => Promise<string>, runWorks = true, idle?: { delayMs: number; ready(): boolean }) {
     const root = new FakeEl(fakeDoc);
     const frame = new FakeEl(fakeDoc);
     root.append(frame);
@@ -158,6 +158,7 @@ describe('createNextStepChips', () => {
       focused: () => state.focused ? { id: 'f1', el: frame as unknown as HTMLElement, board: { kind: state.kind, tiles: state.tiles.map((k) => ({ kind: k })), pinned: false } } : null,
       ctx: () => ({ lang: 'en', online: true, phones: 0 }),
       nano,
+      idle,
       run: (s) => { ran.push(s); if (runWorks && s === 'check accessibility') chips.markDone('f1', 'check'); },
       onNano: (l) => nanoLines.push(l),
     });
@@ -165,6 +166,36 @@ describe('createNextStepChips', () => {
   }
   const row = (frame: FakeEl) => frame.children.find((c) => c.className === 'mc-next');
   const labels = (frame: FakeEl) => row(frame)!.children.filter((c) => c.className.includes('mc-next-chip')).map((c) => c.textContent);
+
+  it('with an idle gate: rules at once, Nano only after the board sat still — and not while the model is busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const nano = vi.fn(async () => '{"ids":["check","3d"]}');
+      let ready = false;
+      const t = setup(nano, true, { delayMs: 3000, ready: () => ready });
+      t.chips.refresh();
+      expect(row(t.frame)!.dataset.source).toBe('rules'); // on screen immediately
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(nano).not.toHaveBeenCalled(); // not on load
+      await vi.advanceTimersByTimeAsync(10);
+      expect(nano).not.toHaveBeenCalled(); // idle time passed, but a turn holds the model
+      // the model frees up: the next idle check asks, once
+      ready = true;
+      await vi.advanceTimersByTimeAsync(2900);
+      expect(nano).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(nano).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(nano).toHaveBeenCalledTimes(1);
+      // she leaves the board before the idle time is up: nothing is asked
+      const away = setup(nano, true, { delayMs: 3000, ready: () => true });
+      away.chips.refresh();
+      away.state.focused = false;
+      away.chips.refresh();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(nano).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
 
   it('renders the rule chips at once with an honest "Suggested" tag; the chip runs its say', () => {
     const t = setup();

@@ -35,7 +35,7 @@ describe('App Check debug gating', () => {
   });
 
   it('auto-generates only in dev when no token was injected', () => {
-    expect(applyAppCheckDebugToken({ dev: true })).toBe(true);
+    expect(applyAppCheckDebugToken({ dev: true, envToken: null })).toBe(true);
     expect((globalThis as Record<string, unknown>).FIREBASE_APPCHECK_DEBUG_TOKEN).toBe(true);
   });
 

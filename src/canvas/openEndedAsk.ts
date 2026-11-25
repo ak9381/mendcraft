@@ -13,12 +13,14 @@ export function buildOpenEndedPrompt(text: string): string {
 /** Called once per engine actually tried (never for its scripted fallback),
  *  with the raw prompt; returns the prompt that really goes to that engine —
  *  the caller redacts and books a cloud engine's send here. */
-export type OpenEndedPrepare = (engine: SurfaceEngine, prompt: string) => string;
+export type OpenEndedPrepare = (engine: SurfaceEngine, prompt: string) => string | { prompt: string; onCloudSend?: () => void };
 
 async function streamOrFallback(engine: SurfaceEngine, prompt: string, onText?: (full: string) => void, prepare?: OpenEndedPrepare): Promise<OpenEndedReply> {
-  const p = prepare ? prepare(engine, prompt) : prompt;
+  const prepared = prepare ? prepare(engine, prompt) : prompt;
+  const p = typeof prepared === 'string' ? prepared : prepared.prompt;
+  const onCloudSend = typeof prepared === 'string' ? undefined : prepared.onCloudSend;
   try {
-    const reply = await engine.stream(p, (full) => onText?.(full));
+    const reply = await engine.stream(p, (full) => onText?.(full), { shape: 'text', ...(onCloudSend ? { onCloudSend } : {}) });
     return { engineId: engine.id, reply, sim: engine.sim };
   } catch (e) {
     // The prepared (SIM) reply is not a second send: no prepare, no booking.

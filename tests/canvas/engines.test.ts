@@ -36,14 +36,14 @@ describe('engine selection (honest labels)', () => {
 });
 
 describe('createEngines', () => {
-  it('attaches a scripted fallback to a real cloud engine', () => {
+  it('a real cloud engine carries no scripted stand-in (a live failure says why instead)', () => {
     const engines = createEngines({
       cloud: async (prompt, onText) => { onText('{"kind":"room","title":"X","tiles":[]}'); return '{"kind":"room","title":"X","tiles":[]}'; },
       sim: false,
     });
     const gemini = engines.gemini!('{"kind":"room","title":"Draft","tiles":[]}');
     expect(gemini.sim).toBe(false);
-    expect(gemini.fallback?.sim).toBe(true);
+    expect(gemini.fallback).toBeUndefined();
   });
 
   it('?sim=1 stays scripted with no fallback hop', () => {
