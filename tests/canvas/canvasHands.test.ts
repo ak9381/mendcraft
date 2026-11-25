@@ -163,11 +163,11 @@ describe('Part 2: src/canvas/canvasHands.ts', () => {
       expect(events.filter((e) => e.type === 'palm')).toHaveLength(0);
     });
 
-    it('does not emit a frame event when no hands are visible', () => {
+    it('emits an EMPTY frame when no hands are visible (holds cancel, overlays clear) — and nothing else', () => {
       const events: CanvasHandEvent[] = [];
       const adapter = createCanvasHandsAdapter((e) => events.push(e));
       adapter.update({ hands: [], now: 1000 });
-      expect(events.find((e) => e.type === 'frame')).toBeUndefined();
+      expect(events).toEqual([{ type: 'frame', hands: [], now: 1000 }]);
     });
   });
 

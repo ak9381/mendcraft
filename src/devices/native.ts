@@ -29,6 +29,11 @@ export interface GimbalPlugin {
    *  `enabled` is read back from DockKit, `error` is the native error text.
    *  keepAlive (opt-in) runs a minimal front-camera session while it is on. */
   setSystemTrackingEnabled?(opts: { enabled: boolean; keepAlive?: boolean }): Promise<{ ok: boolean; enabled?: boolean; keepAlive?: boolean; error?: string }>;
+  /** DockKit body language: DockAccessory.animate(motion:) .yes / .no / .wakeup.
+   *  ok:true only once DockKit accepted and ran the animation (3 s timeout);
+   *  otherwise reason says why (no stand docked, timeout, DockKit error).
+   *  Optional: older app builds don't have it. */
+  cue?(opts: { kind: 'yes' | 'no' | 'wakeup' }): Promise<{ ok: boolean; reason?: string }>;
 }
 
 interface CapacitorGlobal {

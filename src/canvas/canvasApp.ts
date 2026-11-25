@@ -36,6 +36,7 @@ import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, t
 import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
+import type { GimbalCueKind } from '../relay/protocol';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
@@ -61,8 +62,7 @@ import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
 import { betterSummary, draftSummary, floorPlanSummary, tilesFilledLine } from './planTruth';
-
-import { mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
+import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
   type OwnerRecord,
@@ -78,8 +78,12 @@ import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
+import { createHandPointer, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { mountPhoneHands } from './phoneHands';
+import { createGestureControl, type GestureControl } from './gestureControl';
+import { createPalmHighlight } from './palmHighlight';
+import { LAPTOP_GESTURES, PHONE_GESTURES } from './gestureBindings';
+import { syntheticHand } from './handShapeFixtures';
 import type { PhoneCamera } from './phoneCamera';
 import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
@@ -430,6 +434,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pinch). The committed transfer + updated board ride the host `state`
   // snapshot, so both phones see it with no new Relay message type.
   let hostSession: HostSession | null = null;
+  /** The phone paired before hostSession was assigned: wake its gimbal then. */
+  let wakeOnSession = false;
   let screenLayout: ScreenLayout = coerceLayout(loadLayout(storage) ?? defaultLayout({ android: true, ios: true }));
   let snapshotRev = 0;
   let dragFrame: string | null = null;
@@ -752,6 +758,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
   };
+
+  /** Gimbal body language: nod 'yes' on an Approve, shake 'no' on a refusal,
+   *  'wakeup' when a phone pairs. In the iPhone app (gimbal plugin present) it
+   *  animates the docked stand here; on the laptop it relays an allow-listed
+   *  cue to the paired phone(s). No stand / not paired / rate-limited → a
+   *  silent no-op. The status line claims a move only after DockKit reported
+   *  success (never on the laptop, which can't see whether it moved). */
+  function bodyLanguage(kind: GimbalCueKind): void {
+    if (getGimbalPlugin()) {
+      void inputs.gimbal.gimbalCue(kind).then((r) => { if (r.ok && r.status) say(r.status); }).catch(() => {});
+      return;
+    }
+    void hostSession?.sendGimbalCue(kind).catch(() => false);
+  }
 
   {
     const saved = loadSetup()?.calibration;
@@ -1108,8 +1128,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!surfaces[f.id] && !empty.querySelector(".mc-empty-talk")) {
         empty.innerHTML = `<p class="mc-empty-lead" data-i18n="emptyLead">What would you like to build on this board?</p>
           <button type="button" class="mc-btn primary mc-empty-talk" data-act="talk" aria-label="Talk: start listening">${MIC_ICON_SVG}<span>Talk</span></button>
-          <p class="mc-empty-talk-caption" hidden></p>
-          <div class="mc-row"><button class="mc-btn" data-act="connect" data-i18n="emptyConnect">Connect this room</button><button class="mc-btn" data-act="floorplan" data-i18n="emptyFloorplan">Floor plan</button></div>`;
+          <p class="mc-empty-talk-caption" hidden></p>`;
       }
     }
     root.dataset.mode = focusId ? 'focus' : 'overview';
@@ -1182,7 +1201,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- navigation ----
   /** 1:1 focus camera. A board with content that is wider/taller than the screen
    *  (a dashboard on a phone) opens at its top-left; an empty board stays centred
-   *  so its "Connect this room" call-to-action is on screen. */
+   *  so its Talk call-to-action is on screen. */
   /** Narrow a focused board to the free width between the dock and the hand
    *  cluster, so nothing on it sits under chrome. Never below 480px.
    *  Display-only: the board's own size (registry + storage) is never
@@ -1601,12 +1620,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       tilesFilledLine(plan));
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
-    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }
+    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); bodyLanguage('no'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
     // Where it actually ran (a phone's "Nano" step is really Deep in the cloud).
     const ranId: EngineId = si.engine;
     return new Promise((done) => {
       const before = surfaces[frameId] ?? null;
+      let built = false;
       const prop = createSurfaceProposal(`p-${Date.now()}`, ranId, summary, check.messages, () => {
         try {
           surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
@@ -1617,6 +1637,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // self-check measures) so a wide dashboard opens at its top-left on a phone.
           if (!before && focusId === frameId) { const ff = reg.get(frameId); if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
+          built = true;
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
           else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`); if (el) el.innerHTML = ''; }
@@ -1637,7 +1658,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         id: `p-${frameId}`, title: summary, youAsked: utterance, status,
         catalog: { helper: ranId === 'nano' ? 'Quick' : 'Deep', byLine: ranId === 'nano' ? 'Quick · on this device' : 'Deep · online',
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
-      }, { onKeep: () => { prop.accept(); finish(true); }, onDrop: () => { prop.reject(); finish(false); } });
+      }, { onKeep: () => { prop.accept(); finish(true); if (built) bodyLanguage('yes'); }, onDrop: () => { prop.reject(); finish(false); } });
       tagCardI18n(card);
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
@@ -1786,6 +1807,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** phone: the frames come from the iPhone's own sensing camera (bigger
    *  crop, out-of-frame check). remote: the laptop asked for this photo —
    *  send the identity back instead of proposing here. */
+  /** When the last point-to-connect capture ended (finger-count gestures
+   *  stay off for POINT_COUNT_QUIET_MS after it: the pointing hand lingers). */
+  let pointWaitEndedAt = -Infinity;
   let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void; phone?: boolean; remote?: boolean } | null = null;
   /** Laptop: waiting for the iPhone's point photo result. */
   let iphonePoint: { frameId: string; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -1825,6 +1849,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     clearTimeout(pointWait.timer);
     pointWait.cleanup();
     pointWait = null;
+    pointWaitEndedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   }
   /** Fed from the hand frame loop (raw camera-space hands) while a point is
    *  armed. Only a hand that is actually pointing (index extended) counts. */
@@ -2140,7 +2165,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // paired (minting a fresh token every time would strand them).
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
-        if (st === 'paired') { pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
+        if (st === 'paired') {
+          pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+          // The docked iPhone wakes up. hostSession is set once startPhoneJoin
+          // resolves; a phone already in the room can pair a tick before that.
+          if (hostSession) bodyLanguage('wakeup'); else wakeOnSession = true;
+        }
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
           // The relay can't say WHICH phone left, so forget every announce
@@ -2170,7 +2200,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           return;
         }
         if (cmd.kind === 'pointResult') { onIphonePointResult(cmd.text ?? ''); return; }
-        if (cmd.kind === 'sensePoint') return; // host → phone only
+        if (cmd.kind === 'sensePoint' || cmd.kind === 'gimbalCue') return; // host → phone only
         dispatchRelayCommand(cmd, {
           run,
           undo,
@@ -2189,6 +2219,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
+    if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
     renderArrangeStrip(); // reveal the arrangement strip now a phone is here
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
@@ -2317,7 +2348,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
       catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
     }, {
-      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
+      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); bodyLanguage('yes'); },
       onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English.'); autoHideAi(); },
     });
     showReview({
@@ -2387,8 +2418,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   setDwellClick(dwellClickOn);
   const handTip = typeof document !== 'undefined' ? document.createElement('div') : null;
   if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
+  // Open-palm highlight (palmHighlight.ts): the palm moves a sticky highlight
+  // over the buttons; R thumbs-up (2 s) presses it, a fist tap clicks it.
+  const palmHighlight = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
+    ? createPalmHighlight({
+        root,
+        // The control under the hand that DRIVES the highlight (nearest pointer slot).
+        directAt: (p) => handPointer?.directHit?.(p) ?? null,
+        ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
+      })
+    : null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
+        targetOverride: (now) => palmHighlight?.forced(now) ?? null,
+        // Thumbs up / down veto fist starts and taps only while button
+        // gestures are on — with Hands' gestures off a thumb-up grip still pans.
+        fixedShapeVeto: () => !!gestures?.isActive(),
         onHandEvent: (ev) => {
           if (ev.type === 'click') activityLog.push({ kind: 'click', text: ev.target ? `Click · ${ev.target}` : 'Click', target: ev.target });
           else activityLog.push({ kind: 'grab', text: ev.target ? `Grab · ${ev.target}` : 'Grab', target: ev.target });
@@ -2448,6 +2493,53 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       })
     : null;
 
+  // Button gestures (gestureControl.ts): a fixed hand shape held still for
+  // 2 s presses its bound button — a real click, the same path as the
+  // mouse. Badges show only while Hands is on. Phones bind the short table.
+  // Facing gate: the operator's hand gate from presence frames.
+  let gestureFacing: boolean | null = null;
+  let gestureFaceX: number | null = null;
+  const gestures: GestureControl | null = typeof document !== 'undefined' && handPointer
+    ? createGestureControl({
+        root,
+        bindings: phoneShell ? PHONE_GESTURES : LAPTOP_GESTURES,
+        run: (text) => { run(text); },
+        say,
+        onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
+        highlight: palmHighlight,
+      })
+    : null;
+  /** Gestures are paused while something else owns the hands: a fist grab,
+   *  the not-facing lock, or the point-to-connect capture step. */
+  const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
+  /** Finger counts (1/2/3) are off while a point capture is armed and for a
+   *  second after it: a natural pointing hand must never press a chip. */
+  const POINT_COUNT_QUIET_MS = 1000;
+  const countsSuppressed = (): boolean => !!pointWait
+    || (typeof performance !== 'undefined' ? performance.now() : Date.now()) - pointWaitEndedAt < POINT_COUNT_QUIET_MS;
+  /** One laptop hand frame (selfie-space hands; may be EMPTY — an empty frame
+   *  cancels a hold and lets the overlays clear): the ONE shape read, then
+   *  the pointer (which reuses it: a thumbs-up is never a fist), then the
+   *  button gestures, then the taught-gesture matcher and point capture. */
+  function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
+    gestures?.read(hands, { faceX: gestureFaceX, cameraAspect: handCameraAspect });
+    // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
+    // The pointer owns every live hand gesture: dwell-click, one-fist
+    // grab (board move / pan) and two-fist zoom.
+    const cam = cameraHandsFromSelfie(hands);
+    handPointer?.update(cam, now);
+    gestures?.frame(hands, now, {
+      facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
+      suppressCounts: countsSuppressed(),
+    });
+    if (!hands.length) return;
+    // Taught gestures obey the same guards as built-ins: never while the
+    // hands are locked (not facing the screen) or a fist grab is running —
+    // and never over a fixed button gesture (held, or its shape showing).
+    if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive() && !gestures?.busy()) teachPanel.matchFrame(hands, now);
+    feedPointWait(cam, now);
+  }
+
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —
   // a Hands pill next to Join laptop, persisted, off on first run. Same
   // pointer as the laptop; touch is untouched. Hand clicks/grabs only reach
@@ -2461,6 +2553,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         locked: () => phoneLocked(),
         onAspect: (a) => { phoneCamAspect = a; handCameraAspect = a; },
+        gestures,
+        gesturesBlocked,
+        countsSuppressed,
+        cameraAspect: () => handCameraAspect,
       })
     : null;
 
@@ -2577,6 +2673,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // facing: you look at the device you point at, not at this screen.
     const op = f.faces.find((x) => x.isOperator);
     handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
+    gestureFacing = op ? (op.handGate ?? null) : null;
+    gestureFaceX = op ? op.box.cx : null;
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (scanPanel?.isOpen()) {
@@ -2673,17 +2771,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // was the "it opens just when I hover" bug.
       palm: () => {},
       status: say,
-      frame: (hands, now) => {
-        // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
-        // The pointer owns every live hand gesture: dwell-click, one-fist
-        // grab (board move / pan) and two-fist zoom.
-        const cam = cameraHandsFromSelfie(hands);
-        handPointer?.update(cam, now);
-        // Taught gestures obey the same guards as built-ins: never while the
-        // hands are locked (not facing the screen) or a fist grab is running.
-        if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive()) teachPanel.matchFrame(hands, now);
-        feedPointWait(cam, now);
-      },
+      frame: (hands, now) => onHandFrame(hands, now),
     },
   });
   // iPhone SENSING layer (phoneSensor.ts): same phone camera/tracker as the
@@ -2750,7 +2838,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handPointer?.lost(); gestures?.lost(); gestures?.setActive(false); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
     handsBusy = true; handsMountOk = false;
     await inputs.start(root);
@@ -2760,6 +2848,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!handsMountOk) { say(lastHandsError ?? 'No camera here — hands stay off.'); return; }
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
+    gestures?.setActive(true);
     restoreOwnerLock();
     say('Hands on: point with your palm, tap a fist to click. Hold a fist to move a board or pan; two fists to zoom.');
   }
@@ -2848,6 +2937,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!engine) rulesPanel.log('received', text);
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      if (r.refused) bodyLanguage('no');
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally { settleSwarm(); settleEngines(); autoHideAi(); }
   }
@@ -3313,7 +3403,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const editBtn = root.querySelector('.mc-edit-toggle');
     const resetBtn = root.querySelector('.mc-edit-reset');
     const registerBtn = root.querySelector('.mc-register-chip');
-    for (const node of [registerBtn, editBtn, toolsChip, talk, resetBtn]) {
+    // A small, always-visible Undo beside Tools / Talk (its left thumbs-down
+    // badge is always on screen); same data-cmd as the bar's Undo.
+    const undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'mc-cluster-undo';
+    undoBtn.dataset.cmd = 'undo';
+    undoBtn.textContent = 'Undo';
+    undoBtn.dataset.i18n = 'undo';
+    for (const node of [registerBtn, editBtn, toolsChip, talk, undoBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
   }
@@ -3370,6 +3468,37 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
   }
 
+  // Sim/test hook: the button gestures without a camera. show(true) turns
+  // the badges on as if Hands were on; feed() runs one selfie-space frame
+  // through the real classifier → hold engine → button path; hand() builds
+  // synthetic landmarks for a shape (handShapeFixtures).
+  /** Sim: the wrist (selfie space) of a synthetic right open hand whose palm
+   *  centre maps to screen (x, y) through the laptop reach box. */
+  const palmFor = (x: number, y: number): { x: number; y: number } => ({
+    x: REACH.x0 + (x / innerWidth) * (REACH.x1 - REACH.x0) + 0.001,
+    y: REACH.y0 + (y / innerHeight) * (REACH.y1 - REACH.y0) + 0.074,
+  });
+  if (opts.sim && typeof window !== 'undefined' && gestures) {
+    const simAdapter = createCanvasHandsAdapter((ev) => inputs.handEvent(ev));
+    (window as unknown as { __mcGestures?: unknown }).__mcGestures = {
+      show: (on: boolean) => gestures.setActive(on),
+      feed: (hands: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null = true) =>
+        gestures.frame(hands, now, { facing, faceX: 0.5, blocked: gesturesBlocked() }),
+      hand: syntheticHand,
+      shapes: () => gestures.lastShapes(),
+      highlighted: () => palmHighlight?.current() ?? null,
+      /** A presence frame through the REAL camera path: the canvasHands
+       *  adapter → canvasInputs → onHandFrame (shape read, pointer, gestures).
+       *  `hands` may be empty — exactly what the camera sends when hands leave. */
+      presence: (hands: readonly (readonly { x: number; y: number }[])[], now: number) => {
+        simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
+      },
+      /** For assertions: camera, any grab running, debug state. */
+      state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
+      /** Selfie-space wrist position that puts the PALM at screen (x, y). */
+      palmFor: (x: number, y: number) => palmFor(x, y),
+    };
+  }
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
   // Sim/test hook: feed a raw landmark frame (camera space, up to two hands)
@@ -3529,7 +3658,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
                 id: `p-fix-${target.id}`, title: `Fix ${target.label}`, youAsked: 'self-check fix', status: 'changed',
                 catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · self-check fix', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the tile dump and the problems', technicalLine: 'Gemini · self-check fix' },
               }, {
-                onKeep: () => { reviewDialog.close(); done(true); },
+                onKeep: () => { reviewDialog.close(); done(true); bodyLanguage('yes'); },
                 onDrop: () => { reviewDialog.close(); done(false); },
               });
               showReview({
@@ -3630,7 +3759,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
       }, {
-        onKeep: () => { reviewDialog.close(); done(applyMorph(fid, patched, summary, path)); },
+        onKeep: () => { reviewDialog.close(); const ok = applyMorph(fid, patched, summary, path); done(ok); if (ok) bodyLanguage('yes'); },
         onDrop: () => { reviewDialog.close(); done(false); },
       });
       showReview({
@@ -3807,6 +3936,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
+    /** iPhone: the laptop relayed a gimbal cue ('gimbalCue'). Local only — never re-relayed. */
+    gimbalCue: (kind: GimbalCueKind): void => { if (getGimbalPlugin()) bodyLanguage(kind); },
     onPhoneSenseChange: (cb: () => void) => { senseSubs.add(cb); return () => { senseSubs.delete(cb); }; },
   };
 }

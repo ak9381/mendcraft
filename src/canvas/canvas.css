@@ -1444,3 +1444,68 @@
   font-size: 12px; font-weight: 650; pointer-events: none;
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
+
+/* ---- Button gestures (gestureControl.ts): yellow animated hand badges on
+   the bound buttons, only while Hands is on; the bound button fills while a
+   2 s hold runs; a small HUD names what the held shape will press. */
+.mc-gesture-layer { position: fixed; inset: 0; pointer-events: none; z-index: 80; }
+.mc-gesture-layer[hidden], .mc-gesture-badge[hidden], .mc-gesture-hud[hidden] { display: none; }
+.mc-gesture-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
+  padding: 2px 3px 1px; border-radius: 8px; background: #2B2B2B; box-shadow: 0 1px 3px rgb(0 0 0 / 0.3); }
+.mc-gesture-badge .mc-gi { display: block; width: 22px; height: 22px; }
+.mc-gesture-side { font: 700 9px/1 system-ui, sans-serif; color: #FFC83D; letter-spacing: 0.02em; margin-top: 1px; }
+.mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
+.mc-gi-thumbsUp .mc-gi-move, .mc-gi-thumbsDown .mc-gi-move { animation: mc-gi-thumb 1.8s ease-in-out infinite; }
+.mc-gi-one .mc-gi-move, .mc-gi-peace .mc-gi-move, .mc-gi-three .mc-gi-move { animation: mc-gi-raise 1.8s ease-in-out infinite; }
+.mc-gesture-badge.is-holding { background: #6B4E00; box-shadow: 0 0 0 3px #FFC83D; }
+.mc-gesture-badge.is-holding .mc-gi-move { animation-duration: 0.6s; }
+@keyframes mc-gi-thumb { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-1.5px) rotate(-6deg); } }
+@keyframes mc-gi-raise { 0%, 60%, 100% { transform: scaleY(1); } 30% { transform: scaleY(0.82); } }
+/* The bound button while its gesture is held: a yellow fill grows left to
+   right with the 2 s hold, inside a ring that tightens toward done. */
+.mc-gesture-target { outline: 3px solid #E0A800; outline-offset: calc(6px - 4px * var(--mc-gesture-progress, 0));
+  background-image: linear-gradient(90deg, rgb(255 200 61 / 0.6) calc(var(--mc-gesture-progress, 0) * 100%), transparent 0); }
+.mc-gesture-pressed { scale: 0.95; filter: brightness(0.9); transition: scale 80ms ease, filter 80ms ease; }
+.mc-gesture-hud { position: absolute; left: 50%; bottom: 172px; translate: -50% 0; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px 8px 10px; border-radius: 999px; background: #2B2B2B; color: #FFFFFF; font: 600 17px/1.2 system-ui, sans-serif;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); max-width: calc(100vw - 32px); }
+.mc-gesture-hud-icon .mc-gi { width: 28px; height: 28px; display: block; }
+.mc-gesture-hud-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-gesture-hud-bar { width: 64px; height: 6px; border-radius: 3px; background: rgb(255 255 255 / 0.2); overflow: hidden; flex: none; }
+.mc-gesture-hud-bar > span { display: block; height: 100%; width: 0; background: #FFC83D; }
+.mc-gesture-hud.is-none .mc-gesture-hud-bar { display: none; }
+@media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 15px; } }
+@media (prefers-reduced-motion: reduce) {
+  .mc-gi-move, .mc-gesture-badge.is-holding .mc-gi-move { animation: none; }
+  .mc-gesture-pressed { scale: none; transition: none; }
+}
+/* "AI monitor" is the one named AI entry on the laptop bar: the in-app
+   drawer opens by itself while a model works, or from the engine bar. The
+   phone layout keeps its primary AI button (it lives in .mc-phone-actions). */
+.mc-bar-btns > [data-cmd=ai] { display: none; }
+
+/* Open-palm highlight (palmHighlight.ts): a thick yellow ring on the button
+   the palm is on, its name large above it, and, for a crowded group, a
+   spaced magnified row the palm moves across. Never takes pointer input. */
+.mc-highlight-layer { position: fixed; inset: 0; pointer-events: none; z-index: 79; }
+.mc-highlight-layer[hidden], .mc-highlight-row[hidden] { display: none; }
+.mc-highlight-ring { position: absolute; left: 0; top: 0; border: 4px solid #E0A800; border-radius: 16px;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.85), 0 0 18px rgb(224 168 0 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-highlight-label { position: absolute; left: 0; top: 0; translate: -50% -100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 14px 6px; border-radius: 14px; background: #2B2B2B; color: #FFFFFF; box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); white-space: nowrap; }
+.mc-highlight-label.below { translate: -50% 0; }
+.mc-highlight-name { font: 700 26px/1.15 system-ui, sans-serif; }
+.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 13px/1 system-ui, sans-serif; color: #FFC83D; }
+.mc-highlight-how .mc-gi { width: 18px; height: 18px; }
+.mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
+  border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }
+.mc-highlight-slot { position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px;
+  border-radius: 16px; background: #FFFFFF; color: #2B2B2B; font: 700 20px/1.15 system-ui, sans-serif; overflow: hidden; }
+.mc-highlight-slot.is-current { background: #FFC83D; }
+@media (prefers-reduced-motion: reduce) { .mc-highlight-ring { transition: none; } }
+
+/* Small always-visible Undo in the hand cluster (its left thumbs-down
+   gesture badge is then always on screen). Same data-cmd as the bar's Undo. */
+.mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
+  border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
+.mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
