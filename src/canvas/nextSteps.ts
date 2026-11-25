@@ -24,7 +24,13 @@ export interface NextStepCtx extends JourneyCtx {
 export interface NextStepsResult { steps: NextStep[]; source: 'nano' | 'rules'; sim?: boolean }
 
 export const MAX_NEXT_STEPS = 3;
-export const NANO_PICK_TIMEOUT_MS = 2500;
+/** The pick runs while she is idle and the rule chips are already up, so it
+ *  can take its time; a miss is silent. */
+export const NANO_PICK_TIMEOUT_MS = 8000;
+/** How long the board must sit unchanged before Nano is asked at all. */
+export const NANO_PICK_IDLE_MS = 3000;
+/** How many idle checks a pick gets before the rule chips simply stay. */
+export const NANO_PICK_MAX_WAITS = 4;
 
 const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
   'connect-devices': { label: 'Connect devices', say: 'connect devices' },
@@ -160,6 +166,10 @@ export interface NextChipsHost {
   focused(): { id: string; el: HTMLElement; board: JourneyBoard } | null;
   ctx(): Omit<NextStepCtx, 'done' | 'checked'>;
   nano?: (prompt: string) => Promise<string>;
+  /** Ask Nano only once the board has sat unchanged for `delayMs` and
+   *  `ready()` says nothing else needs the model. Without this the pick is
+   *  asked at once (tests). */
+  idle?: { delayMs: number; ready(): boolean };
   run(say: string): void;
   /** Nano picked the chips (on device): one line for its terminal / the AI feed. */
   onNano?(line: string): void;
@@ -186,6 +196,8 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
   let lastSig = '';
   let seq = 0;
   let nanoBusy = false;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const dropIdle = (): void => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
   let shown: NextStep[] = [];
   const clear = (except?: HTMLElement) => host.root.querySelectorAll<HTMLElement>('.mc-next').forEach((el) => { if (el.parentElement !== except) el.remove(); });
 
@@ -230,7 +242,7 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
 
   const api: NextChips = {
     steps: () => shown,
-    destroy() { seq++; lastSig = ''; shown = []; clear(); },
+    destroy() { seq++; lastSig = ''; shown = []; dropIdle(); clear(); },
     markDone(frameId, stepId) {
       if (!ONE_SHOT.has(stepId)) return;
       const set = done.get(frameId) ?? new Set<string>();
@@ -239,7 +251,7 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
     },
     refresh() {
       const f = host.focused();
-      if (!f) { clear(); lastSig = ''; shown = []; seq++; return; }
+      if (!f) { clear(); lastSig = ''; shown = []; seq++; dropIdle(); return; }
       clear(f.el);
       const d = done.get(f.id) ?? new Set<string>();
       const ctx: NextStepCtx = { ...host.ctx(), done: [...d], checked: d.has('check') };
@@ -252,15 +264,34 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
       if (cached) { render(f.el, { steps: cached, source: 'nano' }); return; }
       const rules = ruleSuggestions(at, ctx);
       render(f.el, { steps: rules, source: 'rules', sim: ctx.sim || undefined });
+      dropIdle();
       if (ctx.sim || !nanoOnce || nanoBusy) return;
-      void suggestNextSteps(at, ctx, nanoOnce).then((r) => {
-        if (r.source !== 'nano') return; // rules are already up
-        cache.set(sig, r.steps);
-        if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
-        if (mine !== seq || !f.el.isConnected) return; // she moved on: keep it for next time
-        render(f.el, r);
-        host.onNano?.(`next steps (${at}): ${r.steps.map((s) => s.label).join(' · ')}`);
-      });
+      const ask = (): void => {
+        void suggestNextSteps(at, ctx, nanoOnce).then((r) => {
+          if (r.source !== 'nano') return; // rules are already up
+          cache.set(sig, r.steps);
+          if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+          if (mine !== seq || !f.el.isConnected) return; // she moved on: keep it for next time
+          render(f.el, r);
+          host.onNano?.(`next steps (${at}): ${r.steps.map((s) => s.label).join(' · ')}`);
+        });
+      };
+      if (!host.idle) { ask(); return; }
+      // Rules first; Nano only once the board has been still for a while and
+      // nothing else wants the model. A board that changed meanwhile, or a
+      // busy model, simply keeps the rule chips.
+      const idle = host.idle;
+      let waits = 0;
+      const arm = (): void => {
+        idleTimer = setTimeout(() => {
+          idleTimer = null;
+          if (mine !== seq || nanoBusy || !f.el.isConnected) return;
+          // The model is busy (a turn, a review): look again later, a few times.
+          if (!idle.ready()) { if (++waits < NANO_PICK_MAX_WAITS) arm(); return; }
+          ask();
+        }, idle.delayMs);
+      };
+      arm();
     },
   };
   return api;
