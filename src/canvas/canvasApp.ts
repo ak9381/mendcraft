@@ -1294,7 +1294,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function overview(): Promise<void> {
     focusId = null; sync(); clearDock();
     const list = reg.list();
-    await flyTo(fitRects(list.map((f) => f.rect), vp(), Math.max(56, barH())));
+    // Leave the hand cluster's lane on the right free (it sits on the edge).
+    const v = vp();
+    await flyTo(fitRects(list.map((f) => f.rect), { w: Math.max(320, v.w - clusterInset()), h: v.h }, Math.max(56, barH())));
     say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
