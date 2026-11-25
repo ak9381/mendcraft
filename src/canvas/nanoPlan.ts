@@ -85,7 +85,11 @@ export function buildNanoPlanRequest(req: SurfaceRequest): NanoPlanRequest {
 
 /** The follow-up when the first reply was refused: short, and says why. */
 export function buildNanoRepairPrompt(first: NanoPlanRequest, why: string): string {
-  return `${first.prompt}\nYour last reply was refused: ${why.slice(0, 160)}. Reply again with the JSON object only.`;
+  return `${first.system}\n${buildNanoRepairUser(first, why)}`;
+}
+/** The repair turn alone, for a session that already holds the instructions. */
+export function buildNanoRepairUser(first: NanoPlanRequest, why: string): string {
+  return `${first.user}\nYour last reply was refused: ${why.slice(0, 160)}. Reply again with the JSON object only.`;
 }
 
 function tileTypeFor(kind: string): 'lamp' | 'music' | 'switch' {

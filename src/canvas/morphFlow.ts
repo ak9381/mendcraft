@@ -37,6 +37,8 @@ export interface MorphUiHooks {
    *  morphed tile. Implemented by the host so the privacy-order invariant
    *  stays in one place. */
   sent(s: SentInfo, o: { utterance: string; tileIndex: number; label: string }): void;
+  /** One cloud call of that turn really left this device (book its bytes). */
+  cloudSent?(s: SentInfo): void;
   log(engine: 'nano' | 'gemini', verb: LogVerb, detail: string): void;
   handoff(reason: string): void;
   /** Settle the swarm (the host may hold it on screen a minimum in sim). */
@@ -351,7 +353,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     deps.ui.log('gemini', 'plan', `revise ${t.label}; everything else stays put`);
     let full = '';
     try {
-      full = await engine.stream(prompt, () => {}, { shape: 'json' });
+      full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => deps.ui.cloudSent?.(sent) });
     } catch (e) {
       if (g !== gen) return;
       // Live: no prepared edit — say why Gemini couldn't do it.

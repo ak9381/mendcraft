@@ -5,11 +5,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
-import { acceptCanvasReply, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, type TextGenModel } from '../../src/ai/hybrid';
-import { GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
-import { createEngines, createNanoRunner, NANO_DEFAULT_TIMEOUT_MS, type PromptApi, type PromptSession } from '../../src/canvas/engines';
+import { acceptCanvasReply, countingSends, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
+import { geminiFailLine, GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
+import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
+import { createCanvasLedger } from '../../src/canvas/ledger';
 import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan } from '../../src/canvas/nanoPlan';
-import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, tilesFilledLine } from '../../src/canvas/planTruth';
+import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
 import { resolveAppCheckDebugToken } from '../../src/firebase/debugToken';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
@@ -25,29 +26,45 @@ const GEMINI_OK = '{"kind":"room","title":"Living room","tiles":[{"type":"lamp",
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const never = <T,>(): Promise<T> => new Promise<T>(() => undefined);
 
-/** A fake Chrome LanguageModel that records how many prompts run at once. */
-function fakeLm(reply = NANO_OK, o: { delayMs?: number; chunks?: number } = {}) {
-  const stats = { created: 0, cloned: 0, prompts: 0, running: 0, peak: 0, destroyed: 0, lastOptions: null as Record<string, unknown> | null, lastInput: '' };
-  const session = (): PromptSession => ({
-    promptStreaming(input: string, options?: unknown) {
-      stats.prompts++; stats.lastOptions = (options ?? null) as Record<string, unknown> | null; stats.lastInput = input;
-      const n = o.chunks ?? 4;
-      return (async function* () {
-        stats.running++; stats.peak = Math.max(stats.peak, stats.running);
-        try {
-          for (let i = 1; i <= n; i++) {
-            if (o.delayMs) await tick(o.delayMs);
-            yield reply.slice(Math.floor(((i - 1) * reply.length) / n), Math.floor((i * reply.length) / n));
-          }
-        } finally { stats.running--; }
-      })();
-    },
-    async clone() { stats.cloned++; return session(); },
-    destroy() { stats.destroyed++; },
-  });
-  const lm: PromptApi = { async create() { stats.created++; return session(); } };
-  return { lm, stats };
+/** A fake Firebase AI Logic on-device model factory (what getGenerativeModel
+ *  with mode ONLY_ON_DEVICE gives the app), recording every model it builds. */
+function fakeSdk(reply = NANO_OK, o: { delayMs?: number; chunks?: number; source?: string; hang?: boolean } = {}) {
+  const stats = { models: 0, prompts: 0, running: 0, peak: 0, aborted: 0, params: [] as OnDeviceModelParams[], inputs: [] as string[] };
+  const source = o.source ?? 'on_device';
+  const factory = (params: OnDeviceModelParams): TextGenModel => {
+    stats.models++; stats.params.push(params);
+    (params.createOptions.signal as AbortSignal | undefined)?.addEventListener('abort', () => { stats.aborted++; });
+    return {
+      generateContent: async (prompt) => { stats.prompts++; stats.inputs.push(prompt); return { response: { text: () => reply, inferenceSource: source } }; },
+      generateContentStream: async (prompt) => {
+        stats.prompts++; stats.inputs.push(prompt);
+        const n = o.chunks ?? 4;
+        const stream = (async function* () {
+          stats.running++; stats.peak = Math.max(stats.peak, stats.running);
+          try {
+            if (o.hang) await never<void>();
+            for (let i = 1; i <= n; i++) {
+              if (o.delayMs) await tick(o.delayMs);
+              const piece = reply.slice(Math.floor(((i - 1) * reply.length) / n), Math.floor((i * reply.length) / n));
+              yield { text: () => piece, inferenceSource: source };
+            }
+          } finally { stats.running--; }
+        })();
+        return { stream, response: never<{ text: () => string }>() };
+      },
+    };
+  };
+  setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: factory });
+  return { stats };
 }
+/** The adapter canvasMain gives the engines: every Nano prompt is a Firebase
+ *  AI Logic on-device call. */
+const nanoVia = (queue = createNanoQueue(1)): OnDeviceStream => (prompt, onText, o) => streamOnDevice({
+  system: o?.system && o.user ? o.system : undefined,
+  prompt: o?.system && o.user ? o.user : prompt,
+  constraint: o?.constraint, signal: o?.signal, onChunk: onText, onStart: o?.onStart, queue,
+});
+const LM = {}; // Chrome's LanguageModel global: only its presence matters
 
 afterEach(() => { setModelsForTest(null); vi.useRealTimers(); });
 
@@ -79,37 +96,60 @@ describe('A: on-device concurrency cap', () => {
     expect(started).toBe(false);
   });
 
-  it('14 prompts launched at once reach Chrome one at a time, through one runner', async () => {
-    const { lm, stats } = fakeLm(NANO_OK, { delayMs: 1 });
-    const runner = createNanoRunner(lm, { queue: createNanoQueue(1) });
-    const out = await Promise.all(Array.from({ length: 14 }, () => runner.stream('p', () => undefined)));
+  it('14 on-device calls launched at once reach the SDK one at a time', async () => {
+    const { stats } = fakeSdk(NANO_OK, { delayMs: 1 });
+    const queue = createNanoQueue(1);
+    const out = await Promise.all(Array.from({ length: 14 }, () => streamOnDevice({ prompt: 'p', queue })));
     expect(out.every((t) => t === NANO_OK)).toBe(true);
     expect(stats.prompts).toBe(14);
     expect(stats.peak).toBe(1);
   });
 
-  it('a live Nano board turn is ONE structured prompt — not a session per tile', async () => {
-    const { lm, stats } = fakeLm();
-    const engines = createEngines({ languageModel: lm, nanoRunner: createNanoRunner(lm, { queue: createNanoQueue(1) }), cloud: async () => GEMINI_OK });
-    const nano = engines.nano!('{}');
-    const plan = await runSurfaceTurn(req, nano);
+  it('a live Nano board turn is ONE Firebase AI Logic on-device call — not a call per tile', async () => {
+    const { stats } = fakeSdk();
+    const engines = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud: async () => GEMINI_OK });
+    const ghosts: number[] = [];
+    const plan = await runSurfaceTurn(req, engines.nano!('{}'), { onGhost: (g) => ghosts.push(g.tiles.length) });
     expect(plan?.tiles.map((t) => t.type)).toEqual(['lamp', 'music']);
+    expect(stats.models).toBe(1);
     expect(stats.prompts).toBe(1);
     expect(stats.peak).toBe(1);
+    const params = stats.params[0];
     // the reply is constrained to a board plan whose device ids are the real ones
-    const constraint = stats.lastOptions?.responseConstraint as { properties: { tiles: { items: { properties: { deviceId: { enum: string[] } } } } } };
+    const constraint = params.promptOptions?.responseConstraint as { properties: { tiles: { items: { properties: { deviceId: { enum: string[] } } } } } };
     expect(constraint.properties.tiles.items.properties.deviceId.enum).toEqual(['wiz-ceiling', 'speaker-1']);
-    // not warmed yet: the whole prompt goes to a fresh session, still one call
-    expect(stats.cloned).toBe(0);
-    expect(stats.lastInput).toContain(NANO_SYSTEM_PROMPT);
-    // once warm, the session that already holds the instructions is cloned
-    // and only this turn is sent
-    const runner = createNanoRunner(lm, { queue: createNanoQueue(1) });
-    expect(await runner.warm()).toBe(true);
-    await runSurfaceTurn(req, createEngines({ languageModel: lm, nanoRunner: runner, cloud: async () => GEMINI_OK }).nano!('{}'));
-    expect(stats.cloned).toBe(1);
-    expect(stats.lastInput).not.toContain(NANO_SYSTEM_PROMPT);
-    expect(stats.lastInput).toContain('connect everything in this room');
+    // text in / text out English, and the fixed instructions ride in the session
+    expect(params.createOptions.expectedInputs).toEqual([{ type: 'text', languages: ['en'] }]);
+    expect(params.createOptions.initialPrompts).toEqual([{ role: 'system', content: [{ type: 'text', value: NANO_SYSTEM_PROMPT }] }]);
+    expect(stats.inputs[0]).not.toContain(NANO_SYSTEM_PROMPT);
+    expect(stats.inputs[0]).toContain('connect everything in this room');
+    // streamed: the ghost saw tiles arrive
+    expect(ghosts.at(-1)).toBe(2);
+  });
+
+  it('board prompts go through Firebase AI Logic in ONLY_ON_DEVICE mode — the canvas never prompts LanguageModel itself', async () => {
+    const { readFileSync } = await import('node:fs');
+    const read = (f: string): string => readFileSync(new URL(`../../src/${f}`, import.meta.url), 'utf8');
+    const hybrid = read('ai/hybrid.ts');
+    const factory = hybrid.slice(hybrid.indexOf('onDeviceFactory = (onDeviceParams) =>'), hybrid.indexOf('onDeviceFactory = (onDeviceParams) =>') + 260);
+    expect(factory).toContain('getGenerativeModel(ai, {');
+    expect(factory).toContain('mode: InferenceMode.ONLY_ON_DEVICE');
+    expect(hybrid).toContain("recordInference('on-device', 'board'");
+    for (const f of ['canvas/engines.ts', 'canvas/canvasMain.ts', 'canvas/aiTurn.ts', 'canvas/canvasApp.ts', 'canvas/nanoPlan.ts']) {
+      const src = read(f);
+      expect(src, f).not.toMatch(/\.promptStreaming\(|\.prompt\(|\.clone\(/);
+      expect(src, f).not.toMatch(/(languageModel|LanguageModel|lm)\.create\(/);
+    }
+  });
+
+  it('text that did not come from the on-device model is refused', async () => {
+    fakeSdk(NANO_OK, { source: 'in_cloud' });
+    await expect(streamOnDevice({ prompt: 'p', queue: createNanoQueue(1) })).rejects.toThrow('did not come from the on-device model');
+  });
+
+  it('without Firebase AI Logic there is no on-device call at all (never a direct one)', async () => {
+    setModelsForTest({ enabled: false });
+    await expect(streamOnDevice({ prompt: 'p', queue: createNanoQueue(1) })).rejects.toThrow(/Firebase AI Logic isn’t set up/);
   });
 
   it('the Nano prompt is short and flat (no nested dashboard grammar)', () => {
@@ -147,43 +187,74 @@ describe('A: on-device concurrency cap', () => {
   });
 
   it('a burst of buffered chunks hands the page a frame instead of holding it', async () => {
+    fakeSdk(NANO_OK, { chunks: 50 });
     let yields = 0;
     let clock = 0;
-    const { lm } = fakeLm(NANO_OK, { chunks: 50 });
-    const runner = createNanoRunner(lm, { queue: createNanoQueue(1), now: () => (clock += 10), yieldToPage: async () => { yields++; } });
-    expect(await runner.stream('p', () => undefined)).toBe(NANO_OK);
+    expect(await streamOnDevice({ prompt: 'p', queue: createNanoQueue(1), now: () => (clock += 10), yieldToPage: async () => { yields++; } })).toBe(NANO_OK);
     expect(yields).toBeGreaterThan(5);
   });
 
-  it('a prompt with no deadline of its own is stopped by the runner’s', async () => {
-    vi.useFakeTimers();
-    let destroyed = 0;
-    const stuck: PromptApi = { async create() { return { promptStreaming: () => (async function* () { await never<void>(); yield ''; })(), destroy() { destroyed++; } }; } };
-    const runner = createNanoRunner(stuck, { queue: createNanoQueue(1) });
-    const p = runner.stream('p', () => undefined);
-    const settled = p.then(() => 'ok', (e: Error) => e.message);
-    await vi.advanceTimersByTimeAsync(NANO_DEFAULT_TIMEOUT_MS + 10);
-    expect(destroyed).toBeGreaterThan(0); // the session was torn down, not just abandoned
-    expect(await settled).toBe('took longer than 20 s');
-  });
-
-  it('stopping a prompt that never settles still frees the model for the next one', async () => {
+  it('stopping a call that never settles ends the wait, destroys its session and frees the model', async () => {
+    const { stats } = fakeSdk(NANO_OK, { hang: true });
     const q = createNanoQueue(1);
-    let n = 0;
-    const lm: PromptApi = { async create() {
-      const mine = ++n;
-      return { promptStreaming: () => (mine === 1 ? new ReadableStream<string>({}) : (async function* () { yield NANO_OK; })()), destroy() { /* a stuck session ignores this */ } };
-    } };
-    const runner = createNanoRunner(lm, { queue: q });
     const ctl = new AbortController();
-    const stuck = runner.stream('p', () => undefined, { signal: ctl.signal });
-    const next = runner.stream('p', () => undefined);
+    const stuck = streamOnDevice({ prompt: 'p', queue: q, signal: ctl.signal });
     await tick(5);
     expect(q.active()).toBe(1);
     ctl.abort();
     await expect(stuck).rejects.toThrow('stopped');
-    expect(await next).toBe(NANO_OK);
+    expect(stats.aborted).toBe(1); // the signal given to the session's create()
     expect(q.idle()).toBe(true);
+    fakeSdk(NANO_OK);
+    expect(await streamOnDevice({ prompt: 'p', queue: q })).toBe(NANO_OK);
+  });
+
+  it('a call Chrome never settles gives the slot back after the max run', async () => {
+    vi.useFakeTimers();
+    const { stats } = fakeSdk(NANO_OK, { hang: true });
+    const q = createNanoQueue(1);
+    const settled = streamOnDevice({ prompt: 'p', queue: q }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_MAX_RUN_MS + 10);
+    expect(await settled).toBe('took longer than 20 s');
+    expect(stats.aborted).toBe(1);
+    expect(q.idle()).toBe(true);
+  });
+
+  it('I4: the warm-up steps aside the moment a real request arrives', async () => {
+    const q = createNanoQueue(1);
+    const order: string[] = [];
+    let warmSignal: AbortSignal | null = null;
+    const warm = q.run((ctx) => { warmSignal = ctx.signal; order.push('warm starts'); return never<void>(); }, { priority: -1, preemptible: true });
+    const warmEnd = warm.then(() => 'done', (e: Error) => e.name);
+    const turn = q.run(async () => { order.push('turn starts'); return 'plan'; }, { priority: 10 });
+    expect(await turn).toBe('plan'); // it did not wait for the warm-up to finish
+    expect(await warmEnd).toBe('NanoQueueSkipped');
+    expect(warmSignal!.aborted).toBe(true); // the warm-up's session is told to stop
+    expect(order).toEqual(['warm starts', 'turn starts']);
+    expect(q.idle()).toBe(true);
+    // an ordinary (non-preemptible) job is never pushed aside
+    let release!: () => void;
+    const plain = q.run(() => new Promise<string>((r) => { release = () => r('kept'); }));
+    const later = q.run(async () => 'later', { priority: 10 });
+    await tick(2);
+    expect(q.active()).toBe(1);
+    release();
+    expect(await plain).toBe('kept');
+    expect(await later).toBe('later');
+  });
+
+  it('I4: the real warm-up is the lowest job, pre-emptible, and never waits in line', async () => {
+    const { stats } = fakeSdk('{"ok":true}');
+    const q = createNanoQueue(1);
+    expect(await warmBoardOnDevice(q)).toBe(true);
+    expect(stats.prompts).toBe(1);
+    expect(stats.params[0].createOptions.initialPrompts).toBeUndefined();
+    // busy model: the warm-up gives up at once instead of queueing behind it
+    setModelsForTest(null);
+    fakeSdk('{"ok":true}');
+    const hold = q.run(() => tick(20));
+    expect(await warmBoardOnDevice(q)).toBe(false);
+    await hold;
   });
 
   it('SDK on-device models share the queue too (one at a time; busy means skipped)', async () => {
@@ -200,19 +271,20 @@ describe('A: on-device concurrency cap', () => {
 });
 
 describe('B: Nano fails → Gemini takes over, and says so', () => {
-  function turn(nano: SurfaceEngine, o: { nanoTimeoutMs?: number; sleep?: (ms: number) => Promise<void>; canHandoff?: () => boolean } = {}) {
-    const log: { sent: SentInfo[]; handoff: Array<{ s: SentInfo; why: string }>; errors: Array<{ why: string; engine?: string }>; fallback: number; notes: string[] } = { sent: [], handoff: [], errors: [], fallback: 0, notes: [] };
+  function turn(nano: SurfaceEngine, o: { nanoTimeoutMs?: number; nanoQueueWaitMs?: number; sleep?: (ms: number) => Promise<void>; canHandoff?: () => boolean } = {}) {
+    const log: { sent: SentInfo[]; handoff: Array<{ s: SentInfo; why: string }>; errors: Array<{ why: string; engine?: string }>; fallback: number; notes: string[]; sends: string[] } = { sent: [], handoff: [], errors: [], fallback: 0, notes: [], sends: [] };
     const session = createDeviceIdSession();
     const p = runSurfaceTurn(req, nano, {
       onSent: (s) => log.sent.push(s),
       onHandoff: (s, why) => log.handoff.push({ s, why }),
+      onCloudSend: (s) => log.sends.push(s.engine),
       onFallback: () => { log.fallback++; },
       onError: (why, engine) => log.errors.push({ why, engine }),
       onNote: (n) => log.notes.push(n),
     }, { deviceIdSession: session, ...o });
     return { p, log };
   }
-  const geminiOk = (seen: string[] = []): SurfaceEngine => ({ id: 'gemini', sim: false, stream: async (prompt, onText) => { seen.push(prompt); onText(GEMINI_OK); return GEMINI_OK; } });
+  const geminiOk = (seen: string[] = []): SurfaceEngine => ({ id: 'gemini', sim: false, stream: async (prompt, onText, so) => { seen.push(prompt); so?.onCloudSend?.(); onText(GEMINI_OK); return GEMINI_OK; } });
 
   it('an error on device hands off to Gemini with the redacted cloud prompt', async () => {
     const seen: string[] = [];
@@ -236,13 +308,42 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
 
   it('a Nano that takes too long is stopped and Gemini takes over', async () => {
     let signal: AbortSignal | undefined;
-    const nano: SurfaceEngine = { id: 'nano', sim: false, stream: (_p, _on, so?: StreamOptions) => { signal = so?.signal; return never<string>(); }, handoff: geminiOk() };
-    // the turn's clock: the Nano budget elapses at once; Gemini's never does
+    const nano: SurfaceEngine = { id: 'nano', sim: false, stream: (_p, _on, so?: StreamOptions) => { signal = so?.signal; so?.onStart?.(); return never<string>(); }, handoff: geminiOk() };
+    // the turn's clock: the Nano budget elapses at once; nothing else does
     const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, sleep: (ms) => (ms === 20_000 ? Promise.resolve() : never<void>()) });
     expect((await p)?.title).toBe('Living room');
     expect(signal?.aborted).toBe(true); // the model itself was told to stop
     expect(log.handoff[0].why).toBe('took longer than 20 s');
     expect(log.handoff[0].s.routeLine).toContain('Nano couldn’t finish (took longer than 20 s), so Gemini made this');
+    expect(log.sends).toEqual(['gemini']);
+  });
+
+  it('I4: the 20 s clock starts when the model takes the call — waiting in line is not counted', async () => {
+    vi.useFakeTimers();
+    let start!: () => void;
+    let finish!: (text: string) => void;
+    // the model is busy for 30 s before this call gets its turn, then answers in 5 s
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => new Promise<string>((resolve) => { start = () => so?.onStart?.(); finish = resolve; }) };
+    const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, nanoQueueWaitMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(log.handoff).toEqual([]); // 30 s in the queue did not use up the budget
+    start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    finish(NANO_OK);
+    expect((await p)?.tiles).toHaveLength(2);
+    expect(log.handoff).toEqual([]);
+    expect(log.sends).toEqual([]);
+  });
+
+  it('I4: once the model has the call, 20 s is all it gets', async () => {
+    vi.useFakeTimers();
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => { setTimeout(() => so?.onStart?.(), 10_000); return never<string>(); } };
+    const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, nanoQueueWaitMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(log.handoff).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await p)?.title).toBe('Living room');
+    expect(log.handoff[0].why).toBe('took longer than 20 s');
   });
 
   it('an invalid plan gets one repair try; a good second reply stays on device', async () => {
@@ -271,7 +372,8 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
     const { p, log } = turn(nano, { canHandoff: () => false });
     expect(await p).toBeNull();
     expect(seen).toEqual([]);
-    expect(log.errors[0]).toEqual({ why: 'Nano couldn’t finish (the model crashed). You’re offline, so Gemini can’t take over.', engine: 'nano' });
+    expect(log.errors[0]).toEqual({ why: 'Nano couldn’t finish (the model crashed). You’re offline, so Gemini can’t take over. Nothing was sent.', engine: 'nano' });
+    expect(log.sends).toEqual([]);
   });
 
   it('both fail: one honest error with both reasons, no draft, nothing labelled SIM', async () => {
@@ -281,7 +383,8 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
     const nano: SurfaceEngine = { id: 'nano', sim: false, stream: async () => { throw new Error('the model crashed'); }, handoff: gemini };
     const { p, log } = turn(nano);
     expect(await p).toBeNull();
-    expect(log.errors).toEqual([{ why: `Nano couldn’t finish (the model crashed). ${APP_CHECK_403_LINE}`, engine: 'gemini' }]);
+    expect(log.errors).toEqual([{ why: `Nano couldn’t finish (the model crashed). ${APP_CHECK_403_LINE}. Nothing was sent.`, engine: 'gemini' }]);
+    expect(log.sends).toEqual([]); // refused before it left: no bytes booked
     expect(geminiCalls).toBe(1); // a 403 is not retried: the same call cannot pass
     expect(log.fallback).toBe(0);
     const everything = JSON.stringify(log);
@@ -292,16 +395,15 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
     const gemini: SurfaceEngine = { id: 'gemini', sim: false, stream: async () => { throw new Error('AppCheck: Fetch server returned an HTTP error status. HTTP status: 403.'); } };
     const errors: string[] = [];
     expect(await runSurfaceTurn(req, gemini, { onError: (w) => errors.push(w) }, { sleep: () => never<void>() })).toBeNull();
-    expect(errors).toEqual(['Gemini blocked: App Check 403 (this address isn’t registered)']);
+    expect(errors).toEqual(['Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.']);
   });
 });
 
 describe('B: no SIM wording without ?sim=1', () => {
   const cloud = async (): Promise<string> => GEMINI_OK;
   it('live engines carry no scripted stand-in, on either slot', () => {
-    const { lm } = fakeLm();
     for (const rt of [
-      { languageModel: lm, cloud },
+      { languageModel: LM, nanoStream: nanoVia(), cloud },
       { cloud },
       { cloud, isPhone: true, appleOnDevice: true, onDeviceGenerate: cloud },
     ]) {
@@ -318,11 +420,20 @@ describe('B: no SIM wording without ?sim=1', () => {
   });
 
   it('a live on-device engine hands off to the real cloud engine; ?sim=1 stays scripted', () => {
-    const { lm } = fakeLm();
-    expect(createEngines({ languageModel: lm, cloud }).nano!('{}').handoff?.id).toBe('gemini');
-    const sim = createEngines({ languageModel: lm, cloud, sim: true }).nano!(NANO_OK);
+    const live = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud }).nano!('{}');
+    expect(live.id).toBe('nano');
+    expect(live.handoff?.id).toBe('gemini');
+    const sim = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud, sim: true }).nano!(NANO_OK);
     expect(sim.sim).toBe(true);
     expect(sim.handoff).toBeUndefined();
+  });
+
+  it('nanoStream null means Nano is OFF: the step is Gemini’s and says so (no hidden direct path)', () => {
+    for (const nanoStream of [null, undefined]) {
+      const e = createEngines({ languageModel: LM, nanoStream, cloud }).nano!('{}');
+      expect(e.id).toBe('gemini');
+      expect(e.routeLine).toBe(NO_NANO_NOTE);
+    }
   });
 
   it('a failed live turn never streams a script, and no line says SIM or “prepared draft”', async () => {
@@ -334,7 +445,7 @@ describe('B: no SIM wording without ?sim=1', () => {
     }, { sleep: () => never<void>() });
     expect(plan).toBeNull();
     expect(lines.join('\n')).not.toMatch(/SIM|prepared|FALLBACK|SCRIPTED/);
-    expect(lines.at(-1)).toBe('Gemini couldn’t be reached: no connection');
+    expect(lines.at(-1)).toBe('Gemini couldn’t be reached: no connection. Nothing was sent.');
   });
 
   it('the canvas source no longer builds a prepared draft outside a scripted fallback', async () => {
@@ -351,6 +462,153 @@ describe('B: no SIM wording without ?sim=1', () => {
     const plan = await runSurfaceTurn(req, scriptedEngine('nano', NANO_OK, { delayMs: 0 }), { onSent: (s) => lines.push(s.routeLine) });
     expect(plan?.tiles).toHaveLength(2);
     expect(lines[0]).toMatch(/^SIM · /);
+  });
+});
+
+describe('I3: bytes are booked when a call really leaves', () => {
+  const RUN1 = 'AI: Error fetching from https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse: AppCheck: Fetch server returned an HTTP error status. HTTP status: 403.';
+  const ok = (text: string): TextGenModel => ({ generateContent: async () => ({ response: { text: () => text } }) });
+
+  it('a call counts once: at its first chunk, or when it resolves', async () => {
+    let sends = 0;
+    await countingSends(ok('{}'), () => { sends++; }).generateContent('p');
+    expect(sends).toBe(1);
+    const streamed: TextGenModel = {
+      generateContent: async () => ({ response: { text: () => '' } }),
+      generateContentStream: async () => {
+        let done!: () => void;
+        const response = new Promise<{ text: () => string }>((r) => { done = () => r({ text: () => 'ab' }); });
+        return { stream: (async function* () { yield { text: () => 'a' }; yield { text: () => 'b' }; done(); })(), response };
+      },
+    };
+    sends = 0;
+    const started = await countingSends(streamed, () => { sends++; }).generateContentStream!('p');
+    expect(sends).toBe(0); // nothing has come back yet
+    for await (const chunk of started.stream) void chunk;
+    await started.response;
+    expect(sends).toBe(1); // two chunks and a final response are still one send
+  });
+
+  it('a call refused before it left is not a send; one the server answered is', async () => {
+    const failing = (msg: string): TextGenModel => ({ generateContent: async () => { throw new Error(msg); } });
+    for (const [msg, expected] of [[RUN1, 0], ['Failed to fetch', 0], ['429 RESOURCE_EXHAUSTED', 1], ['503 Service Unavailable', 1]] as const) {
+      let sends = 0;
+      await countingSends(failing(msg), () => { sends++; }).generateContent('p').catch(() => undefined);
+      expect(sends, msg).toBe(expected);
+    }
+  });
+
+  it('App Check 403 through the cloud seam: the line says nothing was sent, and nothing is counted', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: { generateContent: async () => { throw new Error(RUN1); } } });
+    let sends = 0;
+    const err = await streamCanvasPlanOrThrow('build a board', undefined, 'board', { onSend: () => { sends++; } }).catch((e: unknown) => e);
+    expect(geminiFailLine(err)).toBe('Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.');
+    expect(sends).toBe(0);
+    warn.mockRestore();
+  });
+
+  it('not set up and App Check failing to start also say nothing was sent', async () => {
+    setModelsForTest({ enabled: false });
+    expect(geminiFailLine(await streamCanvasPlanOrThrow('p').catch((e: unknown) => e))).toBe('Gemini isn’t set up in this build (no Firebase config). Nothing was sent.');
+    setModelsForTest({ enabled: true, appCheck: 'failed' });
+    expect(geminiFailLine(await streamCanvasPlanOrThrow('p').catch((e: unknown) => e))).toMatch(/App Check.*Nothing was sent\.$/);
+    // a failure after the request left makes no such claim
+    expect(geminiFailLine(new Error('429 RESOURCE_EXHAUSTED'))).toBe('Gemini couldn’t answer: the quota is used up (429)');
+  });
+
+  it('a success is one send; a retry after a bad reply is a second send', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let sends = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: ok(GEMINI_OK) });
+    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    expect(sends).toBe(1);
+    const replies = ['sorry, no', GEMINI_OK];
+    sends = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: { generateContent: async () => ({ response: { text: () => replies.shift()! } }) } });
+    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    expect(sends).toBe(2);
+    info.mockRestore(); warn.mockRestore();
+  });
+
+  it('the ledger opens a cloud turn at 0 bytes and adds only what left', () => {
+    const ledger = createCanvasLedger();
+    const entry = ledger.record({ engine: 'gemini' });
+    expect(ledger.totals()).toMatchObject({ aiCount: 1, aiBytes: 0 });
+    ledger.addBytes(entry, 1200);
+    ledger.addBytes(entry, 1200); // the hedge left too
+    expect(ledger.totals()).toMatchObject({ aiCount: 1, aiBytes: 2400 });
+    const sim = ledger.record({ engine: 'gemini', sentText: 'x', sim: true });
+    ledger.addBytes(sim, 500);
+    expect(ledger.totals().aiBytes).toBe(2400); // a SIM turn never gains real bytes
+  });
+
+  it('two overlapping cloud calls each report their own failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let n = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: { generateContent: async () => {
+      const mine = ++n;
+      await tick(mine === 1 ? 15 : 1);
+      throw new Error(mine === 1 ? RUN1 : 'Failed to fetch');
+    } } });
+    const [a, b] = await Promise.all([
+      streamCanvasPlanOrThrow('first').catch((e: Error) => e.message),
+      streamCanvasPlanOrThrow('second').catch((e: Error) => e.message),
+    ]);
+    expect(a).toBe(APP_CHECK_403_LINE);
+    expect(b).toBe('Gemini couldn’t be reached: no connection');
+    warn.mockRestore();
+  });
+
+  it('the canvas books on the send, not on the start, and skips the second Gemini pass after a handoff', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    const aiSent = src.slice(src.indexOf('function aiSent('), src.indexOf('function aiFellBack('));
+    expect(aiSent).toContain("if (ctx.defer && !s.sim && s.engine === 'gemini' && s.sent) openCloudTurn(");
+    expect(src).toContain('onCloudSend: cloudSent,');
+    const room = src.slice(src.indexOf('async function connectRoom('), src.indexOf('function floorPlan('));
+    expect(room).toMatch(/if \(lastTurnHandedOff\) \{[\s\S]*?return;\s*\}\s*panels\.showHandoff/);
+    // connect by name / scan run the same turn as a board build
+    const connect = src.slice(src.indexOf('async function connectTurn('), src.indexOf('// ---- point-to-connect'));
+    expect(connect).toContain('runSurfaceTurn({ ...turn.request, frameId }, engine,');
+    expect(connect).toContain('offerRetry(() => { void connectTurn(');
+  });
+});
+
+describe('minors: stale streams stay silent; a busy Nano is said out loud', () => {
+  it('after a timeout retry, the first attempt’s late chunks draw nothing', async () => {
+    const firstCalls: Array<(full: string) => void> = [];
+    let call = 0;
+    const gemini: SurfaceEngine = { id: 'gemini', sim: false, stream: (_p, onText) => {
+      if (++call === 1) { firstCalls.push(onText); return never<string>(); }
+      onText(GEMINI_OK);
+      return Promise.resolve(GEMINI_OK);
+    } };
+    let wakes = 0;
+    const texts: string[] = [];
+    const ghosts: number[] = [];
+    // the first attempt times out at once; the retry's timer never fires
+    const plan = runSurfaceTurn(req, gemini, { onText: (t) => texts.push(t), onGhost: (g) => ghosts.push(g.tiles.length) }, { deviceIdSession: createDeviceIdSession(), sleep: () => (++wakes === 1 ? Promise.resolve() : never<void>()) });
+    expect((await plan)?.title).toBe('Living room');
+    const before = { texts: texts.length, ghosts: ghosts.length };
+    firstCalls[0]('{"kind":"room","title":"STALE","tiles":[{"type":"connect","label":"x"},{"type":"plan","boardId":"a","template":"studio"},{"type":"connect"}]}');
+    expect({ texts: texts.length, ghosts: ghosts.length }).toEqual(before);
+    expect(texts.join('')).not.toContain('STALE');
+  });
+
+  it('an on-device job that goes to its cloud twin because Nano is busy tells its listeners', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const heard: string[] = [];
+    const off = onNanoBusyHandoff((label) => heard.push(label));
+    const { compileCommand } = await import('../../src/ai/hybrid');
+    const busy: TextGenModel = { generateContent: async () => { throw new NanoQueueSkipped('the on-device model was busy'); } };
+    const cloud: TextGenModel = { generateContent: async () => ({ response: { text: () => '{}' } }) };
+    setModelsForTest({ enabled: true, appCheck: 'ready', deviceModel: 'ready', intent: busy, intentCloud: cloud });
+    await compileCommand('make the kitchen bigger', { planNames: [] } as never).catch(() => undefined);
+    off();
+    expect(heard.length).toBeGreaterThan(0);
+    warn.mockRestore();
   });
 });
 
@@ -497,6 +755,27 @@ describe('D: titles and counts come from the plan', () => {
     expect(out.notes).toHaveLength(2);
     // an honest plan is returned untouched
     expect(dropUnbackedClaims(lightAndSpeaker).plan).toBe(lightAndSpeaker);
+  });
+
+  it('I2: every made-up status shape is caught, and real readings are left alone', () => {
+    for (const [label, value] of [
+      ['Desk Lamp Status', 'on'], ['Lamp Status', 'On'], ['Speaker Status', 'playing'], ['Devices', '3'],
+      ['Device Status', 'Connected'], ['Status', 'OK'], ['Desk lamp', 'On'], ['Speaker', 'Paused'], ['Devices found', '2'],
+      ['Room', '3 devices'], ['Network', 'Online'], ['Lamp', 'off'],
+    ]) expect(isStatusClaim(label, value), `${label} / ${value}`).toBe(true);
+    for (const [label, value] of [
+      ['Power', '120 W'], ['Today', '2 kWh'], ['Brightness', '70%'], ['Temperature', '21°C'], ['Monthly cost', '£14'], ['Volume', '40'], ['Standby power', '3 W'],
+    ]) expect(isStatusClaim(label, value), `${label} / ${value}`).toBe(false);
+    const plan: SurfacePlan = { kind: 'room', title: 'r', tiles: [
+      { type: 'stat', label: 'Desk Lamp Status', value: 'on' },
+      { type: 'stat', label: 'Lamp Status', value: 'On' },
+      { type: 'card', title: 'Now', children: [{ type: 'stat', label: 'Speaker Status', value: 'playing' }, { type: 'stat', label: 'Devices', value: '3' }] },
+      { type: 'stat', label: 'Power', value: '120 W' },
+      { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling Light' },
+    ] };
+    const out = dropUnbackedClaims(plan);
+    expect(out.plan.tiles).toEqual([{ type: 'stat', label: 'Power', value: '120 W' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling Light' }]);
+    expect(out.notes).toHaveLength(4);
   });
 
   it('a live Gemini plan is cleaned before she reviews it; the model is told not to invent status', async () => {

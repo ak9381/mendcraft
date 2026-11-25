@@ -9,7 +9,7 @@ import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, typ
 import type { LanguagePack } from './languagePack';
 import { OFFLINE_MID_LINE } from './failLines';
 import { CloudCallError, explainCloudFailure } from '../ai/cloudErrors';
-import { buildNanoPlanRequest, buildNanoRepairPrompt, parseNanoPlan } from './nanoPlan';
+import { buildNanoPlanRequest, buildNanoRepairPrompt, buildNanoRepairUser, parseNanoPlan } from './nanoPlan';
 import { dropUnbackedClaims } from './planTruth';
 
 export type EngineId = 'nano' | 'gemini';
@@ -45,6 +45,12 @@ export interface StreamOptions {
   /** What the reply is, so the cloud seam accepts it: a board plan (default),
    *  any JSON object (a language pack, one tile, a fix), or plain words. */
   shape?: ReplyShape;
+  /** On device: the model's queue gave this call its turn (a deadline should
+   *  count from here, not from the time spent waiting in line). */
+  onStart?: () => void;
+  /** Cloud: one model call really left this device (hedges and retries each
+   *  count). Bytes are booked here, not when the turn was started. */
+  onCloudSend?: () => void;
 }
 export type ReplyShape = 'board' | 'json' | 'text';
 
@@ -160,6 +166,10 @@ export interface TurnUi {
   /** The on-device model could not finish and Gemini (cloud) takes over: `s`
    *  is the NEW send — book its bytes and show it — and `why` is the reason. */
   onHandoff?(s: SentInfo, why: string): void;
+  /** One cloud model call of turn `s` really left this device (a hedge or a
+   *  retry is another one). Book the bytes here — `onSent` only opens the
+   *  turn; a call that never left books nothing. */
+  onCloudSend?(s: SentInfo): void;
   onText?(full: string): void;
   onGhost?(p: PartialPlan): void;
   /** `engine`: the engine whose failure ended the turn. */
@@ -238,6 +248,9 @@ export const NANO_TIMEOUT_MS = 20_000;
 /** A live stream re-parses its ghost preview at most this often, so a long
  *  reply can never turn into a parse per token. */
 export const GHOST_EVERY_MS = 120;
+/** The longest an on-device call may sit in the model's queue before its
+ *  20 s clock starts regardless. */
+export const NANO_QUEUE_WAIT_MS = 15_000;
 
 /** A failure a second identical call cannot fix: don't spend a retry on it. */
 function worthRetry(e: unknown): boolean {
@@ -246,12 +259,18 @@ function worthRetry(e: unknown): boolean {
   return true;
 }
 
-/** One plain line for a failed Gemini call (App Check 403, offline, quota…). */
+/** Failures where the request never left this device: no App Check token,
+ *  no connection, or no cloud model set up at all. */
+const NOTHING_LEFT = new Set(['app-check-403', 'app-check', 'not-set-up', 'offline']);
+export const NOTHING_SENT = 'Nothing was sent.';
+
+/** One plain line for a failed Gemini call (App Check 403, offline, quota…),
+ *  and — when the request never left — that nothing was sent. */
 export function geminiFailLine(e: unknown): string {
-  if (e instanceof CloudCallError) return e.message;
   const msg = e instanceof Error ? e.message : String(e);
-  if (/^timed out after/.test(msg)) return `Gemini didn’t answer in time (${msg})`;
-  return explainCloudFailure(e).line;
+  if (!(e instanceof CloudCallError) && /^timed out after/.test(msg)) return `Gemini didn’t answer in time (${msg})`;
+  const f = e instanceof CloudCallError ? { kind: e.kind, line: e.message } : explainCloudFailure(e);
+  return NOTHING_LEFT.has(f.kind) ? `${f.line}. ${NOTHING_SENT}` : f.line;
 }
 
 export interface SurfaceTurnOptions {
@@ -263,6 +282,13 @@ export interface SurfaceTurnOptions {
   nanoTimeoutMs?: number;
   /** False when the cloud can't be reached right now (offline): no handoff. */
   canHandoff?: () => boolean;
+  /** A turn that already has its receipt (connect by name / scan): used as
+   *  is for the cloud and scripted paths; a live on-device engine still gets
+   *  the short constrained prompt built from the request. */
+  sent?: SentInfo;
+  /** The longest the on-device call may wait in line before its clock starts
+   *  anyway (an engine that never reports its start). */
+  nanoQueueWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -279,9 +305,9 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   const now = opts.now ?? (() => Date.now());
   const liveNano = engine.id === 'nano' && !engine.sim;
   const nanoReq = liveNano ? buildNanoPlanRequest(req) : null;
-  const sent = buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
+  const sent = opts.sent ?? buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
   if (nanoReq) sent.prompt = nanoReq.prompt;
-  if (engine.routeLine) sent.routeLine = engine.routeLine;
+  if (!opts.sent && engine.routeLine) sent.routeLine = engine.routeLine;
   ui.onSent?.(sent);
   let ghostCount = -1;
   const throwIfCancelled = (): void => { if (opts.isCancelled?.()) throw new MidStreamOffline(); };
@@ -289,9 +315,14 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     const g = parsePartialPlan(full);
     if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
   };
+  // Only the newest attempt may draw: a stream that timed out and was retried
+  // (or handed off) can still be delivering chunks, and must stay silent.
+  let attempt = 0;
   const watcher = (eng: SurfaceEngine): ((full: string) => void) => {
+    const mine = ++attempt;
     let last = -Infinity;
     return (full) => {
+      if (mine !== attempt) return;
       throwIfCancelled();
       ui.onText?.(full);
       if (!eng.sim) { const t = now(); if (t - last < GHOST_EVERY_MS) return; last = t; }
@@ -316,10 +347,12 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
       ui.onError?.(`${prefix}${line}`, eng.id);
       return null;
     };
+    // Each model call that really leaves is reported once (hedges, retries).
+    const so: StreamOptions | undefined = eng.id === 'gemini' && live ? { onCloudSend: () => ui.onCloudSend?.(info) } : undefined;
     let final: string;
     try {
       final = await (eng.id === 'gemini' && live
-        ? withTimeoutRetry(() => streamOne(eng, info.prompt), { timeoutMs: opts.timeoutMs ?? GEMINI_TIMEOUT_MS, retries: 1, sleep, shouldRetry: worthRetry })
+        ? withTimeoutRetry(() => streamOne(eng, info.prompt, so), { timeoutMs: opts.timeoutMs ?? GEMINI_TIMEOUT_MS, retries: 1, sleep, shouldRetry: worthRetry })
         : streamOne(eng, info.prompt));
       throwIfCancelled();
     } catch (e) {
@@ -332,6 +365,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
         throwIfCancelled();
       } catch (e2) { return fail(e2); }
     }
+    attempt++; // the reply is in: any stream still running is stale
     showGhost(final);
     const plan = parseModelPlan(final, opts.deviceIdSession);
     if (!plan.ok) {
@@ -344,19 +378,24 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
 
   if (!nanoReq) return runPlain(engine, sent);
 
-  // ---- live on-device turn: one structured call, one repair, a hard budget.
+  // ---- live on-device turn: one structured call, one repair, a hard budget
+  // that starts when the model's queue hands this call its turn — time spent
+  // waiting in line is not Nano being slow.
   const budgetMs = opts.nanoTimeoutMs ?? NANO_TIMEOUT_MS;
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   let over = false;
   const TIMED_OUT = Symbol('nano-timeout');
-  const deadline = sleep(budgetMs).then(() => { if (!over) ctl?.abort(); return TIMED_OUT; });
+  let begin!: () => void;
+  const began = new Promise<void>((r) => { begin = r; });
+  void sleep(opts.nanoQueueWaitMs ?? NANO_QUEUE_WAIT_MS).then(begin);
+  const deadline = began.then(() => sleep(budgetMs)).then(() => { if (!over) ctl?.abort(); return TIMED_OUT; });
   const timed = async (p: Promise<string>): Promise<string> => {
     p.catch(() => undefined); // an aborted stream may reject after the deadline already won
     const got = await Promise.race([p, deadline]);
     if (got === TIMED_OUT) throw new Error(`took longer than ${Math.round(budgetMs / 1000)} s`);
     return got as string;
   };
-  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal };
+  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onStart: begin };
   let why: string;
   try {
     let text = await timed(streamOne(engine, nanoReq.prompt, { ...so, system: nanoReq.system, user: nanoReq.user }));
@@ -365,12 +404,13 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     if (!plan.ok) {
       // One repair retry, inside the same budget.
       ui.onNote?.(`Nano’s reply was refused (${plan.error}); asking once more.`);
-      text = await timed(streamOne(engine, buildNanoRepairPrompt(nanoReq, plan.error), so));
+      text = await timed(streamOne(engine, buildNanoRepairPrompt(nanoReq, plan.error), { ...so, system: nanoReq.system, user: buildNanoRepairUser(nanoReq, plan.error) }));
       throwIfCancelled();
       plan = parseNanoPlan(text, req);
     }
     if (plan.ok) {
       over = true;
+      attempt++;
       showGhost(JSON.stringify(plan.value));
       return settle(plan, true);
     }
@@ -380,12 +420,13 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     why = e instanceof Error ? e.message : String(e);
   }
   over = true;
+  attempt++;
   ctl?.abort(); // stop the model: nobody is waiting for this reply any more
 
   const cloud = engine.handoff;
   const head = `Nano couldn’t finish (${why}). `;
   if (!cloud) { ui.onError?.(`${head}Gemini isn’t available here to take over.`, 'nano'); return null; }
-  if (opts.canHandoff && !opts.canHandoff()) { ui.onError?.(`${head}You’re offline, so Gemini can’t take over.`, 'nano'); return null; }
+  if (opts.canHandoff && !opts.canHandoff()) { ui.onError?.(`${head}You’re offline, so Gemini can’t take over. ${NOTHING_SENT}`, 'nano'); return null; }
   const handed = buildSurfacePrompt(req, 'gemini', { sim: cloud.sim, deviceIdSession: opts.deviceIdSession });
   handed.handoffWhy = why;
   handed.routeLine = `${cloud.sim ? 'SIM · ' : ''}Gemini · cloud — Nano couldn’t finish (${why}), so Gemini made this`;

@@ -40,6 +40,9 @@ export const isAiEngine = (engine: string): boolean => engine.toLowerCase() !== 
 
 export interface CanvasLedger {
   record(input: LedgerRecordInput): LedgerEntry;
+  /** Bytes of a turn that left AFTER the turn was opened (a cloud call books
+   *  when it really leaves; a hedge or retry adds again). Never for SIM. */
+  addBytes(entry: LedgerEntry, bytes: number): void;
   totals(): LedgerTotals;
   entries(): readonly LedgerEntry[];
   formatLine(): string;
@@ -106,6 +109,11 @@ export function createCanvasLedger(): CanvasLedger {
         : { engine: input.engine, bytes: would, at };
       entriesList.push(entry);
       return entry;
+    },
+
+    addBytes(entry: LedgerEntry, bytes: number): void {
+      if (entry.sim || !entriesList.includes(entry)) return;
+      entry.bytes += Math.max(0, Math.round(bytes));
     },
 
     totals(): LedgerTotals {

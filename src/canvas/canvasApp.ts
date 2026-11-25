@@ -15,7 +15,7 @@ import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type S
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
-import { buildSurfacePrompt, createCanvasHistory, geminiFailLine, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { createCanvasHistory, geminiFailLine, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pickPointChoice, pointConnectFromIdentity, pointFailureReceipt, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
 import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, phoneCropFraction, pointerInCrop, rayOutOfFrame, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
 import { createPhoneSensor, type PhoneSensor } from './phoneSensor';
@@ -107,7 +107,7 @@ import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } 
 import { nanoQueue } from '../ai/nanoQueue';
 import { routeLine, type RouteWorld } from './routeLine';
 import type { ReplayHost } from './journeyReplay';
-import { identifyDevice, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
+import { identifyDevice, onNanoBusyHandoff, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -738,7 +738,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     onOpenAgent: (agentId) => swarmEl.querySelector(`[data-agent-id="${agentId}"]`)?.classList.add('is-dock-open'),
     onCloseAgent: (agentId) => swarmEl.querySelector(`[data-agent-id="${agentId}"]`)?.classList.remove('is-dock-open'),
   });
-  const settleSwarm = (): void => { swarm.settle(); swarmDock.settle(); };
+  const settleSwarm = (): void => { swarmFollowsTiles = false; swarm.settle(); swarmDock.settle(); };
+  // The one on-device model was busy, so an on-device job (a voice intent,
+  // a pick) went to its cloud twin instead: say so, never silently.
+  const offNanoBusy = onNanoBusyHandoff((label) => { panels.show(); panels.showHandoff('nano', `Nano busy → Gemini (${label})`); });
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
   const history = createCanvasHistory();
@@ -1404,7 +1407,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.setFooterBytes(t.aiBytes, t.simBytes);
     swarm.reportBytes(t.aiBytes, t.simBytes);
   }
-  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; tileCount?: number; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean } = {}): void {
+  /** Live cloud turns that are open but have not (yet) sent: bytes are booked
+   *  when a model call really leaves (cloudSent), never when the turn starts —
+   *  a call refused before it left books nothing. */
+  const pendingCloud = new WeakMap<SentInfo, { entry: ReturnType<typeof ledger.record>; perSend: number; sends: number }>();
+  function openCloudTurn(s: SentInfo, payload: string, extraBytes = 0): void {
+    const entry = ledger.record({ engine: s.engine }); // the turn counts; 0 bytes so far
+    receipts.record(s, 0, 0);
+    pendingCloud.set(s, { entry, perSend: utf8ByteLength(payload) + Math.max(0, extraBytes), sends: 0 });
+    renderBytes();
+  }
+  /** One model call of turn `s` left this device (a hedge or retry is another). */
+  function cloudSent(s: SentInfo): void {
+    const p = pendingCloud.get(s);
+    if (!p) return;
+    p.sends++;
+    ledger.addBytes(p.entry, p.perSend);
+    receipts.record(s, p.perSend, 0);
+    renderBytes();
+    const total = p.perSend * p.sends;
+    panels.forEngine('gemini').log('note', p.sends === 1 ? `sent ${formatBytesShort(p.perSend)}` : `sent again: ${p.sends} calls, ${formatBytesShort(total)} in all`);
+    // A handoff says so where she decides: who made it, why, and what left.
+    if (s.handoffWhy) s.routeLine = `${s.routeLine.replace(/ · [\d.]+ (?:B|KB|MB) sent$/, '')} · ${formatBytesShort(total)} sent`;
+  }
+  /** Swarm cursors follow the reply: one per tile it has really produced. */
+  let swarmFollowsTiles = false;
+  function growSwarm(tiles: number): void { if (swarmFollowsTiles) swarm.setTiles(tiles); }
+  function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean; /** live cloud turn: book bytes when a call really leaves */ defer?: boolean } = {}): void {
     showAi(true);
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
@@ -1416,9 +1445,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // up redacted even when 0 bytes were sent.
     const protect = protectTurn(utterance, s.prompt);
     // extraBytes: a photo crop that went with the prompt (point-to-connect).
-    const bookedBytes = recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0, s.sent ? ctx.prebookedBytes : 0);
-    // A handoff says so where she decides: who made it, why, and what left.
-    if (s.handoffWhy && !s.sim && !/ sent$/.test(s.routeLine)) s.routeLine += ` · ${formatBytesShort(bookedBytes)} sent`;
+    if (ctx.defer && !s.sim && s.engine === 'gemini' && s.sent) openCloudTurn(s, protect.promptText, ctx.extraBytes);
+    else recordSent(s, s.sent ? protect.promptText : '', s.sent ? ctx.extraBytes : 0, s.sent ? ctx.prebookedBytes : 0);
     // The privacy order invariant: Nano logs `received` + any `redact` lines
     // before a byte of this turn reaches the Gemini terminal.
     logTurnReceipt(panels, {
@@ -1431,15 +1459,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       setRouteBadge(s.sim ? `SIM · ${badge}` : badge);
     }
     if (ctx.swarm === false) return;
-    // Swarm cursors spin up for this real call — a mix of Gemini (planning,
-    // layout, tile frames) and Nano (labels, device values, redaction/Kannada
-    // swaps) sub-steps, honestly capped at REAL_CALL_CAP real calls. A call
-    // that ran on Nano shows Nano cursors only.
+    // One cursor for this real call, in its engine's colour; a tile cursor
+    // joins for each tile the reply really produces (growSwarm, from the
+    // ghost) — never more cursors than tiles, never the other engine's.
     swarmStartedAt = Date.now();
-    const plan = ctx.swarmPlan ?? buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic', {
-      tileCount: ctx.tileCount,
-      redactedName: protect.used.length > 0,
-    });
+    const plan = ctx.swarmPlan ?? buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic');
+    swarmFollowsTiles = !ctx.swarmPlan;
     swarm.start(plan, opts.sim ? 1 : Date.now());
     swarm.reportBytes(ledger.totals().aiBytes, ledger.totals().simBytes);
     swarmDock.start(buildSwarmAgents(plan), {
@@ -1516,6 +1541,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!el) return;
     clearGhostTimers(frameId);
     if (!g) { el.hidden = true; el.innerHTML = ''; return; }
+    growSwarm(g.tiles.length);
     el.hidden = false;
     el.innerHTML = `<p class="mc-ghost-title">${esc(g.title ?? '…')}</p>` + g.tiles.map((t, i) =>
       `<div class="mc-ghost-tile ${t.type} stage-frame" data-tile-i="${i}">` +
@@ -1571,6 +1597,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
+  /** The last aiTurn's draft came from Gemini after an on-device failure. */
+  let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
   type PlanSummary = string | ((plan: SurfacePlan) => string);
   async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: PlanSummary, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string): Promise<boolean> {
@@ -1580,17 +1608,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const f = reg.get(frameId); if (!f) return false;
       const engine = engineFor(engineId, script.replace('BOARD', frameId));
       let sentInfo: SentInfo | null = null;
+      lastTurnHandedOff = false;
       const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null, frameId }, engine, {
-        onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
+        onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, defer: true }); },
         onFallback: aiFellBack,
-        // Nano couldn't finish: Gemini takes over as a NEW, booked send — the
-        // Nano terminal says why, the Gemini terminal shows what left.
+        onCloudSend: cloudSent,
+        // Nano couldn't finish: Gemini takes over as a NEW send — the Nano
+        // terminal says why, the Gemini terminal shows what left (if it did).
         onHandoff: (s, why) => {
           panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
           panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this board');
           ghost(frameId, null);
           sentInfo = s;
-          aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length });
+          lastTurnHandedOff = true;
+          aiSent(utterance, s, { task, defer: true });
         },
         onGhost: (g) => ghost(frameId, g),
         onNote: (note) => {
@@ -1701,6 +1732,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
       return;
     }
+    if (lastTurnHandedOff) {
+      // Gemini already made this draft (Nano couldn't finish): asking it to
+      // improve its own board would be a second cloud send for nothing.
+      const line = 'Gemini made this draft, so there is no second pass.';
+      panels.forEngine('gemini').log('note', line);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = line;
+      return;
+    }
     panels.showHandoff('nano', 'group the lights and add a room plan');
     // Tell Deep what the handoff line promises (only in the prompt; her card
     // still shows her own words) — without it the live model never added the
@@ -1730,55 +1769,61 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (engine.routeLine) turn.sent.routeLine = engine.sim ? (engine.routeLine.startsWith('SIM') ? engine.routeLine : `SIM · ${engine.routeLine}`) : engine.routeLine;
         turn.sent.sim = engine.sim;
       }
-      aiSent(utterance, turn.sent, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes, swarm: o.swarm });
-      if (o.note) panels.forEngine(turn.sent.engine).log('note', o.note);
-      if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
-      const streamOne = (eng: typeof engine) => eng.stream(turn.sent.prompt, (chunk) => {
-        ghost(frameId, parsePartialPlan(chunk));
-      });
-      let full = '';
-      let handedOff = false;
-      try {
-        full = await withBuildGimbal(() => streamOne(engine));
-      } catch (e) {
-        const fallbackEngine = engine.fallback;
-        if (!fallbackEngine) {
-          // No prepared draft in a live run: Gemini takes over from a failed
-          // on-device call, or the turn ends with the plain reason.
-          const failWith = (why: string, who: EngineId): false => {
-            settleSwarm(); panels.forEngine(who).fail(why); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
-          };
-          const nanoWhy = `Nano couldn’t finish (${e instanceof Error ? e.message : String(e)}). `;
-          if (engine.id !== 'nano') return failWith(geminiFailLine(e), 'gemini');
-          if (!engine.handoff) return failWith(`${nanoWhy}Gemini isn’t available here to take over.`, 'nano');
-          if (!net.isOnline()) return failWith(`${nanoWhy}You’re offline, so Gemini can’t take over.`, 'nano');
-          const cloud = engine.handoff;
-          const handed = buildSurfacePrompt(turn.request, 'gemini', { sim: cloud.sim, deviceIdSession });
-          handed.handoffWhy = e instanceof Error ? e.message : String(e);
-          handed.routeLine = `Gemini · cloud — Nano couldn’t finish (${handed.handoffWhy}), so Gemini made this`;
-          panels.forEngine('nano').fail(`couldn’t finish: ${handed.handoffWhy}`);
-          panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this tile');
-          aiSent(utterance, handed, { task: 'dashboard', tileCount: surfaces[frameId]?.tiles.length, swarm: o.swarm });
-          turn.sent = handed;
-          try {
-            full = await withBuildGimbal(() => cloud.stream(handed.prompt, (chunk) => { ghost(frameId, parsePartialPlan(chunk)); }));
-          } catch (e2) { return failWith(`${nanoWhy}${geminiFailLine(e2)}`, 'gemini'); }
-          handedOff = true;
-        } else {
-        turn.sent.sim = true;
-        turn.sent.routeLine = `SIM · ${turn.sent.routeLine.replace(/^SIM · /, '')} — the model didn’t answer, so a prepared draft is waiting`;
-        aiFellBack(turn.sent);
+      let made: SurfacePlan | null = null;
+      // The receipt the review shows: Gemini's, when it took over from Nano.
+      let reviewSent: SentInfo = turn.sent;
+      if (o.identified) {
+        // The identity is already known: replay its tile into the ghost. No
+        // model is called here, so there is nothing to hand off or retry.
+        aiSent(utterance, turn.sent, { task: 'dashboard', extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes, swarm: o.swarm });
+        if (o.note) panels.forEngine(turn.sent.engine).log('note', o.note);
+        if (o.photoNote) panels.forEngine(turn.sent.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
+        let full = '';
         try {
-          full = await withBuildGimbal(() => streamOne(fallbackEngine));
-        } catch (e2) {
-          const why = `${turn.sent.engine === 'nano' ? 'Nano' : 'Gemini'} didn’t answer: ${e2 instanceof Error ? e2.message : String(e2)}`;
+          full = await withBuildGimbal(() => engine.stream(turn.sent.prompt, (chunk) => { ghost(frameId, parsePartialPlan(chunk)); }));
+        } catch (e) {
+          const why = `Couldn’t add that device: ${e instanceof Error ? e.message : String(e)}`;
           settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
         }
-        }
+        const parsed = parseModelPlan(full);
+        if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+        made = parsed.value;
+      } else {
+        // By name / scan: the same turn as a board build — a live on-device
+        // engine gets the short constrained prompt, a failed one hands off to
+        // Gemini, a live plan is stripped of made-up claims, and a failure
+        // says why and offers Retry. Never a prepared draft in a live run.
+        let current: SentInfo = turn.sent;
+        made = await withBuildGimbal(() => runSurfaceTurn({ ...turn.request, frameId }, engine, {
+          onSent: (s) => {
+            current = s;
+            aiSent(utterance, s, { task: 'dashboard', extraBytes: o.extraBytes, prebookedBytes: o.prebookedBytes, swarm: o.swarm, defer: true });
+            if (o.note) panels.forEngine(s.engine).log('note', o.note);
+            if (o.photoNote) panels.forEngine(s.engine).log('note', 'no camera or gimbal here, so the photo is simulated.');
+          },
+          onFallback: aiFellBack,
+          onCloudSend: cloudSent,
+          onHandoff: (s, why) => {
+            panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
+            panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this tile');
+            ghost(frameId, null);
+            current = s;
+            aiSent(utterance, s, { task: 'dashboard', swarm: o.swarm, defer: true });
+          },
+          onGhost: (g) => ghost(frameId, g),
+          onNote: (note) => { const state = aiPanel.querySelector('.mc-ai-state'); if (state) state.textContent = note; },
+          onError: (why, failed) => {
+            settleSwarm();
+            panels.forEngine(failed ?? turn.sent.engine).fail(why);
+            aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+            // Retry runs after this turn has let go of the board.
+            offerRetry(() => { void connectTurn(frameId, utterance, turn, summary, status, o); });
+          },
+        }, { sent: turn.sent, deviceIdSession, isCancelled: () => current.engine === 'gemini' && !net.isOnline(), canHandoff: () => net.isOnline() }));
+        reviewSent = current;
+        if (!made) { settleSwarm(); ghost(frameId, null); return false; }
       }
-      const parsed = parseModelPlan(full, handedOff ? deviceIdSession : undefined);
-      if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
-      const plan = parsed;
+      const plan = { value: made };
       const before: SurfacePlan = surfaces[frameId] ?? { kind: 'room', title: f.title, tiles: [] };
       const merged = mergeTiles(before, plan.value.tiles);
       if (merged.tiles.length === before.tiles.length) {
@@ -1788,7 +1833,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say('That device is already on this board.');
         return false;
       }
-      return await proposePlan(frameId, utterance, merged, turn.sent, summary, status);
+      return await proposePlan(frameId, utterance, merged, reviewSent, summary, status);
     } finally { turnBusy = false; }
   }
 
@@ -2308,12 +2353,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       'Kannada script only, each string ≤80 chars, no markup.',
     ].join('\n');
     const knSent: SentInfo = { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim };
-    aiSent(utterance, knSent, { task: 'kannada' });
+    aiSent(utterance, knSent, { task: 'kannada', defer: true });
     // The redact-before-handoff invariant: aiSent() above already logged any
     // Nano redaction, so it's safe to announce the handoff now.
     panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
     let full = '';
-    try { full = await engine.stream(prompt, () => {}, { shape: 'json' }); }
+    try { full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(knSent) }); }
     catch (e) {
       if (!engine.fallback) {
         settleSwarm();
@@ -2882,17 +2927,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Each engine really tried goes through the ledger like any AI turn. A
     // cloud one (Gemini — including the "Nano" step on a device without Nano)
     // only ever gets the redacted prompt, and its bytes are booked.
-    const prepare = (eng: SurfaceEngine, prompt: string): string => {
+    const prepare = (eng: SurfaceEngine, prompt: string): { prompt: string; onCloudSend: () => void } => {
       const cloud = eng.id === 'gemini';
       const base = cloud
         ? (eng.routeLine ?? 'Gemini · cloud — sent your words (names redacted) for a short reply')
         : 'Nano · on device — nothing left this device';
-      aiSent(text, {
+      const si: SentInfo = {
         engine: eng.id, prompt, sim: eng.sim,
         sent: cloud ? 'your words (names redacted). No board data, no device addresses.' : null,
         routeLine: eng.sim && !base.startsWith('SIM') ? `SIM · ${base}` : base,
-      }, { swarm: false });
-      return cloud ? protectTurn(text, prompt).promptText : prompt;
+      };
+      aiSent(text, si, { swarm: false, defer: true });
+      return { prompt: cloud ? protectTurn(text, prompt).promptText : prompt, onCloudSend: () => cloudSent(si) };
     };
     let r: Awaited<ReturnType<typeof openEndedAsk>>;
     try {
@@ -3295,6 +3341,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     endPointWait();
     stopReplay();
     reviewDialog.destroy();
+    offNanoBusy();
     swarm.destroy();
     swarmDock.destroy();
     swarmPillObserver?.disconnect();
@@ -3627,9 +3674,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             const eng = engineFor('gemini', scriptedFixJson(target.spec));
             const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
             const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
-            recordSent(si, eng.id === 'nano' ? '' : prompt);
+            if (!eng.sim && eng.id === 'gemini') openCloudTurn(si, prompt);
+            else recordSent(si, eng.id === 'nano' ? '' : prompt);
             fixSent = si;
-            try { return await eng.stream(prompt, () => {}, { shape: 'json' }); } catch (e) {
+            try { return await eng.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(si) }); } catch (e) {
               if (!eng.fallback) throw e;
               // The prepared draft answered instead: the footer says SIM.
               si.sim = true;
@@ -3694,15 +3742,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return { tileId: entry.id, path: entry.path, spec: entry.spec, label: entry.label, rect: host.getBoundingClientRect(), host };
   };
   // The morph swarm: one real Gemini call, every cursor pinned to the tile.
-  const morphSwarmPlan = (tileIndex: number, redactedName: boolean): SwarmPlanInput => ({
+  const morphSwarmPlan = (tileIndex: number): SwarmPlanInput => ({
     calls: [{ kind: 'gemini', label: 'Gemini · tile edit' }],
-    subSteps: [
-      { kind: 'gemini', label: 'Gemini · revise tile', tileIndex },
-      { kind: 'gemini', label: 'Gemini · keep layout', tileIndex },
-      ...(redactedName ? [{ kind: 'nano' as const, label: 'Nano · redaction', tileIndex }] : []),
-      { kind: 'nano', label: 'Nano · labels', tileIndex },
-      { kind: 'nano', label: 'Nano · device values', tileIndex },
-    ],
+    subSteps: [{ kind: 'gemini', label: 'Gemini · revise tile', tileIndex }],
   });
   function applyMorph(frameId: string, patched: SurfacePlan, summary: string, path?: number[]): boolean {
     const f = reg.get(frameId);
@@ -3770,7 +3812,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }),
     undo,
     ui: {
-      sent: (s, o) => aiSent(o.utterance, s, { swarmPlan: morphSwarmPlan(o.tileIndex, protectTurn(o.utterance, s.prompt).used.length > 0) }),
+      sent: (s, o) => aiSent(o.utterance, s, { swarmPlan: morphSwarmPlan(o.tileIndex), defer: true }),
+      cloudSent,
       log: (engine, verb, detail) => panels.forEngine(engine).log(verb, detail),
       handoff: (reason) => panels.showHandoff('nano', reason),
       settle: async () => { await holdSwarmMinimum(); settleSwarm(); autoHideAi(); },

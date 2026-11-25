@@ -1,10 +1,9 @@
-// Swarm-style build cursors: ~10-20 small, labelled, colour-coded cursors
-// that fly around the canvas while a build turn runs. Every visible cursor
-// stands for a real sub-step of the model work already happening elsewhere
-// (aiTurn.ts's onSent/onGhost) — never decoration invented on top of it.
-// Real model calls stay capped at REAL_CALL_CAP (matching raceHedged's
-// primary+backup path in src/ai/hedge.ts); the rest of the cursors are
-// sub-steps of the one real call this turn made, flagged `real: false`.
+// Build cursors: small, labelled, colour-coded cursors on the canvas while a
+// build turn runs. They only show what is really happening: ONE cursor for
+// the model call this turn made, in that engine's colour, plus one cursor
+// per tile the reply has actually produced so far (never more cursors than
+// tiles, never a cursor for an engine that was not called). The pill says
+// the same thing in words: "Nano · 1 call".
 export type SwarmKind = 'gemini' | 'nano';
 export type SwarmTask = 'dashboard' | 'floorplan' | 'kannada' | 'generic';
 
@@ -13,13 +12,11 @@ export interface SwarmAgentSpec {
   kind: SwarmKind;
   label: string;
   color: string;
-  /** True for the handful of cursors standing in for an actual network
-   *  call; false for a sub-step cursor of one of those calls. */
+  /** True for the cursor that stands for an actual model call; false for a
+   *  tile cursor of that call. */
   real: boolean;
   /** Which board tile (0-based, matching the streamed plan's tile order)
-   *  this cursor's "editing" phase lands on, if any. Two cursors (one
-   *  Gemini, one Nano) usually share a tileIndex: Gemini frames it first,
-   *  Nano labels it after — the two visible stages a tile fills in. */
+   *  this cursor's "editing" phase lands on, if any. */
   tileIndex?: number;
 }
 
@@ -28,10 +25,13 @@ export const REAL_CALL_CAP = 3;
 // one green for Nano — matches the Gemini/Nano terminal accents.
 const GEMINI_COLORS = ['#5A7BA6', '#7B9BC2'];
 const NANO_COLOR = '#6B8F71';
-const DEFAULT_SUB_STEPS = 14;
 const FLIGHT_MS = 1400;
-const MIN_TILE_COUNT = 4;
-const MAX_TILE_COUNT = 8;
+/** The most tile cursors a turn ever shows (a plan has at most this many
+ *  top-level tiles worth pointing at). */
+export const MAX_TILE_CURSORS = 8;
+/** Grid cells the cursors are laid out on — fixed, so a cursor that joins
+ *  when a new tile arrives never moves the ones already placed. */
+const SLOT_COUNT = 1 + MAX_TILE_CURSORS;
 
 /** Pure, order-stable colour assignment: index N of a kind always gets the
  *  same colour for the same kind sequence. */
@@ -42,11 +42,9 @@ export function assignSwarmColor(kind: SwarmKind, indexWithinKind: number): stri
 
 export interface SwarmPlanInput {
   /** One entry per real model call this build turn makes. Truncated to
-   *  REAL_CALL_CAP — anything past that is a sub-step of an in-flight call,
-   *  not a new network call. */
+   *  REAL_CALL_CAP. */
   calls: { kind: SwarmKind; label: string }[];
-  /** Honest sub-steps already implied by the real call (e.g. one per tile
-   *  a plan can carry) — never more than what the real work could produce. */
+  /** One entry per tile the call has really produced (or is editing). */
   subSteps: { kind: SwarmKind; label: string; tileIndex?: number }[];
 }
 
@@ -64,68 +62,41 @@ export function buildSwarmAgents(input: SwarmPlanInput): SwarmAgentSpec[] {
 }
 
 const TASK_REAL_LABEL: Record<SwarmTask, Record<SwarmKind, string>> = {
-  dashboard: { gemini: 'Gemini · planner', nano: 'Nano · labels' },
-  floorplan: { gemini: 'Gemini · layout', nano: 'Nano · room labels' },
-  kannada: { gemini: 'Gemini · translation plan', nano: 'Nano · Kannada swaps' },
-  generic: { gemini: 'Gemini · planner', nano: 'Nano · labels' },
+  dashboard: { gemini: 'Gemini · board plan', nano: 'Nano · board draft' },
+  floorplan: { gemini: 'Gemini · floor plan', nano: 'Nano · floor plan' },
+  kannada: { gemini: 'Gemini · Kannada pack', nano: 'Nano · Kannada pack' },
+  generic: { gemini: 'Gemini · reply', nano: 'Nano · reply' },
 };
 
+const ENGINE_NAME: Record<SwarmKind, string> = { gemini: 'Gemini', nano: 'Nano' };
+
 export interface MixedSwarmOptions {
-  /** How many tiles the plan is actually carrying, so the swarm follows the
-   *  real work instead of a fixed-size mob. Clamped to [4, 8]. */
+  /** Tiles the reply has really produced so far. 0 (the default) shows only
+   *  the call's own cursor; capped at MAX_TILE_CURSORS. */
   tileCount?: number;
-  /** A name was redacted from this turn's prompt — adds an honest
-   *  "Nano · redaction" cursor instead of inventing one unconditionally. */
-  redactedName?: boolean;
 }
 
-/** The mixed Gemini+Nano swarm for one real call (`realEngine`). Gemini
- *  cursors stand for planning/layout/frame work; Nano cursors stand for
- *  labelling, device values, redaction and (for the Kannada turn) word
- *  swaps — honest sub-steps of the one real network call this turn made,
- *  landing in the ~10-20 cursor range the demo calls for. */
+/** One tile cursor, in the engine that is really producing the tile. */
+export function tileCursor(kind: SwarmKind, tileIndex: number): SwarmPlanInput['subSteps'][number] {
+  return { kind, label: `${ENGINE_NAME[kind]} · tile ${tileIndex + 1}`, tileIndex };
+}
+
+/** The cursors for one real call by `realEngine`: the call itself, plus one
+ *  per tile it has produced. Only that engine's cursors — a Nano call shows
+ *  no Gemini cursor, a Gemini call shows no Nano cursor. */
 export function buildMixedSwarmPlan(realEngine: SwarmKind, task: SwarmTask, opts: MixedSwarmOptions = {}): SwarmPlanInput {
-  const tileCount = Math.max(MIN_TILE_COUNT, Math.min(MAX_TILE_COUNT, opts.tileCount ?? 6));
-  const calls = [{ kind: realEngine, label: TASK_REAL_LABEL[task][realEngine] }];
-  const geminiRoles = ['Gemini · layout', 'Gemini · structure', 'Gemini · tile frames'];
-  const nanoRoles = task === 'kannada'
-    ? ['Nano · Kannada swaps', 'Nano · device values', 'Nano · labels']
-    : opts.redactedName
-    ? ['Nano · redaction', 'Nano · device values', 'Nano · labels']
-    : ['Nano · labels', 'Nano · device values'];
-  const subSteps: SwarmPlanInput['subSteps'] = [];
-  if (realEngine === 'nano') {
-    // The one real call ran on this device: every sub-step is Nano's. No
-    // Gemini cursor may appear next to "0 B sent to cloud".
-    for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'nano', label: `Nano · tile ${i + 1}`, tileIndex: i });
-    for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'nano', label: nanoRoles[i % nanoRoles.length], tileIndex: i });
-    subSteps.push({ kind: 'nano', label: task === 'floorplan' ? 'Nano · layout' : 'Nano · structure' });
-    return { calls, subSteps };
-  }
-  // One Gemini "tile N" cursor per tile (frames the tile first)...
-  for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'gemini', label: `Gemini · tile ${i + 1}`, tileIndex: i });
-  // ...then one Nano labelling cursor per tile (fills it in after).
-  for (let i = 0; i < tileCount; i++) subSteps.push({ kind: 'nano', label: nanoRoles[i % nanoRoles.length], tileIndex: i });
-  subSteps.push({ kind: 'gemini', label: geminiRoles[0] });
-  subSteps.push({ kind: 'nano', label: nanoRoles[0] });
-  return { calls, subSteps };
+  const tileCount = Math.max(0, Math.min(MAX_TILE_CURSORS, Math.floor(opts.tileCount ?? 0)));
+  return {
+    calls: [{ kind: realEngine, label: TASK_REAL_LABEL[task][realEngine] }],
+    subSteps: Array.from({ length: tileCount }, (_, i) => tileCursor(realEngine, i)),
+  };
 }
 
-/** One real call's worth of cursors: the call itself plus a fixed set of
- *  honestly-labelled sub-steps, landing in the ~10-20 cursor range the demo
- *  calls for from a single real model call. */
-export function buildSwarmPlanForCall(kind: SwarmKind, subStepCount = DEFAULT_SUB_STEPS): SwarmPlanInput {
-  const name = kind === 'gemini' ? 'Gemini' : 'Nano';
-  const realLabel = kind === 'gemini' ? 'Gemini · planner' : 'Nano · labels';
-  const subSteps = Array.from({ length: subStepCount }, (_, i) => ({ kind, label: `${name} · tile ${i + 2}` }));
-  return { calls: [{ kind, label: realLabel }], subSteps };
-}
-
-/** The honesty line the full-screen review / model panels show next to the
- *  swarm, so the visual never reads as more model calls than really ran. */
+/** What the cursors stand for, for the pill's tooltip. */
 export function honestyNote(agents: SwarmAgentSpec[]): string {
   const real = agents.filter((a) => a.real).length;
-  return `${agents.length} agent${agents.length === 1 ? '' : 's'} show the real steps of about ${real} model call${real === 1 ? '' : 's'}.`;
+  const tiles = agents.length - real;
+  return `${real} model call${real === 1 ? '' : 's'}${tiles ? `; ${tiles} cursor${tiles === 1 ? '' : 's'} mark the tile${tiles === 1 ? '' : 's'} it has made so far` : ''}.`;
 }
 
 function formatBytesShort(bytes: number): string {
@@ -135,13 +106,16 @@ function formatBytesShort(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function swarmPillText(s: { agents: number; gemini: number; nano: number; bytes: number; simBytes?: number }): string {
-  const counts = [s.gemini ? `Gemini ${s.gemini}` : '', s.nano ? `Nano ${s.nano}` : ''].filter(Boolean).join(' · ');
+/** The pill: which engine was really called, how many times, and what left.
+ *  `gemini` / `nano` are REAL model calls — cursors are never counted. */
+export function swarmPillText(s: { gemini: number; nano: number; bytes: number; simBytes?: number }): string {
+  const calls = (name: string, n: number): string => (n ? `${name} · ${n} call${n === 1 ? '' : 's'}` : '');
+  const who = [calls('Nano', s.nano), calls('Gemini', s.gemini)].filter(Boolean).join(' · ');
   const sim = s.simBytes ?? 0;
   // A SIM turn sent nothing: what it would send is labelled, never "to cloud".
   const bytes = sim > 0 && s.bytes <= 0 ? `SIM · would send ${formatBytesShort(sim)}`
     : `${formatBytesShort(s.bytes)} to cloud${sim > 0 ? ` · SIM · would send ${formatBytesShort(sim)}` : ''}`;
-  return `${s.agents} agent${s.agents === 1 ? '' : 's'}${counts ? ` · ${counts}` : ''} · ${bytes}`;
+  return `${who ? `${who} · ` : ''}${bytes}`;
 }
 
 export interface SwarmPose { id: string; x: number; y: number; phase: 'flying' | 'editing' }
@@ -193,6 +167,9 @@ export function poseAt(agent: SwarmAgentSpec, index: number, tMs: number, opts: 
 
 export interface SwarmLayer {
   start(input: SwarmPlanInput, seed?: number): void;
+  /** The reply now holds `count` tiles: add a cursor for each new one (the
+   *  cursors already placed stay where they are). No-op when not running. */
+  setTiles(count: number): void;
   reportBytes(bytes: number, simBytes?: number): void;
   settle(): void;
   destroy(): void;
@@ -234,17 +211,18 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
 
   let agents: SwarmAgentSpec[] = [];
   const els = new Map<string, HTMLElement>();
+  /** When each cursor joined (ms on `now()`), so a late one flies in on its own clock. */
+  const born = new Map<string, number>();
   let rafId: number | null = null;
-  let startedAt = 0;
   let seed = 1;
   let bytes = 0;
   let simBytes = 0;
   let reached = new Set<string>();
+  let running = false;
 
   function renderPill(): void {
-    const gemini = agents.filter((a) => a.kind === 'gemini').length;
-    const nano = agents.filter((a) => a.kind === 'nano').length;
-    pill.textContent = swarmPillText({ agents: agents.length, gemini, nano, bytes, simBytes });
+    const real = agents.filter((a) => a.real);
+    pill.textContent = swarmPillText({ gemini: real.filter((a) => a.kind === 'gemini').length, nano: real.filter((a) => a.kind === 'nano').length, bytes, simBytes });
     pill.title = honestyNote(agents);
   }
 
@@ -261,46 +239,73 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   }
 
   function frame(t: number): void {
-    const elapsed = t - startedAt;
-    agents.forEach((a, i) => applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: agents.length })));
-    rafId = elapsed < FLIGHT_MS && raf ? raf(frame) : null;
+    let flying = false;
+    agents.forEach((a, i) => {
+      const elapsed = t - (born.get(a.id) ?? t);
+      if (elapsed < FLIGHT_MS) flying = true;
+      applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: SLOT_COUNT }));
+    });
+    rafId = flying && raf ? raf(frame) : null;
   }
 
   function clear(): void {
     els.forEach((el) => el.remove());
     els.clear();
+    born.clear();
     agents = [];
     reached = new Set();
+  }
+
+  function mount(a: SwarmAgentSpec, i: number): void {
+    const el = doc!.createElement('div');
+    el.className = `mc-swarm-cursor is-${a.kind}`;
+    el.setAttribute('data-agent-id', a.id);
+    el.style.setProperty('--mc-swarm-color', a.color);
+    el.innerHTML = `<span class="mc-swarm-arrow"></span><span class="mc-swarm-label">${a.label}</span>`;
+    container.appendChild(el);
+    els.set(a.id, el);
+    born.set(a.id, now());
+    applyPose(a, poseAt(a, i, opts.reducedMotion ? FLIGHT_MS : 0, { seed, total: SLOT_COUNT }));
   }
 
   return {
     start(input, s = 1) {
       if (rafId != null && caf) caf(rafId);
+      rafId = null;
       clear();
       seed = s;
       agents = buildSwarmAgents(input);
-      agents.forEach((a, i) => {
-        const el = doc.createElement('div');
-        el.className = `mc-swarm-cursor is-${a.kind}`;
-        el.setAttribute('data-agent-id', a.id);
-        el.style.setProperty('--mc-swarm-color', a.color);
-        el.innerHTML = `<span class="mc-swarm-arrow"></span><span class="mc-swarm-label">${a.label}</span>`;
-        container.appendChild(el);
-        els.set(a.id, el);
-        const initial = opts.reducedMotion
-          ? poseAt(a, i, FLIGHT_MS, { seed, total: agents.length })
-          : poseAt(a, i, 0, { seed, total: agents.length });
-        applyPose(a, initial);
-      });
+      agents.forEach(mount);
+      running = true;
       container.hidden = false;
       pill.hidden = false;
       renderPill();
-      if (!opts.reducedMotion && raf) { startedAt = now(); rafId = raf(frame); }
+      if (!opts.reducedMotion && raf) rafId = raf(frame);
+    },
+    setTiles(count) {
+      if (!running) return;
+      const call = agents.find((a) => a.real);
+      if (!call) return;
+      const have = new Set(agents.filter((a) => a.tileIndex != null).map((a) => a.tileIndex));
+      const want = Math.min(MAX_TILE_CURSORS, Math.max(0, Math.floor(count)));
+      let added = false;
+      for (let i = 0; i < want; i++) {
+        if (have.has(i)) continue;
+        const step = tileCursor(call.kind, i);
+        const agent: SwarmAgentSpec = { id: `tile-${i}`, kind: step.kind, label: step.label, color: call.color, real: false, tileIndex: i };
+        agents.push(agent);
+        mount(agent, agents.length - 1);
+        added = true;
+      }
+      if (!added) return;
+      renderPill();
+      if (!opts.reducedMotion && raf && rafId == null) rafId = raf(frame);
     },
     reportBytes(b, sim = 0) { bytes = b; simBytes = sim; renderPill(); },
     settle() {
       if (rafId != null && caf) caf(rafId);
       rafId = null;
+      running = false;
       clear();
       container.hidden = true;
       pill.hidden = true;
@@ -308,6 +313,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     destroy() {
       if (rafId != null && caf) caf(rafId);
       rafId = null;
+      running = false;
       clear();
     },
   };
