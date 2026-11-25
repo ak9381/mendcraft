@@ -12,8 +12,43 @@ in a real Chrome, with **no `?sim=1`**. About ten minutes.
   `docs/app-check-local-dev.md`. `npm run dev` must print
   `App Check: using the debug token from …`.
 - **One canvas tab only.** Two tabs share the one on-device model.
-- Open DevTools → Console before each step. Use `?fresh` to start clean:
-  `http://127.0.0.1:5173/canvas.html?fresh`
+- Open DevTools → Console before each step. Use `?fresh` to start clean, and
+  add `nanoTrace=1` to have the page time Nano for you:
+  `http://127.0.0.1:5173/canvas.html?fresh&nanoTrace=1`
+
+## The trace (`?nanoTrace=1`)
+
+With the flag, every on-device call is timed at `LanguageModel` itself (under
+the Firebase SDK) and logged with a `[nano-trace]` prefix. Timings and sizes
+only — never prompt or reply text:
+
+```
+[nano-trace] create #2: 2600 ms (initialPrompts 318 chars)
+[nano-trace] on-device call: waited 0 ms for the model's queue
+[nano-trace] prompt #2 (session #2): input 131 chars, constraint 196 chars — started
+[nano-trace] prompt #2 (session #2): input 131 chars, constraint 196 chars — first chunk 900 ms, done in 3100 ms, output 62 chars
+[nano-trace] on-device call: done in 5800 ms, output 62 chars
+```
+
+What to read off it:
+
+- **Output length is the time.** Nano writes about 20 characters a second
+  here. A room draft should be ~60 characters (`{"t":…,"d":[ids]}`), a floor
+  plan ~18 (`{"p":"twoBedroom"}`). An output over ~120 characters means the
+  schema is not being enforced.
+- **Queue wait** should be 0 ms for a board turn. Anything else means another
+  on-device call was in the way.
+- **Does a stop really stop Nano?** When a turn times out or is handed off,
+  the app aborts the signal it gave to `create()` and calls `destroy()` on
+  the SDK's session. The trace then prints one of:
+
+  ```
+  [nano-trace] session #2: after destroy(), prompt #2 ended 40 ms later with 0 more chars (0 chunks) — generation stopped
+  [nano-trace] session #2: create-signal abort did NOT stop prompt #2 — still generating 5 s later (112 more chars, 9 chunks since)
+  ```
+
+  Use the hang/slow case in step 3 to see it. "did NOT stop" means Nano keeps
+  the model busy after a handoff, and the next on-device call will wait.
 
 ## 1. Nano is fast and is one call
 
@@ -32,7 +67,8 @@ in a real Chrome, with **no `?sim=1`**. About ten minutes.
 
 Expect:
 
-- First ghost tiles / the review in **under 15 s** (typically 3–8 s warm).
+- First ghost tile as soon as the first device id arrives, and the review in
+  **under 7 s** warm (the reply is ~60 characters).
 - Exactly **one** `Nano prompt #…` line for the turn (two only if the first
   reply was refused and repaired). Never one per tile, never 14.
 - The pill / engine bar reads `Nano · 1 call`. There is one Nano cursor for
@@ -110,8 +146,10 @@ Expect:
 
 - One status line with both reasons, e.g.
   `Nano couldn’t finish (probe: forced failure). Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.`
-  or `… Gemini couldn’t be reached: no connection. Nothing was sent.`
-- The byte total does **not** go up for that turn.
+  (only a failure before the request is issued says "Nothing was sent." —
+  with the domain blocked the line is `… Gemini couldn’t be reached: no
+  connection`, and the bytes ARE booked, because the request was issued).
+- With the App Check 403 the byte total does **not** go up for that turn.
 - A **Retry** button. No review opens. No draft appears. Nothing says SIM.
 - Unblock the domain, press Retry: the turn succeeds.
 
@@ -124,16 +162,20 @@ on-device model is busy, both terminals show a handoff line
 
 ## 5. Next-step chips don’t spend Nano on load
 
-1. Reload with the prompt counter from step 1 installed early (paste it
-   right after load).
+1. Reload with `?nanoTrace=1` (or the prompt counter from step 1).
 2. Do nothing for 3 s: the rule chips (“Suggested”) are already on the board.
+3. Run a board turn and watch the trace until 10 s after its review closes.
 
 Expect:
 
 - No `next steps timed out` warning in the console, on any load.
-- No Nano prompt during a turn or while a review is open. After the board has
-  sat still ~3 s with nothing else running, the chips may switch to
-  “Nano · on device”.
+- No Nano prompt (no `create #` / `prompt #` line) other than the board's own
+  during a turn, while its review is open, or for 10 s after the turn ended.
+  After that, once the board has sat still with nothing else running, the
+  chips may switch to “Nano · on device”.
+- The model is only used when `LanguageModel.availability()` says
+  `"available"`; while it is `"downloadable"` or `"downloading"` the Nano
+  step is drafted by Gemini and its route line says so.
 
 ## 6. Hosted preview (production build, reCAPTCHA)
 
@@ -147,8 +189,10 @@ Enterprise key’s allowed domains.
 
 | Check | Target | Measured |
 | --- | --- | --- |
-| Nano “connect everything” → review | < 15 s | |
-| Nano “draw the floor plan” → review | < 15 s | |
+| Nano “connect everything” → review | < 7 s, output ≤ 120 chars | |
+| Nano “draw the floor plan” → review | < 5 s, output ≤ 20 chars | |
+| Trace: queue wait for a board turn | 0 ms | |
+| Trace: after a stop | “generation stopped” | |
 | Nano prompts per turn | 1 | |
 | Pill during a Nano turn | `Nano · 1 call`, cursors ≤ tiles | |
 | Nano really stops after a 20 s handoff | yes | |

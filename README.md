@@ -33,7 +33,9 @@ web it soft-fails with a clear note.
   call in `ONLY_ON_DEVICE` mode — Chrome's `LanguageModel` global is only
   asked whether the model is available. One on-device prompt runs at a time.
 - **Nano first, Gemini second, never a stand-in.** A board draft is one short
-  on-device call with a JSON-schema reply. If Nano errors, takes longer than
+  on-device call whose JSON-schema reply is only Nano's decision — a title
+  and the device ids (or a floor-plan template); tiles and labels are built
+  from the device list. If Nano errors, takes longer than
   20 s or returns an invalid plan, Gemini makes the board and the review says
   so, with the bytes sent. If Gemini fails too, the canvas shows the reason
   (for example `Gemini blocked: App Check 403`) and a Retry. Scripted drafts
@@ -43,8 +45,9 @@ web it soft-fails with a clear note.
   in the Proposal keep/drop buffer first.
 - **Byte ledger** — every cloud round trip is logged with its byte size, so the
   canvas shows exactly what left the machine. Bytes are booked when a call
-  really leaves (a hedge or retry counts again); a call refused before it
-  left books nothing and says "Nothing was sent."
+  is issued (a hedge or retry counts again); a call stopped before its
+  request went out (no App Check token) books nothing and says "Nothing was
+  sent."
 - **App Check** (reCAPTCHA Enterprise) runs before any AI call.
 
 ## Privacy router: phones go through the desktop hub
@@ -114,7 +117,9 @@ npm run wiz-bridge               # optional: real WiZ lamp on the LAN (prints a 
   and register it once in Firebase console → App Check → Apps → Manage debug
   tokens. Without it Gemini is refused (403) on local addresses. Steps:
   `docs/app-check-local-dev.md`. Never commit the token.
-- **Checking real Nano + Gemini by hand:** `scripts/live-probe.md`.
+- **Checking real Nano + Gemini by hand:** `scripts/live-probe.md`. Add
+  `?nanoTrace=1` to log every on-device call's timings and sizes (never its
+  content) to the console.
 - **Human console steps** (for a full cloud/replay-protected run) are listed in
   `docs/CONSOLE-STEPS.md`.
 
