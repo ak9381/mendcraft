@@ -119,10 +119,13 @@ export function coerceLanguagePack(raw: unknown): Coerced<LanguagePack> {
   if (r.phrases !== undefined) {
     if (!r.phrases || typeof r.phrases !== 'object' || Array.isArray(r.phrases)) return { ok: false, error: 'phrases must be an object' };
     for (const [intent, arr] of Object.entries(r.phrases as Record<string, unknown>)) {
-      if (!INTENT_KEY_SET.has(intent)) return { ok: false, error: `unknown intent "${intent}"` };
-      if (!Array.isArray(arr) || !arr.length) return { ok: false, error: `phrases.${intent} must be a non-empty list` };
-      for (const p of arr) if (!okString(p)) return { ok: false, error: `phrase for "${intent}" must be Kannada, ≤${MAX_STRING} chars, no markup` };
-      phrases[intent as IntentKey] = arr as string[];
+      // Phrases are optional extras: a phrase for an intent we don't know, or
+      // one that fails the checks, is dropped — it never sinks the whole pack
+      // (live Gemini added an "ai" intent and the pack was refused).
+      if (!INTENT_KEY_SET.has(intent)) continue;
+      if (!Array.isArray(arr) || !arr.length) continue;
+      const good = arr.filter(okString);
+      if (good.length) phrases[intent as IntentKey] = good;
     }
   }
   return { ok: true, value: { lang, strings, phrases } };
