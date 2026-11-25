@@ -644,13 +644,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const platformLabel = (p: PhonePlatform | null): string => (p === 'android' ? 'Nothing' : p === 'ios' ? 'iPhone' : 'none');
   /** Phones are on the table: sim scripts them, or a real one joined. */
   const phonesPaired = (): boolean => !phoneShell && (pairFirst.phones().length > 0 || !!hostSession);
-  function showArrangeStrip(): void {
+  /** `refly`: re-fit the focused board if the strip's visibility changed —
+   *  only for a lasting change (a phone joined/left), never for Tools
+   *  opening or a drag nearing an edge (the board must not jump). */
+  function showArrangeStrip(refly = false): void {
     const toolsOpen = !!root.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)');
     const was = arrangeStrip.hidden;
     arrangeStrip.hidden = !(phonesPaired() && (toolsOpen || edgeNear));
     const swap = root.querySelector<HTMLElement>('[data-cmd=swap]');
     if (swap) swap.hidden = phoneShell || !(opts.sim || hostSession);
-    if (was !== arrangeStrip.hidden && focusId && !edgeNear) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
+    if (refly && was !== arrangeStrip.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
   }
   function renderArrangeStrip(): void {
     arrangeStrip.innerHTML = `
@@ -708,7 +711,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // The row changes the bottom inset: re-fit the focused board above it.
       if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
-      showArrangeStrip();
+      showArrangeStrip(true);
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
       // Past the pairing step the card collapses into the row's "N phones connected"
@@ -796,10 +799,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every status line, in order (the journey replay reads what each step said).
   const statusLog: string[] = [];
   let statusBase = 0;
-  // The status line is a toast, not permanent chrome: it fades ~6 s after the
-  // last line, except while a review waits, a Retry is offered or the mic
-  // listens (those lines stay until something replaces them).
-  const STATUS_FADE_MS = 6000;
+  // The status line is a toast, not permanent chrome: it fades 6-12 s after
+  // the last line (longer lines stay longer), except while a review waits, a
+  // Retry is offered or the mic listens (those stay until replaced). A
+  // failure or refusal is also copied into the AI drawer's live log, so it
+  // can be read again after the toast is gone.
+  const statusFadeMs = (t: string): number => Math.min(12000, Math.max(6000, 2500 + t.length * 60));
+  const FAILURE_LINE = /^(Blocked|Refused|Nothing changed|Needs network|No answer|Could ?n[o’']t|Couldn[’']t)\b|didn[’']t answer|\bfailed\b|Nothing changed\.?$/i;
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
   const fadeStatus = (t: string): void => {
     if (statusTimer) clearTimeout(statusTimer);
@@ -810,13 +816,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (statusEl.textContent !== t) return;
       if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
       statusEl.textContent = '';
-    }, STATUS_FADE_MS);
+    }, statusFadeMs(t));
   };
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
+    if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };
 
   /** Gimbal body language: nod 'yes' on an Approve, shake 'no' on a refusal,
@@ -1132,6 +1139,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- frames DOM ----
+  /** The bottom fade only while there is more board below the fold. */
+  function markMoreBelow(body: HTMLElement): void {
+    body.classList.toggle('is-more-below', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
+  }
   function frameEl(f: Frame): HTMLElement {
     let el = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`);
     if (!el) {
@@ -1141,6 +1152,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
+      const fb = el.querySelector<HTMLElement>('.mc-frame-body')!;
+      fb.addEventListener('scroll', () => markMoreBelow(fb), { passive: true });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markMoreBelow(fb)).observe(fb);
       if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
         frameId: f.id,
         getZoom: () => camera.z,
@@ -1186,6 +1200,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.classList.toggle('focused', focused);
       el.classList.toggle('dim', focusId !== null && !focused);
       const body = el.querySelector<HTMLElement>('.mc-frame-body')!;
+      if (focused && typeof requestAnimationFrame === 'function') requestAnimationFrame(() => markMoreBelow(body));
       body.inert = !focused; // overview is view-only: the plan engine hit-tests in unscaled pixels
       el.setAttribute('aria-label', `${f.title} board${focused ? ', editing' : ''}`);
       const empty = el.querySelector<HTMLElement>('.mc-empty')!;
@@ -1231,9 +1246,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  shrank a laptop-sized board to ~8px text), filling the width minus
    *  16px gutters and the height between the top badge and the mic; the
    *  board scrolls inside. Display-only, like fitBoardWidth. */
+  /** "Show everything" on a phone: keep the whole-canvas view (a resize or
+   *  a remote board must not snap back to one board) until a board is
+   *  focused again. */
+  let phoneOverview = false;
   function fitPhone(): void {
     const list = reg.list();
     if (!list.length) return;
+    if (phoneOverview && !focusId) { camera = fitRects(list.map((r) => r.rect), vp(), 28); applyCamera(); return; }
     const f = (focusId ? reg.get(focusId) : undefined) ?? (lastFocus ? reg.get(lastFocus) : undefined) ?? list[0];
     if (focusId !== f.id) { focusId = f.id; lastFocus = f.id; }
     const cs = typeof getComputedStyle === 'function' ? getComputedStyle(viewport) : null;
@@ -1301,14 +1321,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
     let f = reg.get(id); if (!f) return;
-    focusId = id; lastFocus = id; sync(); updateDock();
+    focusId = id; lastFocus = id; phoneOverview = false; sync(); updateDock();
     f = fitBoardWidth(f);
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
   async function overview(): Promise<void> {
-    focusId = null; sync(); clearDock();
+    focusId = null; phoneOverview = phoneShell; sync(); clearDock();
     const list = reg.list();
     // Leave the hand cluster's lane on the right free (it sits on the edge).
     const v = vp();
