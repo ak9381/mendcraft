@@ -125,7 +125,7 @@ export function combineFacts(main: ReviewFacts, other: ReviewFacts, kind: 'impro
   const sentWhat = [main.sentWhat, other.sentWhat].filter((x) => x && x.trim()).join('; ') || null;
   const chain = kind === 'improved'
     ? `Drafted by ${engineName(other.engine)} ${stepWhere(other)} · ${stepBytes(other)}; improved by ${engineName(main.engine)} · ${stepBytes(main)}`
-    : `${engineName(other.engine)} didn’t answer — this is ${engineName(main.engine)}’s draft (${engineName(other.engine)} attempt · ${stepBytes(other)})`;
+    : `${typeof navigator !== 'undefined' && navigator.onLine === false ? 'You’re offline' : `${engineName(other.engine)} didn’t answer`} — this is ${engineName(main.engine)}’s draft (${engineName(other.engine)} attempt · ${stepBytes(other)})`;
   return { ...main, sim: !!(main.sim || other.sim), bytes, sentWhat, chain, ...(simBytes > 0 ? { simBytes } : { simBytes: undefined }) };
 }
 

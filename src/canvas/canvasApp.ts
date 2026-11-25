@@ -61,7 +61,7 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { betterSummary, draftSummary, floorPlanSummary, tilesFilledLine } from './planTruth';
+import { betterSummary, roomSummary, draftSummary, floorPlanSummary, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -1889,7 +1889,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance),
       });
       if (link?.kind === 'fallback') {
-        say(`${engineName(link.si.engine)} didn’t answer — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
+        say(`${typeof navigator !== 'undefined' && navigator.onLine === false ? 'You’re offline' : `${engineName(link.si.engine)} didn’t answer`} — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
         if (link.retry) offerRetry(link.retry);
       } else say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
     });
@@ -1931,7 +1931,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // Tell Deep what the handoff line promises (only in the prompt; her card
       // still shows her own words) — without it the live model never added the
       // room plan: 0/3 → 7/7 boards with it (live-build study).
-      const kept = await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
+      const kept = await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, roomSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
       // The network dropped between the draft and Gemini: the kept draft gets
       // its Deep pass on reconnect, as on the offline path.
       if (kept && draft.fellBack && !net.isOnline() && !deepLater.some((d) => d.frameId === frameId)) {
