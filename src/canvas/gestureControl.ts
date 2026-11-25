@@ -147,7 +147,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (!badge) continue;
       let el: HTMLElement | null = null;
       for (const s of b.targets) { el = env.visible(s); if (el) break; }
-      if (!el) { badge.hidden = true; continue; }
+      if (!el || !onTop(el)) { badge.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       badge.hidden = false;
       badge.style.transform = `translate(${Math.round(r.right - 16)}px, ${Math.round(r.top - 12)}px)`;
@@ -169,10 +169,25 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     (hud.querySelector('.mc-gesture-hud-bar > span') as HTMLElement).style.width = `${Math.round(progress * 100)}%`;
   }
 
+  /** Covered by a dialog (a chip behind the review): no badge on it. */
+  function onTop(el: HTMLElement): boolean {
+    if (typeof doc.elementFromPoint !== 'function') return true;
+    const r = el.getBoundingClientRect();
+    const hit = doc.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !hit || el === hit || el.contains(hit) || hit.contains(el);
+  }
+  /** The review is modal: while it is open only its own gestures act. */
+  function resolve(b: GestureBinding): GestureAction {
+    if (!b.context && !b.say && b.targets.some((t) => t.startsWith('.mc-next')) && env.visible('.mc-review-approve')) {
+      return { kind: 'none', label: b.label, why: 'Finish the review first: thumbs up to approve, thumbs down to reject.' };
+    }
+    return resolveGesture(b, env);
+  }
+
   function act(key: GestureKey): void {
     const b = byKey.get(key);
     if (!b) return;
-    const a = resolveGesture(b, env);
+    const a = resolve(b);
     if (a.kind === 'none') { opts.say?.(a.why); return; }
     if (a.kind === 'say') {
       opts.run?.(a.text);
@@ -208,7 +223,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       act(s.fired);
     } else if (s.key) {
       const b = byKey.get(s.key);
-      const a = b ? resolveGesture(b, env) : null;
+      const a = b ? resolve(b) : null;
       light(a?.kind === 'click' ? a.el : null, s.progress);
       hudShow(b ? s.key : null, a, s.progress);
     } else {
