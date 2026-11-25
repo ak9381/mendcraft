@@ -2451,6 +2451,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         locked: () => phoneLocked(),
         onAspect: (a) => { phoneCamAspect = a; handCameraAspect = a; },
+        gestures,
+        gesturesBlocked,
+        cameraAspect: () => handCameraAspect,
       })
     : null;
 

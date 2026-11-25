@@ -13,6 +13,11 @@
 //  - Touch is never touched: nothing here listens to or cancels touch or
 //    pointer input, and every drawn layer is pointer-events: none.
 //  - Hand actions are not AI: nothing here reaches the AI feed / monitor.
+//  - Button gestures (gestureControl.ts, PHONE_GESTURES): the same shape
+//    classifier, 2 s hold and open-palm highlight as the laptop — right
+//    thumbs up Approve (or press the highlighted button), right thumbs down
+//    Reject / close, left thumbs down Undo, left thumbs up Save. Active only
+//    while the pill is on; badges show only then.
 
 import type { PresenceFrame } from '../input/presence';
 import { describeCameraError } from '../input/cameraError';
@@ -22,6 +27,7 @@ import { mapToScreen } from './handPointer';
 import { palmCenter, type ReachBox } from './handFeel';
 import { cameraHandsFromSelfie, stampHandLabel } from './handSpace';
 import { CameraLostError, readPhoneHands, writePhoneHands, type PhoneCamera } from './phoneCamera';
+import type { GestureControl } from './gestureControl';
 
 export const PHONE_HANDS_ON_LINE = 'Hands on: point with your palm, tap a fist to click. Hold a fist to move or pan; two fists to zoom.';
 export const PHONE_HANDS_OFF_LINE = 'Hands off.';
@@ -43,6 +49,12 @@ export interface PhoneHandsDeps {
   now?: () => number;
   /** Draw the glass-hand overlay (default true; tests pass false). */
   overlay?: boolean;
+  /** Button gestures + open-palm highlight, fed from the same frames. */
+  gestures?: Pick<GestureControl, 'frame' | 'setActive' | 'lost'> | null;
+  /** Something else owns the hands (a grab, a point capture): no gestures. */
+  gesturesBlocked?: () => boolean;
+  /** Camera frame height ÷ width (for the shape classifier's 3D bend). */
+  cameraAspect?: () => number;
 }
 
 export interface PhoneHands {
@@ -90,6 +102,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
   }
   function release(): void {
     if (fed) { deps.pointer.lost(); fed = false; }
+    deps.gestures?.lost();
     overlay?.clear();
   }
   let gateLocked = false;
@@ -123,13 +136,21 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     const g = !!deps.pointer.handsLocked?.();
     if (g !== gateLocked) { gateLocked = g; paint(); }
     if (deps.locked?.()) { release(); return; }
+    const selfie = f.hands.map((h) => stampHandLabel(h.points.slice(), h.label));
     if (f.hands.length) {
       // Presence hands are selfie-mirrored; the pointer expects camera space
       // and mirrors once itself (the front camera's frames are un-mirrored).
-      const cam = cameraHandsFromSelfie(f.hands.map((h) => stampHandLabel(h.points.slice(), h.label)));
+      const cam = cameraHandsFromSelfie(selfie);
       deps.pointer.update(cam, t);
       fed = true;
     }
+    // Gestures see every frame (an empty one lets a hold cancel / release).
+    deps.gestures?.frame(selfie, t, {
+      facing: op ? (op.handGate ?? null) : null,
+      faceX: op ? op.box.cx : null,
+      blocked: g || !!deps.gesturesBlocked?.(),
+      cameraAspect: deps.cameraAspect?.(),
+    });
     overlay?.draw(f.hands);
   }
 
@@ -142,6 +163,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       const reason = err instanceof CameraLostError ? PHONE_HANDS_LOST_LINE : describeCameraError(err);
       on = false;
       gateLocked = false;
+      deps.gestures?.setActive(false);
       writePhoneHands(false, deps.storage);
       void deps.camera.setUse('hands', false);
       deps.pointer.setFacing?.(null, now());
@@ -157,6 +179,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     on = next;
     gateLocked = false;
     writePhoneHands(next, deps.storage);
+    deps.gestures?.setActive(next);
     paint();
     if (next) {
       ensureOverlay();
@@ -188,6 +211,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       offFrame(); offStatus();
       release();
       if (on) void deps.camera.setUse('hands', false);
+      deps.gestures?.setActive(false);
       on = false;
       overlayEl?.remove();
       pill.remove(); indicator.remove();
