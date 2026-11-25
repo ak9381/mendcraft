@@ -1430,6 +1430,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // A handoff says so where she decides: who made it, why, and what left.
     if (s.handoffWhy) s.routeLine = `${s.routeLine.replace(/ · [\d.]+ (?:B|KB|MB) sent$/, '')} · ${formatBytesShort(total)} sent`;
   }
+  /** A call booked as sent turned out to have failed before its request was
+   *  issued (its App Check token came back refused, late): take it back. */
+  function cloudRetract(s: SentInfo): void {
+    const p = pendingCloud.get(s);
+    if (!p || p.sends <= 0) return;
+    p.sends--;
+    ledger.addBytes(p.entry, -p.perSend);
+    receipts.record(s, -p.perSend, 0);
+    renderBytes();
+    panels.forEngine('gemini').log('note', 'that call never left: nothing was sent');
+    if (s.handoffWhy) s.routeLine = s.routeLine.replace(/ · [\d.]+ (?:B|KB|MB) sent$/, '') + (p.sends ? ` · ${formatBytesShort(p.perSend * p.sends)} sent` : '');
+  }
   /** Swarm cursors follow the reply: one per tile it has really produced. */
   let swarmFollowsTiles = false;
   function growSwarm(tiles: number): void { if (swarmFollowsTiles) swarm.setTiles(tiles); }
@@ -1597,6 +1609,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
+  /** When the last AI turn (stream + its review) let go of the board. The
+   *  next-step pick stays away from the model for a while after that: a
+   *  timed-out Nano call can still be finishing inside Chrome. */
+  let lastTurnEndedAt = 0;
+  const NEXT_PICK_COOLDOWN_MS = 10_000;
   /** The last aiTurn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
@@ -1609,10 +1626,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const engine = engineFor(engineId, script.replace('BOARD', frameId));
       let sentInfo: SentInfo | null = null;
       lastTurnHandedOff = false;
-      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null, frameId }, engine, {
+      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null, frameId, want: task === 'floorplan' ? 'plan' : 'room' }, engine, {
         onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, defer: true }); },
         onFallback: aiFellBack,
         onCloudSend: cloudSent,
+        onCloudRetract: cloudRetract,
         // Nano couldn't finish: Gemini takes over as a NEW send — the Nano
         // terminal says why, the Gemini terminal shows what left (if it did).
         onHandoff: (s, why) => {
@@ -1637,7 +1655,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { deviceIdSession, isCancelled: () => (sentInfo?.engine ?? engineId) === 'gemini' && !net.isOnline(), canHandoff: () => net.isOnline() }));
       if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
       return await proposePlan(frameId, utterance, plan, sentInfo, typeof summary === 'function' ? summary(plan) : summary, status);
-    } finally { turnBusy = false; settleEngines(); autoHideAi(); }
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -1803,6 +1821,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           },
           onFallback: aiFellBack,
           onCloudSend: cloudSent,
+          onCloudRetract: cloudRetract,
           onHandoff: (s, why) => {
             panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
             panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this tile');
@@ -1834,7 +1853,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return false;
       }
       return await proposePlan(frameId, utterance, merged, reviewSent, summary, status);
-    } finally { turnBusy = false; }
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); }
   }
 
   // ---- point-to-connect: hold a point (or click, hands off) → one frame →
@@ -2358,7 +2377,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Nano redaction, so it's safe to announce the handoff now.
     panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
     let full = '';
-    try { full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(knSent) }); }
+    try { full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(knSent), onCloudRetract: () => cloudRetract(knSent) }); }
     catch (e) {
       if (!engine.fallback) {
         settleSwarm();
@@ -3677,7 +3696,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             if (!eng.sim && eng.id === 'gemini') openCloudTurn(si, prompt);
             else recordSent(si, eng.id === 'nano' ? '' : prompt);
             fixSent = si;
-            try { return await eng.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(si) }); } catch (e) {
+            try { return await eng.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(si), onCloudRetract: () => cloudRetract(si) }); } catch (e) {
               if (!eng.fallback) throw e;
               // The prepared draft answered instead: the footer says SIM.
               si.sim = true;
@@ -3814,6 +3833,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ui: {
       sent: (s, o) => aiSent(o.utterance, s, { swarmPlan: morphSwarmPlan(o.tileIndex), defer: true }),
       cloudSent,
+      cloudRetract,
       log: (engine, verb, detail) => panels.forEngine(engine).log(verb, detail),
       handoff: (reason) => panels.showHandoff('nano', reason),
       settle: async () => { await holdSwarmMinimum(); settleSwarm(); autoHideAi(); },
@@ -3892,7 +3912,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
     // Rules first: Nano reorders the chips only when she has been idle and no
     // turn (or any other on-device prompt) is using the model.
-    idle: { delayMs: NANO_PICK_IDLE_MS, ready: () => !turnBusy && !reviewBusy() && nanoQueue.idle() && document.visibilityState !== 'hidden' },
+    // Never during a turn or its review, never while any model stream is
+    // out, and not for 10 s after a turn ended.
+    idle: { delayMs: NANO_PICK_IDLE_MS, ready: () => !turnBusy && !reviewBusy() && streamsOut === 0 && Date.now() - lastTurnEndedAt >= NEXT_PICK_COOLDOWN_MS && nanoQueue.idle() && document.visibilityState !== 'hidden' },
     run: (say) => { run(say); },
     // A note line (feeds the AI monitor too); no turn running → no blinking cursor.
     onNano: (line) => { const p = panels.forEngine('nano'); p.log('note', line); if (!turnBusy) p.setWorking(false); },

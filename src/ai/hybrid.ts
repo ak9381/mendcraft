@@ -43,8 +43,9 @@ import {
 } from '../devices/identify';
 import { coerceConnector, type Connector } from '../devices/connector';
 import { appCheckTokenError, initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
-import { classifyCloudBlock, cloudCallError, explainCloudFailure, GEMINI_NOT_SET_UP, type CloudFailure } from './cloudErrors';
+import { cloudCallError, explainCloudFailure, GEMINI_NOT_SET_UP, type CloudFailure } from './cloudErrors';
 import { nanoQueue, NanoQueueSkipped } from './nanoQueue';
+import { nanoTrace } from './nanoTrace';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
 import {
   classifyCloudFailure,
@@ -563,36 +564,50 @@ export function looksLikeSurfacePlan(raw: unknown, depth = 0): boolean {
   return Object.values(o).some((v) => looksLikeSurfacePlan(v, depth + 1));
 }
 
-/** A failure the server itself answered: the request did reach it. */
-function answeredByServer(err: unknown): boolean {
-  const kind = classifyCloudBlock(err);
-  return kind === 'quota' || kind === 'busy' || kind === 'safety';
-}
+/** How long after a cloud call starts we take its request as issued when
+ *  nothing has come back either way. An App Check token failure — the one
+ *  thing that stops a call before its fetch — arrives well inside this. */
+export const SEND_ASSUMED_AFTER_MS = 2500;
 
-/** Tell `onSend` once per model call that really left this device: at its
- *  first chunk, when it resolves, or when the server answered with an error.
- *  A call that failed before anything came back (no App Check token, no
- *  connection) is not a send. Hedge and retry calls are each counted. */
-export function countingSends(model: TextGenModel, onSend: () => void): TextGenModel {
-  const each = (): (() => void) => { let done = false; return () => { if (!done) { done = true; try { onSend(); } catch { /* bookkeeping only */ } } }; };
+/** Tell `onSend` once per model call whose request was issued: at its first
+ *  chunk, when it resolves, when it fails with anything but a pre-fetch
+ *  error, or SEND_ASSUMED_AFTER_MS into a call still waiting (a timeout, a
+ *  cancelled hedge). A call that fails before its fetch (no App Check token)
+ *  is not a send — and if that failure arrives after the call was already
+ *  assumed sent, `onRetract` takes it back. Hedge and retry calls each count. */
+export function countingSends(model: TextGenModel, onSend: () => void, onRetract?: () => void, assumeAfterMs = SEND_ASSUMED_AFTER_MS): TextGenModel {
+  const each = () => {
+    let state: 'open' | 'sent' | 'not-sent' = 'open';
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => { timer = null; sent(); }, assumeAfterMs);
+    const tidy = (): void => { if (timer) { clearTimeout(timer); timer = null; } };
+    function sent(): void { tidy(); if (state === 'open') { state = 'sent'; try { onSend(); } catch { /* bookkeeping only */ } } }
+    function failed(e: unknown): void {
+      tidy();
+      if (!explainCloudFailure(e).nothingSent) { sent(); return; }
+      if (state === 'sent') { try { onRetract?.(); } catch { /* bookkeeping only */ } }
+      state = 'not-sent';
+    }
+    return { sent, failed };
+  };
   const out: TextGenModel = {
     async generateContent(request) {
-      const once = each();
-      try { const r = await model.generateContent(request); once(); return r; }
-      catch (e) { if (answeredByServer(e)) once(); throw e; }
+      const call = each();
+      try { const r = await model.generateContent(request); call.sent(); return r; }
+      catch (e) { call.failed(e); throw e; }
     },
   };
   if (typeof model.generateContentStream === 'function') {
     out.generateContentStream = async (request) => {
-      const once = each();
+      const call = each();
       let started: Awaited<ReturnType<NonNullable<TextGenModel['generateContentStream']>>>;
       try { started = await model.generateContentStream!(request); }
-      catch (e) { if (answeredByServer(e)) once(); throw e; }
+      catch (e) { call.failed(e); throw e; }
+      call.sent(); // the SDK resolves once the response has started: the request went out
       const stream = (async function* () {
-        try { for await (const chunk of started.stream) { once(); yield chunk; } }
-        catch (e) { if (answeredByServer(e)) once(); throw e; }
+        try { for await (const chunk of started.stream) yield chunk; }
+        catch (e) { call.failed(e); throw e; }
       })();
-      const response = started.response?.then((r) => { once(); return r; }, (e) => { if (answeredByServer(e)) once(); throw e; });
+      const response = started.response?.then((r) => r, (e) => { call.failed(e); throw e; });
       response?.catch(() => undefined);
       return { stream, response };
     };
@@ -601,8 +616,10 @@ export function countingSends(model: TextGenModel, onSend: () => void): TextGenM
 }
 
 export interface CanvasCloudHooks {
-  /** One model call left this device (see countingSends). */
+  /** One model call's request was issued (see countingSends). */
   onSend?: () => void;
+  /** A call counted as sent turned out to have failed before its fetch. */
+  onRetract?: () => void;
 }
 type CanvasCloudResult = { ok: true; text: string } | { ok: false; why: string; kind: CloudFailKind | null };
 
@@ -619,8 +636,8 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
     return { ok: false, why, kind: null };
   }
   if (hooks.onSend) {
-    primary = countingSends(primary, hooks.onSend);
-    backup = backup ? countingSends(backup, hooks.onSend) : null;
+    primary = countingSends(primary, hooks.onSend, hooks.onRetract);
+    backup = backup ? countingSends(backup, hooks.onSend, hooks.onRetract) : null;
   }
   // Same privacy path as the rest of hybrid: directory tokens, then rules-first
   // redaction. The canvas ledger should record this redacted payload.
@@ -707,6 +724,17 @@ export const ON_DEVICE_BOARD_MAX_WAIT_MS = 15_000;
 /** How long a burst of buffered chunks may run before the page gets a turn. */
 const ON_DEVICE_YIELD_EVERY_MS = 24;
 
+/** The SDK's on-device path cannot be aborted, and (measured on real Chrome)
+ *  aborting the signal given to create() does not stop a prompt that is
+ *  already running. The SDK does keep the session it made on the model's
+ *  Chrome adapter, so stopping also destroys that session directly. */
+function destroySdkSession(model: unknown): void {
+  try {
+    const session = (model as { chromeAdapter?: { oldSession?: { destroy?: () => void } } } | null)?.chromeAdapter?.oldSession;
+    session?.destroy?.();
+  } catch { /* already gone */ }
+}
+
 /** Destroys the previous call's session (the SDK keeps each model's last
  *  session alive; one finished board session is enough to keep Nano loaded). */
 let lastOnDeviceStop: (() => void) | null = null;
@@ -733,18 +761,22 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
   const now = req.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
   const yieldToPage = req.yieldToPage ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
   await ensureModels();
+  const asked = Date.now();
   return queue.run(async () => {
     if (req.signal?.aborted) throw new Error('stopped');
     const t0 = Date.now();
+    nanoTrace(`on-device call: waited ${t0 - asked} ms for the model's queue`);
     try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
     lastOnDeviceStop?.();
     const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
     let iterator: AsyncIterator<{ text: () => string; inferenceSource?: string }> | null = null;
+    let model: TextGenModel | null = null;
     const stop = (): void => {
       try { void iterator?.return?.(); } catch { /* already done */ }
       session?.abort();
+      destroySdkSession(model);
     };
-    const model = onDeviceModelFor({
+    model = onDeviceModelFor({
       createOptions: {
         ...ON_DEVICE_CREATE_OPTIONS,
         ...(req.system ? { initialPrompts: [{ role: 'system', content: [{ type: 'text', value: req.system }] }] } : {}),
@@ -765,7 +797,9 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
         let piece = '';
         try { piece = chunk.text(); } catch { piece = ''; }
         if (!piece) return;
-        full = mergeStreamText(full, piece);
+        // Deltas (current Chrome) or the text so far (older builds). A delta
+        // that repeats the tail ("ro" + "o") is still new text.
+        full = full && piece.length > full.length && piece.startsWith(full) ? piece : full + piece;
         try { req.onChunk?.(full); } catch (e) { if (e instanceof Error && e.name === 'MidStreamOffline') throw e; }
       };
       if (typeof model.generateContentStream === 'function') {
@@ -797,12 +831,14 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
         .catch((e) => { throw /timed out after/.test(e instanceof Error ? e.message : '') ? new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`) : e; });
       finished = true;
       recordInference('on-device', 'board', Date.now() - t0);
+      nanoTrace(`on-device call: done in ${Date.now() - t0} ms, output ${text.length} chars`);
       // Keep this finished session (it keeps Nano loaded) until the next call.
-      lastOnDeviceStop = () => session?.abort();
+      const kept = model;
+      lastOnDeviceStop = () => { session?.abort(); destroySdkSession(kept); };
       return text;
     } finally {
       if (onAbort) req.signal?.removeEventListener('abort', onAbort);
-      if (!finished) stop();
+      if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms`); stop(); }
     }
   }, { priority: 10, signal: req.signal, maxWaitMs: ON_DEVICE_BOARD_MAX_WAIT_MS });
 }
@@ -820,13 +856,22 @@ export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
     try {
       await queue.run(async (ctx) => {
         const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        ctx.signal?.addEventListener('abort', () => session?.abort(), { once: true });
-        const model = onDeviceModelFor({
+        let model: TextGenModel | null = null;
+        ctx.signal?.addEventListener('abort', () => { session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request'); }, { once: true });
+        model = onDeviceModelFor({
           createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
           promptOptions: { responseConstraint: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } },
         });
-        await withTimeout(model.generateContent('Reply with JSON only: {"ok":true}'), ON_DEVICE_TIMEOUT_MS, 'on-device warm-up');
-        lastOnDeviceStop ??= () => session?.abort();
+        const kept = model;
+        try {
+          await withTimeout(model.generateContent('Reply with JSON only: {"ok":true}'), ON_DEVICE_TIMEOUT_MS, 'on-device warm-up');
+        } catch (e) {
+          // Timed out (or failed): its session must not keep generating.
+          session?.abort(); destroySdkSession(kept);
+          nanoTrace('warm-up: stopped (timed out or failed)');
+          throw e;
+        }
+        lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(kept); };
       }, { priority: -1, preemptible: true, maxWaitMs: 0 });
       return true;
     } catch {
@@ -2347,12 +2392,28 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
   if (deviceModelStatus !== 'ready') return null;
   // Never compete with a board turn (or anything else) for the one model.
   if (!testOverrides && !nanoQueue.idle()) return null;
+  const budget = opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS;
+  // A per-call model with its own session: when the pick runs out of time (or
+  // fails) that session is destroyed, so Nano is not left generating a reply
+  // nobody will read while the next real request waits behind it.
+  const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let own: TextGenModel | null = null;
+  let done = false;
   try {
-    const budget = opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS;
-    // The pick holds the model's slot for its own budget at most (not the
-    // 20 s a real call may take), and never waits in line.
-    const model = testOverrides ? models.nextSteps : queueOnDevice({ generateContent: (p: string) => models.nextSteps!.generateContent(p) }, nanoQueue, 0, budget);
-    const { response } = await withTimeout(model.generateContent(prompt), budget, 'next steps');
+    let response: ModelResponse;
+    if (testOverrides) {
+      ({ response } = await withTimeout(models.nextSteps.generateContent(prompt), budget, 'next steps'));
+    } else {
+      // Never waits in line, and holds the model's slot for its budget at most.
+      ({ response } = await nanoQueue.run(() => {
+        own = onDeviceModelFor({
+          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
+          promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
+        });
+        return withTimeout(own.generateContent(prompt), budget, 'next steps');
+      }, { maxWaitMs: 0 }));
+    }
+    done = true;
     if (sourceOf(response) !== 'on-device') {
       noteError('next steps', new Error('resolved off-device; using the rule list'));
       return null;
@@ -2365,6 +2426,10 @@ export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?:
     if (err instanceof NanoQueueSkipped || /timed out/i.test(err instanceof Error ? err.message : '')) return null;
     noteError('next steps', err);
     return null;
+  } finally {
+    // Timed out or failed: stop the session. A finished pick's session is
+    // dropped too — a chip pick is not worth keeping a session alive for.
+    if (own) { if (!done) nanoTrace('next steps: stopped (timed out or failed)'); session?.abort(); destroySdkSession(own); }
   }
 }
 

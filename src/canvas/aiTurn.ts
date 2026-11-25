@@ -9,7 +9,7 @@ import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, typ
 import type { LanguagePack } from './languagePack';
 import { OFFLINE_MID_LINE } from './failLines';
 import { CloudCallError, explainCloudFailure } from '../ai/cloudErrors';
-import { buildNanoPlanRequest, buildNanoRepairPrompt, buildNanoRepairUser, parseNanoPlan } from './nanoPlan';
+import { buildNanoPlanRequest, buildNanoRepairPrompt, buildNanoRepairUser, parseNanoPlan, partialNanoPlan } from './nanoPlan';
 import { dropUnbackedClaims } from './planTruth';
 
 export type EngineId = 'nano' | 'gemini';
@@ -51,11 +51,14 @@ export interface StreamOptions {
   /** Cloud: one model call really left this device (hedges and retries each
    *  count). Bytes are booked here, not when the turn was started. */
   onCloudSend?: () => void;
+  /** Cloud: a call counted as sent turned out to have failed before its
+   *  request was issued — take its bytes back. */
+  onCloudRetract?: () => void;
 }
 export type ReplyShape = 'board' | 'json' | 'text';
 
 export interface DeviceHint { id: string; label: string; kind: string; host?: string }
-export interface SurfaceRequest { utterance: string; frameTitle: string; devices: DeviceHint[]; current?: SurfacePlan | null; /** The board being filled (names its floor-plan tile). */ frameId?: string }
+export interface SurfaceRequest { utterance: string; frameTitle: string; devices: DeviceHint[]; current?: SurfacePlan | null; /** The board being filled (names its floor-plan tile). */ frameId?: string; /** What the turn is for, when the caller knows (else her words decide). */ want?: 'room' | 'plan' }
 export interface SentInfo { engine: EngineId; prompt: string; sent: string | null; routeLine: string; sim: boolean; /** Gemini took over from the on-device model, and why. */ handoffWhy?: string }
 
 const TEMPLATE_UNION = PLAN_TEMPLATES.map((t) => `"${t}"`).join('|');
@@ -170,6 +173,8 @@ export interface TurnUi {
    *  retry is another one). Book the bytes here — `onSent` only opens the
    *  turn; a call that never left books nothing. */
   onCloudSend?(s: SentInfo): void;
+  /** A call booked by onCloudSend turned out never to have left: un-book it. */
+  onCloudRetract?(s: SentInfo): void;
   onText?(full: string): void;
   onGhost?(p: PartialPlan): void;
   /** `engine`: the engine whose failure ended the turn. */
@@ -259,9 +264,6 @@ function worthRetry(e: unknown): boolean {
   return true;
 }
 
-/** Failures where the request never left this device: no App Check token,
- *  no connection, or no cloud model set up at all. */
-const NOTHING_LEFT = new Set(['app-check-403', 'app-check', 'not-set-up', 'offline']);
 export const NOTHING_SENT = 'Nothing was sent.';
 
 /** One plain line for a failed Gemini call (App Check 403, offline, quota…),
@@ -269,8 +271,10 @@ export const NOTHING_SENT = 'Nothing was sent.';
 export function geminiFailLine(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   if (!(e instanceof CloudCallError) && /^timed out after/.test(msg)) return `Gemini didn’t answer in time (${msg})`;
-  const f = e instanceof CloudCallError ? { kind: e.kind, line: e.message } : explainCloudFailure(e);
-  return NOTHING_LEFT.has(f.kind) ? `${f.line}. ${NOTHING_SENT}` : f.line;
+  // Only a failure raised before the request was issued (no App Check token,
+  // no cloud model) says so; a refusal by the endpoint itself does not.
+  const f = e instanceof CloudCallError ? { line: e.message, nothingSent: e.nothingSent } : explainCloudFailure(e);
+  return f.nothingSent ? `${f.line}. ${NOTHING_SENT}` : f.line;
 }
 
 export interface SurfaceTurnOptions {
@@ -305,26 +309,38 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   const now = opts.now ?? (() => Date.now());
   const liveNano = engine.id === 'nano' && !engine.sim;
   const nanoReq = liveNano ? buildNanoPlanRequest(req) : null;
-  const sent = opts.sent ?? buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
+  // A prepared receipt is only true for the engine it was written for. When
+  // the step is really run by the other engine (a "Nano" step drafted by
+  // Gemini on a machine without Nano), the receipt is rebuilt for the engine
+  // that actually runs: what leaves, where, and the honest route line.
+  const prepared = opts.sent && opts.sent.engine === engine.id ? opts.sent : null;
+  const sent = prepared ?? buildSurfacePrompt(req, engine.id, { sim: engine.sim, deviceIdSession: opts.deviceIdSession });
   if (nanoReq) sent.prompt = nanoReq.prompt;
-  if (!opts.sent && engine.routeLine) sent.routeLine = engine.routeLine;
+  if (!prepared && engine.routeLine) sent.routeLine = engine.sim && !engine.routeLine.startsWith('SIM') ? `SIM · ${engine.routeLine}` : engine.routeLine;
   ui.onSent?.(sent);
   let ghostCount = -1;
   const throwIfCancelled = (): void => { if (opts.isCancelled?.()) throw new MidStreamOffline(); };
-  const showGhost = (full: string): void => {
-    const g = parsePartialPlan(full);
+  const showGhost = (full: string, partial: (text: string) => PartialPlan = parsePartialPlan): void => {
+    const g = partial(full);
     if (g.tiles.length !== ghostCount) { ghostCount = g.tiles.length; ui.onGhost?.(g); }
   };
+  // Nano's reply is a short decision ({"t":…,"d":[ids]}), not tile JSON: its
+  // ghost is a tile per device id as each id arrives.
+  const nanoPartial = (text: string): PartialPlan => partialNanoPlan(text, req);
   // Only the newest attempt may draw: a stream that timed out and was retried
   // (or handed off) can still be delivering chunks, and must stay silent.
   let attempt = 0;
   const watcher = (eng: SurfaceEngine): ((full: string) => void) => {
     const mine = ++attempt;
     let last = -Infinity;
+    const onDevice = eng === engine && !!nanoReq;
     return (full) => {
       if (mine !== attempt) return;
       throwIfCancelled();
       ui.onText?.(full);
+      // A tiny on-device reply is looked at on every chunk, so each tile
+      // shows the moment its id lands; a long cloud reply is throttled.
+      if (onDevice) { showGhost(full, nanoPartial); return; }
       if (!eng.sim) { const t = now(); if (t - last < GHOST_EVERY_MS) return; last = t; }
       showGhost(full);
     };
@@ -348,7 +364,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
       return null;
     };
     // Each model call that really leaves is reported once (hedges, retries).
-    const so: StreamOptions | undefined = eng.id === 'gemini' && live ? { onCloudSend: () => ui.onCloudSend?.(info) } : undefined;
+    const so: StreamOptions | undefined = eng.id === 'gemini' && live ? { onCloudSend: () => ui.onCloudSend?.(info), onCloudRetract: () => ui.onCloudRetract?.(info) } : undefined;
     let final: string;
     try {
       final = await (eng.id === 'gemini' && live

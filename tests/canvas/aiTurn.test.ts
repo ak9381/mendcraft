@@ -71,7 +71,7 @@ describe('runSurfaceTurn', () => {
     const boom: SurfaceEngine = { id: 'gemini', sim: false, stream: async () => { throw new Error('offline'); } };
     expect(await runSurfaceTurn(req, boom, { onError: (e) => { why = e; } })).toBeNull();
     // a live Gemini failure is named plainly (no raw error text, no draft)
-    expect(why).toBe('Gemini couldn’t be reached: no connection. Nothing was sent.');
+    expect(why).toBe('Gemini couldn’t be reached: no connection');
   });
   it('scripted engines say SIM on their route line', () => {
     expect(scriptedEngine('nano', PLAN).sim).toBe(true);

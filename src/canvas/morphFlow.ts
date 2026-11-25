@@ -39,6 +39,8 @@ export interface MorphUiHooks {
   sent(s: SentInfo, o: { utterance: string; tileIndex: number; label: string }): void;
   /** One cloud call of that turn really left this device (book its bytes). */
   cloudSent?(s: SentInfo): void;
+  /** That call turned out never to have left (un-book it). */
+  cloudRetract?(s: SentInfo): void;
   log(engine: 'nano' | 'gemini', verb: LogVerb, detail: string): void;
   handoff(reason: string): void;
   /** Settle the swarm (the host may hold it on screen a minimum in sim). */
@@ -353,7 +355,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     deps.ui.log('gemini', 'plan', `revise ${t.label}; everything else stays put`);
     let full = '';
     try {
-      full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => deps.ui.cloudSent?.(sent) });
+      full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => deps.ui.cloudSent?.(sent), onCloudRetract: () => deps.ui.cloudRetract?.(sent) });
     } catch (e) {
       if (g !== gen) return;
       // Live: no prepared edit — say why Gemini couldn't do it.

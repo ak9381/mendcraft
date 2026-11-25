@@ -9,7 +9,8 @@ import { acceptCanvasReply, countingSends, ON_DEVICE_MAX_RUN_MS, onNanoBusyHando
 import { geminiFailLine, GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
-import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan } from '../../src/canvas/nanoPlan';
+import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan } from '../../src/canvas/nanoPlan';
+import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
 import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
 import { resolveAppCheckDebugToken } from '../../src/firebase/debugToken';
@@ -21,7 +22,10 @@ const req: SurfaceRequest = {
   frameId: 'b3',
   devices: [{ id: 'wiz-ceiling', label: 'Ceiling light', kind: 'lamp' }, { id: 'speaker-1', label: 'Speaker', kind: 'music' }],
 };
-const NANO_OK = '{"kind":"room","title":"This room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Ceiling light"},{"type":"music","deviceId":"speaker-1","label":"Speaker"}]}';
+/** What live Nano writes: only its decision (title + device ids). */
+const NANO_OK = '{"t":"This room","d":["wiz-ceiling","speaker-1"]}';
+/** A scripted (?sim=1) engine still plays a whole plan. */
+const NANO_SCRIPT = '{"kind":"room","title":"This room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Ceiling light"},{"type":"music","deviceId":"speaker-1","label":"Speaker"}]}';
 const GEMINI_OK = '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"Device 1","label":"Main light"},{"type":"music","deviceId":"Device 2","label":"Speaker"}]}';
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const never = <T,>(): Promise<T> => new Promise<T>(() => undefined);
@@ -66,7 +70,7 @@ const nanoVia = (queue = createNanoQueue(1)): OnDeviceStream => (prompt, onText,
 });
 const LM = {}; // Chrome's LanguageModel global: only its presence matters
 
-afterEach(() => { setModelsForTest(null); vi.useRealTimers(); });
+afterEach(() => { setModelsForTest(null); resetNanoTrace(); vi.useRealTimers(); });
 
 describe('A: on-device concurrency cap', () => {
   it('the queue never runs more than one job at once, however many are launched together', async () => {
@@ -116,8 +120,11 @@ describe('A: on-device concurrency cap', () => {
     expect(stats.peak).toBe(1);
     const params = stats.params[0];
     // the reply is constrained to a board plan whose device ids are the real ones
-    const constraint = params.promptOptions?.responseConstraint as { properties: { tiles: { items: { properties: { deviceId: { enum: string[] } } } } } };
-    expect(constraint.properties.tiles.items.properties.deviceId.enum).toEqual(['wiz-ceiling', 'speaker-1']);
+    const constraint = params.promptOptions?.responseConstraint as { properties: { d: { items: { enum: string[] }; uniqueItems: boolean } } };
+    expect(constraint.properties.d.items.enum).toEqual(['wiz-ceiling', 'speaker-1']);
+    expect(constraint.properties.d.uniqueItems).toBe(true);
+    // tiles, types and labels come from the device list, not from the model
+    expect(plan?.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }]);
     // text in / text out English, and the fixed instructions ride in the session
     expect(params.createOptions.expectedInputs).toEqual([{ type: 'text', languages: ['en'] }]);
     expect(params.createOptions.initialPrompts).toEqual([{ role: 'system', content: [{ type: 'text', value: NANO_SYSTEM_PROMPT }] }]);
@@ -152,19 +159,88 @@ describe('A: on-device concurrency cap', () => {
     await expect(streamOnDevice({ prompt: 'p', queue: createNanoQueue(1) })).rejects.toThrow(/Firebase AI Logic isn’t set up/);
   });
 
-  it('the Nano prompt is short and flat (no nested dashboard grammar)', () => {
+  it('Nano only decides: the reply schema has a title and device ids, nothing optional', () => {
     const r = buildNanoPlanRequest(req);
-    expect(r.prompt.length).toBeLessThan(1400);
-    expect(r.prompt).not.toMatch(/chart|table|visual|split|tabs/);
-    expect(JSON.stringify(nanoPlanConstraint(req.devices))).toContain('"maxItems":6');
+    expect(r.plan).toBe(false);
+    expect(r.constraint).toEqual({
+      type: 'object', additionalProperties: false, required: ['t', 'd'],
+      properties: {
+        t: { type: 'string', maxLength: 24 },
+        d: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'string', enum: ['wiz-ceiling', 'speaker-1'] } },
+      },
+    });
+    expect(JSON.stringify(r.constraint)).not.toMatch(/label|template|connect|kind|tiles/);
+    expect(r.prompt.length).toBeLessThan(700);
+    expect(r.system).not.toMatch(/chart|table|visual|split|tabs|connect|template/);
+    // never more than four devices from one draft, however many the room has
+    const many = Array.from({ length: 9 }, (_, i) => ({ id: `lamp-${i}`, label: `Lamp ${i}`, kind: 'lamp' }));
+    const c = nanoPlanConstraint(many) as { properties: { d: { maxItems: number } } };
+    expect(c.properties.d.maxItems).toBe(4);
   });
 
-  it('a made-up device in Nano’s reply is dropped, not shown', () => {
-    const got = parseNanoPlan('{"kind":"room","title":"Room","tiles":[{"type":"lamp","deviceId":"lamp-2","label":"Desk lamp"},{"type":"lamp","deviceId":"wiz-ceiling","label":"Ceiling"}]}', req);
+  it('the longest reply the schema allows is short: at about 20 chars a second, well inside the budget', () => {
+    // four devices with 40-character ids (the id limit) and a full-length title
+    const ids = Array.from({ length: 4 }, (_, i) => `${'x'.repeat(38)}-${i}`);
+    const worst = JSON.stringify({ t: 'T'.repeat(24), d: ids });
+    expect(worst.length).toBeLessThanOrEqual(220);
+    // the canvas's own devices: the reply the live run should produce
+    const typical = JSON.stringify({ t: 'Living room', d: ['wiz-desk', 'wiz-ceiling', 'speaker-1'] });
+    expect(typical.length).toBeLessThanOrEqual(120);
+    expect(JSON.stringify({ p: 'twoBedroom' }).length).toBeLessThanOrEqual(20);
+  });
+
+  it('a floor-plan turn asks Nano for a template and nothing else', () => {
+    const planReq = { ...req, utterance: 'draw the floor plan', want: 'plan' as const };
+    const r = buildNanoPlanRequest(planReq);
+    expect(r.plan).toBe(true);
+    expect(r.constraint).toEqual({ type: 'object', additionalProperties: false, required: ['p'], properties: { p: { type: 'string', enum: ['studio', 'oneRoom', 'twoBedroom'] } } });
+    expect(r.user).not.toContain('wiz-ceiling'); // the device list is not even sent
+    const got = parseNanoPlan('{"p":"twoBedroom"}', planReq);
+    expect(got).toEqual({ ok: true, value: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b3-cad', template: 'twoBedroom' }] } });
+    // her own words win over the model's pick
+    expect(parseNanoPlan('{"p":"oneRoom"}', { ...planReq, utterance: 'a floor plan with two bedrooms' })).toMatchObject({ ok: true, value: { tiles: [{ template: 'twoBedroom' }] } });
+    // the words decide when the caller did not say
+    expect(buildNanoPlanRequest({ ...req, utterance: 'start a floor plan' }).plan).toBe(true);
+    expect(buildNanoPlanRequest(req).plan).toBe(false);
+    expect(parseNanoPlan('{"t":"x","d":["wiz-ceiling"]}', planReq).ok).toBe(false);
+  });
+
+  it('a made-up device in Nano’s reply is dropped; labels and types are the devices’ own', () => {
+    const got = parseNanoPlan('{"t":"Room","d":["lamp-2","wiz-ceiling","wiz-ceiling"]}', req);
     expect(got.ok).toBe(true);
     if (!got.ok) return;
-    expect(got.value.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling' }]);
+    expect(got.value).toEqual({ kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] });
     expect(got.notes?.join(' ')).toMatch(/not in this room/);
+    // only made-up ids: refused (and repaired / handed off by the turn)
+    expect(parseNanoPlan('{"t":"Room","d":["lamp-2"]}', req)).toEqual({ ok: false, error: 'no device from this room was chosen' });
+    // no Connect tile ever comes from Nano; an empty room gets one locally
+    expect(parseNanoPlan('{"t":"Empty"}', { ...req, devices: [] })).toMatchObject({ ok: true, value: { tiles: [{ type: 'connect', label: 'Connect a device' }] } });
+    // a rambling title is cut to four words
+    expect(parseNanoPlan('{"t":"The very large open living room","d":["speaker-1"]}', req)).toMatchObject({ ok: true, value: { title: 'The very large open' } });
+  });
+
+  it('ghost tiles appear as each device id streams in, before the reply closes', async () => {
+    expect(partialNanoPlan('{"t":"Li', req).tiles).toEqual([]);
+    expect(partialNanoPlan('{"t":"Living room","d":["wiz-cei', req)).toMatchObject({ title: 'Living room', tiles: [] });
+    expect(partialNanoPlan('{"t":"Living room","d":["wiz-ceiling"', req).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }]);
+    expect(partialNanoPlan('{"t":"Living room","d":["wiz-ceiling","speaker-1', req).tiles).toHaveLength(1);
+    expect(partialNanoPlan('{"t":"Living room","d":["wiz-ceiling","speaker-1"', req).tiles).toHaveLength(2);
+    expect(partialNanoPlan('{"p":"twoB', { ...req, want: 'plan' }).tiles).toEqual([]);
+    expect(partialNanoPlan('{"p":"twoBedroom"', { ...req, want: 'plan' }).tiles).toEqual([{ type: 'plan', boardId: 'b3-cad', template: 'twoBedroom' }]);
+    // through a live turn: one ghost update per id, in order, not one at the end
+    const seen: Array<{ at: number; tiles: number }> = [];
+    let chars = 0;
+    const nano: SurfaceEngine = { id: 'nano', sim: false, async stream(_p, onText, so) {
+      so?.onStart?.();
+      for (let i = 1; i <= NANO_OK.length; i++) { chars = i; onText(NANO_OK.slice(0, i)); }
+      return NANO_OK;
+    } };
+    await runSurfaceTurn(req, nano, { onGhost: (g) => seen.push({ at: chars, tiles: g.tiles.length }) });
+    const first = seen.find((g) => g.tiles === 1)!;
+    const second = seen.find((g) => g.tiles === 2)!;
+    expect(first.at).toBe(NANO_OK.indexOf('"wiz-ceiling"') + '"wiz-ceiling"'.length);
+    expect(second.at).toBe(NANO_OK.indexOf('"speaker-1"') + '"speaker-1"'.length);
+    expect(second.at).toBeLessThan(NANO_OK.length);
   });
 
   it('a live stream re-parses its ghost preview on a timer, not on every token', async () => {
@@ -423,7 +499,7 @@ describe('B: no SIM wording without ?sim=1', () => {
     const live = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud }).nano!('{}');
     expect(live.id).toBe('nano');
     expect(live.handoff?.id).toBe('gemini');
-    const sim = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud, sim: true }).nano!(NANO_OK);
+    const sim = createEngines({ languageModel: LM, nanoStream: nanoVia(), cloud, sim: true }).nano!(NANO_SCRIPT);
     expect(sim.sim).toBe(true);
     expect(sim.handoff).toBeUndefined();
   });
@@ -445,7 +521,8 @@ describe('B: no SIM wording without ?sim=1', () => {
     }, { sleep: () => never<void>() });
     expect(plan).toBeNull();
     expect(lines.join('\n')).not.toMatch(/SIM|prepared|FALLBACK|SCRIPTED/);
-    expect(lines.at(-1)).toBe('Gemini couldn’t be reached: no connection. Nothing was sent.');
+    // the request was issued and the network failed: no claim that nothing left
+    expect(lines.at(-1)).toBe('Gemini couldn’t be reached: no connection');
   });
 
   it('the canvas source no longer builds a prepared draft outside a scripted fallback', async () => {
@@ -459,7 +536,7 @@ describe('B: no SIM wording without ?sim=1', () => {
 
   it('under ?sim=1 the scripted engine still works and is labelled SIM', async () => {
     const lines: string[] = [];
-    const plan = await runSurfaceTurn(req, scriptedEngine('nano', NANO_OK, { delayMs: 0 }), { onSent: (s) => lines.push(s.routeLine) });
+    const plan = await runSurfaceTurn(req, scriptedEngine('nano', NANO_SCRIPT, { delayMs: 0 }), { onSent: (s) => lines.push(s.routeLine) });
     expect(plan?.tiles).toHaveLength(2);
     expect(lines[0]).toMatch(/^SIM · /);
   });
@@ -469,33 +546,62 @@ describe('I3: bytes are booked when a call really leaves', () => {
   const RUN1 = 'AI: Error fetching from https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse: AppCheck: Fetch server returned an HTTP error status. HTTP status: 403.';
   const ok = (text: string): TextGenModel => ({ generateContent: async () => ({ response: { text: () => text } }) });
 
-  it('a call counts once: at its first chunk, or when it resolves', async () => {
+  it('a call counts once its request is out: when it resolves, or when its stream starts', async () => {
     let sends = 0;
     await countingSends(ok('{}'), () => { sends++; }).generateContent('p');
     expect(sends).toBe(1);
     const streamed: TextGenModel = {
       generateContent: async () => ({ response: { text: () => '' } }),
-      generateContentStream: async () => {
-        let done!: () => void;
-        const response = new Promise<{ text: () => string }>((r) => { done = () => r({ text: () => 'ab' }); });
-        return { stream: (async function* () { yield { text: () => 'a' }; yield { text: () => 'b' }; done(); })(), response };
-      },
+      generateContentStream: async () => ({ stream: (async function* () { yield { text: () => 'a' }; yield { text: () => 'b' }; })(), response: Promise.resolve({ text: () => 'ab' }) }),
     };
     sends = 0;
     const started = await countingSends(streamed, () => { sends++; }).generateContentStream!('p');
-    expect(sends).toBe(0); // nothing has come back yet
     for await (const chunk of started.stream) void chunk;
     await started.response;
-    expect(sends).toBe(1); // two chunks and a final response are still one send
+    expect(sends).toBe(1); // a started stream, two chunks and a final response are still one send
   });
 
-  it('a call refused before it left is not a send; one the server answered is', async () => {
+  it('F2: only a failure before the fetch is not a send — every error after it counts', async () => {
     const failing = (msg: string): TextGenModel => ({ generateContent: async () => { throw new Error(msg); } });
-    for (const [msg, expected] of [[RUN1, 0], ['Failed to fetch', 0], ['429 RESOURCE_EXHAUSTED', 1], ['503 Service Unavailable', 1]] as const) {
+    const ENDPOINT_403 = 'AI: Error fetching from https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse: [403 ] Firebase App Check token is invalid. (AI/fetch-error)';
+    for (const [msg, expected] of [
+      [RUN1, 0],                                                   // no App Check token: the SDK never fetched
+      ['AppCheck: Fetch failed to connect to a network. (appCheck/fetch-network-error).', 0],
+      [ENDPOINT_403, 1],                                           // the Gemini endpoint itself refused: it got the request
+      ['Failed to fetch', 1],                                      // the request was issued; the network dropped it
+      ['429 RESOURCE_EXHAUSTED', 1], ['503 Service Unavailable', 1], ['400 Bad Request', 1], ['canvas plan timed out after 20000 ms', 1],
+    ] as const) {
       let sends = 0;
       await countingSends(failing(msg), () => { sends++; }).generateContent('p').catch(() => undefined);
       expect(sends, msg).toBe(expected);
     }
+    // and the words match: a 403 from the endpoint never says "Nothing was sent"
+    expect(geminiFailLine(new Error(ENDPOINT_403))).toBe('Gemini refused the request (403)');
+    expect(geminiFailLine(new Error(RUN1))).toBe('Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.');
+    expect(geminiFailLine(new Error('Failed to fetch'))).toBe('Gemini couldn’t be reached: no connection');
+    expect(explainCloudFailure(new Error(ENDPOINT_403))).toMatchObject({ kind: 'forbidden', nothingSent: false });
+  });
+
+  it('F2: a call still waiting counts as sent (a timeout, a cancelled hedge); a late pre-fetch failure takes it back', async () => {
+    vi.useFakeTimers();
+    let sends = 0, retracts = 0;
+    let fail!: (e: Error) => void;
+    const hanging: TextGenModel = { generateContent: () => new Promise((_, reject) => { fail = reject; }) };
+    const call = countingSends(hanging, () => { sends++; }, () => { retracts++; }, 2500).generateContent('p').catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(2400);
+    expect(sends).toBe(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(sends).toBe(1); // nothing came back, no token failure: its request is out
+    fail(new Error(RUN1)); // …but then App Check says the token was refused after all
+    await call;
+    expect(retracts).toBe(1);
+    // a call that times out or errors after the request went out is never taken back
+    sends = 0; retracts = 0;
+    const call2 = countingSends(hanging, () => { sends++; }, () => { retracts++; }, 2500).generateContent('p').catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(3000);
+    fail(new Error('503 Service Unavailable'));
+    await call2;
+    expect({ sends, retracts }).toEqual({ sends: 1, retracts: 0 });
   });
 
   it('App Check 403 through the cloud seam: the line says nothing was sent, and nothing is counted', async () => {
@@ -609,6 +715,182 @@ describe('minors: stale streams stay silent; a busy Nano is said out loud', () =
     off();
     expect(heard.length).toBeGreaterThan(0);
     warn.mockRestore();
+  });
+});
+
+describe('round 2: the next-step pick keeps away from a turn; ?nanoTrace=1', () => {
+  it('the pick is skipped during a turn, its review, any model stream, and for 10 s after a turn', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    const ready = src.slice(src.indexOf('idle: { delayMs: NANO_PICK_IDLE_MS, ready: () =>'), src.indexOf('idle: { delayMs: NANO_PICK_IDLE_MS, ready: () =>') + 320);
+    for (const gate of ['!turnBusy', '!reviewBusy()', 'streamsOut === 0', 'Date.now() - lastTurnEndedAt >= NEXT_PICK_COOLDOWN_MS', 'nanoQueue.idle()']) expect(ready).toContain(gate);
+    expect(src).toContain('const NEXT_PICK_COOLDOWN_MS = 10_000;');
+    expect(src.match(/lastTurnEndedAt = Date\.now\(\)/g)!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  /** A fake LanguageModel whose stream is driven by the test. */
+  function steppedLm(clock: { t: number }, createMs = 2600) {
+    const ctl: { push: (text: string) => void; end: () => void; fail: (e: Error) => void } = { push: () => undefined, end: () => undefined, fail: () => undefined };
+    const lm = {
+      async create(_options?: unknown) {
+        clock.t += createMs;
+        return {
+          destroy() { /* a real session would stop here; the fake keeps going unless the test ends it */ },
+          promptStreaming(_input: unknown, _options?: unknown) {
+            return new ReadableStream<string>({ start(c) { ctl.push = (text) => c.enqueue(text); ctl.end = () => c.close(); ctl.fail = (e) => c.error(e); } });
+          },
+        };
+      },
+    };
+    return { lm, ctl };
+  }
+  const drain = async (stream: unknown, into: string[] = []): Promise<string[]> => {
+    const reader = (stream as ReadableStream<string>).getReader();
+    try { for (;;) { const { done, value } = await reader.read(); if (done) break; into.push(value); } } catch { /* an aborted stream errors */ }
+    return into;
+  };
+
+  it('?nanoTrace=1 logs create and prompt timings and sizes — never content', async () => {
+    const lines: string[] = [];
+    const clock = { t: 0 };
+    const SECRET_PROMPT = 'She said: "floor plan for Mrs Sharma"';
+    const SECRET_REPLY = '{"t":"Sharma flat","d":["wiz-desk"]}';
+    const { lm, ctl } = steppedLm(clock);
+    expect(installNanoTrace(lm, { log: (l) => lines.push(l), now: () => clock.t })).toBe(true);
+    expect(installNanoTrace(lm, { log: (l) => lines.push(l), now: () => clock.t })).toBe(false); // once
+    const session = await lm.create({ initialPrompts: [{ role: 'system', content: [{ type: 'text', value: 'x'.repeat(318) }] }] });
+    const stream = session.promptStreaming([{ role: 'user', content: [{ type: 'text', value: SECRET_PROMPT }] }], { responseConstraint: { type: 'object' } });
+    const got: string[] = [];
+    const reading = drain(stream, got);
+    clock.t += 900; ctl.push(SECRET_REPLY.slice(0, 10)); await tick();
+    clock.t += 800; ctl.push(SECRET_REPLY.slice(10)); ctl.end();
+    await reading;
+    expect(got.join('')).toBe(SECRET_REPLY); // the trace does not change what flows through
+    const all = lines.join('\n');
+    expect(all).toContain('[nano-trace] create #1: 2600 ms (initialPrompts 318 chars)');
+    expect(all).toContain(`prompt #1 (session #1): input ${SECRET_PROMPT.length} chars, constraint 17 chars — first chunk 900 ms, done in 1700 ms, output ${SECRET_REPLY.length} chars`);
+    expect(all).not.toMatch(/Sharma|wiz-desk|floor plan/);
+  });
+
+  it('F6: the trace says whether a create-signal abort really stopped generation', async () => {
+    // (a) Chrome stops: the stream errors 40 ms after the abort, nothing more arrives
+    let lines: string[] = [];
+    let clock = { t: 0 };
+    let { lm, ctl } = steppedLm(clock);
+    installNanoTrace(lm, { log: (l) => lines.push(l), now: () => clock.t });
+    let abort = new AbortController();
+    let session = await lm.create({ signal: abort.signal });
+    let reading = drain(session.promptStreaming('p'));
+    ctl.push('0123456789'); await tick();
+    clock.t += 5000; abort.abort();
+    clock.t += 40; ctl.fail(new Error('AbortError'));
+    await reading;
+    let all = lines.join('\n');
+    expect(all).toContain('session #1: create-signal abort while prompt #1 was streaming (10 chars so far)');
+    expect(all).toContain('session #1: after create-signal abort, prompt #1 ended 40 ms later with 0 more chars (0 chunks) — generation stopped');
+
+    // (b) Chrome does NOT stop: text keeps arriving, and 5 s later it is still going
+    resetNanoTrace();
+    vi.useFakeTimers();
+    lines = []; clock = { t: 0 };
+    ({ lm, ctl } = steppedLm(clock));
+    installNanoTrace(lm, { log: (l) => lines.push(l), now: () => clock.t, stillRunningMs: 5000 });
+    abort = new AbortController();
+    session = await lm.create({ signal: abort.signal });
+    reading = drain(session.promptStreaming('p'));
+    ctl.push('0123456789'); await vi.advanceTimersByTimeAsync(1);
+    abort.abort();
+    ctl.push('more text after the abort'); await vi.advanceTimersByTimeAsync(1);
+    clock.t += 5000; await vi.advanceTimersByTimeAsync(5000);
+    all = lines.join('\n');
+    expect(all).toContain('session #1: create-signal abort did NOT stop prompt #1 — still generating 5 s later (25 more chars, 1 chunks since)');
+    clock.t += 2400; ctl.end(); await vi.advanceTimersByTimeAsync(1);
+    await reading;
+    expect(lines.join('\n')).toContain('session #1: after create-signal abort, prompt #1 ended 7400 ms later with 25 more chars (1 chunks) — it kept generating until then');
+    expect(lines.join('\n')).not.toMatch(/more text|0123456789/);
+  });
+
+  it('F6: a destroy() is traced the same way', async () => {
+    const lines: string[] = [];
+    const clock = { t: 0 };
+    const { lm, ctl } = steppedLm(clock);
+    installNanoTrace(lm, { log: (l) => lines.push(l), now: () => clock.t });
+    const session = await lm.create({});
+    const reading = drain(session.promptStreaming('p'));
+    ctl.push('abc'); await tick();
+    session.destroy();
+    clock.t += 15; ctl.fail(new Error('destroyed'));
+    await reading;
+    expect(lines.join('\n')).toContain('session #1: after destroy(), prompt #1 ended 15 ms later with 0 more chars (0 chunks) — generation stopped');
+  });
+
+  it('the trace is off (and LanguageModel untouched) unless the flag asked for it', async () => {
+    const { readFileSync } = await import('node:fs');
+    const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(main).toContain("if (params.get('nanoTrace') === '1' && languageModel) installNanoTrace(languageModel);");
+    expect(main.match(/installNanoTrace\(/g)).toHaveLength(1);
+  });
+});
+
+describe('re-review fixes', () => {
+  it('F1: a prepared receipt for one engine is rebuilt when the other engine really runs the step', async () => {
+    // a by-name connect on a machine without Nano: the "nano" step is Gemini
+    const prepared: SentInfo = { engine: 'nano', prompt: 'p', sent: null, routeLine: 'Nano · on device — nothing left this device', sim: false };
+    const gemini: SurfaceEngine = { id: 'gemini', sim: false, routeLine: NO_NANO_NOTE, stream: async (_p, onText, so) => { so?.onCloudSend?.(); onText(GEMINI_OK); return GEMINI_OK; } };
+    const opened: SentInfo[] = [];
+    const sends: SentInfo[] = [];
+    const plan = await runSurfaceTurn(req, gemini, { onSent: (s) => opened.push(s), onCloudSend: (s) => sends.push(s) }, { sent: prepared, deviceIdSession: createDeviceIdSession() });
+    expect(plan?.title).toBe('Living room');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).not.toBe(prepared);
+    expect(opened[0].engine).toBe('gemini');
+    expect(opened[0].sent).toMatch(/your words/); // it says what left
+    expect(opened[0].routeLine).toBe(NO_NANO_NOTE);
+    expect(opened[0].routeLine).not.toMatch(/nothing left/);
+    expect(sends).toEqual([opened[0]]);
+    // a receipt written for the engine that runs is used as it is
+    const mine: SentInfo = { engine: 'gemini', prompt: 'custom prompt', sent: 'the name you said', routeLine: 'Gemini · cloud — the name you said', sim: false };
+    const seen: string[] = [];
+    await runSurfaceTurn(req, { ...gemini, stream: async (prompt) => { seen.push(prompt); return GEMINI_OK; } }, { onSent: (s) => opened.push(s) }, { sent: mine, deviceIdSession: createDeviceIdSession() });
+    expect(opened.at(-1)).toBe(mine);
+    expect(seen).toEqual(['custom prompt']);
+  });
+
+  it('F3/F4: a next-step pick and a warm-up that run out of time stop their own sessions', async () => {
+    const { readFileSync } = await import('node:fs');
+    const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
+    const pick = hybrid.slice(hybrid.indexOf('export async function pickNextStepsOnDevice('), hybrid.indexOf('// ADD A DEVICE'));
+    expect(pick).toContain('own = onDeviceModelFor({'); // a per-call model, not the shared one
+    expect(pick).toMatch(/createOptions: \{ \.\.\.ON_DEVICE_CREATE_OPTIONS, \.\.\.\(session \? \{ signal: session\.signal \}/);
+    expect(pick).toMatch(/finally \{[\s\S]*session\?\.abort\(\); destroySdkSession\(own\);/);
+    expect(pick).toContain('{ maxWaitMs: 0 }');
+    // the warm-up, behaviourally: a model that never answers is aborted at its timeout
+    vi.useFakeTimers();
+    let aborted = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
+      return { generateContent: () => never() };
+    } });
+    const q = createNanoQueue(1);
+    const warm = warmBoardOnDevice(q);
+    await vi.advanceTimersByTimeAsync(15_100);
+    expect(await warm).toBe(false);
+    expect(aborted).toBe(1);
+    expect(q.idle()).toBe(true);
+  });
+
+  it('F5: Nano is chosen for a turn only while Chrome reports it available', async () => {
+    const { readFileSync } = await import('node:fs');
+    const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(main).toContain("nanoAvailable = (await lm.availability(NANO_CREATE_OPTIONS)) === 'available';");
+    expect(main).toContain('get nanoStream() { return nanoAvailable ? nanoStream : null; },');
+    // and what that getter means to the engines: not available → the step is Gemini's, and says so
+    let available = false;
+    const rt = { languageModel: LM, cloud: async () => GEMINI_OK, get nanoStream() { return available ? nanoVia() : null; } };
+    const engines = createEngines(rt);
+    expect(engines.nano!('{}')).toMatchObject({ id: 'gemini', routeLine: NO_NANO_NOTE });
+    available = true; // the download finished: the very next turn is Nano's
+    expect(engines.nano!('{}').id).toBe('nano');
   });
 });
 

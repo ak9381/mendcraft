@@ -113,7 +113,8 @@ export function createCanvasLedger(): CanvasLedger {
 
     addBytes(entry: LedgerEntry, bytes: number): void {
       if (entry.sim || !entriesList.includes(entry)) return;
-      entry.bytes += Math.max(0, Math.round(bytes));
+      // Negative takes back a send that turned out never to have left.
+      entry.bytes = Math.max(0, entry.bytes + Math.round(bytes));
     },
 
     totals(): LedgerTotals {

@@ -30,7 +30,7 @@ export const NANO_PICK_TIMEOUT_MS = 8000;
 /** How long the board must sit unchanged before Nano is asked at all. */
 export const NANO_PICK_IDLE_MS = 3000;
 /** How many idle checks a pick gets before the rule chips simply stay. */
-export const NANO_PICK_MAX_WAITS = 4;
+export const NANO_PICK_MAX_WAITS = 6;
 
 const CATALOG: Record<string, Omit<NextStep, 'id'>> = {
   'connect-devices': { label: 'Connect devices', say: 'connect devices' },

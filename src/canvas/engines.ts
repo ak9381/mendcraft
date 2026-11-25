@@ -62,7 +62,7 @@ export type PromptApi = object;
 
 /** Minimal cloud model: a function that streams a prompt and resolves the text.
  *  createEngines() adapts src/ai/hybrid.streamCanvasPlanOrThrow to this. */
-export type CloudStream = (prompt: string, onText: (full: string) => void, opts?: { shape?: ReplyShape; onSend?: () => void }) => Promise<string>;
+export type CloudStream = (prompt: string, onText: (full: string) => void, opts?: { shape?: ReplyShape; onSend?: () => void; onRetract?: () => void }) => Promise<string>;
 
 /** One on-device prompt: Firebase AI Logic in ONLY_ON_DEVICE mode, through
  *  the page's one Nano queue (src/ai/hybrid.streamOnDevice). */
@@ -91,7 +91,7 @@ function cloudEngine(id: EngineId, cloud: CloudStream, routeNote?: string): Surf
     stream: (prompt, onText, opts) => {
       // A plugin's on-device generate has no queue: it starts at once.
       if (id === 'nano') opts?.onStart?.();
-      return cloud(prompt, onText, opts?.shape || opts?.onCloudSend ? { shape: opts.shape, onSend: opts.onCloudSend } : undefined);
+      return cloud(prompt, onText, opts?.shape || opts?.onCloudSend ? { shape: opts.shape, onSend: opts.onCloudSend, onRetract: opts.onCloudRetract } : undefined);
     },
   };
 }

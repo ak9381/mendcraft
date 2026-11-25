@@ -16,6 +16,7 @@ import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/a
 import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
+import { installNanoTrace } from '../ai/nanoTrace';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
@@ -56,13 +57,16 @@ bindDirectory(createDirectory(directoryStore));
 // Do not await Apple/ML Kit availability before first paint — a hanging plugin
 // left the iOS WKWebView on the dark body background (a black screen).
 const languageModel = (globalThis as Record<string, unknown>).LanguageModel as PromptApi | undefined;
+// ?nanoTrace=1: log every on-device create/prompt with its timings and sizes
+// (never content), measured at LanguageModel itself, under the SDK.
+if (params.get('nanoTrace') === '1' && languageModel) installNanoTrace(languageModel);
 const capacitor = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null;
 const isPhone = !!capacitor?.isNativePlatform?.();
 const phoneShell = isPhoneCanvasShell({ capacitor, viewportWidth: window.innerWidth });
 const cloud: CloudStream | undefined = isEnabled()
   ? async (prompt, onText, o) => {
       // A failure throws with its plain reason (App Check 403, offline, …).
-      const text = await streamCanvasPlanOrThrow(prompt, onText, o?.shape, { onSend: o?.onSend });
+      const text = await streamCanvasPlanOrThrow(prompt, onText, o?.shape, { onSend: o?.onSend, onRetract: o?.onRetract });
       onText(text);
       return text;
     }
@@ -82,6 +86,21 @@ const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !params.h
     })
   : null;
 
+let nanoAvailable = false;
+/** Ask Chrome whether Nano can answer right now; re-asked until it can. */
+async function refreshNanoAvailable(): Promise<boolean> {
+  const lm = languageModel as (PromptApi & { availability?: (o?: unknown) => Promise<string> }) | undefined;
+  if (!nanoStream || !lm?.availability) { nanoAvailable = false; return false; }
+  try { nanoAvailable = (await lm.availability(NANO_CREATE_OPTIONS)) === 'available'; } catch { nanoAvailable = false; }
+  return nanoAvailable;
+}
+if (nanoStream) {
+  void refreshNanoAvailable().then((ok) => {
+    if (ok) return;
+    const again = setInterval(() => { void refreshNanoAvailable().then((now) => { if (now) clearInterval(again); }); }, 15_000);
+  });
+}
+
 const apple = {
   ready: false,
   androidNano: false,
@@ -89,7 +108,10 @@ const apple = {
 };
 const engines = createEngines({
   languageModel: languageModel ?? null,
-  nanoStream,
+  // Nano is chosen for a turn only while Chrome says the model is
+  // 'available' — never 'downloadable' or 'downloading' (a turn must not
+  // start, or wait on, a multi-gigabyte download).
+  get nanoStream() { return nanoAvailable ? nanoStream : null; },
   cloud: cloud ?? null,
   isPhone,
   get androidNano() { return apple.androidNano; },
@@ -279,13 +301,7 @@ if (!params.has('sim')) {
 // cold model. Only when the model is already on this machine (warming must
 // never start a download), and the warm-up steps aside for any real request.
 if (nanoStream && languageModel) {
-  const lm = languageModel as PromptApi & { availability?: (o?: unknown) => Promise<string> };
-  const warm = (): void => {
-    void (async () => {
-      try { if (!lm.availability || (await lm.availability(NANO_CREATE_OPTIONS)) !== 'available') return; } catch { return; }
-      await warmBoardOnDevice();
-    })();
-  };
+  const warm = (): void => { void (async () => { if (await refreshNanoAvailable()) await warmBoardOnDevice(); })(); };
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
   afterFirstPaint(() => { if (ric) ric(warm, { timeout: 4000 }); else setTimeout(warm, 1500); });
 }
