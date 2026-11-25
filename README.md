@@ -99,8 +99,12 @@ npm run wiz-bridge               # optional: real WiZ lamp on the LAN (prints a 
 - **On-device Gemini Nano:** Chrome desktop 139+, enable
   `chrome://flags/#prompt-api-for-gemini-nano-multimodal-input`, then click
   **Enable on-device AI** (the model must init on a user gesture).
-- **Debug App Check:** set `VITE_APPCHECK_DEBUG=true`, copy the printed debug
-  token from DevTools, register it in Firebase console → App Check. Never commit it.
+- **App Check on `npm run dev`:** put one stable debug token in
+  `APPCHECK_DEBUG_TOKEN` (`.env.local`) or `~/.secrets/mendcraft-appcheck-debug`
+  and register it once in Firebase console → App Check → Apps → Manage debug
+  tokens. Without it Gemini is refused (403) on local addresses. Steps:
+  `docs/app-check-local-dev.md`. Never commit the token.
+- **Checking real Nano + Gemini by hand:** `scripts/live-probe.md`.
 - **Human console steps** (for a full cloud/replay-protected run) are listed in
   `docs/CONSOLE-STEPS.md`.
 
