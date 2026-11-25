@@ -388,8 +388,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const swarmEl = root.querySelector<HTMLElement>('.mc-swarm')!;
+  // One cursor per engine, parked on a tile of the focused board (never
+  // floating loose over the canvas); the other agents only light their tiles.
+  const swarmAnchor = (tileIndex: number | undefined): { x: number; y: number } | null => {
+    const id = focusId ?? lastFocus;
+    const frame = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"]`) : null;
+    if (!frame) return null;
+    const tile = tileIndex == null ? null
+      : frame.querySelector<HTMLElement>(`.mc-ghost-tile[data-tile-i="${tileIndex}"]`) ?? frame.querySelectorAll<HTMLElement>('[data-mc-tile]')[tileIndex] ?? null;
+    const box = swarmEl.getBoundingClientRect();
+    const r = (tile ?? frame).getBoundingClientRect();
+    if (!box.width || !box.height || !r.width) return null;
+    const x = Math.min(r.right - 24, r.left + Math.max(r.width * 0.72, 90));
+    const y = r.top + Math.min(tile ? 26 : 40, r.height / 2);
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    return { x: (x - box.left) / box.width, y: (y - box.top) / box.height };
+  };
   const swarm: SwarmLayer = createSwarmLayer(swarmEl, {
     reducedMotion: reduced,
+    maxPerKind: 1,
+    anchor: swarmAnchor,
     onReachTarget: (tileIndex, kind) => flashGhostTarget(tileIndex, kind),
   });
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;

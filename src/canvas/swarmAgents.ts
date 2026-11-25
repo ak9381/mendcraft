@@ -210,6 +210,14 @@ export interface SwarmLayerOptions {
    *  host uses this to put the selection box / '+' crosshair on the real
    *  tile element, not on the cursor badge. */
   onReachTarget?: (tileIndex: number, kind: SwarmKind) => void;
+  /** At most this many visible cursors per engine (default: one per agent).
+   *  The canvas passes 1: one Nano and one Gemini cursor, never a spray. The
+   *  other agents still count in the pill and still light their tiles. */
+  maxPerKind?: number;
+  /** Where a visible cursor parks, as a fraction of the container: the tile
+   *  it fills (`tileIndex`) or, with no tile, the board itself. null hides
+   *  the cursor, so it never floats outside a board. Read every frame. */
+  anchor?: (tileIndex: number | undefined) => { x: number; y: number } | null;
 }
 
 /** Mounts cursor elements into `container` and drives them with ONE shared
@@ -233,6 +241,10 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   container.appendChild(pill);
 
   let agents: SwarmAgentSpec[] = [];
+  /** The agents that get a cursor element (maxPerKind per engine). */
+  let shown = new Set<string>();
+  /** A shown cursor parks on the first tile its engine fills. */
+  const parkTile = new Map<string, number | undefined>();
   const els = new Map<string, HTMLElement>();
   let rafId: number | null = null;
   let startedAt = 0;
@@ -248,12 +260,27 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     pill.title = honestyNote(agents);
   }
 
-  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose): void {
+  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose, t: number): void {
     const el = els.get(agent.id);
-    if (!el) return;
-    el.style.left = `${(pose.x * 100).toFixed(2)}%`;
-    el.style.top = `${(pose.y * 100).toFixed(2)}%`;
-    el.classList.toggle('is-editing', pose.phase === 'editing');
+    if (el) {
+      let x = pose.x;
+      let y = pose.y;
+      if (opts.anchor) {
+        // Fly from the board to the parked tile (both inside the board).
+        const to = opts.anchor(parkTile.get(agent.id));
+        const from = opts.anchor(undefined) ?? to;
+        el.hidden = !to;
+        if (to && from) {
+          const p = Math.max(0, Math.min(1, t / FLIGHT_MS));
+          const e = 1 - Math.pow(1 - p, 3);
+          x = from.x + (to.x - from.x) * e;
+          y = from.y + (to.y - from.y) * e;
+        }
+      }
+      el.style.left = `${(x * 100).toFixed(2)}%`;
+      el.style.top = `${(y * 100).toFixed(2)}%`;
+      el.classList.toggle('is-editing', pose.phase === 'editing');
+    }
     if (pose.phase === 'editing' && agent.tileIndex != null && !reached.has(agent.id)) {
       reached.add(agent.id);
       opts.onReachTarget?.(agent.tileIndex, agent.kind);
@@ -262,7 +289,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
 
   function frame(t: number): void {
     const elapsed = t - startedAt;
-    agents.forEach((a, i) => applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: agents.length })));
+    agents.forEach((a, i) => applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: agents.length }), elapsed));
     rafId = elapsed < FLIGHT_MS && raf ? raf(frame) : null;
   }
 
@@ -270,6 +297,8 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     els.forEach((el) => el.remove());
     els.clear();
     agents = [];
+    shown = new Set();
+    parkTile.clear();
     reached = new Set();
   }
 
@@ -279,7 +308,19 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       clear();
       seed = s;
       agents = buildSwarmAgents(input);
+      const cap = opts.maxPerKind ?? Infinity;
+      const perKind: Record<SwarmKind, number> = { gemini: 0, nano: 0 };
+      for (const a of agents) {
+        if (perKind[a.kind] >= cap) continue;
+        perKind[a.kind]++;
+        shown.add(a.id);
+        parkTile.set(a.id, a.tileIndex ?? agents.find((b) => b.kind === a.kind && b.tileIndex != null)?.tileIndex);
+      }
       agents.forEach((a, i) => {
+        if (!shown.has(a.id)) {
+          if (opts.reducedMotion) applyPose(a, poseAt(a, i, FLIGHT_MS, { seed, total: agents.length }), FLIGHT_MS);
+          return;
+        }
         const el = doc.createElement('div');
         el.className = `mc-swarm-cursor is-${a.kind}`;
         el.setAttribute('data-agent-id', a.id);
@@ -290,7 +331,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
         const initial = opts.reducedMotion
           ? poseAt(a, i, FLIGHT_MS, { seed, total: agents.length })
           : poseAt(a, i, 0, { seed, total: agents.length });
-        applyPose(a, initial);
+        applyPose(a, initial, opts.reducedMotion ? FLIGHT_MS : 0);
       });
       container.hidden = false;
       pill.hidden = false;
