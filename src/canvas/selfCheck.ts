@@ -316,17 +316,40 @@ export interface SelfCheckBadge { setState(s: SelfCheckState): void; remove(): v
 /** Warm-paper checking mark: amber while checking, sage once passed, a
  *  restrained warning colour if it still fails after the one fix pass. No
  *  new colours — reuses the app's existing --action/--accent/--danger vars. */
+/** A passed mark fades away this long after it turns sage (a warning stays). */
+export const SELF_CHECK_PASSED_MS = 1500;
+
 export function mountSelfCheckBadge(host: HTMLElement, doc: Document = document): SelfCheckBadge {
   const el = doc.createElement('div');
-  el.className = 'mc-self-check is-checking';
   el.setAttribute('aria-hidden', 'true');
   const r = host.getBoundingClientRect();
-  el.style.left = `${r.left + r.width - 12}px`;
-  el.style.top = `${r.top - 2}px`;
-  doc.body.append(el);
+  // Inside the canvas world (it pans and zooms with the board): world
+  // coordinates, so the mark stays on its tile instead of being left behind
+  // at a fixed screen spot. Outside a canvas: the old fixed-position mark.
+  const world = typeof host.closest === 'function' ? host.closest<HTMLElement>('.mc-world') : null;
+  let anchored = '';
+  if (world) {
+    const w = world.getBoundingClientRect();
+    const scale = world.offsetWidth ? w.width / world.offsetWidth : 1;
+    el.style.left = `${(r.right - w.left) / (scale || 1) - 12}px`;
+    el.style.top = `${(r.top - w.top) / (scale || 1) - 2}px`;
+    anchored = ' is-anchored';
+    el.className = `mc-self-check is-checking${anchored}`;
+    world.append(el);
+  } else {
+    el.style.left = `${r.left + r.width - 12}px`;
+    el.style.top = `${r.top - 2}px`;
+    el.className = 'mc-self-check is-checking';
+    doc.body.append(el);
+  }
+  let fade: ReturnType<typeof setTimeout> | null = null;
   return {
-    setState(s) { el.className = `mc-self-check is-${s}`; },
-    remove() { el.remove(); },
+    setState(s) {
+      el.className = `mc-self-check is-${s}${anchored}`;
+      if (fade) { clearTimeout(fade); fade = null; }
+      if (s === 'passed' && anchored) fade = setTimeout(() => { el.classList.add('is-gone'); }, SELF_CHECK_PASSED_MS);
+    },
+    remove() { if (fade) clearTimeout(fade); el.remove(); },
   };
 }
 

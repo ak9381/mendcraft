@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createReviewReceipts, clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
+import { combineFacts, createReviewReceipts, clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
 
 describe('reviewActionFor', () => {
   it('approve maps to keep', () => { expect(reviewActionFor('approve')).toBe('keep'); });
@@ -186,7 +186,7 @@ describe('mountReviewDialog', () => {
     const r = root as unknown as FakeEl;
     const list = r.querySelector('.mc-review-plan-list') as FakeEl;
     expect(list.children.map((li) => li.className)).toEqual(['mc-review-change is-change', 'mc-review-change is-add', 'mc-review-change is-remove']);
-    expect(list.children.map((li) => li.children[0].textContent)).toEqual(['~', '+', '−']);
+    expect(list.children.map((li) => li.children[0].textContent)).toEqual(['Rename', 'Add', 'Remove']);
     expect((r.querySelector('.mc-review-engine') as FakeEl).textContent).toBe('Gemini · cloud');
     expect((r.querySelector('.mc-review-sim') as FakeEl).hidden).toBe(false);
     expect((r.querySelector('.mc-review-asked') as FakeEl).textContent).toBe('You asked: “make it better”');
@@ -332,5 +332,32 @@ describe('review window keyboard', () => {
     dialogEl.fire('keydown', key('Tab', { shiftKey: true }));
     expect(fakeDoc.activeElement).toBe(resize);
     expect(close).toBeTruthy();
+  });
+});
+
+describe('combineFacts: one review for a two-engine change', () => {
+  const nano = { engine: 'nano', sim: false, sentWhat: null, bytes: 0 };
+  const gemini = { engine: 'gemini', sim: false, sentWhat: 'your words and device names', bytes: 2048 };
+  it('improved: names both steps and counts both steps\' bytes', () => {
+    const f = combineFacts(gemini, nano, 'improved');
+    expect(f.chain).toBe('Drafted by Nano on this device · 0 B; improved by Gemini · 2.0 KB');
+    expect(honestyLines(f).why).toBe(f.chain);
+    expect(honestyLines(f).left).toBe('What left this device: your words and device names · 2.0 KB');
+  });
+  it('improved: a draft step that ran in the cloud adds its own bytes', () => {
+    const f = combineFacts(gemini, { engine: 'gemini', sim: false, sentWhat: 'your words', bytes: 1024 }, 'improved');
+    expect(f.bytes).toBe(3072);
+    expect(f.chain).toContain('Drafted by Gemini in the cloud · 1.0 KB');
+  });
+  it('fallback: the failed attempt\'s bytes still count, and it says so', () => {
+    const f = combineFacts(nano, gemini, 'fallback');
+    expect(f.engine).toBe('nano');
+    expect(f.chain).toContain('Gemini didn’t answer — this is Nano’s draft');
+    expect(honestyLines(f).left).toBe('What left this device: your words and device names · 2.0 KB');
+  });
+  it('SIM: would-send bytes add up and nothing is claimed as sent', () => {
+    const f = combineFacts({ ...gemini, sim: true, bytes: 0, simBytes: 2048 }, { ...nano, sim: true }, 'improved');
+    expect(f.chain).toContain('improved by Gemini · SIM would send 2.0 KB');
+    expect(honestyLines(f).left).toMatch(/^SIM · nothing left this device/);
   });
 });

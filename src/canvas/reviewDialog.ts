@@ -100,6 +100,33 @@ export interface ReviewFacts {
   simBytes?: number;
   /** No AI call made this change (no ledger token): say so, claim no bytes. */
   noAiCall?: boolean;
+  /** Two engines made this one change (draft + improvement, or a draft
+   *  shown because the improvement failed): replaces the "Why …" line. */
+  chain?: string;
+}
+
+function stepBytes(f: Pick<ReviewFacts, 'bytes' | 'simBytes'>): string {
+  if (f.bytes && f.bytes > 0) return formatReviewBytes(f.bytes);
+  if (f.simBytes && f.simBytes > 0) return `SIM would send ${formatReviewBytes(f.simBytes)}`;
+  return '0 B';
+}
+function stepWhere(f: Pick<ReviewFacts, 'engine'>): string {
+  return f.engine.toLowerCase() === 'gemini' ? 'in the cloud' : 'on this device';
+}
+const addBytes = (a?: number, b?: number): number | undefined => (a == null && b == null ? undefined : (a ?? 0) + (b ?? 0));
+
+/** One review for a two-engine change. `improved`: `draft` was improved by
+ *  `main` (both steps' bytes count). `fallback`: `main` is the draft shown
+ *  because the `attempt` to improve it failed — whatever that attempt
+ *  already sent still left this device, so it is counted too. */
+export function combineFacts(main: ReviewFacts, other: ReviewFacts, kind: 'improved' | 'fallback'): ReviewFacts {
+  const bytes = addBytes(main.bytes, other.bytes);
+  const simBytes = (main.simBytes ?? 0) + (other.simBytes ?? 0);
+  const sentWhat = [main.sentWhat, other.sentWhat].filter((x) => x && x.trim()).join('; ') || null;
+  const chain = kind === 'improved'
+    ? `Drafted by ${engineName(other.engine)} ${stepWhere(other)} · ${stepBytes(other)}; improved by ${engineName(main.engine)} · ${stepBytes(main)}`
+    : `${engineName(other.engine)} didn’t answer — this is ${engineName(main.engine)}’s draft (${engineName(other.engine)} attempt · ${stepBytes(other)})`;
+  return { ...main, sim: !!(main.sim || other.sim), bytes, sentWhat, chain, ...(simBytes > 0 ? { simBytes } : { simBytes: undefined }) };
 }
 
 /** What a turn told the ledger (aiTurn's SentInfo shape, kept structural). */
@@ -179,7 +206,7 @@ export function honestyLines(facts: ReviewFacts): { why: string | null; left: st
   // "nothing left this device" is the next line's job, not a reason.
   if (/^nothing (left|sent)\b/i.test(reason)) reason = '';
   if (!reason) reason = DEFAULT_WHY[engine] ?? '';
-  const why = reason ? `Why ${engineName(engine)}: ${reason}` : null;
+  const why = facts.chain ?? (reason ? `Why ${engineName(engine)}: ${reason}` : null);
   // SIM: nothing left; say what a real run would send, never as real bytes.
   if (facts.simBytes && facts.simBytes > 0 && !facts.bytes) {
     const leftWhat = `SIM · nothing left this device; a real run would send ${(facts.sentWhat || 'your request').replace(/\.\s*$/, '')}`;
@@ -193,8 +220,12 @@ export function honestyLines(facts: ReviewFacts): { why: string | null; left: st
   return { why, left: leftWhat + leftBytes, leftWhat, leftBytes };
 }
 
-const OP_SIGN: Record<PlanChange['op'], string> = { add: '+', change: '~', remove: '−' };
 const OP_WORD: Record<PlanChange['op'], string> = { add: 'Add', change: 'Change', remove: 'Remove' };
+/** The word on a plan line's badge: "Rename" for a name change, else Add / Change / Remove. */
+export function opWord(c: Pick<PlanChange, 'op' | 'detail'>): string {
+  if (c.op === 'change' && /^renamed\b|→/.test(c.detail ?? '')) return 'Rename';
+  return OP_WORD[c.op];
+}
 
 function btn(doc: Document, cls: string, label: string, onClick: () => void, i18n?: string): HTMLButtonElement {
   const b = doc.createElement('button');
@@ -224,6 +255,9 @@ export function mountReviewDialog(
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'false');
   dialog.setAttribute('aria-labelledby', 'mc-review-title');
+  // Opening focuses the window itself, not Approve: no focus ring sits on
+  // the primary button before anyone chose it; Tab reaches it next.
+  dialog.tabIndex = -1;
   dialog.hidden = true;
 
   const head = el(doc, 'div', 'mc-review-head');
@@ -413,8 +447,8 @@ export function mountReviewDialog(
     for (const c of changes) {
       const none = c.label === NO_VISIBLE_CHANGE;
       const li = el(doc, 'li', `mc-review-change is-${none ? 'none' : c.op}`);
-      const badge = el(doc, 'span', 'mc-review-op', none ? '=' : OP_SIGN[c.op]);
-      badge.setAttribute('aria-label', none ? 'No change' : OP_WORD[c.op]);
+      const badge = el(doc, 'span', 'mc-review-op', none ? 'Same' : opWord(c));
+      if (none) badge.setAttribute('aria-label', 'No change');
       const text = el(doc, 'span', 'mc-review-change-text');
       text.append(el(doc, 'span', 'mc-review-change-label', c.label));
       if (c.detail) text.append(el(doc, 'span', 'mc-review-change-detail', c.detail));
@@ -480,7 +514,7 @@ export function mountReviewDialog(
       open = true;
       planSec.scrollTop = 0;
       lastFocused = (doc.activeElement as HTMLElement) ?? null;
-      approveBtn.focus();
+      (typeof dialog.focus === 'function' ? dialog : approveBtn).focus();
     },
     close,
     isOpen() { return open; },

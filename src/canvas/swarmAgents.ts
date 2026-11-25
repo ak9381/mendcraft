@@ -187,6 +187,14 @@ export interface SwarmLayerOptions {
    *  host uses this to put the selection box / '+' crosshair on the real
    *  tile element, not on the cursor badge. */
   onReachTarget?: (tileIndex: number, kind: SwarmKind) => void;
+  /** At most this many visible cursors per engine (default: one per agent).
+   *  The canvas passes 1: one Nano and one Gemini cursor, never a spray. The
+   *  other agents still count in the pill and still light their tiles. */
+  maxPerKind?: number;
+  /** Where a visible cursor parks, as a fraction of the container: the tile
+   *  it fills (`tileIndex`) or, with no tile, the board itself. null hides
+   *  the cursor, so it never floats outside a board. Read every frame. */
+  anchor?: (tileIndex: number | undefined) => { x: number; y: number } | null;
 }
 
 /** Mounts cursor elements into `container` and drives them with ONE shared
@@ -210,6 +218,14 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   container.appendChild(pill);
 
   let agents: SwarmAgentSpec[] = [];
+  /** The agents that get a cursor element (maxPerKind per engine). */
+  let shown = new Set<string>();
+  /** The newest tile an engine is filling (where its call cursor parks). */
+  const latestTile = (kind: SwarmKind): number | undefined => {
+    let best: number | undefined;
+    for (const a of agents) if (a.kind === kind && a.tileIndex != null && (best == null || a.tileIndex > best)) best = a.tileIndex;
+    return best;
+  };
   const els = new Map<string, HTMLElement>();
   /** When each cursor joined (ms on `now()`), so a late one flies in on its own clock. */
   const born = new Map<string, number>();
@@ -226,12 +242,27 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     pill.title = honestyNote(agents);
   }
 
-  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose): void {
+  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose, t: number): void {
     const el = els.get(agent.id);
-    if (!el) return;
-    el.style.left = `${(pose.x * 100).toFixed(2)}%`;
-    el.style.top = `${(pose.y * 100).toFixed(2)}%`;
-    el.classList.toggle('is-editing', pose.phase === 'editing');
+    if (el) {
+      let x = pose.x;
+      let y = pose.y;
+      if (opts.anchor) {
+        // Fly from the board to the parked tile (both inside the board).
+        const to = opts.anchor(agent.tileIndex ?? latestTile(agent.kind));
+        const from = opts.anchor(undefined) ?? to;
+        el.hidden = !to;
+        if (to && from) {
+          const p = Math.max(0, Math.min(1, t / FLIGHT_MS));
+          const e = 1 - Math.pow(1 - p, 3);
+          x = from.x + (to.x - from.x) * e;
+          y = from.y + (to.y - from.y) * e;
+        }
+      }
+      el.style.left = `${(x * 100).toFixed(2)}%`;
+      el.style.top = `${(y * 100).toFixed(2)}%`;
+      el.classList.toggle('is-editing', pose.phase === 'editing');
+    }
     if (pose.phase === 'editing' && agent.tileIndex != null && !reached.has(agent.id)) {
       reached.add(agent.id);
       opts.onReachTarget?.(agent.tileIndex, agent.kind);
@@ -243,7 +274,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     agents.forEach((a, i) => {
       const elapsed = t - (born.get(a.id) ?? t);
       if (elapsed < FLIGHT_MS) flying = true;
-      applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: SLOT_COUNT }));
+      applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: SLOT_COUNT }), elapsed);
     });
     rafId = flying && raf ? raf(frame) : null;
   }
@@ -253,10 +284,20 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     els.clear();
     born.clear();
     agents = [];
+    shown = new Set();
     reached = new Set();
   }
 
+  /** Over the per-engine cap: no element, but it still flies on its own
+   *  clock (so it reaches and lights its tile) and counts in the pill. */
   function mount(a: SwarmAgentSpec, i: number): void {
+    born.set(a.id, now());
+    const cap = opts.maxPerKind ?? Infinity;
+    if ([...shown].filter((id) => agents.find((b) => b.id === id)?.kind === a.kind).length >= cap) {
+      if (opts.reducedMotion) applyPose(a, poseAt(a, i, FLIGHT_MS, { seed, total: SLOT_COUNT }), FLIGHT_MS);
+      return;
+    }
+    shown.add(a.id);
     const el = doc!.createElement('div');
     el.className = `mc-swarm-cursor is-${a.kind}`;
     el.setAttribute('data-agent-id', a.id);
@@ -264,8 +305,8 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     el.innerHTML = `<span class="mc-swarm-arrow"></span><span class="mc-swarm-label">${a.label}</span>`;
     container.appendChild(el);
     els.set(a.id, el);
-    born.set(a.id, now());
-    applyPose(a, poseAt(a, i, opts.reducedMotion ? FLIGHT_MS : 0, { seed, total: SLOT_COUNT }));
+    const t0 = opts.reducedMotion ? FLIGHT_MS : 0;
+    applyPose(a, poseAt(a, i, t0, { seed, total: SLOT_COUNT }), t0);
   }
 
   return {

@@ -91,12 +91,12 @@ import { loadSetup } from '../setup/setupState';
 
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
-import { mountMicFab, MIC_ICON_SVG, type MicFab } from './micFab';
+import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
 import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { createReviewReceipts, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
@@ -304,6 +304,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <p class="mc-blank-lead">Let's build something fun.</p>
       <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or click Tools.</p>
       <button type="button" class="mc-btn mc-blank-register" data-cmd="register">Register</button>
+      <p class="mc-blank-phone">Hold the mic and say what you need.</p>
     </div>
     <header class="mc-bar">
       <div class="mc-bar-tools">
@@ -311,18 +312,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="everything" class="mc-btn" data-i18n="showEverything">Show everything</button>
       <button data-cmd="new" class="mc-btn" data-i18n="newBoard">New board</button>
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
-      <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
-      <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
-      <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
-      <button data-cmd="reregister" class="mc-btn">Re-register</button>
-      <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
-      <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
+      <button data-cmd="undo" class="mc-btn mc-btn-quiet" data-i18n="undo">Undo</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
-      <button data-cmd="monitor" class="mc-btn">AI monitor</button>
-      <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
+      <div class="mc-more">
+        <button type="button" class="mc-btn mc-more-btn" aria-expanded="false" aria-controls="mc-more-menu">More<span class="mc-more-caret" aria-hidden="true"></span></button>
+        <div class="mc-more-menu" id="mc-more-menu" role="group" aria-label="More tools" hidden>
+          <section class="mc-more-group" aria-label="Hands"><h3 class="mc-more-title">Hands</h3>
+            <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
+            <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
+            <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
+            <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
+            <button data-cmd="reregister" class="mc-btn" hidden>Register again</button></section>
+          <section class="mc-more-group" aria-label="Screens"><h3 class="mc-more-title">Screens</h3>
+            <button data-cmd="monitor" class="mc-btn">AI monitor</button>
+            <button data-cmd="swap" class="mc-btn" hidden>Swap phone sides</button></section>
+          <section class="mc-more-group" aria-label="Demo"><h3 class="mc-more-title">Demo</h3>
+            <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button></section>
+        </div>
+      </div>
       </div>
       <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
-        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
+        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Type or say a command…" />
         <button class="mc-btn primary" type="submit" data-i18n="go">Go</button></form>
       </div>
       <div class="mc-status-row"><p class="mc-canvas-status" role="status" aria-live="polite"></p>
@@ -391,8 +401,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const swarmEl = root.querySelector<HTMLElement>('.mc-swarm')!;
+  // One cursor per engine, parked on a tile of the focused board (never
+  // floating loose over the canvas); the other agents only light their tiles.
+  const swarmAnchor = (tileIndex: number | undefined): { x: number; y: number } | null => {
+    const id = focusId ?? lastFocus;
+    const frame = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"]`) : null;
+    if (!frame) return null;
+    const tile = tileIndex == null ? null
+      : frame.querySelector<HTMLElement>(`.mc-ghost-tile[data-tile-i="${tileIndex}"]`) ?? frame.querySelectorAll<HTMLElement>('[data-mc-tile]')[tileIndex] ?? null;
+    const box = swarmEl.getBoundingClientRect();
+    const r = (tile ?? frame).getBoundingClientRect();
+    if (!box.width || !box.height || !r.width) return null;
+    const x = Math.min(r.right - 24, r.left + Math.max(r.width * 0.72, 90));
+    const y = r.top + Math.min(tile ? 26 : 40, r.height / 2);
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    return { x: (x - box.left) / box.width, y: (y - box.top) / box.height };
+  };
   const swarm: SwarmLayer = createSwarmLayer(swarmEl, {
     reducedMotion: reduced,
+    maxPerKind: 1,
+    anchor: swarmAnchor,
     onReachTarget: (tileIndex, kind) => flashGhostTarget(tileIndex, kind),
   });
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
@@ -407,10 +435,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
   // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
   const aiFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
-  const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
+  const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true), sim: !!opts.sim });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
-      if (state === 'failed' || state === 'queued') { aiHold.add(engine); showAi(true); } else aiHold.delete(engine);
+      // Only a failure opens the drawer by itself (the reason must be readable);
+      // a queued turn is shown on the engine bar and the AI monitor.
+      if (state === 'failed' || state === 'queued') { aiHold.add(engine); if (state === 'failed') showAi(true); } else aiHold.delete(engine);
       engineBar.set(engine, state, line);
     },
     handoff: (from, to) => engineBar.handoff(from, to),
@@ -457,6 +487,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
     viewport.classList.toggle('mc-edge-glow-left', side === 'left' && glow > 0.05);
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
+    // The phones strip shows which phone sits on that side while a board nears an edge.
+    const near = !!side && glow > 0.05;
+    if (near !== edgeNear) { edgeNear = near; showArrangeStrip(); }
   }
 
   function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
@@ -600,27 +633,41 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
 
   // Screen-arrangement strip (set once, remembered): Left | This laptop | Right,
-  // showing which phone is on which side with a Swap button. Hand-reachable
-  // normal buttons (pinch-click). Shown in sim (so judges/audits see it) or once
-  // a phone is paired; hidden otherwise so it never clutters a solo canvas.
+  // showing which phone is on which side. Only while a phone is paired AND
+  // either Tools is open or a board is held near a screen edge — never
+  // permanent chrome. Swapping sides lives in Tools > More > Screens (and
+  // voice "swap phone sides").
   const arrangeStrip = document.createElement('div');
   arrangeStrip.className = 'mc-arrange';
   arrangeStrip.setAttribute('aria-label', 'Phone screen arrangement');
   arrangeStrip.hidden = true;
   root.appendChild(arrangeStrip);
+  let edgeNear = false;
   const platformLabel = (p: PhonePlatform | null): string => (p === 'android' ? 'Nothing' : p === 'ios' ? 'iPhone' : 'none');
+  /** Phones are on the table: sim scripts them, or a real one joined. */
+  const phonesPaired = (): boolean => !phoneShell && (pairFirst.phones().length > 0 || !!hostSession);
+  /** `refly`: re-fit the focused board if the strip's visibility changed —
+   *  only for a lasting change (a phone joined/left), never for Tools
+   *  opening or a drag nearing an edge (the board must not jump). */
+  function showArrangeStrip(refly = false): void {
+    const toolsOpen = !!root.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)');
+    const was = arrangeStrip.hidden;
+    arrangeStrip.hidden = !(phonesPaired() && (toolsOpen || edgeNear));
+    const swap = root.querySelector<HTMLElement>('[data-cmd=swap]');
+    if (swap) swap.hidden = phoneShell || !(opts.sim || hostSession);
+    if (refly && was !== arrangeStrip.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
+  }
   function renderArrangeStrip(): void {
-    arrangeStrip.hidden = phoneShell || !(opts.sim || hostSession);
     arrangeStrip.innerHTML = `
       <span class="mc-arrange-label">Phones</span>
       <span class="mc-arrange-slot" data-side="left">◀ ${platformLabel(screenLayout.left)} · left</span>
       <span class="mc-arrange-laptop">This laptop</span>
-      <span class="mc-arrange-slot" data-side="right">${platformLabel(screenLayout.right)} · right ▶</span>
-      <button type="button" class="mc-btn mc-arrange-swap">Swap sides</button>`;
-    arrangeStrip.querySelector<HTMLButtonElement>('.mc-arrange-swap')?.addEventListener('click', () => {
-      setScreenLayout({ left: screenLayout.right, right: screenLayout.left });
-      renderArrangeStrip();
-    });
+      <span class="mc-arrange-slot" data-side="right">${platformLabel(screenLayout.right)} · right ▶</span>`;
+  }
+  function swapPhoneSides(): void {
+    setScreenLayout({ left: screenLayout.right, right: screenLayout.left });
+    renderArrangeStrip();
+    say(`Swapped: ${platformLabel(screenLayout.left)} on the left, ${platformLabel(screenLayout.right)} on the right.`);
   }
   renderArrangeStrip();
 
@@ -666,6 +713,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // The row changes the bottom inset: re-fit the focused board above it.
       if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
+      showArrangeStrip(true);
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
       // Past the pairing step the card collapses into the row's "N phones connected"
@@ -756,10 +804,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every status line, in order (the journey replay reads what each step said).
   const statusLog: string[] = [];
   let statusBase = 0;
+  // The status line is a toast, not permanent chrome: it fades 6-12 s after
+  // the last line (longer lines stay longer), except while a review waits, a
+  // Retry is offered or the mic listens (those stay until replaced). A
+  // failure or refusal is also copied into the AI drawer's live log, so it
+  // can be read again after the toast is gone.
+  const statusFadeMs = (t: string): number => Math.min(12000, Math.max(6000, 2500 + t.length * 60));
+  const FAILURE_LINE = /^(Blocked|Refused|Nothing changed|Needs network|No answer|Could ?n[o’']t|Couldn[’']t)\b|didn[’']t answer|\bfailed\b|Nothing changed\.?$/i;
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  const fadeStatus = (t: string): void => {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
+    if (!t || typeof window === 'undefined') return;
+    statusTimer = setTimeout(() => {
+      statusTimer = null;
+      if (statusEl.textContent !== t) return;
+      if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
+      statusEl.textContent = '';
+    }, statusFadeMs(t));
+  };
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
+    fadeStatus(t);
+    if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };
 
   /** Gimbal body language: nod 'yes' on an Approve, shake 'no' on a refusal,
@@ -997,7 +1066,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!plan) return false;
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
-      ...expandPlan(plan, id, store.all()),
+      // The frame head already shows the title: no second heading inside.
+      ...expandPlan(plan, id, store.all(), { heading: false }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
@@ -1053,7 +1123,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const dockPlan: SurfacePlan = { kind: 'room', title: plan.title, tiles };
     const msgs: A2uiMessage[] = [
       ...(live.has(sid) ? [{ version: 'v0.9', deleteSurface: { surfaceId: sid } } as A2uiMessage] : []),
-      ...expandPlan(dockPlan, sid, store.all()),
+      ...expandPlan(dockPlan, sid, store.all(), { heading: false }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) return;
@@ -1074,6 +1144,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- frames DOM ----
+  /** The bottom fade only while there is more board below the fold. */
+  function markMoreBelow(body: HTMLElement): void {
+    body.classList.toggle('is-more-below', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
+  }
   function frameEl(f: Frame): HTMLElement {
     let el = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`);
     if (!el) {
@@ -1083,6 +1157,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
+      const fb = el.querySelector<HTMLElement>('.mc-frame-body')!;
+      fb.addEventListener('scroll', () => markMoreBelow(fb), { passive: true });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markMoreBelow(fb)).observe(fb);
       if (!phoneShell) attachBoardDrag(el.querySelector<HTMLElement>('.mc-frame-title')!, {
         frameId: f.id,
         getZoom: () => camera.z,
@@ -1119,11 +1196,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const w = fit?.w ?? f.rect.w, h = fit?.h ?? f.rect.h;
       Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: `${h}px` });
       el.querySelector('.mc-frame-title')!.textContent = f.title;
-      el.querySelector('.mc-chip')!.textContent = f.pinned ? `${labelFor(f)} · pinned` : labelFor(f);
+      // The kind chip only when it says something the title doesn't ("Floor plan" twice did not).
+      const chip = el.querySelector<HTMLElement>('.mc-chip')!;
+      const kindLabel = labelFor(f);
+      chip.textContent = f.pinned ? `${kindLabel} · pinned` : kindLabel;
+      chip.hidden = !f.pinned && kindLabel.trim().toLowerCase() === f.title.trim().toLowerCase();
       const focused = focusId === f.id;
       el.classList.toggle('focused', focused);
       el.classList.toggle('dim', focusId !== null && !focused);
       const body = el.querySelector<HTMLElement>('.mc-frame-body')!;
+      if (focused && typeof requestAnimationFrame === 'function') requestAnimationFrame(() => markMoreBelow(body));
       body.inert = !focused; // overview is view-only: the plan engine hit-tests in unscaled pixels
       el.setAttribute('aria-label', `${f.title} board${focused ? ', editing' : ''}`);
       const empty = el.querySelector<HTMLElement>('.mc-empty')!;
@@ -1165,10 +1247,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return { w: w - (aiPanel.hidden || aiAuto ? 0 : aiPanel.offsetWidth + 24), h };
   };
   const barH = () => phoneShell ? 0 : (root.querySelector<HTMLElement>('.mc-bar')!.offsetHeight + 32);
+  /** Phone: one board at a time, at 1:1 (readable — the whole-canvas fit
+   *  shrank a laptop-sized board to ~8px text), filling the width minus
+   *  16px gutters and the height between the top badge and the mic; the
+   *  board scrolls inside. Display-only, like fitBoardWidth. */
+  /** "Show everything" on a phone: keep the whole-canvas view (a resize or
+   *  a remote board must not snap back to one board) until a board is
+   *  focused again. */
+  let phoneOverview = false;
   function fitPhone(): void {
     const list = reg.list();
     if (!list.length) return;
-    camera = fitRects(list.map((f) => f.rect), vp(), 28);
+    if (phoneOverview && !focusId) { camera = fitRects(list.map((r) => r.rect), vp(), 28); applyCamera(); return; }
+    const f = (focusId ? reg.get(focusId) : undefined) ?? (lastFocus ? reg.get(lastFocus) : undefined) ?? list[0];
+    if (focusId !== f.id) { focusId = f.id; lastFocus = f.id; }
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(viewport) : null;
+    const padTop = parseFloat(cs?.paddingTop ?? '0') || 0;
+    const padBottom = parseFloat(cs?.paddingBottom ?? '0') || 0;
+    const v = vp();
+    const GUTTER = 16, TOP = 60 + padTop, BOTTOM = 128 + padBottom;
+    const fit = { w: Math.max(240, Math.floor(v.w - 2 * GUTTER)), h: Math.max(240, Math.floor(v.h - TOP - BOTTOM)) };
+    focusFit.set(f.id, fit);
+    sync();
+    camera = { x: f.rect.x - GUTTER, y: f.rect.y - TOP, z: 1 };
     applyCamera();
   }
 
@@ -1225,16 +1326,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
   async function focus(id: string): Promise<void> {
     let f = reg.get(id); if (!f) return;
-    focusId = id; lastFocus = id; sync(); updateDock();
+    focusId = id; lastFocus = id; phoneOverview = false; sync(); updateDock();
     f = fitBoardWidth(f);
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
   async function overview(): Promise<void> {
-    focusId = null; sync(); clearDock();
+    focusId = null; phoneOverview = phoneShell; sync(); clearDock();
     const list = reg.list();
-    await flyTo(fitRects(list.map((f) => f.rect), vp(), Math.max(56, barH())));
+    // Leave the hand cluster's lane on the right free (it sits on the edge).
+    const v = vp();
+    await flyTo(fitRects(list.map((f) => f.rect), { w: Math.max(320, v.w - clusterInset()), h: v.h }, Math.max(56, barH())));
     say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
@@ -1446,7 +1549,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let swarmFollowsTiles = false;
   function growSwarm(tiles: number): void { if (swarmFollowsTiles) swarm.setTiles(tiles); }
   function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean; /** live cloud turn: book bytes when a call really leaves */ defer?: boolean } = {}): void {
-    showAi(true);
+    // No auto-open: the engine bar shows the turn (click it for the drawer)
+    // and the AI monitor carries the full story; the canvas stays clean.
     aiPanel.querySelector<HTMLElement>('.mc-ai-empty')!.hidden = true;
     panels.show();
     aiPanel.dataset.engine = s.engine;
@@ -1524,6 +1628,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : 'Floor plan';
   function revealGhostTile(tileEl: HTMLElement, stage: 'controls' | 'labels'): void {
     if (stage === 'controls') {
+      // Already labelled (a later cursor of the same engine landed again):
+      // never bring the kind word back next to the label ("LampLamp · …").
+      if (tileEl.classList.contains('stage-labels')) return;
       tileEl.classList.remove('stage-frame');
       tileEl.classList.add('stage-controls');
       tileEl.querySelector<HTMLElement>('.mc-ghost-tile-kind')!.hidden = false;
@@ -1614,53 +1721,113 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  timed-out Nano call can still be finishing inside Chrome. */
   let lastTurnEndedAt = 0;
   const NEXT_PICK_COOLDOWN_MS = 10_000;
-  /** The last aiTurn's draft came from Gemini after an on-device failure. */
+  /** The last streamed turn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
   type PlanSummary = string | ((plan: SurfacePlan) => string);
-  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: PlanSummary, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string): Promise<boolean> {
+  const summaryOf = (summary: PlanSummary, plan: SurfacePlan): string => (typeof summary === 'function' ? summary(plan) : summary);
+
+  /** Stream one model turn into the ghost; the plan and its ledger receipt
+   *  (the SentInfo token live bookings — cloudSent / cloudRetract — are
+   *  recorded against), or null (failed / cancelled; the reason was said).
+   *  `onSi` sees every receipt the turn opens, including a handoff's. */
+  async function streamTurn(frameId: string, engineId: EngineId, utterance: string, script: string, task: SwarmTask, goal: string | undefined,
+    current: SurfacePlan | null, retry: () => void, onSi?: (si: SentInfo) => void): Promise<{ plan: SurfacePlan; si: SentInfo } | null> {
+    const f = reg.get(frameId); if (!f) return null;
+    const engine = engineFor(engineId, script.replace('BOARD', frameId));
+    let sentInfo: SentInfo | null = null;
+    lastTurnHandedOff = false;
+    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current, frameId, want: task === 'floorplan' ? 'plan' : 'room' }, engine, {
+      onSent: (s) => { sentInfo = s; onSi?.(s); aiSent(utterance, s, { task, defer: true }); },
+      onFallback: aiFellBack,
+      onCloudSend: cloudSent,
+      onCloudRetract: cloudRetract,
+      // Nano couldn't finish: Gemini takes over as a NEW send — the Nano
+      // terminal says why, the Gemini terminal shows what left (if it did).
+      onHandoff: (s, why) => {
+        panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
+        panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this board');
+        ghost(frameId, null);
+        sentInfo = s;
+        onSi?.(s);
+        lastTurnHandedOff = true;
+        aiSent(utterance, s, { task, defer: true });
+      },
+      onGhost: (g) => ghost(frameId, g),
+      onNote: (note) => {
+        const state = aiPanel.querySelector('.mc-ai-state');
+        if (state) state.textContent = note;
+      },
+      onError: (why, failed) => {
+        settleSwarm();
+        panels.forEngine(failed ?? engineId).fail(why);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+        offerRetry(retry);
+      },
+    }, { deviceIdSession, isCancelled: () => (sentInfo?.engine ?? engineId) === 'gemini' && !net.isOnline(), canHandoff: () => net.isOnline() }));
+    const si = sentInfo as SentInfo | null;
+    return plan && si ? { plan, si } : null;
+  }
+
+  interface TurnDraft { plan: SurfacePlan; si: SentInfo; summary: string; status: ProposalStatus; fellBack?: boolean; handedOff?: boolean }
+  /** How a review's facts combine two engine steps (see combineFacts); both
+   *  receipts are the ledger tokens the live bookings were recorded on. */
+  type FactsLink = { si: SentInfo; kind: 'improved' | 'fallback'; retry?: () => void };
+  /** `improve`: this turn improves an unreviewed draft (its plan is the
+   *  model's starting point). If the turn fails, the draft itself goes to
+   *  review — one request, one review, whichever engine finished it. */
+  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: PlanSummary, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string, improve?: TurnDraft): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
-      const f = reg.get(frameId); if (!f) return false;
-      const engine = engineFor(engineId, script.replace('BOARD', frameId));
-      let sentInfo: SentInfo | null = null;
-      lastTurnHandedOff = false;
-      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null, frameId, want: task === 'floorplan' ? 'plan' : 'room' }, engine, {
-        onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, defer: true }); },
-        onFallback: aiFellBack,
-        onCloudSend: cloudSent,
-        onCloudRetract: cloudRetract,
-        // Nano couldn't finish: Gemini takes over as a NEW send — the Nano
-        // terminal says why, the Gemini terminal shows what left (if it did).
-        onHandoff: (s, why) => {
-          panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
-          panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this board');
-          ghost(frameId, null);
-          sentInfo = s;
-          lastTurnHandedOff = true;
-          aiSent(utterance, s, { task, defer: true });
-        },
-        onGhost: (g) => ghost(frameId, g),
-        onNote: (note) => {
-          const state = aiPanel.querySelector('.mc-ai-state');
-          if (state) state.textContent = note;
-        },
-        onError: (why, failed) => {
-          settleSwarm();
-          panels.forEngine(failed ?? engineId).fail(why);
-          aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
-          offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });
-        },
-      }, { deviceIdSession, isCancelled: () => (sentInfo?.engine ?? engineId) === 'gemini' && !net.isOnline(), canHandoff: () => net.isOnline() }));
-      if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
-      return await proposePlan(frameId, utterance, plan, sentInfo, typeof summary === 'function' ? summary(plan) : summary, status);
+      if (!reg.get(frameId)) return false;
+      let attempt: SentInfo | null = null;
+      const out = await streamTurn(frameId, engineId, utterance, script, task, goal, improve ? improve.plan : surfaces[frameId] ?? null,
+        () => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); }, (si) => { attempt = si; });
+      if (!out) {
+        settleSwarm(); ghost(frameId, null);
+        if (!improve) return false;
+        // The improvement failed: review the draft, counting whatever the
+        // failed attempt already booked, and keep a Retry for the whole request.
+        improve.fellBack = true;
+        const tried = attempt as SentInfo | null;
+        return await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status,
+          tried ? { si: tried, kind: 'fallback', retry: () => { drop(); setTimeout(() => { void connectRoom(frameId, utterance); }, 0); } } : undefined);
+      }
+      return await proposePlan(frameId, utterance, out.plan, out.si, summaryOf(summary, out.plan), status, improve ? { si: improve.si, kind: 'improved' } : undefined);
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
+  }
+
+  /** A quick on-device draft that is NOT reviewed on its own: the next
+   *  (Gemini) turn improves it and the person reviews the result once. */
+  async function draftTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: PlanSummary, status: ProposalStatus): Promise<TurnDraft | null> {
+    if (turnBusy) return null;
+    turnBusy = true;
+    try {
+      if (!reg.get(frameId)) return null;
+      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', undefined, surfaces[frameId] ?? null,
+        () => { void connectRoom(frameId, utterance); });
+      await holdSwarmMinimum();
+      settleSwarm();
+      if (!out) { ghost(frameId, null); return null; }
+      const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
+      if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
+      const handedOff = lastTurnHandedOff;
+      if (!handedOff) panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
+      return { ...out, summary: summaryOf(summary, out.plan), status, handedOff };
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
+  }
+  /** Review a draft as it is (Gemini already made it after a Nano handoff). */
+  async function proposeDraft(frameId: string, utterance: string, d: TurnDraft): Promise<boolean> {
+    if (turnBusy) return false;
+    turnBusy = true;
+    try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status); }
+    finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -1684,7 +1851,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           sync(); updateDock(); persist(); historyRender();
           // First build on an empty focused board: re-place it (no animation, before the
           // self-check measures) so a wide dashboard opens at its top-left on a phone.
-          if (!before && focusId === frameId) { const ff = reg.get(frameId); if (ff) { camera = focusCam(ff); applyCamera(); } }
+          if (!before && focusId === frameId) { const ff = reg.get(frameId); if (phoneShell) fitPhone(); else if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
           built = true;
         } catch (e) {
@@ -1717,9 +1884,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // A blank board still has a name ("Board 3"): diff against it, so the
         // plan says "Board 3 → This room" — or nothing when the name stays.
         changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
-        facts: reviewFacts(si, utterance),
+        // A two-step change (draft + improvement, or a draft after a failed
+        // improvement) names both steps and counts both steps' bytes.
+        facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance),
       });
-      say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
+      if (link?.kind === 'fallback') {
+        say(`${engineName(link.si.engine)} didn’t answer — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
+        if (link.retry) offerRetry(link.retry);
+      } else say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
     });
   }
 
@@ -1738,6 +1910,37 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (net.isOnline()) {
+      // One request, one review: Nano drafts (shown in the ghost, not
+      // reviewed on its own), Gemini improves that draft, and the person
+      // approves the result once. The review's footer names both steps and
+      // counts both steps' booked bytes (a phone's "Nano" draft step may
+      // itself run in the cloud).
+      const draft = await draftTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, draftSummary, 'guess');
+      if (!draft) return;
+      if (draft.handedOff) {
+        // Gemini already made this draft (Nano couldn't finish): asking it to
+        // improve its own board would be a second cloud send for nothing.
+        const line = 'Gemini made this draft, so there is no second pass.';
+        panels.forEngine('gemini').log('note', line);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = line;
+        await proposeDraft(frameId, utterance, draft);
+        return;
+      }
+      panels.showHandoff('nano', 'group the lights and add a room plan');
+      // Tell Deep what the handoff line promises (only in the prompt; her card
+      // still shows her own words) — without it the live model never added the
+      // room plan: 0/3 → 7/7 boards with it (live-build study).
+      const kept = await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
+      // The network dropped between the draft and Gemini: the kept draft gets
+      // its Deep pass on reconnect, as on the offline path.
+      if (kept && draft.fellBack && !net.isOnline() && !deepLater.some((d) => d.frameId === frameId)) {
+        deepLater.push({ frameId, utterance });
+        panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
+        say(`${OFFLINE_QUICK_ONLY}. Deep will improve it when you're back online.`);
+      }
+      return;
+    }
     const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, draftSummary, 'guess');
     if (!kept) return;
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
@@ -2284,7 +2487,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     pairingStop = res.stop;
     hostSession = res.session;
     if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
-    renderArrangeStrip(); // reveal the arrangement strip now a phone is here
+    showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
     // remembered one that just reconnected) populates its side immediately.
@@ -2350,7 +2553,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pack?.lang === 'kn') { say('Kannada is already on. Say “undo” for English.'); return; }
     if (!net.isOnline()) {
       net.queueLater('add kannada');
-      showAi(true); panels.show();
+      panels.show();
       panels.forEngine('nano').setQueued(net.laterCount());
       aiHold.add('gemini'); // the Kannada pack waits on Gemini; keep the reason on screen
       say(`${LATER_LIST_PROMISE}.`);
@@ -2658,12 +2861,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (text) regChip.textContent = text;
   }
   function refreshRegisterLabels(): void {
-    const label = registerButtonLabel(loadOwner(regStorage));
-    if (registerChip) registerChip.textContent = label;
+    const owner = loadOwner(regStorage);
+    const label = registerButtonLabel(owner);
+    // One Register on screen: the cluster chip (or the empty-state button)
+    // until someone registers; after that only Tools > More > Hands offers
+    // "Register again" (voice "register" works either way).
+    if (registerChip) { registerChip.textContent = label; registerChip.hidden = !!owner; }
     const blankBtn = root.querySelector<HTMLElement>('.mc-blank-register');
     if (blankBtn) blankBtn.textContent = label;
     const toolbarBtn = root.querySelector<HTMLElement>('[data-cmd=reregister]');
-    if (toolbarBtn) toolbarBtn.textContent = label;
+    if (toolbarBtn) toolbarBtn.hidden = !owner;
   }
   function applyOwnerLock(owner: OwnerRecord): void {
     handsHandle?.presence?.registerSignature(owner.face);
@@ -2914,7 +3121,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     btn.setAttribute('aria-pressed', 'true');
     gestures?.setActive(true);
     restoreOwnerLock();
-    say('Hands on: point with your palm, tap a fist to click. Hold a fist to move a board or pan; two fists to zoom.');
+    say('Hands on. Palm to point · fist to click · hold a fist to move.');
   }
 
   // ---- offline (simulate + real) ----
@@ -2940,7 +3147,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const OPEN_ENDED_SIM_REPLY = "I'm listening — tell me what to build, or ask me anything.";
   async function openEndedTurn(text: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    showAi(true);
     const nano = engineFor('nano', OPEN_ENDED_SIM_REPLY);
     const gemini = engineFor('gemini', OPEN_ENDED_SIM_REPLY);
     // Each engine really tried goes through the ledger like any AI turn. A
@@ -3048,7 +3254,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'teachList': openTeachList(); return true;
       case 'showAi': showAi(true, true); return true;
       case 'monitor': openMonitor(); return true;
-      case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true;
+      case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens on a failure, from the engine bar, or say “show ai”.'); return true;
+      case 'tool': {
+        const press = (cmd: string) => root.querySelector<HTMLElement>(`[data-cmd="${cmd}"]`)?.click();
+        const handsOn = root.querySelector('[data-cmd=hands]')?.getAttribute('aria-pressed') === 'true';
+        switch (r.tool) {
+          case 'handsOn': if (handsOn) say('Hands are already on.'); else press('hands'); break;
+          case 'handsOff': if (!handsOn) say('Hands are already off.'); else press('hands'); break;
+          case 'dwell': press('dwell'); break;
+          case 'register': openScan(); break;
+          case 'offline': if (!net.isOnline()) say('Already offline (simulated).'); else press('offline'); break;
+          case 'online': if (net.isOnline()) say('Already online.'); else press('offline'); break;
+          case 'swap': if (phoneShell || !(opts.sim || hostSession)) say('No phones are paired, so there are no sides to swap.'); else swapPhoneSides(); break;
+        }
+        return true;
+      }
       case 'packIntent': return runIntent(r.intent);
       // On the web there is no gimbal — handleSpeech answers with the honest why.
       case 'pointConnect': {
@@ -3112,6 +3332,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) void store.act(i);
+        revealDeviceTiles(dc.intents.map((i) => i.deviceId));
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
         if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
@@ -3166,10 +3387,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
-  const toolPalette = mountToolPalette(root);
+  const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
   function openTools(): void { if (isPhone()) phoneMenu?.open(); else toolPalette.open(); }
   function closeTools(): void { if (isPhone()) phoneMenu?.close(); else toolPalette.close(); }
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
@@ -3340,6 +3561,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // edit must survive).
     if (persistTimer) persist(true);
     clearTimeout(wheelPersistTimer);
+    if (statusTimer) clearTimeout(statusTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }
     hostSession = null;
@@ -3602,6 +3824,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (el) { el.setAttribute('data-mc-tile', entry.id); el.setAttribute('data-mc-frame', frameId); }
     });
     return els;
+  }
+  /** A spoken device command changed these devices: scroll the first of
+   *  their tiles on the focused board into view, so "play music" visibly
+   *  does something even when the Speaker sat below the board's fold. */
+  function revealDeviceTiles(deviceIds: readonly string[]): void {
+    const id = focusId;
+    const plan = id ? surfaces[id] : undefined;
+    if (!id || !plan || !deviceIds.length) return;
+    const want = new Set(deviceIds);
+    const els = stampMorphTiles(id);
+    const i = enumerateMorphTiles(plan).findIndex((e) => want.has((e.spec as { deviceId?: string }).deviceId ?? ''));
+    const el = i >= 0 ? els[i] : null;
+    // Scroll only the board body (scrollIntoView would also scroll the
+    // overflow-hidden viewport and knock the camera off).
+    const body = el?.closest<HTMLElement>('.mc-frame-body');
+    if (!el || !body || !body.clientHeight) return;
+    const er = el.getBoundingClientRect();
+    const br = body.getBoundingClientRect();
+    const scale = br.height / body.clientHeight || 1;
+    const pad = 16 * scale;
+    let dy = 0;
+    if (er.bottom > br.bottom - pad) dy = Math.min(er.bottom - br.bottom + pad, er.top - br.top - pad);
+    else if (er.top < br.top) dy = er.top - br.top - pad;
+    if (Math.abs(dy) > 1) body.scrollBy?.({ top: dy / scale, behavior: reduced ? 'auto' : 'smooth' });
   }
   function tileSelfCheckLog(engine: 'nano' | 'gemini', _verb: string, detail: string): void {
     panels.forEngine(engine).log('note', detail);
@@ -3928,6 +4174,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   sync();
   updateDock();
   refreshRegisterLabels();
+  showArrangeStrip();
   if (loadOwner(regStorage)) setRegChip('Registered'); // survives a reload within the session
   if (phoneShell) {
     if (focusId) stampMorphTiles(focusId);

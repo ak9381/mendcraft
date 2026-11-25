@@ -280,6 +280,32 @@ describe('createSwarmLayer', () => {
     expect(c.children.length).toBe(1 + 1 + MAX_TILE_CURSORS); // FakeEl.remove is a no-op; nothing was added
   });
 
+  it('maxPerKind 1: one cursor per engine, yet every tile-bound agent still lights its tile', () => {
+    const container = new FakeEl('div') as unknown as HTMLElement;
+    const hits: number[] = [];
+    const layer = createSwarmLayer(container, {
+      reducedMotion: true, doc: fakeDoc, maxPerKind: 1,
+      anchor: () => ({ x: 0.5, y: 0.5 }),
+      onReachTarget: (i) => hits.push(i),
+    });
+    const plan = buildMixedSwarmPlan('gemini', 'dashboard', { tileCount: 4 });
+    layer.start(plan, 1);
+    const c = container as unknown as FakeEl;
+    const kinds = new Set(buildSwarmAgents(plan).map((a) => a.kind));
+    expect(c.children.length).toBe(1 + kinds.size); // pill + one cursor per engine called
+    expect(hits.length).toBe(buildSwarmAgents(plan).filter((a) => a.tileIndex != null).length);
+  });
+
+  it('a cursor with no anchor is hidden, never left floating off the board', () => {
+    const container = new FakeEl('div') as unknown as HTMLElement;
+    const layer = createSwarmLayer(container, { reducedMotion: true, doc: fakeDoc, maxPerKind: 1, anchor: () => null });
+    layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const c = container as unknown as FakeEl;
+    const cursors = c.children.slice(1) as unknown as { hidden: boolean }[];
+    expect(cursors.length).toBe(1);
+    expect(cursors.every((el) => el.hidden)).toBe(true);
+  });
+
   it('never fires onReachTarget twice for the same agent in one run', () => {
     const container = new FakeEl('div') as unknown as HTMLElement;
     let calls = 0;

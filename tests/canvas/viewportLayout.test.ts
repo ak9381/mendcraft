@@ -16,11 +16,11 @@ describe('viewport fit (CSS contract — live bbox check runs in Chrome via mac-
     expect(css).toMatch(/max-width:\s*min\(340px,\s*calc\(100vw - 24px\)\)/);
   });
 
-  it('the mid-screen cluster is a vertically centred right-edge column that always clears the drawer slot', () => {
+  it('the mid-screen cluster is a vertically centred column docked to the right edge, left of an open drawer', () => {
     expect(css).toMatch(/\.mc-hand-cluster \{[^}]*top:\s*50%/s);
     expect(css).toMatch(/translateY\(-50%\)/);
-    expect(css).toMatch(/\.mc-hand-cluster \{[^}]*right:\s*max\(180px, 13vw, calc\(min\(var\(--mc-ai-w, 320px\), 340px\) \+ 40px\)\)/s);
-    expect(css).not.toMatch(/is-ai-pinned \.mc-hand-cluster/);
+    expect(css).toMatch(/\.mc-hand-cluster \{[^}]*right:\s*24px/s);
+    expect(css).toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-hand-cluster \{ right: calc\(min\(var\(--mc-ai-w, 320px\), 340px\) \+ 40px\)/);
     expect(css).not.toMatch(/has\(\.mc-ai:not\(\[hidden\]\)\) \.mc-review-dialog/);
   });
 

@@ -18,6 +18,11 @@
      for the one primary action a tile offers, a muted warm red for errors —
      never the old dark-theme's periwinkle/coral/mint literals. */
   --action: #C98B3C;
+  /* Contrast-safe pair (WCAG 4.5:1+): white text on --action-fill is 5.2:1
+     (white on --action is only 2.9:1); --accent-ink is sage for TEXT on
+     paper (5.4:1), --accent stays for borders, dots and fills. */
+  --action-fill: #9A5F1C;
+  --accent-ink: #4F7356;
   --danger: #B5453A;
   --a2ui-color-on-background: var(--text);
   --a2ui-color-background: transparent;
@@ -43,6 +48,9 @@
 .mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
 .mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+/* More below the fold: the last 24px fade out instead of a hard cut, so a
+   clipped tile reads as "scroll for more". */
+.mc-frame.focused .mc-frame-body.is-more-below { mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
 .mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
 
 /* Edit mode (editBoard.ts): every tile pulled into its own absolutely
@@ -91,10 +99,11 @@
 /* Register chip already occupies this column's next slot up from Edit
    (same right edge). Stack Reset one chip above Register so both stay
    tappable in Edit mode. */
-.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 13px; }
+.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 15px; }
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
-.mc-edit-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.mc-edit-toggle[aria-pressed=true] { background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
+/* A greyed Edit on an empty canvas reads as broken on camera: hide it until there is a board to edit. */
+.mc-edit-toggle:disabled { display: none; }
 /* Cluster owns placement — do not set `right` on these chips when the AI drawer is open. */
 @media (max-width: 600px) { .mc-edit-toggle, .mc-edit-reset { display: none; } }
 .mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
@@ -132,11 +141,11 @@
    accent (Nano green / Gemini blue, from swarmAgents.ts) as the only colour. */
 .mc-swarm { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
 .mc-swarm-cursor { position: absolute; display: flex; align-items: center; gap: 6px; transform: translate(-50%, -50%);
-  padding: 3px 8px 3px 4px; border-radius: 999px; background: rgb(255 255 255 / 0.92);
+  padding: 4px 12px 4px 8px; border-radius: 999px; background: rgb(255 255 255 / 0.96);
   border: 1px solid var(--mc-swarm-color, var(--accent)); box-shadow: 0 2px 8px rgb(0 0 0 / 0.08); white-space: nowrap; pointer-events: none; }
 .mc-swarm-arrow { width: 10px; height: 10px; border-radius: 2px; background: var(--mc-swarm-color, var(--accent));
   clip-path: polygon(0 0, 100% 35%, 35% 100%); }
-.mc-swarm-label { font-size: 11px; color: var(--text); }
+.mc-swarm-label { font-size: 15px; font-weight: 600; color: var(--text); }
 .mc-swarm-cursor.is-editing { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 3px; }
 .mc-swarm-cursor.is-editing::after { content: '+'; position: absolute; left: -16px; top: 50%; transform: translateY(-50%);
   font-size: 12px; color: var(--mc-swarm-color, var(--accent)); }
@@ -144,7 +153,7 @@
    views of the same agent read as one thing. */
 .mc-swarm-cursor.is-dock-open { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 4px; }
 .mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
-  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
 /* The terminal column is reserved: cursors and the pill they summarise stay
    inside the visible board area and never fly under it (percentages inside
@@ -152,7 +161,9 @@
    and Talk fab already make for the same reason — see below. */
 .mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
 .mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
-.mc-ai { position: absolute; z-index: 9; right: 16px; top: 16px; bottom: 16px;
+/* Starts under the bar/toast (--mc-bar-h already includes the gap) so the
+   panel's title and close button are never covered. */
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: max(16px, var(--mc-bar-h, 80px)); bottom: 16px;
   width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
   overflow: hidden; padding: 12px 14px 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); font-size: 16px; display: flex; flex-direction: column; min-height: 0; }
@@ -164,26 +175,26 @@
   border: 0; border-radius: 999px; background: var(--panel-2, #F1EEE6); color: var(--text); font-size: 22px;
   line-height: 1; cursor: pointer; }
 .mc-ai-close:focus-visible { outline: 3px solid var(--focus, #C98B3C); outline-offset: 2px; }
-.mc-ai-history-empty { color: var(--text-dim); font-size: 13px; margin: 4px 0 8px; }
+.mc-ai-history-empty { color: var(--text-dim); font-size: 15px; margin: 4px 0 8px; }
 .mc-ai-history-empty[hidden] { display: none; }
 .mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
 /* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
 .mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
 .mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
-.mc-ai-h3 { margin: 16px 0 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.mc-ai-h3 { margin: 16px 0 6px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
 .mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
-.mc-ai-ledger-total { font-size: 13px; }
+.mc-ai-ledger-total { font-size: 15px; }
 .mc-ai-state { color: var(--text-dim); }
 .mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
-  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 13px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
+  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 15px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
 /* History stays discreet — a quiet trailing log, not a second focal point
    next to the live terminals. */
-.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; opacity: 0.85; }
-.mc-ai-live-log { list-style: none; margin: 0 0 12px; padding: 0; font-size: 13px; color: var(--text); }
+.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 15px; opacity: 0.85; }
+.mc-ai-live-log { list-style: none; margin: 0 0 12px; padding: 0; font-size: 15px; color: var(--text); }
 .mc-ai-live-log li { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--border, #E4E0D8); line-height: 1.4; }
 .mc-ai-live-log .mc-ai-live-kind { display: inline-block; min-width: 3.6em; font-weight: 650; letter-spacing: 0.04em;
-  text-transform: uppercase; font-size: 10px; color: var(--text-dim); margin-right: 6px; }
+  font-size: 15px; color: var(--text-dim); margin-right: 6px; }
 .mc-ai-close[hidden] { display: none !important; }
 .mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
 
@@ -196,9 +207,9 @@
 .mc-terminal { position: relative; border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 /* Bottom-right corner resize grip (A6-008): mouse/touch drag or a virtual-hand
    pinch-drag (it's a [data-mc-resize-handle]) grows/shrinks the terminal. Sized
-   generously (24px) for a less-precise hand pointer; the diagonal lines read as
+   generously (44px) for a less-precise hand pointer; the diagonal lines read as
    the usual resize affordance. */
-.mc-term-resize { position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; z-index: 2;
+.mc-term-resize { position: absolute; right: 0; bottom: 0; width: 44px; height: 44px; z-index: 2;
   cursor: nwse-resize; touch-action: none;
   background:
     linear-gradient(135deg, transparent 0 50%, #6B6761 50% 58%, transparent 58% 66%, #6B6761 66% 74%, transparent 74%); }
@@ -223,7 +234,7 @@
 .mc-terminal.is-floating { position: fixed; z-index: 46; width: min(460px, calc(100% - 48px)); max-height: 60vh; }
 .mc-terminal.is-floating .mc-term-body { max-height: calc(60vh - 40px); }
 .mc-terminal-spacer { height: 0; }
-.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 13px; color: #D8D4CC; }
+.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 15px; color: #D8D4CC; }
 .mc-term-drag { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; cursor: grab; touch-action: none; border-radius: 6px; }
 .mc-term-drag:active { cursor: grabbing; }
 .mc-term-drag:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
@@ -239,10 +250,10 @@
 /* Lives in the terminal's head, not its scrolling body — stays visible and
    stable (for a screenshot or a glance) however many lines log afterward,
    until reconnecting actually clears the queue. */
-.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 12px; padding: 3px 9px; border-radius: 999px;
+.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 15px; padding: 3px 9px; border-radius: 999px;
   background: rgb(201 139 60 / 0.22); color: #E7B274; }
 .mc-term-body { position: relative; padding: 12px 14px; font-family: ui-monospace, 'DejaVu Sans Mono', Consolas, monospace;
-  font-size: 12.5px; line-height: 1.7; max-height: 220px; overflow: auto; }
+  font-size: 15px; line-height: 1.7; max-height: 220px; overflow: auto; }
 .mc-term-lines { display: flex; flex-direction: column; }
 .mc-term-line { margin: 0; color: #D8D4CC; white-space: pre-wrap; word-break: break-word; }
 .mc-term-mark { display: inline-block; width: 1.1em; color: inherit; }
@@ -259,24 +270,24 @@
    that engine — tapping/pinching one opens its mini terminal. */
 .mc-term-dock { margin: 0; }
 .mc-term-dock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px 4px 8px;
-  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 12px; cursor: pointer; }
+.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 10px 4px 8px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 15px; cursor: pointer; }
 .mc-dock-chip-cursor { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color, var(--accent)); flex: 0 0 auto; }
 .mc-dock-chip.is-working { border-color: var(--chip-color, var(--accent)); }
-.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 1.1s ease-in-out infinite; }
+.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 2.4s ease-in-out infinite; }
 .mc-dock-chip.is-done { opacity: 0.7; }
 .mc-dock-chip.is-done .mc-dock-chip-cursor { background: transparent; border: 1px solid var(--chip-color, var(--accent)); }
 .mc-dock-chip-mark { color: var(--chip-color, var(--accent)); font-size: 11px; font-weight: 700; }
 .mc-dock-chip[aria-pressed=true] { outline: 2px solid var(--chip-color, var(--accent)); outline-offset: 2px; }
 .mc-dock-chip-overflow { color: var(--text-dim); }
-@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.35); } }
+@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.15); } }
 @media (prefers-reduced-motion: reduce) { .mc-dock-chip.is-working .mc-dock-chip-cursor { animation: none; } }
 
 /* Every past turn's chips, kept for the whole session but folded away by
    default so the dock never grows taller than one row until she opens it. */
 .mc-term-dock-history { margin-top: 6px; }
 .mc-term-dock-history summary { min-height: 44px; display: inline-flex; align-items: center; padding: 2px 10px;
-  border-radius: 999px; color: var(--text-dim); font-size: 12px; cursor: pointer; list-style: none; }
+  border-radius: 999px; color: var(--text-dim); font-size: 15px; cursor: pointer; list-style: none; }
 .mc-term-dock-history summary::-webkit-details-marker { display: none; }
 .mc-term-dock-history summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .mc-term-dock-history[open] summary { color: var(--text); }
@@ -292,15 +303,15 @@
   width: min(360px, calc(100vw - min(var(--mc-ai-w, 320px), 340px) - 48px)); max-width: calc(100vw - 24px); max-height: min(60vh, 420px); display: flex; flex-direction: column;
   border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 .mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
-.mc-mini-close { margin-left: auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;
+.mc-mini-close { margin-left: auto; min-width: 44px; min-height: 44px; padding: 0; border: none; background: transparent;
   color: #8A867E; font-size: 16px; line-height: 1; cursor: pointer; }
 .mc-mini-close:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
 
 /* One compact bar spanning under both terminals: what stayed on this device
    vs. what actually left it, as real bytes — never a fabricated number. */
-.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-dim); }
+.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
 
-.mc-eyebrow { margin: 0; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-eyebrow { margin: 0; font-size: 15px; font-weight: 650; color: var(--text-dim); }
 .mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
 .mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
   padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px);
@@ -309,16 +320,46 @@
   z-index: 51; }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
+/* Open Tools = the say box first, then Show everything, New board, Save, a
+   quieter Undo, and More (Hands / Screens / Demo). */
+.mc-bar-tools > .mc-say { order: -1; }
+.mc-btn.mc-btn-quiet { background: transparent; }
+.mc-more { position: relative; display: flex; }
+.mc-more-btn { display: inline-flex; align-items: center; gap: 8px; }
+.mc-more-caret { width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); transition: transform 150ms ease-out; }
+.mc-more-btn[aria-expanded=true] .mc-more-caret { transform: translateY(2px) rotate(-135deg); }
+.mc-more-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 52; display: grid; gap: 14px;
+  min-width: 260px; padding: 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12); }
+.mc-more-group { display: flex; flex-direction: column; gap: 8px; }
+.mc-more-title { margin: 0 4px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+.mc-more-group > .mc-btn { width: 100%; text-align: left; padding: 0 16px; }
+@media (prefers-reduced-motion: reduce) { .mc-more-caret { transition: none; } }
 /* Morph's type-it path (no mic): peek just the say box, not the buttons row. */
 .mc-bar-tools.mc-bar-tools-peek .mc-bar-btns { display: none; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
 .mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
+/* Quiet hover and a small press, so a click visibly lands (scale, not
+   transform: positioned buttons keep their own transforms). */
+.mc-btn:hover:not(:disabled) { border-color: var(--text-dim); }
+.mc-btn:active:not(:disabled) { scale: 0.97; transition: scale 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .mc-btn:active:not(:disabled) { scale: none; } }
 .mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
 .mc-say input { flex: 1; min-width: 0; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--panel); color: var(--text); font-size: 18px; text-overflow: ellipsis; }
 .mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mc-status-row .mc-canvas-status { flex: 1 1 auto; min-width: 0; }
+/* Tools closed (desktop): the status line is a dark centred toast that fades
+   ~6 s after the last line (say() clears it), not a permanent full-width pill. */
+@media (min-width: 601px) {
+  .mc-bar:has(.mc-bar-tools[hidden]) { left: 50%; right: auto; transform: translateX(-50%); width: max-content;
+    max-width: min(720px, calc(100vw - 32px)); padding: 8px 18px; border-radius: 999px; border-color: transparent;
+    background: rgb(43 43 43 / 0.88); backdrop-filter: none; box-shadow: 0 6px 18px rgb(0 0 0 / 0.16); }
+  .mc-bar:has(.mc-bar-tools[hidden]) .mc-canvas-status { color: #FFFFFF; }
+  .mc-bar:has(.mc-bar-tools[hidden]):has(.mc-canvas-status:empty):has(.mc-retry[hidden]) { display: none; }
+}
 .mc-retry { min-height: 44px; min-width: 44px; padding: 0 16px; }
 .mc-retry[hidden] { display: none; }
 .mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -331,9 +372,9 @@
 .mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
 .mc-dock-surface { display: grid; gap: 12px; }
-.mc-btn[aria-pressed=true] { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
+.mc-btn[aria-pressed=true] { border-color: var(--accent-ink); background: var(--panel-2); color: var(--accent-ink); }
 .mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
-.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
+.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 44px; font-size: 15px; padding: 4px 10px; }
 
 /* Author display rules must never beat the hidden attribute. */
 .mc-canvas [hidden] { display: none !important; }
@@ -427,7 +468,7 @@
 .mc-pair-code {
   font-size: 24px;
   letter-spacing: 0.08em;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .mc-connect-status, .mc-pair-status {
   font-size: 16px;
@@ -436,7 +477,7 @@
   margin: 4px 0 10px;
 }
 .mc-pair-note {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-dim);
   text-align: center;
   margin: 8px 0 0;
@@ -525,15 +566,15 @@
   font-size: 20px;
   cursor: pointer;
 }
-.mc-teach-note { font-size: 13px; opacity: 0.7; margin: 0 28px 12px 0; }
+.mc-teach-note { font-size: 15px; opacity: 0.7; margin: 0 28px 12px 0; }
 .mc-teach-count { font-size: 28px; font-weight: 600; margin: 8px 0; }
-.mc-teach-conflict { color: #b5651d; font-size: 13px; }
+.mc-teach-conflict { color: #b5651d; font-size: 15px; }
 .mc-teach-describe { display: flex; gap: 8px; }
 .mc-teach-describe input { flex: 1; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; }
 .mc-teach-list { list-style: none; margin: 0; padding: 0; }
 .mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.mc-teach-meter { font-size: 12px; opacity: 0.75; }
-.mc-proposal-engine { font-size: 12px; opacity: 0.7; margin-left: 8px; }
+.mc-teach-meter { font-size: 15px; opacity: 0.75; }
+.mc-proposal-engine { font-size: 15px; opacity: 0.7; margin-left: 8px; }
 
 /* Phone tools menu (phoneMenu.ts). iOS: bottom sheet with a grabber.
    Android: Material 3 modal sheet with 28dp top corners and tonal buttons. */
@@ -560,7 +601,9 @@
 .mc-menu-title { margin: 0; font-size: 22px; font-weight: 650; }
 .mc-menu-close { min-height: 44px; }
 .mc-menu-group { margin-top: 16px; }
-.mc-menu-group-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-menu-group-title { margin: 0 0 8px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+/* The open menu sheet owns the bottom of the screen: no pill draws over it. */
+.mc-menu-open .mc-join-pill, .mc-menu-open .mc-phone-hands-pill, .mc-menu-open .mc-phone-track-pill { display: none !important; }
 .mc-menu-items { display: flex; flex-direction: column; gap: 8px; }
 .mc-menu-items > .mc-btn { width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; padding: 0 16px; }
 .mc-menu-ios .mc-menu-items > .mc-btn { min-height: 44px; border-radius: 12px; }
@@ -596,7 +639,7 @@
   border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-tools-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+.mc-tools-chip[aria-expanded=true] { border-color: var(--accent-ink); color: var(--accent-ink); }
 /* Cluster owns Tools placement when the AI drawer is open. */
 @media (max-width: 600px) { .mc-tools-chip { display: none; } }
 
@@ -604,6 +647,12 @@
 .mc-blank { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 10px; pointer-events: none; z-index: 1; }
 .mc-blank-lead { margin: 0; font-size: 34px; font-weight: 650; color: var(--text); }
 .mc-blank-hint { margin: 0; font-size: 18px; color: var(--text-dim); }
+.mc-blank-phone { display: none; }
+/* Phone shell: the blank canvas says what to do (desktop hint and Register stay desktop-only). */
+.mc-phone-simple .mc-blank { padding: 0 24px; }
+.mc-phone-simple .mc-blank-lead { font-size: 26px; }
+.mc-phone-simple .mc-blank-hint, .mc-phone-simple .mc-blank-register { display: none; }
+.mc-phone-simple .mc-blank-phone { display: block; margin: 0; font-size: 18px; color: var(--text-dim); }
 
 /* Hand pointer feedback (handPointer.ts): no dot, no big rings. A modest
    frame on the targeted control, plus a small macOS-style coral arrow that
@@ -637,6 +686,7 @@
    footer, and big Approve / Reject / Ask-else that never scroll away.
    Fist-grab or mouse-drag the title bar to move it; drag the bottom-right
    corner to resize it (420×320 … 80vw×85vh, remembered). */
+.mc-review-dialog:focus { outline: none; }
 .mc-review-dialog { position: fixed; z-index: 50; inset: auto;
   top: calc(var(--mc-bar-h, 64px) + 24px);
   right: calc(min(var(--mc-ai-w, 320px), 340px) + 70px);
@@ -668,10 +718,10 @@
 .mc-review-title { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; color: #2B2B2B; }
 .mc-review-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mc-review-engine, .mc-review-sim { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px;
-  border-radius: 999px; font-size: 13px; font-weight: 600; line-height: 1; white-space: nowrap; }
+  border-radius: 999px; font-size: 15px; font-weight: 600; line-height: 1; white-space: nowrap; }
 .mc-review-engine { background: rgb(107 143 113 / 0.16); color: #3D6145; }
 .mc-review-engine[data-engine="gemini"] { background: rgb(90 123 166 / 0.14); color: #3A5679; }
-.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 11px; }
+.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 15px; }
 .mc-review-engine[hidden], .mc-review-sim[hidden] { display: none; }
 .mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; margin: 0; box-sizing: border-box;
   display: flex; flex-direction: column; overflow: hidden; padding: 0 24px 20px; }
@@ -681,13 +731,13 @@
 /* THE PLAN — the visual centre, and the only part that scrolls. */
 .mc-review-plan { flex: 1 1 auto; min-height: 72px; overflow: auto; overscroll-behavior: contain;
   background: #FFFFFF; border: 1px solid var(--border, #E4E0D8); border-radius: 14px; padding: 12px 16px 14px; }
-.mc-review-plan-head { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #8A857D; }
+.mc-review-plan-head { margin: 0 0 6px; font-size: 15px; font-weight: 650; color: #6E6A63; }
 .mc-review-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .mc-review-plan-list[hidden] { display: none; }
 .mc-review-change { display: flex; align-items: flex-start; gap: 14px; padding: 10px 0; border-top: 1px solid #F0ECE4; }
 .mc-review-change:first-child { border-top: 0; }
-.mc-review-op { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-  font-size: 20px; font-weight: 700; line-height: 1; margin-top: 1px; }
+.mc-review-op { flex: 0 0 auto; min-width: 76px; height: 28px; padding: 0 8px; box-sizing: border-box; border-radius: 8px; display: grid; place-items: center;
+  font-size: 15px; font-weight: 650; line-height: 1; margin-top: 1px; }
 .mc-review-change.is-add .mc-review-op { background: rgb(107 143 113 / 0.18); color: #3D6145; }
 .mc-review-change.is-change .mc-review-op { background: rgb(201 139 60 / 0.18); color: #855419; }
 .mc-review-change.is-remove .mc-review-op { background: rgb(181 69 58 / 0.14); color: #973A30; }
@@ -705,14 +755,14 @@
    here; the review's own Approve/Reject/Ask buttons are the only visible
    decision controls. */
 .mc-review-card-host .mc-proposal-actions { display: none; }
-.mc-review-more { margin-top: 10px; font-size: 14px; color: #6E6A63; }
+.mc-review-more { margin-top: 10px; font-size: 15px; color: #6E6A63; }
 .mc-review-more[hidden] { display: none; }
-.mc-review-more > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-weight: 600; }
+.mc-review-more > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
 .mc-review-extra:empty { display: none; }
 /* Honesty footer: why this engine, and exactly what left this device. */
 .mc-review-honesty { flex: 0 0 auto; margin: 12px 2px 0; display: flex; flex-direction: column; gap: 2px; }
 .mc-review-honesty[hidden] { display: none; }
-.mc-review-honesty p { margin: 0; font-size: 14px; line-height: 1.4; color: #5E5A54; }
+.mc-review-honesty p { margin: 0; font-size: 15px; line-height: 1.4; color: #5E5A54; }
 .mc-review-honesty p[hidden] { display: none; }
 .mc-review-why { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 /* The byte count never shrinks or ellipsizes; only the "what" text does. */
@@ -726,7 +776,7 @@
   padding: 0 24px; box-sizing: border-box; border-radius: 14px;
   white-space: nowrap; /* a label never wraps inside its button */
 }
-.mc-review-approve { flex: 1.4 1 0; background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+.mc-review-approve { flex: 1.4 1 0; background: var(--action-fill, #9A5F1C); color: #FFFFFF; border-color: var(--action-fill, #9A5F1C); }
 .mc-review-reject { flex: 1 1 0; background: #FFFFFF; }
 .mc-review-ask-else { flex: 1 1 100%; min-height: 56px; background: transparent; border-color: #D8D2C6; color: #4A4640; }
 /* Wide enough: all three decisions on one row. */
@@ -740,8 +790,8 @@
   background: transparent; border-color: transparent; color: #6E6A63; }
 .mc-review-close:hover { background: #F1EEE6; }
 /* Bottom-right resize grip — a [data-mc-resize-handle], so mouse, touch and
-   the hand's pinch-drag all work. 28px hit area for a less-precise hand. */
-.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 28px; height: 28px; z-index: 3;
+   the hand's pinch-drag all work. 44px hit area for a less-precise hand. */
+.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 44px; height: 44px; z-index: 3;
   cursor: nwse-resize; touch-action: none; border-bottom-right-radius: 18px;
   background:
     linear-gradient(135deg, transparent 0 52%, #A39D92 52% 58%, transparent 58% 68%, #A39D92 68% 74%, transparent 74%); }
@@ -750,7 +800,7 @@
 
 .mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 49;
   background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
-  border-radius: 999px; padding: 6px 14px; font-size: 13px;
+  border-radius: 999px; padding: 6px 14px; font-size: 15px;
   box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
 .mc-reg-chip[hidden] { display: none; }
 
@@ -758,7 +808,7 @@
    blank-canvas CTA open a full-viewport scan overlay with a progress ring and
    step checklist, so owner face+hands registration reads as one clear flow. */
 .mc-register-chip { position: fixed; z-index: 40; right: 24px; bottom: 236px; min-height: 52px; padding: 0 20px;
-  border-radius: 999px; border: 2px solid var(--action); background: var(--action); color: #FFFFFF;
+  border-radius: 999px; border: 2px solid var(--action-fill); background: var(--action-fill); color: #FFFFFF;
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-register-chip:hover { filter: brightness(0.95); }
 .mc-register-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
@@ -767,7 +817,7 @@
 
 .mc-blank .mc-blank-register { pointer-events: auto; justify-self: center; margin-top: 10px;
   min-height: 56px; padding: 0 30px; font-size: 17px; font-weight: 600; border-radius: 999px;
-  background: var(--action); border-color: var(--action); color: #FFFFFF; }
+  background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
 
 .mc-scan { position: fixed; inset: 0; z-index: 90; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
 .mc-scan[hidden] { display: none; }
@@ -783,7 +833,7 @@
 .mc-scan.is-done .mc-scan-ring-fill { stroke: var(--accent); }
 .mc-scan-prompt { margin: 0; font-size: 15px; color: var(--text); min-height: 1.4em; }
 .mc-scan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: start; }
-.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 14px; }
+.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 15px; }
 .mc-scan-steps li.is-active { color: var(--text); font-weight: 600; }
 .mc-scan-steps li.is-done { color: var(--text); }
 .mc-scan-tick { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
@@ -809,13 +859,13 @@
 .mc-morph-card[hidden] { display: none; }
 .mc-morph-card-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
 .mc-morph-card-title strong { font-weight: 700; }
-.mc-morph-card-line { margin: 0; font-size: 14px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
+.mc-morph-card-line { margin: 0; font-size: 15px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
 .mc-morph-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .mc-morph-dot.is-sage { background: #6B8F71; }
 .mc-morph-dot.is-amber { background: #C98B3C; }
 .mc-morph-chips { display: flex; flex-wrap: wrap; gap: 10px; }
 .mc-morph-cancel, .mc-morph-undo { min-height: 44px; padding: 0 16px; border-radius: 999px;
-  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 14px; font-weight: 600; cursor: pointer; }
+  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 15px; font-weight: 600; cursor: pointer; }
 .mc-morph-cancel:hover, .mc-morph-undo:hover { filter: brightness(0.97); }
 .mc-morph-undo { border-color: #C98B3C; color: #C98B3C; }
 
@@ -835,6 +885,10 @@
    pass. pointer-events: none so it never blocks the real hit-test it is
    itself verifying. No new colours: reuses --action/--accent/--danger. */
 .mc-self-check { position: fixed; z-index: 47; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+/* Inside the canvas world: moves with its board; a passed mark fades out. */
+.mc-self-check.is-anchored { position: absolute; z-index: 3; transition: opacity 400ms ease-out; }
+.mc-self-check.is-gone { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .mc-self-check.is-anchored { transition: none; } }
 .mc-self-check.is-checking { background: var(--action, #C98B3C); }
 .mc-self-check.is-passed { background: var(--accent, #6B8F71); }
 .mc-self-check.is-warning { background: var(--danger, #B5453A); }
@@ -855,7 +909,7 @@
   max-width: min(260px, calc(100vw - 16px));
   padding: 4px 8px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.3;
   white-space: normal;
   background: rgb(20 20 24 / 0.92);
@@ -917,15 +971,16 @@
 }
 
 /* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
-   Vertically centred, inset ~13vw (min 180px) from the right edge so a hand
-   cursor does not have to graze the screen edge. Equal-width 120×52px targets,
-   24px gaps (smaller, calmer; still comfortably dwell-reachable). Shifts left of the AI drawer when that is open. */
+   Docked to the right edge (24px) so it never sits on top of a board: Fit
+   and the overview take clusterInset() out of the board area. The hand
+   reach box maps to the full screen (handPointer.mapToScreen), so the edge
+   column is reachable without a full arm stretch. Equal-width 120×52px
+   targets, 24px gaps. Moves left of the AI drawer only while that is open
+   (the drawer no longer opens by itself during a turn, only on a failure). */
 .mc-hand-cluster {
   position: fixed;
   top: 50%;
-  /* Always left of the AI panel's slot (open or closed) so an auto-open never
-     covers it and clusterInset() stays constant. */
-  right: max(180px, 13vw, calc(min(var(--mc-ai-w, 320px), 340px) + 40px));
+  right: 24px;
   transform: translateY(-50%);
   /* Below the review window (50) and modal dialogs, so they're never covered. */
   z-index: 49;
@@ -939,6 +994,10 @@
   max-width: min(240px, calc(100vw - 32px));
 }
 .mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster { right: calc(min(var(--mc-ai-w, 320px), 340px) + 40px); }
+/* One Register on screen: the empty-state button owns it while the blank
+   canvas shows; after registration it lives under Tools > More > Hands. */
+.mc-canvas:has(.mc-blank:not([hidden])) .mc-hand-cluster .mc-register-chip { display: none; }
 .mc-hand-cluster .mc-fab-mic,
 .mc-hand-cluster .mc-tools-chip,
 .mc-hand-cluster .mc-edit-toggle,
@@ -996,7 +1055,7 @@
   border-radius: 10px;
   background: rgba(11, 15, 20, 0.88);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
   pointer-events: none;
@@ -1035,7 +1094,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   padding: 6px 8px;
@@ -1148,7 +1207,7 @@
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.88);
   color: #fff;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: 0.01em;
   box-shadow: 0 4px 12px rgb(0 0 0 / 0.25);
@@ -1163,7 +1222,6 @@
 .mc-phone-simple .mc-ai,
 .mc-phone-simple .mc-ai-scrim,
 .mc-phone-simple .mc-dock,
-.mc-phone-simple .mc-blank,
 .mc-phone-simple .mc-swarm,
 .mc-phone-simple .mc-hand-cluster,
 .mc-phone-simple .mc-tools-chip,
@@ -1200,8 +1258,10 @@
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
   top: calc(10px + env(safe-area-inset-top, 0px));
   padding: 5px 12px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
-  font-size: 13px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
+  font-size: 15px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
 }
+/* The open review carries its own engine + SIM chips; the badge would sit on its title. */
+.mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-route-badge { display: none; }
 .mc-look-hint {
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); margin: 0;
   bottom: calc(124px + env(safe-area-inset-bottom, 0px));
@@ -1212,6 +1272,11 @@
 .mc-phone-simple.is-edit-locked .mc-viewport { cursor: default; }
 .mc-phone-simple.is-edit-locked .mc-frame-body { pointer-events: none; }
 .mc-phone-simple .is-phone-selected { outline: 3px solid var(--action); outline-offset: 3px; border-radius: 14px; }
+/* Phones: touch edits are always on, but the move/resize grips (and the
+   dashed outline) show only on the tile she selected — not as dots over
+   every lamp and speaker. */
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) > :is(.mc-edit-move, .mc-edit-resize) { display: none; }
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) { outline: none; }
 
 /* ---- Calmer screen: engine bar, overlay AI panel, corner face chip ------- */
 /* Both engines, always visible, bottom-centre. Nano is green (on this device),
@@ -1238,26 +1303,28 @@
 .mc-engine-card:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .mc-engine-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mc-engine-name { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
-.mc-engine-where { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.mc-engine-where { font-size: 15px; color: var(--text-dim); white-space: nowrap; }
 .mc-engine-where::before { content: "\00b7\00a0"; }
 .mc-engine-dot {
   flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
   border: 2px solid var(--eng); background: transparent; opacity: 0.85;
 }
-.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12.5px; line-height: 1.25; }
+.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 15px; line-height: 1.25; }
 .mc-engine-state { flex: 0 0 auto; font-weight: 650; color: var(--text-dim); }
 .mc-engine-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .mc-engine-line:not([hidden])::before { content: "\00b7\00a0"; }
-.mc-engine-line[hidden] { display: none; }
+/* Two lines per card: who and where, then the state. The detail line echoed
+   her own words; it stays in the DOM (title, AI monitor) but is not shown. */
+.mc-engine-line, .mc-engine-line[hidden] { display: none; }
 
 .mc-engine-card[data-state="working"] { border-color: var(--eng); background: color-mix(in srgb, var(--eng) 9%, var(--panel)); }
 .mc-engine-card[data-state="working"] .mc-engine-dot,
 .mc-engine-card[data-state="done"] .mc-engine-dot { background: var(--eng); opacity: 1; }
 .mc-engine-card[data-state="working"] .mc-engine-state,
-.mc-engine-card[data-state="done"] .mc-engine-state { color: var(--eng); }
+.mc-engine-card[data-state="done"] .mc-engine-state { color: color-mix(in srgb, var(--eng) 70%, #000); }
 .mc-engine-card[data-state="working"] .mc-engine-line { color: var(--text); }
 .mc-engine-card[data-state="queued"] .mc-engine-dot { background: var(--action); border-color: var(--action); opacity: 1; }
-.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action); }
+.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action-fill); }
 .mc-engine-card[data-state="failed"] { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
 .mc-engine-card[data-state="failed"] .mc-engine-dot { background: var(--danger); border-color: var(--danger); opacity: 1; }
 .mc-engine-card[data-state="failed"] .mc-engine-state { color: var(--danger); }
@@ -1285,10 +1352,16 @@
 @keyframes mc-engine-flow { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @keyframes mc-engine-pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.7); } }
 
-.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
-.mc-engine-agents[hidden] { display: none; }
+.mc-engine-agents, .mc-engine-agents[hidden] { display: none; }
 @media (max-width: 1240px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
+/* 601-1240px: centred, the bar would run under the zoom controls; start it
+   right of them instead (zoom HUD is 16px + ~244px wide). */
+@media (min-width: 601px) and (max-width: 1240px) { .mc-engine-bar { left: 276px; transform: none; max-width: calc(100vw - 292px); } }
+/* Wide screens: clear of the zoom HUD (left) and the camera preview (right);
+   below 1241px the narrower cards above keep it from squeezing. */
+@media (min-width: 1241px) { .mc-engine-bar { max-width: max(680px, min(760px, calc(100vw - 600px))); } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
 @media (prefers-reduced-motion: reduce) {
@@ -1316,9 +1389,9 @@
   top: auto; left: auto; transform: none;
   right: 16px; bottom: calc(16px + 216px + 8px + env(safe-area-inset-bottom, 0px));
   max-width: 220px; padding: 5px 6px 5px 12px; gap: 4px; z-index: 71;
-  font-size: 13px; font-weight: 600; line-height: 1.2;
+  font-size: 15px; font-weight: 600; line-height: 1.2;
 }
-.mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
+.mc-canvas .mc-facing-banner-hide { font-size: 15px; min-height: 44px; min-width: 44px; padding: 4px 8px; }
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
   .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
@@ -1347,7 +1420,7 @@
 /* Plan board header: Check / 3D / DXF. >= 52px so a hand can dwell them. */
 .mc-plan-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .mc-plan-extra { min-height: 52px; min-width: 72px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: var(--panel, #fff); color: var(--text, #2B2B2B); font: 600 18px/1 system-ui, sans-serif; cursor: pointer; }
-.mc-plan-extra[aria-pressed="true"] { background: var(--accent, #6B8F71); color: #fff; border-color: var(--accent, #6B8F71); }
+.mc-plan-extra[aria-pressed="true"] { background: var(--accent-ink, #4F7356); color: #fff; border-color: var(--accent-ink, #4F7356); }
 .mc-plan-extra-status { flex: 1 1 200px; font: 500 16px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
 
 /* The AI monitor is a second-display tool: never offered on a phone. */
@@ -1367,8 +1440,8 @@
 .mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
   border-radius: 0 0 18px 18px; }
-.mc-next-src { font-size: 13px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
-.mc-next[data-source=nano] .mc-next-src { color: var(--accent); }
+.mc-next-src { font-size: 15px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.mc-next[data-source=nano] .mc-next-src { color: var(--accent-ink); }
 .mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
   border-color: var(--border); font-size: 18px; }
 .mc-next-chip.mc-btn:hover { border-color: var(--accent); }
@@ -1385,9 +1458,10 @@
 }
 .mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
 .mc-phone-simple .mc-join-pill:not([hidden]) {
-  display: inline-flex; position: fixed; z-index: 61; left: 16px;
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
+  max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-join-panel:not([hidden]) {
   display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
@@ -1418,21 +1492,21 @@
 .mc-phone-simple .mc-phone-hands-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
   /* Never reaches the centre mic (≈ 2 × 58px wide around the middle). */
   max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 /* iPhone: the Track pill (hand SENSING for the gimbal / pointing; never acts
    on the UI) sits just left of the Hands pill. */
 .mc-phone-track-pill { display: none; }
 .mc-phone-simple .mc-phone-track-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 112px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650;
 }
-.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
-.mc-paired-sub { font-size: 0.85em; color: var(--text-dim, inherit); }
+.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
+.mc-paired-sub { font-size: 15px; color: var(--text-dim, inherit); }
 /* Facing gate has the hands locked ("Face phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {
@@ -1441,26 +1515,29 @@
   display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
   bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
-  font-size: 12px; font-weight: 650; pointer-events: none;
+  font-size: 15px; font-weight: 650; pointer-events: none;
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
 
-/* ---- Button gestures (gestureControl.ts): yellow animated hand badges on
-   the bound buttons, only while Hands is on; the bound button fills while a
+/* ---- Button gestures (gestureControl.ts): amber 24px hand badges on the
+   bound buttons (top-right, -8px), only while Hands is on; the bound button fills while a
    2 s hold runs; a small HUD names what the held shape will press. */
 .mc-gesture-layer { position: fixed; inset: 0; pointer-events: none; z-index: 80; }
 .mc-gesture-layer[hidden], .mc-gesture-badge[hidden], .mc-gesture-hud[hidden] { display: none; }
-.mc-gesture-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center;
-  padding: 2px 3px 1px; border-radius: 8px; background: #2B2B2B; box-shadow: 0 1px 3px rgb(0 0 0 / 0.3); }
-.mc-gesture-badge .mc-gi { display: block; width: 22px; height: 22px; }
-.mc-gesture-side { font: 700 9px/1 system-ui, sans-serif; color: #FFC83D; letter-spacing: 0.02em; margin-top: 1px; }
+.mc-gesture-badge { position: absolute; left: 0; top: 0; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%;
+  display: grid; place-items: center; background: #F2C14E; border: 1.5px solid #9A5F1C; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  animation: mc-badge-in 400ms ease-out both; }
+.mc-gesture-badge .mc-gi { display: block; width: 18px; height: 18px; }
+/* Which hand (L, R, L+R): a small dark tab on the circle's lower-left edge. */
+.mc-gesture-side { position: absolute; left: -8px; bottom: -7px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 3px;
+  border-radius: 8px; background: #2B2B2B; color: #F2C14E; font: 700 11px/16px system-ui, sans-serif; text-align: center; white-space: nowrap; }
 .mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
-.mc-gi-thumbsUp .mc-gi-move, .mc-gi-thumbsDown .mc-gi-move { animation: mc-gi-thumb 1.8s ease-in-out infinite; }
-.mc-gi-one .mc-gi-move, .mc-gi-peace .mc-gi-move, .mc-gi-three .mc-gi-move { animation: mc-gi-raise 1.8s ease-in-out infinite; }
-.mc-gesture-badge.is-holding { background: #6B4E00; box-shadow: 0 0 0 3px #FFC83D; }
-.mc-gesture-badge.is-holding .mc-gi-move { animation-duration: 0.6s; }
-@keyframes mc-gi-thumb { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-1.5px) rotate(-6deg); } }
-@keyframes mc-gi-raise { 0%, 60%, 100% { transform: scaleY(1); } 30% { transform: scaleY(0.82); } }
+/* Holding its gesture: the badge darkens (the bound button fills, below). */
+.mc-gesture-badge.is-holding { background: #9A5F1C; box-shadow: 0 0 0 3px #F2C14E; }
+/* Appears once (scale 0.9 → 1 + fade, ≤ 600 ms), then stays still. The
+   placement transform is inline, so the entrance uses the separate scale. */
+@keyframes mc-badge-in { from { opacity: 0; scale: 0.9; } to { opacity: 1; scale: 1; } }
+@keyframes mc-badge-fade { from { opacity: 0; } to { opacity: 1; } }
 /* The bound button while its gesture is held: a yellow fill grows left to
    right with the 2 s hold, inside a ring that tightens toward done. */
 .mc-gesture-target { outline: 3px solid #E0A800; outline-offset: calc(6px - 4px * var(--mc-gesture-progress, 0));
@@ -1476,7 +1553,7 @@
 .mc-gesture-hud.is-none .mc-gesture-hud-bar { display: none; }
 @media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 15px; } }
 @media (prefers-reduced-motion: reduce) {
-  .mc-gi-move, .mc-gesture-badge.is-holding .mc-gi-move { animation: none; }
+  .mc-gesture-badge { animation: mc-badge-fade 400ms ease-out both; }
   .mc-gesture-pressed { scale: none; transition: none; }
 }
 /* "AI monitor" is the one named AI entry on the laptop bar: the in-app
@@ -1495,7 +1572,7 @@
   padding: 6px 14px 6px; border-radius: 14px; background: #2B2B2B; color: #FFFFFF; box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); white-space: nowrap; }
 .mc-highlight-label.below { translate: -50% 0; }
 .mc-highlight-name { font: 700 26px/1.15 system-ui, sans-serif; }
-.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 13px/1 system-ui, sans-serif; color: #FFC83D; }
+.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 15px/1 system-ui, sans-serif; color: #FFC83D; }
 .mc-highlight-how .mc-gi { width: 18px; height: 18px; }
 .mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
   border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }

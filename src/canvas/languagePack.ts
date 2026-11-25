@@ -46,7 +46,7 @@ export const EN_PACK: LanguagePack = {
   lang: 'en',
   strings: {
     showEverything: 'Show everything', newBoard: 'New board', save: 'Save', undo: 'Undo', ai: 'AI activity',
-    sayPlaceholder: 'Say: new board · show everything · go to floor plan',
+    sayPlaceholder: 'Type or say a command…',
     emptyLead: 'What would you like to build on this board?', emptyConnect: 'Connect this room', emptyFloorplan: 'Floor plan',
     keep: 'Keep', drop: 'Drop',
     tools: 'Tools', approve: 'Approve', reject: 'Reject', askElse: 'Something else',

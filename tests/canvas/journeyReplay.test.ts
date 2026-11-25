@@ -171,7 +171,8 @@ describe('the demo journey', () => {
       'connect', 'build', 'music', 'save', 'floorplan', 'check', '3d', 'kannada', 'undo', 'break',
       'offline', 'kannada-queued', 'online', 'goto-room', 'send', 'new-board', 'point', 'everything',
     ]);
-    expect(DEMO_JOURNEY.reduce((n, s) => n + (s.reviews ?? 0), 0)).toBe(6);
+    // "build the dashboard" is one review: Gemini improves Nano's draft before she sees it.
+    expect(DEMO_JOURNEY.reduce((n, s) => n + (s.reviews ?? 0), 0)).toBe(5);
   });
 
   it('says exactly what the next-step chips say', () => {

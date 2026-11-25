@@ -51,7 +51,7 @@ export interface ReplayStep {
 
 export const DEMO_JOURNEY: readonly ReplayStep[] = [
   { id: 'connect', label: 'Connect devices and make a dashboard', action: { kind: 'say', text: 'connect devices and make a dashboard' }, needsRoute: 'connectDevices', expect: /joined/ },
-  { id: 'build', label: 'Build the dashboard', chip: 'build-dashboard', action: { kind: 'say', text: 'build the dashboard' }, reviews: 2 },
+  { id: 'build', label: 'Build the dashboard', chip: 'build-dashboard', action: { kind: 'say', text: 'build the dashboard' }, reviews: 1 },
   { id: 'music', label: 'Play music', chip: 'play-music', action: { kind: 'say', text: 'play music' } },
   { id: 'save', label: 'Save', chip: 'save', action: { kind: 'say', text: 'save' }, expect: /^Saved/ },
   { id: 'floorplan', label: 'Draw the floor plan', chip: 'floorplan', action: { kind: 'say', text: 'draw the floor plan' }, reviews: 1 },
