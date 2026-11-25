@@ -43,6 +43,7 @@ import { magnetPull, tooltipTextFor } from '../ui/handHover';
 import { getGestureTrace, targetIdOf } from './gestureTrace';
 import { createEdgeGuard, isEdgeFrame, SCREEN_MARGIN_PX } from './handEdge';
 import { handLabelOf } from './handSpace';
+import { classifyHandShape, isFixedShape, stampedShape } from './handShape';
 import { fieldCaretAt } from '../input/caretAt';
 import { INDEX_TIP } from '../input/handLogic';
 import { classifyGesture, createPointFistGate, type Pt as GesturePt } from '../input/gestures';
@@ -328,6 +329,15 @@ export interface HandPointerOptions {
   /** Reach box (camera units → the full screen), read every frame. Default
    *  HAND_FEEL.reach (laptop); the phone shell passes phoneReach(aspect). */
   reach?: () => typeof REACH;
+  /** The open-palm highlight (palmHighlight.ts), given the frame time: while
+   *  it returns a control (it does only shortly after the palm last drove
+   *  it), that control is the target — no magnet, no own frame drawn — so a
+   *  fist tap (the backup click) presses what is highlighted. A control
+   *  directly under the raw point still wins over it. */
+  targetOverride?: (now: number) => HTMLElement | null;
+  /** Fixed button shapes (thumbs up / down…) veto fist starts and taps —
+   *  only while button gestures are on. Default: on. */
+  fixedShapeVeto?: () => boolean;
 }
 
 /** A fist closed this long (or moved HAND_FEEL.fistMovePx while closed)
@@ -381,6 +391,8 @@ interface SlotPointer extends HandPointer {
   rawPoint(): P;
   /** The control directly under a point (no magnet) — a fist over one never grabs. */
   controlAt(p: P): HTMLElement | null;
+  /** The current fist has shown a fixed button shape: it never taps or grabs. */
+  fixedInFist(): boolean;
   /** The plural pointer marks a slot that drives a running grab: its fist
    *  then only opens after the release grace (HAND_FEEL.releaseGrace*). */
   setGrabbing(on: boolean): void;
@@ -445,6 +457,9 @@ export interface HandPointer {
   /** Each tracked hand's palm mapped to the screen (unsmoothed) and its
    *  drawn cursor point (client px) — the glass-hand overlay anchors to it. */
   cursors?(): { palm: P; cursor: P }[];
+  /** The control directly under a tracked hand's raw point (no magnet) —
+   *  the hand nearest `near` (screen px) when two are tracked. */
+  directHit?(near?: P): HTMLElement | null;
 }
 
 function createOneHandPointer(doc: Document = document, opts: HandPointerOptions = {}): HandPointer {
@@ -526,6 +541,11 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let targetSince = 0;
   let lastMapped: P = { x: -1, y: -1 };
   let lastHandedness: string | null = null;
+  // The open-palm highlight owns the target this frame (opts.targetOverride).
+  let overridden = false;
+  /** This fist (closed or grabbing) has shown a fixed button shape. */
+  let fixedInFist = false;
+  let lastDirect: HTMLElement | null = null;
   // The gate only relabels (a fist needs a curled index); its point↔fist
   // time debounce is 0 here because the frame-counted fist hysteresis below
   // (fistCloseFrames / fistOpenFrames / release grace) replaces it — a quick
@@ -606,7 +626,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   // the fingertip instead of framing the whole screen.
   const isDismiss = (el: HTMLElement | null) => !!el && el.getAttribute?.('data-hand-dismiss') != null;
   function paint() {
-    if (target && !isDismiss(target)) {
+    if (target && !isDismiss(target) && !overridden) {
       const r = target.getBoundingClientRect();
       frame.hidden = false;
       frame.style.transform = `translate(${r.left - 4}px, ${r.top - 4}px)`;
@@ -635,7 +655,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   }
 
   function displayPoint(p: P): P {
-    if (fisted || !target || isDismiss(target)) return p;
+    if (fisted || !target || isDismiss(target) || overridden) return p;
     const r = target.getBoundingClientRect();
     return magnetPull(p, { x: r.left, y: r.top, width: r.width, height: r.height }, MAGNET_PULL);
   }
@@ -999,8 +1019,13 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // into focus); its title is a <button> and so a control like any other.
     // `live` is false for the pointAt() sim path: no lock there.
     const direct = rawInteractiveHit(p);
+    lastDirect = direct;
+    const offered = opts.targetOverride?.(clock || now()) ?? null;
+    const forced = offered && (!direct || direct === offered) ? offered : null;
+    overridden = !!forced;
     let next: HTMLElement | null;
-    if (direct) next = direct;
+    if (forced) next = forced;
+    else if (direct) next = direct;
     else if (live && target && !isDismiss(target) && lockHolds(target, p)) next = target;
     else next = snapNear(p);
     setTarget(next);
@@ -1091,7 +1116,20 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       // the release grace (releaseGraceMs AND releaseGraceFrames). At the
       // camera edge a grabbing hand stays closed (distorted landmarks).
       const aspect = opts.cameraAspect?.() ?? HAND_FEEL.cameraAspect;
-      const cs = curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
+      // A held button gesture (thumbs up / down — four fingers curled, thumb
+      // out) never STARTS a fist: no grab, no pan, no two-fist zoom. Once a
+      // fist is closed (or grabbing) a fixed shape is a HOLD state
+      // ('between'): it never opens the fist — so it is never the "open" end
+      // of a tap, and a thumb popping up mid-drag never drops the board — and
+      // a fist that shows a fixed shape is spent (fixedInFist: no tap, no
+      // grab). The frame's shared shape read is used when stamped.
+      // Only while button gestures are on (fixedShapeVeto).
+      const veto = opts.fixedShapeVeto?.() ?? true;
+      const shape = veto ? (stampedShape(h) ?? classifyHandShape(h as readonly { x: number; y: number; z?: number }[], undefined, null, { mirrored: false, cameraAspect: aspect }).shape) : undefined;
+      const fixed = veto && isFixedShape(shape);
+      const closedNow = fisted || grabbing || geoClosed;
+      if (fixed && closedNow) fixedInFist = true;
+      const cs = fixed ? (closedNow ? 'between' : 'open') : curlState(h as readonly { x: number; y: number; z?: number }[], { ...HAND_FEEL, cameraAspect: aspect });
       if (cs !== 'between') { geoClosed = cs === 'closed'; looseSince = -1; }
       else {
         // A loosened fist held half-open while grabbing counts as open
@@ -1111,6 +1149,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
           : openRun >= HAND_FEEL.fistOpenFrames;
         if (open) fisted = false; else releasing = grabbing;
       }
+      if (!fisted && !geoClosed) fixedInFist = false;
 
       let live: P;
       if (edge.atEdge || (edge.blockClicks(t) && wasEdge)) {
@@ -1137,6 +1176,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     isFisted: () => fisted,
     rawPoint: () => ({ ...pt }),
     controlAt: (p: P) => rawInteractiveHit(p),
+    directHit: () => (pt.x < 0 ? null : lastDirect),
+    fixedInFist: () => fixedInFist,
     cursorPoint: () => (pt.x < 0 ? { ...pt } : displayPoint(pt)),
     setGrabbing(on: boolean) { grabbing = on; if (!on) releasing = false; },
     fistTiming: () => ({ fistStart: fistStartT, openSince, openRun }),
@@ -1421,6 +1462,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         const m = slots[i].mappedPalm();
         if (t - s.closedAt >= HAND_FEEL.fistTapMs || Math.hypot(m.x - s.closeRaw.x, m.y - s.closeRaw.y) >= HAND_FEEL.fistMovePx) s.holding = true;
       }
+      // A fist that turned into a button gesture (thumbs up after closing)
+      // is spent: it never taps and never starts a grab. A grab it already
+      // drives keeps going.
+      const drives = !!grab && (grab.kind === 'zoom' || grab.slot === i);
+      if (fisted && slots[i].fixedInFist() && !drives) { s.spent = true; s.tapArmed = false; }
       s.wasFisted = fisted;
     }
   }
@@ -1523,6 +1569,16 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     },
     handsLocked: () => locked,
     cursors: () => [0, 1].filter((i) => active[i]).map((i) => ({ palm: slots[i].mappedPalm(), cursor: slots[i].cursorPoint() })),
+    directHit: (near?: P) => {
+      const live = [0, 1].filter((i) => active[i]);
+      if (!live.length) return null;
+      let i = live[0];
+      if (near && live.length === 2) {
+        const d = (k: number) => { const r = slots[k].rawPoint(); return Math.hypot(r.x - near.x, r.y - near.y); };
+        i = d(0) <= d(1) ? 0 : 1;
+      }
+      return slots[i].directHit?.() ?? null;
+    },
     clickTarget: () => locked ? false : (grab ? false : (slots[0].target ? slots[0].clickTarget() : slots[1].clickTarget())),
   };
 }

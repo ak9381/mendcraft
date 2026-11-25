@@ -56,7 +56,7 @@ const frame = (opts: { hands?: number; handGate?: boolean | null; face?: boolean
   facing: true, registered: false, paused: false, aspect: 640 / 480,
 });
 
-function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean; startGate?: Promise<void> } = {}) {
+function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error; locked?: () => boolean; startGate?: Promise<void>; gestures?: { read: ReturnType<typeof vi.fn>; frame: ReturnType<typeof vi.fn>; setActive: ReturnType<typeof vi.fn>; lost: ReturnType<typeof vi.fn> }; gesturesBlocked?: () => boolean; countsSuppressed?: () => boolean } = {}) {
   const getUserMedia = vi.fn(async () => { if (opts.gumFails) throw opts.gumFails; return fakeStream(); });
   let feed: ((f: PresenceFrame) => void) | null = null;
   let lost: (() => void) | null = null;
@@ -79,6 +79,7 @@ function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error
   const hands = mountPhoneHands(root as unknown as HTMLElement, {
     camera, pointer, reach: () => phoneReach(null), storage, say, overlay: false,
     locked: opts.locked, onAspect: (a) => aspects.push(a), now: () => 1000,
+    gestures: opts.gestures as never, gesturesBlocked: opts.gesturesBlocked, countsSuppressed: opts.countsSuppressed,
   });
   return {
     hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, timers,
@@ -373,5 +374,99 @@ describe('hand actions are not AI', () => {
     expect(css).toMatch(/\.mc-canvas \.hand-overlay \{[^}]*pointer-events: none/);
     expect(css).toMatch(/\.mc-hand-frame, \.mc-hand-cursor \{[^}]*pointer-events: none/);
     expect(css).toMatch(/\.mc-phone-simple \.mc-cam-on:not\(\[hidden\]\) \{[^}]*pointer-events: none/);
+  });
+});
+
+describe('phone button gestures (behind the Hands pill)', () => {
+  const stub = () => ({ read: vi.fn(), frame: vi.fn(), setActive: vi.fn(), lost: vi.fn() });
+
+  it('the pill turns the gesture layer on (only once the camera is live) and off', async () => {
+    const g = stub();
+    const s = setup({ gestures: g });
+    await flush();
+    expect(g.setActive).not.toHaveBeenCalledWith(true);
+    await s.hands.setOn(true);
+    expect(s.camera.status()).toBe('live');
+    expect(g.setActive).toHaveBeenLastCalledWith(true);
+    await s.hands.setOn(false);
+    expect(g.setActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it('frames reach the gestures (selfie space, labelled) with the facing gate and face x', async () => {
+    const g = stub();
+    const s = setup({ gestures: g });
+    await s.hands.setOn(true);
+    s.feed(frame({ handGate: true }));
+    expect(g.frame).toHaveBeenCalledTimes(1);
+    const [hands, , ctx] = g.frame.mock.calls[0];
+    expect(hands).toHaveLength(1);
+    expect(hands[0][0]).toEqual({ x: 0.3, y: 0.5 }); // NOT mirrored to camera space
+    expect((hands[0] as { label?: string }).label).toBe('Right');
+    expect(ctx).toMatchObject({ facing: true, faceX: 0.5, blocked: false });
+  });
+
+  it('blocked while the hands are gated (not facing) or the app says so', async () => {
+    const g = stub();
+    let busy = false;
+    const s = setup({ gestures: g, gesturesBlocked: () => busy });
+    await s.hands.setOn(true);
+    s.gate(true);
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].blocked).toBe(true);
+    s.gate(false); busy = true;
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].blocked).toBe(true);
+  });
+
+  it('the look-to-edit lock stops gestures (and cancels a hold)', async () => {
+    const g = stub();
+    let locked = false;
+    const s = setup({ gestures: g, locked: () => locked });
+    await s.hands.setOn(true);
+    locked = true;
+    s.feed(frame());
+    expect(g.frame).not.toHaveBeenCalled();
+    expect(g.lost).toHaveBeenCalled();
+  });
+
+  it('not live (camera still starting): badges stay off', async () => {
+    const g = stub();
+    let release!: () => void;
+    const s = setup({ gestures: g, startGate: new Promise<void>((r) => { release = r; }) });
+    void s.hands.setOn(true);
+    await flush();
+    expect(s.camera.status()).not.toBe('live');
+    expect(g.setActive).not.toHaveBeenCalledWith(true);
+    release();
+    await flush(); await flush();
+    expect(g.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it('the shared shape read runs before the pointer sees the frame', async () => {
+    const g = stub();
+    const s = setup({ gestures: g });
+    await s.hands.setOn(true);
+    s.feed(frame());
+    expect(g.read).toHaveBeenCalledTimes(1);
+    expect(g.read.mock.invocationCallOrder[0]).toBeLessThan(s.pointer.update.mock.invocationCallOrder[0]);
+  });
+
+  it('finger counts are suppressed on phones too while a point capture is armed', async () => {
+    const g = stub();
+    let pointing = true;
+    const s = setup({ gestures: g, countsSuppressed: () => pointing });
+    await s.hands.setOn(true);
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].suppressCounts).toBe(true);
+    pointing = false;
+    s.feed(frame());
+    expect(g.frame.mock.calls.at(-1)![2].suppressCounts).toBe(false);
+  });
+
+  it('off: no frames reach the gestures', async () => {
+    const g = stub();
+    const s = setup({ gestures: g });
+    s.feed(frame());
+    expect(g.frame).not.toHaveBeenCalled();
   });
 });

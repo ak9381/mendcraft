@@ -71,7 +71,13 @@ export function createCanvasHandsAdapter(
   function update(frame: { hands?: Array<{ points?: readonly Pt[] } | readonly Pt[]>; now: number }): void {
     const now = frame.now;
     const handList = frame.hands ?? [];
-    if (!handList.length) return;
+    if (!handList.length) {
+      // An EMPTY frame is news too: a held button gesture cancels and its
+      // light-up / highlight clear when the hand leaves (not on its return).
+      onEvent({ type: 'frame', hands: [], now });
+      palmHold.update(false, now);
+      return;
+    }
 
     const rawHands = handList.map(extractPoints);
     onEvent({ type: 'frame', hands: rawHands, now });
