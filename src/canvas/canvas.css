@@ -1285,8 +1285,7 @@
 .mc-engine-bar {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 48;
   display: flex; align-items: center; gap: 10px; box-sizing: border-box;
-  /* Clear of the zoom HUD (left) and the camera preview (right). */
-  max-width: min(760px, calc(100vw - 600px)); padding: 8px 14px 8px 8px;
+  max-width: calc(100vw - 32px); padding: 8px 14px 8px 8px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 22px;
   box-shadow: 0 10px 28px rgb(43 43 43 / 0.10), 0 1px 0 rgb(255 255 255 / 0.8) inset;
   font-size: 14px; color: var(--text);
@@ -1357,6 +1356,12 @@
 .mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
 .mc-engine-agents, .mc-engine-agents[hidden] { display: none; }
 @media (max-width: 1240px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
+/* 601-1240px: centred, the bar would run under the zoom controls; start it
+   right of them instead (zoom HUD is 16px + ~244px wide). */
+@media (min-width: 601px) and (max-width: 1240px) { .mc-engine-bar { left: 276px; transform: none; max-width: calc(100vw - 292px); } }
+/* Wide screens: clear of the zoom HUD (left) and the camera preview (right);
+   below 1241px the narrower cards above keep it from squeezing. */
+@media (min-width: 1241px) { .mc-engine-bar { max-width: max(680px, min(760px, calc(100vw - 600px))); } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
 @media (prefers-reduced-motion: reduce) {

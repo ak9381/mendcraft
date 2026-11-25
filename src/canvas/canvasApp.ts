@@ -433,7 +433,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
   // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
   const aiFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
-  const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true) });
+  const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true), sim: !!opts.sim });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
       // Only a failure opens the drawer by itself (the reason must be readable);
