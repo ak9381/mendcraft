@@ -7,6 +7,7 @@ import {
   advancePair,
   createCueLimiter,
   cryptoRandom,
+  GIMBAL_CUE_RECEIVE_GAP_MS,
   isGimbalCue,
   type GimbalCueKind,
   generateRoomToken,
@@ -62,8 +63,10 @@ export interface HostSession extends SessionBase {
   /** Ask the phone of `platform` to take the point-to-connect photo. */
   askSensePoint(platform: 'ios' | 'android'): Promise<void>;
   /** Ask the phones to play a DockKit body-language move (an allow-listed word,
-   *  no user content). At most one per GIMBAL_CUE_MIN_GAP_MS: resolves false
-   *  when dropped by the rate limit or not paired, true once published. */
+   *  no user content). At most one per GIMBAL_CUE_MIN_GAP_MS (a 'no' right
+   *  after a 'yes' may follow at once): resolves false when dropped by the rate
+   *  limit or not paired, true once published. A failed publish rejects and
+   *  does not start a gap. */
   sendGimbalCue(kind: GimbalCueKind): Promise<boolean>;
 }
 
@@ -187,6 +190,7 @@ export async function createHostSession(
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
   const cueLimiter = createCueLimiter(undefined, opts.now);
+  let cueInflight = false;
   // The most recent snapshot, re-sent whenever a /control dashboard announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -280,8 +284,16 @@ export async function createHostSession(
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'sensePoint', text: JSON.stringify({ platform }) } }),
     sendGimbalCue: async (kind) => {
       if (!isGimbalCue(kind) || core.state !== 'paired') return false;
-      if (!cueLimiter.allow()) return false;
-      await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalCue', text: kind } });
+      if (cueInflight || !cueLimiter.ready(kind)) return false;
+      // Stamp the gap only once the cue really went out: a failed publish
+      // doesn't block the next cue.
+      cueInflight = true;
+      try {
+        await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalCue', text: kind } });
+      } finally {
+        cueInflight = false;
+      }
+      cueLimiter.mark(kind);
       return true;
     },
     publishState,
@@ -305,8 +317,8 @@ export async function createGuestSession(
   let whoCb: (() => void) | null = null;
   let senseCb: ((platform: string) => void) | null = null;
   let cueCb: ((kind: GimbalCueKind) => void) | null = null;
-  // The receiver enforces the same ≤ 1 per 2 s, whatever the sender does.
-  const cueLimiter = createCueLimiter(undefined, opts.now);
+  // The receiver enforces its own gap (1.5 s, jitter-tolerant), whatever the sender does.
+  const cueLimiter = createCueLimiter(GIMBAL_CUE_RECEIVE_GAP_MS, opts.now);
   // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
   // still sees current state (same late-join contract as ControlSession).
   let lastSnapshot: ControlSnapshot | null = null;
@@ -340,7 +352,7 @@ export async function createGuestSession(
       if (platform) senseCb?.(platform);
     } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'gimbalCue') {
       const kind = msg.cmd.text;
-      if (isGimbalCue(kind) && cueCb && cueLimiter.allow()) cueCb(kind);
+      if (isGimbalCue(kind) && cueCb && cueLimiter.allow(kind)) cueCb(kind);
     } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createCueLimiter,
   GIMBAL_CUE_MIN_GAP_MS,
+  GIMBAL_CUE_RECEIVE_GAP_MS,
   GIMBAL_CUES,
   isGimbalCue,
   validateCommand,
@@ -55,6 +56,72 @@ describe('cue rate limit (≤ 1 per 2 s)', () => {
     t = 1999; expect(lim.allow()).toBe(false);
     t = 2000; expect(lim.allow()).toBe(true);
     t = 2500; expect(lim.allow()).toBe(false);
+  });
+
+  it("lets a 'no' straight after a 'yes' through, once", () => {
+    let t = 0;
+    const lim = createCueLimiter(GIMBAL_CUE_MIN_GAP_MS, () => t);
+    expect(lim.allow('yes')).toBe(true);
+    t = 100; expect(lim.allow('yes')).toBe(false);
+    t = 200; expect(lim.allow('no')).toBe(true);
+    t = 300; expect(lim.allow('no')).toBe(false);
+    t = 400; expect(lim.allow('wakeup')).toBe(false);
+    // 'no' after a non-yes cue is still limited.
+    t = 5000; expect(lim.allow('wakeup')).toBe(true);
+    t = 5100; expect(lim.allow('no')).toBe(false);
+  });
+
+  it('ready() does not stamp; mark() does', () => {
+    let t = 0;
+    const lim = createCueLimiter(GIMBAL_CUE_MIN_GAP_MS, () => t);
+    expect(lim.ready('yes')).toBe(true);
+    expect(lim.ready('yes')).toBe(true);
+    lim.mark('yes');
+    t = 10; expect(lim.ready('wakeup')).toBe(false);
+  });
+
+  it('receiver gap is 1.5 s (jitter-tolerant), sender 2 s', () => {
+    expect(GIMBAL_CUE_MIN_GAP_MS).toBe(2000);
+    expect(GIMBAL_CUE_RECEIVE_GAP_MS).toBe(1500);
+  });
+
+  it('sender stamps the gap only after a successful publish', async () => {
+    const tr = createFakeTransport();
+    let now = 0;
+    const host = await createHostSession(tr, seqRandom(), { now: () => now });
+    const guest = await createGuestSession(tr, host.token, { now: () => now });
+    const got: string[] = [];
+    guest.onGimbalCue((k) => got.push(k));
+    await flush();
+    const real = tr.publish.bind(tr);
+    const spy = vi.spyOn(tr, 'publish').mockRejectedValueOnce(new Error('offline'));
+    await expect(host.sendGimbalCue('yes')).rejects.toThrow('offline');
+    spy.mockImplementation(real);
+    now = 100;
+    expect(await host.sendGimbalCue('yes')).toBe(true); // not blocked by the failed one
+    await flush();
+    expect(got).toEqual(['yes']);
+    spy.mockRestore();
+    await guest.close();
+    await host.close();
+  });
+
+  it('receiver: a cue 1.6 s after the last is accepted (jitter); a yes then no arrives as both', async () => {
+    const tr = createFakeTransport();
+    let now = 0;
+    const host = await createHostSession(tr, seqRandom());
+    const guest = await createGuestSession(tr, host.token, { now: () => now });
+    const got: string[] = [];
+    guest.onGimbalCue((k) => got.push(k));
+    await flush();
+    const send = (text: string) => tr.publish(host.token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalCue', text } });
+    await send('wakeup'); await flush();
+    now = 1600; await send('yes'); await flush();
+    now = 1700; await send('no'); await flush();
+    now = 1800; await send('yes'); await flush();
+    expect(got).toEqual(['wakeup', 'yes', 'no']);
+    await guest.close();
+    await host.close();
   });
 
   it('host → guest: relayed, rate-limited on send, honoured only from the host', async () => {
@@ -165,9 +232,21 @@ describe('gimbalCanvas.gimbalCue', () => {
     const c = createGimbalCanvasController({ plugin: p, now: () => t });
     expect((await c.gimbalCue('yes')).ok).toBe(true);
     t = 1000;
-    expect(await c.gimbalCue('no')).toEqual({ ok: false, why: CUE_RATE_WHY });
+    expect(await c.gimbalCue('wakeup')).toEqual({ ok: false, why: CUE_RATE_WHY });
     t = 2100;
+    expect((await c.gimbalCue('wakeup')).ok).toBe(true);
+    expect(p.cue).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refusal right after an Approve still shakes (no bypasses the gap after yes)', async () => {
+    let t = 0;
+    const p = plugin();
+    const c = createGimbalCanvasController({ plugin: p, now: () => t });
+    expect((await c.gimbalCue('yes')).ok).toBe(true);
+    t = 300;
     expect((await c.gimbalCue('no')).ok).toBe(true);
+    t = 600;
+    expect((await c.gimbalCue('no')).ok).toBe(false); // the bypass is one-shot
     expect(p.cue).toHaveBeenCalledTimes(2);
   });
 
@@ -203,5 +282,14 @@ describe('wiring (source checks)', () => {
     expect(swift).toMatch(/acc\.animate\(motion: motion\)/);
     for (const m of ['.yes', '.no', '.wakeup']) expect(swift).toContain(`motion = ${m}`);
     expect(swift).toMatch(/withTimeout\(ms: 3000\)/);
+  });
+
+  it('native: a timeout cancels the animation Progress; overlapping moves restore the pre-pause state', () => {
+    expect(swift).toMatch(/if outcome == nil \{ box\.cancel\(\) \}/);
+    expect(swift).toMatch(/withTaskCancellationHandler/);
+    expect(swift).toMatch(/if movesInFlight == 0 \{ pausedFrom = DockAccessoryManager\.shared\.isSystemTrackingEnabled \}/);
+    expect(swift).toMatch(/let restoreOn = wanted \?\? pausedFrom \?\? false/);
+    // No move re-reads the live system value to decide its restore.
+    expect(swift).not.toMatch(/restoreOn = wanted \?\? DockAccessoryManager/);
   });
 });

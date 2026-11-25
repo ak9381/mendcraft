@@ -272,6 +272,22 @@ final class CameraKeepAlive {
     }
 }
 
+/// The animation's Progress, cancellable from the timeout. A Progress that
+/// arrives after cancel() is cancelled on arrival.
+final class ProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var progress: Progress?
+    private var cancelled = false
+    func set(_ p: Progress) {
+        lock.lock(); progress = p; let c = cancelled; lock.unlock()
+        if c { p.cancel() }
+    }
+    func cancel() {
+        lock.lock(); cancelled = true; let p = progress; lock.unlock()
+        p?.cancel()
+    }
+}
+
 /// Resolves a continuation exactly once (result vs timeout race).
 final class OnceGate: @unchecked Sendable {
     private let lock = NSLock()
@@ -294,6 +310,25 @@ actor DockWatcher {
     private var wanted: Bool?
     private var keepAliveWanted = false
     private var movesInFlight = 0
+    /// System-tracking state captured when the FIRST overlapping move paused it
+    /// (movesInFlight 0 → 1). Never re-read mid-move: by then it is our own
+    /// "off". Restored (unless the web layer chose) when the last move ends.
+    private var pausedFrom: Bool?
+
+    /// Start one move (aim / cue). Call endMove() exactly once after it.
+    private func beginMove() {
+        if movesInFlight == 0 { pausedFrom = DockAccessoryManager.shared.isSystemTrackingEnabled }
+        movesInFlight += 1
+    }
+
+    /// End one move; the last one out restores `wanted ?? pausedFrom`.
+    private func endMove() async {
+        movesInFlight = max(0, movesInFlight - 1)
+        guard movesInFlight == 0 else { return }
+        let restoreOn = wanted ?? pausedFrom ?? false
+        pausedFrom = nil
+        if restoreOn { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+    }
 
     nonisolated func start() {
         Task { await self.watch() }
@@ -372,24 +407,23 @@ actor DockWatcher {
 
     func aim(yaw: Double, pitch: Double, seconds: Double) async throws -> Bool {
         guard let acc = accessory else { return false }
-        movesInFlight += 1
-        defer { movesInFlight -= 1 }
-        // Off for this move only; the restore below puts the web layer's
-        // choice back once the last overlapping move has finished.
-        try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
+        // Off for this move only; endMove() puts the web layer's choice (or
+        // the pre-pause state) back once the last overlapping move finished.
+        beginMove()
         let target = Vector3D(x: pitch, y: yaw, z: 0)
         let ms = Int64(max(0.3, min(4.0, seconds)) * 1000)
         do {
+            try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
             // setOrientation returns a Progress when the move STARTS: wait for
             // it to finish (or its duration + a margin) before tracking is
             // restored and the web layer may send the next move.
             let progress = try await acc.setOrientation(target, duration: .milliseconds(ms), relative: true)
             await DockWatcher.waitForMove(progress, maxMs: ms + 400)
         } catch {
-            if movesInFlight == 1, wanted == true { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+            await endMove()
             throw error
         }
-        if movesInFlight == 1, wanted == true { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+        await endMove()
         return true
     }
 
@@ -404,19 +438,27 @@ actor DockWatcher {
         case "wakeup": motion = .wakeup
         default: return ["ok": false, "reason": "Unknown cue"]
         }
-        // Put back what the web layer chose, or (never chose) what DockKit had.
-        let restoreOn = wanted ?? DockAccessoryManager.shared.isSystemTrackingEnabled
-        movesInFlight += 1
-        defer { movesInFlight -= 1 }
+        // Tracking paused for the animation; endMove() restores what the web
+        // layer chose, or (never chose) what DockKit had before the first pause.
+        beginMove()
         var result: [String: Any]
+        // Holds the animation's Progress so a timeout can cancel it.
+        let box = ProgressBox()
         do {
             try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
             // animate() returns a Progress; whole thing bounded by 3 s.
             let outcome = try await DockWatcher.withTimeout(ms: 3000) {
-                let progress = try await acc.animate(motion: motion)
-                await DockWatcher.waitForMove(progress, maxMs: 2800)
-                return !progress.isCancelled
+                try await withTaskCancellationHandler {
+                    let progress = try await acc.animate(motion: motion)
+                    box.set(progress)
+                    await DockWatcher.waitForMove(progress, maxMs: 2800)
+                    return !progress.isCancelled
+                } onCancel: {
+                    box.cancel()
+                }
             }
+            // Timed out: stop the animation before tracking is restored.
+            if outcome == nil { box.cancel() }
             switch outcome {
             case .some(true): result = ["ok": true]
             case .some(false): result = ["ok": false, "reason": "The gimbal animation was cancelled"]
@@ -425,7 +467,7 @@ actor DockWatcher {
         } catch {
             result = ["ok": false, "reason": error.localizedDescription]
         }
-        if movesInFlight == 1, restoreOn { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+        await endMove()
         return result
     }
 

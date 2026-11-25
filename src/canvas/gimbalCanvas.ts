@@ -309,7 +309,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       if (!plugin) return { ok: false, why: NO_GIMBAL_WHY };
       if (!plugin.cue) return { ok: false, why: CUE_OLD_BUILD_WHY };
       if (!(await checkPlugin())) return { ok: false, why: why() };
-      if (!cueLimiter.allow()) return { ok: false, why: CUE_RATE_WHY };
+      if (!cueLimiter.allow(kind)) return { ok: false, why: CUE_RATE_WHY };
       try {
         const r = await plugin.cue({ kind });
         if (r?.ok === true) return { ok: true, status: CUE_STATUS[kind] };

@@ -196,20 +196,39 @@ export type RelayCommandKind =
 /** The only DockKit animations the laptop may ask for (no user content). */
 export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
 export const GIMBAL_CUES: readonly GimbalCueKind[] = ['yes', 'no', 'wakeup'];
-/** At most one gimbal cue per this many ms (sender and receiver both enforce). */
+/** At most one gimbal cue per this many ms (the sender's gate). */
 export const GIMBAL_CUE_MIN_GAP_MS = 2000;
+/** The receiver's gate: a little shorter, so relay jitter between two cues
+ *  the sender spaced 2 s apart never drops a valid one. */
+export const GIMBAL_CUE_RECEIVE_GAP_MS = 1500;
 export function isGimbalCue(v: unknown): v is GimbalCueKind {
   return typeof v === 'string' && (GIMBAL_CUES as readonly string[]).includes(v);
 }
 
-/** A "≤ 1 per minGapMs" gate. allow() returns true and starts a new gap, or false (drop). */
-export function createCueLimiter(minGapMs = GIMBAL_CUE_MIN_GAP_MS, now: () => number = () => Date.now()): { allow(): boolean } {
+export interface CueLimiter {
+  /** Would `kind` pass now? Doesn't stamp. */
+  ready(kind?: GimbalCueKind): boolean;
+  /** Record that `kind` was sent/played now. */
+  mark(kind?: GimbalCueKind): void;
+  /** ready + mark in one step: true = go, false = drop. */
+  allow(kind?: GimbalCueKind): boolean;
+}
+
+/** A "<= 1 per minGapMs" gate. One exception: a 'no' right after a 'yes'
+ *  (a refusal straight after an Approve) is let through once; the gap
+ *  restarts from it. */
+export function createCueLimiter(minGapMs = GIMBAL_CUE_MIN_GAP_MS, now: () => number = () => Date.now()): CueLimiter {
   let last = -Infinity;
+  let lastKind: GimbalCueKind | null = null;
+  const ready = (kind?: GimbalCueKind): boolean =>
+    now() - last >= minGapMs || (kind === 'no' && lastKind === 'yes');
+  const mark = (kind?: GimbalCueKind): void => { last = now(); lastKind = kind ?? null; };
   return {
-    allow() {
-      const t = now();
-      if (t - last < minGapMs) return false;
-      last = t;
+    ready,
+    mark,
+    allow(kind) {
+      if (!ready(kind)) return false;
+      mark(kind);
       return true;
     },
   };
