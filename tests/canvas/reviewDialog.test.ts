@@ -186,7 +186,7 @@ describe('mountReviewDialog', () => {
     const r = root as unknown as FakeEl;
     const list = r.querySelector('.mc-review-plan-list') as FakeEl;
     expect(list.children.map((li) => li.className)).toEqual(['mc-review-change is-change', 'mc-review-change is-add', 'mc-review-change is-remove']);
-    expect(list.children.map((li) => li.children[0].textContent)).toEqual(['~', '+', '−']);
+    expect(list.children.map((li) => li.children[0].textContent)).toEqual(['Rename', 'Add', 'Remove']);
     expect((r.querySelector('.mc-review-engine') as FakeEl).textContent).toBe('Gemini · cloud');
     expect((r.querySelector('.mc-review-sim') as FakeEl).hidden).toBe(false);
     expect((r.querySelector('.mc-review-asked') as FakeEl).textContent).toBe('You asked: “make it better”');

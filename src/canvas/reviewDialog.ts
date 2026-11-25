@@ -193,8 +193,12 @@ export function honestyLines(facts: ReviewFacts): { why: string | null; left: st
   return { why, left: leftWhat + leftBytes, leftWhat, leftBytes };
 }
 
-const OP_SIGN: Record<PlanChange['op'], string> = { add: '+', change: '~', remove: '−' };
 const OP_WORD: Record<PlanChange['op'], string> = { add: 'Add', change: 'Change', remove: 'Remove' };
+/** The word on a plan line's badge: "Rename" for a name change, else Add / Change / Remove. */
+export function opWord(c: Pick<PlanChange, 'op' | 'detail'>): string {
+  if (c.op === 'change' && /^renamed\b|→/.test(c.detail ?? '')) return 'Rename';
+  return OP_WORD[c.op];
+}
 
 function btn(doc: Document, cls: string, label: string, onClick: () => void, i18n?: string): HTMLButtonElement {
   const b = doc.createElement('button');
@@ -224,6 +228,9 @@ export function mountReviewDialog(
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'false');
   dialog.setAttribute('aria-labelledby', 'mc-review-title');
+  // Opening focuses the window itself, not Approve: no focus ring sits on
+  // the primary button before anyone chose it; Tab reaches it next.
+  dialog.tabIndex = -1;
   dialog.hidden = true;
 
   const head = el(doc, 'div', 'mc-review-head');
@@ -413,8 +420,8 @@ export function mountReviewDialog(
     for (const c of changes) {
       const none = c.label === NO_VISIBLE_CHANGE;
       const li = el(doc, 'li', `mc-review-change is-${none ? 'none' : c.op}`);
-      const badge = el(doc, 'span', 'mc-review-op', none ? '=' : OP_SIGN[c.op]);
-      badge.setAttribute('aria-label', none ? 'No change' : OP_WORD[c.op]);
+      const badge = el(doc, 'span', 'mc-review-op', none ? 'Same' : opWord(c));
+      if (none) badge.setAttribute('aria-label', 'No change');
       const text = el(doc, 'span', 'mc-review-change-text');
       text.append(el(doc, 'span', 'mc-review-change-label', c.label));
       if (c.detail) text.append(el(doc, 'span', 'mc-review-change-detail', c.detail));
@@ -480,7 +487,7 @@ export function mountReviewDialog(
       open = true;
       planSec.scrollTop = 0;
       lastFocused = (doc.activeElement as HTMLElement) ?? null;
-      approveBtn.focus();
+      (typeof dialog.focus === 'function' ? dialog : approveBtn).focus();
     },
     close,
     isOpen() { return open; },

@@ -654,6 +654,7 @@
    footer, and big Approve / Reject / Ask-else that never scroll away.
    Fist-grab or mouse-drag the title bar to move it; drag the bottom-right
    corner to resize it (420×320 … 80vw×85vh, remembered). */
+.mc-review-dialog:focus { outline: none; }
 .mc-review-dialog { position: fixed; z-index: 50; inset: auto;
   top: calc(var(--mc-bar-h, 64px) + 24px);
   right: calc(min(var(--mc-ai-w, 320px), 340px) + 70px);
@@ -698,13 +699,13 @@
 /* THE PLAN — the visual centre, and the only part that scrolls. */
 .mc-review-plan { flex: 1 1 auto; min-height: 72px; overflow: auto; overscroll-behavior: contain;
   background: #FFFFFF; border: 1px solid var(--border, #E4E0D8); border-radius: 14px; padding: 12px 16px 14px; }
-.mc-review-plan-head { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #8A857D; }
+.mc-review-plan-head { margin: 0 0 6px; font-size: 15px; font-weight: 650; color: #6E6A63; }
 .mc-review-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .mc-review-plan-list[hidden] { display: none; }
 .mc-review-change { display: flex; align-items: flex-start; gap: 14px; padding: 10px 0; border-top: 1px solid #F0ECE4; }
 .mc-review-change:first-child { border-top: 0; }
-.mc-review-op { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-  font-size: 20px; font-weight: 700; line-height: 1; margin-top: 1px; }
+.mc-review-op { flex: 0 0 auto; min-width: 76px; height: 28px; padding: 0 8px; box-sizing: border-box; border-radius: 8px; display: grid; place-items: center;
+  font-size: 15px; font-weight: 650; line-height: 1; margin-top: 1px; }
 .mc-review-change.is-add .mc-review-op { background: rgb(107 143 113 / 0.18); color: #3D6145; }
 .mc-review-change.is-change .mc-review-op { background: rgb(201 139 60 / 0.18); color: #855419; }
 .mc-review-change.is-remove .mc-review-op { background: rgb(181 69 58 / 0.14); color: #973A30; }
@@ -724,7 +725,7 @@
 .mc-review-card-host .mc-proposal-actions { display: none; }
 .mc-review-more { margin-top: 10px; font-size: 14px; color: #6E6A63; }
 .mc-review-more[hidden] { display: none; }
-.mc-review-more > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-weight: 600; }
+.mc-review-more > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
 .mc-review-extra:empty { display: none; }
 /* Honesty footer: why this engine, and exactly what left this device. */
 .mc-review-honesty { flex: 0 0 auto; margin: 12px 2px 0; display: flex; flex-direction: column; gap: 2px; }
@@ -757,8 +758,8 @@
   background: transparent; border-color: transparent; color: #6E6A63; }
 .mc-review-close:hover { background: #F1EEE6; }
 /* Bottom-right resize grip — a [data-mc-resize-handle], so mouse, touch and
-   the hand's pinch-drag all work. 28px hit area for a less-precise hand. */
-.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 28px; height: 28px; z-index: 3;
+   the hand's pinch-drag all work. 44px hit area for a less-precise hand. */
+.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 44px; height: 44px; z-index: 3;
   cursor: nwse-resize; touch-action: none; border-bottom-right-radius: 18px;
   background:
     linear-gradient(135deg, transparent 0 52%, #A39D92 52% 58%, transparent 58% 68%, #A39D92 68% 74%, transparent 74%); }
@@ -1222,8 +1223,10 @@
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
   top: calc(10px + env(safe-area-inset-top, 0px));
   padding: 5px 12px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
-  font-size: 13px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
+  font-size: 15px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
 }
+/* The open review carries its own engine + SIM chips; the badge would sit on its title. */
+.mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-route-badge { display: none; }
 .mc-look-hint {
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); margin: 0;
   bottom: calc(124px + env(safe-area-inset-bottom, 0px));

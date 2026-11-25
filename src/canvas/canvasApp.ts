@@ -1587,31 +1587,68 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
-  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string): Promise<boolean> {
+  /** Stream one model turn into the ghost; the plan and its ledger receipt,
+   *  or null (failed / cancelled — the reason was already said). */
+  async function streamTurn(frameId: string, engineId: EngineId, utterance: string, script: string, task: SwarmTask, goal: string | undefined,
+    current: SurfacePlan | null, retry: () => void): Promise<{ plan: SurfacePlan; si: SentInfo } | null> {
+    const f = reg.get(frameId); if (!f) return null;
+    const engine = engineFor(engineId, script.replace('BOARD', frameId));
+    let sentInfo: SentInfo | null = null;
+    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current }, engine, {
+      onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
+      onFallback: aiFellBack,
+      onGhost: (g) => ghost(frameId, g),
+      onNote: (note) => {
+        const state = aiPanel.querySelector('.mc-ai-state');
+        if (state) state.textContent = note;
+      },
+      onError: (why) => {
+        settleSwarm();
+        panels.forEngine(engineId).fail(why);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+        offerRetry(retry);
+      },
+    }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
+    const si = sentInfo as SentInfo | null;
+    return plan && si ? { plan, si } : null;
+  }
+
+  interface TurnDraft { plan: SurfacePlan; si: SentInfo; summary: string; status: ProposalStatus }
+  /** `improve`: this turn improves an unreviewed draft (its plan is the
+   *  model's starting point). If the turn fails, the draft itself goes to
+   *  review — one request, one review, whichever engine finished it. */
+  async function aiTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string, improve?: TurnDraft): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
     try {
-      const f = reg.get(frameId); if (!f) return false;
-      const engine = engineFor(engineId, script.replace('BOARD', frameId));
-      let sentInfo: SentInfo | null = null;
-      const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current: surfaces[frameId] ?? null }, engine, {
-        onSent: (s) => { sentInfo = s; aiSent(utterance, s, { task, tileCount: surfaces[frameId]?.tiles.length }); },
-        onFallback: aiFellBack,
-        onGhost: (g) => ghost(frameId, g),
-        onNote: (note) => {
-          const state = aiPanel.querySelector('.mc-ai-state');
-          if (state) state.textContent = note;
-        },
-        onError: (why) => {
-          settleSwarm();
-          panels.forEngine(engineId).fail(why);
-          aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
-          offerRetry(() => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });
-        },
-      }, { deviceIdSession, isCancelled: () => engineId === 'gemini' && !net.isOnline() }));
-      if (!plan || !sentInfo) { settleSwarm(); ghost(frameId, null); return false; }
-      return await proposePlan(frameId, utterance, plan, sentInfo, summary, status);
+      if (!reg.get(frameId)) return false;
+      const out = await streamTurn(frameId, engineId, utterance, script, task, goal, improve ? improve.plan : surfaces[frameId] ?? null,
+        () => { void aiTurn(frameId, engineId, utterance, script, summary, status, task, goal); });
+      if (!out) {
+        settleSwarm(); ghost(frameId, null);
+        return improve ? await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status) : false;
+      }
+      return await proposePlan(frameId, utterance, out.plan, out.si, summary, status);
     } finally { turnBusy = false; settleEngines(); autoHideAi(); }
+  }
+
+  /** A quick on-device draft that is NOT reviewed on its own: the next
+   *  (Gemini) turn improves it and the person reviews the result once. */
+  async function draftTurn(frameId: string, engineId: EngineId, utterance: string, script: string, summary: string, status: ProposalStatus): Promise<TurnDraft | null> {
+    if (turnBusy) return null;
+    turnBusy = true;
+    try {
+      if (!reg.get(frameId)) return null;
+      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', undefined, surfaces[frameId] ?? null,
+        () => { void connectRoom(frameId, utterance); });
+      await holdSwarmMinimum();
+      settleSwarm();
+      if (!out) { ghost(frameId, null); return null; }
+      const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
+      if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
+      panels.forEngine(out.si.engine).log('done', `draft: ${out.plan.tiles.length} tile${out.plan.tiles.length === 1 ? '' : 's'}, not shown for review yet`);
+      return { ...out, summary, status };
+    } finally { turnBusy = false; settleEngines(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
@@ -1692,7 +1729,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, 'Draft: 2 lamps found in this room', 'guess');
+    const DRAFT = 'Draft: 2 lamps found in this room';
+    if (net.isOnline()) {
+      // One request, one review: Nano drafts on this device (shown in the
+      // ghost, not reviewed on its own), Gemini improves that draft, and the
+      // person approves the result once. The review's footer names Gemini
+      // and what it sent; the draft itself sent nothing.
+      const draft = await draftTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, DRAFT, 'guess');
+      if (!draft) return;
+      panels.showHandoff('nano', 'group the lights and add a room plan');
+      // Tell Deep what the handoff line promises (only in the prompt; her card
+      // still shows her own words) — without it the live model never added the
+      // room plan: 0/3 → 7/7 boards with it (live-build study).
+      await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, 'Room dashboard: grouped lights + a room plan', 'changed', 'dashboard', DEEP_ROOM_GOAL, draft);
+      return;
+    }
+    const kept = await aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, DRAFT, 'guess');
     if (!kept) return;
     if (!net.isOnline()) { // offline: Deep can't improve it; keep the on-device draft
       panels.forEngine('nano').log('note', ROUTE_LINES.offline);
