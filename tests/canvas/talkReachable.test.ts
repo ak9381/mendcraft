@@ -134,13 +134,13 @@ describe('hand cluster sits mid-screen on the right, clear of the tools bar', ()
     expect(chip).toContain('top: auto');
     expect(chip).toMatch(/right:\s*16px/);
     expect(chip).toMatch(/bottom:\s*calc\(16px/);
-    expect(chip).toMatch(/max-width:\s*300px/);
-    // Readable on camera: ≥20px pill text, a ≥200×150 face chip.
-    expect(chip).toMatch(/font-size:\s*20px/);
+    expect(chip).toMatch(/max-width:\s*220px/);
+    // Quiet small pill (13px); a large 288×216 camera preview.
+    expect(chip).toMatch(/font-size:\s*13px/);
     const face = canvasCss.match(/\.mc-canvas \.mc-face-preview \{[^}]*\}/)?.[0] ?? '';
     expect(face).toMatch(/right:\s*16px/);
-    expect(face).toMatch(/width:\s*200px/);
-    expect(face).toMatch(/height:\s*150px/);
+    expect(face).toMatch(/width:\s*288px/);
+    expect(face).toMatch(/height:\s*216px/);
     // …and lifted above the bottom-centre engine bar on narrower screens.
     expect(canvasCss).toMatch(/@media \(max-width: 1240px\)[^@]*\.mc-canvas \.mc-face-preview \{ bottom: calc\(96px/);
     expect(ruleFor(canvasCss, '.mc-facing-banner-hide')).toContain('pointer-events: auto');

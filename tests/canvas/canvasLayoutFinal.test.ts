@@ -77,8 +77,8 @@ describe('hosting rewrites (C7)', () => {
 describe('corner chip + Facing pill never sit on the AI panel (C1); phone pill clears the mic (C2)', () => {
   const css = readFileSync('src/canvas/canvas.css', 'utf8');
   it('the AI panel foot rises above the chip and the pill while they show', () => {
-    expect(css).toContain('.mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(176px');
-    expect(css).toContain('.mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(246px');
+    expect(css).toContain('.mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(242px');
+    expect(css).toContain('.mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(290px');
   });
   it('the phone Hands pill is short and capped beside the centre mic', async () => {
     const { PHONE_HANDS_FACE_LINE } = await import('../../src/canvas/phoneHands');

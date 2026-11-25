@@ -1305,40 +1305,34 @@
   .mc-canvas:has(.mc-engine-bar) .mc-ai { bottom: 148px; }
 }
 
-/* Face preview + "Facing" pill: a small chip in the bottom-right corner. */
+/* Face preview (large, so you can see your hands) + a SMALL quiet "Facing" pill above it. */
 .mc-canvas .mc-face-preview {
   top: auto; left: auto; transform: none;
   right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  /* Big enough to read at a glance while gesturing at the camera. */
-  width: 200px; height: 150px; border-radius: 14px; opacity: 1; z-index: 70;
-  border: 3px solid #ffffff; box-shadow: 0 0 0 2px #0b0f14, 0 10px 24px rgb(0 0 0 / 0.35);
+  width: 288px; height: 216px; border-radius: 12px; opacity: 1; z-index: 70;
+  border: 1px solid rgb(0 0 0 / 0.12); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
 }
 .mc-canvas .mc-facing-banner {
   top: auto; left: auto; transform: none;
-  right: 16px; bottom: calc(16px + 150px + 10px + env(safe-area-inset-bottom, 0px));
-  max-width: 300px; padding: 10px 10px 10px 18px; gap: 8px; z-index: 71;
-  font-size: 20px; font-weight: 700; line-height: 1.2;
-  background: #0b0f14; color: #ffffff; border: 2px solid #ffffff;
-  box-shadow: 0 0 0 2px #0b0f14, 0 10px 24px rgb(0 0 0 / 0.35);
+  right: 16px; bottom: calc(16px + 216px + 8px + env(safe-area-inset-bottom, 0px));
+  max-width: 220px; padding: 5px 6px 5px 12px; gap: 4px; z-index: 71;
+  font-size: 13px; font-weight: 600; line-height: 1.2;
 }
-.mc-canvas .mc-facing-banner.is-facing { background: #0f5132; }
-.mc-canvas .mc-facing-banner.is-away { background: #8a2c0d; }
-.mc-canvas .mc-facing-banner-hide { font-size: 16px; font-weight: 700; min-height: 36px; padding: 6px 10px; }
+.mc-canvas .mc-facing-banner-hide { font-size: 12px; min-height: 28px; padding: 4px 8px; }
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
   .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas .mc-facing-banner { bottom: calc(96px + 150px + 10px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas .mc-facing-banner { bottom: calc(96px + 216px + 8px + env(safe-area-inset-bottom, 0px)); }
 }
-/* The chip + pill own the bottom-right corner: while they show, the AI
-   panel's foot (and its ledger) stops 10px above them instead of under them.
-   chip = 16 + 150; pill = chip + 10 + 60 (its 36px button + padding/border). */
+/* The chip + pill own the bottom-right corner: the AI panel's foot stops above them.
+   chip = 16 + 216; pill = chip + 8 + ~38. */
 @media (min-width: 601px) {
-  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(176px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(246px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(242px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(290px + env(safe-area-inset-bottom, 0px)); }
 }
 @media (min-width: 601px) and (max-width: 1240px) {
-  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(256px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(326px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(322px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(370px + env(safe-area-inset-bottom, 0px)); }
 }
 /* Hands locked while not facing the screen: dimmed cursor + a small hint. */
 .mc-hand-cursor.is-away { opacity: 0.35; filter: grayscale(1); }
