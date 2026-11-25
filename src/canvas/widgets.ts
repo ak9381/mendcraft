@@ -47,7 +47,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     .state { font-variant-numeric: tabular-nums; }
     button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
     .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
     .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
     .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
@@ -234,7 +234,7 @@ export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
     .state { font-variant-numeric: tabular-nums; }
     button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
     .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
     .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
     .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
@@ -275,7 +275,7 @@ export class SwitchTileElement extends A2uiLitElement<typeof SwitchTileApi> {
     .state { font-variant-numeric: tabular-nums; }
     button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
     .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
   `;
   override render() {
@@ -308,7 +308,7 @@ export class SceneTileElement extends A2uiLitElement<typeof SceneTileApi> {
     .state { font-variant-numeric: tabular-nums; }
     button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
   `;
   override render() {
     const p = this.controller?.props;
@@ -333,7 +333,7 @@ export class ConnectTileElement extends A2uiLitElement<typeof ConnectTileApi> {
     :host { display: block; }
     .tile { border: 2px dashed var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel-2, #F1EEE6); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); align-content: center; justify-items: start; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    button { font: inherit; min-height: 64px; min-width: 140px; border-radius: 12px; border: 2px solid var(--action, #C98B3C); background: var(--action, #C98B3C); color: #FFFFFF; cursor: pointer; }
+    button { font: inherit; min-height: 64px; min-width: 140px; border-radius: 12px; border: 2px solid var(--action-fill, #9A5F1C); background: var(--action-fill, #9A5F1C); color: #FFFFFF; cursor: pointer; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
   `;
   override render() {
@@ -580,7 +580,7 @@ export class FormTileElement extends A2uiLitElement<typeof FormTileApi> {
     input[type="checkbox"] { width: 24px; height: 24px; }
     button { font: inherit; min-height: 56px; min-width: 100px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button.choice.active { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.12); }
-    button.primary { background: var(--action, #C98B3C); border-color: var(--action, #C98B3C); color: #FFFFFF; }
+    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
     button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
   `;
   private valueFor(f: FormField): boolean | number | string {

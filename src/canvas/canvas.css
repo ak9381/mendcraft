@@ -18,6 +18,11 @@
      for the one primary action a tile offers, a muted warm red for errors —
      never the old dark-theme's periwinkle/coral/mint literals. */
   --action: #C98B3C;
+  /* Contrast-safe pair (WCAG 4.5:1+): white text on --action-fill is 5.2:1
+     (white on --action is only 2.9:1); --accent-ink is sage for TEXT on
+     paper (5.4:1), --accent stays for borders, dots and fills. */
+  --action-fill: #9A5F1C;
+  --accent-ink: #4F7356;
   --danger: #B5453A;
   --a2ui-color-on-background: var(--text);
   --a2ui-color-background: transparent;
@@ -93,7 +98,7 @@
    tappable in Edit mode. */
 .mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 13px; }
 .mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.mc-edit-toggle[aria-pressed=true] { background: var(--action); border-color: var(--action); color: #FFFFFF; }
+.mc-edit-toggle[aria-pressed=true] { background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
 /* A greyed Edit on an empty canvas reads as broken on camera: hide it until there is a board to edit. */
 .mc-edit-toggle:disabled { display: none; }
 /* Cluster owns placement — do not set `right` on these chips when the AI drawer is open. */
@@ -343,7 +348,7 @@
 .mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
 .mc-dock-surface { display: grid; gap: 12px; }
-.mc-btn[aria-pressed=true] { border-color: var(--accent); background: var(--panel-2); color: var(--accent); }
+.mc-btn[aria-pressed=true] { border-color: var(--accent-ink); background: var(--panel-2); color: var(--accent-ink); }
 .mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
 .mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 40px; font-size: 14px; padding: 4px 10px; }
 
@@ -439,7 +444,7 @@
 .mc-pair-code {
   font-size: 24px;
   letter-spacing: 0.08em;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 .mc-connect-status, .mc-pair-status {
   font-size: 16px;
@@ -608,7 +613,7 @@
   border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-tools-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
-.mc-tools-chip[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+.mc-tools-chip[aria-expanded=true] { border-color: var(--accent-ink); color: var(--accent-ink); }
 /* Cluster owns Tools placement when the AI drawer is open. */
 @media (max-width: 600px) { .mc-tools-chip { display: none; } }
 
@@ -738,7 +743,7 @@
   padding: 0 24px; box-sizing: border-box; border-radius: 14px;
   white-space: nowrap; /* a label never wraps inside its button */
 }
-.mc-review-approve { flex: 1.4 1 0; background: #C98B3C; color: #FFFFFF; border-color: #C98B3C; }
+.mc-review-approve { flex: 1.4 1 0; background: var(--action-fill, #9A5F1C); color: #FFFFFF; border-color: var(--action-fill, #9A5F1C); }
 .mc-review-reject { flex: 1 1 0; background: #FFFFFF; }
 .mc-review-ask-else { flex: 1 1 100%; min-height: 56px; background: transparent; border-color: #D8D2C6; color: #4A4640; }
 /* Wide enough: all three decisions on one row. */
@@ -770,7 +775,7 @@
    blank-canvas CTA open a full-viewport scan overlay with a progress ring and
    step checklist, so owner face+hands registration reads as one clear flow. */
 .mc-register-chip { position: fixed; z-index: 40; right: 24px; bottom: 236px; min-height: 52px; padding: 0 20px;
-  border-radius: 999px; border: 2px solid var(--action); background: var(--action); color: #FFFFFF;
+  border-radius: 999px; border: 2px solid var(--action-fill); background: var(--action-fill); color: #FFFFFF;
   font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
 .mc-register-chip:hover { filter: brightness(0.95); }
 .mc-register-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
@@ -779,7 +784,7 @@
 
 .mc-blank .mc-blank-register { pointer-events: auto; justify-self: center; margin-top: 10px;
   min-height: 56px; padding: 0 30px; font-size: 17px; font-weight: 600; border-radius: 999px;
-  background: var(--action); border-color: var(--action); color: #FFFFFF; }
+  background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
 
 .mc-scan { position: fixed; inset: 0; z-index: 90; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
 .mc-scan[hidden] { display: none; }
@@ -1271,10 +1276,10 @@
 .mc-engine-card[data-state="working"] .mc-engine-dot,
 .mc-engine-card[data-state="done"] .mc-engine-dot { background: var(--eng); opacity: 1; }
 .mc-engine-card[data-state="working"] .mc-engine-state,
-.mc-engine-card[data-state="done"] .mc-engine-state { color: var(--eng); }
+.mc-engine-card[data-state="done"] .mc-engine-state { color: color-mix(in srgb, var(--eng) 70%, #000); }
 .mc-engine-card[data-state="working"] .mc-engine-line { color: var(--text); }
 .mc-engine-card[data-state="queued"] .mc-engine-dot { background: var(--action); border-color: var(--action); opacity: 1; }
-.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action); }
+.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action-fill); }
 .mc-engine-card[data-state="failed"] { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
 .mc-engine-card[data-state="failed"] .mc-engine-dot { background: var(--danger); border-color: var(--danger); opacity: 1; }
 .mc-engine-card[data-state="failed"] .mc-engine-state { color: var(--danger); }
@@ -1364,7 +1369,7 @@
 /* Plan board header: Check / 3D / DXF. >= 52px so a hand can dwell them. */
 .mc-plan-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .mc-plan-extra { min-height: 52px; min-width: 72px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: var(--panel, #fff); color: var(--text, #2B2B2B); font: 600 18px/1 system-ui, sans-serif; cursor: pointer; }
-.mc-plan-extra[aria-pressed="true"] { background: var(--accent, #6B8F71); color: #fff; border-color: var(--accent, #6B8F71); }
+.mc-plan-extra[aria-pressed="true"] { background: var(--accent-ink, #4F7356); color: #fff; border-color: var(--accent-ink, #4F7356); }
 .mc-plan-extra-status { flex: 1 1 200px; font: 500 16px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
 
 /* The AI monitor is a second-display tool: never offered on a phone. */
@@ -1385,7 +1390,7 @@
   padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
   border-radius: 0 0 18px 18px; }
 .mc-next-src { font-size: 13px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
-.mc-next[data-source=nano] .mc-next-src { color: var(--accent); }
+.mc-next[data-source=nano] .mc-next-src { color: var(--accent-ink); }
 .mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
   border-color: var(--border); font-size: 18px; }
 .mc-next-chip.mc-btn:hover { border-color: var(--accent); }
@@ -1439,7 +1444,7 @@
   /* Never reaches the centre mic (≈ 2 × 58px wide around the middle). */
   max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 /* iPhone: the Track pill (hand SENSING for the gimbal / pointing; never acts
    on the UI) sits just left of the Hands pill. */
 .mc-phone-track-pill { display: none; }
@@ -1448,7 +1453,7 @@
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
 }
-.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 .mc-paired-sub { font-size: 0.85em; color: var(--text-dim, inherit); }
 /* Facing gate has the hands locked ("Face phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
