@@ -267,20 +267,17 @@ try {
       await page.screenshot({ path: join(OUT, `${d.name}-menu-by-hand.png`) });
       real.push({ device: d.name, step: 'Menu close (hand)', ...await handPress(page, (el) => el.classList.contains('mc-menu-close')) });
       await sleep(300);
-    } else {
-      // On desktop the AI activity button lives in the collapsible toolbar
-      // (.mc-bar-btns starts hidden until the Tools palette opens — toolPalette.ts),
-      // so open Tools by hand first, exactly as a user would, before reaching it.
-      real.push({ device: d.name, step: 'Tools (for AI activity)', ...await handPress(page, (el) => el.classList.contains('mc-tools-chip')) });
-      await sleep(300);
     }
-    real.push({ device: d.name, step: 'AI activity', ...await handPress(page, (el) => el.dataset?.cmd === 'ai') });
+    // Desktop: the AI activity drawer opens from an engine card (the bar has
+    // no "AI activity" button — "AI monitor" is the one named AI entry).
+    // Phones keep their primary AI button.
+    const aiOpener = d.mobile ? (el) => el.dataset?.cmd === 'ai' : (el) => el.classList.contains('mc-engine-card');
+    real.push({ device: d.name, step: 'AI activity', ...await handPress(page, aiOpener) });
     await sleep(500);
     all.push(...await audit(page, S('ai-activity')));
-    // Close the AI panel again. The data-cmd click auto-closed the Tools
-    // palette on desktop, so re-open it by hand before the toggle-off press.
-    if (!d.mobile) await handPress(page, (el) => el.classList.contains('mc-tools-chip'));
-    await handPress(page, (el) => el.dataset?.cmd === 'ai');
+    // Close the AI panel again.
+    if (d.mobile) await handPress(page, aiOpener);
+    else await handPress(page, (el) => el.classList.contains('mc-ai-close'));
     await sleep(300);
 
     // Mic by hand (sim has no speech: the press still toggles or explains)

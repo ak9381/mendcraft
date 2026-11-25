@@ -78,6 +78,9 @@ import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, mapToScreen, type HandPointer } from './handPointer';
 import { mountPhoneHands } from './phoneHands';
+import { createGestureControl, type GestureControl } from './gestureControl';
+import { LAPTOP_GESTURES, PHONE_GESTURES } from './gestureBindings';
+import { syntheticHand } from './handShapeFixtures';
 import type { PhoneCamera } from './phoneCamera';
 import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
@@ -2408,6 +2411,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       })
     : null;
 
+  // Button gestures (gestureControl.ts): a fixed hand shape held still for
+  // 2 s presses its bound button — a real click, the same path as the
+  // mouse. Badges show only while Hands is on. Phones bind the short table.
+  // Facing gate: the operator's hand gate from presence frames.
+  let gestureFacing: boolean | null = null;
+  let gestureFaceX: number | null = null;
+  const gestures: GestureControl | null = typeof document !== 'undefined' && handPointer
+    ? createGestureControl({
+        root,
+        bindings: phoneShell ? PHONE_GESTURES : LAPTOP_GESTURES,
+        run: (text) => { run(text); },
+        say,
+        onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
+      })
+    : null;
+  /** Gestures are paused while something else owns the hands: a fist grab,
+   *  the not-facing lock, or the point-to-connect capture step. */
+  const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
+
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —
   // a Hands pill next to Join laptop, persisted, off on first run. Same
   // pointer as the laptop; touch is untouched. Hand clicks/grabs only reach
@@ -2537,6 +2559,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // facing: you look at the device you point at, not at this screen.
     const op = f.faces.find((x) => x.isOperator);
     handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
+    gestureFacing = op ? (op.handGate ?? null) : null;
+    gestureFaceX = op ? op.box.cx : null;
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (scanPanel?.isOpen()) {
@@ -2639,6 +2663,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // grab (board move / pan) and two-fist zoom.
         const cam = cameraHandsFromSelfie(hands);
         handPointer?.update(cam, now);
+        gestures?.frame(hands, now, { facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect });
         // Taught gestures obey the same guards as built-ins: never while the
         // hands are locked (not facing the screen) or a fist grab is running.
         if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive()) teachPanel.matchFrame(hands, now);
@@ -2710,7 +2735,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   async function toggleHands(): Promise<void> {
     const btn = root.querySelector<HTMLElement>('[data-cmd=hands]')!;
-    if (handsOn) { inputs.stop(); handPointer?.lost(); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
+    if (handsOn) { inputs.stop(); handPointer?.lost(); gestures?.lost(); gestures?.setActive(false); handsHandle = null; handsOn = false; setRegChip(null); closeScan(); btn.setAttribute('aria-pressed', 'false'); say('Hands off.'); return; }
     if (handsBusy) return;
     handsBusy = true; handsMountOk = false;
     await inputs.start(root);
@@ -2720,6 +2745,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!handsMountOk) { say(lastHandsError ?? 'No camera here — hands stay off.'); return; }
     handsOn = true;
     btn.setAttribute('aria-pressed', 'true');
+    gestures?.setActive(true);
     restoreOwnerLock();
     say('Hands on: point with your palm, tap a fist to click. Hold a fist to move a board or pan; two fists to zoom.');
   }
@@ -3330,6 +3356,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
   }
 
+  // Sim/test hook: the button gestures without a camera. show(true) turns
+  // the badges on as if Hands were on; feed() runs one selfie-space frame
+  // through the real classifier → hold engine → button path; hand() builds
+  // synthetic landmarks for a shape (handShapeFixtures).
+  if (opts.sim && typeof window !== 'undefined' && gestures) {
+    (window as unknown as { __mcGestures?: unknown }).__mcGestures = {
+      show: (on: boolean) => gestures.setActive(on),
+      feed: (hands: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null = true) =>
+        gestures.frame(hands, now, { facing, faceX: 0.5, blocked: gesturesBlocked() }),
+      hand: syntheticHand,
+      shapes: () => gestures.lastShapes(),
+    };
+  }
   // Sim/test hook: drive the hand pointer without a camera.
   if (opts.sim && typeof window !== 'undefined' && handPointer) (window as unknown as { __mcHand?: HandPointer }).__mcHand = handPointer;
   // Sim/test hook: feed a raw landmark frame (camera space, up to two hands)
