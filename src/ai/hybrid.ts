@@ -735,6 +735,11 @@ function destroySdkSession(model: unknown): void {
   } catch { /* already gone */ }
 }
 
+/** Has the SDK already created this model's session (its create() resolved)? */
+function sdkSessionReady(model: unknown): boolean {
+  try { return !!(model as { chromeAdapter?: { oldSession?: unknown } } | null)?.chromeAdapter?.oldSession; } catch { return false; }
+}
+
 /** Destroys the previous call's session (the SDK keeps each model's last
  *  session alive; one finished board session is enough to keep Nano loaded). */
 let lastOnDeviceStop: (() => void) | null = null;
@@ -843,12 +848,20 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
   }, { priority: 10, signal: req.signal, maxWaitMs: ON_DEVICE_BOARD_MAX_WAIT_MS });
 }
 
+/** The warm-up's reply schema (kept to keywords Chrome accepts). */
+export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 let boardWarm: Promise<boolean> | null = null;
+/** The warm-up's model while it runs (to see whether its session exists yet). */
+let warming: TextGenModel | null = null;
 /**
  * Load Nano ahead of the first board turn: one tiny on-device prompt through
- * the same SDK path. It runs below every real job and steps aside the moment
- * one arrives (its session is destroyed and its slot freed), so a warm-up can
- * never make her wait.
+ * the same SDK path, so the cold start (about 14 s on the laptop measured)
+ * is paid right after load and not by her first request. It runs below every
+ * real job. If a request arrives while it is still creating its session it
+ * steps aside (session destroyed, slot freed); once the session exists the
+ * model is loaded and only a ~10-character reply is left, so it is allowed to
+ * finish — aborting then would throw the load away and make the turn pay it
+ * again.
  */
 export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
   boardWarm ??= (async () => {
@@ -860,8 +873,10 @@ export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
         ctx.signal?.addEventListener('abort', () => { session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request'); }, { once: true });
         model = onDeviceModelFor({
           createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
-          promptOptions: { responseConstraint: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } },
+          promptOptions: { responseConstraint: WARM_CONSTRAINT },
         });
+        warming = model;
+        nanoTrace('warm-up: started');
         const kept = model;
         try {
           await withTimeout(model.generateContent('Reply with JSON only: {"ok":true}'), ON_DEVICE_TIMEOUT_MS, 'on-device warm-up');
@@ -872,7 +887,8 @@ export function warmBoardOnDevice(queue = nanoQueue): Promise<boolean> {
           throw e;
         }
         lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(kept); };
-      }, { priority: -1, preemptible: true, maxWaitMs: 0 });
+      }, { priority: -1, preemptible: () => !sdkSessionReady(warming), maxWaitMs: 0 });
+      nanoTrace('warm-up: done — the model is loaded');
       return true;
     } catch {
       boardWarm = null; // stepped aside or not ready: a later idle moment may try again

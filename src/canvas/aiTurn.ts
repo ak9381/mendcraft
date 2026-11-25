@@ -277,6 +277,15 @@ export function geminiFailLine(e: unknown): string {
   return f.nothingSent ? `${f.line}. ${NOTHING_SENT}` : f.line;
 }
 
+/** Chrome refused the on-device request itself (an option or schema keyword
+ *  it does not support) — as opposed to Nano trying and failing. */
+export function isNanoUnsupported(e: unknown): boolean {
+  const name = e instanceof Error ? e.name : '';
+  const msg = e instanceof Error ? e.message : String(e ?? '');
+  return name === 'NotSupportedError' || /NotSupportedError|request is invalid|could not be processed/i.test(msg);
+}
+export const NANO_COULD_NOT_RUN = 'Nano couldn’t run this request';
+
 export interface SurfaceTurnOptions {
   deviceIdSession?: DeviceIdSession;
   isCancelled?: () => boolean;
@@ -413,6 +422,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   };
   const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onStart: begin };
   let why: string;
+  let unsupported = false;
   try {
     let text = await timed(streamOne(engine, nanoReq.prompt, { ...so, system: nanoReq.system, user: nanoReq.user }));
     throwIfCancelled();
@@ -433,19 +443,22 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     why = `its reply was not a valid board: ${plan.error.replace(/^The reply was /, '').replace(/\.$/, '')}`;
   } catch (e) {
     if (e instanceof MidStreamOffline) { over = true; ui.onError?.(OFFLINE_MID_LINE, 'nano'); return null; }
-    why = e instanceof Error ? e.message : String(e);
+    // Chrome's own refusal is said in plain words, never as its raw error text.
+    unsupported = isNanoUnsupported(e);
+    why = unsupported ? 'Chrome didn’t accept the request' : e instanceof Error ? e.message : String(e);
   }
   over = true;
   attempt++;
   ctl?.abort(); // stop the model: nobody is waiting for this reply any more
 
   const cloud = engine.handoff;
-  const head = `Nano couldn’t finish (${why}). `;
+  const nanoLine = unsupported ? NANO_COULD_NOT_RUN : `Nano couldn’t finish (${why})`;
+  const head = `${nanoLine}. `;
   if (!cloud) { ui.onError?.(`${head}Gemini isn’t available here to take over.`, 'nano'); return null; }
   if (opts.canHandoff && !opts.canHandoff()) { ui.onError?.(`${head}You’re offline, so Gemini can’t take over. ${NOTHING_SENT}`, 'nano'); return null; }
   const handed = buildSurfacePrompt(req, 'gemini', { sim: cloud.sim, deviceIdSession: opts.deviceIdSession });
   handed.handoffWhy = why;
-  handed.routeLine = `${cloud.sim ? 'SIM · ' : ''}Gemini · cloud — Nano couldn’t finish (${why}), so Gemini made this`;
+  handed.routeLine = `${cloud.sim ? 'SIM · ' : ''}Gemini · cloud — ${nanoLine}, so Gemini made this`;
   ghostCount = -1;
   ui.onHandoff?.(handed, why);
   return runPlain(cloud, handed, head);

@@ -14,8 +14,9 @@ export interface NanoJobOptions {
   signal?: AbortSignal;
   /** A running job that a higher-priority arrival may push aside: its
    *  `ctx.signal` aborts, its slot is freed at once, and its promise rejects
-   *  with NanoQueueSkipped. */
-  preemptible?: boolean;
+   *  with NanoQueueSkipped. A function is asked at the moment of the arrival
+   *  (a warm-up that is nearly done says no and is left to finish). */
+  preemptible?: boolean | (() => boolean);
 }
 
 export interface NanoJobContext {
@@ -75,7 +76,8 @@ export function createNanoQueue(limit = 1): NanoQueue {
   function preemptFor(priority: number): void {
     if (runningJobs.size < cap) return;
     for (const r of runningJobs) {
-      if (r.preempt && r.priority < priority) { r.preempt(); return; }
+      if (r.preempt && r.priority < priority) r.preempt();
+      if (runningJobs.size < cap) return;
     }
   }
 
@@ -100,8 +102,10 @@ export function createNanoQueue(limit = 1): NanoQueue {
             const me: Running = { priority, preempt: null };
             const release = (): void => { if (released) return; released = true; runningJobs.delete(me); pump(); };
             if (opts.preemptible) {
+              const may = opts.preemptible;
               me.preempt = () => {
                 if (released) return;
+                if (typeof may === 'function' && !may()) return; // not now: the arrival waits its turn
                 ctl?.abort();
                 reject(new NanoQueueSkipped('stepped aside for a request'));
                 release();

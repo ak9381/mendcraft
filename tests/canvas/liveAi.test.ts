@@ -5,11 +5,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
-import { acceptCanvasReply, countingSends, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
+import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, acceptCanvasReply, countingSends, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
 import { geminiFailLine, GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
-import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan } from '../../src/canvas/nanoPlan';
+import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
 import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
@@ -120,9 +120,9 @@ describe('A: on-device concurrency cap', () => {
     expect(stats.peak).toBe(1);
     const params = stats.params[0];
     // the reply is constrained to a board plan whose device ids are the real ones
-    const constraint = params.promptOptions?.responseConstraint as { properties: { d: { items: { enum: string[] }; uniqueItems: boolean } } };
+    const constraint = params.promptOptions?.responseConstraint as { properties: { d: { items: { enum: string[] } } } };
     expect(constraint.properties.d.items.enum).toEqual(['wiz-ceiling', 'speaker-1']);
-    expect(constraint.properties.d.uniqueItems).toBe(true);
+    expect(unsupportedConstraintKeywords(constraint)).toEqual([]);
     // tiles, types and labels come from the device list, not from the model
     expect(plan?.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }]);
     // text in / text out English, and the fixed instructions ride in the session
@@ -166,7 +166,7 @@ describe('A: on-device concurrency cap', () => {
       type: 'object', additionalProperties: false, required: ['t', 'd'],
       properties: {
         t: { type: 'string', maxLength: 24 },
-        d: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'string', enum: ['wiz-ceiling', 'speaker-1'] } },
+        d: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'string', enum: ['wiz-ceiling', 'speaker-1'] } },
       },
     });
     expect(JSON.stringify(r.constraint)).not.toMatch(/label|template|connect|kind|tiles/);
@@ -829,6 +829,124 @@ describe('round 2: the next-step pick keeps away from a turn; ?nanoTrace=1', () 
     const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
     expect(main).toContain("if (params.get('nanoTrace') === '1' && languageModel) installNanoTrace(languageModel);");
     expect(main.match(/installNanoTrace\(/g)).toHaveLength(1);
+  });
+});
+
+describe('live fix: what Chrome’s Prompt API accepts', () => {
+  it('no on-device responseConstraint uses a keyword Chrome rejects (uniqueItems, pattern, format, $ref)', async () => {
+    expect([...UNSUPPORTED_CONSTRAINT_KEYWORDS]).toEqual(['uniqueItems', 'pattern', 'format', '$ref']);
+    const { PLAN_OP_CONSTRAINT, PLAN_VERIFY_CONSTRAINT } = await import('../../src/plan/ai');
+    const { buildFusionConstraint } = await import('../../src/ai/intentFusion');
+    const { DEIXIS_CONSTRAINT } = await import('../../src/ai/deixis');
+    const { CONDENSE_CONSTRAINT } = await import('../../src/ai/condense');
+    const { PROFILE_CONSTRAINT } = await import('../../src/input/handProfile');
+    const { CAD_TOOL_CONSTRAINT } = await import('../../src/cad/tools');
+    const { IDENTIFY_CONSTRAINT, EFFECT_CONSTRAINT } = await import('../../src/devices/identify');
+    const many = Array.from({ length: 9 }, (_, i) => ({ id: `lamp-${i}`, label: `Lamp ${i}`, kind: 'lamp' }));
+    // every schema hybrid.ts hands to an ONLY_ON_DEVICE / PREFER_ON_DEVICE model
+    const onDevice: Record<string, unknown> = {
+      'board (room)': nanoPlanConstraint(req.devices),
+      'board (room, many devices)': nanoPlanConstraint(many),
+      'board (room, no devices)': nanoPlanConstraint([]),
+      'board (floor plan)': nanoPlanConstraint(req.devices, true),
+      'board as built for a turn': buildNanoPlanRequest(req).constraint,
+      'warm-up': WARM_CONSTRAINT,
+      'next steps': NEXT_STEPS_CONSTRAINT,
+      intent: PLAN_OP_CONSTRAINT,
+      verify: PLAN_VERIFY_CONSTRAINT,
+      fusion: buildFusionConstraint(PLAN_OP_CONSTRAINT),
+      deixis: DEIXIS_CONSTRAINT,
+      condense: CONDENSE_CONSTRAINT,
+      'hand profile': PROFILE_CONSTRAINT,
+      'cad tool': CAD_TOOL_CONSTRAINT,
+      identify: IDENTIFY_CONSTRAINT,
+      effect: EFFECT_CONSTRAINT,
+    };
+    for (const [name, schema] of Object.entries(onDevice)) expect(unsupportedConstraintKeywords(schema), name).toEqual([]);
+    // and hybrid.ts passes no other schema to an on-device model
+    const { readFileSync } = await import('node:fs');
+    const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
+    const used = new Set([...hybrid.matchAll(/responseConstraint: ([A-Za-z_.]+)/g)].map((m) => m[1]));
+    expect([...used].sort()).toEqual(['CAD_TOOL_CONSTRAINT', 'CONDENSE_CONSTRAINT', 'DEIXIS_CONSTRAINT', 'EFFECT_CONSTRAINT', 'IDENTIFY_CONSTRAINT', 'NEXT_STEPS_CONSTRAINT', 'PROFILE_CONSTRAINT', 'WARM_CONSTRAINT', 'fusionConstraint', 'modeAi.opConstraint', 'modeAi.verifyConstraint', 'req.constraint'].sort());
+  });
+
+  it('the checker finds a keyword at any depth, but not a field that merely has that name', () => {
+    expect(unsupportedConstraintKeywords({ type: 'array', uniqueItems: true })).toEqual(['$.uniqueItems']);
+    expect(unsupportedConstraintKeywords({ type: 'object', properties: { d: { type: 'array', items: { type: 'string', pattern: '^a' } } } })).toEqual(['$.properties.d.items.pattern']);
+    expect(unsupportedConstraintKeywords({ anyOf: [{ $ref: '#/x' }, { type: 'string', format: 'date' }] })).toEqual(['$.anyOf[0].$ref', '$.anyOf[1].format']);
+    expect(unsupportedConstraintKeywords({ type: 'object', properties: { format: { type: 'string' }, pattern: { type: 'string' } } })).toEqual([]);
+  });
+
+  it('a repeated device id is dropped locally (the schema can no longer forbid it)', () => {
+    expect(parseNanoPlan('{"t":"Room","d":["speaker-1","speaker-1","wiz-ceiling","speaker-1"]}', req)).toMatchObject({ ok: true, value: { tiles: [{ deviceId: 'speaker-1' }, { deviceId: 'wiz-ceiling' }] } });
+    expect(partialNanoPlan('{"t":"Room","d":["speaker-1","speaker-1"', req).tiles).toHaveLength(1);
+  });
+
+  it('Chrome’s NotSupportedError reads “Nano couldn’t run this request”, never its raw text', async () => {
+    const refused = Object.assign(new Error('The request is invalid - the input or options could not be processed.'), { name: 'NotSupportedError' });
+    const errors: string[] = [];
+    const handoffs: string[] = [];
+    const cloud: SurfaceEngine = { id: 'gemini', sim: false, stream: async (_p, onText) => { onText(GEMINI_OK); return GEMINI_OK; } };
+    const nano: SurfaceEngine = { id: 'nano', sim: false, stream: async () => { throw refused; }, handoff: cloud };
+    const plan = await runSurfaceTurn(req, nano, { onHandoff: (s) => handoffs.push(s.routeLine), onError: (w) => errors.push(w) }, { deviceIdSession: createDeviceIdSession() });
+    expect(plan?.title).toBe('Living room');
+    expect(handoffs).toEqual(['Gemini · cloud — Nano couldn’t run this request, so Gemini made this']);
+    // with Gemini failing too, and with no Gemini at all
+    const down: SurfaceEngine = { id: 'gemini', sim: false, stream: async () => { throw new Error('503 Service Unavailable'); } };
+    await runSurfaceTurn(req, { ...nano, handoff: down }, { onError: (w) => errors.push(w) }, { sleep: () => never<void>() });
+    await runSurfaceTurn(req, { ...nano, handoff: undefined }, { onError: (w) => errors.push(w) });
+    // the SDK may wrap it: the name survives only in the message
+    await runSurfaceTurn(req, { ...nano, handoff: undefined, stream: async () => { throw new Error('AI: NotSupportedError: The request is invalid'); } }, { onError: (w) => errors.push(w) });
+    expect(errors).toEqual([
+      'Nano couldn’t run this request. Gemini couldn’t answer: the service is busy (5xx)',
+      'Nano couldn’t run this request. Gemini isn’t available here to take over.',
+      'Nano couldn’t run this request. Gemini isn’t available here to take over.',
+    ]);
+    expect(errors.join(' ') + handoffs.join(' ')).not.toMatch(/request is invalid|could not be processed|NotSupportedError/);
+  });
+
+  it('a warm-up still creating its session steps aside; once its session exists it is left to finish', async () => {
+    // (a) past create: the SDK has its session, only a tiny reply is left
+    let finishWarm!: () => void;
+    let aborted = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
+      const model = { chromeAdapter: { oldSession: {} as unknown }, generateContent: () => new Promise<{ response: { text: () => string } }>((r) => { finishWarm = () => { order.push('warm replied'); r({ response: { text: () => '{"ok":true}' } }); }; }) };
+      return model as unknown as TextGenModel;
+    } });
+    const q = createNanoQueue(1);
+    const order: string[] = [];
+    const warm = warmBoardOnDevice(q);
+    await tick(2);
+    const turn = q.run(async () => { order.push('turn starts'); return 'plan'; }, { priority: 10 });
+    await tick(5);
+    expect(order).toEqual([]); // the turn waits; the warm-up was not thrown away
+    expect(aborted).toBe(0);
+    finishWarm();
+    expect(await warm).toBe(true);
+    expect(await turn).toBe('plan');
+    expect(order).toEqual(['warm replied', 'turn starts']);
+
+    // (b) still in create(): no session yet, so it steps aside at once
+    setModelsForTest(null);
+    aborted = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
+      return { chromeAdapter: {}, generateContent: () => never() } as unknown as TextGenModel;
+    } });
+    const q2 = createNanoQueue(1);
+    const warm2 = warmBoardOnDevice(q2);
+    await tick(2);
+    expect(await q2.run(async () => 'plan', { priority: 10 })).toBe('plan');
+    expect(await warm2).toBe(false);
+    expect(aborted).toBe(1);
+  });
+
+  it('the warm-up starts soon after load, with a deadline rather than "whenever idle"', async () => {
+    const { readFileSync } = await import('node:fs');
+    const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(main).toContain('afterFirstPaint(() => { if (ric) ric(warm, { timeout: 1200 }); else setTimeout(warm, 600); });');
+    expect(main).toContain('if (await refreshNanoAvailable()) await warmBoardOnDevice();');
   });
 });
 

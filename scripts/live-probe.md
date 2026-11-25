@@ -36,6 +36,17 @@ What to read off it:
   here. A room draft should be ~60 characters (`{"t":…,"d":[ids]}`), a floor
   plan ~18 (`{"p":"twoBedroom"}`). An output over ~120 characters means the
   schema is not being enforced.
+- **Cold start.** The first on-device prompt after a page load is slow
+  (about 14 s measured) because Chrome loads the model. The page pays that
+  itself right after load: look for `warm-up: started` and then
+  `warm-up: done — the model is loaded` before you ask for anything. If you
+  ask during the warm-up, a warm-up that already has its session finishes
+  first (your turn's queue wait shows the remainder); one still creating its
+  session steps aside.
+- **Schema keywords.** Chrome rejects a constraint that uses `uniqueItems`
+  (and, to be safe, `pattern`, `format`, `$ref`) with `NotSupportedError`.
+  None are used; if the status ever reads `Nano couldn’t run this request`,
+  Chrome refused the request itself — note the Chrome version.
 - **Queue wait** should be 0 ms for a board turn. Anything else means another
   on-device call was in the way.
 - **Does a stop really stop Nano?** When a turn times out or is handed off,

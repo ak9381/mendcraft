@@ -41,6 +41,28 @@ export function nanoWantsPlan(req: SurfaceRequest): boolean {
   return PLAN_ASK.test(req.utterance);
 }
 
+/** JSON-schema keywords Chrome's Prompt API does not accept in a
+ *  `responseConstraint` — one of them makes the whole prompt fail with
+ *  NotSupportedError. `uniqueItems` was measured live; the others are the
+ *  same class (validation the constrained decoder cannot express). */
+export const UNSUPPORTED_CONSTRAINT_KEYWORDS = ['uniqueItems', 'pattern', 'format', '$ref'] as const;
+
+/** Every unsupported keyword used in `schema` (as a keyword, not as the name
+ *  of a property), with its path — empty when the schema is safe to send. */
+export function unsupportedConstraintKeywords(schema: unknown, path = '$'): string[] {
+  if (!schema || typeof schema !== 'object') return [];
+  if (Array.isArray(schema)) return schema.flatMap((v, i) => unsupportedConstraintKeywords(v, `${path}[${i}]`));
+  const found: string[] = [];
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if ((UNSUPPORTED_CONSTRAINT_KEYWORDS as readonly string[]).includes(key)) found.push(`${path}.${key}`);
+    // The keys of a `properties` map are field names, not keywords.
+    if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [name, sub] of Object.entries(value as Record<string, unknown>)) found.push(...unsupportedConstraintKeywords(sub, `${path}.properties.${name}`));
+    } else found.push(...unsupportedConstraintKeywords(value, `${path}.${key}`));
+  }
+  return found;
+}
+
 /** The JSON schema Chrome's Prompt API enforces (`responseConstraint`). */
 export function nanoPlanConstraint(devices: DeviceHint[], plan = false): Record<string, unknown> {
   if (plan) {
@@ -56,7 +78,10 @@ export function nanoPlanConstraint(devices: DeviceHint[], plan = false): Record<
     type: 'object', additionalProperties: false, required: ['t', 'd'],
     properties: {
       t: title,
-      d: { type: 'array', minItems: 1, maxItems: Math.min(NANO_MAX_DEVICES, ids.length), uniqueItems: true, items: { type: 'string', enum: ids } },
+      // No `uniqueItems`: Chrome's Prompt API rejects the whole request with
+      // NotSupportedError when a constraint carries it (measured live). A
+      // repeated id is dropped locally instead (expandNanoPlan).
+      d: { type: 'array', minItems: 1, maxItems: Math.min(NANO_MAX_DEVICES, ids.length), items: { type: 'string', enum: ids } },
     },
   };
 }

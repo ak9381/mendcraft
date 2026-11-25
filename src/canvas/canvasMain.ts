@@ -303,7 +303,9 @@ if (!params.has('sim')) {
 if (nanoStream && languageModel) {
   const warm = (): void => { void (async () => { if (await refreshNanoAvailable()) await warmBoardOnDevice(); })(); };
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-  afterFirstPaint(() => { if (ric) ric(warm, { timeout: 4000 }); else setTimeout(warm, 1500); });
+  // Soon after load, not "whenever idle": hand tracking keeps the page busy,
+  // and the cold start must be over before her first request.
+  afterFirstPaint(() => { if (ric) ric(warm, { timeout: 1200 }); else setTimeout(warm, 600); });
 }
 
 // ?replay=demo: play the journey once the canvas has painted. The outcome is
