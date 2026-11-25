@@ -308,18 +308,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <button data-cmd="everything" class="mc-btn" data-i18n="showEverything">Show everything</button>
       <button data-cmd="new" class="mc-btn" data-i18n="newBoard">New board</button>
       <button data-cmd="save" class="mc-btn" data-i18n="save">Save</button>
-      <button data-cmd="undo" class="mc-btn" data-i18n="undo">Undo</button>
-      <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
-      <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
-      <button data-cmd="reregister" class="mc-btn">Re-register</button>
-      <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
-      <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
+      <button data-cmd="undo" class="mc-btn mc-btn-quiet" data-i18n="undo">Undo</button>
       <button data-cmd="ai" class="mc-btn" aria-expanded="false" data-i18n="ai">AI activity</button>
-      <button data-cmd="monitor" class="mc-btn">AI monitor</button>
-      <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button>
+      <div class="mc-more">
+        <button type="button" class="mc-btn mc-more-btn" aria-expanded="false" aria-controls="mc-more-menu">More<span class="mc-more-caret" aria-hidden="true"></span></button>
+        <div class="mc-more-menu" id="mc-more-menu" role="group" aria-label="More tools" hidden>
+          <section class="mc-more-group" aria-label="Hands"><h3 class="mc-more-title">Hands</h3>
+            <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
+            <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
+            <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
+            <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
+            <button data-cmd="reregister" class="mc-btn" hidden>Register again</button></section>
+          <section class="mc-more-group" aria-label="Screens"><h3 class="mc-more-title">Screens</h3>
+            <button data-cmd="monitor" class="mc-btn">AI monitor</button>
+            <button data-cmd="swap" class="mc-btn" hidden>Swap phone sides</button></section>
+          <section class="mc-more-group" aria-label="Demo"><h3 class="mc-more-title">Demo</h3>
+            <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button></section>
+        </div>
+      </div>
       </div>
       <form class="mc-say"><label class="mc-sr" for="mc-say-in">Say or type a command</label>
-        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Say: new board · show everything · go to floor plan" />
+        <input id="mc-say-in" autocomplete="off" data-i18n="sayPlaceholder" placeholder="Type or say a command…" />
         <button class="mc-btn primary" type="submit" data-i18n="go">Go</button></form>
       </div>
       <div class="mc-status-row"><p class="mc-canvas-status" role="status" aria-live="polite"></p>
@@ -472,6 +481,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
     viewport.classList.toggle('mc-edge-glow-left', side === 'left' && glow > 0.05);
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
+    // The phones strip shows which phone sits on that side while a board nears an edge.
+    const near = !!side && glow > 0.05;
+    if (near !== edgeNear) { edgeNear = near; showArrangeStrip(); }
   }
 
   function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
@@ -615,27 +627,38 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
 
   // Screen-arrangement strip (set once, remembered): Left | This laptop | Right,
-  // showing which phone is on which side with a Swap button. Hand-reachable
-  // normal buttons (pinch-click). Shown in sim (so judges/audits see it) or once
-  // a phone is paired; hidden otherwise so it never clutters a solo canvas.
+  // showing which phone is on which side. Only while a phone is paired AND
+  // either Tools is open or a board is held near a screen edge — never
+  // permanent chrome. Swapping sides lives in Tools > More > Screens (and
+  // voice "swap phone sides").
   const arrangeStrip = document.createElement('div');
   arrangeStrip.className = 'mc-arrange';
   arrangeStrip.setAttribute('aria-label', 'Phone screen arrangement');
   arrangeStrip.hidden = true;
   root.appendChild(arrangeStrip);
+  let edgeNear = false;
   const platformLabel = (p: PhonePlatform | null): string => (p === 'android' ? 'Nothing' : p === 'ios' ? 'iPhone' : 'none');
+  /** Phones are on the table: sim scripts them, or a real one joined. */
+  const phonesPaired = (): boolean => !phoneShell && (pairFirst.phones().length > 0 || !!hostSession);
+  function showArrangeStrip(): void {
+    const toolsOpen = !!root.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)');
+    const was = arrangeStrip.hidden;
+    arrangeStrip.hidden = !(phonesPaired() && (toolsOpen || edgeNear));
+    const swap = root.querySelector<HTMLElement>('[data-cmd=swap]');
+    if (swap) swap.hidden = phoneShell || !(opts.sim || hostSession);
+    if (was !== arrangeStrip.hidden && focusId && !edgeNear) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
+  }
   function renderArrangeStrip(): void {
-    arrangeStrip.hidden = phoneShell || !(opts.sim || hostSession);
     arrangeStrip.innerHTML = `
       <span class="mc-arrange-label">Phones</span>
       <span class="mc-arrange-slot" data-side="left">◀ ${platformLabel(screenLayout.left)} · left</span>
       <span class="mc-arrange-laptop">This laptop</span>
-      <span class="mc-arrange-slot" data-side="right">${platformLabel(screenLayout.right)} · right ▶</span>
-      <button type="button" class="mc-btn mc-arrange-swap">Swap sides</button>`;
-    arrangeStrip.querySelector<HTMLButtonElement>('.mc-arrange-swap')?.addEventListener('click', () => {
-      setScreenLayout({ left: screenLayout.right, right: screenLayout.left });
-      renderArrangeStrip();
-    });
+      <span class="mc-arrange-slot" data-side="right">${platformLabel(screenLayout.right)} · right ▶</span>`;
+  }
+  function swapPhoneSides(): void {
+    setScreenLayout({ left: screenLayout.right, right: screenLayout.left });
+    renderArrangeStrip();
+    say(`Swapped: ${platformLabel(screenLayout.left)} on the left, ${platformLabel(screenLayout.right)} on the right.`);
   }
   renderArrangeStrip();
 
@@ -681,6 +704,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // The row changes the bottom inset: re-fit the focused board above it.
       if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
+      showArrangeStrip();
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
       // Past the pairing step the card collapses into the row's "N phones connected"
@@ -2249,7 +2273,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
-    renderArrangeStrip(); // reveal the arrangement strip now a phone is here
+    showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
     // remembered one that just reconnected) populates its side immediately.
@@ -2988,7 +3012,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'teachList': openTeachList(); return true;
       case 'showAi': showAi(true, true); return true;
       case 'monitor': openMonitor(); return true;
-      case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens by itself when a model works, or say “show ai”.'); return true;
+      case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens on a failure, from the engine bar, or say “show ai”.'); return true;
+      case 'tool': {
+        const press = (cmd: string) => root.querySelector<HTMLElement>(`[data-cmd="${cmd}"]`)?.click();
+        const handsOn = root.querySelector('[data-cmd=hands]')?.getAttribute('aria-pressed') === 'true';
+        switch (r.tool) {
+          case 'handsOn': if (handsOn) say('Hands are already on.'); else press('hands'); break;
+          case 'handsOff': if (!handsOn) say('Hands are already off.'); else press('hands'); break;
+          case 'dwell': press('dwell'); break;
+          case 'register': openScan(); break;
+          case 'offline': if (!net.isOnline()) say('Already offline (simulated).'); else press('offline'); break;
+          case 'online': if (net.isOnline()) say('Already online.'); else press('offline'); break;
+          case 'swap': if (phoneShell || !(opts.sim || hostSession)) say('No phones are paired, so there are no sides to swap.'); else swapPhoneSides(); break;
+        }
+        return true;
+      }
       case 'packIntent': return runIntent(r.intent);
       // On the web there is no gimbal — handleSpeech answers with the honest why.
       case 'pointConnect': {
@@ -3107,10 +3145,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
-  const toolPalette = mountToolPalette(root);
+  const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
   function openTools(): void { if (isPhone()) phoneMenu?.open(); else toolPalette.open(); }
   function closeTools(): void { if (isPhone()) phoneMenu?.close(); else toolPalette.close(); }
   dockEl.querySelector('.mc-dock-unpin')!.addEventListener('click', () => {
@@ -3874,6 +3912,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   sync();
   updateDock();
   refreshRegisterLabels();
+  showArrangeStrip();
   if (loadOwner(regStorage)) setRegChip('Registered'); // survives a reload within the session
   if (phoneShell) {
     if (focusId) stampMorphTiles(focusId);

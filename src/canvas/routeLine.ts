@@ -30,6 +30,7 @@ export type Route =
   | { name: 'paletteOpen' } | { name: 'paletteClose' }
   | { name: 'teach' } | { name: 'teachList' }
   | { name: 'showAi' } | { name: 'monitor' } | { name: 'hideAi' }
+  | { name: 'tool'; tool: ToolVoice }
   | { name: 'packIntent'; intent: IntentKey }
   | { name: 'pointConnect' }
   | { name: 'gimbalScan' } | { name: 'gimbal' }
@@ -46,6 +47,20 @@ export type Route =
   | { name: 'openEnded' };
 export type RouteName = Route['name'];
 
+/** Tools > More buttons by voice (the menu hides them; speech never needs to open it). */
+export type ToolVoice = 'handsOn' | 'handsOff' | 'dwell' | 'register' | 'offline' | 'online' | 'swap';
+export function matchToolVoice(text: string): ToolVoice | null {
+  const t = text.trim().replace(/[.!?]+$/, '').toLowerCase();
+  if (/^(turn )?hands on$|^turn on (the )?hands$|^start hands$/.test(t)) return 'handsOn';
+  if (/^(turn )?hands off$|^turn off (the )?hands$|^stop hands$/.test(t)) return 'handsOff';
+  if (/^(turn )?(on |off )?hover to click( on| off)?$/.test(t)) return 'dwell';
+  if (/^(register|register again|re-?register)( me)?$/.test(t)) return 'register';
+  if (/^(simulate offline|go offline)$/.test(t)) return 'offline';
+  if (/^(go online|go back online|back online)$/.test(t)) return 'online';
+  if (/^swap (the )?(phone )?sides$|^swap (the )?phones$/.test(t)) return 'swap';
+  return null;
+}
+
 // "connect / add (to) what(ever) I'm pointing at", or a bare "connect this"
 // (not "connect this room", which is connectRoom).
 const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
@@ -59,6 +74,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) return { name: 'showAi' };
   if (/^\s*(open\s+)?(the\s+)?ai\s+monitor\s*$/i.test(text)) return { name: 'monitor' };
   if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) return { name: 'hideAi' };
+  const tool = matchToolVoice(text);
+  if (tool) return { name: 'tool', tool };
   // Active language pack: a spoken phrase routes to the same intents first.
   if (world.pack) { const intent = routePackPhrase(text, world.pack); if (intent) return { name: 'packIntent', intent }; }
   // Point-to-connect: hold a point at a real device; a frame is cropped along

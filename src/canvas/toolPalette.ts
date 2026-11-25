@@ -33,9 +33,19 @@ export interface ToolPalette {
   destroy(): void;
 }
 
-export function mountToolPalette(root: HTMLElement, win: Window = window): ToolPalette {
+export function mountToolPalette(root: HTMLElement, win: Window = window, o: { onChange?: () => void } = {}): ToolPalette {
   const doc = root.ownerDocument;
   const tools = root.querySelector<HTMLElement>('.mc-bar-tools')!;
+  // "More": the less-used tools (Hands / Screens / Demo groups) behind one
+  // disclosure, so the open palette is the say box plus four buttons.
+  const moreBtn = tools.querySelector<HTMLElement>('.mc-more-btn');
+  const moreMenu = tools.querySelector<HTMLElement>('.mc-more-menu');
+  function setMore(on: boolean): void {
+    if (!moreBtn || !moreMenu) return;
+    moreMenu.hidden = !on;
+    moreBtn.setAttribute('aria-expanded', String(on));
+  }
+  moreBtn?.addEventListener('click', () => setMore(!!moreMenu?.hidden));
   tools.id = 'mc-tool-palette';
   tools.setAttribute('aria-label', 'Tools');
 
@@ -59,6 +69,8 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
     tools.classList.toggle('mc-bar-tools-peek', peek && !openState);
     chip.hidden = phone;
     chip.setAttribute('aria-expanded', String(openState));
+    if (!openState) setMore(false);
+    o.onChange?.();
   }
 
   function open(): void {
@@ -66,7 +78,8 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
     lastFocus = doc.activeElement as HTMLElement | null;
     openState = true;
     apply();
-    tools.querySelector<HTMLElement>('button, input')?.focus();
+    // The say box first: type or speak; no focus ring parked on a button.
+    (tools.querySelector<HTMLElement>('#mc-say-in') ?? tools.querySelector<HTMLElement>('button, input'))?.focus();
   }
   function close(): void {
     if (phone || !openState) return;
@@ -91,7 +104,11 @@ export function mountToolPalette(root: HTMLElement, win: Window = window): ToolP
     if ((e.target as HTMLElement).closest('[data-cmd]')) win.setTimeout(close, 0);
   });
   tools.addEventListener('submit', () => win.setTimeout(close, 0));
-  const onKey = (e: KeyboardEvent) => { if (openState && e.key === 'Escape') { e.preventDefault(); close(); } };
+  const onKey = (e: KeyboardEvent) => {
+    if (!openState || e.key !== 'Escape') return;
+    e.preventDefault();
+    if (moreMenu && !moreMenu.hidden) { setMore(false); moreBtn?.focus(); } else close();
+  };
   doc.addEventListener('keydown', onKey);
 
   const mq = win.matchMedia?.(PHONE_QUERY);

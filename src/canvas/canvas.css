@@ -320,6 +320,22 @@
   z-index: 51; }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
+/* Open Tools = the say box first, then Show everything, New board, Save, a
+   quieter Undo, and More (Hands / Screens / Demo). */
+.mc-bar-tools > .mc-say { order: -1; }
+.mc-btn.mc-btn-quiet { background: transparent; }
+.mc-more { position: relative; display: flex; }
+.mc-more-btn { display: inline-flex; align-items: center; gap: 8px; }
+.mc-more-caret { width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); transition: transform 150ms ease-out; }
+.mc-more-btn[aria-expanded=true] .mc-more-caret { transform: translateY(2px) rotate(-135deg); }
+.mc-more-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 52; display: grid; gap: 14px;
+  min-width: 260px; padding: 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12); }
+.mc-more-group { display: flex; flex-direction: column; gap: 8px; }
+.mc-more-title { margin: 0 4px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+.mc-more-group > .mc-btn { width: 100%; text-align: left; padding: 0 16px; }
+@media (prefers-reduced-motion: reduce) { .mc-more-caret { transition: none; } }
 /* Morph's type-it path (no mic): peek just the say box, not the buttons row. */
 .mc-bar-tools.mc-bar-tools-peek .mc-bar-btns { display: none; }
 .mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
