@@ -1628,6 +1628,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : 'Floor plan';
   function revealGhostTile(tileEl: HTMLElement, stage: 'controls' | 'labels'): void {
     if (stage === 'controls') {
+      // Already labelled (a later cursor of the same engine landed again):
+      // never bring the kind word back next to the label ("LampLamp · …").
+      if (tileEl.classList.contains('stage-labels')) return;
       tileEl.classList.remove('stage-frame');
       tileEl.classList.add('stage-controls');
       tileEl.querySelector<HTMLElement>('.mc-ghost-tile-kind')!.hidden = false;
