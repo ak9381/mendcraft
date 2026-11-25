@@ -596,7 +596,9 @@
 .mc-menu-title { margin: 0; font-size: 22px; font-weight: 650; }
 .mc-menu-close { min-height: 44px; }
 .mc-menu-group { margin-top: 16px; }
-.mc-menu-group-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.mc-menu-group-title { margin: 0 0 8px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+/* The open menu sheet owns the bottom of the screen: no pill draws over it. */
+.mc-menu-open .mc-join-pill, .mc-menu-open .mc-phone-hands-pill, .mc-menu-open .mc-phone-track-pill { display: none !important; }
 .mc-menu-items { display: flex; flex-direction: column; gap: 8px; }
 .mc-menu-items > .mc-btn { width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; padding: 0 16px; }
 .mc-menu-ios .mc-menu-items > .mc-btn { min-height: 44px; border-radius: 12px; }
@@ -640,6 +642,12 @@
 .mc-blank { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 10px; pointer-events: none; z-index: 1; }
 .mc-blank-lead { margin: 0; font-size: 34px; font-weight: 650; color: var(--text); }
 .mc-blank-hint { margin: 0; font-size: 18px; color: var(--text-dim); }
+.mc-blank-phone { display: none; }
+/* Phone shell: the blank canvas says what to do (desktop hint and Register stay desktop-only). */
+.mc-phone-simple .mc-blank { padding: 0 24px; }
+.mc-phone-simple .mc-blank-lead { font-size: 26px; }
+.mc-phone-simple .mc-blank-hint, .mc-phone-simple .mc-blank-register { display: none; }
+.mc-phone-simple .mc-blank-phone { display: block; margin: 0; font-size: 18px; color: var(--text-dim); }
 
 /* Hand pointer feedback (handPointer.ts): no dot, no big rings. A modest
    frame on the targeted control, plus a small macOS-style coral arrow that
@@ -1209,7 +1217,6 @@
 .mc-phone-simple .mc-ai,
 .mc-phone-simple .mc-ai-scrim,
 .mc-phone-simple .mc-dock,
-.mc-phone-simple .mc-blank,
 .mc-phone-simple .mc-swarm,
 .mc-phone-simple .mc-hand-cluster,
 .mc-phone-simple .mc-tools-chip,
@@ -1260,6 +1267,11 @@
 .mc-phone-simple.is-edit-locked .mc-viewport { cursor: default; }
 .mc-phone-simple.is-edit-locked .mc-frame-body { pointer-events: none; }
 .mc-phone-simple .is-phone-selected { outline: 3px solid var(--action); outline-offset: 3px; border-radius: 14px; }
+/* Phones: touch edits are always on, but the move/resize grips (and the
+   dashed outline) show only on the tile she selected — not as dots over
+   every lamp and speaker. */
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) > :is(.mc-edit-move, .mc-edit-resize) { display: none; }
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) { outline: none; }
 
 /* ---- Calmer screen: engine bar, overlay AI panel, corner face chip ------- */
 /* Both engines, always visible, bottom-centre. Nano is green (on this device),
@@ -1436,9 +1448,10 @@
 }
 .mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
 .mc-phone-simple .mc-join-pill:not([hidden]) {
-  display: inline-flex; position: fixed; z-index: 61; left: 16px;
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
+  max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-join-panel:not([hidden]) {
   display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
@@ -1469,7 +1482,7 @@
 .mc-phone-simple .mc-phone-hands-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
   /* Never reaches the centre mic (≈ 2 × 58px wide around the middle). */
   max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -1480,7 +1493,7 @@
 .mc-phone-simple .mc-phone-track-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 112px;
   bottom: calc(40px + env(safe-area-inset-bottom, 0px));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 650;
+  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650;
 }
 .mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 .mc-paired-sub { font-size: 0.85em; color: var(--text-dim, inherit); }
@@ -1492,7 +1505,7 @@
   display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
   bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
-  font-size: 12px; font-weight: 650; pointer-events: none;
+  font-size: 15px; font-weight: 650; pointer-events: none;
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
 

@@ -301,6 +301,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       <p class="mc-blank-lead">Let's build something fun.</p>
       <p class="mc-blank-hint">Say &ldquo;show tools&rdquo;, or click Tools.</p>
       <button type="button" class="mc-btn mc-blank-register" data-cmd="register">Register</button>
+      <p class="mc-blank-phone">Hold the mic and say what you need.</p>
     </div>
     <header class="mc-bar">
       <div class="mc-bar-tools">
@@ -1210,10 +1211,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return { w: w - (aiPanel.hidden || aiAuto ? 0 : aiPanel.offsetWidth + 24), h };
   };
   const barH = () => phoneShell ? 0 : (root.querySelector<HTMLElement>('.mc-bar')!.offsetHeight + 32);
+  /** Phone: one board at a time, at 1:1 (readable — the whole-canvas fit
+   *  shrank a laptop-sized board to ~8px text), filling the width minus
+   *  16px gutters and the height between the top badge and the mic; the
+   *  board scrolls inside. Display-only, like fitBoardWidth. */
   function fitPhone(): void {
     const list = reg.list();
     if (!list.length) return;
-    camera = fitRects(list.map((f) => f.rect), vp(), 28);
+    const f = (focusId ? reg.get(focusId) : undefined) ?? (lastFocus ? reg.get(lastFocus) : undefined) ?? list[0];
+    if (focusId !== f.id) { focusId = f.id; lastFocus = f.id; }
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(viewport) : null;
+    const padTop = parseFloat(cs?.paddingTop ?? '0') || 0;
+    const padBottom = parseFloat(cs?.paddingBottom ?? '0') || 0;
+    const v = vp();
+    const GUTTER = 16, TOP = 60 + padTop, BOTTOM = 128 + padBottom;
+    const fit = { w: Math.max(240, Math.floor(v.w - 2 * GUTTER)), h: Math.max(240, Math.floor(v.h - TOP - BOTTOM)) };
+    focusFit.set(f.id, fit);
+    sync();
+    camera = { x: f.rect.x - GUTTER, y: f.rect.y - TOP, z: 1 };
     applyCamera();
   }
 
@@ -1705,7 +1720,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           sync(); updateDock(); persist(); historyRender();
           // First build on an empty focused board: re-place it (no animation, before the
           // self-check measures) so a wide dashboard opens at its top-left on a phone.
-          if (!before && focusId === frameId) { const ff = reg.get(frameId); if (ff) { camera = focusCam(ff); applyCamera(); } }
+          if (!before && focusId === frameId) { const ff = reg.get(frameId); if (phoneShell) fitPhone(); else if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
