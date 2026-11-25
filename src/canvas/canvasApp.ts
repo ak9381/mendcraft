@@ -36,6 +36,7 @@ import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, t
 import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
+import type { GimbalCueKind } from '../relay/protocol';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
@@ -427,6 +428,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pinch). The committed transfer + updated board ride the host `state`
   // snapshot, so both phones see it with no new Relay message type.
   let hostSession: HostSession | null = null;
+  /** The phone paired before hostSession was assigned: wake its gimbal then. */
+  let wakeOnSession = false;
   let screenLayout: ScreenLayout = coerceLayout(loadLayout(storage) ?? defaultLayout({ android: true, ios: true }));
   let snapshotRev = 0;
   let dragFrame: string | null = null;
@@ -749,6 +752,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
   };
+
+  /** Gimbal body language: nod 'yes' on an Approve, shake 'no' on a refusal,
+   *  'wakeup' when a phone pairs. In the iPhone app (gimbal plugin present) it
+   *  animates the docked stand here; on the laptop it relays an allow-listed
+   *  cue to the paired phone(s). No stand / not paired / rate-limited → a
+   *  silent no-op. The status line claims a move only after DockKit reported
+   *  success (never on the laptop, which can't see whether it moved). */
+  function bodyLanguage(kind: GimbalCueKind): void {
+    if (getGimbalPlugin()) {
+      void inputs.gimbal.gimbalCue(kind).then((r) => { if (r.ok && r.status) say(r.status); }).catch(() => {});
+      return;
+    }
+    void hostSession?.sendGimbalCue(kind).catch(() => false);
+  }
 
   {
     const saved = loadSetup()?.calibration;
@@ -1583,12 +1600,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       `${plan.tiles.length} tile${plan.tiles.length === 1 ? '' : 's'} filled`);
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
-    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return Promise.resolve(false); }
+    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); bodyLanguage('no'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
     // Where it actually ran (a phone's "Nano" step is really Deep in the cloud).
     const ranId: EngineId = si.engine;
     return new Promise((done) => {
       const before = surfaces[frameId] ?? null;
+      let built = false;
       const prop = createSurfaceProposal(`p-${Date.now()}`, ranId, summary, check.messages, () => {
         try {
           surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
@@ -1599,6 +1617,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // self-check measures) so a wide dashboard opens at its top-left on a phone.
           if (!before && focusId === frameId) { const ff = reg.get(frameId); if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
+          built = true;
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
           else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`); if (el) el.innerHTML = ''; }
@@ -1619,7 +1638,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         id: `p-${frameId}`, title: summary, youAsked: utterance, status,
         catalog: { helper: ranId === 'nano' ? 'Quick' : 'Deep', byLine: ranId === 'nano' ? 'Quick · on this device' : 'Deep · online',
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
-      }, { onKeep: () => { prop.accept(); finish(true); }, onDrop: () => { prop.reject(); finish(false); } });
+      }, { onKeep: () => { prop.accept(); finish(true); if (built) bodyLanguage('yes'); }, onDrop: () => { prop.reject(); finish(false); } });
       tagCardI18n(card);
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
@@ -2101,7 +2120,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // paired (minting a fresh token every time would strand them).
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
-        if (st === 'paired') { pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.'); }
+        if (st === 'paired') {
+          pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+          // The docked iPhone wakes up. hostSession is set once startPhoneJoin
+          // resolves; a phone already in the room can pair a tick before that.
+          if (hostSession) bodyLanguage('wakeup'); else wakeOnSession = true;
+        }
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
           // The relay can't say WHICH phone left, so forget every announce
@@ -2131,7 +2155,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           return;
         }
         if (cmd.kind === 'pointResult') { onIphonePointResult(cmd.text ?? ''); return; }
-        if (cmd.kind === 'sensePoint') return; // host → phone only
+        if (cmd.kind === 'sensePoint' || cmd.kind === 'gimbalCue') return; // host → phone only
         dispatchRelayCommand(cmd, {
           run,
           undo,
@@ -2150,6 +2174,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
+    if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
     renderArrangeStrip(); // reveal the arrangement strip now a phone is here
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
@@ -2277,7 +2302,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
       catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
     }, {
-      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); },
+      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); bodyLanguage('yes'); },
       onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English.'); autoHideAi(); },
     });
     showReview({
@@ -2808,6 +2833,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!engine) rulesPanel.log('received', text);
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      if (r.refused) bodyLanguage('no');
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally { settleSwarm(); settleEngines(); autoHideAi(); }
   }
@@ -3489,7 +3515,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
                 id: `p-fix-${target.id}`, title: `Fix ${target.label}`, youAsked: 'self-check fix', status: 'changed',
                 catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · self-check fix', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the tile dump and the problems', technicalLine: 'Gemini · self-check fix' },
               }, {
-                onKeep: () => { reviewDialog.close(); done(true); },
+                onKeep: () => { reviewDialog.close(); done(true); bodyLanguage('yes'); },
                 onDrop: () => { reviewDialog.close(); done(false); },
               });
               showReview({
@@ -3590,7 +3616,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
       }, {
-        onKeep: () => { reviewDialog.close(); done(applyMorph(fid, patched, summary, path)); },
+        onKeep: () => { reviewDialog.close(); const ok = applyMorph(fid, patched, summary, path); done(ok); if (ok) bodyLanguage('yes'); },
         onDrop: () => { reviewDialog.close(); done(false); },
       });
       showReview({
@@ -3764,6 +3790,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
+    /** iPhone: the laptop relayed a gimbal cue ('gimbalCue'). Local only — never re-relayed. */
+    gimbalCue: (kind: GimbalCueKind): void => { if (getGimbalPlugin()) bodyLanguage(kind); },
     onPhoneSenseChange: (cb: () => void) => { senseSubs.add(cb); return () => { senseSubs.delete(cb); }; },
   };
 }

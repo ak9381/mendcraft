@@ -207,6 +207,9 @@ afterFirstPaint(() => {
         // Only the iPhone, only for its own platform, and only from the host
         // (the session drops any sensePoint not sent by the host).
         s?.onSensePoint?.((platform) => { if (phonePlatform === 'ios' && platform === 'ios' && h.phoneSenseStatus()) h.pointForLaptop(); });
+        // Gimbal body language from the laptop (nod / shake / wakeup). The
+        // session already validated + rate-limited it; no stand → no-op.
+        if (phonePlatform === 'ios') s?.onGimbalCue?.((kind) => h.gimbalCue(kind));
       },
       joinExtras: { announceStatus: () => h.phoneSenseStatus() },
     });

@@ -12,6 +12,9 @@
 import { aimAngles, getGimbalPlugin, type GimbalPlugin } from '../devices/native';
 import { createGimbalFollow, FOLLOW_INTERVAL_MS, type GimbalFollow } from '../devices/gimbalFollow';
 import type { Pt } from '../input/handLogic';
+import { createCueLimiter, GIMBAL_CUE_MIN_GAP_MS, isGimbalCue, type GimbalCueKind } from '../relay/protocol';
+
+export type { GimbalCueKind };
 
 export type GimbalCanvasMode = 'face' | 'hands' | 'hold' | 'point';
 export type GimbalSpeechCommand = 'face' | 'hands' | 'hold' | 'point' | 'scan' | 'keepAliveOn' | 'keepAliveOff';
@@ -59,6 +62,11 @@ export interface GimbalCanvasController {
   /** The native app saw the stand dock/undock. false→true re-applies face
    *  (unless she chose hold/hands); returns that result, else null. */
   noteDocked?(docked: boolean): Promise<GimbalResult | null>;
+  /** Body language: nod yes / shake no / wake up (DockKit animate). Silent
+   *  no-op (ok:false, no status) when there is no docked stand, an old build,
+   *  or within GIMBAL_CUE_MIN_GAP_MS of the last cue. `status` is set only
+   *  after the native call reported success. */
+  gimbalCue(kind: GimbalCueKind): Promise<GimbalResult>;
 }
 
 export const NO_GIMBAL_WHY = 'The gimbal works in the iPhone app';
@@ -73,6 +81,14 @@ export const POINT_STATUS = 'Gimbal holding still while you point';
 export const SCAN_LIVE_WHY = 'Room scan isn’t available yet — point at a device or name it.';
 export const POINT_NEEDS_LAPTOP = 'Pointing needs the laptop camera — turn on Hands on the laptop and say it there.';
 export const OLD_BUILD_WHY = 'This iPhone app build can’t switch DockKit tracking — update the app';
+/** Status lines for a cue — only ever shown after DockKit reported success. */
+export const CUE_STATUS: Record<GimbalCueKind, string> = {
+  yes: 'Gimbal nodded',
+  no: 'Gimbal shook its head',
+  wakeup: 'Gimbal woke up',
+};
+export const CUE_OLD_BUILD_WHY = 'This iPhone app build can’t animate the gimbal — update the app';
+export const CUE_RATE_WHY = 'Gimbal cue skipped (one every 2 s)';
 
 /**
  * Follows the user (native only) for exactly as long as `run` is in flight —
@@ -146,6 +162,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   /** Inside the native app the plugin's reason; on the web the generic line. */
   const why = (): string => (plugin ? lastReason || NO_STAND_WHY : NO_GIMBAL_WHY);
   let availInflight: Promise<boolean> | null = null;
+  const cueLimiter = createCueLimiter(GIMBAL_CUE_MIN_GAP_MS, clock);
 
   /** isAvailable() at most once per TTL (it crosses the native bridge). */
   async function checkPlugin(): Promise<boolean> {
@@ -285,6 +302,21 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       if (explicit === 'hold' || explicit === 'hands') return null;
       if (currentMode === 'face') return null;
       return this.setMode('face');
+    },
+
+    async gimbalCue(kind: GimbalCueKind): Promise<GimbalResult> {
+      if (!isGimbalCue(kind)) return { ok: false, why: 'Unknown gimbal cue' };
+      if (!plugin) return { ok: false, why: NO_GIMBAL_WHY };
+      if (!plugin.cue) return { ok: false, why: CUE_OLD_BUILD_WHY };
+      if (!(await checkPlugin())) return { ok: false, why: why() };
+      if (!cueLimiter.allow()) return { ok: false, why: CUE_RATE_WHY };
+      try {
+        const r = await plugin.cue({ kind });
+        if (r?.ok === true) return { ok: true, status: CUE_STATUS[kind] };
+        return { ok: false, why: r?.reason || NO_STAND_WHY };
+      } catch (e) {
+        return { ok: false, why: e instanceof Error ? e.message : String(e) };
+      }
     },
 
     async setKeepAlive(on: boolean): Promise<GimbalResult> {

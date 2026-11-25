@@ -185,9 +185,35 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //   • 'pointResult' — phone → host: what that photo was identified as (or why
 //     not). text: a small JSON object coerced by canvas/phonePoint.ts. The
 //     photo itself never rides the relay.
+//   • 'gimbalCue' — host → phones: "play this DockKit body-language move"
+//     (nod yes on Approve, shake no on a refusal, wakeup on pairing). text is
+//     exactly one of GIMBAL_CUES — never user content. Phones only honour it
+//     from the host; the host rate-limits it (GIMBAL_CUE_MIN_GAP_MS).
 export type RelayCommandKind =
   | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
-  | 'sensePoint' | 'pointResult';
+  | 'sensePoint' | 'pointResult' | 'gimbalCue';
+
+/** The only DockKit animations the laptop may ask for (no user content). */
+export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
+export const GIMBAL_CUES: readonly GimbalCueKind[] = ['yes', 'no', 'wakeup'];
+/** At most one gimbal cue per this many ms (sender and receiver both enforce). */
+export const GIMBAL_CUE_MIN_GAP_MS = 2000;
+export function isGimbalCue(v: unknown): v is GimbalCueKind {
+  return typeof v === 'string' && (GIMBAL_CUES as readonly string[]).includes(v);
+}
+
+/** A "≤ 1 per minGapMs" gate. allow() returns true and starts a new gap, or false (drop). */
+export function createCueLimiter(minGapMs = GIMBAL_CUE_MIN_GAP_MS, now: () => number = () => Date.now()): { allow(): boolean } {
+  let last = -Infinity;
+  return {
+    allow() {
+      const t = now();
+      if (t - last < minGapMs) return false;
+      last = t;
+      return true;
+    },
+  };
+}
 
 export interface RelayCommand {
   kind: RelayCommandKind;
@@ -278,7 +304,7 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
 const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult'];
 
@@ -295,6 +321,8 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   // 'transfer'/'announce' require a non-empty, size-capped JSON blob in `text`.
   if (JSON_KINDS.includes(c.kind) && (typeof c.text !== 'string' || !c.text || c.text.length > CMD_JSON_MAX)) return null;
   if (c.kind === 'aiEvent' && (c.text as string).length > AI_EVENT_JSON_MAX) return null;
+  // 'gimbalCue' carries one allow-listed word and nothing else.
+  if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;

@@ -21,6 +21,13 @@
 // frame processing, so the app itself has a capture session DockKit can use.
 // It is stopped on hold / hands / release-to-off / background. Test both ways.
 //
+// Body language: cue({kind}) plays DockAccessory.animate(motion:) — .yes (nod),
+// .no (shake), .wakeup — the web layer calls it on Approve / refusal / pairing.
+// System tracking is paused for the animation and the web layer's `wanted`
+// state is restored after (same as aim()). ok:true only once DockKit accepted
+// the animation and it finished (or ran its course) within 3 s; otherwise
+// {ok:false, reason}. Undocked → {ok:false, reason:"No DockKit stand docked"}.
+//
 // Everything DockKit is behind `#if canImport(DockKit)` and
 // `@available(iOS 18.0, *)` (setOrientation is iOS 18+).
 // Axis convention to verify on the device: DockKit Vector3D x = pitch (tilt),
@@ -46,6 +53,7 @@ public class MendcraftGimbalPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "aim", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "release", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSystemTrackingEnabled", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cue", returnType: CAPPluginReturnPromise),
     ]
 
     private var fgObserver: NSObjectProtocol?
@@ -138,6 +146,28 @@ public class MendcraftGimbalPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         #endif
         call.resolve(["ok": false, "enabled": false])
+    }
+
+    /// Body language: kind = "yes" | "no" | "wakeup" → DockAccessory.animate(motion:).
+    /// Resolves {ok, reason}; ok only after DockKit ran it (3 s timeout).
+    @objc func cue(_ call: CAPPluginCall) {
+        let kind = call.getString("kind") ?? ""
+        guard ["yes", "no", "wakeup"].contains(kind) else {
+            call.resolve(["ok": false, "reason": "Unknown cue"])
+            return
+        }
+        #if canImport(DockKit)
+        if #available(iOS 18.0, *) {
+            Task {
+                let r = await DockWatcher.shared.cue(kind)
+                call.resolve(r)
+            }
+            return
+        }
+        call.resolve(["ok": false, "reason": "Gimbal animations need iOS 18"])
+        #else
+        call.resolve(["ok": false, "reason": "DockKit not in this SDK"])
+        #endif
     }
 
     /// enabled: DockKit system (subject) tracking on/off.
@@ -239,6 +269,18 @@ final class CameraKeepAlive {
 
     func stop() {
         queue.async { [weak self] in self?.teardown() }
+    }
+}
+
+/// Resolves a continuation exactly once (result vs timeout race).
+final class OnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }
 
@@ -351,10 +393,67 @@ actor DockWatcher {
         return true
     }
 
+    /// DockKit's built-in accessory animation. Tracking is paused for it and
+    /// the web layer's choice restored afterwards (face-follow keeps working).
+    func cue(_ kind: String) async -> [String: Any] {
+        guard let acc = accessory else { return ["ok": false, "reason": "No DockKit stand docked"] }
+        let motion: DockAccessory.Animation
+        switch kind {
+        case "yes": motion = .yes
+        case "no": motion = .no
+        case "wakeup": motion = .wakeup
+        default: return ["ok": false, "reason": "Unknown cue"]
+        }
+        // Put back what the web layer chose, or (never chose) what DockKit had.
+        let restoreOn = wanted ?? DockAccessoryManager.shared.isSystemTrackingEnabled
+        movesInFlight += 1
+        defer { movesInFlight -= 1 }
+        var result: [String: Any]
+        do {
+            try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
+            // animate() returns a Progress; whole thing bounded by 3 s.
+            let outcome = try await DockWatcher.withTimeout(ms: 3000) {
+                let progress = try await acc.animate(motion: motion)
+                await DockWatcher.waitForMove(progress, maxMs: 2800)
+                return !progress.isCancelled
+            }
+            switch outcome {
+            case .some(true): result = ["ok": true]
+            case .some(false): result = ["ok": false, "reason": "The gimbal animation was cancelled"]
+            case .none: result = ["ok": false, "reason": "The gimbal didn’t answer in 3 s"]
+            }
+        } catch {
+            result = ["ok": false, "reason": error.localizedDescription]
+        }
+        if movesInFlight == 1, restoreOn { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+        return result
+    }
+
+    /// Run `op`, giving up after `ms`: nil on timeout. Returns at the deadline
+    /// even if DockKit never answers (the late result is dropped, the op cancelled).
+    static func withTimeout<T: Sendable>(ms: UInt64, _ op: @escaping @Sendable () async throws -> T) async throws -> T? {
+        let gate = OnceGate()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T?, Error>) in
+            let work = Task {
+                do {
+                    let v = try await op()
+                    if gate.claim() { cont.resume(returning: v) }
+                } catch {
+                    if gate.claim() { cont.resume(throwing: error) }
+                }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: ms * 1_000_000)
+                if gate.claim() { work.cancel(); cont.resume(returning: nil) }
+            }
+        }
+    }
+
     /// Poll the move's Progress until it finishes, at most `maxMs`.
     static func waitForMove(_ progress: Progress, maxMs: Int64) async {
         let start = Date()
         while !progress.isFinished && !progress.isCancelled {
+            if Task.isCancelled { break }
             if Date().timeIntervalSince(start) * 1000 >= Double(maxMs) { break }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
