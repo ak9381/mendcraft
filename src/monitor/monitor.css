@@ -322,7 +322,8 @@ html, body { margin: 0; height: 100%; background: var(--ink); color: var(--text)
   .mon-redact-name::after { animation: none; transform: none; }
   .mon-packet, .mon-packet--back { animation-name: mon-fade-hold !important; animation-timing-function: ease !important; }
   .mon-shock, .mon-shock::before, .mon-shock::after, .mon-settle-ring, .mon-boundary-flash { animation: none !important; opacity: 0; }
-  .mon-fx:has(.mon-shock) { animation: none; }
+  /* The refusal still registers: the red wash fades in place, no rings. */
+  .mon-fx:has(.mon-shock) { animation: mon-alarm 1.6s ease-out both; }
 }
 @keyframes mon-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes mon-fade-hold { 0% { opacity: 0; } 20%, 80% { opacity: 1; } 100% { opacity: 0; } }

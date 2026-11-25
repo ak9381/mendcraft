@@ -51,7 +51,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
     .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
     .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
-    .sim-badge { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #6E6A63); border: 1.5px solid var(--border, #E4E0D8); border-radius: 999px; padding: 2px 8px; }
+    .sim-badge { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #6E6A63); border: 1.5px solid var(--border, #E4E0D8); border-radius: 999px; padding: 2px 8px; }
   `;
   override render() {
     const p = this.controller?.props;

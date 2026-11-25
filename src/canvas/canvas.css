@@ -50,7 +50,7 @@
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 /* More below the fold: the last 24px fade out instead of a hard cut, so a
    clipped tile reads as "scroll for more". */
-.mc-frame.focused .mc-frame-body { mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
+.mc-frame.focused .mc-frame-body.is-more-below { mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
 .mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
 
 /* Edit mode (editBoard.ts): every tile pulled into its own absolutely
@@ -270,7 +270,7 @@
    that engine — tapping/pinching one opens its mini terminal. */
 .mc-term-dock { margin: 0; }
 .mc-term-dock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px 4px 8px;
+.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 10px 4px 8px;
   border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 15px; cursor: pointer; }
 .mc-dock-chip-cursor { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color, var(--accent)); flex: 0 0 auto; }
 .mc-dock-chip.is-working { border-color: var(--chip-color, var(--accent)); }
@@ -303,7 +303,7 @@
   width: min(360px, calc(100vw - min(var(--mc-ai-w, 320px), 340px) - 48px)); max-width: calc(100vw - 24px); max-height: min(60vh, 420px); display: flex; flex-direction: column;
   border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
 .mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
-.mc-mini-close { margin-left: auto; min-width: 28px; min-height: 28px; padding: 0; border: none; background: transparent;
+.mc-mini-close { margin-left: auto; min-width: 44px; min-height: 44px; padding: 0; border: none; background: transparent;
   color: #8A867E; font-size: 16px; line-height: 1; cursor: pointer; }
 .mc-mini-close:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
 
@@ -1506,7 +1506,7 @@
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650;
 }
 .mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
-.mc-paired-sub { font-size: 0.85em; color: var(--text-dim, inherit); }
+.mc-paired-sub { font-size: 15px; color: var(--text-dim, inherit); }
 /* Facing gate has the hands locked ("Face phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {
@@ -1529,8 +1529,8 @@
   animation: mc-badge-in 400ms ease-out both; }
 .mc-gesture-badge .mc-gi { display: block; width: 18px; height: 18px; }
 /* Which hand (L, R, L+R): a small dark tab on the circle's lower-left edge. */
-.mc-gesture-side { position: absolute; left: -7px; bottom: -6px; min-width: 14px; height: 14px; box-sizing: border-box; padding: 0 3px;
-  border-radius: 7px; background: #2B2B2B; color: #F2C14E; font: 700 9px/14px system-ui, sans-serif; text-align: center; white-space: nowrap; }
+.mc-gesture-side { position: absolute; left: -8px; bottom: -7px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 3px;
+  border-radius: 8px; background: #2B2B2B; color: #F2C14E; font: 700 11px/16px system-ui, sans-serif; text-align: center; white-space: nowrap; }
 .mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
 /* Holding its gesture: the badge darkens (the bound button fills, below). */
 .mc-gesture-badge.is-holding { background: #9A5F1C; box-shadow: 0 0 0 3px #F2C14E; }
