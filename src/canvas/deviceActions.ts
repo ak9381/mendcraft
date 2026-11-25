@@ -29,6 +29,10 @@ export interface DeviceStore {
   /** Flag a device as simulated (or not) without a network round trip —
    *  used once the WiZ bridge's reachability is known. */
   setSim(id: string, sim: boolean): void;
+  /** A device that was really found joins the list (or its state is replaced). */
+  add(id: string, state: DeviceState): void;
+  /** A device that is not really there leaves the list. */
+  remove(id: string): void;
 }
 
 /** A "play <query>" turn is a multi-step search-and-play, not a quick ack. */
@@ -108,6 +112,13 @@ export function createDeviceStore(
       if (!state[id]) return;
       state[id] = { ...state[id], sim };
       publish(id);
+    },
+    add(id, s) {
+      state[id] = structuredClone(s);
+      publish(id);
+    },
+    remove(id) {
+      delete state[id];
     },
   };
 }

@@ -43,6 +43,7 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
+import { applyRealLamps, discoverRealLamps } from './realLamps';
 import { createSpotifyAwareConnector } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
@@ -897,8 +898,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // probe localhost at all: no console noise for visitors without a lamp.
   const wizClient = opts.sim ? null : (opts.wizClient ?? (resolveWizToken() ? createWizClient() : null));
   const bridgeStatus: BridgeStatus = { up: false };
+  // Which bulb each real lamp id is (filled when the bridge answers).
+  const lampIps = new Map<string, string>();
   const lampConnector = wizClient
-    ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })
+    ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus, bulbIp: (id) => lampIps.get(id) ?? '' })
     : simulatedConnector;
   // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
   const spOpts = (): spotifyApi.SpotifyApiOptions => ({
@@ -937,10 +940,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
   if (wizClient && !opts.connector) {
-    void wizClient.health().then((up) => {
-      bridgeStatus.up = up;
-      for (const id of Object.keys(store.all())) if (isWizDevice(id)) store.setSim(id, !up);
-    });
+    // Bridge up: the lamps are the bulbs it really finds (one per bulb IP,
+    // with their real on/brightness) and the seeded lamps go. Bridge down:
+    // the seeded lamps stay, labelled SIM.
+    void discoverRealLamps(wizClient, storage).then((lamps) => {
+      bridgeStatus.up = lamps !== null;
+      if (lamps === null || opts.devices) {
+        for (const id of Object.keys(store.all())) if (isWizDevice(id)) store.setSim(id, lamps === null);
+        return;
+      }
+      const changed = applyRealLamps({ store, surfaces, labels: DEVICE_LABELS, ips: lampIps }, lamps);
+      for (const fid of changed) renderSurface(fid);
+      if (changed.length) { sync(); updateDock(); persist(); }
+      say(lamps.length ? `Found ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.');
+    }).catch(() => { /* a broken bridge reply leaves the SIM lamps as they are */ });
   }
 
   processor.onSurfaceCreated((s: unknown) => {
