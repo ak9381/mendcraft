@@ -1675,7 +1675,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!out) { ghost(frameId, null); return null; }
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
-      panels.forEngine(out.si.engine).log('done', `draft: ${out.plan.tiles.length} tile${out.plan.tiles.length === 1 ? '' : 's'}, not shown for review yet`);
+      panels.forEngine(out.si.engine).log('done', `draft: ${out.plan.tiles.length} tile${out.plan.tiles.length === 1 ? '' : 's'} for Gemini to improve`);
       return { ...out, summary, status };
     } finally { turnBusy = false; settleEngines(); }
   }
