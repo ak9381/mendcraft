@@ -1264,7 +1264,8 @@
 .mc-engine-bar {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 48;
   display: flex; align-items: center; gap: 10px; box-sizing: border-box;
-  max-width: calc(100vw - 32px); padding: 8px 14px 8px 8px;
+  /* Clear of the zoom HUD (left) and the camera preview (right). */
+  max-width: min(760px, calc(100vw - 600px)); padding: 8px 14px 8px 8px;
   background: var(--panel); border: 1px solid var(--border); border-radius: 22px;
   box-shadow: 0 10px 28px rgb(43 43 43 / 0.10), 0 1px 0 rgb(255 255 255 / 0.8) inset;
   font-size: 14px; color: var(--text);
@@ -1282,17 +1283,19 @@
 .mc-engine-card:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .mc-engine-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mc-engine-name { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
-.mc-engine-where { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }
+.mc-engine-where { font-size: 15px; color: var(--text-dim); white-space: nowrap; }
 .mc-engine-where::before { content: "\00b7\00a0"; }
 .mc-engine-dot {
   flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
   border: 2px solid var(--eng); background: transparent; opacity: 0.85;
 }
-.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12.5px; line-height: 1.25; }
+.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 15px; line-height: 1.25; }
 .mc-engine-state { flex: 0 0 auto; font-weight: 650; color: var(--text-dim); }
 .mc-engine-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .mc-engine-line:not([hidden])::before { content: "\00b7\00a0"; }
-.mc-engine-line[hidden] { display: none; }
+/* Two lines per card: who and where, then the state. The detail line echoed
+   her own words; it stays in the DOM (title, AI monitor) but is not shown. */
+.mc-engine-line, .mc-engine-line[hidden] { display: none; }
 
 .mc-engine-card[data-state="working"] { border-color: var(--eng); background: color-mix(in srgb, var(--eng) 9%, var(--panel)); }
 .mc-engine-card[data-state="working"] .mc-engine-dot,
@@ -1329,9 +1332,9 @@
 @keyframes mc-engine-flow { from { background-position: 100% 0; } to { background-position: 0 0; } }
 @keyframes mc-engine-pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.7); } }
 
-.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
-.mc-engine-agents[hidden] { display: none; }
+.mc-engine-agents, .mc-engine-agents[hidden] { display: none; }
 @media (max-width: 1240px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
