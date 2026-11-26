@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { floorPlanTarget, FLOOR_PLAN_TITLE, roomSummary, roomWithoutPlanTiles } from '../../src/canvas/planTruth';
-import { connectedDeviceRows, connectedDevicesPlan, DEVICES_BOARD_TITLE, TICK } from '../../src/canvas/connectedDevices';
+import { floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomSummary, roomWithoutPlanTiles } from '../../src/canvas/planTruth';
+import { connectedDeviceRows, connectedDevicesPlan, DEVICES_BOARD_TITLE, NOT_ANSWERING, PHONE_FRESH_MS, TICK } from '../../src/canvas/connectedDevices';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 import { journeyStepOf } from '../../src/canvas/journey';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
@@ -103,5 +103,63 @@ describe('the Connected devices board', () => {
     expect(app).toMatch(/const target = ensureDevicesBoard\(\);\s*pairFrame = target;/);
     expect(app).toMatch(/const id = dashboardTarget\(focusId \?\? lastFocus\);/);
     expect(app).toMatch(/const target = dashboardTarget\(focusId\);/);
+  });
+});
+
+describe('review fixes: honest rows over time', () => {
+  it('a paired phone that stopped answering is not ticked', () => {
+    expect(PHONE_FRESH_MS).toBe(45_000);
+    const rows = connectedDeviceRows({ iphone: { sim: false, gimbal: 'tracking', answering: false }, android: { sim: false, answering: false }, lamps: [] });
+    expect(rows.find((r) => r.device === 'iPhone')).toEqual({ device: 'iPhone', status: NOT_ANSWERING, ok: false });
+    expect(rows.find((r) => r.device === 'Nothing phone')).toEqual({ device: 'Nothing phone', status: NOT_ANSWERING, ok: false });
+    expect(connectedDeviceRows({ iphone: { sim: false, gimbal: 'ready', answering: true }, lamps: [] })[1].ok).toBe(true);
+    // the canvas stamps a phone only on a LIVE announce, and forgets on disconnect
+    expect(app).toMatch(/phoneSeenAt\.set\(platform, Date\.now\(\)\)/);
+    expect(app).toMatch(/phoneSense\.clear\(\);\s*phoneSeenAt\.clear\(\);/);
+  });
+  it('a lamp is "answering" only while the bridge is up', () => {
+    expect(app).toMatch(/!bridgeStatus\.up \|\| d\.unreachable \|\| d\.sim \? 'unreachable'/);
+  });
+  it('the devices board is the frame it was made as, not any board with that title', () => {
+    expect(app).not.toMatch(/isDevicesBoard\(/);
+    expect(app).toMatch(/devicesFrame = id;\s*try \{ storage\.setItem\(DEVICES_BOARD_KEY, id\); \}/);
+  });
+});
+
+describe('review fixes: saved boards from before the floor plan had its own board', () => {
+  it('a legacy dashboard\'s plan tile and drawing move to a new "Floor plan" board', () => {
+    const surfaces: Record<string, SurfacePlan> = {
+      f1: { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'card', title: 'Plan', children: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] }] },
+    };
+    const drawings: Record<string, Record<string, unknown>> = { f1: { 'f1-cad': { walls: [1, 2, 3] } } };
+    const changed = liftLegacyPlanTiles([{ id: 'f1' }], surfaces, drawings, () => 'f2');
+    expect(changed.sort()).toEqual(['f1', 'f2']);
+    expect(surfaces.f2).toEqual({ kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] });
+    expect(JSON.stringify(surfaces.f1)).not.toContain('"plan"');
+    expect(surfaces.f1.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    expect(drawings).toEqual({ f2: { 'f1-cad': { walls: [1, 2, 3] } } });
+    // run again (the next load): nothing left to move
+    expect(liftLegacyPlanTiles([{ id: 'f1' }, { id: 'f2' }], surfaces, drawings, () => 'f3')).toEqual([]);
+  });
+  it('an existing floor-plan board is kept; a full canvas leaves the board as saved', () => {
+    const surfaces: Record<string, SurfacePlan> = {
+      f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'oneRoom' }, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] },
+      f9: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f9-cad', template: 'studio' }] },
+    };
+    liftLegacyPlanTiles([{ id: 'f1' }, { id: 'f9' }], surfaces, {}, () => { throw new Error('no new board needed'); });
+    expect(surfaces.f9.tiles).toEqual([{ type: 'plan', boardId: 'f9-cad', template: 'studio' }]);
+    expect(surfaces.f1.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    const full: Record<string, SurfacePlan> = { f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'oneRoom' }] } };
+    expect(liftLegacyPlanTiles([{ id: 'f1' }], full, {}, () => null)).toEqual([]);
+    expect(full.f1.tiles[0].type).toBe('plan');
+  });
+  it('runs on load, before any board renders (and before fitPlan strips plan tiles)', () => {
+    const at = app.indexOf('liftLegacyPlanTiles(reg.list(), surfaces, drawings');
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(app.indexOf('const fitPlan ='));
+  });
+  it('a turn on the floor-plan board is a floor plan, whatever kind the model wrote', () => {
+    expect(app).toContain('const plan = fitPlan(planForBoard(frameId, proposed));');
+    expect(app).toMatch(/reg\.get\(frameId\)\?\.kind === 'plan' && plan\.kind !== 'plan' \? \{ \.\.\.plan, kind: 'plan' \}/);
   });
 });

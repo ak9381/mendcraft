@@ -26,6 +26,9 @@ export const GIMBAL_TILE_LABEL = 'Gimbal';
 export const GIMBAL_TRACKING = 'Tracking you';
 export const GIMBAL_HANDS = 'Following your hands';
 export const GIMBAL_HOLD = 'Holding still';
+/** Hands mode is on at the iPhone, but no hand frames are being sensed yet:
+ *  it is neither following nor confirmed still. */
+export const GIMBAL_HANDS_WAITING = 'Docked · waiting to see your hands';
 export const GIMBAL_NO_STAND = 'No stand docked';
 /** On the laptop with no iPhone paired at all. */
 export const GIMBAL_NO_PHONE = 'No iPhone paired — pair the iPhone on its stand';
@@ -58,7 +61,8 @@ export function gimbalTileState(s: PhoneSenseStatus | null | undefined, o: { pai
     // 'hands' only claims following while the hand-sensing layer really runs.
     case 'hands': return s.sensor
       ? { docked: true, mode: 'hands', status: GIMBAL_HANDS, error: '' }
-      : { docked: true, mode: 'hold', status: GIMBAL_HOLD, error: '' };
+      : { docked: true, mode: 'hands', status: GIMBAL_HANDS_WAITING, error: '' };
+    // "Holding still" only once the iPhone reports tracking off ('ready').
     case 'ready': return { docked: true, mode: 'hold', status: GIMBAL_HOLD, error: '' };
     default: return { docked: false, mode: '', status: GIMBAL_NO_STAND, error: '' };
   }

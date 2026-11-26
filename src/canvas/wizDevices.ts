@@ -27,6 +27,10 @@ export interface WizConnectorDeps {
   /** Live mode (no ?sim=1): a lamp the bridge can't reach is NOT simulated —
    *  the press is refused with LAMP_NOT_REACHABLE and nothing changes. */
   honest?: boolean;
+  /** The bridge just stopped answering mid-session (status.up flipped false). */
+  onDown?: () => void;
+  /** Live mode: a lamp press was refused because the bridge isn't answering. */
+  onRefusedUnreachable?: () => void;
 }
 
 /** A real lamp the bridge can't reach right now (live mode only). */
@@ -82,9 +86,10 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
           // nothing is simulated in its place — the store shows the refusal.
           if (err instanceof BridgeRefusedError) throw err;
           deps.status.up = false; // bridge dropped mid-session — fall through below.
+          deps.onDown?.();
         }
       }
-      if (deps.honest && isWizDevice(intent.deviceId)) throw new DeviceError(LAMP_NOT_REACHABLE);
+      if (deps.honest && isWizDevice(intent.deviceId)) { deps.onRefusedUnreachable?.(); throw new DeviceError(LAMP_NOT_REACHABLE); }
       const ack = await deps.fallback.run(intent);
       return isWizDevice(intent.deviceId) ? { ...ack, sim: true } : ack;
     },

@@ -161,7 +161,7 @@ export async function discoverRealLamps(client: WizClient, storage: IdStore = nu
     lamps.push({
       id: ids[f.ip], ip: f.ip, label: lampLabel(i),
       // The bulb's own state; one that would not answer is shown off, not guessed.
-      state: { on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false },
+      state: { on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false, unreachable: false },
     });
   }
   return lamps;

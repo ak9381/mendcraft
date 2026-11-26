@@ -240,3 +240,52 @@ export function floorPlanTarget(o: {
   if (o.from && o.frames.some((f) => f.id === o.from) && !o.surfaces[o.from]?.tiles.length) return { id: o.from, reuseEmpty: true };
   return { id: null, make: true };
 }
+
+type PlanTile = Extract<TileSpec, { type: 'plan' }>;
+function firstPlanTile(tiles: readonly TileSpec[]): PlanTile | null {
+  for (const t of tiles) {
+    if (t.type === 'plan') return t;
+    const kids = childrenOf(t);
+    const hit = kids ? firstPlanTile(kids) : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** One-time load migration for boards saved before the floor plan had its
+ *  own board: a room board's plan tile (and what was drawn on it) moves to a
+ *  "Floor plan" board — the existing one, else a new one made by `addPlanFrame`
+ *  — BEFORE roomWithoutPlanTiles strips it, so nothing she drew is lost.
+ *  Mutates `surfaces` and `drawings`; returns the ids of boards it changed. */
+export function liftLegacyPlanTiles(
+  frames: readonly { id: string }[],
+  surfaces: Record<string, SurfacePlan>,
+  drawings: Record<string, Record<string, unknown>>,
+  addPlanFrame: () => string | null,
+): string[] {
+  const changed: string[] = [];
+  for (const f of [...frames]) {
+    const plan = surfaces[f.id];
+    if (plan?.kind !== 'room') continue;
+    const tile = firstPlanTile(plan.tiles);
+    if (!tile) continue;
+    let target = Object.keys(surfaces).find((id) => surfaces[id]?.kind === 'plan') ?? null;
+    if (!target) {
+      target = addPlanFrame();
+      if (!target) continue; // canvas full: leave the board as saved
+      surfaces[target] = { kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [tile] };
+      changed.push(target);
+    }
+    // The drawing follows its tile (unless the floor-plan board already has one).
+    const drawn = drawings[f.id]?.[tile.boardId];
+    if (drawn !== undefined) {
+      drawings[target] ??= {};
+      drawings[target][tile.boardId] ??= drawn;
+      delete drawings[f.id][tile.boardId];
+      if (!Object.keys(drawings[f.id]).length) delete drawings[f.id];
+    }
+    surfaces[f.id] = roomWithoutPlanTiles(plan);
+    changed.push(f.id);
+  }
+  return changed;
+}
