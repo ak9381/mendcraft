@@ -119,7 +119,14 @@ function send(res, origin, status, body) {
   // Only echo back an Access-Control-Allow-Origin for an allowlisted origin —
   // every other caller gets a response with no CORS header, so the browser
   // refuses to let the page read it. No credentials are ever used.
-  if (isAllowedOrigin(origin)) headers['access-control-allow-origin'] = origin;
+  if (isAllowedOrigin(origin)) {
+    headers['access-control-allow-origin'] = origin;
+    // Chrome's Private Network Access: a public https page (the hosted
+    // preview) may call this loopback bridge only if the preflight says so.
+    // Still allowlisted origins only, and every request still needs the token.
+    headers['access-control-allow-private-network'] = 'true';
+    headers.vary = 'Origin';
+  }
   res.writeHead(status, headers);
   res.end(json);
 }
