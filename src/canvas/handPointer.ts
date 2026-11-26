@@ -1582,7 +1582,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
     if (grab) {
       const g = grab;
-      if (!fisted[g.slot]) { endGrab(true); return; }
+      // Opening the hand commits a hand-edit stroke — but never while the user
+      // is not facing the screen: then it ends as a cancel.
+      if (!fisted[g.slot]) { endGrab(!locked); return; }
       if (ready[1 - g.slot]) {
         endGrab(); // a second fist takes over: finish the move/pan, then zoom below
       } else {

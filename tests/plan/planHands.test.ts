@@ -275,6 +275,47 @@ describe('plan hands: who gets the fist', () => {
     expect(rig.hand.mode().note).toBe('Draw a wall first — a door sits in a wall.');
   });
 
+  it('a fist held STILL draws nothing with any drawing tool (no 10 px walls, no surprise openings or dimensions)', () => {
+    rig.apply({ op: 'add_wall', x1: 1000, y1: 2000, x2: 5000, y2: 2000 });
+    rig.journal.flush(); rig.entries.length = 0;
+    for (const tool of ['wall', 'room', 'dim', 'opening', 'stairs', 'measure']) {
+      rig.tools.activate(tool);
+      rig.stroke({ x: 450, y: 495 }, { x: 462, y: 497 }); // 12 px of drift, on the wall
+    }
+    const d = rig.doc();
+    expect([d.walls.length, d.rooms.length, d.dims.length, d.openings.length, d.fixtures.length]).toEqual([1, 0, 0, 0, 0]);
+    expect(rig.entries).toHaveLength(0);
+    expect(rig.statuses.at(-1)).toMatch(/Nothing drawn/);
+    expect(rig.hand.mode().note).toMatch(/Nothing drawn/);
+  });
+
+  it('a wall shorter than 30 cm is not drawn even after a real stroke', () => {
+    rig.tools.activate('wall');
+    // 80 px out and back to 18 px from the start: the travel counts, the wall is 0.2 m.
+    rig.open(300, 500, 10); rig.fist(300, 500, 14);
+    rig.fistTo({ x: 300, y: 500 }, { x: 380, y: 500 }, 12);
+    rig.fist(380, 500, 8);
+    rig.fistTo({ x: 380, y: 500 }, { x: 318, y: 500 }, 12);
+    rig.fist(318, 500, 12); rig.open(318, 500, 8);
+    expect(rig.doc().walls).toHaveLength(0);
+    expect(rig.statuses.at(-1)).toMatch(/Too short for a wall/);
+  });
+
+  it('opening the hand while NOT facing the screen cancels the stroke (inside the 400 ms before the lock ends the grab)', () => {
+    rig.tools.activate('wall');
+    rig.open(300, 500, 10);
+    rig.fist(300, 500, 14);
+    rig.fistTo({ x: 300, y: 500 }, { x: 600, y: 500 }, 20);
+    rig.fist(600, 500, 6);
+    rig.hp.setFacing?.(false, rig.t);
+    rig.fist(600, 500, 10); // 330 ms: locked (300 ms), the grab not yet ended (400 ms)
+    expect(rig.hp.handsLocked?.()).toBe(true);
+    rig.open(600, 500, 8); // the hand opens while looking away
+    expect(rig.doc().walls).toHaveLength(0);
+    expect(rig.hand.busy()).toBe(false);
+    expect(rig.entries).toHaveLength(0);
+  });
+
   it('a fist TAP with the Wall tool draws nothing (drawing needs a held fist)', () => {
     rig.tools.activate('wall');
     rig.tap(400, 400);
@@ -385,14 +426,39 @@ describe('plan hands: select, move, rotate, resize', () => {
     expect(rig.hand.targets()).toEqual([]);
   });
 
-  it('a held fist with nothing selected grabs what the palm is on', () => {
+  it('a held fist with nothing selected never grabs a nearby element (it pans the plan)', () => {
     rig.apply({ op: 'add_fixture', kind: 'sofa', nums: { x: 3000, y: 2500, w: 2000, d: 900, rotation: 0 } });
-    rig.journal.flush();
+    rig.journal.flush(); rig.entries.length = 0;
     rig.apply({ op: 'select_set', ids: [] });
     const p = toScreen({ x: 3000, y: 2500 });
     rig.stroke(p, { x: p.x + 100, y: p.y - 60 });
+    expect(rig.doc().fixtures[0]).toMatchObject({ x: 3000, y: 2500 });
+    expect(rig.doc().selectedId).toBeNull();
+    expect(rig.entries).toHaveLength(0);
+  });
+
+  it('the selected element moves only when the fist closes on or near it; elsewhere the fist pans', () => {
+    rig.apply({ op: 'add_fixture', kind: 'sofa', nums: { x: 3000, y: 2500, w: 2000, d: 900, rotation: 0 } });
+    rig.journal.flush();
+    const p = toScreen({ x: 3000, y: 2500 });
+    // Far from it (300 px away): nothing moves.
+    rig.stroke({ x: p.x + 300, y: p.y + 150 }, { x: p.x + 400, y: p.y + 150 });
+    expect(rig.doc().fixtures[0]).toMatchObject({ x: 3000, y: 2500 });
+    expect(rig.hand.mode().text).not.toMatch(/Moving/);
+    // On it: it moves.
+    rig.stroke(p, { x: p.x + 100, y: p.y - 60 });
     expect(rig.doc().fixtures[0]).toMatchObject({ x: 4000, y: 3100 });
-    expect(rig.doc().selectedId).toBe(rig.doc().fixtures[0].id);
+  });
+
+  it('a trembling fist on the selected element moves nothing (under 2 grid steps)', () => {
+    rig.apply({ op: 'add_fixture', kind: 'sofa', nums: { x: 3000, y: 2500, w: 2000, d: 900, rotation: 0 } });
+    rig.journal.flush(); rig.entries.length = 0;
+    const p = toScreen({ x: 3000, y: 2500 });
+    rig.stroke(p, { x: p.x + 9, y: p.y }); // 9 px ≈ 0.1 m after snapping
+    expect(rig.doc().fixtures[0]).toMatchObject({ x: 3000, y: 2500 });
+    expect(rig.entries).toHaveLength(0);
+    expect(rig.journal.pending()).toBe(0);
+    expect(rig.controller.applyOp({ op: 'redo' }).ok).toBe(false);
   });
 
   it('a door slides along its wall', () => {
@@ -400,7 +466,7 @@ describe('plan hands: select, move, rotate, resize', () => {
     rig.apply({ op: 'add_door', target: rig.doc().walls[0].id, offset: 500, width: 900 });
     rig.journal.flush();
     rig.hand.select(rig.doc().openings[0].id);
-    rig.stroke({ x: 400, y: 400 }, { x: 500, y: 430 });
+    rig.stroke({ x: 400, y: 480 }, { x: 500, y: 500 }); // the fist closes on the door
     expect(rig.doc().openings[0].offset).toBe(1500);
   });
 
@@ -456,7 +522,7 @@ describe('plan hands: select, move, rotate, resize', () => {
     rig.tools.activate('select');
     rig.apply({ op: 'add_wall', x1: 1000, y1: 2000, x2: 4000, y2: 2000 });
     rig.hand.select(rig.doc().walls[0].id);
-    expect(rig.hand.mode().text).toBe('Wall 3.00 m selected — fist: move · peace-and-move: resize · right thumbs-down: remove');
+    expect(rig.hand.mode().text).toBe('Wall 3.00 m selected — fist on it: move · peace-and-move: resize · right thumbs-down: remove');
   });
 });
 
@@ -520,6 +586,18 @@ describe('contextual fixed gestures for the plan', () => {
   const ROTATE = '.mc-plan-hand-on .mc-plan-rotate';
   const binding = (key: string) => LAPTOP_GESTURES.find((b) => b.key === key)!;
 
+  it('R thumbs-down CLOSES what is open before it ever removes (Tools, a menu, a dialog, the drawer)', () => {
+    const open = env({ [REMOVE]: { id: 'remove' } }, { closer: () => ({ id: 'tools-close' }) });
+    expect(resolveGesture(binding('R:thumbsDown'), open)).toEqual({ kind: 'click', el: { id: 'tools-close' }, label: 'Close' });
+    const phone = PHONE_GESTURES.find((b) => b.key === 'R:thumbsDown')!;
+    expect(resolveGesture(phone, open)).toEqual({ kind: 'click', el: { id: 'tools-close' }, label: 'Close' });
+  });
+
+  it('L peace stays Tools while the Tools palette is open, even with Rotate on screen', () => {
+    const e = env({ [ROTATE]: { id: 'rot' }, '.mc-tools-chip': { id: 'tools' }, '.mc-tools-chip[aria-expanded="true"]': { id: 'tools' } });
+    expect(resolveGesture(binding('L:peace'), e)).toEqual({ kind: 'click', el: { id: 'tools' }, label: 'Tools' });
+  });
+
   it('R thumbs-down = Remove while the plan shows Remove; a review still wins; otherwise Close', () => {
     expect(resolveGesture(binding('R:thumbsDown'), env({ [REMOVE]: { id: 'remove' } }))).toEqual({ kind: 'click', el: { id: 'remove' }, label: 'Remove' });
     expect(resolveGesture(binding('R:thumbsDown'), env({ [REMOVE]: { id: 'remove' }, '.mc-review-reject': { id: 'reject' } }))).toEqual({ kind: 'click', el: { id: 'reject' }, label: 'Reject' });
@@ -539,35 +617,122 @@ describe('contextual fixed gestures for the plan', () => {
   });
 });
 
-import { isStorablePlanDoc, savedPlanDoc, setSavedPlanDoc, storablePlanDoc } from '../../src/canvas/planDocs';
+import { coerceDrawings, sanitizePlanDoc, savedPlanDoc, setSavedPlanDoc } from '../../src/canvas/planDocs';
 import { coerceSurfacePlan } from '../../src/canvas/surfacePlan';
+import { parseCanvasDoc } from '../../src/canvas/frames';
+import { buildSurfacePrompt } from '../../src/canvas/aiTurn';
 
-describe('the drawing is stored with the board', () => {
-  it('a plan tile keeps a sane `doc` through validation and drops a bad one', () => {
-    const doc = { walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 3000, y: 0 }, thickness: 100 }], openings: [], rooms: [], dims: [], fixtures: [], texts: [], selectedId: 'w1', selectedIds: ['w1'] };
-    const ok = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc }] });
-    expect(ok.ok && (ok.value.tiles[0] as { doc?: unknown }).doc).toEqual(doc);
-    const bad = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc: 'rm -rf' }] });
-    expect(bad.ok && 'doc' in bad.value.tiles[0]).toBe(false);
+describe('the drawing is stored BESIDE the board, never inside what is sent out', () => {
+  const SECRET = 'Grandma Lakshmi bedroom';
+  const drawing = () => {
+    const rig = planHandRig();
+    rig.apply({ op: 'add_room', x: 0, y: 0, w: 4000, h: 3000, name: SECRET });
+    rig.apply({ op: 'add_text', nums: { x: 500, y: 500 }, text: `${SECRET} note` });
+    const d = sanitizePlanDoc(rig.doc())!;
+    rig.destroy();
+    return d;
+  };
+
+  it('a surface plan has no place for a drawing: a model, a relayed board or storage cannot put one on a tile', () => {
+    const r = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc: drawing() }] });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.tiles[0]).toEqual({ type: 'plan', boardId: 'p-cad', template: 'studio' });
+      expect(JSON.stringify(r.value)).not.toContain(SECRET);
+    }
   });
 
-  it('what is stored has no selection, and the registry hands it to the board by frame + plan id', () => {
-    const rig = planHandRig();
-    rig.apply({ op: 'add_wall', x1: 0, y1: 0, x2: 3000, y2: 0 });
-    const d = storablePlanDoc(rig.doc())!;
+  it('a stored canvas with a drawing: the drawing loads, and neither the surfaces nor a model prompt built from them carry its text', () => {
+    const stored = {
+      version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+      frames: [{ id: 'f1', kind: 'plan', title: 'Floor plan', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }],
+      surfaces: { f1: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] } },
+      drawings: { f1: { 'f1-cad': drawing() }, ghost: { x: drawing() } },
+    };
+    const doc = parseCanvasDoc(JSON.parse(JSON.stringify(stored)))!;
+    expect(doc).not.toBeNull();
+    expect(Object.keys(doc.drawings ?? {})).toEqual(['f1']); // a drawing for a board that is not there is dropped
+    expect(JSON.stringify(doc.drawings)).toContain(SECRET);
+    expect(JSON.stringify(doc.surfaces)).not.toContain(SECRET);
+    for (const engine of ['gemini', 'nano'] as const) {
+      const sent = buildSurfacePrompt({ utterance: 'add a lamp', frameTitle: 'Floor plan', devices: [], current: doc.surfaces.f1, frameId: 'f1' } as never, engine);
+      const text = JSON.stringify(sent);
+      expect(text).toContain('f1-cad'); // the board itself is in the prompt…
+      expect(text).not.toContain(SECRET); // …what was drawn on it is not
+      expect(text).not.toContain('"walls"');
+      expect(text.length).toBeLessThan(20_000);
+    }
+  });
+
+  it('sanitizePlanDoc drops malformed elements, dangling references and duplicate ids, and clears the selection', () => {
+    const d = sanitizePlanDoc({
+      walls: [
+        { id: 'w1', a: { x: 0, y: 0 }, b: { x: 3000, y: 0 }, thickness: 100 },
+        { id: 'w1', a: { x: 0, y: 0 }, b: { x: 1, y: 1 }, thickness: 100 }, // duplicate id
+        { id: 'w2', a: { x: 'NaN', y: 0 }, b: { x: 1, y: 1 }, thickness: 100 }, // bad point
+        { id: 'w3', a: { x: 0, y: 0 }, b: { x: 1, y: 1 }, thickness: -5 },
+      ],
+      openings: [
+        { id: 'o1', kind: 'door', wallId: 'w1', offset: 500, width: 900, swing: 'left' },
+        { id: 'o2', kind: 'door', wallId: 'gone', offset: 500, width: 900 },
+        { id: 'o3', kind: 'portal', wallId: 'w1', offset: 500, width: 900 },
+      ],
+      rooms: [{ id: 'r1', name: 'Room', wallIds: ['w1', 'gone', 7] }],
+      dims: [{ id: 'm1', wallId: 'w1' }, { id: 'm2' }],
+      fixtures: [{ id: 'f1', kind: 'sofa', x: 0, y: 0, w: 2000, d: 900, rotation: 0 }, { id: 'f2', kind: '<img>', x: 0, y: 0, w: 1, d: 1, rotation: 0 }],
+      texts: [{ id: 't1', x: 0, y: 0, text: 'Note', size: 300 }, { id: 't2', x: 0, y: 0, text: 5, size: 300 }],
+      selectedId: 'w1', selectedIds: ['w1'], extra: 'ignored',
+    })!;
+    expect((d.walls as { id: string }[]).map((w) => w.id)).toEqual(['w1']);
+    expect((d.openings as { id: string }[]).map((o) => o.id)).toEqual(['o1']);
+    expect(d.rooms).toEqual([{ id: 'r1', name: 'Room', wallIds: ['w1'] }]);
+    expect((d.dims as { id: string }[]).map((m) => m.id)).toEqual(['m1']);
+    expect((d.fixtures as { id: string }[]).map((f) => f.id)).toEqual(['f1']);
+    expect((d.texts as { id: string }[]).map((t) => t.id)).toEqual(['t1']);
     expect(d.selectedId).toBeNull();
-    expect((d.walls as unknown[]).length).toBe(1);
-    expect(isStorablePlanDoc({ walls: 1 })).toBe(false);
+    expect('extra' in d).toBe(false);
+    expect(sanitizePlanDoc('rm -rf')).toBeNull();
+    expect(sanitizePlanDoc({ walls: 1 })).toBeNull();
+    expect(coerceDrawings({ f1: { 'BAD ID': d } }, new Set(['f1']))).toEqual({});
+  });
+
+  it('reload, then draw: new ids never repeat a restored one, so Remove hits the right element', () => {
+    // The first session: the template plus two drawn walls.
+    const first = planHandRig();
+    first.apply({ op: 'add_room', x: 0, y: 0, w: 4000, h: 3000 }); // "the template": w1..w4
+    first.apply({ op: 'add_wall', x1: 5000, y1: 0, x2: 8000, y2: 0 }); // w6 (r5 took 5)
+    first.apply({ op: 'add_wall', x1: 5000, y1: 1000, x2: 8000, y2: 1000 });
+    const saved = sanitizePlanDoc(first.doc())!;
+    const savedIds = [...(saved.walls as { id: string }[]), ...(saved.rooms as { id: string }[])].map((x) => x.id);
+    first.destroy();
+    // The reload: the board rebuilds its template (the id counter restarts
+    // low), then restores the saved drawing.
+    const rig = planHandRig();
+    rig.controller.applyGenerated?.({ ops: [{ op: 'add_room', x: 0, y: 0, w: 4000, h: 3000 }] });
+    expect(rig.controller.restoreSnapshot?.(saved).ok).toBe(true);
+    rig.journal.flush();
+    // Draw with the hand, through the real pointer.
+    rig.tools.activate('wall');
+    rig.stroke({ x: 300, y: 200 }, { x: 600, y: 200 });
+    const walls = rig.doc().walls;
+    const fresh = walls[walls.length - 1];
+    expect(savedIds).not.toContain(fresh.id);
+    expect(new Set(walls.map((w) => w.id)).size).toBe(walls.length);
+    // Remove the new wall: exactly that one goes.
+    rig.tools.activate('select');
+    rig.hand.select(fresh.id);
+    rig.hand.remove();
+    expect(rig.doc().walls.map((w) => w.id)).toEqual(walls.slice(0, -1).map((w) => w.id));
+    rig.destroy();
+  });
+
+  it('the registry hands a drawing to its board by frame + plan board id', () => {
+    const d = drawing();
     setSavedPlanDoc('f1', 'p-cad', d);
     expect(savedPlanDoc('f1', 'p-cad')).toBe(d);
     expect(savedPlanDoc('f2', 'p-cad')).toBeNull();
-    // A fresh controller restored from it shows the same wall.
-    const again = planHandRig();
-    again.controller.restoreSnapshot?.(d);
-    expect(again.doc().walls).toHaveLength(1);
     setSavedPlanDoc('f1', 'p-cad', null);
     expect(savedPlanDoc('f1', 'p-cad')).toBeNull();
-    rig.destroy(); again.destroy();
   });
 
   it('focusBox is the selected element on screen (what the view keeps visible after an edit)', () => {

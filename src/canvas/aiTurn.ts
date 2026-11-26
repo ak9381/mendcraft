@@ -489,9 +489,13 @@ export interface HistoryEntry {
   at: number;
   undone: boolean;
   /** 'surface' (default) edits a board; 'lang' swaps the UI language pack. */
-  kind?: 'surface' | 'lang' | 'layout' | 'plan' | 'close';
+  kind?: 'surface' | 'lang' | 'layout' | 'plan' | 'close' | 'resize';
   /** kind 'close': the board that was closed (`before` holds its surface). */
   closedFrame?: import('./frames').Frame;
+  /** kind 'close': what was drawn on the closed board's plan(s). */
+  closedDrawings?: Record<string, Record<string, unknown>>;
+  /** kind 'resize': the board's size before Smaller / Bigger. */
+  rectBefore?: { x: number; y: number; w: number; h: number };
   /** kind 'plan': a floor-plan drawing edit — the plan engine's own undo
    *  steps it is made of, and the board mount it belongs to. */
   planSteps?: number;

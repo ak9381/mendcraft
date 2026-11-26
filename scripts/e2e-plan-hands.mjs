@@ -228,7 +228,7 @@ async function main() {
       await P((c) => { window.__ph.hold('thumbsUp', 'R', c.x + 4, c.y + 34, 2200); window.__ph.gone(); }, target);
       const sel = await P(() => ({ id: window.__ph.doc().selectedId, banner: window.__ph.banner(), readout: window.__ph.readout(), bar: [...window.__ph.host().querySelectorAll('.mc-plan-hand-bar button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height })) }));
       check(sel.id === target.id, 'right thumbs-up selects it');
-      check(/selected — fist: move/.test(sel.banner ?? ''), `the banner lists what the hand can do (${sel.banner})`);
+      check(/selected — fist on it: move/.test(sel.banner ?? ''), `the banner lists what the hand can do (${sel.banner})`);
       check(sel.bar.some((x) => x.t === 'Remove') && sel.bar.every((x) => x.h >= 56), `the action bar is up with ≥ 56 px buttons (${sel.bar.map((x) => x.t).join(', ')})`);
       const badges = await P(() => { const q = (k) => { const el = document.querySelector(`.mc-gesture-badge[data-key="${k}"]`); return !!el && !el.hidden; }; return { remove: q('R:thumbsDown') }; });
       await wait(400);
@@ -268,7 +268,9 @@ async function main() {
 
       // ---- a held fist moves it
       const before = await P((id) => { const w = window.__ph.doc().walls.find((x) => x.id === id); return { x: w.a.x, y: w.a.y }; }, target.id);
-      const from = { x: target.x, y: target.y - 30 };
+      // Where the wall is NOW (it grew, and the view may have followed it): a
+      // point on the wall itself, clear of the door.
+      const from = await P((id) => { const P = window.__ph; const el = P.host().querySelector(`.mc-plan-hot[data-plan-id="${id}"]`); const c = P.center(el); for (const dx of [-70, 70, -50, 50, -90, 90]) if (P.host().__mcPlanPick(c.x + dx, c.y) === id) return { x: c.x + dx, y: c.y }; return c; }, target.id);
       await P((a, b) => { window.__ph.strokeStart(a, b); }, from, { x: from.x + 6, y: from.y - 52 });
       await shot('10-moving-the-wall-fist-down');
       await P((b) => { window.__ph.strokeEnd(b); window.__ph.gone(); }, { x: from.x + 6, y: from.y - 52 });
@@ -278,6 +280,14 @@ async function main() {
 
       // ---- right thumbs-down removes; left thumbs-down (Undo) restores
       const n0 = await P(() => window.__ph.doc().walls.length);
+      // With Tools open, thumbs-down closes Tools; it must not remove the wall.
+      await P(() => document.querySelector('.mc-tools-chip').click());
+      await wait(1600); // the Tools toggle is latched against a second press right after the first
+      const toolsOpen = await P(() => document.querySelector('.mc-tools-chip').getAttribute('aria-expanded') === 'true');
+      await P(() => { window.__ph.hold('thumbsDown', 'R', 900, 300, 2300); window.__ph.gone(); });
+      const afterClose = await P(() => ({ n: window.__ph.doc().walls.length, open: document.querySelector('.mc-tools-chip').getAttribute('aria-expanded') === 'true' }));
+      check(toolsOpen && !afterClose.open && afterClose.n === n0, 'with Tools open, right thumbs-down closes Tools and removes nothing');
+      await wait(1600);
       await P(() => { window.__ph.hold('thumbsDown', 'R', 900, 300, 1000); });
       check((await P(() => window.__ph.doc().walls.length)) === n0, 'right thumbs-down held 1 s removes nothing');
       await shot('11-thumbs-down-filling-remove');
@@ -343,8 +353,9 @@ async function main() {
 
     // ---- board buttons for hands: Smaller, Close board, Undo
     const drawing0 = await P(() => { const d = window.__ph.doc(); return JSON.stringify([d.walls.length, d.openings.length, d.fixtures.length]); });
-    const stored = await P(() => { const t = JSON.stringify(window.__canvas.snapshot()); return /"type":"plan"[^}]*"doc":\{/.test(t) || /"doc":\{"walls"/.test(t); });
-    check(stored, 'the drawing is stored with the board (on its plan tile)');
+    const stored = await P(() => { const snap = window.__canvas.snapshot(); return { drawings: JSON.stringify(snap.drawings ?? {}).includes('"walls"'), inSurfaces: JSON.stringify(snap.surfaces).includes('"walls"') }; });
+    check(stored.drawings, 'the drawing is stored with the board in the canvas document');
+    check(!stored.inSurfaces, 'and not inside the surface plan that model prompts and transfers serialize');
     const w0 = await P(() => window.__canvas.snapshot().frames.find((f) => document.querySelector(`[data-frame="${f.id}"] mc-plan-board`)).rect.w);
     await P(() => document.querySelector('.mc-frame.focused .mc-frame-smaller').click());
     await wait(500);

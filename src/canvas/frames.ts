@@ -1,4 +1,5 @@
 // Frames (boards) on the infinite canvas and the persisted canvas document.
+import { coerceDrawings, type Drawings } from './planDocs';
 import { MAX_Z, MIN_Z, type Camera, type Rect } from './camera';
 import { coerceSurfacePlan, type SurfacePlan } from './surfacePlan';
 import { coerceLanguagePack, type LanguagePack } from './languagePack';
@@ -9,6 +10,9 @@ export interface CanvasDoc {
   version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan>;
   /** Active non-English UI pack (validated), persisted so it works offline. */
   lang?: string; pack?: LanguagePack;
+  /** What was drawn on floor-plan boards: frame id → plan board id → plan
+   *  document. Beside `surfaces`, never inside them (see planDocs.ts). */
+  drawings?: Drawings;
 }
 
 export const CANVAS_DOC_VERSION = 1;
@@ -92,5 +96,6 @@ export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
     const p = coerceLanguagePack(d.pack);
     if (p.ok) { pack = p.value; lang = p.value.lang; }
   }
-  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack };
+  const drawings = coerceDrawings(d.drawings, seen);
+  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack, ...(Object.keys(drawings).length ? { drawings } : {}) };
 }

@@ -80,9 +80,9 @@ import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, mapToScreen, REACH, type HandPointer } from './handPointer';
-import { PLAN_EDIT_EVENT, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
+import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
-import { setSavedPlanDoc, storablePlanDoc } from './planDocs';
+import { sanitizePlanDoc, setSavedPlanDoc, type Drawings } from './planDocs';
 import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
@@ -284,6 +284,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const doc = opts.showcase === 'energy' ? buildEnergyShowcaseDoc() : initialDoc(stored, { seed: opts.seed, fresh: opts.fresh }, seedDoc);
   const reg: FrameRegistry = createFrameRegistry(doc.frames);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
+  // What was drawn on floor-plan boards (frame id → plan board id → plan doc).
+  const drawings: Drawings = JSON.parse(JSON.stringify(doc.drawings ?? {})) as Drawings;
   let camera: Camera = doc.camera;
   let focusId: string | null = doc.focusId;
   let lastFocus: string | null = focusId;
@@ -1132,21 +1134,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!node || typeof node !== 'object') return;
       const o = node as Record<string, unknown>;
       if (o.type === 'plan' && typeof o.boardId === 'string') { out.push(o as never); return; }
-      for (const k of Object.keys(o)) if (k !== 'doc') walk(o[k]);
+      for (const k of Object.keys(o)) walk(o[k]);
     };
     walk(plan.tiles);
     return out;
   }
-  /** Keep what was drawn on a plan board WITH the board: on its tile, so the
-   *  canvas document, the history and Close + Undo all carry it. */
+  /** What was drawn on a plan board is kept with the board in the canvas
+   *  document, BESIDE its surface plan (`drawings`), never inside it: the
+   *  surface plan is what model prompts, morph edits and board transfers
+   *  serialize. See planDocs.ts. */
   function savePlanDrawing(frameId: string, pb: (HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null }) | null | undefined): void {
     const st = pb?.planState?.();
     const plan = surfaces[frameId];
-    if (!st || !plan) return;
-    const tile = planTilesOf(plan).find((t) => t.boardId === st.boardId);
-    const doc = storablePlanDoc(st.doc);
-    if (!tile || !doc) return;
-    tile.doc = doc;
+    if (!st || !plan || !planTilesOf(plan).some((t) => t.boardId === st.boardId)) return;
+    const doc = sanitizePlanDoc(st.doc);
+    if (!doc) return;
+    (drawings[frameId] ??= {})[st.boardId] = doc;
     setSavedPlanDoc(frameId, st.boardId, doc);
     persist();
   }
@@ -1163,7 +1166,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
     // Saved drawings reach the plan boards before they mount.
-    for (const t of planTilesOf(plan)) setSavedPlanDoc(id, t.boardId, t.doc ?? null);
+    // A drawing belongs to its plan board id: an AI or morph edit of the board
+    // that keeps the plan tile keeps the drawing; a tile that is gone takes it along.
+    const planIds = new Set(planTilesOf(plan).map((t) => t.boardId));
+    for (const boardId of Object.keys(drawings[id] ?? {})) if (!planIds.has(boardId)) { delete drawings[id][boardId]; setSavedPlanDoc(id, boardId, null); }
+    for (const boardId of planIds) setSavedPlanDoc(id, boardId, drawings[id]?.[boardId] ?? null);
     live.delete(id);
     processor.processMessages(g.messages as never);
     deviceSurfaces.track(id, plan);
@@ -1418,7 +1425,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- persistence ----
   let persistTimer = 0;
   function snapshot(): CanvasDoc {
-    return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined };
+    const kept: Drawings = {};
+    for (const f of reg.list()) if (surfaces[f.id] && drawings[f.id] && Object.keys(drawings[f.id]).length) kept[f.id] = drawings[f.id];
+    return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined, ...(Object.keys(kept).length ? { drawings: kept } : {}) };
   }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
@@ -1515,6 +1524,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const h = Math.round(Math.min(BOARD_SIZE.maxH, Math.max(BOARD_SIZE.minH, f.rect.h * k)));
     if (w === f.rect.w && h === f.rect.h) { say(dir > 0 ? `${f.title} is as big as it gets.` : `${f.title} is as small as it gets.`); return; }
     reg.setRect(id, { ...f.rect, w, h });
+    history.push({ frameId: id, before: null, after: null, by: 'her', summary: `Made ${f.title} ${dir > 0 ? 'bigger' : 'smaller'}`, kind: 'resize', rectBefore: { ...f.rect } });
+    historyRender();
     refit(id);
     say(focusId === id && handsPlanBoard(id) ? `${f.title} is smaller. It fills the screen while Hands is on.` : `${f.title} is ${dir > 0 ? 'bigger' : 'smaller'}.`);
   }
@@ -1527,7 +1538,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     live.delete(id); deviceSurfaces.untrack(id);
     reg.remove(id);
     delete surfaces[id];
-    history.push({ frameId: id, before: surface, after: null, by: 'her', summary: `Closed ${f.title}`, kind: 'close', closedFrame: f });
+    const closedDrawings = drawings[id];
+    delete drawings[id];
+    history.push({ frameId: id, before: surface, after: null, by: 'her', summary: `Closed ${f.title}`, kind: 'close', closedFrame: f, ...(closedDrawings ? { closedDrawings } : {}) });
     if (focusId === id) { focusId = null; void overview(); } else sync();
     updateDock(); persist(); historyRender();
     say(`Closed ${f.title}. Say “undo” to bring it back.`);
@@ -2743,13 +2756,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function undo(): void {
     pairFirst.abandon();
+    // A plan edit made a moment ago (mouse / keyboard, still inside its
+    // 350 ms grouping window) becomes its own history entry first, so this
+    // Undo takes back exactly one edit.
+    flushPlanEdits();
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
     if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`); return; }
+    if (h.kind === 'resize' && h.rectBefore) {
+      const cur = reg.get(h.frameId);
+      // Its size goes back; where it was moved to since stays.
+      if (cur) { reg.setRect(h.frameId, { ...cur.rect, w: h.rectBefore.w, h: h.rectBefore.h }); refit(h.frameId); }
+      historyRender();
+      say(`Undid: ${h.summary}.`);
+      return;
+    }
     if (h.kind === 'close' && h.closedFrame) {
       if (!reg.restore(h.closedFrame)) { historyRender(); say(`Could not bring “${h.closedFrame.title}” back.`); return; }
       if (h.before) surfaces[h.frameId] = h.before;
+      if (h.closedDrawings) drawings[h.frameId] = h.closedDrawings;
       sync();
       if (h.before) renderSurface(h.frameId);
       updateDock(); persist(); historyRender();
@@ -3051,6 +3077,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return edit && edit.armed(p.x, p.y) ? edit : null;
   }
   const planPeace = createPlanPeace();
+  let planRefreshAt = -Infinity;
   /** Peace-and-move on a plan size stepper: one levelControl.adjustLevel step
    *  (a click on its own − / + button) per 30 px of travel, up = longer. */
   function levelPeaceTarget(el: HTMLElement): PeaceTarget {
@@ -3088,7 +3115,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         },
       });
     }
-    refreshPlanHands();
+    // The boards' hand UI follows at ~10 Hz (a live stroke repaints itself).
+    if (now - planRefreshAt >= 100 || now < planRefreshAt) { planRefreshAt = now; refreshPlanHands(); }
     return { claimedPeace: (side) => planPeace.claimed(side), noScrollPeace: (side) => planPeace.taken(side) };
   }
   if (typeof root.addEventListener === 'function') {

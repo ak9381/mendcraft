@@ -1,7 +1,6 @@
 // Smart canvas — the compact "surface plan" that Nano drafts and Gemini
 // upgrades. Models never write raw A2UI: they emit this small JSON, which is
 // coerced here and expanded deterministically into A2UI v0.9 messages.
-import { isStorablePlanDoc } from './planDocs';
 import { sanitizeVisualMarkup } from './visualSanitize';
 
 export const PROTOCOL = 'v0.9' as const;
@@ -27,9 +26,9 @@ export type FormField =
 
 export type LeafTileSpec =
   | { type: 'lamp'; deviceId: string; label: string }
-  /** `doc`: the drawing as the user left it (plan/doc.ts PlanDoc), when it
-   *  differs from the template. Stored with the board; see planDocs.ts. */
-  | { type: 'plan'; boardId: string; template: PlanTemplate; doc?: unknown }
+  /** No drawing here, by design: a surface plan goes to models, morph edits
+   *  and the relay. What is drawn lives beside it (planDocs.ts). */
+  | { type: 'plan'; boardId: string; template: PlanTemplate }
   | { type: 'music'; deviceId: string; label: string }
   | { type: 'switch'; deviceId: string; label: string }
   | { type: 'scene'; sceneId: string; label: string }
@@ -188,7 +187,7 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   if (o.type === 'plan') {
     const boardId = typeof o.boardId === 'string' && ID_RE.test(o.boardId) ? o.boardId : 'plan-1';
     const template = (PLAN_TEMPLATES as readonly string[]).includes(String(o.template)) ? (o.template as PlanTemplate) : 'studio';
-    return { ok: true, value: { type: 'plan', boardId, template, ...(isStorablePlanDoc(o.doc) ? { doc: o.doc } : {}) } };
+    return { ok: true, value: { type: 'plan', boardId, template } };
   }
   if (o.type === 'scene') {
     const sceneId = typeof o.sceneId === 'string' && ID_RE.test(o.sceneId) ? o.sceneId : null;

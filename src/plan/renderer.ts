@@ -89,6 +89,8 @@ export function createPlanRenderer(
   // plan is held between 60 and 80 px per metre, with only the palette and
   // the hand banner / bar kept clear. Larger plans overflow and are panned.
   let handFit = false;
+  /** The view was zoomed / panned by hand while hand fit was on. */
+  let handView = false;
   const HAND_SCALE = { min: 0.06, max: 0.08 };
   function handInsets(): { left: number; top: number; right: number; bottom: number } {
     const host = container.getBoundingClientRect();
@@ -993,8 +995,10 @@ export function createPlanRenderer(
     setHandFit(on) {
       if (on === handFit) return;
       handFit = on;
-      fitView();
-      fitted = true;
+      // The user's own zoom / pan (two fists, a fist on empty floor) survives
+      // hand edit going off and on again (3D, the Hand edit switch, tile
+      // Edit): only a view nobody has touched is re-fitted.
+      if (!handView) { fitView(); fitted = true; }
       render();
     },
     toggle3D,
@@ -1016,6 +1020,7 @@ export function createPlanRenderer(
       const rect = svg.getBoundingClientRect();
       const cx = clientX - rect.left;
       const cy = clientY - rect.top;
+      if (handFit) handView = true;
       // Never past 10–400 px per metre: a runaway two-hand zoom stays usable.
       const f = Math.min(4, Math.max(0.25, factor, 0.01 / scale), 0.4 / scale);
       originX = cx - (cx - originX) * f;
@@ -1029,6 +1034,7 @@ export function createPlanRenderer(
     setLiveGesture(on) { liveGesture = on; if (!on) render(); },
     // Pan by a screen-pixel delta — the translation leg of the two-hand pinch.
     panByPx(dx, dy) {
+      if (handFit) handView = true;
       originX += dx;
       originY += dy;
       fitted = true;

@@ -58,6 +58,11 @@ export function refreshPlanHands(force = false): void {
   for (const s of mounted) s.refresh(force);
 }
 
+/** Close every board's open mouse / keyboard edit now (before an Undo). */
+export function flushPlanEdits(): void {
+  for (const s of mounted) s.journal.flush();
+}
+
 let epochSeq = 0;
 
 export function mountPlanHandSurface(o: {
@@ -286,6 +291,7 @@ export function mountPlanHandSurface(o: {
     const pxPerM = (view.screenScale?.() ?? 0) * 1000;
     const next = JSON.stringify([act, turning, !!orbit, Math.round(pxPerM), mode, sel, targets.map((t) => [t.id, Math.round(t.x - r.left), Math.round(t.y - r.top), t.label])]);
     if (!force && next === sig) return;
+    if (!act && !turning && sig === '' && !force) { sig = next; return; } // never been on: nothing to draw
     sig = next;
     host.classList.toggle('mc-plan-hand-on', act || turning);
     board.classList.toggle('mc-plan-hands', act || turning);

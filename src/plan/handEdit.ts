@@ -40,6 +40,12 @@ export const HAND_AIM_PX = 56;
 export const RESIZE_STEP_MM = GRID_MM;
 export const RESIZE_STEP_PX = 30;
 const MIN_WALL_MM = 300;
+/** A stroke must travel this far on screen to draw anything: a fist that
+ *  closes and opens in place draws nothing. */
+export const MIN_STROKE_PX = 40;
+/** A move must carry the element at least this far to count (2 grid steps):
+ *  a fist that only trembles moves nothing. */
+export const MIN_MOVE_MM = 2 * GRID_MM;
 
 export interface HandEditHost {
   /** The plan's own tool context (apply → controller.applyOp + render). */
@@ -283,6 +289,9 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     | { kind: 'move'; id: string; elem: HandElementKind; grab: Point; ids: string[]; applied: Point; offset0: number; wallId?: string; label: string }
     | { kind: 'pan'; last: { x: number; y: number } };
   let stroke: Stroke | null = null;
+  /** Where the fist closed, and how far it has got from there (px). */
+  let strokeFrom = { x: 0, y: 0 };
+  let strokeTravel = 0;
   let readout: string | null = null;
   let lingering: string | null = null;
 
@@ -326,13 +335,18 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
 
   /** What a held fist with the Select tool moves. */
   function beginMove(x: number, y: number): Stroke | null {
-    let d = doc();
+    const d = doc();
     const sel = d.selectedIds?.length ? d.selectedIds : d.selectedId ? [d.selectedId] : [];
-    // The selected element moves from anywhere on the plan (no aiming). With
-    // nothing selected the fist grabs what the palm is on, or nearest to.
-    const id = sel.length === 1 ? sel[0] : (ctx.pick(x, y) ?? host.aim?.(x, y, HAND_AIM_PX) ?? null);
-    if (!id) return { kind: 'pan', last: { x, y } };
-    if (!sel.includes(id) || sel.length !== 1) { ctx.apply({ op: 'select_set', ids: [id] }); d = doc(); }
+    // Only the SELECTED element moves, and only when the fist closes on or
+    // near it. Anywhere else (or with nothing selected) the fist pans the
+    // plan — it never grabs whatever happens to be nearby.
+    const id = sel.length === 1 ? sel[0] : null;
+    // "Near" is measured to the selected element ITSELF (its box on screen plus
+    // the hand reach), so a door in the middle of the selected wall, or a
+    // closer neighbour, cannot steal the grab.
+    const box = id ? focusBox() : null;
+    const onIt = !!box && x >= box.left - HAND_AIM_PX && x <= box.right + HAND_AIM_PX && y >= box.top - HAND_AIM_PX && y <= box.bottom + HAND_AIM_PX;
+    if (!id || !onIt) return { kind: 'pan', last: { x, y } };
     const elem = kindOf(d, id);
     if (!elem) return null;
     const grab = ctx.toWorld(x, y);
@@ -377,6 +391,8 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     if (stroke) fistCancel();
     lingering = null;
     steps = 0;
+    strokeFrom = { x, y };
+    strokeTravel = 0;
     const tool = toolId();
     const world = ctx.toWorld(x, y);
     const d = doc();
@@ -401,6 +417,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
   function fistMove(x: number, y: number): void {
     const s = stroke;
     if (!s) return;
+    strokeTravel = Math.max(strokeTravel, Math.hypot(x - strokeFrom.x, y - strokeFrom.y));
     const world = ctx.toWorld(x, y);
     if (s.kind === 'wall') s.b = drawSnap(world, s.a);
     else if (s.kind === 'room') s.b = snapToGrid(world);
@@ -438,6 +455,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     host.setLive?.(false);
     const done = (): void => { ctx.setOverlay(null); changed(); };
     if (s.kind === 'tool') {
+      if (apply && strokeTravel < MIN_STROKE_PX) { tools.cancel(); status('Nothing drawn — keep your fist closed and move, then open your hand.'); return done(); }
       if (apply) {
         const before = doc().fixtures.length;
         tools.up(pinch(s.last.x, s.last.y));
@@ -451,9 +469,16 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     }
     if (s.kind === 'pan') return done();
     if (!apply) { rollback(); ctx.render(); return done(); }
+    // A fist that closed and opened without really moving draws nothing.
+    if (s.kind !== 'move' && strokeTravel < MIN_STROKE_PX) {
+      rollback();
+      status('Nothing drawn — keep your fist closed and move, then open your hand.');
+      ctx.render();
+      return done();
+    }
     if (s.kind === 'wall') {
       const len = dist(s.a, s.b);
-      if (len < 150) status('Too short for a wall — keep your fist closed and move further.');
+      if (len < MIN_WALL_MM) status('Too short for a wall — keep your fist closed and move further.');
       else if (commit([{ op: 'add_wall', x1: s.a.x, y1: s.a.y, x2: s.b.x, y2: s.b.y, thickness: DEFAULTS.thickness }], `Drew a wall ${m(len)}`)) lingering = `Wall: ${m(len)}`;
     } else if (s.kind === 'room') {
       const r = normRect(s.a, s.b);
@@ -461,7 +486,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
       else if (commit([{ op: 'add_room', x: r.x, y: r.y, w: r.w, h: r.h }], `Drew a room ${m(r.w)} × ${m(r.h)}`)) lingering = `Room: ${m(r.w)} × ${m(r.h)}`;
     } else if (s.kind === 'dim') {
       const len = dist(s.a, s.b);
-      if (len < GRID_MM) pinDimension(s.a);
+      if (len < GRID_MM) status('Too short for a dimension — move further, or fist-tap a wall to pin one.');
       else if (commit([{ op: 'add_dim', ax: s.a.x, ay: s.a.y, bx: s.b.x, by: s.b.y }], `Added a dimension ${m(len)}`)) lingering = `Dimension: ${m(len)}`;
     } else if (s.kind === 'measure') {
       const len = dist(s.a, s.b);
@@ -469,9 +494,8 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
       ctx.setStatus(`Measured ${m(len)}.`);
     } else if (s.kind === 'opening') {
       const sp = openingSpan(s);
-      const width = sp.width < PLAN_LIMITS.openingWidth.min ? DEFAULTS.doorWidth : sp.width;
-      const offset = sp.width < PLAN_LIMITS.openingWidth.min ? clampOpeningOffset(s.t0, width, wallLength(s.wall)) : sp.offset;
-      if (commit([{ op: 'add_opening', target: s.wall.id, offset, width }], `Added an opening ${m(width)}`)) lingering = `Opening: ${m(width)}`;
+      if (sp.width < PLAN_LIMITS.openingWidth.min) status('Too narrow for an opening — drag further along the wall, or fist-tap for a standard one.');
+      else if (commit([{ op: 'add_opening', target: s.wall.id, offset: sp.offset, width: sp.width }], `Added an opening ${m(sp.width)}`)) lingering = `Opening: ${m(sp.width)}`;
     } else {
       let envs: Env[];
       if (s.wallId) {
@@ -479,7 +503,12 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
         const o = doc().openings.find((q) => q.id === s.id);
         envs = o && Math.abs(o.offset - s.offset0) >= 1 ? [{ op: 'move_opening', target: s.id, offset: o.offset }] : [];
       } else envs = moveEnvs(s, s.applied);
-      commit(envs, `Moved ${s.label}`);
+      // Under two grid steps it was a tremble, not a move.
+      const far = s.wallId
+        ? envs.length > 0 && Math.abs(Number((envs[0] as { offset?: number }).offset) - s.offset0) >= MIN_MOVE_MM
+        : Math.hypot(s.applied.x, s.applied.y) >= MIN_MOVE_MM;
+      if (far) commit(envs, `Moved ${s.label}`);
+      else { rollback(); ctx.render(); if (strokeTravel > 0) status(`${s.label} stays where it was — move at least 20 cm to move it.`); }
     }
     done();
   }
@@ -734,7 +763,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
       else if (stroke?.kind === 'pan') text = 'Moving the plan view — open your hand to stop';
       else if (resize) text = `Resizing ${sel?.label ?? ''} — move your peace sign, change shape to finish`;
       else if (sel) {
-        const bits = [sel.movable ? 'fist: move' : '', sel.axes.length ? 'peace-and-move: resize' : '', sel.rotate ? `left peace: ${sel.rotate.toLowerCase()}` : '', 'right thumbs-down: remove'].filter(Boolean);
+        const bits = [sel.movable ? 'fist on it: move' : '', sel.axes.length ? 'peace-and-move: resize' : '', sel.rotate ? `left peace: ${sel.rotate.toLowerCase()}` : '', 'right thumbs-down: remove'].filter(Boolean);
         text = `${sel.label} selected — ${bits.join(' · ')}`;
       }
       return { ...base, kind: 'select', text };

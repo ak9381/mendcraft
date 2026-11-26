@@ -1,38 +1,79 @@
-// SAVED PLAN DRAWINGS. A floor-plan tile is `{ type: 'plan', boardId,
-// template }`; what the user then draws on it is stored on that same tile as
-// `doc` and so rides the board's existing persistence (the canvas document in
-// storage, the history's before / after surfaces, Close + Undo).
+// SAVED PLAN DRAWINGS. What the user draws on a floor-plan board is kept in
+// the canvas document under `drawings` (frame id → plan board id → plan doc),
+// NEXT TO the boards' surface plans — never inside them. A surface plan is
+// what goes into model prompts, morph edits, board transfers and the relay,
+// so nothing drawn (room names, labels, sizes) can reach the cloud through
+// those, and a prompt never grows with the drawing. A model or a relayed
+// board can also never supply a drawing: surface plans have no field for one.
 //
-// The drawing never travels through the A2UI message (it is not a component
-// prop): the canvas hands it to the plan board through this small registry,
-// keyed by board frame + plan board id, and the board reads it when it mounts.
+// The drawing never travels through the A2UI message either: the canvas
+// hands it to the plan board through this registry when the board mounts.
 
 /** A drawing larger than this is not kept (storage quota; a hand-drawn plan
  *  is a few kB). */
 export const PLAN_DOC_MAX_CHARS = 400_000;
+const MAX_ITEMS = 2000;
 
-const docs = new Map<string, unknown>();
+export type Drawings = Record<string, Record<string, Record<string, unknown>>>;
+
+const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const str = (v: unknown, max = 80): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
+const pt = (v: unknown): v is { x: number; y: number } => !!v && typeof v === 'object' && fin((v as { x?: unknown }).x) && fin((v as { y?: unknown }).y);
+const list = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.slice(0, MAX_ITEMS).filter((x) => x && typeof x === 'object') : []);
+
+/** A plan document with every element checked field by field: anything
+ *  malformed is dropped, ids are unique, openings and room loops only refer
+ *  to walls that exist, the selection is cleared. null = not a plan at all,
+ *  or too large to store. Never trusts its input (storage can be edited). */
+export function sanitizePlanDoc(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const d = raw as Record<string, unknown>;
+  if (!Array.isArray(d.walls) || !Array.isArray(d.openings)) return null;
+  const ids = new Set<string>();
+  const fresh = (id: unknown): id is string => str(id, 40) && !ids.has(id) && !!ids.add(id);
+  const walls = list(d.walls).filter((w) => pt(w.a) && pt(w.b) && fin(w.thickness) && w.thickness > 0 && (w.height === undefined || fin(w.height)) && fresh(w.id))
+    .map((w) => ({ id: w.id, a: { x: (w.a as { x: number }).x, y: (w.a as { y: number }).y }, b: { x: (w.b as { x: number }).x, y: (w.b as { y: number }).y }, thickness: w.thickness, ...(w.height !== undefined ? { height: w.height } : {}) }));
+  const wallIds = new Set(walls.map((w) => w.id as string));
+  const openings = list(d.openings).filter((o) => (o.kind === 'door' || o.kind === 'window' || o.kind === 'opening') && typeof o.wallId === 'string' && wallIds.has(o.wallId)
+    && fin(o.offset) && fin(o.width) && o.width > 0 && (o.sill === undefined || fin(o.sill)) && (o.height === undefined || fin(o.height)) && fresh(o.id))
+    .map((o) => ({ id: o.id, kind: o.kind, wallId: o.wallId, offset: o.offset, width: o.width,
+      ...(o.swing === 'left' || o.swing === 'right' ? { swing: o.swing } : {}), ...(o.sill !== undefined ? { sill: o.sill } : {}), ...(o.height !== undefined ? { height: o.height } : {}) }));
+  const rooms = list(d.rooms).filter((r) => typeof r.name === 'string' && r.name.length <= 80 && Array.isArray(r.wallIds) && fresh(r.id))
+    .map((r) => ({ id: r.id, name: r.name, wallIds: (r.wallIds as unknown[]).filter((w): w is string => typeof w === 'string' && wallIds.has(w)) }));
+  const dims = list(d.dims).filter((m) => ((typeof m.wallId === 'string' && wallIds.has(m.wallId)) || (pt(m.a) && pt(m.b))) && fresh(m.id))
+    .map((m) => (typeof m.wallId === 'string' && wallIds.has(m.wallId) ? { id: m.id, wallId: m.wallId } : { id: m.id, a: { x: (m.a as { x: number }).x, y: (m.a as { y: number }).y }, b: { x: (m.b as { x: number }).x, y: (m.b as { y: number }).y } }));
+  const fixtures = list(d.fixtures).filter((f) => str(f.kind, 40) && /^[a-z0-9-]+$/.test(f.kind) && fin(f.x) && fin(f.y) && fin(f.w) && fin(f.d) && f.w > 0 && f.d > 0 && fin(f.rotation)
+    && (f.steps === undefined || fin(f.steps)) && (f.rise === undefined || fin(f.rise)) && fresh(f.id))
+    .map((f) => ({ id: f.id, kind: f.kind, x: f.x, y: f.y, w: f.w, d: f.d, rotation: f.rotation, ...(f.steps !== undefined ? { steps: f.steps } : {}), ...(f.rise !== undefined ? { rise: f.rise } : {}) }));
+  const texts = list(d.texts).filter((t) => fin(t.x) && fin(t.y) && typeof t.text === 'string' && t.text.length <= 200 && fin(t.size) && t.size > 0 && fresh(t.id))
+    .map((t) => ({ id: t.id, x: t.x, y: t.y, text: t.text, size: t.size }));
+  const out = { walls, openings, rooms, dims, fixtures, texts, selectedId: null, selectedIds: [] };
+  try { return JSON.stringify(out).length <= PLAN_DOC_MAX_CHARS ? out : null; } catch { return null; }
+}
+
+/** The `drawings` part of a stored canvas document: only for boards that
+ *  exist, every drawing sanitized; anything off is dropped (never the boards). */
+export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>): Drawings {
+  const out: Drawings = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [frameId, boards] of Object.entries(raw as Record<string, unknown>)) {
+    if (!frameIds.has(frameId) || !boards || typeof boards !== 'object' || Array.isArray(boards)) continue;
+    for (const [boardId, doc] of Object.entries(boards as Record<string, unknown>).slice(0, 8)) {
+      const clean = /^[a-z0-9][a-z0-9-]{0,39}$/.test(boardId) ? sanitizePlanDoc(doc) : null;
+      if (clean) (out[frameId] ??= {})[boardId] = clean;
+    }
+  }
+  return out;
+}
+
+const docs = new Map<string, Record<string, unknown>>();
 const key = (frameId: string, boardId: string): string => `${frameId}:${boardId}`;
 
-/** Looks like a plan document, and small enough to store. */
-export function isStorablePlanDoc(doc: unknown): doc is Record<string, unknown> {
-  if (!doc || typeof doc !== 'object') return false;
-  const d = doc as Record<string, unknown>;
-  if (!Array.isArray(d.walls) || !Array.isArray(d.openings)) return false;
-  try { return JSON.stringify(doc).length <= PLAN_DOC_MAX_CHARS; } catch { return false; }
-}
-
-/** The drawing without its selection (a selection is not part of the plan). */
-export function storablePlanDoc(doc: unknown): Record<string, unknown> | null {
-  if (!isStorablePlanDoc(doc)) return null;
-  return { ...(JSON.parse(JSON.stringify(doc)) as Record<string, unknown>), selectedId: null, selectedIds: [] };
-}
-
-export function setSavedPlanDoc(frameId: string, boardId: string, doc: unknown | null): void {
-  if (doc && isStorablePlanDoc(doc)) docs.set(key(frameId, boardId), doc);
+export function setSavedPlanDoc(frameId: string, boardId: string, doc: Record<string, unknown> | null): void {
+  if (doc) docs.set(key(frameId, boardId), doc);
   else docs.delete(key(frameId, boardId));
 }
 
-export function savedPlanDoc(frameId: string, boardId: string): unknown | null {
+export function savedPlanDoc(frameId: string, boardId: string): Record<string, unknown> | null {
   return docs.get(key(frameId, boardId)) ?? null;
 }
