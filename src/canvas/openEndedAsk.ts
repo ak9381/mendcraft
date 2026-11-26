@@ -46,7 +46,7 @@ const OBJ_PHRASE = String.raw`(?:\s+(?:on|off|up|down|in|out|back|over))?(?:\s+(
 const OBJ_ONLY = String.raw`(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${OBJ})\b`;
 const FUTURE = String.raw`\b(?:I\s*(?:['’]ll|\s+will|\s+shall|['’]m\s+going\s+to|\s+am\s+going\s+to|['’]m\s+gonna|['’]d\s+(?:be\s+(?:glad|happy|delighted)\s+to|love\s+to)|\s+would\s+(?:be\s+(?:glad|happy|delighted)\s+to|love\s+to)|\s+can)|let\s+me|allow\s+me\s+to)\s+(?:go\s+ahead\s+and\s+|now\s+|just\s+|quickly\s+)?`;
 const PROMISES: RegExp[] = [
-  new RegExp(String.raw`${FUTURE}(?:${ACT})${OBJ_PHRASE}`, 'i'),
+  new RegExp(String.raw`${FUTURE}(?!put\s+it\s+(?:this|that|another)\s+way)(?:${ACT})${OBJ_PHRASE}`, 'i'), // "Let me put it this way" is talk
   new RegExp(String.raw`${FUTURE}(?:do|handle|take\s+care\s+of|sort\s+out)\s+(?:that|it|this)\b`, 'i'),
   new RegExp(String.raw`\bI\s*(?:['’]ll|\s+will)\s+get\s+(?:it|that|this|them)\s+(?:sorted|done|fixed|added|set\s+up|ready|going|moving|changed)\b`, 'i'),
   new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)\s+(?:just\s+|now\s+|already\s+)?(?:${ACTED})${OBJ_PHRASE}`, 'i'),
@@ -63,42 +63,64 @@ const PROMISES: RegExp[] = [
   new RegExp(String.raw`(?:^|[.!?,;—]\s*)(?:${ACTING})${OBJ_ONLY}[^.!?]*\b(?:now|for\s+you)\b`, 'i'),
 ];
 
-// ── Inverted guard ────────────────────────────────────────────────────────
-// The lists above only know the board's own verbs; Nano also says "I will
-// call your daughter right away". So any first-person "I'll / I will / I'm
-// going to / let me / I'd be happy to <verb>" is a promise UNLESS the verb is
-// conversation itself (explain, think, suggest, tell you, be…). Chat can't
-// remember either, so "I'll remember that" / "I'll keep that in mind" count.
-const CHAT_VERBS = new Set(['be', 'explain', 'describe', 'clarify', 'answer', 'chat', 'talk', 'listen', 'think', 'suggest', 'recommend', 'say', 'ask', 'guess', 'wonder', 'admit', 'mention', 'repeat', 'rephrase', 'wait', 'know', 'hear', 'bet', 'stay', 'share', 'summarize', 'summarise', 'answer', 'reply', 'respond', 'imagine', 'agree', 'note']);
-// Verbs that reach outside the app — never something chat (or the app) does.
-const OUTSIDE = 'call|ring|phone|dial|text|message|email|e-mail|mail|send|order|book|buy|purchase|pay|reserve|schedule|remind|alert|notify|contact|reach|tell|invite|arrange|cancel|transfer|post|share|fetch|deliver|pick|drive|cook|clean|lock|unlock|check|look|find|search|google|ask';
-const OUTSIDE_RE = new RegExp(String.raw`\b(?:${OUTSIDE})\b`, 'i');
+// ── Action claims beyond the board's own verbs ────────────────────────────
+// The lists above only know the board's objects; Nano also says "I will call
+// your daughter right away". Allowed by default: a reply is only a promise
+// when its first-person verb is an action — the app's own (add, turn, play…)
+// or one out in the world (call, text, order, book, remind…) — or when a
+// lighter verb (check, tell her, look into…) is aimed at now / for you.
+// Talk itself ("I'll do my best", "I'll keep you company", "I'll try") passes.
+const APP_ACT = 'add|make|create|build|draw|place|insert|change|move|remove|delete|turn|switch|set|open|close|update|connect|start|stop|play|pause|dim|brighten|widen|resize|rename|extend|enlarge|fix|save|undo|put|get|install|adjust|lower|raise|mute|unmute|record';
+const OUTSIDE = 'call|ring|phone|dial|text|message|email|e-mail|mail|send|forward|order|book|buy|purchase|pay|reserve|schedule|remind|alert|notify|contact|invite|arrange|cancel|transfer|post|deliver|fetch|drive|cook|clean|lock|unlock|remember';
+const STRONG = new RegExp(String.raw`^(?:${APP_ACT}|${OUTSIDE})$`, 'i');
+const OUTSIDE_ONLY = new RegExp(String.raw`^(?:${OUTSIDE})$`, 'i');
+const ANY_ACT = new RegExp(String.raw`\b(?:${OUTSIDE}|${APP_ACT})\b`, 'i');
+/** Lighter verbs: a promise only when aimed at now / for you (or, for tell, at someone else). */
+const WEAK = /^(?:check|look|find|search|tell|share|see|help|handle|do|take|sort|keep|ask|let|note|write|reach)$/i;
+const SOON = /\b(?:now|right\s+away|straight\s+away|for\s+you|as\s+we\s+speak|immediately|at\s+once|in\s+a\s+(?:moment|second|minute|sec)|for\s+(?:\w+\s+){0,2}(?:seconds?|minutes?|hours?|days?))\b/i;
 // Words that may sit between the lead and its verb.
-const SKIP = /^(?:\s+(?:go\s+ahead\s+and|now|just|quickly|also|always|still|probably|really|certainly|definitely|gladly|happily|surely|simply|then|first|immediately|soon|right\s+now|actually|personally|try\s+(?:to|and)|be\s+(?:happy|glad|delighted|pleased|sure|able)\s+to|need\s+to|have\s+to|want\s+to|make\s+sure\s+to))/i;
+const SKIP = /^(?:\s+(?:go\s+ahead\s+and|now|just|quickly|also|always|still|probably|really|certainly|definitely|gladly|happily|surely|simply|then|first|immediately|soon|right\s+now|actually|personally|be\s+(?:happy|glad|delighted|pleased|sure|able)\s+to|need\s+to|have\s+to|want\s+to|make\s+sure\s+to))/i;
 const NEGATION = /^\s+(?:not|never|n't)\b/i;
-/** Judge the words after a lead ("I'll", "let me"…): is this a promise? */
+/** Exemptions after a strong verb: "stop rambling", "make a suggestion", "get back to…". */
+function strongExempt(verb: string, rest: string): boolean {
+  if (/^\s+[a-z]+ing\b/i.test(rest) && !/^\s+(?:something|nothing|anything|everything)\b/i.test(rest)) return true; // "stop rambling", "start chatting"
+  switch (verb) {
+    case 'make': return /^\s+(?:a|an|one|my)?\s*(?:suggestion|guess|point|joke|recommendation|observation|comment|wish|promise)s?\b/i.test(rest);
+    case 'put': return /^\s+it\s+(?:this|that|another|simply)\s+way\b|^\s+it\s+simply\b|^\s+(?:the\s+)?kettle\s+on\b/i.test(rest);
+    case 'start': case 'begin': return /^\s+(?:by|with|over)\b/i.test(rest);
+    case 'get': return /^\s+(?:back|to|you\s+(?:an?\s+)?(?:idea|answer|tip))\b|^\s+(?:it|that|what\s+you\s+mean)\s*(?:[.!,?]|$)|^\s+(?:this|that)\s+straight\b/i.test(rest);
+    case 'set': return /^\s+(?:the\s+)?(?:record\s+straight|scene)\b/i.test(rest);
+    case 'turn': return /^\s+(?:this|that|it)\s+around\b/i.test(rest);
+    default: return false;
+  }
+}
+/** Judge the words after a lead ("I'll", "let me"…): is this a promise?
+ *  `complete` is false while a reply streams: a verb whose verdict needs the
+ *  next word is not decided until that word has arrived. */
 function judgeAfterLead(after: string, bareIsPromise: boolean, complete: boolean): boolean {
   let a = after;
   for (let m = SKIP.exec(a); m; m = SKIP.exec(a)) a = a.slice(m[0].length);
   if (NEGATION.test(a)) return false;
   const w = /^\s+([a-z][a-z'-]*)/i.exec(a);
-  // "Sure, I can." / "I'd be happy to!" — but a stream that just stops
-  // after "Sure, I'll" is not finished yet.
+  // "Sure, I can." / "I'd be happy to!" — but a stream that just stops after "Sure, I'll" is not finished yet.
   if (!w) return bareIsPromise && (complete || /^\s*[.!?,;:—…]/.test(a));
   const verb = w[1].toLowerCase();
   const rest = a.slice(w[0].length);
+  if (!complete && /^\s*$/.test(rest)) return false; // undecided until the next word
+  const clause = rest.split(/[.!?;:]/)[0];
+  if (STRONG.test(verb)) return !strongExempt(verb, rest);
+  if (!WEAK.test(verb)) return false;
   switch (verb) {
-    case 'tell': return !/^\s+(?:you|me|us|a|an|some|one|the\s+truth|stories|jokes)\b/i.test(rest);
-    case 'help': return OUTSIDE_RE.test(rest.split(/[.!?]/)[0]) && !/^\s+(?:you\s+)?(?:explain|understand|think|decide|choose|figure)\b/i.test(rest);
-    case 'see': return !/^\s*(?:[,.!?…]|$|you\b)/i.test(rest);
-    case 'make': return !/^\s+(?:a|an|one|my)?\s*(?:suggestion|guess|point|joke|recommendation|observation|comment)s?\b/i.test(rest);
-    case 'give': return !/^\s+(?:you\s+)?(?:a|an|some|one|my)?\s*(?:tip|idea|hint|example|suggestion|rundown|overview|summary|thought|answer|opinion)s?\b/i.test(rest);
-    case 'keep': return !/^\s+it\s+(?:short|simple|brief|quick)\b/i.test(rest);
-    case 'put': return !/^\s+it\s+(?:this|that|another|simply)\s+way\b|^\s+it\s+simply\b/i.test(rest);
-    case 'walk': return !/^\s+you\s+through\b/i.test(rest);
-    case 'start': case 'begin': return !/^\s+(?:by|with)\b/i.test(rest);
-    case 'share': return !/^\s+(?:a|an|some|one|my)\s+(?:tip|idea|thought|story|joke|fact)s?\b/i.test(rest);
-    default: return !CHAT_VERBS.has(verb);
+    case 'tell': return !/^\s+(?:you|me|us|a|an|some|one|the\s+truth|stories|jokes)\b/i.test(rest); // "tell her" relays a message
+    case 'let': return /^\s+(?:\w+\s+){1,2}know\b/i.test(rest) && !/^\s+me\s+know\b/i.test(rest); // "let your son know"
+    case 'note': case 'write': return /^\s+(?:that|it|this)?\s*down\b/i.test(rest);
+    case 'reach': return /^\s+out\b/i.test(rest);
+    case 'see': return /^\s+what\s+I\s+can\s+do\b/i.test(rest);
+    case 'help': return ANY_ACT.test(clause.split(/\b(?:if|when)\b/)[0]) && !/^\s+(?:you\s+)?(?:explain|understand|think|decide|choose|figure)\b/i.test(rest);
+    case 'keep': return /^\s+(?:that|it|this)\s+in\s+mind\b/i.test(rest);
+    case 'take': return /^\s+care\s+of\s+(?:it|that|this|them)\b/i.test(rest);
+    case 'do': case 'handle': case 'sort': return /^\s+(?:that|it|this)\b/i.test(rest) && !/^\s+(?:that|it|this)\s+(?:way|again)\b/i.test(rest);
+    default: return SOON.test(clause);
   }
 }
 const LEAD = /\b(?:I\s*'ll|I\s+will|I\s+shall|I\s*'m\s+(?:going\s+to|gonna)|I\s+am\s+(?:going\s+to|gonna)|let\s+me|allow\s+me\s+to)\b|\b(I\s*'d|I\s+would)\s+(?:be\s+(?:glad|happy|delighted|pleased)\s+to|love\s+to|like\s+to)\b/gi;
@@ -106,10 +128,23 @@ const YES_CAN = /(?:^|[.!?,;—]\s*)(?:yes|yeah|yep|yup|sure|of\s+course|absolut
 const I_CAN = /\bI\s+(?:can|could)\b(?!\s*not|'t)/gi;
 const I_AM_ING = /\bI\s*(?:'m|\s+am)\s+(?:now\s+|just\s+|currently\s+|already\s+)?([a-z]+ing)\b([^.!?]*)/gi;
 const LEAD_ING = /(?:^|[.!?,;:—]\s*)([A-Za-z]+ing)\b([^.!?]*)/g;
-const CHAT_ING = new Set(['being', 'thinking', 'explaining', 'listening', 'talking', 'chatting', 'wondering', 'hoping', 'glad', 'happy', 'here', 'going', 'feeling', 'doing', 'saying', 'asking', 'guessing', 'learning', 'smiling', 'nothing', 'something', 'anything', 'everything', 'morning', 'evening', 'thing', 'bring', 'string', 'spring', 'swing', 'sing', 'ring', 'wing', 'sting', 'king', 'during', 'ceiling', 'ping', 'cling', 'fling', 'sling', 'having', 'trying']);
-const SOON = /\b(?:now|right\s+away|straight\s+away|for\s+you|as\s+we\s+speak|immediately|at\s+once)\b/i;
-/** The inverted checks: true when any first-person claim of an action
- *  (beyond conversation) is in the text. */
+/** "setting" → set, "making" → make, "calling" → call. */
+function strongGerund(ing: string): boolean {
+  const stem = ing.toLowerCase().slice(0, -3);
+  const forms = [stem, `${stem}e`, stem.replace(/(.)\1$/, '$1')];
+  return forms.some((f) => f.length > 1 && STRONG.test(f));
+}
+const OUTSIDE_PAST = 'sent|called|rang|rung|phoned|dialled|dialed|texted|messaged|emailed|mailed|forwarded|ordered|booked|bought|purchased|paid|reserved|scheduled|reminded|alerted|notified|contacted|invited|arranged|cancell?ed|transferred|posted|delivered|informed';
+const PAST_CLAIMS: RegExp[] = [
+  new RegExp(String.raw`\bI\s*(?:'ve|\s+have|'d|\s+had)?\s+(?:just\s+|now\s+|already\s+)?(?:${OUTSIDE_PAST})\b`, 'i'),
+  /\bI\s*(?:'ve|\s+have)\s+(?:just\s+|already\s+)?(?:told|let)\s+(?!you\b|me\b)\w+(?:\s+\w+)?(?:\s+know)?\b/i,
+  new RegExp(String.raw`\b(?:has|have|was|were)\s+(?:just\s+|now\s+|already\s+)?been\s+(?:${OUTSIDE_PAST}|told|set|added|turned|switched)\b`, 'i'),
+  // "Got it, the fan is off." — chat switched nothing.
+  /(?:^|[.!?]\s*)(?:got\s+it|done|okay|ok|sure|there|all\s+set|alright)[,!.—\s]+(?:the|your)\s+(?:[\w'-]+\s+){0,3}(?:is|are)\s+(?:now\s+)?(?:on|off|set|booked|sent|done|locked|unlocked|playing|paused|muted)\b/i,
+];
+/** A sentence that only shows her how to ask ("…if you say 'turn on the lamp'"). */
+const HOW_TO_ASK = /\bif\s+you\s+(?:say|ask|tell\s+me)\s*[,:]?\s*["“'‘]/i;
+/** The extra checks: true when any first-person claim of an action is in the text. */
 function claimsAnyAction(raw: string, complete: boolean): boolean {
   const t = raw.replace(/[’‘]/g, "'");
   for (const m of t.matchAll(LEAD)) {
@@ -122,29 +157,28 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
   // ("I can tell you about…", "I can turn this around for you" pass).
   for (const m of t.matchAll(I_CAN)) {
     const w = /^\s+(?:just\s+|also\s+)?([a-z][a-z'-]*)/i.exec(t.slice(m.index! + m[0].length));
-    if (w && new RegExp(`^(?:${OUTSIDE})$`, 'i').test(w[1]) && !/^tell$|^ask$|^check$|^look$|^share$/i.test(w[1])) return true;
+    if (w && OUTSIDE_ONLY.test(w[1]) && !/^remember$/i.test(w[1])) return true;
   }
-  // "I'm calling her now", "I'm sending it for you"
-  for (const m of t.matchAll(I_AM_ING)) {
-    if (!CHAT_ING.has(m[1].toLowerCase()) && SOON.test(m[2])) return true;
-  }
+  // "I'm calling her now", "I'm setting a timer for ten minutes"
+  for (const m of t.matchAll(I_AM_ING)) if (strongGerund(m[1]) && SOON.test(m[2])) return true;
   // "Calling your daughter right away." / "Sure — sending it now."
-  for (const m of t.matchAll(LEAD_ING)) {
-    const w = m[1].toLowerCase();
-    if (w.length >= 6 && !CHAT_ING.has(w) && SOON.test(m[2])) return true;
-  }
+  for (const m of t.matchAll(LEAD_ING)) if (strongGerund(m[1]) && SOON.test(m[2])) return true;
   // "right away" with no "you" before it in its sentence ("You should rest right away" passes).
   for (const s of t.split(/(?<=[.!?])\s+/)) {
     const i = s.search(/\b(?:right|straight)\s+away\b/i);
     if (i >= 0 && !/\byou\b/i.test(s.slice(0, i))) return true;
   }
+  if (PAST_CLAIMS.some((re) => re.test(t))) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
+/** Sentences that only teach her what to say are not judged. */
+const judged = (t: string): string => t.split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' ');
+
 
 /** True when the reply promises (or claims) an action chat cannot take. */
 export function promisesAction(reply: string, complete = true): boolean {
-  const t = String(reply ?? '');
+  const t = judged(String(reply ?? ''));
   return PROMISES.some((re) => re.test(t)) || claimsAnyAction(t, complete);
 }
 /** The reply as it may be shown and spoken: an action promise is replaced

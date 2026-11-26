@@ -81,11 +81,12 @@ describe('presence frameIntervalMs + face-only frames', () => {
     t.stop();
   });
 
-  it('a slow tracking run (GPU busy, e.g. with Nano) is followed by as much idle time: the page stays at least half free', async () => {
+  it('slow tracking runs in a row (GPU busy, e.g. with Nano) get a short pause each; one slow run gets none', async () => {
     const { createPresenceTracker, trackingBackoffMs } = await import('../src/input/presence');
-    expect(trackingBackoffMs(4)).toBe(0); // a normal run waits for nothing
-    expect(trackingBackoffMs(300)).toBe(300);
-    expect(trackingBackoffMs(5000)).toBe(1000);
+    expect(trackingBackoffMs(4, true)).toBe(0); // a normal run waits for nothing
+    expect(trackingBackoffMs(300, false)).toBe(0); // one slow run alone: a hiccup
+    expect(trackingBackoffMs(100, true)).toBe(50); // half its time…
+    expect(trackingBackoffMs(5000, true)).toBe(80); // …at most 80 ms
     h.handCostMs = 200; // each detectForVideo blocks the main thread 200 ms
     const t = createPresenceTracker(() => undefined, undefined, { detectFaces: false });
     await t.start(stream());
@@ -93,8 +94,8 @@ describe('presence frameIntervalMs + face-only frames', () => {
     pump(4000, 16);
     const elapsed = clock - before;
     const busy = h.handCalls * 200;
-    expect(h.handCalls).toBeGreaterThan(3); // the hands keep ticking…
-    expect(busy / elapsed).toBeLessThanOrEqual(0.55); // …but never take the whole thread
+    expect(h.handCalls).toBeGreaterThan(5); // the hands keep ticking…
+    expect(busy / elapsed).toBeLessThanOrEqual(0.75); // …and the page gets the thread between runs
     t.stop();
   });
 });

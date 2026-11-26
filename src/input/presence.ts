@@ -172,16 +172,17 @@ export function bindOperatorHands(paused: boolean, lastBox: unknown): boolean {
   return !paused && lastBox != null;
 }
 
-/** A tracking run (MediaPipe's detectForVideo is synchronous, and on the GPU
- *  delegate it waits for its own readback) that took `spentMs` is followed by
- *  at least as long with no run, so the page's main thread is never more than
- *  half taken by tracking — the GPU busy with another job (Nano, a heavy
- *  render) slows the hands down instead of freezing the page. Normal runs
- *  (well under a frame) wait for nothing extra. */
+/** MediaPipe's detectForVideo is synchronous (on the GPU delegate it waits
+ *  for its own readback). When runs stay slow — two in a row over
+ *  SLOW_TRACKING_RUN_MS, e.g. the GPU busy with Nano or a heavy render — each
+ *  is followed by a short pause (half its time, at most TRACKING_BACKOFF_MAX_MS)
+ *  so the page's other work gets the thread. One slow run (a hiccup) and
+ *  normal runs wait for nothing extra. */
 export const SLOW_TRACKING_RUN_MS = 50;
-export function trackingBackoffMs(spentMs: number): number {
-  if (!(spentMs > SLOW_TRACKING_RUN_MS)) return 0;
-  return Math.min(spentMs, 1000);
+export const TRACKING_BACKOFF_MAX_MS = 80;
+export function trackingBackoffMs(spentMs: number, previousWasSlow: boolean): number {
+  if (!(spentMs > SLOW_TRACKING_RUN_MS) || !previousWasSlow) return 0;
+  return Math.min(spentMs * 0.5, TRACKING_BACKOFF_MAX_MS);
 }
 
 export function createPresenceTracker(
@@ -225,6 +226,7 @@ export function createPresenceTracker(
   let lastRunAt = -Infinity;
   /** No tracking run before this time: a slow run is followed by as much idle time. */
   let backoffUntil = -Infinity;
+  let lastRunSlow = false;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
@@ -425,7 +427,9 @@ export function createPresenceTracker(
       handleHands({ landmarks: [], worldLandmarks: [], handedness: [], handednesses: [] } as unknown as HandLandmarkerResult);
     }
     const doneAt = performance.now();
-    backoffUntil = doneAt + trackingBackoffMs(doneAt - at);
+    const spent = doneAt - at;
+    backoffUntil = doneAt + trackingBackoffMs(spent, lastRunSlow);
+    lastRunSlow = spent > SLOW_TRACKING_RUN_MS;
     rafId = requestAnimationFrame(loop);
   }
 
