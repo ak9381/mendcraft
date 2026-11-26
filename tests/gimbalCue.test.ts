@@ -276,7 +276,7 @@ describe('wiring (source checks)', () => {
   it('the laptop relays; the iPhone cues locally and never re-relays', () => {
     expect(app).toMatch(/if \(getGimbalPlugin\(\)\) \{\s*void inputs\.gimbal\.gimbalCue\(kind\)/);
     expect(app).toMatch(/hostSession\?\.sendGimbalCue\(kind\)/);
-    expect(app).toMatch(/cmd\.kind === 'gimbalCue'\) return; \/\/ host → phone only/);
+    expect(app).toMatch(/cmd\.kind === 'gimbalCue' \|\| cmd\.kind === 'gimbalMode'\) return; \/\/ host → phone only/);
     expect(main).toMatch(/if \(phonePlatform === 'ios'\) s\?\.onGimbalCue\?\.\(\(kind\) => h\.gimbalCue\(kind\)\)/);
   });
 

@@ -1163,7 +1163,8 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     const wiring = src.slice(src.indexOf('void discoverRealLamps(wizClient, storage)'), src.indexOf('void discoverRealLamps(wizClient, storage)') + 900);
     expect(wiring).toContain('bridgeStatus.up = lamps !== null;');
-    expect(wiring).toMatch(/if \(lamps === null \|\| opts\.devices\) \{\s*for \(const id of Object\.keys\(store\.all\(\)\)\) if \(isWizDevice\(id\)\) store\.setSim\(id, lamps === null\);\s*return;/);
+    // ?sim=1-style canvases keep the SIM flag; live mode marks the lamps "Not reachable" and never simulates them.
+    expect(wiring).toMatch(/if \(lamps === null \|\| opts\.devices\) \{\s*for \(const id of Object\.keys\(store\.all\(\)\)\) \{\s*if \(!isWizDevice\(id\)\) continue;\s*if \(liveLamps\) store\.patch\(id, \{ sim: lamps === null, unreachable: lamps === null \}\);\s*else store\.setSim\(id, lamps === null\);/);
     expect(src).toContain('const lampSwap = { store, surfaces, labels: DEVICE_LABELS, ips: lampIps };');
     expect(wiring).toContain('applyRealLamps(lampSwap, lamps)');
     expect(src).toContain("bulbIp: (id) => lampIps.get(id) ?? ''");
@@ -1221,7 +1222,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     // reload, bridge down: the saved board holds wiz-lamp-1, the store starts with the seeded lamps
     expect(rememberedLampIds(storage)).toEqual(['wiz-lamp-1']);
     const start = rememberedLamps(storage)!;
-    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: false, brightness: 50, sim: true } }]); // SIM until the bridge answers
+    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: false, brightness: 50, sim: true, unreachable: true } }]); // "Not reachable" until the bridge answers
     const c = seededCanvas();
     c.surfaces.room = { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };
     const changed = applyRealLamps(c, start);
@@ -1237,7 +1238,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-2']);
     expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp' });
     const src = (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/const remembered = rememberedLamps\(storage\);\s*if \(remembered\) applyRealLamps\(lampSwap, remembered\);/);
+    expect(src).toMatch(/applyRealLamps\(lampSwap, rememberedLamps\(storage\) \?\? \[\]\);/);
   });
 
   it('review 4: the bridge’s default bulb and the same bulb found later under its address keep one id', async () => {

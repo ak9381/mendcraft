@@ -1,0 +1,149 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import {
+  GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_PHONE, gimbalPress, gimbalTileState, isAddGimbal, planHasGimbal, withGimbalTile,
+} from '../../src/canvas/gimbalTile';
+import { coerceSurfacePlan, expandPlan, MAX_TILES, type SurfacePlan } from '../../src/canvas/surfacePlan';
+import { gateMessages } from '../../src/canvas/gate';
+import { CATALOG_SCHEMAS } from '../../src/canvas/catalogApi';
+import { validateCommand } from '../../src/relay/protocol';
+import { routeLine } from '../../src/canvas/routeLine';
+import { createLocalNetworkCheck, LNA_BLOCKED_LINE, localNetworkBlocked } from '../../src/canvas/localNetwork';
+import { createUnreachableLampConnector, createWizAwareConnector, LAMP_NOT_REACHABLE } from '../../src/canvas/wizDevices';
+import { applyRealLamps, rememberedLamps } from '../../src/canvas/realLamps';
+import { pointConnectFromIdentity } from '../../src/canvas/connectTurns';
+import { DeviceError } from '../../src/canvas/deviceActions';
+
+const src = (p: string): string => readFileSync(new URL(`../../src/${p}`, import.meta.url), 'utf8');
+
+describe('gimbal tile: status is only what the iPhone reported', () => {
+  it('maps the reported gimbal state to the four honest lines', () => {
+    expect(gimbalTileState({ gimbal: 'tracking', sensor: false, hands: false, canPoint: true }).status).toBe('Tracking you');
+    expect(gimbalTileState({ gimbal: 'hands', sensor: true, hands: false, canPoint: true }).status).toBe('Following your hands');
+    // 'hands' without live sensing frames is NOT following
+    expect(gimbalTileState({ gimbal: 'hands', sensor: false, hands: false, canPoint: true }).status).toBe('Holding still');
+    expect(gimbalTileState({ gimbal: 'ready', sensor: false, hands: false, canPoint: true }).status).toBe('Holding still');
+    expect(gimbalTileState({ gimbal: 'none', sensor: false, hands: false, canPoint: true })).toMatchObject({ docked: false, status: 'No stand docked' });
+    expect(gimbalTileState(null).status).toBe('No stand docked');
+    expect(gimbalTileState(null, { paired: false }).status).toBe(GIMBAL_NO_PHONE);
+  });
+
+  it('has Follow me / Follow my hands / Hold still / Nod / Shake and no Centre (aim() is relative only)', () => {
+    expect([...GIMBAL_MODE_BUTTONS, ...GIMBAL_CUE_BUTTONS].map((b) => b.label)).toEqual(['Follow me', 'Follow my hands', 'Hold still', 'Nod', 'Shake']);
+    expect(src('canvas/gimbalTile.ts')).toMatch(/No "Centre" button: the plugin's aim\(\) is a RELATIVE move/);
+  });
+
+  it('a press is only an allow-listed mode or cue', () => {
+    expect(gimbalPress('gimbal.mode', 'face')).toEqual({ mode: 'face' });
+    expect(gimbalPress('gimbal.mode', 'hands')).toEqual({ mode: 'hands' });
+    expect(gimbalPress('gimbal.cue', 'yes')).toEqual({ cue: 'yes' });
+    expect(gimbalPress('gimbal.cue', 'no')).toEqual({ cue: 'no' });
+    expect(gimbalPress('gimbal.cue', 'wakeup')).toBeNull();
+    expect(gimbalPress('gimbal.mode', 'spin')).toBeNull();
+    expect(gimbalPress('lamp.toggle', 'face')).toBeNull();
+  });
+
+  it('is a valid catalog tile that passes the gate, with live /gimbal data', () => {
+    const plan = coerceSurfacePlan({ kind: 'room', title: 'Room', tiles: [{ type: 'gimbal' }, { type: 'gimbal' }] });
+    expect(plan.ok && plan.value.tiles).toEqual([{ type: 'gimbal', label: 'Gimbal' }]);
+    const msgs = expandPlan((plan as { value: SurfacePlan }).value, 's1', {}, { gimbal: { docked: true, mode: 'face', status: 'Tracking you' } });
+    expect(gateMessages(msgs, CATALOG_SCHEMAS).ok).toBe(true);
+    expect(JSON.stringify(msgs)).toContain('"component":"GimbalTile"');
+    expect(msgs.at(-1)).toMatchObject({ updateDataModel: { path: '/gimbal', value: { docked: true, mode: 'face', status: 'Tracking you' } } });
+  });
+
+  it('joins the board before "Connect a device", once, and never past the tile cap', () => {
+    const p: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'connect', label: 'Connect a device' }] };
+    const next = withGimbalTile(p)!;
+    expect(next.tiles.map((t) => t.type)).toEqual(['lamp', 'gimbal', 'connect']);
+    expect(withGimbalTile(next)).toBe(next);
+    expect(planHasGimbal(next)).toBe(true);
+    const full: SurfacePlan = { kind: 'room', title: 'r', tiles: Array.from({ length: MAX_TILES }, (_, i) => ({ type: 'stat' as const, label: `s${i}`, value: '1' })) };
+    expect(withGimbalTile(full)).toBeNull();
+  });
+
+  it('"add the gimbal" / "gimbal controls" route to the tile; "follow me" stays a gimbal phrase', () => {
+    for (const t of ['add the gimbal', 'gimbal controls', 'Add gimbal controls.', 'show the gimbal tile', 'add the gimbal to the dashboard']) {
+      expect(isAddGimbal(t)).toBe(true);
+      expect(routeLine(t, { hasPlanBoard: false, devices: [] }).name).toBe('addGimbal');
+    }
+    expect(isAddGimbal('add the lamp')).toBe(false);
+    expect(routeLine('follow me', { hasPlanBoard: false, devices: [] }).name).toBe('gimbal');
+  });
+
+  it('the relay carries a mode as one allow-listed word, host → phone only', () => {
+    expect(validateCommand({ kind: 'gimbalMode', text: 'hands' })).toEqual({ kind: 'gimbalMode', text: 'hands' });
+    expect(validateCommand({ kind: 'gimbalMode', text: 'turn left' })).toBeNull();
+    expect(validateCommand({ kind: 'gimbalMode' })).toBeNull();
+    const session = src('relay/session.ts');
+    expect(session).toMatch(/msg\.from === 'host' && msg\.cmd\.kind === 'gimbalMode'/);
+    const app = src('canvas/canvasApp.ts');
+    // one path: the tile and "follow me" both go through gimbalMode(); the
+    // iPhone drives its local plugin, the laptop asks the iPhone
+    expect(app).toMatch(/if \(press\) gimbalTilePress\(press\)/);
+    expect(app).toMatch(/gimbalMode\(g\); return true;/);
+    expect(app).toMatch(/inputs\.gimbal\.setMode\(mode, \{ explicit: true \}\)/);
+    expect(app).toMatch(/hostSession!\.sendGimbalMode\(mode\)/);
+    expect(app).toMatch(/bodyLanguage\(press\.cue\)/);
+    expect(src('canvas/canvasMain.ts')).toMatch(/s\?\.onGimbalMode\?\.\(\(mode\) => h\.gimbalMode\(mode\)\)/);
+  });
+});
+
+describe('honest lamps in live mode', () => {
+  const mem = (ids: string[]) => {
+    const m = new Map<string, string>();
+    m.set('mendcraft.wizLamps', JSON.stringify({ v: 2, ids: Object.fromEntries(ids.map((id, i) => [`h${String(i).padStart(16, '0')}`, id])), last: ids }));
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } };
+  };
+  it('remembered real lamps start "Not reachable"; none remembered → the placeholders leave and the board offers Connect', () => {
+    expect(rememberedLamps(mem(['wiz-lamp-1']))![0].state).toMatchObject({ sim: true, unreachable: true });
+    const state: Record<string, { on: boolean; brightness: number }> = { 'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 }, 'speaker-1': { on: false, brightness: 0 } };
+    const surfaces: Record<string, SurfacePlan> = { room: { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] } };
+    applyRealLamps({ store: { all: () => ({ ...state }), add: () => {}, remove: (id) => { delete state[id]; } }, surfaces, labels: {}, ips: new Map() }, []);
+    expect(Object.keys(state)).toEqual(['speaker-1']);
+    expect(surfaces.room.tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
+    const app = src('canvas/canvasApp.ts');
+    expect(app).toMatch(/if \(liveLamps\) \{[\s\S]{0,200}applyRealLamps\(lampSwap, rememberedLamps\(storage\) \?\? \[\]\);/);
+    expect(app).toMatch(/const liveLamps = !opts\.sim && !opts\.devices && !opts\.connector;/);
+  });
+  it('an unreachable lamp is refused, never simulated', async () => {
+    const fallback = { run: async () => ({ on: true }) };
+    await expect(createUnreachableLampConnector(fallback).run({ deviceId: 'wiz-lamp-1', on: true })).rejects.toThrow(LAMP_NOT_REACHABLE);
+    await expect(createUnreachableLampConnector(fallback).run({ deviceId: 'speaker-1', playing: true })).resolves.toEqual({ on: true });
+    const down = createWizAwareConnector({ client: {} as never, fallback, status: { up: false }, honest: true });
+    await expect(down.run({ deviceId: 'wiz-lamp-1', on: true })).rejects.toBeInstanceOf(DeviceError);
+    const sim = createWizAwareConnector({ client: {} as never, fallback, status: { up: false } });
+    await expect(sim.run({ deviceId: 'wiz-lamp-1', on: true })).resolves.toMatchObject({ sim: true });
+  });
+});
+
+describe('Chrome local network access', () => {
+  it('denied under either permission name → blocked; unknown names are not', async () => {
+    expect(await localNetworkBlocked({ query: async ({ name }) => ({ state: name === 'local-network-access' ? 'denied' : 'granted' }) })).toBe(true);
+    expect(await localNetworkBlocked({ query: async ({ name }) => { if (name === 'local-network-access') throw new TypeError('unknown'); return { state: 'denied' }; } })).toBe(true);
+    expect(await localNetworkBlocked({ query: async () => { throw new TypeError('unknown'); } })).toBe(false);
+    expect(await localNetworkBlocked({ query: async () => ({ state: 'prompt' }) })).toBe(false);
+    expect(await localNetworkBlocked(null)).toBe(false);
+  });
+  it('the line is logged once', async () => {
+    const logs: string[] = [];
+    const c = createLocalNetworkCheck({ query: async () => ({ state: 'denied' }) }, (l) => logs.push(l));
+    expect(await c.line()).toBe(LNA_BLOCKED_LINE);
+    expect(await c.line()).toBe(LNA_BLOCKED_LINE);
+    expect(logs).toEqual([LNA_BLOCKED_LINE]);
+  });
+});
+
+describe('point identify: a smart bulb is her real lamp', () => {
+  const bulb = { identity: { kind: 'smart-bulb', brand: '', model: '', label: 'Smart bulb', confidence: 0.9 }, source: 'on-device' as const };
+  const lamp = { id: 'wiz-lamp-1', label: 'Lamp', kind: 'lamp' };
+  it('proposes the reachable real lamp', () => {
+    const out = pointConnectFromIdentity(bulb as never, { devices: [lamp], realLamps: ['wiz-lamp-1'] });
+    expect(out.ok).toBe(true);
+    expect(JSON.stringify(out)).toContain('wiz-lamp-1');
+  });
+  it('without a reachable lamp it is not proposed, and canvasApp says why', () => {
+    expect(pointConnectFromIdentity(bulb as never, { devices: [lamp], realLamps: [] }).ok).toBe(false);
+    expect(src('canvas/canvasApp.ts')).toMatch(/say\(\(await lna\.line\(\)\) \|\| BULB_UNREACHABLE_LINE/);
+  });
+});

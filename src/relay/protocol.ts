@@ -189,6 +189,11 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     (nod yes on Approve, shake no on a refusal, wakeup on pairing). text is
 //     exactly one of GIMBAL_CUES — never user content. Phones only honour it
 //     from the host; the host rate-limits it (GIMBAL_CUE_MIN_GAP_MS).
+//   • 'gimbalMode' — host → phones: "switch the docked stand to this mode"
+//     (the laptop's gimbal tile: follow me / follow my hands / hold still).
+//     text is exactly one of GIMBAL_MODES — never user content. The iPhone
+//     runs it through the same handler as the spoken phrase and re-announces
+//     what DockKit REALLY reports; the laptop never claims the switch itself.
 //   • 'ping' — phone → host: "are you really there?". text: JSON {n, sid?} —
 //     n is the phone's one-time nonce, sid the host session it believes it is
 //     talking to. 'pong' — host → phone: JSON {n, sid} echoing the nonce with
@@ -197,7 +202,7 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     message in the room is not. Handled inside the sessions.
 export type RelayCommandKind =
   | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
-  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'ping' | 'pong';
+  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong';
 
 /** The only DockKit animations the laptop may ask for (no user content). */
 export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
@@ -209,6 +214,15 @@ export const GIMBAL_CUE_MIN_GAP_MS = 2000;
 export const GIMBAL_CUE_RECEIVE_GAP_MS = 1500;
 export function isGimbalCue(v: unknown): v is GimbalCueKind {
   return typeof v === 'string' && (GIMBAL_CUES as readonly string[]).includes(v);
+}
+
+/** The only gimbal modes the laptop may ask the docked iPhone for: the same
+ *  words parseGimbalSpeech returns for "follow me" / "follow my hands" /
+ *  "hold still". */
+export type GimbalModeKind = 'face' | 'hands' | 'hold';
+export const GIMBAL_MODES: readonly GimbalModeKind[] = ['face', 'hands', 'hold'];
+export function isGimbalMode(v: unknown): v is GimbalModeKind {
+  return typeof v === 'string' && (GIMBAL_MODES as readonly string[]).includes(v);
 }
 
 export interface CueLimiter {
@@ -344,7 +358,7 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'ping', 'pong'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
 const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult', 'ping', 'pong'];
 
@@ -366,6 +380,7 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (c.kind === 'whoIsThere' && c.text !== undefined && !isSessionId(c.text)) return null;
   // 'gimbalCue' carries one allow-listed word and nothing else.
   if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
+  if (c.kind === 'gimbalMode') return isGimbalMode(c.text) ? { kind: 'gimbalMode', text: c.text } : null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;

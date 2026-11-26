@@ -33,6 +33,9 @@ export type LeafTileSpec =
   | { type: 'switch'; deviceId: string; label: string }
   | { type: 'scene'; sceneId: string; label: string }
   | { type: 'connect'; label?: string }
+  /** The docked iPhone's stand (DockKit). One per board; its status is what
+   *  the iPhone really reports (see gimbalTile.ts). */
+  | { type: 'gimbal'; label?: string }
   | { type: 'stat'; label: string; value: string; delta?: string; trend?: TrendKind; spark?: number[] }
   | { type: 'chart'; title: string; chartType: ChartType; series: { label: string; value: number }[] }
   | { type: 'table'; title: string; columns: string[]; rows: string[][]; sortable?: boolean; rowActionLabel?: string }
@@ -65,6 +68,9 @@ export interface DeviceState {
   error?: string;
   /** True once we know this lamp isn't the real WiZ bulb (bridge unreachable). */
   sim?: boolean;
+  /** Live mode: a real lamp this machine knows but can't reach right now
+   *  (shown "Not reachable", never as a working simulated lamp). */
+  unreachable?: boolean;
   /** Lamp look — only one of these is set at a time (0 / '' = not in that mode). */
   /** White colour temperature, Kelvin. */
   temp?: number;
@@ -79,6 +85,18 @@ export interface DeviceState {
 }
 
 export type MusicSource = 'spotify' | 'builtin';
+
+/** What the gimbal tile shows — only ever what the iPhone reported. */
+export interface GimbalTileState {
+  /** A stand is docked on the iPhone that reported. */
+  docked: boolean;
+  /** 'face' | 'hands' | 'hold' | '' (no stand / unknown). */
+  mode: string;
+  /** The status line ("Tracking you", "No stand docked", …). */
+  status: string;
+  /** The last honest "why not" for a press (or '' ). */
+  error?: string;
+}
 
 export interface SceneState {
   active: boolean;
@@ -198,6 +216,11 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   }
   if (o.type === 'connect') {
     return { ok: true, value: { type: 'connect', label: cleanText(o.label, 40) ?? 'Connect a device' } };
+  }
+  if (o.type === 'gimbal') {
+    if (seen.has('gimbal')) return { ok: true, value: null };
+    seen.add('gimbal');
+    return { ok: true, value: { type: 'gimbal', label: cleanText(o.label, 40) ?? 'Gimbal' } };
   }
   if (o.type === 'stat') {
     const label = cleanText(o.label, 40);
@@ -354,6 +377,7 @@ export function tileComponentId(t: TileSpec, path: number[] = [0]): string {
   if (t.type === 'switch') return `switch-${t.deviceId}`;
   if (t.type === 'scene') return `scene-${t.sceneId}`;
   if (t.type === 'connect') return 'connect-tile';
+  if (t.type === 'gimbal') return 'gimbal-tile';
   return `${t.type}-${path.join('-')}`;
 }
 
@@ -369,11 +393,12 @@ export function expandPlan(
   devices: Record<string, DeviceState>,
   /** heading: false leaves out the board-title heading (the canvas frame
    *  head already shows the same title). */
-  o: { heading?: boolean } = {},
+  o: { heading?: boolean; gimbal?: GimbalTileState } = {},
 ): A2uiMessage[] {
   const components: Record<string, unknown>[] = [];
   const deviceData: Record<string, DeviceState> = {};
   const sceneData: Record<string, SceneState> = {};
+  let hasGimbal = false;
 
   function expandNode(t: TileSpec, path: number[]): string {
     const id = tileComponentId(t, path);
@@ -390,6 +415,7 @@ export function expandPlan(
         onBrighter: { event: { name: 'lamp.brighter', context: { deviceId: t.deviceId } } },
         onDimmer: { event: { name: 'lamp.dimmer', context: { deviceId: t.deviceId } } },
         sim: { path: `/devices/${t.deviceId}/sim` },
+        unreachable: { path: `/devices/${t.deviceId}/unreachable` },
         temp: { path: `/devices/${t.deviceId}/temp` },
         color: { path: `/devices/${t.deviceId}/color` },
         sceneId: { path: `/devices/${t.deviceId}/sceneId` },
@@ -403,7 +429,7 @@ export function expandPlan(
       });
       const s = devices[t.deviceId] ?? { on: false, brightness: 50 };
       deviceData[t.deviceId] = {
-        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false,
+        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false, unreachable: s.unreachable ?? false,
         temp: s.temp ?? 0, color: s.color ?? '', sceneId: s.sceneId ?? 0,
       };
     } else if (t.type === 'plan') {
@@ -474,6 +500,20 @@ export function expandPlan(
         label: t.label ?? 'Connect a device',
         onConnect: { event: { name: 'connect.start' } },
       });
+    } else if (t.type === 'gimbal') {
+      hasGimbal = true;
+      components.push({
+        id,
+        component: 'GimbalTile',
+        label: t.label ?? 'Gimbal',
+        docked: { path: '/gimbal/docked' },
+        mode: { path: '/gimbal/mode' },
+        status: { path: '/gimbal/status' },
+        error: { path: '/gimbal/error' },
+        // One press each; the button's own value (a mode or a cue) rides along.
+        onMode: { event: { name: 'gimbal.mode' } },
+        onCue: { event: { name: 'gimbal.cue' } },
+      });
     } else if (t.type === 'stat') {
       components.push({ id, component: 'StatTile', label: t.label, value: t.value, delta: t.delta ?? '', trend: t.trend ?? 'neutral', spark: t.spark ?? [] });
     } else if (t.type === 'chart') {
@@ -541,7 +581,19 @@ export function expandPlan(
   if (Object.keys(sceneData).length > 0) {
     msgs.push({ version: PROTOCOL, updateDataModel: { surfaceId, path: '/scenes', value: sceneData } });
   }
+  if (hasGimbal) msgs.push(gimbalUpdate(surfaceId, o.gimbal ?? NO_GIMBAL_TILE_STATE));
   return msgs;
+}
+
+/** No iPhone has reported a docked stand. */
+export const NO_GIMBAL_TILE_STATE: GimbalTileState = { docked: false, mode: '', status: 'No stand docked', error: '' };
+
+/** The gimbal tile's state as a data-model update (iPhone report -> tile). */
+export function gimbalUpdate(surfaceId: string, g: GimbalTileState): A2uiMessage {
+  return {
+    version: PROTOCOL,
+    updateDataModel: { surfaceId, path: '/gimbal', value: { docked: g.docked, mode: g.mode, status: g.status, error: g.error ?? '' } },
+  };
 }
 
 /** One device's live state as a data-model update (store -> tile). */
@@ -556,6 +608,7 @@ export function deviceUpdate(surfaceId: string, deviceId: string, s: DeviceState
   if (s.trackTitle !== undefined) value.trackTitle = s.trackTitle;
   if (s.volume !== undefined) value.volume = s.volume;
   if (s.sim !== undefined) value.sim = s.sim;
+  if (s.unreachable !== undefined) value.unreachable = s.unreachable;
   if (s.temp !== undefined) value.temp = s.temp;
   if (s.color !== undefined) value.color = s.color;
   if (s.sceneId !== undefined) value.sceneId = s.sceneId;

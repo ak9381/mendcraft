@@ -3,7 +3,7 @@
 // every other device, and every wiz- device while the bridge is unreachable,
 // falls through to `fallback` (the canvas's own simulated connector) — tagged
 // `sim: true` so the tile shows it's not the real bulb.
-import { lampLook, type DeviceConnector, type DeviceIntent } from './deviceActions';
+import { DeviceError, lampLook, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
 import { BridgeRefusedError, type WizClient } from '../devices/wizClient';
 import type { LampIntent, LampState } from '../devices/wiz';
@@ -24,6 +24,23 @@ export interface WizConnectorDeps {
   status: BridgeStatus;
   /** WiZ bulb IP for a device id; '' asks the bridge for its configured default. */
   bulbIp?: (deviceId: string) => string;
+  /** Live mode (no ?sim=1): a lamp the bridge can't reach is NOT simulated —
+   *  the press is refused with LAMP_NOT_REACHABLE and nothing changes. */
+  honest?: boolean;
+}
+
+/** A real lamp the bridge can't reach right now (live mode only). */
+export const LAMP_NOT_REACHABLE = 'Not reachable — the lamp bridge isn’t answering. Nothing changed.';
+
+/** Live mode without a bridge at all: lamps are refused, never simulated;
+ *  every other device goes to `fallback`. */
+export function createUnreachableLampConnector(fallback: DeviceConnector): DeviceConnector {
+  return {
+    async run(intent) {
+      if (isWizDevice(intent.deviceId)) throw new DeviceError(LAMP_NOT_REACHABLE);
+      return fallback.run(intent);
+    },
+  };
 }
 
 /** The one WiZ command a device intent becomes. A scene, a colour and a white
@@ -59,7 +76,7 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
       if (isWizDevice(intent.deviceId) && deps.status.up) {
         try {
           const state = await deps.client.setPilot(bulbIp(intent.deviceId), wizIntentFor(intent));
-          return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false };
+          return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false, unreachable: false };
         } catch (err) {
           // The bridge is up and refused the value: the lamp did not change and
           // nothing is simulated in its place — the store shows the refusal.
@@ -67,6 +84,7 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
           deps.status.up = false; // bridge dropped mid-session — fall through below.
         }
       }
+      if (deps.honest && isWizDevice(intent.deviceId)) throw new DeviceError(LAMP_NOT_REACHABLE);
       const ack = await deps.fallback.run(intent);
       return isWizDevice(intent.deviceId) ? { ...ack, sim: true } : ack;
     },

@@ -272,6 +272,9 @@ afterFirstPaint(() => {
         // Gimbal body language from the laptop (nod / shake / wakeup). The
         // session already validated + rate-limited it; no stand → no-op.
         if (phonePlatform === 'ios') s?.onGimbalCue?.((kind) => h.gimbalCue(kind));
+        // The laptop's gimbal tile: follow me / follow my hands / hold still.
+        // Same handler as the spoken phrase; the re-announce reports the result.
+        if (phonePlatform === 'ios') s?.onGimbalMode?.((mode) => h.gimbalMode(mode));
       },
       joinExtras: { announceStatus: () => h.phoneSenseStatus() },
     });

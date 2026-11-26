@@ -12,6 +12,7 @@ import {
   activeColourKey, lampStateLine, rangeNudge, rangePresets, rangeStep,
 } from './lampPresets';
 import { BUILTIN_LABEL } from './spotifyConnector';
+import { GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_STAND, GIMBAL_TILE_LABEL } from './gimbalTile';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -742,7 +743,8 @@ export function renderNodeToDom(
     const stateSpan = mk('span', 'state', `${lampStateLine({ on, brightness, ...look })}${p.pending ? ' · checking…' : ''}`);
     stateSpan.setAttribute('aria-live', 'polite');
     head.appendChild(stateSpan);
-    if (p.sim) head.appendChild(mk('span', 'sim-badge', 'SIM'));
+    if (p.unreachable) head.appendChild(mk('span', 'reach-badge', 'Not reachable'));
+    else if (p.sim) head.appendChild(mk('span', 'sim-badge', 'SIM'));
     head.appendChild(btn(on ? 'Turn off' : 'Turn on', 'toggle', () => triggerAction(p.onToggle), { cls: 'primary' }));
     el.appendChild(head);
     if (p.error) el.appendChild(noteEl());
@@ -907,6 +909,35 @@ export function renderNodeToDom(
     btnAct.addEventListener('click', () => triggerAction(p.onActivate));
     rowBtns.appendChild(btnAct);
     el.appendChild(rowBtns);
+    return el;
+  }
+
+  if (node.component === 'GimbalTile') {
+    const docked = !!p.docked;
+    const mode = typeof p.mode === 'string' ? p.mode : '';
+    const label = p.label ? String(p.label) : GIMBAL_TILE_LABEL;
+    const el = mk('div', `mc-fb-tile gimbal ${docked && mode !== 'hold' ? 'on' : ''}`);
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', label);
+    el.setAttribute('data-gimbal-docked', String(docked));
+    const head = mk('div', 'row head');
+    head.appendChild(mk('span', 'label', label));
+    const st = mk('span', 'state', p.status ? String(p.status) : GIMBAL_NO_STAND);
+    st.setAttribute('aria-live', 'polite');
+    st.setAttribute('data-gimbal-status', '');
+    head.appendChild(st);
+    el.appendChild(head);
+    if (p.error) el.appendChild(noteEl());
+    const modes = mk('div', 'chips modes');
+    modes.setAttribute('role', 'group');
+    modes.setAttribute('aria-label', 'Gimbal mode');
+    for (const b of GIMBAL_MODE_BUTTONS) modes.appendChild(btn(b.label, 'gimbal-mode', () => triggerAction(p.onMode, { value: b.value }), { pressed: docked && mode === b.value, value: b.value }));
+    el.appendChild(modes);
+    const cues = mk('div', 'chips cues');
+    cues.setAttribute('role', 'group');
+    cues.setAttribute('aria-label', 'Gimbal body language');
+    for (const b of GIMBAL_CUE_BUTTONS) cues.appendChild(btn(b.label, 'gimbal-cue', () => triggerAction(p.onCue, { value: b.value }), { value: b.value }));
+    el.appendChild(cues);
     return el;
   }
 
