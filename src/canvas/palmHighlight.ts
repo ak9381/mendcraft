@@ -256,9 +256,11 @@ export function placeBubble(
   return { left: clampX(best.left), top: clampY(best.top), side: best.side };
 }
 
-/** The bubble's neighbours: controls whose box comes within `px` of the target. */
+/** The bubble's neighbours: controls whose box comes within `px` of the
+ *  target (the target itself is left out by identity, not by position, so a
+ *  neighbour that happens to share its box still counts). */
 export function nearRects(target: Rect, all: readonly Rect[], px = 240): Rect[] {
-  return all.filter((r) => r !== target && !(r.left === target.left && r.top === target.top && r.width === target.width)
+  return all.filter((r) => r !== target
     && r.left < target.left + target.width + px && r.left + r.width > target.left - px
     && r.top < target.top + target.height + px && r.top + r.height > target.top - px);
 }
@@ -336,6 +338,7 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
   }
 
   let shownRow = '';
+  let labelSize: { w: number; h: number } | null = null;
   function render(v: HighlightView<HTMLElement>): void {
     const show = active && !!v.current && !!v.rect;
     layer.hidden = !show;
@@ -350,11 +353,13 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
       label.title = name;
       label.innerHTML = `<span class="mc-highlight-name"></span><span class="mc-highlight-how">${hint}<span>R · 2 s</span></span>`;
       label.querySelector('.mc-highlight-name')!.textContent = name;
+      labelSize = null; // measured once per name, not every frame
     }
+    labelSize ??= { w: label.offsetWidth || 200, h: label.offsetHeight || 34 };
     // A compact glass bubble beside the button — never on it or on the
     // buttons around it (the magnified row's slots, when that is open).
     const others = v.expanded ? v.expanded.slots : targets.map((t) => t.rect);
-    const at = placeBubble(r, { w: label.offsetWidth || 200, h: label.offsetHeight || 34 }, nearRects(r, others), { w: innerWidth, h: innerHeight });
+    const at = placeBubble(r, labelSize, nearRects(r, others), { w: innerWidth, h: innerHeight });
     label.dataset.side = at.side;
     label.style.transform = `translate(${Math.round(at.left)}px, ${Math.round(at.top)}px)`;
     if (v.expanded) {

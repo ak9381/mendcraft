@@ -28,12 +28,17 @@ export interface RelayTransport {
   setAlias(code: string, roomId: string): Promise<void>;
   resolveAlias(code: string): Promise<string | null>;
   clearAlias(code: string): Promise<void>;
+  /** When (ms, the transport's clock) the alias `code` → `roomId` was last
+   *  vouched for: written, or — where the alias doc itself cannot carry a
+   *  time — the room's newest host message. null: no proof it is live.
+   *  resolveRoomId rejects a code older than ALIAS_TTL_MS. */
+  aliasFreshAt?(code: string, roomId: string): Promise<number | null>;
 }
 
 /** In-memory transport: both "devices" live in the same page (tests, sim). */
 export function createFakeTransport(): RelayTransport {
   const rooms = new Map<string, Set<(msg: RelayMessage, meta?: RelayMeta) => void>>();
-  const aliases = new Map<string, string>();
+  const aliases = new Map<string, { room: string; createdAt: number }>();
   let clock = 0; // the fake room's "server time": one tick per message
 
   async function deliver(roomId: string, msg: RelayMessage): Promise<RelayMeta> {
@@ -73,10 +78,14 @@ export function createFakeTransport(): RelayTransport {
       };
     },
     async setAlias(code, roomId) {
-      aliases.set(code, roomId);
+      aliases.set(code, { room: roomId, createdAt: Date.now() });
     },
     async resolveAlias(code) {
-      return aliases.get(code) ?? null;
+      return aliases.get(code)?.room ?? null;
+    },
+    async aliasFreshAt(code, roomId) {
+      const a = aliases.get(code);
+      return a && a.room === roomId ? a.createdAt : null;
     },
     async clearAlias(code) {
       aliases.delete(code);

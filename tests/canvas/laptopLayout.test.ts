@@ -58,6 +58,14 @@ describe('room board widening', () => {
   });
 });
 
+describe('re-framing the focused board', () => {
+  it('a window resize and a bar that changes height re-fit the board at its shown size', () => {
+    const src = read('src/canvas/canvasApp.ts');
+    expect(src).toContain('camera = focusCam(fitBoardWidth(f)); applyCamera();');
+    expect(src).toMatch(/barRefit = window\.setTimeout\(\(\) => \{ const f = focusId \? reg\.get\(focusId\) : undefined; if \(f\) void flyTo\(focusCam\(fitBoardWidth\(f\)\)\); \}, 160\);/);
+  });
+});
+
 describe('hand cluster order', () => {
   it('Register, Tools, Talk, Read aloud, Undo, Edit (Reset joins Edit)', () => {
     expect(read('src/canvas/canvasApp.ts')).toContain('for (const node of [registerBtn, toolsChip, talk, readBtn, undoBtn, editBtn, resetBtn]) {');

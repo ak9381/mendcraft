@@ -925,9 +925,14 @@
   padding: 6px 12px;
   font-size: 15px;
   line-height: 1.25;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* At most two lines, the rest ellipsized. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* Placed by canvasApp (placeBubble): its left/top are the bubble's corner. */
 .mc-hand-tooltip.is-placed, .mc-hand-tooltip.is-placed.below { transform: none; }
@@ -1457,10 +1462,10 @@
 .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster > * { width: 168px; }
 /* A short window: a smaller camera preview leaves the cluster room for one column. */
 @media (max-height: 860px) and (min-width: 601px) {
-  .mc-canvas { --mc-cam-h: 144px; }
-  .mc-canvas .mc-face-preview { width: 192px; height: 144px; }
-  .mc-canvas .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
-  .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
+  .mc-canvas:not(.mc-phone-simple) { --mc-cam-h: 144px; }
+  .mc-canvas:not(.mc-phone-simple) .mc-face-preview { width: 192px; height: 144px; }
+  .mc-canvas:not(.mc-phone-simple) .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
 }
 @media (max-width: 1240px) {
   .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {

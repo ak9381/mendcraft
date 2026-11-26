@@ -268,6 +268,8 @@ export const ROOM_MAX_W = 1280;
  *  this (shown at the ROOM_MIN_Z zoom the camera then uses anyway), so its
  *  tiles get wide enough to sit in one row instead of running off the bottom. */
 export const ROOM_WIDE_MAX_W = 1680;
+/** Re-opening the code for one more phone failed; the paired phones are fine. */
+export const REPAIR_FAILED_LINE = 'Couldn’t reopen pairing — your phones are still connected.';
 
 /** The wider width to try for a room board that does not fit `freeH` at
  *  `w` (null: no wider try). `free`/`freeH` are screen px; at `minZ` the
@@ -2863,6 +2865,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sheetOpen = { frameId: id, host, sheet };
     say('Connect a device: point at it, say its name, or join a phone.');
   }
+  /** Close the card that was admitting one more phone, keeping the relay. */
+  function endExtraPairing(session: HostSession): void {
+    livePairing?.stopChime();
+    livePairing = null;
+    admissionOpen = false;
+    void session.endAdmission().catch(() => undefined);
+    pairFirst.abandon(); // pairing → live: the phones stay listed and connected
+  }
   async function joinPhone(frameId: string): Promise<boolean> {
     const open = sheetOpen; if (!open || open.frameId !== frameId) return false;
     if (pairingStop && hostSession && relayKept()) {
@@ -2873,7 +2883,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       livePairing?.stopChime();
       admissionOpen = true;
       try { await session.admitMore(); } catch {
-        if (sheetOpen === open) open.sheet.setStatus('Needs network: the Relay room is not reachable right now.');
+        admissionOpen = false;
+        if (sheetOpen === open) open.sheet.setStatus(REPAIR_FAILED_LINE);
         return false;
       }
       if (sheetOpen !== open || hostSession !== session) return false;
@@ -2884,7 +2895,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       livePairing = showPairing(open.host, {
         code: session.code,
         note: `${n} phone${n === 1 ? ' stays' : 's stay'} connected. Hold the next phone near the laptop.`,
-        onClose: () => { disconnectPhones(); open.host.hidden = true; },
+        // X ends only this extra pairing: the code closes, the chime stops,
+        // and the phones already here stay connected (Disconnect is the chip).
+        onClose: () => { endExtraPairing(session); open.host.hidden = true; },
       });
       pairingHost = open.host;
       return true;
@@ -3259,7 +3272,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           handTip.hidden = false;
           // Beside the control, on screen, never over it or its neighbours.
           const r = { left: b.left, top: b.top, width: b.width, height: b.height };
-          const near = nearRects(r, collectControls(document).map((c) => { const q = c.getBoundingClientRect(); return { left: q.left, top: q.top, width: q.width, height: q.height }; }));
+          const near = nearRects(r, collectControls(document).filter((c) => c !== el).map((c) => { const q = c.getBoundingClientRect(); return { left: q.left, top: q.top, width: q.width, height: q.height }; }));
           const at = placeBubble(r, { w: handTip.offsetWidth || 160, h: handTip.offsetHeight || 32 }, near, { w: innerWidth, h: innerHeight });
           handTip.classList.add('is-placed');
           handTip.style.left = `${Math.round(at.left)}px`;
@@ -4259,13 +4272,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     else if (!isTypingTarget(e.target)) e.preventDefault();
   };
   const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
-  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  // A focused board is re-fitted at its SHOWN size (a room board is widened
+  // or narrowed for the window), not its stored one.
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
   const barEl = root.querySelector<HTMLElement>('.mc-bar');
+  let lastBarH = phoneShell ? 0 : barH();
+  let barRefit = 0;
   const barRo = typeof ResizeObserver !== 'undefined' && barEl
-    ? new ResizeObserver(() => { root.style.setProperty('--mc-bar-h', `${barH()}px`); })
+    ? new ResizeObserver(() => {
+      const h = barH();
+      root.style.setProperty('--mc-bar-h', `${h}px`);
+      // A status line that wraps (or goes) moves the board area's top: the
+      // focused board is re-framed so it is never left under the bar or the
+      // engine bar by a toast that came and went.
+      if (Math.abs(h - lastBarH) < 8) return;
+      lastBarH = h;
+      if (phoneShell || !focusId) return;
+      clearTimeout(barRefit);
+      barRefit = window.setTimeout(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); }, 160);
+    })
     : null;
   if (barEl && barRo) barRo.observe(barEl);
   const onWindowOnline = () => setOnline(true);
@@ -4279,6 +4307,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('resize', onWindowResize);
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
+  // Leaving the page: the short code must not outlive the pairing (best effort).
+  const onPageHide = (): void => { if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); } };
+  addEventListener('pagehide', onPageHide);
   function destroy(): void {
     // Pending writes and timers go first, so nothing fires into a torn-down
     // canvas — but a pending board write is flushed, not dropped (the last
@@ -4323,7 +4354,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('resize', onWindowResize);
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
+    removeEventListener('pagehide', onPageHide);
     barRo?.disconnect();
+    clearTimeout(barRefit);
   }
   // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
   // Every zoom path drops focus first: a focused board is 1:1 only.

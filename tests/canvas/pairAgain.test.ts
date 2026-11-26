@@ -3,6 +3,8 @@
 // session id) and only re-opens the code; pongs answer every paired phone; and
 // a phone whose laptop session really did change follows it on its own.
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { ALIAS_TTL_MS, createGuestSession, createHostSession, resolveRoomId } from '../../src/relay/session';
 import { createLaptopLink, LINK_LINES, PING_EVERY_MS, PING_TIMEOUT_MS } from '../../src/canvas/laptopLink';
 import { startPhoneJoin } from '../../src/canvas/phoneJoin';
 import { createPairFirst } from '../../src/canvas/pairedRow';
@@ -116,5 +118,67 @@ describe('connect devices again: phone A stays paired while phone B joins', () =
     expect(pf.phones().map((p) => p.id)).toEqual(['android']);
     pf.addPhone({ id: 'ios', label: 'iPhone' });
     expect(pf.phones().map((p) => p.id)).toEqual(['android', 'ios']);
+  });
+});
+
+const app = () => readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+
+describe('review fixes', () => {
+  it('I1: closing the extra-pairing card ends only that pairing — the phones stay', () => {
+    const src = app();
+    const repair = src.slice(src.indexOf('if (pairingStop && hostSession && relayKept()) {'), src.indexOf('if (simEnv() || !net.isOnline()) {'));
+    expect(repair).toContain('onClose: () => { endExtraPairing(session); open.host.hidden = true; },');
+    expect(repair).not.toContain('disconnectPhones()');
+    expect(repair).toContain('setStatus(REPAIR_FAILED_LINE)');
+    const fn = src.slice(src.indexOf('function endExtraPairing(session: HostSession): void {'), src.indexOf('async function joinPhone('));
+    expect(fn).toContain('session.endAdmission()');
+    expect(fn).toContain('livePairing?.stopChime();');
+    expect(fn).not.toMatch(/disconnectPhones|pairingStop|pairFirst\.cancel/);
+  });
+
+  it('I2: the reopened code closes on pagehide and when pairing is done', () => {
+    const src = app();
+    expect(src).toContain("addEventListener('pagehide', onPageHide);");
+    expect(src).toMatch(/const onPageHide = \(\): void => \{ if \(admissionOpen\) \{ admissionOpen = false; void hostSession\?\.endAdmission\(\)/);
+    expect(src).toMatch(/if \(admissionOpen && pairFirst\.phase\(\) !== 'pairing'\) \{ admissionOpen = false; void hostSession\?\.endAdmission\(\)/);
+  });
+
+  it('I2: a short code older than ALIAS_TTL_MS no longer resolves (even if its doc is still there)', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t);
+    const now = Date.now();
+    expect(await resolveRoomId(t, { kind: 'code', code: host.code }, { now: () => now })).toBe(host.token);
+    expect(await resolveRoomId(t, { kind: 'code', code: host.code }, { now: () => now + ALIAS_TTL_MS + 1000 })).toBeNull();
+    // A full token never expires this way.
+    expect(await resolveRoomId(t, { kind: 'token', token: host.token }, { now: () => now + 10 * ALIAS_TTL_MS })).toBe(host.token);
+    // Reopening re-vouches for the code; ending admission retires it.
+    await host.admitMore();
+    expect(await resolveRoomId(t, { kind: 'code', code: host.code })).toBe(host.token);
+    await host.endAdmission();
+    expect(await resolveRoomId(t, { kind: 'code', code: host.code })).toBeNull();
+    await host.close();
+  });
+
+  it("I3: another phone's (or a dashboard's) bye does not drop this phone's link", async () => {
+    const t = createFakeTransport();
+    const host = await startPhoneJoin({ transport: t, chime: () => undefined });
+    if ('error' in host) throw new Error('host');
+    const a = phone(t, 'android');
+    await a.link.joinWithCode(host.code, true);
+    await flush();
+    expect(a.link.state()).toBe('connected');
+    const other = await createGuestSession(t, host.token);
+    await flush();
+    await other.close(); // a phone's bye
+    await t.publish(host.token, { v: 1, from: 'control', type: 'bye' });
+    await flush();
+    expect(a.link.state()).toBe('connected');
+    a.timers.fire(PING_EVERY_MS); await flush();
+    expect(a.link.state()).toBe('connected');
+    // The laptop's own bye still counts.
+    await host.stop();
+    await flush();
+    expect(a.link.state()).toBe('error');
+    await a.link.stop();
   });
 });

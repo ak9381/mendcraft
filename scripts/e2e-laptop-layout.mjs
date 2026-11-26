@@ -86,6 +86,7 @@ function measure() {
     surface: surface ? { box: box(surface), sw: surface.scrollWidth, cw: surface.clientWidth, sh: surface.scrollHeight, ch: surface.clientHeight } : null,
     tiles, chips, scrollers, items,
     bar: bar && shown(bar) ? box(bar) : null,
+    z: document.querySelector('.mc-world')?.style.transform.match(/scale\(([^)]+)\)/)?.[1] ?? '?',
   };
 }
 
@@ -143,6 +144,17 @@ async function main() {
       await page.waitForSelector('.mc-frame .mc-next .mc-next-chip', { timeout: 10_000 }).catch(() => undefined);
       await page.evaluate(() => document.fonts.ready);
       await new Promise((r) => setTimeout(r, 1500));
+      // Headless Chrome has no camera, so a "Camera blocked" toast wraps the
+      // top bar for ~8 s. Clear it now (as its fade would): the board is
+      // re-framed when the bar changes height, which this also exercises.
+      await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = ''; });
+      // Let the camera settle (a refit after the first paint flies 420 ms):
+      // the board's box must hold still for three polls in a row.
+      for (let i = 0, last = '', same = 0; i < 40 && same < 3; i++) {
+        const now = await page.evaluate(() => { const f = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame'); const r = f?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') : ''; });
+        same = now === last ? same + 1 : 0; last = now;
+        await new Promise((r) => setTimeout(r, 150));
+      }
 
       const m = await page.evaluate(measure);
       check(m.tiles.length === board.doc.surfaces.f1.tiles.length, `${vp.name}: tiles rendered (${m.tiles.length})`);
@@ -155,7 +167,7 @@ async function main() {
       check(m.scrollers.length === 0, `${vp.name}: no inner scroll${m.scrollers.length ? ` — ${m.scrollers.join(', ')}` : ''}`);
       if (board.whole) {
         const under = m.bar && m.chips.some((c) => overlap(c, m.bar));
-        check(!!m.frame && m.frame.top >= 0 && m.chips.every((c) => c.bottom <= m.vh) && !under, `${vp.name}: whole board and its chips on screen, clear of the engine bar`);
+        check(!!m.frame && m.frame.top >= 0 && m.chips.every((c) => c.bottom <= m.vh) && !under, `${vp.name}: whole board and its chips on screen, clear of the engine bar (board top ${Math.round(m.frame?.top ?? -1)}, chips end ${Math.round(Math.max(0, ...m.chips.map((c) => c.bottom)))}, bar top ${Math.round(m.bar?.top ?? -1)}, z ${m.z})`);
       }
       checkCluster(m, vp.name, { allowWrap: false });
       if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name.replace(' ', '-')}.png`) });
