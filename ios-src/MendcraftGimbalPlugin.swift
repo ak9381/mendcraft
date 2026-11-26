@@ -416,6 +416,21 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         var mirrored = false
     }
 
+    /// What status() / isRunning read: written on `queue`, read anywhere
+    /// under `snapLock` (never a queue.sync from the actor).
+    private struct Snapshot {
+        var running = false
+        var lastSentAt: CFTimeInterval = 0
+        var sent = 0
+        var failures = 0
+        var lastError: String?
+    }
+    private let snapLock = NSLock()
+    private var snap = Snapshot()
+    /// Bumped by every stop(): a start() that was asked for before it must
+    /// not bring the session back (read/written under snapLock).
+    private var wantGen = 0
+
     /// Fired on the tracker queue when running / aiming flips.
     var onChange: (@Sendable (_ running: Bool, _ aiming: Bool) -> Void)?
 
@@ -446,39 +461,48 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     private var reportedRunning = false
     private var reportedAiming = false
     private var generation = 0
+    /// Frames per second asked of the sensor (15; 8 when the phone runs hot).
+    private var fps: Int32 = 15
+    /// One automatic restart after a runtime error (e.g. media services reset).
+    private var retriedAfterError = false
 
     /// A hand observation sent this recently counts as "aiming at hands".
     static let aimingWindow: CFTimeInterval = 0.5
 
     private func now() -> CFTimeInterval { CACurrentMediaTime() }
 
-    /// For isAvailable / handTrackingStatus. Never call from `queue`.
+    /// For isAvailable / handTrackingStatus (snapshot, no queue hop).
     func status() -> [String: Any] {
-        queue.sync {
-            let running = isRunningLocked()
-            let age = lastSentAt > 0 ? Int((now() - lastSentAt) * 1000) : -1
-            var r: [String: Any] = [
-                "handTracking": running,
-                "aimingAtHands": running && age >= 0 && Double(age) < HandTracker.aimingWindow * 1000,
-                "handObservations": sent,
-                "handTrackFailures": failures,
-            ]
-            if age >= 0 { r["lastHandMs"] = age }
-            if let lastError { r["handError"] = lastError }
-            return r
-        }
+        snapLock.lock(); let s = snap; snapLock.unlock()
+        let age = s.lastSentAt > 0 ? Int((now() - s.lastSentAt) * 1000) : -1
+        var r: [String: Any] = [
+            "handTracking": s.running,
+            "aimingAtHands": s.running && age >= 0 && Double(age) < HandTracker.aimingWindow * 1000,
+            "handObservations": s.sent,
+            "handTrackFailures": s.failures,
+        ]
+        if age >= 0 { r["lastHandMs"] = age }
+        if let e = s.lastError { r["handError"] = e }
+        return r
     }
 
-    var isRunning: Bool { queue.sync { isRunningLocked() } }
+    var isRunning: Bool { snapLock.lock(); defer { snapLock.unlock() }; return snap.running }
     private func isRunningLocked() -> Bool {
         guard let s = session else { return false }
         return s.isRunning && !s.isInterrupted
     }
+    /// Publish the queue's state to the snapshot. On `queue`.
+    private func publish() {
+        let v = Snapshot(running: isRunningLocked(), lastSentAt: lastSentAt, sent: sent, failures: failures, lastError: lastError)
+        snapLock.lock(); snap = v; snapLock.unlock()
+    }
+    private func currentWant() -> Int { snapLock.lock(); defer { snapLock.unlock() }; return wantGen }
 
     /// Pause track() calls while a nod / shake plays.
     func setPaused(_ p: Bool) { queue.async { self.paused = p } }
 
     func start(_ acc: DockAccessory, config: Config) async -> (ok: Bool, error: String?) {
+        let token = currentWant()
         let denied = "Camera permission denied — allow Mendcraft in Settings › Camera"
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: break
@@ -488,24 +512,32 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
             return (false, denied)
         }
         return await withCheckedContinuation { cont in
-            queue.async { cont.resume(returning: self.startLocked(acc, config: config)) }
+            queue.async {
+                // stop() came after this start was asked for: stay stopped.
+                guard token == self.currentWant() else { cont.resume(returning: (false, "superseded")); return }
+                self.retriedAfterError = false
+                cont.resume(returning: self.startLocked(acc, config: config))
+            }
         }
     }
 
     private func startLocked(_ acc: DockAccessory, config: Config) -> (ok: Bool, error: String?) {
         accessory = acc
-        if isRunningLocked(), config.corrected == self.config.corrected, config.mirrored == self.config.mirrored {
+        // Running, or still waiting for WebKit to let go of the lens
+        // (interrupted): keep that session — the caller waits it out.
+        if let s = session, s.isRunning || s.isInterrupted,
+           config.corrected == self.config.corrected, config.mirrored == self.config.mirrored {
             return (true, nil)
         }
         teardownLocked(reason: nil)
         self.config = config
         lastError = nil
         guard let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
-            lastError = "No front camera"; return (false, lastError)
+            lastError = "No front camera"; publish(); return (false, lastError)
         }
         let input: AVCaptureDeviceInput
         do { input = try AVCaptureDeviceInput(device: dev) } catch {
-            lastError = "Front camera: \(error.localizedDescription)"; return (false, lastError)
+            lastError = "Front camera: \(error.localizedDescription)"; publish(); return (false, lastError)
         }
         let s = AVCaptureSession()
         s.beginConfiguration()
@@ -513,7 +545,7 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         if s.canSetSessionPreset(.vga640x480) { s.sessionPreset = .vga640x480 } else { s.sessionPreset = .low }
         guard s.canAddInput(input) else {
             s.commitConfiguration()
-            lastError = "The front camera is busy"; return (false, lastError)
+            lastError = "The front camera is busy"; publish(); return (false, lastError)
         }
         s.addInput(input)
         let out = AVCaptureVideoDataOutput()
@@ -522,7 +554,7 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         out.setSampleBufferDelegate(self, queue: queue)
         guard s.canAddOutput(out) else {
             s.commitConfiguration()
-            lastError = "Camera output unavailable"; return (false, lastError)
+            lastError = "Camera output unavailable"; publish(); return (false, lastError)
         }
         s.addOutput(out)
         let rc = AVCaptureDevice.RotationCoordinator(device: dev, previewLayer: nil)
@@ -536,15 +568,8 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
             }
         }
         s.commitConfiguration()
-        // ≤15 fps at the sensor (no wasted frames); Vision is throttled too.
-        if (try? dev.lockForConfiguration()) != nil {
-            let fps = 15.0
-            if dev.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= fps && fps <= $0.maxFrameRate }) {
-                dev.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 15)
-                dev.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 15)
-            }
-            dev.unlockForConfiguration()
-        }
+        // ≤15 fps at the sensor (8 when hot): no wasted frames.
+        applyFrameRate(dev, HandTracker.fpsForThermal())
         generation += 1
         let gen = generation
         let nc = NotificationCenter.default
@@ -578,8 +603,21 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
                 guard let self, self.generation == gen else { return }
                 self.log.error("[hands] session runtime error: \(err, privacy: .public)")
                 self.teardownLocked(reason: "runtime error")
+                // Once per start: build the session again (e.g. media services were reset).
+                if !self.retriedAfterError, let acc = self.accessory {
+                    self.retriedAfterError = true
+                    let r = self.startLocked(acc, config: self.config)
+                    self.log.notice("[hands] restart after runtime error: \(r.ok ? "ok" : (r.error ?? "failed"), privacy: .public)")
+                    if r.ok { self.report(); return }
+                }
                 self.lastError = "Hand camera error: \(err)"
                 self.report()
+            }
+        })
+        observers.append(nc.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                guard let self, self.generation == gen, let dev = self.device else { return }
+                self.applyFrameRate(dev, HandTracker.fpsForThermal())
             }
         })
         session = s
@@ -590,19 +628,39 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         lastHandSeen = 0
         trackInFlight = false
         s.startRunning() // on our own queue, never the main thread
-        guard s.isRunning else {
+        // Interrupted (WebKit still holds the lens) is not a failure: keep it.
+        guard s.isRunning || s.isInterrupted else {
             teardownLocked(reason: nil)
             lastError = "The hand camera did not start"
             log.error("[hands] start failed: session did not run")
+            publish()
             return (false, lastError)
         }
         let orient = config.corrected ? "corrected" : "device"
-        log.notice("[hands] start: front camera \(s.sessionPreset.rawValue, privacy: .public) @15fps, orient=\(orient, privacy: .public), mirrored=\(config.mirrored, privacy: .public)")
+        log.notice("[hands] start: front camera \(s.sessionPreset.rawValue, privacy: .public) @\(self.fps, privacy: .public)fps, orient=\(orient, privacy: .public), mirrored=\(config.mirrored, privacy: .public), interrupted=\(s.isInterrupted, privacy: .public)")
         report()
         return (true, nil)
     }
 
+    static func fpsForThermal() -> Int32 {
+        let t = ProcessInfo.processInfo.thermalState
+        return (t == .serious || t == .critical) ? 8 : 15
+    }
+
+    /// Sensor frame rate (both min and max frame duration). On `queue`.
+    private func applyFrameRate(_ dev: AVCaptureDevice, _ want: Int32) {
+        guard (try? dev.lockForConfiguration()) != nil else { return }
+        defer { dev.unlockForConfiguration() }
+        let f = Double(want)
+        guard dev.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= f && f <= $0.maxFrameRate }) else { return }
+        dev.activeVideoMinFrameDuration = CMTime(value: 1, timescale: want)
+        dev.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: want)
+        if want != fps { log.notice("[hands] frame rate → \(want, privacy: .public) fps (thermal)") }
+        fps = want
+    }
+
     func stop(reason: String) {
+        snapLock.lock(); wantGen += 1; snapLock.unlock()
         queue.async { self.teardownLocked(reason: reason); self.report() }
     }
 
@@ -620,10 +678,12 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
         smoothed = nil
         lastSentAt = 0
         generation += 1
+        publish()
     }
 
-    /// Fire onChange when running / aiming flipped. On `queue`.
+    /// Publish the snapshot; fire onChange when running / aiming flipped. On `queue`.
     private func report() {
+        publish()
         let running = isRunningLocked()
         let aiming = running && lastSentAt > 0 && now() - lastSentAt < HandTracker.aimingWindow
         if running == reportedRunning && aiming == reportedAiming { return }
@@ -637,9 +697,8 @@ final class HandTracker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard session != nil, let acc = accessory else { return }
         let t = now()
-        // 15 fps; 8 fps when the phone runs hot.
-        let thermal = ProcessInfo.processInfo.thermalState
-        let interval: CFTimeInterval = (thermal == .serious || thermal == .critical) ? 1.0 / 8.0 : 1.0 / 15.0
+        // At most the sensor rate (15 fps; 8 when the phone runs hot).
+        let interval: CFTimeInterval = 1.0 / Double(fps)
         if t - lastProcessed < interval * 0.9 { report(); return }
         lastProcessed = t
         // Keep the frame upright as the phone turns (corrected mode).
@@ -795,6 +854,9 @@ actor DockWatcher {
     /// background / undock; the tracker itself runs only while docked + active.
     private var handsWanted = false
     private var handsConfig = HandTracker.Config()
+    /// Bumped by every hands start / stop / Follow me: a start that awaited
+    /// across one of them gives up.
+    private var handsGen = 0
 
     /// Start one move (aim / cue). Call endMove() exactly once after it.
     private func beginMove() {
@@ -938,6 +1000,7 @@ actor DockWatcher {
         // Follow me = DockKit's own tracking: the hand tracker stops.
         if enabled && handsWanted {
             handsWanted = false
+            handsGen += 1
             HandTracker.shared.stop(reason: "follow me")
         }
         let gen = trackingGen
@@ -1016,17 +1079,25 @@ actor DockWatcher {
         keepAliveWanted = false
         CameraKeepAlive.shared.stop()
         handsWanted = true
+        handsGen += 1
+        let myGen = handsGen
         handsConfig = config
         updateGuard()
         var errText: String?
         do { try await DockAccessoryManager.shared.setSystemTrackingEnabled(false) } catch { errText = error.localizedDescription }
-        if let e = await applyHands() { errText = e; handsWanted = false }
+        let superseded = { () -> Bool in myGen != self.handsGen || !self.handsWanted }
+        if superseded() { return await bailHands() }
+        if let e = await applyHands() {
+            if superseded() { return await bailHands() }
+            errText = e; handsWanted = false
+        }
         // The WebKit process may still be letting go of the lens (our session
         // starts interrupted, "in use by another client"): give it 2 s.
         let until = Date().addingTimeInterval(2.0)
-        while errText == nil && !HandTracker.shared.isRunning && Date() < until {
+        while errText == nil && !HandTracker.shared.isRunning && Date() < until && !superseded() {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        if superseded() { return await bailHands() }
         let running = HandTracker.shared.isRunning
         if !running && errText == nil {
             errText = HandTracker.shared.status()["handError"] as? String ?? "The hand camera didn’t start"
@@ -1038,8 +1109,15 @@ actor DockWatcher {
         return r
     }
 
+    /// A start overtaken by Follow me / stop: our "off" must not be the last word.
+    private func bailHands() async -> [String: Any] {
+        if wanted == true { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true) }
+        return ["ok": false, "running": false, "error": "superseded"]
+    }
+
     func stopHands(_ reason: String) -> [String: Any] {
         handsWanted = false
+        handsGen += 1
         HandTracker.shared.stop(reason: reason)
         return ["ok": true, "running": false]
     }
@@ -1051,7 +1129,13 @@ actor DockWatcher {
             if !handsWanted { HandTracker.shared.stop(reason: "not wanted") }
             return nil
         }
+        let gen = handsGen
         let r = await HandTracker.shared.start(acc, config: handsConfig)
+        // Follow me / stop / undock while the camera started (actor reentrancy).
+        guard handsWanted, gen == handsGen, accessory != nil else {
+            HandTracker.shared.stop(reason: "superseded")
+            return "superseded"
+        }
         // A capture session starting can flip DockKit tracking back on.
         if r.ok { await enforceOff(force: true) }
         return r.ok ? nil : (r.error ?? "The hand tracker didn’t start")
