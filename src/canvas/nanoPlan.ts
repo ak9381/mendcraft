@@ -6,7 +6,7 @@
 // button) is derived here from the device list. A full draft is ~60
 // characters instead of ~600.
 //
-//   room:        {"t":"Living room","d":["wiz-desk","speaker-1"]}
+//   room:        {"t":"Living room","d":["lamp-a","speaker-a"]}
 //   floor plan:  {"p":"twoBedroom"}
 import { extractJson } from '../ai/cloudJson';
 import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type Coerced, type PlanTemplate, type SurfacePlan, type TileSpec } from './surfacePlan';

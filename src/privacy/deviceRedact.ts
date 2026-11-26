@@ -36,8 +36,8 @@ export function createDeviceIdSession(): DeviceIdSession {
 /** Swap every occurrence of a known real device id in `text` for its session
  *  token. Placeholders are assigned in `ids`' own order (so "Device 1",
  *  "Device 2"... reads the same as the device list), but the actual
- *  substring replacement runs longest-id-first so e.g. "speaker-1" never
- *  gets clipped by "speaker-10" matching first. Plain substring replace —
+ *  substring replacement runs longest-id-first so e.g. "lamp-1" never
+ *  gets clipped by "lamp-10" matching first. Plain substring replace —
  *  ids are simple lowercase slugs (see surfacePlan.ts's ID_RE), never
  *  regex-special. An id absent from `text` is left unassigned. */
 export function redactDeviceIds(text: string, ids: readonly string[], session: DeviceIdSession): string {
