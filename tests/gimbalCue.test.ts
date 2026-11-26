@@ -280,10 +280,13 @@ describe('wiring (source checks)', () => {
     expect(main).toMatch(/if \(phonePlatform === 'ios'\) s\?\.onGimbalCue\?\.\(\(kind\) => h\.gimbalCue\(kind\)\)/);
   });
 
-  it('native uses DockKit animate(motion:) with .yes / .no / .wakeup and a 3 s timeout', () => {
+  it('native uses DockKit animate(motion:) with .yes / .wakeup and a 3 s timeout; "no" is our own shake', () => {
     expect(swift).toMatch(/CAPPluginMethod\(name: "cue"/);
     expect(swift).toMatch(/acc\.animate\(motion: motion\)/);
-    for (const m of ['.yes', '.no', '.wakeup']) expect(swift).toContain(`motion = ${m}`);
+    for (const m of ['.yes', '.wakeup']) expect(swift).toContain(`motion = ${m}`);
+    // DockKit's .no never visibly moved the Flow 2 Pro: never used again.
+    expect(swift).not.toContain('motion = .no');
+    expect(swift).toMatch(/if kind == "no" \{ return await shakeCue\(acc\) \}/);
     expect(swift).toMatch(/let budgetMs: UInt64 = kind == "wakeup" \? 4500 : 3000/);
     expect(swift).toMatch(/withTimeout\(ms: budgetMs\)/);
   });
@@ -293,6 +296,26 @@ describe('wiring (source checks)', () => {
     expect(swift).toMatch(/await settle\(acc, offset\); return false/);
     expect(swift).toMatch(/Vector3D\(x: 0, y: -offset, z: 0\)/);
     expect(swift).toMatch(/Task\.detached/);
+  });
+
+  it('native shake: brisk ±11° relative yaw swings, net zero, 3 s budget, tracking paused like cue(), compensating move', () => {
+    expect(swift).toMatch(/let s = 11\.0 \* Double\.pi \/ 180\.0/);
+    expect(swift).toMatch(/\[\(s, 170\), \(-2 \* s, 260\), \(2 \* s, 260\), \(-2 \* s, 260\), \(s, 170\)\]/);
+    expect(swift).toMatch(/let deadline = Date\(\)\.addingTimeInterval\(3\.0\)/);
+    // Same pause / restore as the animations.
+    expect(swift).toMatch(/private func shakeCue[\s\S]{0,200}beginMove\(\)[\s\S]{0,300}setSystemTrackingEnabled\(false\)[\s\S]{0,400}await endMove\(\)/);
+    // ok only when every swing finished; cut short → move back by the offset.
+    expect(swift).toMatch(/if !done \{\s*await settle\(acc, offset\)/);
+    expect(swift).toMatch(/relative: true\)/);
+  });
+
+  it('native keeps tracking OFF while the web layer wants it off (guard, capture-session start, tracked subjects)', () => {
+    expect(swift).toMatch(/AVCaptureSession\.didStartRunningNotification/);
+    expect(swift).toMatch(/func enforceOff\(force: Bool = false\) async \{\s*guard wanted == false, appActive else \{ return \}/);
+    expect(swift).toMatch(/if wanted == false && appActive \{/);
+    expect(swift).toMatch(/acc\.trackingStates/);
+    expect(swift).toMatch(/"dockSubjects"/);
+    expect(swift).toMatch(/"reasserts"/);
   });
 
   it('native: a timeout cancels the animation Progress; overlapping moves restore the pre-pause state', () => {
