@@ -531,16 +531,24 @@ async function main() {
     await dash.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     check(await waitFor(dash, () => !!window.__mcGestures && !!document.querySelector('.mc-frame [data-focus]')), 'dashboard page is up');
     await dash.evaluate(() => document.querySelector('.mc-frame [data-focus]').click());
-    check(await waitFor(dash, () => !!document.querySelector('.mc-frame.focused mc-lamp-tile')?.shadowRoot?.querySelector('[data-act=color]')), 'the lamp tile shows its colour swatches');
+    // A just-built tile can be re-rendered (focus flight, the surface
+    // re-mounting): every read below first waits for the focused tile and the
+    // control it needs, instead of racing the render.
+    const tileReady = (tag, sel) => waitFor(dash,
+      `!!document.querySelector('.mc-frame.focused ${tag}')?.shadowRoot?.querySelector(${JSON.stringify(sel)})`, 15_000);
+    check(await tileReady('mc-lamp-tile', '[data-act=color]'), 'the lamp tile shows its colour swatches');
     await wait(900); // the focus flight settles
+    check(await tileReady('mc-lamp-tile', '[data-act=color]') && await tileReady('mc-music-tile', '[data-level=volume]'), 'the lamp and speaker tiles are rendered after the focus flight');
     await dash.evaluate(() => window.__mcGestures.show(true));
     const tileRoot = () => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot;
+    await tileReady('mc-lamp-tile', 'button');
     const noSlider = await dash.evaluate(`(${tileRoot})().querySelectorAll('input[type=range], [role=slider]').length`);
     check(noSlider === 0, 'the lamp tile has no slider');
     const sizes = await dash.evaluate(`[...(${tileRoot})().querySelectorAll('button')].map((b) => Math.min(b.offsetWidth, b.offsetHeight))`);
     check(sizes.length >= 26 && Math.min(...sizes) >= 56, `every lamp-tile control is at least 56 px (${sizes.length} controls, smallest ${Math.min(...sizes)} px)`);
     let dt = 1000;
     const aimAndPress = async (selector) => {
+      await tileReady('mc-lamp-tile', selector);
       const aimed = await dash.evaluate((selector, from) => {
         const g = window.__mcGestures;
         const el = document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector(selector);
@@ -561,7 +569,7 @@ async function main() {
       await wait(700);
       return { ...aimed, fired };
     };
-    const lampState = () => dash.evaluate(() => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector('.state').textContent.trim());
+    const lampState = async () => (await tileReady('mc-lamp-tile', '.state')) && dash.evaluate(() => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector('.state').textContent.trim());
     const blue = await aimAndPress('[data-act=color][data-value=blue]');
     check(blue.same, `an open palm highlights the Blue swatch inside the lamp tile (${blue.name})`);
     const afterBlue = await lampState();
@@ -576,7 +584,7 @@ async function main() {
     // 6) Peace-and-move over the speaker's volume control steps it through the
     //    tile's own − / + buttons (levelControl.ts adjustLevel), and over the
     //    lamp's brightness control too — never a scroll, never a canvas pan.
-    const levelProbe = (tag, kind) => dash.evaluate((tag, kind) => {
+    const levelProbe = async (tag, kind) => (await tileReady(tag, `[data-level=${kind}] [data-level-readout]`)) && dash.evaluate((tag, kind) => {
       const el = document.querySelector(`.mc-frame.focused ${tag}`).shadowRoot.querySelector(`[data-level=${kind}]`);
       const r = el.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2, now: Number(el.getAttribute('aria-valuenow')), readout: el.querySelector('[data-level-readout]').textContent.trim() };
