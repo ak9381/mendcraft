@@ -142,7 +142,8 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   }
 
   if (percent) {
-    const v = clamp(Number(percent[1]));
+    // As asked, never clamped: the store refuses anything outside 10–100 %.
+    const v = Number(percent[1]);
     const intents = targets.map((d) => ({ deviceId: d.id, on: v > 0, brightness: v }));
     return { intents, say: `${labelList(targets, all)} to ${v}%.` };
   }

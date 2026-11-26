@@ -57,6 +57,9 @@ const fire = (act: unknown, value: string | number): void => {
 };
 /** Arrow keys on a focused level control: fine ±1 steps for keyboard users. */
 function fineKey(e: KeyboardEvent): -1 | 0 | 1 {
+  // A held key auto-repeats ~30 times a second: each would be a real lamp
+  // command. One press = one step.
+  if (e.repeat) return 0;
   if (e.key === 'ArrowUp' || e.key === 'ArrowRight') return 1;
   if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') return -1;
   return 0;
@@ -105,7 +108,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
         <button class="primary power" data-act="toggle" @click=${() => p.onToggle?.()}>${on ? 'Turn off' : 'Turn on'}</button>
       </div>
       ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
-      <div class="level" data-level="brightness" data-level-step=${LAMP_TILE_STEP} aria-valuemin="10" aria-valuemax="100" aria-valuenow=${b} role="group" aria-label="Brightness. Arrow keys change it by 1 %."
+      <div class="level" data-level="brightness" data-level-step=${LAMP_TILE_STEP} aria-valuemin="10" aria-valuemax="100" aria-valuenow=${b} role="group" aria-label=${`Brightness ${on ? `${b} %` : 'off'}. Arrow keys change it by 1 %.`}
         @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); fire(p.onLevel, Math.max(10, Math.min(100, (on ? b : 10) + d))); } }}>
         <div class="steps">
           <button class="step dec" data-level-dec data-act="dimmer" aria-label="Dimmer" @click=${() => p.onDimmer?.()}>−</button>
@@ -123,7 +126,7 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
       <div class="chips scenes" role="group" aria-label="Scenes">
         ${LAMP_SCENES.map((s) => html`<button data-act="scene" data-value=${s.key} aria-label=${`${s.label} scene`} aria-pressed=${on && sceneId === s.sceneId ? 'true' : 'false'} @click=${() => fire(p.onScene, s.key)}>${s.label}</button>`)}
       </div>
-      <div class="level" data-level="temp" data-level-step=${TEMP_STEP} aria-valuemin="2200" aria-valuemax="6500" aria-valuenow=${temp || TEMP_DEFAULT} role="group" aria-label="White. Arrow keys change it by 100 kelvin."
+      <div class="level" data-level="temp" data-level-step=${TEMP_STEP} aria-valuemin="2200" aria-valuemax="6500" aria-valuenow=${temp || TEMP_DEFAULT} role="group" aria-label=${`White ${whiteOn && temp ? `${temp} kelvin` : 'not set'}. Arrow keys change it by 100 kelvin.`}
         @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); fire(p.onWhite, Math.max(2200, Math.min(6500, (temp || TEMP_DEFAULT) + d * 100))); } }}>
         <div class="steps">
           <button class="step dec" data-level-dec data-act="warmer" aria-label="Warmer" @click=${() => p.onWarmer?.()}>−</button>
@@ -171,7 +174,7 @@ export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
         <button class="primary" data-act="playpause" @click=${() => p.onPlayPause?.()}>${playing ? 'Pause' : 'Play'}</button>
         <button data-act="next" @click=${() => p.onNext?.()}>Next</button>
       </div>
-      <div class="level" data-level="volume" data-level-step=${VOLUME_TILE_STEP} aria-valuemin="0" aria-valuemax="100" aria-valuenow=${vol} role="group" aria-label="Volume. Arrow keys change it by 1 %."
+      <div class="level" data-level="volume" data-level-step=${VOLUME_TILE_STEP} aria-valuemin="0" aria-valuemax="100" aria-valuenow=${vol} role="group" aria-label=${`Volume ${vol} %. Arrow keys change it by 1 %.`}
         @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); fire(p.onVolume, Math.max(0, Math.min(100, vol + d))); } }}>
         <div class="steps">
           <button class="step dec" data-level-dec data-act="softer" aria-label="Quieter" @click=${() => p.onSofter?.()}>−</button>

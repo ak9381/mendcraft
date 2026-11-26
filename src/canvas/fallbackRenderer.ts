@@ -601,6 +601,7 @@ export function renderNodeToDom(
           values[f.id] = v;
           readout.textContent = String(v);
           level.setAttribute('aria-valuenow', String(v));
+          level.setAttribute('aria-label', `${f.label} ${v}`);
           for (const c of chips) c.el.setAttribute('aria-pressed', String(c.n === v));
         };
         const step = (text: string, dir: 1 | -1, attr: string): HTMLElement => {
@@ -746,7 +747,7 @@ export function renderNodeToDom(
     el.appendChild(head);
     if (p.error) el.appendChild(noteEl());
 
-    const bright = levelEl('brightness', LAMP_TILE_STEP, 'Brightness', brightness, 10, 100);
+    const bright = levelEl('brightness', LAMP_TILE_STEP, `Brightness ${on ? `${brightness} %` : 'off'}`, brightness, 10, 100);
     const steps = mk('div', 'steps');
     steps.appendChild(btn('−', 'dimmer', () => triggerAction(p.onDimmer), { cls: 'step', label: 'Dimmer', attrs: ['data-level-dec'] }));
     const ro = mk('div', 'readout', 'Brightness ');
@@ -779,7 +780,7 @@ export function renderNodeToDom(
     }
     el.appendChild(scenes);
 
-    const white = levelEl('temp', TEMP_STEP, 'White', temp || TEMP_DEFAULT, 2200, 6500);
+    const white = levelEl('temp', TEMP_STEP, `White ${whiteOn && temp ? `${temp} kelvin` : 'not set'}`, temp || TEMP_DEFAULT, 2200, 6500);
     const wsteps = mk('div', 'steps');
     wsteps.appendChild(btn('−', 'warmer', () => triggerAction(p.onWarmer), { cls: 'step', label: 'Warmer', attrs: ['data-level-dec'] }));
     const wro = mk('div', 'readout', 'White ');
@@ -830,7 +831,7 @@ export function renderNodeToDom(
     if (p.onNext) transport.appendChild(btn('Next', 'next', () => triggerAction(p.onNext)));
     el.appendChild(transport);
 
-    const volume = levelEl('volume', VOLUME_TILE_STEP, 'Volume', vol, 0, 100);
+    const volume = levelEl('volume', VOLUME_TILE_STEP, `Volume ${vol} %`, vol, 0, 100);
     const steps = mk('div', 'steps');
     steps.appendChild(btn('−', 'softer', () => triggerAction(p.onSofter), { cls: 'step', label: 'Quieter', attrs: ['data-level-dec'] }));
     const ro = mk('div', 'readout', 'Volume ');

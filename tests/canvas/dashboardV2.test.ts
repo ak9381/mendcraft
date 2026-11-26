@@ -3,7 +3,8 @@
 // routes for them, and room boards that never scroll inside themselves.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { createDeviceStore, lampLook, simulatedAck, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
+import { createActQueue, createDeviceStore, lampLook, simulatedAck, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
+import { mountItemHandles } from '../../src/canvas/editBoard';
 import { COLOUR_RANGE_REFUSAL, LAMP_RANGE_REFUSAL, SCENE_REFUSAL, TEMP_RANGE_REFUSAL, levelRefusal } from '../../src/canvas/deviceGuard';
 import { parseDeviceCommands, type DeviceRef } from '../../src/canvas/deviceCommands';
 import { reduceA2uiMessages, renderNodeToDom, type FallbackAction } from '../../src/canvas/fallbackRenderer';
@@ -514,5 +515,86 @@ describe('menu entry', () => {
     expect(app).toMatch(/window\.open\('\/activity\.html'/);
     expect(readFileSync('vite.config.ts', 'utf8')).toMatch(/activity: path\.join\(root, 'activity\.html'\)/);
     expect(readFileSync('activity.html', 'utf8')).toMatch(/src="\/src\/activity\/activityMain\.ts"/);
+  });
+});
+
+describe('review round 1', () => {
+  it('"lamp to 0 %" and off are a power-off on the real bulb, never a dim (which would turn it on at 10 %)', () => {
+    expect(wizIntentFor({ deviceId: 'wiz-lamp-1', on: false, brightness: 0 })).toEqual({ kind: 'power', on: false });
+    expect(wizIntentFor({ deviceId: 'wiz-lamp-1', brightness: 0 })).toEqual({ kind: 'power', on: false });
+    expect(wizIntentFor({ deviceId: 'wiz-lamp-1', on: false, temp: 2700 })).toEqual({ kind: 'power', on: false });
+    expect(pilotParamsForIntent(wizIntentFor({ deviceId: 'wiz-lamp-1', on: false, brightness: 0 }))).toEqual({ state: false });
+    const spoken = parseDeviceCommands('set the desk lamp to 0%', devices)!.intents[0];
+    expect(wizIntentFor(spoken)).toEqual({ kind: 'power', on: false });
+  });
+
+  it('a spoken percent is passed on as asked, so the store refuses > 100 % instead of quietly setting 100', async () => {
+    const intent = parseDeviceCommands('set the desk lamp to 500%', devices)!.intents[0];
+    expect(intent).toEqual({ deviceId: 'wiz-desk', on: true, brightness: 500 });
+    const run = vi.fn(async () => ({}));
+    const store = createDeviceStore({ 'wiz-desk': lamp() }, { run }, () => {}, () => null);
+    expect(await store.act(intent)).toMatchObject({ brightness: 60, error: LAMP_RANGE_REFUSAL });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('level sets are calmed per device: one in flight, at most one per 150 ms, the latest value wins', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent: number[] = [];
+      let fail = false;
+      const connector: DeviceConnector = { run: (i) => new Promise((res, rej) => setTimeout(() => { if (fail) rej(new Error('no')); else { sent.push(i.brightness!); res({ on: true, brightness: i.brightness }); } }, 300)) };
+      const store = createDeviceStore({ d: lamp({ brightness: 50 }), e: lamp({ brightness: 20 }) }, connector, () => {}, () => null);
+      const q = createActQueue(store);
+      // A held arrow key's worth of presses: 51, 52, … 80 within 300 ms.
+      for (let v = 51; v <= 80; v++) { q.act({ deviceId: 'd', on: true, brightness: v }); await vi.advanceTimersByTimeAsync(10); }
+      q.act({ deviceId: 'e', on: true, brightness: 30 }); // another device is not held up
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(sent.filter((v) => v !== 30)).toEqual([51, 80]); // the first, then only the latest
+      expect(sent).toContain(30);
+      expect(store.get('d').brightness).toBe(80);
+      expect(q.pending('d')).toBe(false);
+      // A failure rolls back to the last value that was really APPLIED (80), not to a stale one.
+      fail = true;
+      q.act({ deviceId: 'd', on: true, brightness: 90 });
+      q.act({ deviceId: 'd', on: true, brightness: 95 });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.get('d')).toMatchObject({ brightness: 80, error: 'Lamp refused the change' });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('presses that are not level sets go straight through, in order', () => {
+    const seen: DeviceIntent[] = [];
+    const q = createActQueue({ act: async (i) => { seen.push(i); return lamp(); } });
+    q.act({ deviceId: 'd', on: false });
+    q.act({ deviceId: 'd', next: true });
+    q.act({ deviceId: 'd', on: true, sceneId: 3 });
+    expect(seen).toHaveLength(3);
+  });
+
+  it('a held arrow key is one step: key auto-repeat is ignored', () => {
+    const src = readFileSync('src/canvas/deviceTiles.ts', 'utf8');
+    expect(src).toMatch(/function fineKey\(e: KeyboardEvent\)[^}]*if \(e\.repeat\) return 0;/s);
+    expect(readFileSync('src/canvas/widgets.ts', 'utf8')).toMatch(/if \(e\.repeat\) return;/);
+    expect(readFileSync('src/canvas/canvasApp.ts', 'utf8')).toMatch(/if \(intent\) actQueue\.act\(intent\);/);
+  });
+
+  it('a level control says its value in its name', () => {
+    const el = renderTile('LampTile', { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Desk lamp' }, { 'wiz-lamp-2': lamp({ brightness: 70, temp: 4000 }) });
+    const levels = all(el, (e) => 'data-level' in e.attrs);
+    expect(levels.map((l) => l.attrs['aria-label'])).toEqual(['Brightness 70 %', 'White 4000 kelvin']);
+  });
+
+  it('edit mode: a drag on a zoomed-out board moves the tile by board px, not screen px', () => {
+    const item = { style: {} as Record<string, string>, offsetWidth: 400, getBoundingClientRect: () => ({ width: 320 }) }; // shown at 80 %
+    const mkHandle = () => {
+      const fns: Record<string, Array<(e: { clientX: number; clientY: number }) => void>> = {};
+      return { fns, addEventListener: (t: string, f: (e: { clientX: number; clientY: number }) => void) => { (fns[t] ??= []).push(f); }, removeEventListener: () => {} };
+    };
+    const move = mkHandle(); const resize = mkHandle();
+    mountItemHandles(item as never, move as never, resize as never, { left: 100, top: 100, width: 400, height: 300 }, { getBounds: () => ({ left: 0, top: 0, width: 5000, height: 5000 }) });
+    move.fns.pointerdown[0]({ clientX: 0, clientY: 0 });
+    move.fns.pointermove[0]({ clientX: 80, clientY: 40 }); // 80 screen px at 0.8 = 100 board px
+    expect(item.style.left).toBe('200px');
+    expect(item.style.top).toBe('150px');
   });
 });

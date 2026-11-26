@@ -30,6 +30,9 @@ export interface WizConnectorDeps {
  *  are separate bulb modes, so the most specific one asked for wins; then
  *  brightness; then plain power. */
 export function wizIntentFor(intent: DeviceIntent): LampIntent {
+  // Off is off: "lamp to 0 %" must never reach the bulb as a dim (WiZ's floor
+  // is 10 %, and a dim also turns the bulb ON).
+  if (intent.on === false || intent.brightness === 0) return { kind: 'power', on: false };
   if (intent.sceneId !== undefined) return { kind: 'scene', sceneId: intent.sceneId };
   if (intent.rgb !== undefined) return { kind: 'color', rgb: intent.rgb };
   if (intent.temp !== undefined) return { kind: 'temp', temp: intent.temp };

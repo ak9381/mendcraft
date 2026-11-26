@@ -528,10 +528,11 @@ export class FormTileElement extends A2uiLitElement<typeof FormTileApi> {
       const v = Number(this.valueFor(f));
       const set = (n: number) => { this.values[f.id] = Math.max(Math.min(min, max), Math.min(Math.max(min, max), n)); this.requestUpdate(); };
       const fine = (e: KeyboardEvent) => {
+        if (e.repeat) return; // one press = one step
         const d = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0;
         if (d) { e.preventDefault(); set(v + d * rangeStep(min, max) / 10); }
       };
-      return html`<div class="level" data-level="value" data-level-step=${rangeStep(min, max)} aria-valuemin=${min} aria-valuemax=${max} aria-valuenow=${v} role="group" aria-label=${f.label} @keydown=${fine}>
+      return html`<div class="level" data-level="value" data-level-step=${rangeStep(min, max)} aria-valuemin=${min} aria-valuemax=${max} aria-valuenow=${v} role="group" aria-label=${`${f.label} ${v}`} @keydown=${fine}>
         <div class="steps">
           <button type="button" class="step" data-level-dec aria-label=${`${f.label}: lower`} @click=${() => set(rangeNudge(v, -1, min, max))}>−</button>
           <div class="readout"><span data-level-readout>${v}</span></div>

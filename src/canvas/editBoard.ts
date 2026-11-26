@@ -286,6 +286,13 @@ export function mountItemHandles(
   const max = opts.max ?? MAX_ITEM_SIZE;
   const slop = opts.engageSlopPx ?? 6;
 
+  /** How much the board is zoomed on screen (a room dashboard may be shown
+   *  zoomed out): pointer travel is screen px, the layout is board px. */
+  function zoom(): number {
+    const el = item as unknown as { offsetWidth?: number; getBoundingClientRect?(): { width: number } };
+    const shown = el.getBoundingClientRect?.().width ?? 0;
+    return el.offsetWidth && shown > 0 ? shown / el.offsetWidth : 1;
+  }
   function apply(): void {
     item.style.left = `${layout.left}px`;
     item.style.top = `${layout.top}px`;
@@ -308,7 +315,8 @@ export function mountItemHandles(
       if (!pastSlop(e.clientX - moveStart.x, e.clientY - moveStart.y, slop)) return;
       moveStart.engaged = true;
     }
-    layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x), top: moveStart.top + (e.clientY - moveStart.y) }, opts.getBounds());
+    const z = zoom();
+    layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x) / z, top: moveStart.top + (e.clientY - moveStart.y) / z }, opts.getBounds());
     apply();
     opts.onMoveDrag?.('move', e.clientX, e.clientY);
   }
@@ -350,7 +358,8 @@ export function mountItemHandles(
       if (!pastSlop(e.clientX - resizeStart.x, e.clientY - resizeStart.y, slop)) return;
       resizeStart.engaged = true;
     }
-    layout = resizeByHandle(resizeStart.box, resizeStart.dir, e.clientX - resizeStart.x, e.clientY - resizeStart.y, opts.getBounds(), min, max);
+    const z = zoom();
+    layout = resizeByHandle(resizeStart.box, resizeStart.dir, (e.clientX - resizeStart.x) / z, (e.clientY - resizeStart.y) / z, opts.getBounds(), min, max);
     apply();
   }
   function onResizeEnd(): void {

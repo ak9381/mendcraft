@@ -26,6 +26,15 @@ export type DeviceIntent = {
   query?: string;
 };
 
+/** A failure whose message is meant for the person ("Spotify needs Premium
+ *  to control playback."): the store shows it on the tile as it is. */
+export class DeviceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeviceError';
+  }
+}
+
 export interface DeviceConnector {
   run(intent: DeviceIntent): Promise<Partial<DeviceState>>;
 }
@@ -138,7 +147,7 @@ export function createDeviceStore(
         };
       } catch (e) {
         const isTimeout = e instanceof Error && e.message === 'timeout';
-        const why = isTimeout
+        const why = e instanceof DeviceError && e.message ? e.message : isTimeout
           ? (isMusic ? "Couldn't reach the music player" : "Couldn't reach the lamp")
           : (isMusic ? 'Music player refused the change' : 'Lamp refused the change');
         state[intent.deviceId] = { ...prev, pending: false, error: why };
@@ -193,4 +202,47 @@ export function tileIntent(name: string, deviceId: string, cur: DeviceState, val
     case 'music.volume': return num === null ? null : { deviceId, volume: num };
     default: return null;
   }
+}
+
+/** Intents that set a level outright (a chip, or a keyboard fine step). */
+export const isLevelSet = (i: DeviceIntent): boolean => i.brightness !== undefined || i.temp !== undefined || i.volume !== undefined;
+
+export const ACT_GAP_MS = 150;
+
+/** Level sets, calmed: per device at most one command in flight and one every
+ *  `gapMs`; while one is out, only the LATEST value asked for is kept and sent
+ *  next. So a held key or a burst of presses is never a burst of lamp
+ *  commands with overlapping rollbacks — a failure rolls back to the last
+ *  value that was really applied. Anything else goes straight to the store. */
+export function createActQueue(
+  store: Pick<DeviceStore, 'act'>,
+  gapMs = ACT_GAP_MS,
+  clock: { now(): number; later(f: () => void, ms: number): unknown } = { now: () => Date.now(), later: (f, ms) => setTimeout(f, ms) },
+): { act(intent: DeviceIntent): void; pending(deviceId: string): boolean } {
+  const lanes = new Map<string, { busy: boolean; lastAt: number; next: DeviceIntent | null; timer: boolean }>();
+  const lane = (id: string) => {
+    let l = lanes.get(id);
+    if (!l) { l = { busy: false, lastAt: -Infinity, next: null, timer: false }; lanes.set(id, l); }
+    return l;
+  };
+  function pump(id: string): void {
+    const l = lane(id);
+    if (l.busy || !l.next) return;
+    const wait = l.lastAt + gapMs - clock.now();
+    if (wait > 0) {
+      if (!l.timer) { l.timer = true; clock.later(() => { l.timer = false; pump(id); }, wait); }
+      return;
+    }
+    const intent = l.next;
+    l.next = null; l.busy = true; l.lastAt = clock.now();
+    void store.act(intent).catch(() => undefined).then(() => { l.busy = false; pump(id); });
+  }
+  return {
+    act(intent) {
+      if (!isLevelSet(intent)) { void store.act(intent).catch(() => undefined); return; }
+      lane(intent.deviceId).next = intent; // latest wins
+      pump(intent.deviceId);
+    },
+    pending: (id) => { const l = lanes.get(id); return !!l && (l.busy || !!l.next); },
+  };
 }

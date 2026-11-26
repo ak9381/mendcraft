@@ -72,20 +72,3 @@ export function validateParams(raw) {
   if (!Object.keys(out).length) return { ok: false, error: 'no params to set' };
   return { ok: true, params: out };
 }
-
-// Re-enforce WiZ's param whitelist + ranges server-side (src/devices/wiz.ts
-// clamps on the client, but the bridge must not trust the wire). Unknown
-// keys are dropped.
-export function sanitizeParams(raw) {
-  const out = {};
-  if (!raw || typeof raw !== 'object') return out;
-  const clampInt = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n))));
-  if (typeof raw.state === 'boolean') out.state = raw.state;
-  if (Number.isFinite(Number(raw.dimming))) out.dimming = clampInt(raw.dimming, 10, 100);
-  if (Number.isFinite(Number(raw.temp))) out.temp = clampInt(raw.temp, 2200, 6500);
-  for (const ch of ['r', 'g', 'b']) {
-    if (Number.isFinite(Number(raw[ch]))) out[ch] = clampInt(raw[ch], 0, 255);
-  }
-  if (Number.isFinite(Number(raw.sceneId))) out.sceneId = clampInt(raw.sceneId, SCENE_ID_MIN, SCENE_ID_MAX);
-  return out;
-}

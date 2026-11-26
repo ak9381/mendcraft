@@ -40,7 +40,7 @@ import type { GimbalCueKind } from '../relay/protocol';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
-import { createDeviceStore, simulatedAck, tileIntent, type DeviceConnector } from './deviceActions';
+import { createActQueue, createDeviceStore, simulatedAck, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
@@ -1032,6 +1032,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const sids = targets && targets.size ? targets : live;
     for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
+  const actQueue = createActQueue(store);
   // Speaker tiles say which player is behind them from the first paint:
   // Spotify when she is connected, else the built-in player (labelled).
   if (!opts.connector) {
@@ -1112,7 +1113,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // The pressed chip's own value (a preset key or a number).
       const value = (a.context?.value ?? ext(a)?.value) as string | number | undefined;
       const intent = tileIntent(a.name, id, cur, value);
-      if (intent) void store.act(intent);
+      // Level sets are calmed per device (one in flight, latest value wins).
+      if (intent) actQueue.act(intent);
     });
   });
 
