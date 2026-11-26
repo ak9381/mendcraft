@@ -4592,21 +4592,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
   const barEl = root.querySelector<HTMLElement>('.mc-bar');
-  let lastBarH = phoneShell ? 0 : barH();
-  let barRefit = 0;
   const barRo = typeof ResizeObserver !== 'undefined' && barEl
-    ? new ResizeObserver(() => {
-      const h = barH();
-      root.style.setProperty('--mc-bar-h', `${h}px`);
-      // A status line that wraps (or goes) moves the board area's top: the
-      // focused board is re-framed so it is never left under the bar or the
-      // engine bar by a toast that came and went.
-      if (Math.abs(h - lastBarH) < 8) return;
-      lastBarH = h;
-      if (phoneShell || !focusId) return;
-      clearTimeout(barRefit);
-      barRefit = window.setTimeout(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); }, 160);
-    })
+    ? new ResizeObserver(() => { root.style.setProperty('--mc-bar-h', `${barH()}px`); })
     : null;
   if (barEl && barRo) barRo.observe(barEl);
   const onWindowOnline = () => setOnline(true);
@@ -4669,7 +4656,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('offline', onWindowOffline);
     removeEventListener('pagehide', onPageHide);
     barRo?.disconnect();
-    clearTimeout(barRefit);
   }
   // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
   // Every zoom path drops focus first: a focused board is 1:1 only.

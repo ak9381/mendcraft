@@ -59,10 +59,10 @@ describe('room board widening', () => {
 });
 
 describe('re-framing the focused board', () => {
-  it('a window resize and a bar that changes height re-fit the board at its shown size', () => {
+  it('a window resize re-fits the board at its shown size (a toast never moves it)', () => {
     const src = read('src/canvas/canvasApp.ts');
     expect(src).toContain('camera = focusCam(fitBoardWidth(f)); applyCamera();');
-    expect(src).toMatch(/barRefit = window\.setTimeout\(\(\) => \{ const f = focusId \? reg\.get\(focusId\) : undefined; if \(f\) void flyTo\(focusCam\(fitBoardWidth\(f\)\)\); \}, 160\);/);
+    expect(src).not.toContain('barRefit');
   });
 });
 

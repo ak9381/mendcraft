@@ -145,9 +145,11 @@ async function main() {
       await page.evaluate(() => document.fonts.ready);
       await new Promise((r) => setTimeout(r, 1500));
       // Headless Chrome has no camera, so a "Camera blocked" toast wraps the
-      // top bar for ~8 s. Clear it now (as its fade would): the board is
-      // re-framed when the bar changes height, which this also exercises.
+      // top bar for ~8 s. Clear it now (as its fade would) and re-fit as a
+      // window resize does (the board is framed at its shown size).
       await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = ''; });
+      await new Promise((r) => setTimeout(r, 50));
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       // Let the camera settle (a refit after the first paint flies 420 ms):
       // the board's box must hold still for three polls in a row.
       for (let i = 0, last = '', same = 0; i < 40 && same < 3; i++) {
