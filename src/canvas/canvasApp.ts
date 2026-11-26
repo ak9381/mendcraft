@@ -46,6 +46,7 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
+import { connectedDeviceRows, connectedDevicesPlan, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, isDevicesBoard, type ConnectedInput } from './connectedDevices';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
@@ -66,7 +67,7 @@ import { buildEnergyShowcaseDoc } from './showcaseFixture';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, SCRIPTED_KN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { betterSummary, roomSummary, draftSummary, floorPlanSummary, tilesFilledLine } from './planTruth';
+import { betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -790,8 +791,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return joinPhone(id);
     },
     buildDashboard: () => {
-      const id = pairFrame ?? focusId ?? lastFocus; // phones stay paired: do not close the pairing card's session
-      if (id) void connectRoom(id);
+      // Phones stay paired (the pairing card's session stays open); the
+      // dashboard is built on its own board, never on Connected devices.
+      const id = dashboardTarget(focusId ?? lastFocus);
+      if (focusId !== id) { sync(); void focus(id); }
+      void connectRoom(id);
     },
     onChange: () => {
       const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }));
@@ -1189,7 +1193,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Any plan about to be shown or applied names only lamps that exist: a
    *  seeded lamp after the swap, a bulb that has gone, or a plan written from
    *  a prompt built before discovery is fitted to the current lamps. */
-  const fitPlan = (plan: SurfacePlan): SurfacePlan => fitLampTiles(plan, lampSlots());
+  const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));
   // Before the bridge has answered (or when it never does): a machine that
   // has seen real bulbs starts with THOSE lamps, marked SIM, so boards saved
   // with them open with working tiles. The seeded lamps are for a machine
@@ -1198,11 +1202,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Chrome's Local Network Access answer (asked once, logged once). */
   const lna = createLocalNetworkCheck();
   let lnaSaid = false;
+  /** The "Chrome is blocking…" line once known ('' = not blocked / not asked). */
+  let lnaLine = '';
   /** Says the "Chrome is blocking…" line the first time it applies; resolves
    *  with the line ('' when Chrome isn't blocking). */
   async function sayLocalNetworkBlocked(): Promise<string> {
     const line = await lna.line();
     if (line && !lnaSaid) { lnaSaid = true; say(line, { speak: true }); }
+    if (line !== lnaLine) { lnaLine = line; if (devicesWired) refreshDevicesBoard(); }
     return line;
   }
   if (liveLamps) {
@@ -1229,6 +1236,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const changed = applyRealLamps(lampSwap, lamps);
       for (const fid of changed) renderSurface(fid);
       if (changed.length) { sync(); updateDock(); persist(); }
+      if (devicesWired) refreshDevicesBoard();
       say(lamps.length ? `Found ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
     }).catch(() => { /* a broken bridge reply leaves the SIM lamps as they are */ });
   }
@@ -1813,7 +1821,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- AI turns: visible prompt, ghost preview, human in the loop ----
   const SCRIPTS: Record<string, string> = {
     nanoRoom: '{"kind":"room","title":"This room","tiles":[{"type":"lamp","deviceId":"wiz-desk","label":"Desk lamp"},{"type":"lamp","deviceId":"wiz-ceiling","label":"Ceiling light"}]}',
-    geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}',
+    geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"connect","label":"Connect a device"}]}',
     nanoPlan: '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}',
   };
   // Model streams in flight (any engine, fallbacks included): the replay's
@@ -2141,9 +2149,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const withBuildGimbal = <T>(run: () => Promise<T>): Promise<T> => followWhileBuilding(inputs.gimbal, run);
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
-  const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
+  // A room dashboard never holds a floor plan: that is its own board.
+  const DEEP_ROOM_GOAL = 'Improve the current board: group the lights. No floor-plan tile: the floor plan has its own board.';
   /** The same goal for a board Gemini makes in ONE call (no draft to improve). */
-  const ONE_CALL_ROOM_GOAL = 'Group the lights and add a room plan tile.';
+  const ONE_CALL_ROOM_GOAL = 'Group the lights. No floor-plan tile: the floor plan has its own board.';
   /** When the last AI turn (stream + its review) let go of the board. The
    *  next-step pick stays away from the model for a while after that: a
    *  timed-out Nano call can still be finishing inside Chrome. */
@@ -2165,7 +2174,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
   type PlanSummary = string | ((plan: SurfacePlan) => string);
-  const summaryOf = (summary: PlanSummary, plan: SurfacePlan): string => (typeof summary === 'function' ? summary(plan) : summary);
+  // Titles come from what she will see: the fitted plan (real lamps, no plan tile on a room).
+  const summaryOf = (summary: PlanSummary, plan: SurfacePlan): string => (typeof summary === 'function' ? summary(fitPlan(plan)) : summary);
 
   /** Stream one model turn into the ghost; the plan and its ledger receipt
    *  (the SentInfo token live bookings — cloudSent / cloudRetract — are
@@ -2353,7 +2363,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const next = deepLater.shift()!;
       if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue; // board deleted meanwhile
       panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
-      panels.showHandoff('nano', 'group the lights and add a room plan');
+      panels.showHandoff('nano', 'group the lights');
       await aiTurn(next.frameId, 'gemini', next.utterance, SCRIPTS.geminiRoom, betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL);
     }
   }
@@ -2381,7 +2391,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         await proposeDraft(frameId, utterance, draft, cloudDraft);
         return;
       }
-      panels.showHandoff('nano', 'group the lights and add a room plan');
+      panels.showHandoff('nano', 'group the lights');
       // Tell Deep what the handoff line promises (only in the prompt; her card
       // still shows her own words) — without it the live model never added the
       // room plan: 0/3 → 7/7 boards with it (live-build study).
@@ -2415,11 +2425,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       aiPanel.querySelector('.mc-ai-state')!.textContent = line;
       return;
     }
-    panels.showHandoff('nano', 'group the lights and add a room plan');
+    panels.showHandoff('nano', 'group the lights');
     // Tell Deep what the handoff line promises (only in the prompt; her card
     // still shows her own words) — without it the live model never added the
     // room plan: 0/3 → 7/7 boards with it (live-build study).
     await aiTurn(frameId, 'gemini', utterance, SCRIPTS.geminiRoom, betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL);
+  }
+  /** "draw the floor plan" (voice, chip, gesture, the empty-board button):
+   *  the plan lives on its OWN board titled "Floor plan" — the existing one is
+   *  focused, else a new one is made (an empty board she is on is used as
+   *  that new board). Never written into a dashboard or any board with tiles. */
+  function openFloorPlan(from: string | null, utterance = 'start a floor plan'): void {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const target = floorPlanTarget({ frames: reg.list(), surfaces, from });
+    let id = target.id;
+    if (target.make) {
+      // A board with tiles (the dashboard) stays as it is, pinned beside.
+      if (from && surfaces[from]?.tiles.length) reg.setPinned(from, true);
+      id = reg.add('plan', FLOOR_PLAN_TITLE).id;
+    } else if (target.reuseEmpty) reg.rename(id!, FLOOR_PLAN_TITLE);
+    if (focusId !== id) { sync(); void focus(id!); }
+    if (target.existing && surfaces[id!]?.tiles.length) { say('Here is your floor plan board.'); return; }
+    floorPlan(id!, utterance);
   }
   function floorPlan(frameId: string, utterance = 'start a floor plan'): void {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
@@ -3738,6 +3765,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Push the current gimbal state to every board that shows the tile. */
   function pushGimbal(): void {
+    if (devicesWired) refreshDevicesBoard();
     const g = gimbalState();
     for (const sid of live) {
       if (sid.endsWith('-dock') || !surfaces[sid] || !planHasGimbal(surfaces[sid])) continue;
@@ -3747,8 +3775,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The room dashboard: the focused room board, else the last one, else a
    *  pinned one, else the first room board. */
   function dashboardId(): string | null {
-    for (const id of [focusId, lastFocus]) if (id && surfaces[id]?.kind === 'room') return id;
-    const room = reg.list().find((f) => f.pinned && surfaces[f.id]?.kind === 'room') ?? reg.list().find((f) => surfaces[f.id]?.kind === 'room');
+    const dash = (id: string | null | undefined): id is string => !!id && surfaces[id]?.kind === 'room' && !isDevicesBoard(reg.get(id)?.title, surfaces[id]);
+    for (const id of [focusId, lastFocus]) if (dash(id)) return id;
+    const room = reg.list().find((f) => f.pinned && dash(f.id)) ?? reg.list().find((f) => dash(f.id));
     return room?.id ?? null;
   }
   /** "add the gimbal" / a stand docking: the tile joins the dashboard. */
@@ -3807,6 +3836,65 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   senseSubs.add(() => { pushGimbal(); });
   gimbalWired = true;
+
+  // ---- the Connected devices board (connectedDevices.ts): local, no AI ----
+  /** What each device really reports right now. */
+  function connectedInput(): ConnectedInput {
+    const phones = pairFirst.phones();
+    const ios = phones.find((p) => isIphoneRow(p));
+    const android = phones.find((p) => p.id === 'android' || (p.sim && /nothing|android/i.test(p.label)));
+    const sense = phoneSense.get('ios');
+    const simG = simGimbalMode === 'face' ? 'tracking' as const : simGimbalMode === 'hands' ? 'hands' as const : 'ready' as const;
+    const lamps = Object.entries(store.all()).filter(([id]) => isManagedLampId(id)).map(([id, d]) => ({
+      label: DEVICE_LABELS[id] ?? id,
+      state: opts.sim ? 'sim' as const : d.unreachable || d.sim ? 'unreachable' as const : 'answering' as const,
+    }));
+    const music = Object.values(store.all()).some((d) => d.playing !== undefined);
+    return {
+      laptop: true,
+      iphone: ios ? { sim: ios.sim, gimbal: ios.sim ? simG : sense?.gimbal ?? null, sensor: ios.sim ? simGimbalMode === 'hands' : sense?.sensor } : null,
+      android: android ? { sim: android.sim } : null,
+      lamps,
+      lampWhy: lnaLine,
+      speaker: music ? { sim: !!opts.sim, spotifyTokens: !opts.sim && !!loadTokens(), playingOn: musicWhere.spotify ? musicWhere.target : '' } : null,
+    };
+  }
+  const devicesBoardId = (): string | null => reg.list().find((f) => isDevicesBoard(f.title, surfaces[f.id]))?.id ?? null;
+  /** Rows changed (a phone joined/left, a lamp answered): redraw the board. */
+  function refreshDevicesBoard(): void {
+    const id = devicesBoardId();
+    if (!id || phoneShell) return;
+    const plan = connectedDevicesPlan(connectedDeviceRows(connectedInput()));
+    if (JSON.stringify(plan) === JSON.stringify(surfaces[id])) return;
+    surfaces[id] = plan;
+    renderSurface(id); persist();
+  }
+  /** "connect devices": the Connected devices board, made or brought up. */
+  function ensureDevicesBoard(): string {
+    let id = devicesBoardId();
+    if (!id) { id = reg.add('note', DEVICES_BOARD_TITLE).id; sync(); } // its frame (and surface host) first
+    surfaces[id] = connectedDevicesPlan(connectedDeviceRows(connectedInput()));
+    renderSurface(id); sync(); persist();
+    if (focusId !== id) void focus(id);
+    return id;
+  }
+  /** Where "build the dashboard" / a room turn goes: the board she is on when
+   *  it can be a dashboard (not the devices board, not a floor plan), else the
+   *  existing dashboard, else an empty board she is on, else a new "Dashboard". */
+  function dashboardTarget(from: string | null): string {
+    const planBoard = (id: string) => surfaces[id]?.kind === 'plan' || reg.get(id)?.kind === 'plan' || reg.get(id)?.title === FLOOR_PLAN_TITLE;
+    const ok = (id: string | null | undefined): id is string => !!id && !!reg.get(id) && !isDevicesBoard(reg.get(id)?.title, surfaces[id]) && !planBoard(id);
+    if (ok(from) && surfaces[from]?.tiles.length) return from;
+    const existing = reg.list().find((f) => ok(f.id) && surfaces[f.id]?.kind === 'room' && surfaces[f.id]!.tiles.length);
+    if (existing) return existing.id;
+    if (ok(from)) return from;
+    return reg.add('room', DASHBOARD_TITLE).id;
+  }
+  let devicesWired = true;
+  if (typeof window !== 'undefined' && !phoneShell) {
+    const devTimer = setInterval(() => { if (devicesBoardId()) refreshDevicesBoard(); }, 4000);
+    addEventListener('pagehide', () => clearInterval(devTimer), { once: true });
+  }
 
   // Native app: watch the stand dock/undock (every 10 s while visible). A
   // false→true flip re-applies face follow (launch race / redock) unless she
@@ -4136,30 +4224,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       }
       case 'connectDevices': {
-        // Phones first; the dashboard review waits for "build the dashboard".
-        const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-        if (!focusId) { sync(); void focus(target); }
+        // Phones first, on the Connected devices board; the dashboard review
+        // waits for "build the dashboard" (its own board).
+        const target = ensureDevicesBoard();
         pairFrame = target;
         void pairFirst.begin({ dashboard: r.dashboard }); return true;
       }
       case 'connectRoom': {
-        const target = focusId ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-        if (!focusId) { sync(); void focus(target); }
+        // The dashboard is its own board: never the devices list or the floor plan.
+        const target = dashboardTarget(focusId);
+        if (focusId !== target) { sync(); void focus(target); }
         void connectRoom(target, text); return true;
       }
       // "floor plan for Mrs Sharma's flat" / "a floor plan" / "floorplan" —
       // route to the Nano floor-plan turn with the full utterance so any name
       // in it (e.g. Sharma) gets redacted by the stayed-local strip.
-      case 'floorPlan': {
-        const cur = focusId;
-        // If the current board already has a surface (e.g. the Living room
-        // dashboard), pin it and draw the plan on a fresh board instead of
-        // drawing the CAD swarm/ghost on top of the dashboard mid-build.
-        let target = cur ?? reg.add('note', `Board ${reg.list().length + 1}`).id;
-        if (cur && surfaces[cur]) { reg.setPinned(cur, true); target = reg.add('note', `Board ${reg.list().length + 1}`).id; }
-        if (focusId !== target) { sync(); void focus(target); }
-        floorPlan(target, text); return true;
-      }
+      case 'floorPlan': openFloorPlan(focusId, text); return true;
       // "connect a device" / "add device" opens the sheet; a named device
       // ("connect the speaker") becomes a Nano-only by-name turn.
       case 'connectSheet': openConnectSheet(); return true;
@@ -4214,7 +4294,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (act && frame) {
       if (act.dataset.act === 'connect') void connectRoom(frame);
       else if (act.dataset.act === 'talk') micFab?.toggle();
-      else if (act.dataset.act === 'floorplan') floorPlan(frame);
+      else if (act.dataset.act === 'floorplan') openFloorPlan(frame);
       return;
     }
     if (phoneLocked()) return;
@@ -4972,6 +5052,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ctx: () => ({
       lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
       pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      devicesBoard: !!focusId && isDevicesBoard(reg.get(focusId)?.title, surfaces[focusId]),
       lampLabel: deviceRefs().find((d) => d.kind === 'lamp')?.label,
       savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
     }),

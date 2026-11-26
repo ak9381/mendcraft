@@ -291,6 +291,7 @@ export function appAuthoredLine(text: string): string | null {
 }
 
 const HANDOFF_REASONS: readonly string[] = [
+  'group the lights',
   'group the lights and add a room plan',
   'plan the Kannada pack — too complex for on-device',
 ];

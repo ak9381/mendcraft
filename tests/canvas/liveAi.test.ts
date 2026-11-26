@@ -1194,7 +1194,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toContain('const plan = fitPlan(proposed);'); // what she reviews and applies
     expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
-    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => fitLampTiles(plan, lampSlots());');
+    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));');
   });
 
   it('review 5: a board keeps a lamp whenever there is one — the first real lamp it does not already show', () => {
