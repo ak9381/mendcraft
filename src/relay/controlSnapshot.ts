@@ -20,6 +20,7 @@ import { redact, type CloudCall, type LedgerCounts } from '../core/ledger';
 import type { JobKind, JobStatus, QueuedJob } from '../offline/queue';
 import { coerceLayout, type ScreenLayout } from '../canvas/screenLayout';
 import { coerceSurfacePlan, type SurfacePlan } from '../canvas/surfacePlan';
+import { coerceBoardDrawings } from '../canvas/planDocs';
 
 export const SNAPSHOT_VERSION = 1 as const;
 
@@ -154,6 +155,9 @@ export interface SnapshotOmissions {
   queue: number;
   primitives: number;
   recipes: number;
+  /** Plan drawings left out of `boardDrawings` (invalid or over the size cap).
+   *  Present only when something was dropped. */
+  drawings?: number;
 }
 
 export interface ControlSnapshot {
@@ -181,6 +185,10 @@ export interface ControlSnapshot {
   /** When set, `board` was sent to ONE phone (a whole-board edge drag): only
    *  the phone of this platform shows it; the other phone ignores it. */
   boardFor?: 'ios' | 'android';
+  /** What is drawn on `board`'s plan tiles right now (plan board id → plan
+   *  doc), BESIDE the surface plan — never inside it. Each doc sanitized,
+   *  only ids `board` has, size-capped (planDocs.coerceBoardDrawings). */
+  boardDrawings?: Record<string, Record<string, unknown>>;
   /** The most recent committed tile transfer (for the enter-from-edge animation). */
   transfer?: TransferMarker;
   omitted: SnapshotOmissions;
@@ -221,6 +229,8 @@ export interface ControlSnapshotInput {
   board?: unknown;
   /** Target phone for `board` (validated; anything else is dropped). */
   boardFor?: unknown;
+  /** Drawings for `board`'s plan tiles (re-sanitized; dropped if invalid). */
+  boardDrawings?: unknown;
   /** Last committed transfer marker. */
   transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
@@ -359,6 +369,8 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   }
   const transfer = coerceTransferMarker(input.transfer);
   const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
+  const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
+  const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
 
   return {
     v: SNAPSHOT_VERSION,
@@ -376,6 +388,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(layout ? { layout } : {}),
     ...(board ? { board } : {}),
     ...(boardFor ? { boardFor } : {}),
+    ...(boardDrawings ? { boardDrawings } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
@@ -383,6 +396,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
       queue: queue.dropped,
       primitives: primitivesDropped,
       recipes: recipes.dropped,
+      ...(bd.dropped ? { drawings: bd.dropped } : {}),
     },
   };
 }
@@ -573,6 +587,7 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     layout: r.layout ? coerceLayout(r.layout) : null,
     board: r.board,
     boardFor: r.boardFor,
+    boardDrawings: r.boardDrawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }

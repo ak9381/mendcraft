@@ -27,14 +27,14 @@ describe('applyGuestSnapshot', () => {
     expect(applyGuestSnapshot({}, show)).toBe(false);
     expect(show).not.toHaveBeenCalled();
     expect(applyGuestSnapshot({ board }, show)).toBe(true);
-    expect(show).toHaveBeenCalledWith(board);
+    expect(show).toHaveBeenCalledWith(board, {});
   });
   it('a board sent to one phone shows only on that phone', () => {
     const ios = vi.fn();
     const android = vi.fn();
     expect(applyGuestSnapshot({ board, boardFor: 'ios' }, ios, 'ios')).toBe(true);
     expect(applyGuestSnapshot({ board, boardFor: 'ios' }, android, 'android')).toBe(false);
-    expect(ios).toHaveBeenCalledWith(board);
+    expect(ios).toHaveBeenCalledWith(board, {});
     expect(android).not.toHaveBeenCalled();
     // An untargeted board still mirrors to every phone.
     expect(applyGuestSnapshot({ board }, android, 'android')).toBe(true);

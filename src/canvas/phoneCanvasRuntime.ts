@@ -37,14 +37,15 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 }
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor'>,
-  showBoard: (plan: SurfacePlan) => void,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings'>,
+  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings']) => void,
   platform?: PhonePlatform,
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
   if (snap.boardFor && snap.boardFor !== platform) return false;
-  showBoard(snap.board);
+  // The board's current plan drawings ride with it (the phone re-checks them).
+  showBoard(snap.board, snap.boardDrawings ?? {});
   return true;
 }
 
