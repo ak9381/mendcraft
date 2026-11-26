@@ -1740,6 +1740,6 @@
 .mc-voice-toggle { text-align: left; padding: 8px 14px; border-radius: 14px; }
 .mc-voice-toggle::before { content: 'Off · '; color: var(--text-dim); }
 .mc-voice-toggle[aria-pressed="true"]::before { content: 'On · '; color: var(--action-fill); }
-@media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: auto; max-height: 76vh; } }
+@media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); width: auto; max-height: 76vh; } }
 .mc-voice-sheet .mc-voice-pick { display: grid; justify-content: stretch; }
 .mc-voice-pick > span { justify-self: start; }
