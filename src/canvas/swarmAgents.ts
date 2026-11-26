@@ -178,9 +178,10 @@ export interface SwarmLayer {
   setTiles(count: number, names?: readonly string[]): void;
   /** The real work is done. Cursors stay until the last tile has landed plus
    *  LINGER_MS (the call's own cursor at least MIN_VISIBLE_MS after it
-   *  appeared), then the layer settles; resolves when it has. A hard
-   *  `settle()` (error, cancel) ends it at once and resolves it too. */
-  finish(): Promise<void>;
+   *  appeared), then the layer settles. Resolves true when it settled this way; false when
+   *  it was cut short (a hard `settle()`, or a newer `start()`), in which case
+   *  the caller must NOT settle: the layer now belongs to someone else. */
+  finish(): Promise<boolean>;
   reportBytes(bytes: number, simBytes?: number): void;
   settle(): void;
   destroy(): void;
@@ -198,9 +199,9 @@ export interface SwarmLayerOptions {
    *  host uses this to put the selection box / '+' crosshair on the real
    *  tile element, not on the cursor badge. */
   onReachTarget?: (tileIndex: number, kind: SwarmKind) => void;
-  /** At most this many visible cursors per engine (default: one per agent).
-   *  The canvas passes 1: one Nano and one Gemini cursor, never a spray. The
-   *  other agents still count in the pill and still light their tiles. */
+  /** Optional cap on visible cursors per engine (default: one per agent, which
+   *  is what the canvas uses). Over the cap an agent has no element but still
+   *  counts in the pill and still lights its tile. */
   maxPerKind?: number;
   /** Where a visible cursor parks, as a fraction of the container: the tile
    *  it fills (`tileIndex`) or, with no tile, the board itself. null hides
@@ -236,7 +237,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   container.appendChild(pill);
 
   let agents: SwarmAgentSpec[] = [];
-  /** The agents that get a cursor element (maxPerKind per engine). */
+  /** The agents that currently have a cursor element. */
   let shown = new Set<string>();
   const els = new Map<string, HTMLElement>();
   /** When each cursor joined (ms on `now()`), so a late one flies in on its own clock. */
@@ -251,7 +252,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
   /** When each cursor leaves (ms on `now()`); a call cursor has none until finish(). */
   const endAt = new Map<string, number>();
   const timers = new Set<unknown>();
-  let finishDone: (() => void) | null = null;
+  let finishDone: ((ok: boolean) => void) | null = null;
 
   function later(ms: number, cb: () => void): void {
     const h = timer(() => { timers.delete(h); cb(); }, Math.max(0, ms));
@@ -273,26 +274,40 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     pill.title = honestyNote(agents);
   }
 
-  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose, t: number): void {
+  type Placed = { x: number; y: number; hidden: boolean };
+  /** READ phase: where this agent's cursor goes (anchor rects are measured
+   *  here, once per distinct tile per frame via `cache`, never after a write). */
+  function place(agent: SwarmAgentSpec, pose: SwarmPose, t: number, cache: Map<number | undefined, { x: number; y: number } | null>): Placed {
+    let x = pose.x;
+    let y = pose.y;
+    let hidden = false;
+    if (opts.anchor) {
+      const read = (i: number | undefined): { x: number; y: number } | null => {
+        if (!cache.has(i)) cache.set(i, opts.anchor!(i));
+        return cache.get(i) ?? null;
+      };
+      // The call's cursor parks on the board; each tile cursor flies from it
+      // to the tile being filled (both inside the board).
+      const to = read(agent.tileIndex);
+      const from = read(undefined) ?? to;
+      hidden = !to;
+      if (to && from) {
+        const p = Math.max(0, Math.min(1, t / FLIGHT_MS));
+        const e = 1 - Math.pow(1 - p, 3);
+        x = from.x + (to.x - from.x) * e;
+        y = from.y + (to.y - from.y) * e;
+      }
+    }
+    return { x, y, hidden };
+  }
+
+  /** WRITE phase. */
+  function write(agent: SwarmAgentSpec, pose: SwarmPose, at: Placed): void {
     const el = els.get(agent.id);
     if (el) {
-      let x = pose.x;
-      let y = pose.y;
-      if (opts.anchor) {
-        // The call's cursor parks on the board; each tile cursor flies from
-        // it to the tile being filled (both inside the board).
-        const to = opts.anchor(agent.tileIndex);
-        const from = opts.anchor(undefined) ?? to;
-        el.hidden = !to;
-        if (to && from) {
-          const p = Math.max(0, Math.min(1, t / FLIGHT_MS));
-          const e = 1 - Math.pow(1 - p, 3);
-          x = from.x + (to.x - from.x) * e;
-          y = from.y + (to.y - from.y) * e;
-        }
-      }
-      el.style.left = `${(x * 100).toFixed(2)}%`;
-      el.style.top = `${(y * 100).toFixed(2)}%`;
+      if (opts.anchor) el.hidden = at.hidden;
+      el.style.left = `${(at.x * 100).toFixed(2)}%`;
+      el.style.top = `${(at.y * 100).toFixed(2)}%`;
       el.classList.toggle('is-editing', pose.phase === 'editing');
     }
     if (pose.phase === 'editing' && agent.tileIndex != null && !reached.has(agent.id)) {
@@ -301,14 +316,32 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     }
   }
 
+  function applyPose(agent: SwarmAgentSpec, pose: SwarmPose, t: number): void {
+    write(agent, pose, place(agent, pose, t, new Map()));
+  }
+
+  /** Parked cursors still follow the board (pan / zoom / layout shifts):
+   *  re-pose at most this often once nothing is flying. */
+  const FOLLOW_MS = 100;
+  let lastFollow = -Infinity;
+
   function frame(t: number): void {
     let flying = false;
-    agents.forEach((a, i) => {
+    const cache = new Map<number | undefined, { x: number; y: number } | null>();
+    const poses = agents.map((a, i) => {
       const elapsed = t - (born.get(a.id) ?? t);
       if (elapsed < FLIGHT_MS) flying = true;
-      applyPose(a, poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: SLOT_COUNT }), elapsed);
+      const pose = poseAt(a, i, elapsed, { seed, durationMs: FLIGHT_MS, total: SLOT_COUNT });
+      return { a, pose, at: place(a, pose, elapsed, cache) };
     });
-    rafId = flying && raf ? raf(frame) : null;
+    poses.forEach(({ a, pose, at }) => write(a, pose, at));
+    lastFollow = t;
+    // Keep a throttled loop while cursors are up so parked ones follow pan/zoom.
+    rafId = raf && (flying || running) ? raf(tick) : null;
+  }
+  function tick(t: number): void {
+    if (t - lastFollow >= FOLLOW_MS || agents.some((a) => t - (born.get(a.id) ?? t) < FLIGHT_MS)) frame(t);
+    else rafId = raf && running ? raf(tick) : null;
   }
 
   function clear(): void {
@@ -354,14 +387,14 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
     clear();
     container.hidden = true;
     pill.hidden = true;
-    const done = finishDone; finishDone = null; done?.();
+    const done = finishDone; finishDone = null; done?.(false);
   }
 
   return {
     start(input, s = 1) {
       if (rafId != null && caf) caf(rafId);
       rafId = null;
-      const pending = finishDone; finishDone = null; pending?.();
+      const pending = finishDone; finishDone = null; pending?.(false);
       clear();
       seed = s;
       agents = buildSwarmAgents(input);
@@ -370,7 +403,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       container.hidden = false;
       pill.hidden = false;
       renderPill();
-      if (!opts.reducedMotion && raf) rafId = raf(frame);
+      if (!opts.reducedMotion && raf) rafId = raf(tick);
     },
     setTiles(count, names) {
       if (!running || finishing) return;
@@ -390,11 +423,11 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       }
       if (!added) return;
       renderPill();
-      if (!opts.reducedMotion && raf && rafId == null) rafId = raf(frame);
+      if (!opts.reducedMotion && raf && rafId == null) rafId = raf(tick);
     },
     finish() {
-      if (!running) return Promise.resolve();
-      if (finishing) return new Promise<void>((res) => { const prev = finishDone; finishDone = () => { prev?.(); res(); }; });
+      if (!running) return Promise.resolve(false);
+      if (finishing) return new Promise<boolean>((res) => { const prev = finishDone; finishDone = (ok) => { prev?.(ok); res(ok); }; });
       finishing = true;
       const t = now();
       let last = t;
@@ -405,9 +438,9 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
         leaveAt(a.id, at);
         last = Math.max(last, at);
       }
-      return new Promise<void>((res) => {
+      return new Promise<boolean>((res) => {
         finishDone = res;
-        later(last - t, settleNow);
+        later(last - t, () => { const done = finishDone; finishDone = null; settleNow(); done?.(true); });
       });
     },
     reportBytes(b, sim = 0) { bytes = b; simBytes = sim; renderPill(); },
@@ -417,7 +450,7 @@ export function createSwarmLayer(container: HTMLElement, opts: SwarmLayerOptions
       rafId = null;
       running = false;
       clear();
-      const done = finishDone; finishDone = null; done?.();
+      const done = finishDone; finishDone = null; done?.(false);
     },
   };
 }

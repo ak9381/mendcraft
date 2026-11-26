@@ -110,14 +110,14 @@ describe('swarm finish()', () => {
     const r = rig();
     r.layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
     let done = false;
-    const p = r.layer.finish().then(() => { done = true; });
+    const p = r.layer.finish().then((ok) => { done = ok; });
     r.advance(MIN_VISIBLE_MS - 1);
     await Promise.resolve();
     expect(done).toBe(false);
     expect(r.cursors().length).toBe(1);
     r.advance(1);
     await p;
-    expect(done).toBe(true);
+    expect(done).toBe(true); // finished normally: the caller may settle
     expect(r.container.hidden).toBe(true);
     expect(r.cursors().length).toBe(0);
   });
@@ -188,5 +188,72 @@ describe('swarm CSS visibility rules', () => {
   it('the cursor label is at least 15 px', () => {
     const m = /\.mc-swarm-label \{[^}]*font-size: (\d+)px/.exec(css);
     expect(Number(m?.[1])).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe('parked cursors follow pan/zoom', () => {
+  it('re-reads the anchor while cursors are shown, throttled, and stops after settle', () => {
+    let t = 0;
+    let cbs: ((t: number) => void)[] = [];
+    let reads = 0;
+    const container = new El();
+    const layer = createSwarmLayer(container as unknown as HTMLElement, {
+      reducedMotion: false, doc, now: () => t,
+      raf: (cb) => { cbs.push(cb); return cbs.length; }, caf: () => { cbs = []; },
+      anchor: () => { reads++; return { x: 0.5, y: 0.5 }; },
+      timer: () => 0, clearTimer: () => {},
+    });
+    layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const step = (to: number): void => { t = to; const run = cbs; cbs = []; run.forEach((cb) => cb(to)); };
+    step(16); step(2000); // flight done
+    const after = reads;
+    step(2030); // inside the throttle window: no re-read
+    expect(reads).toBe(after);
+    step(2200); // due: reads again
+    expect(reads).toBeGreaterThan(after);
+    layer.settle();
+    expect(cbs.length).toBe(0);
+  });
+});
+
+describe('swarm finish() ownership (stale callers never settle a newer turn)', () => {
+  it('a hard settle makes finish() resolve false', async () => {
+    const r = rig();
+    r.layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const p = r.layer.finish();
+    r.layer.settle();
+    expect(await p).toBe(false);
+  });
+
+  it('a newer start() resolves the old finish() false and its own cursors survive the old timer', async () => {
+    const r = rig();
+    r.layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const old = r.layer.finish();
+    r.advance(500);
+    r.layer.start(buildMixedSwarmPlan('gemini', 'dashboard'), 1);
+    expect(await old).toBe(false);
+    r.advance(MIN_VISIBLE_MS + 5000); // the old finish's timer would have fired by now
+    expect(r.container.hidden).toBe(false);
+    expect(r.cursors().length).toBe(1);
+  });
+
+  it('a caller that only settles on true leaves the new turn running (the canvas pattern)', async () => {
+    const r = rig();
+    const finishSwarm = async (): Promise<void> => { if (await r.layer.finish()) r.layer.settle(); };
+    r.layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const old = finishSwarm();
+    r.layer.settle(); // cancel / hard stop
+    r.layer.start(buildMixedSwarmPlan('gemini', 'dashboard'), 1); // new turn begins
+    await old;
+    expect(r.container.hidden).toBe(false);
+    expect(r.cursors().length).toBe(1);
+  });
+
+  it('two finish() calls on one run both resolve true', async () => {
+    const r = rig();
+    r.layer.start(buildMixedSwarmPlan('nano', 'dashboard'), 1);
+    const a = r.layer.finish(); const b = r.layer.finish();
+    r.advance(MIN_VISIBLE_MS);
+    expect(await Promise.all([a, b])).toEqual([true, true]);
   });
 });

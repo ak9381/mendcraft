@@ -1856,7 +1856,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Same rule in sim and live: the review waits until every cursor has landed
   // on its tile plus a short linger (swarmAgents.LINGER_MS) — never longer, and
   // never for work that did not happen.
-  async function holdSwarmMinimum(): Promise<void> { await swarm.finish(); }
+  // Only the call that STARTED this swarm may settle it: if a newer turn took
+  // the layer over (or an error already ended it), finish() says false and we
+  // leave the new turn's cursors alone.
+  async function finishSwarm(): Promise<void> { if (await swarm.finish()) settleSwarm(); }
   /** One ledger line for a turn, remembered against that turn's SentInfo
    *  (summed if the same turn really sends twice). A SIM turn books 0 real
    *  bytes — only what it would send. `prebooked`: bytes of this turn already
@@ -2199,8 +2202,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const onlyCall = engineFor(engineId, '{}').id === 'gemini';
       const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', onlyCall ? ONE_CALL_ROOM_GOAL : undefined, surfaces[frameId] ?? null,
         () => { void connectRoom(frameId, utterance); });
-      await holdSwarmMinimum();
-      settleSwarm();
+      await finishSwarm();
       if (!out) { ghost(frameId, null); return null; }
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); return null; }
@@ -2226,8 +2228,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
-    await holdSwarmMinimum();
-    settleSwarm();
+    await finishSwarm();
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       tilesFilledLine(plan));
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
@@ -3043,8 +3044,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
     }
     const next = coerced.value;
-    await holdSwarmMinimum();
-    settleSwarm();
+    await finishSwarm();
     const swapCount = Object.keys(next.strings).length;
     panels.forEngine('gemini').log('replied', `Kannada pack ready · ${swapCount} swaps`);
     panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
@@ -4744,7 +4744,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       cloudRetract,
       log: (engine, verb, detail) => panels.forEngine(engine).log(verb, detail),
       handoff: (reason) => panels.showHandoff('nano', reason),
-      settle: async () => { await holdSwarmMinimum(); settleSwarm(); autoHideAi(); },
+      settle: async () => { await finishSwarm(); autoHideAi(); },
+      settleNow: () => { settleSwarm(); autoHideAi(); },
       state: (text) => { aiPanel.querySelector('.mc-ai-state')!.textContent = text; say(text); },
     },
     typing: (on) => toolPalette.peekSay(on),
