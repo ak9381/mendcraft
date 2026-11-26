@@ -192,6 +192,9 @@ function leafControls(o: Record<string, unknown>, cls: 'lamp' | 'music' | 'switc
   return r.controls.length ? r.controls : undefined;
 }
 
+/** Said when a reply puts the gimbal on one board twice. */
+export const SECOND_GIMBAL_NOTE = 'Dropped a second gimbal tile: there is one stand.';
+
 function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }, notes: string[]): TileResult {
   counter.n++;
   if (counter.n > MAX_NODES) return { ok: false, error: `too many nodes (> ${MAX_NODES})` };
@@ -239,7 +242,8 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     return { ok: true, value: { type: 'connect', label: cleanText(o.label, 40) ?? 'Connect a device' } };
   }
   if (o.type === 'gimbal') {
-    if (seen.has('gimbal')) return { ok: true, value: null };
+    // One stand, on the paired iPhone: a second gimbal tile would be a copy.
+    if (seen.has('gimbal')) { notes.push(SECOND_GIMBAL_NOTE); return { ok: true, value: null }; }
     seen.add('gimbal');
     const controls = leafControls(o, 'gimbal', notes);
     return { ok: true, value: { type: 'gimbal', label: cleanText(o.label, 40) ?? 'Gimbal', ...(controls ? { controls } : {}) } };
@@ -481,22 +485,24 @@ export function expandPlan(
         unreachable: !s || !!s.unreachable,
       };
     } else if (t.type === 'switch') {
+      // A switch: the same one tile and one event as the lamp (on / off only).
+      const p = (k: string) => ({ path: `/devices/${t.deviceId}/${k}` });
       components.push({
         id,
-        component: 'SwitchTile',
+        component: 'DeviceTile',
+        cls: 'switch',
         label: t.label,
-        on: { path: `/devices/${t.deviceId}/on` },
-        pending: { path: `/devices/${t.deviceId}/pending` },
-        error: { path: `/devices/${t.deviceId}/error` },
-        onToggle: { event: { name: 'switch.toggle', context: { deviceId: t.deviceId } } },
+        deviceId: t.deviceId,
+        controls: t.controls ?? standardControls('switch'),
+        standard: !t.controls,
+        on: p('on'), pending: p('pending'), error: p('error'), sim: p('sim'), unreachable: p('unreachable'),
+        onAct: { event: { name: 'device.act', context: { deviceId: t.deviceId, tile: id } } },
       });
-      const s = devices[t.deviceId] ?? {};
+      const s = devices[t.deviceId];
       deviceData[t.deviceId] = {
-        ...s,
-        on: s.on ?? false,
-        brightness: s.brightness ?? 0,
-        pending: false,
-        error: s.error ?? '',
+        on: s?.on ?? false, brightness: 0, pending: false, error: s?.error ?? '', sim: s?.sim ?? false,
+        // A switch this canvas does not have shows "Not connected".
+        unreachable: !s || !!s.unreachable,
       };
     } else if (t.type === 'scene') {
       components.push({
@@ -515,18 +521,21 @@ export function expandPlan(
         onConnect: { event: { name: 'connect.start' } },
       });
     } else if (t.type === 'gimbal') {
+      // The docked stand: the same one tile and one event. No deviceId (one
+      // stand, on the paired iPhone); its status line and mode are bound to
+      // /gimbal, which only ever holds what the iPhone reported.
       hasGimbal = true;
       components.push({
         id,
-        component: 'GimbalTile',
+        component: 'DeviceTile',
+        cls: 'gimbal',
         label: t.label ?? 'Gimbal',
-        docked: { path: '/gimbal/docked' },
-        mode: { path: '/gimbal/mode' },
+        controls: t.controls ?? standardControls('gimbal'),
+        standard: !t.controls,
         status: { path: '/gimbal/status' },
+        mode: { path: '/gimbal/mode' },
         error: { path: '/gimbal/error' },
-        // One press each; the button's own value (a mode or a cue) rides along.
-        onMode: { event: { name: 'gimbal.mode' } },
-        onCue: { event: { name: 'gimbal.cue' } },
+        onAct: { event: { name: 'device.act', context: { tile: id } } },
       });
     } else if (t.type === 'stat') {
       components.push({ id, component: 'StatTile', label: t.label, value: t.value, delta: t.delta ?? '', trend: t.trend ?? 'neutral', spark: t.spark ?? [] });

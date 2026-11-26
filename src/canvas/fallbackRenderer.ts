@@ -1,16 +1,15 @@
 // Fallback A2UI renderer: takes the SAME gated A2UI messages
 // (createSurface / updateComponents / updateDataModel / deleteSurface)
-// and renders Column, Text, DeviceTile, PlanBoard, SwitchTile,
-// SceneTile, ConnectTile into a host element without @a2ui/lit (plain DOM).
+// and renders Column, Text, DeviceTile (lamp, speaker, switch, gimbal),
+// PlanBoard, SceneTile, ConnectTile into a host element without @a2ui/lit (plain DOM).
 //
 // Pure part: message reducer to a render tree with resolved bindings.
 import type { A2uiMessage, FormField } from './surfacePlan';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
-import { NOT_CONNECTED_BADGE, STANDARD_CONTROLS_NOTE, intentMatches, readoutText, sliderView, stateLine, tileState } from './deviceTile';
+import { NOT_CONNECTED_BADGE, STANDARD_CONTROLS_NOTE, intentMatches, readoutText, sliderView, stateLine, tileActive, tileState } from './deviceTile';
 import type { ControlSpec } from './controlSpec';
-import { GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_STAND, GIMBAL_TILE_LABEL } from './gimbalTile';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -729,7 +728,7 @@ export function renderNodeToDom(
     const s = tileState(p);
     const controls = (Array.isArray(p.controls) ? p.controls : []) as ControlSpec[];
     const label = String(p.label || 'Device');
-    const el = mk('div', `mc-fb-tile device ${s.cls} ${(s.cls === 'music' ? s.playing : s.on) ? 'on' : ''}`);
+    const el = mk('div', `mc-fb-tile device ${s.cls} ${tileActive(s) ? 'on' : ''}`);
     el.setAttribute('role', 'group');
     el.setAttribute('aria-label', label);
     el.setAttribute('data-device-cls', s.cls);
@@ -771,37 +770,6 @@ export function renderNodeToDom(
     return el;
   }
 
-  if (node.component === 'SwitchTile') {
-    const on = !!p.on;
-    const el = doc.createElement('div');
-    el.className = `mc-fb-tile switch ${on ? 'on' : ''}`;
-    el.setAttribute('role', 'group');
-    el.setAttribute('aria-label', String(p.label || 'Switch'));
-
-    const rowTop = doc.createElement('div');
-    rowTop.className = 'row';
-    const labelSpan = doc.createElement('span');
-    labelSpan.className = 'label';
-    labelSpan.textContent = String(p.label || 'Switch');
-    const stateSpan = doc.createElement('span');
-    stateSpan.className = 'state';
-    stateSpan.setAttribute('aria-live', 'polite');
-    stateSpan.textContent = on ? 'On' : 'Off';
-    rowTop.appendChild(labelSpan);
-    rowTop.appendChild(stateSpan);
-    el.appendChild(rowTop);
-
-    const rowBtns = doc.createElement('div');
-    rowBtns.className = 'row';
-    const btnToggle = doc.createElement('button');
-    btnToggle.className = 'primary';
-    btnToggle.textContent = on ? 'Turn off' : 'Turn on';
-    btnToggle.addEventListener('click', () => triggerAction(p.onToggle));
-    rowBtns.appendChild(btnToggle);
-    el.appendChild(rowBtns);
-    return el;
-  }
-
   if (node.component === 'SceneTile') {
     const active = !!p.active;
     const el = doc.createElement('div');
@@ -830,35 +798,6 @@ export function renderNodeToDom(
     btnAct.addEventListener('click', () => triggerAction(p.onActivate));
     rowBtns.appendChild(btnAct);
     el.appendChild(rowBtns);
-    return el;
-  }
-
-  if (node.component === 'GimbalTile') {
-    const docked = !!p.docked;
-    const mode = typeof p.mode === 'string' ? p.mode : '';
-    const label = p.label ? String(p.label) : GIMBAL_TILE_LABEL;
-    const el = mk('div', `mc-fb-tile gimbal ${docked && mode !== 'hold' ? 'on' : ''}`);
-    el.setAttribute('role', 'group');
-    el.setAttribute('aria-label', label);
-    el.setAttribute('data-gimbal-docked', String(docked));
-    const head = mk('div', 'row head');
-    head.appendChild(mk('span', 'label', label));
-    const st = mk('span', 'state', p.status ? String(p.status) : GIMBAL_NO_STAND);
-    st.setAttribute('aria-live', 'polite');
-    st.setAttribute('data-gimbal-status', '');
-    head.appendChild(st);
-    el.appendChild(head);
-    if (p.error) el.appendChild(noteEl());
-    const modes = mk('div', 'chips modes');
-    modes.setAttribute('role', 'group');
-    modes.setAttribute('aria-label', 'Gimbal mode');
-    for (const b of GIMBAL_MODE_BUTTONS) modes.appendChild(btn(b.label, 'gimbal-mode', () => triggerAction(p.onMode, { value: b.value }), { pressed: docked && mode === b.value, value: b.value }));
-    el.appendChild(modes);
-    const cues = mk('div', 'chips cues');
-    cues.setAttribute('role', 'group');
-    cues.setAttribute('aria-label', 'Gimbal body language');
-    for (const b of GIMBAL_CUE_BUTTONS) cues.appendChild(btn(b.label, 'gimbal-cue', () => triggerAction(p.onCue, { value: b.value }), { value: b.value }));
-    el.appendChild(cues);
     return el;
   }
 

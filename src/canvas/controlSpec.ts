@@ -46,6 +46,13 @@ export const NOT_THIS_DEVICE_REFUSAL = "That control can't do that on this devic
 export const UNKNOWN_CONTROL_REFUSAL = 'That control is not on this board. Nothing changed.';
 /** A volume step needs the speaker's real volume; it is never guessed. */
 export const VOLUME_UNREAD_REFUSAL = "Couldn't read the speaker's volume. Nothing changed.";
+/** The one docked stand's id in a press (a gimbal leaf has no deviceId:
+ *  there is one stand, on the paired iPhone). */
+export const GIMBAL_DEVICE_ID = 'gimbal';
+/** A gimbal press with no iPhone paired (nothing can report a stand). */
+export const GIMBAL_NO_PHONE_REFUSAL = 'No iPhone is paired with the stand. Nothing changed.';
+/** A gimbal press while the paired iPhone reports no stand. */
+export const GIMBAL_NO_STAND_REFUSAL = 'No gimbal is docked. Nothing changed.';
 
 const SLIDER_KEYS: readonly SliderKey[] = ['brightness', 'volume', 'temp'];
 const STATE_KEYS: Record<DeviceClass, readonly StateKey[]> = {
@@ -237,8 +244,14 @@ function resolveLevel(key: SliderKey, v: number | '$value' | Step, cur: DeviceSt
 export function bindingIntent(cls: DeviceClass, deviceId: string, spec: IntentSpec, cur: DeviceState | undefined, value?: unknown): BindingResult {
   const s = coerceIntent(spec, cls, { allowValue: true });
   if (!s) return { refusal: NOT_THIS_DEVICE_REFUSAL };
-  if ('gimbalMode' in s) return { gimbal: { mode: s.gimbalMode } };
-  if ('gimbalCue' in s) return { gimbal: { cue: s.gimbalCue } };
+  if ('gimbalMode' in s || 'gimbalCue' in s) {
+    // The stand is here only while the iPhone says so: `cur` is built from
+    // its report (undefined = no iPhone paired; unreachable = no stand).
+    if (!cur) return { refusal: GIMBAL_NO_PHONE_REFUSAL };
+    if (cur.cls !== 'gimbal') return { refusal: NOT_THIS_DEVICE_REFUSAL };
+    if (cur.unreachable) return { refusal: GIMBAL_NO_STAND_REFUSAL };
+    return 'gimbalMode' in s ? { gimbal: { mode: s.gimbalMode } } : { gimbal: { cue: s.gimbalCue } };
+  }
   if (!cur || cur.unreachable) return { refusal: NOT_CONNECTED_REFUSAL };
   // A tile's type is only what the model wrote: the device must really be that class.
   if (deviceClassOf(deviceId, cur) !== cls) return { refusal: NOT_THIS_DEVICE_REFUSAL };
@@ -296,7 +309,7 @@ export function controlAt(plan: SurfacePlan, tileId: string, control: number, op
   const controls = leafControls(leaf);
   if (!isIndex(control, controls.length)) return null;
   const c = controls[control];
-  const base = { cls: leaf.type, deviceId: leaf.type === 'gimbal' ? 'gimbal' : leaf.deviceId };
+  const base = { cls: leaf.type, deviceId: leaf.type === 'gimbal' ? GIMBAL_DEVICE_ID : leaf.deviceId };
   if (c.kind === 'toggle' || c.kind === 'button') return { ...base, spec: c.intent };
   if (c.kind === 'slider') return { ...base, spec: { slider: c.key } };
   if (c.kind === 'chips') return isIndex(option, c.options.length) ? { ...base, spec: c.options[option].intent } : null;
@@ -340,7 +353,8 @@ export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, g
   const slider = 'slider' in hit.spec ? hit.spec.slider : null;
   const spec = slider ? sliderIntent(slider, option, press.value) : (hit.spec as IntentSpec);
   if (!spec) return { refusal: UNKNOWN_CONTROL_REFUSAL };
-  const cur = hit.cls === 'gimbal' ? undefined : get(hit.deviceId);
+  // The gimbal's state is what the iPhone reported (the caller's getter builds it).
+  const cur = get(hit.deviceId);
   const r = bindingIntent(hit.cls, hit.deviceId, spec, cur, slider ? press.value : undefined);
   if (hit.cls === 'music' && !cur && 'refusal' in r && r.refusal === NOT_CONNECTED_REFUSAL && o.spotifyConnected && !o.spotifyConnected()) {
     return { refusal: SPOTIFY_CONNECT_LINE, deviceId: hit.deviceId };

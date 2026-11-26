@@ -11,28 +11,19 @@ import {
   ConnectTileApi,
   DeviceTileApi,
   SceneTileApi,
-  SwitchTileApi,
 } from '../../src/canvas/catalogApi';
 import { gateMessages } from '../../src/canvas/gate';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 
 describe('Part 1: Dashboard tiles in A2UI catalog', () => {
   describe('Zod APIs and CATALOG_SCHEMAS', () => {
-    it('has strict schemas for SwitchTile, SceneTile, ConnectTile, and no MusicTile', () => {
-      // The speaker is a generated DeviceTile now.
+    it('has strict schemas for SceneTile, ConnectTile, and no fixed device tiles', () => {
+      // The speaker, the switch and the gimbal are generated DeviceTiles now.
       expect(CATALOG_SCHEMAS.MusicTile).toBeUndefined();
-      expect(CATALOG_SCHEMAS.SwitchTile).toBeDefined();
+      expect(CATALOG_SCHEMAS.SwitchTile).toBeUndefined();
+      expect(CATALOG_SCHEMAS.GimbalTile).toBeUndefined();
       expect(CATALOG_SCHEMAS.SceneTile).toBeDefined();
       expect(CATALOG_SCHEMAS.ConnectTile).toBeDefined();
-
-      // SwitchTile valid & rejects extra props
-      const validSwitch = {
-        label: 'Fan',
-        on: false,
-        onToggle: { event: { name: 'switch.toggle' } },
-      };
-      expect(SwitchTileApi.schema.safeParse(validSwitch).success).toBe(true);
-      expect(SwitchTileApi.schema.safeParse({ ...validSwitch, hack: true }).success).toBe(false);
 
       // SceneTile valid & rejects extra props
       const validScene = {
@@ -135,13 +126,13 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
         onAct: { event: { name: 'device.act', context: { deviceId: 'spk-1', tile: 'music-spk-1' } } },
       });
 
-      const switchComp = updateComponents.components.find((c) => c.component === 'SwitchTile');
+      const switchComp = updateComponents.components.find((c) => c.component === 'DeviceTile' && c.cls === 'switch');
       expect(switchComp).toMatchObject({
         id: 'switch-sw-1',
-        component: 'SwitchTile',
+        component: 'DeviceTile',
         label: 'Main Switch',
         on: { path: '/devices/sw-1/on' },
-        onToggle: { event: { name: 'switch.toggle', context: { deviceId: 'sw-1' } } },
+        onAct: { event: { name: 'device.act', context: { deviceId: 'sw-1', tile: 'switch-sw-1' } } },
       });
 
       const sceneComp = updateComponents.components.find((c) => c.component === 'SceneTile');
@@ -189,10 +180,13 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
             components: [
               {
                 id: 'bad-switch',
-                component: 'SwitchTile',
+                component: 'DeviceTile',
+                cls: 'switch',
                 label: 'M',
+                controls: [],
+                standard: true,
                 on: false,
-                onToggle: { event: { name: 'switch.toggle' } },
+                onAct: { event: { name: 'device.act' } },
                 unauthorizedScript: 'eval()',
               },
             ],

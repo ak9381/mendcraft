@@ -23,6 +23,8 @@ export interface TileState {
   cls: string; on: boolean; brightness: number; temp: number; color: string; sceneId: number;
   /** null = nothing has reported the volume yet. */
   playing: boolean; volume: number | null; trackTitle: string; playingOn: string; source: string; status: string;
+  /** Gimbal: the mode the iPhone reported ('' = no stand / not known). */
+  mode: string;
 }
 export function tileState(p: Record<string, unknown>): TileState {
   const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -30,6 +32,7 @@ export function tileState(p: Record<string, unknown>): TileState {
   return {
     cls: str(p.cls), on: !!p.on, brightness: num(p.brightness), temp: num(p.temp), color: str(p.color), sceneId: num(p.sceneId),
     playing: !!p.playing, volume: typeof p.volume === 'number' && Number.isFinite(p.volume) ? p.volume : null, trackTitle: str(p.trackTitle), playingOn: str(p.playingOn), source: str(p.source), status: str(p.status),
+    mode: str(p.mode),
   };
 }
 
@@ -41,6 +44,10 @@ export function stateLine(s: TileState): string {
   if (s.cls === 'gimbal') return s.status || 'No stand docked';
   return s.on ? 'On' : 'Off';
 }
+
+/** Lit up: a lamp or switch that is on, a speaker playing, a stand the
+ *  iPhone reports following (face or hands). */
+export const tileActive = (s: TileState): boolean => (s.cls === 'music' ? s.playing : s.cls === 'gimbal' ? !!s.mode && s.mode !== 'hold' : s.on);
 
 /** What a readout control shows. */
 export function readoutText(show: StateKey, s: TileState): string {
@@ -55,6 +62,8 @@ export function readoutText(show: StateKey, s: TileState): string {
 export function intentMatches(i: IntentSpec, s: TileState): boolean {
   if ('on' in i) return typeof i.on === 'boolean' ? s.on === i.on : s.on;
   if ('playing' in i) return typeof i.playing === 'boolean' ? s.playing === i.playing : s.playing;
+  // A mode is marked from the iPhone's report, never from the press.
+  if ('gimbalMode' in i) return s.cls === 'gimbal' && s.mode === i.gimbalMode;
   if (!s.on && s.cls === 'lamp') return false;
   if ('sceneId' in i) return s.sceneId === i.sceneId;
   if ('rgb' in i) return !s.sceneId && s.color.toLowerCase() === rgbHex(i.rgb);
@@ -106,7 +115,7 @@ export class DeviceTileElement extends A2uiLitElement<typeof DeviceTileApi> {
     const s = tileState(p as Record<string, unknown>);
     const controls = (Array.isArray(p.controls) ? p.controls : []) as ControlSpec[];
     const label = String(p.label ?? '');
-    const active = s.cls === 'music' ? s.playing : s.on;
+    const active = tileActive(s);
     return html`<div class="tile ${active && !p.unreachable ? 'active' : ''}" role="group" aria-label=${label} data-device-cls=${s.cls}>
       <div class="head">
         <div class="titles"><span class="label">${label}</span>

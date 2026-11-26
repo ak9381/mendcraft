@@ -1,0 +1,10 @@
+{
+  "engine": "gemini",
+  "model": "none (hand-written)",
+  "turnKind": "board",
+  "recordedAt": "2026-11-27T06:30:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. A board for the stand docked on the SIM iPhone (scripts/e2e-actual.mjs, section gimbal, uses it as the Gemini pass of 'add gimbal controls'). It carries one control the stand can't use on purpose (a 'spin' cue), so the e2e can check it is dropped with a note. Re-record from a live run.",
+  "reply": "{\"kind\": \"room\", \"title\": \"Stand\", \"tiles\": [{\"type\": \"gimbal\", \"label\": \"Camera stand\", \"controls\": [{\"kind\": \"readout\", \"label\": \"Now\", \"show\": \"status\"}, {\"kind\": \"chips\", \"label\": \"Follow\", \"options\": [{\"label\": \"Follow me\", \"intent\": {\"gimbalMode\": \"face\"}}, {\"label\": \"Follow my hands\", \"intent\": {\"gimbalMode\": \"hands\"}}, {\"label\": \"Hold still\", \"intent\": {\"gimbalMode\": \"hold\"}}]}, {\"kind\": \"button\", \"label\": \"Nod\", \"intent\": {\"gimbalCue\": \"yes\"}}, {\"kind\": \"button\", \"label\": \"Shake\", \"intent\": {\"gimbalCue\": \"no\"}}, {\"kind\": \"button\", \"label\": \"Wake up\", \"intent\": {\"gimbalCue\": \"wakeup\"}}, {\"kind\": \"button\", \"label\": \"Spin\", \"intent\": {\"gimbalCue\": \"spin\"}}]}]}"
+}

@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import {
-  GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_PHONE, gimbalPress, gimbalTileState, isAddGimbal, planHasGimbal, withGimbalTile,
-} from '../../src/canvas/gimbalTile';
-import { coerceSurfacePlan, expandPlan, MAX_TILES, type SurfacePlan } from '../../src/canvas/surfacePlan';
+import { GIMBAL_NO_PHONE, gimbalPress, gimbalTileState, planHasGimbal } from '../../src/canvas/gimbalTile';
+import { coerceSurfacePlan, expandPlan, SECOND_GIMBAL_NOTE, type SurfacePlan } from '../../src/canvas/surfacePlan';
+import { standardControls } from '../../src/canvas/controlSpec';
 import { gateMessages } from '../../src/canvas/gate';
 import { CATALOG_SCHEMAS } from '../../src/canvas/catalogApi';
 import { validateCommand } from '../../src/relay/protocol';
@@ -28,9 +27,10 @@ describe('gimbal tile: status is only what the iPhone reported', () => {
     expect(gimbalTileState(null, { paired: false }).status).toBe(GIMBAL_NO_PHONE);
   });
 
-  it('has Follow me / Follow my hands / Hold still / Nod / Shake and no Centre (aim() is relative only)', () => {
-    expect([...GIMBAL_MODE_BUTTONS, ...GIMBAL_CUE_BUTTONS].map((b) => b.label)).toEqual(['Follow me', 'Follow my hands', 'Hold still', 'Nod', 'Shake']);
-    expect(src('canvas/gimbalTile.ts')).toMatch(/No "Centre" button: the plugin's aim\(\) is a RELATIVE move/);
+  it('standard controls: Follow me / Follow my hands / Hold still / Nod / Shake and no Centre (aim() is relative only)', () => {
+    const labels = standardControls('gimbal').flatMap((c) => (c.kind === 'chips' ? c.options.map((o) => o.label) : [c.label]));
+    expect(labels).toEqual(['Follow me', 'Follow my hands', 'Hold still', 'Nod', 'Shake']);
+    expect(src('canvas/gimbalTile.ts')).toMatch(/No "Centre" intent: the plugin's aim\(\) is a RELATIVE move/);
   });
 
   it('a press is only an allow-listed mode or cue', () => {
@@ -38,7 +38,9 @@ describe('gimbal tile: status is only what the iPhone reported', () => {
     expect(gimbalPress('gimbal.mode', 'hands')).toEqual({ mode: 'hands' });
     expect(gimbalPress('gimbal.cue', 'yes')).toEqual({ cue: 'yes' });
     expect(gimbalPress('gimbal.cue', 'no')).toEqual({ cue: 'no' });
-    expect(gimbalPress('gimbal.cue', 'wakeup')).toBeNull();
+    // The wake-up is an allowed cue (spec 5.5): a reviewed "Wake up" button may send it.
+    expect(gimbalPress('gimbal.cue', 'wakeup')).toEqual({ cue: 'wakeup' });
+    expect(gimbalPress('gimbal.cue', 'spin')).toBeNull();
     expect(gimbalPress('gimbal.mode', 'spin')).toBeNull();
     expect(gimbalPress('lamp.toggle', 'face')).toBeNull();
   });
@@ -46,28 +48,24 @@ describe('gimbal tile: status is only what the iPhone reported', () => {
   it('is a valid catalog tile that passes the gate, with live /gimbal data', () => {
     const plan = coerceSurfacePlan({ kind: 'room', title: 'Room', tiles: [{ type: 'gimbal' }, { type: 'gimbal' }] });
     expect(plan.ok && plan.value.tiles).toEqual([{ type: 'gimbal', label: 'Gimbal' }]);
+    expect(plan.ok && plan.notes).toContain(SECOND_GIMBAL_NOTE);
+    expect(planHasGimbal((plan as { value: SurfacePlan }).value)).toBe(true);
     const msgs = expandPlan((plan as { value: SurfacePlan }).value, 's1', {}, { gimbal: { docked: true, mode: 'face', status: 'Tracking you' } });
     expect(gateMessages(msgs, CATALOG_SCHEMAS).ok).toBe(true);
-    expect(JSON.stringify(msgs)).toContain('"component":"GimbalTile"');
+    expect(JSON.stringify(msgs)).toContain('"component":"DeviceTile","cls":"gimbal"');
     expect(msgs.at(-1)).toMatchObject({ updateDataModel: { path: '/gimbal', value: { docked: true, mode: 'face', status: 'Tracking you' } } });
   });
 
-  it('joins the board before "Connect a device", once, and never past the tile cap', () => {
-    const p: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'connect', label: 'Connect a device' }] };
-    const next = withGimbalTile(p)!;
-    expect(next.tiles.map((t) => t.type)).toEqual(['lamp', 'gimbal', 'connect']);
-    expect(withGimbalTile(next)).toBe(next);
-    expect(planHasGimbal(next)).toBe(true);
-    const full: SurfacePlan = { kind: 'room', title: 'r', tiles: Array.from({ length: MAX_TILES }, (_, i) => ({ type: 'stat' as const, label: `s${i}`, value: '1' })) };
-    expect(withGimbalTile(full)).toBeNull();
+  it('nothing adds the tile by itself: a stand docking only updates the tiles that are there', () => {
+    const app = src('canvas/canvasApp.ts');
+    expect(app).not.toMatch(/addGimbalTile|gimbalReported|gimbalOnNewDashboard/);
+    expect(app).toMatch(/if \(platform === 'ios'\) \{ if \(sense && sense\.gimbal !== 'none'\) gimbalError = ''; pushGimbal\(\); \}/);
   });
 
-  it('"add the gimbal" / "gimbal controls" route to the tile; "follow me" stays a gimbal phrase', () => {
-    for (const t of ['add the gimbal', 'gimbal controls', 'Add gimbal controls.', 'show the gimbal tile', 'add the gimbal to the dashboard']) {
-      expect(isAddGimbal(t)).toBe(true);
-      expect(routeLine(t, { hasPlanBoard: false, devices: [] }).name).toBe('addGimbal');
+  it('"add the gimbal" / "gimbal controls" are an ordinary board turn; "follow me" stays a gimbal phrase', () => {
+    for (const t of ['add the gimbal', 'gimbal controls', 'Add gimbal controls.', 'add gimbal controls', 'show the gimbal tile', 'add the gimbal to the dashboard']) {
+      expect(routeLine(t, { hasPlanBoard: false, devices: [] }).name).toBe('connectRoom');
     }
-    expect(isAddGimbal('add the lamp')).toBe(false);
     expect(routeLine('follow me', { hasPlanBoard: false, devices: [] }).name).toBe('gimbal');
   });
 
@@ -80,7 +78,7 @@ describe('gimbal tile: status is only what the iPhone reported', () => {
     const app = src('canvas/canvasApp.ts');
     // one path: the tile and "follow me" both go through gimbalMode(); the
     // iPhone drives its local plugin, the laptop asks the iPhone
-    expect(app).toMatch(/if \(press\) gimbalTilePress\(press\)/);
+    expect(app).toMatch(/if \(p\) gimbalTilePress\(p\); else say\(NOT_THIS_DEVICE_REFUSAL\)/);
     expect(app).toMatch(/gimbalMode\(g\); return true;/);
     expect(app).toMatch(/inputs\.gimbal\.setMode\(mode, \{ explicit: true \}\)/);
     expect(app).toMatch(/hostSession!\.sendGimbalMode\(mode\)/);

@@ -129,8 +129,11 @@ function tileTypeFor(kind: string): 'lamp' | 'music' | 'switch' {
   if (k === 'switch' || k === 'plug' || k === 'fan' || k === 'tv' || k === 'ac') return 'switch';
   return 'lamp';
 }
-/** A device's tile is the device's own: type from its kind, label from its name. */
-const deviceTile = (d: DeviceHint): TileSpec => ({ type: tileTypeFor(d.kind), deviceId: d.id, label: d.label });
+/** A device's tile is the device's own: type from its kind, label from its
+ *  name. The docked stand (kind 'gimbal') is the gimbal tile, which has no deviceId. */
+const deviceTile = (d: DeviceHint): TileSpec => (d.kind === 'gimbal'
+  ? { type: 'gimbal', label: d.label }
+  : { type: tileTypeFor(d.kind), deviceId: d.id, label: d.label });
 
 const wantsTwoBedrooms = (s: string): boolean => /\b(two|2)[\s-]*(bed|bedroom)/i.test(s);
 const wantsStudio = (s: string): boolean => /\bstudio\b/i.test(s);

@@ -79,22 +79,29 @@ export const FIXTURE_DEVICES_MAX = 8;
 const FIXTURE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 /** The devices a test run registers (`window.__mcFixtures.devices =
- *  [{ id, cls, label }]`): simulated, answered by simulatedAck, every one
- *  labelled SIM. canvasMain reads them only in a test build with ?sim=1.
- *  Lamps and speakers only; anything malformed is skipped. */
-export function fixtureDevices(raw: unknown): { devices: Record<string, DeviceState>; labels: Record<string, string> } | null {
+ *  [{ id, cls, label, volume? }]`): simulated, answered by simulatedAck, every
+ *  one labelled SIM. canvasMain reads them only in a test build with ?sim=1.
+ *  Lamps and speakers go into the device store; a speaker's volume is what
+ *  the fixture says (0–100), else unknown until something reads it — never
+ *  a made-up number. A `gimbal` entry is the stand docked on the SIM iPhone
+ *  (`stand: true`): it is not a store device, the iPhone reports it, and it
+ *  counts only while that SIM iPhone is paired. Anything malformed is skipped. */
+export function fixtureDevices(raw: unknown): { devices: Record<string, DeviceState>; labels: Record<string, string>; stand: boolean } | null {
   if (!Array.isArray(raw)) return null;
   const devices: Record<string, DeviceState> = {};
   const labels: Record<string, string> = {};
+  let stand = false;
   for (const d of raw.slice(0, FIXTURE_DEVICES_MAX)) {
     if (!d || typeof d !== 'object') continue;
-    const { id, cls, label } = d as Record<string, unknown>;
+    const { id, cls, label, volume } = d as Record<string, unknown>;
+    if (cls === 'gimbal') { stand = true; continue; }
     if (typeof id !== 'string' || !FIXTURE_ID.test(id) || devices[id]) continue;
     if (cls !== 'lamp' && cls !== 'music') continue;
+    const vol = typeof volume === 'number' && Number.isInteger(volume) && volume >= 0 && volume <= 100 ? volume : undefined;
     devices[id] = cls === 'lamp'
       ? { cls: 'lamp', on: false, brightness: 50, sim: true, unreachable: false }
-      : { cls: 'music', on: false, brightness: 0, playing: false, volume: 50, sim: true };
+      : { cls: 'music', on: false, brightness: 0, playing: false, ...(vol !== undefined ? { volume: vol } : {}), sim: true };
     labels[id] = typeof label === 'string' && label.trim() && !/[<>]/.test(label) ? label.trim().slice(0, 40) : id;
   }
-  return Object.keys(devices).length ? { devices, labels } : null;
+  return Object.keys(devices).length || stand ? { devices, labels, stand } : null;
 }

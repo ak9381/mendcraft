@@ -77,6 +77,8 @@ const TEMPLATE_UNION = PLAN_TEMPLATES.map((t) => `"${t}"`).join('|');
 // a whole dashboard instead of one flat row of device tiles.
 const LEAF_SCHEMA = [
   `{"type":"lamp"|"music"|"switch","deviceId":string,"label":string,"controls":[Control]}`,
+  // The one docked stand: no deviceId; only when the list has a gimbal.
+  `{"type":"gimbal","label":string,"controls":[Control]}`,
   `{"type":"scene","sceneId":string,"label":string}`,
   `{"type":"connect","label":string}`,
   `{"type":"plan","boardId":string,"template":${TEMPLATE_UNION}}`,
@@ -105,8 +107,12 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
   // session's stable "Device N" placeholders (Nano, which never leaves the
   // device, keeps seeing the real ids). See parseModelPlan for the reverse.
   const session = engine === 'gemini' ? opts.deviceIdSession : undefined;
-  const ids = req.devices.map((d) => d.id);
-  let devices = req.devices.map((d) => `- ${d.id}: ${d.label} (${d.kind})`).join('\n') || '- none found yet';
+  // The docked stand is not an address: it is named as the gimbal tile, never
+  // redacted (its "id" is the tile type itself).
+  const ids = req.devices.filter((d) => d.kind !== 'gimbal').map((d) => d.id);
+  let devices = req.devices.map((d) => (d.kind === 'gimbal'
+    ? `- the docked gimbal stand: a {"type":"gimbal"} tile (no deviceId)`
+    : `- ${d.id}: ${d.label} (${d.kind})`)).join('\n') || '- none found yet';
   let current = req.current ? `\nCurrent board: ${JSON.stringify(req.current)}` : '';
   if (session) {
     devices = redactDeviceIds(devices, ids, session);

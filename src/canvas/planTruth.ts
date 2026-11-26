@@ -3,7 +3,7 @@
 // holds: no fixed "2 lamps found" headline over a board with one light and a
 // speaker, no "Connected · 0" tile next to an "All connected" button.
 import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
-import { deviceClassOf } from './controlSpec';
+import { deviceClassOf, GIMBAL_DEVICE_ID } from './controlSpec';
 
 export interface TileCounts {
   /** Tiles at the top of the board. */
@@ -298,9 +298,11 @@ export const ABSENT_DEVICE_LINE = "Left out a control for a device that isn't co
 /** The review line when a tile's type is not what its device really is. */
 export const WRONG_CLASS_LINE = "Left out a tile that doesn't match its device.";
 
-/** Leave out every device tile (lamp, speaker, switch) whose device is not
+/** Leave out every device tile (lamp, speaker, switch, gimbal) whose device is not
  *  in the live store, or is not the class the tile claims (a "music" tile on
  *  a WiZ bulb): a model may only bind what is really here, as what it is.
+ *  The gimbal is looked up as GIMBAL_DEVICE_ID: it is here only while an
+ *  iPhone is paired (with no stand docked it stays, and says so).
  *  An emptied group goes with it; a board left with nothing offers "Connect
  *  a device". Same plan object when nothing was left out. Stored boards are
  *  NOT passed through this — they load as saved, show "Not connected", and
@@ -314,6 +316,13 @@ export function dropAbsentDevices(plan: SurfacePlan, deviceOf: (deviceId: string
         const d = deviceOf(t.deviceId);
         if (!d) { dropped++; continue; }
         if (deviceClassOf(t.deviceId, d) !== t.type) { mismatched++; continue; }
+        out.push(t);
+        continue;
+      }
+      if (t.type === 'gimbal') {
+        const d = deviceOf(GIMBAL_DEVICE_ID);
+        if (!d) { dropped++; continue; }
+        if (d.cls !== 'gimbal') { mismatched++; continue; }
         out.push(t);
         continue;
       }

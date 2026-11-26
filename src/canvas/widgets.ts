@@ -7,7 +7,6 @@ import {
   CardApi,
   ChartTileApi,
   ConnectTileApi,
-  GimbalTileApi,
   FormTileApi,
   GridApi,
   DeviceTileApi,
@@ -16,7 +15,6 @@ import {
   SceneTileApi,
   SplitApi,
   StatTileApi,
-  SwitchTileApi,
   TableTileApi,
   TabsApi,
   VisualTileApi,
@@ -36,11 +34,10 @@ import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
-import { GimbalTileElement } from './deviceTiles';
 import { DeviceTileElement } from './deviceTile';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 
-export { DeviceTileElement, GimbalTileElement };
+export { DeviceTileElement };
 /** The shared look of every device tile (each control at least 56 px tall,
  *  the hand-target size); kept in tileStyles.ts so the tile modules can use
  *  it without importing this file back. */
@@ -240,39 +237,6 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.view?.dispose();
     this.view = null;
     this.mounted = null;
-  }
-}
-
-export class SwitchTileElement extends A2uiLitElement<typeof SwitchTileApi> {
-  static readonly tagName = 'mc-switch-tile';
-  protected override readonly api = SwitchTileApi;
-  static override styles = css`
-    :host { display: block; }
-    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
-    .tile.on { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    .label { font-size: 24px; font-weight: 600; }
-    .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
-    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
-  `;
-  override render() {
-    const p = this.controller?.props;
-    if (!p) return nothing;
-    const on = !!p.on;
-    return html`<div class="tile ${on ? 'on' : ''}" role="group" aria-label=${String(p.label)}>
-      <div class="row">
-        <span class="label">${p.label}</span>
-        <span class="state" aria-live="polite">${on ? 'On' : 'Off'}</span>
-        ${p.pending ? html`<span class="pending">checking…</span>` : nothing}
-      </div>
-      ${p.error ? html`<div class="error" role="status">${p.error}</div>` : nothing}
-      <div class="row">
-        <button class="primary" data-act="toggle" @click=${() => p.onToggle?.()}>${on ? 'Turn off' : 'Turn on'}</button>
-      </div>
-    </div>`;
   }
 }
 
@@ -657,10 +621,8 @@ export class VisualTileElement extends A2uiLitElement<typeof VisualTileApi> {
 // Same shape as web_core's (internal) toWebComponentImplementation.
 export const DeviceTile = { ...DeviceTileApi, tagName: DeviceTileElement.tagName, element: DeviceTileElement as unknown as CustomElementConstructor };
 export const PlanBoard = { ...PlanBoardApi, tagName: PlanBoardElement.tagName, element: PlanBoardElement as unknown as CustomElementConstructor };
-export const SwitchTile = { ...SwitchTileApi, tagName: SwitchTileElement.tagName, element: SwitchTileElement as unknown as CustomElementConstructor };
 export const SceneTile = { ...SceneTileApi, tagName: SceneTileElement.tagName, element: SceneTileElement as unknown as CustomElementConstructor };
 export const ConnectTile = { ...ConnectTileApi, tagName: ConnectTileElement.tagName, element: ConnectTileElement as unknown as CustomElementConstructor };
-export const GimbalTile = { ...GimbalTileApi, tagName: GimbalTileElement.tagName, element: GimbalTileElement as unknown as CustomElementConstructor };
 export const RowTile = { ...RowApi, tagName: RowTileElement.tagName, element: RowTileElement as unknown as CustomElementConstructor };
 export const GridTile = { ...GridApi, tagName: GridTileElement.tagName, element: GridTileElement as unknown as CustomElementConstructor };
 export const CardTile = { ...CardApi, tagName: CardTileElement.tagName, element: CardTileElement as unknown as CustomElementConstructor };
@@ -677,10 +639,8 @@ export const smartCanvasCatalog = new Catalog(ROOM_CATALOG_ID, '0.9', [
   A2uiText,
   DeviceTile,
   PlanBoard,
-  SwitchTile,
   SceneTile,
   ConnectTile,
-  GimbalTile,
   RowTile,
   GridTile,
   CardTile,

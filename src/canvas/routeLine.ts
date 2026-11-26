@@ -7,7 +7,6 @@ import { parseCanvasCommand, type CanvasCommand } from './canvasCommands';
 import { connectAsk } from './connectTurns';
 import { parseDeviceCommands, type DeviceCommandResult, type DeviceRef } from './deviceCommands';
 import { parseGimbalSpeech } from './gimbalCanvas';
-import { isAddGimbal } from './gimbalTile';
 import { routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
 import { parseConnectDevices } from './pairedRow';
 import { routePlanExtra, type PlanExtra } from './planExtras';
@@ -44,7 +43,7 @@ export type Route =
   | { name: 'scroll'; dir: 'up' | 'down'; page: boolean }
   | { name: 'packIntent'; intent: IntentKey }
   | { name: 'pointConnect' }
-  | { name: 'gimbalScan' } | { name: 'gimbal' } | { name: 'addGimbal' }
+  | { name: 'gimbalScan' } | { name: 'gimbal' }
   | { name: 'kannada' }
   | { name: 'history' }
   | { name: 'planExtra'; extra: PlanExtra }
@@ -99,6 +98,8 @@ const ADD_TO_BOARD_RE = /\badd\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s
 // "show me a dashboard" builds one; "show me the control panel" / "show me
 // board 2" are navigation (or chat) unless they say dashboard or a new board.
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;
+/** "add the gimbal", "add gimbal controls", "show the gimbal tile", "gimbal controls". */
+const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?gimbal(?:\s+(?:controls?|tile|buttons?))?(?:\s+(?:here|(?:on|to)\s+(?:the|this|my)\s+(?:board|dashboard)))?|(?:the\s+)?gimbal\s+controls?)(?:\s+please)?\s*[.!?]*\s*$/i;
 export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);
 }
@@ -127,8 +128,9 @@ export function routeLine(text: string, world: RouteWorld): Route {
   // the finger and identified. Before the gimbal routes, which also claim
   // "connect what I'm pointing at" for the iPhone gimbal's point mode.
   if (POINT_CONNECT_RE.test(text)) return { name: 'pointConnect' };
-  // "add the gimbal" / "gimbal controls": the gimbal tile joins the board.
-  if (isAddGimbal(text)) return { name: 'addGimbal' };
+  // "add the gimbal" / "add gimbal controls": an ordinary board turn (the
+  // model writes the tile, she reviews it), like "add the speaker to the dashboard".
+  if (ADD_GIMBAL_RE.test(text)) return { name: 'connectRoom' };
   // Gimbal phrases: follow my hands / hold still / point / scan the room.
   const gimbal = parseGimbalSpeech(text);
   if (gimbal === 'scan') return { name: 'gimbalScan' };

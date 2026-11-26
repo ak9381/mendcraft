@@ -260,7 +260,8 @@ function persistDoc(doc: CanvasDoc): void {
 
 handle = mountCanvas(root, {
   voice, engines, fresh: params.has('fresh'), sim: params.has('sim'),
-  ...(simDevices ? { devices: simDevices.devices, deviceLabels: simDevices.labels } : {}),
+  ...(simDevices && Object.keys(simDevices.devices).length ? { devices: simDevices.devices, deviceLabels: simDevices.labels } : {}),
+  ...(simDevices?.stand ? { simStand: true } : {}),
   gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   doc: startDoc,
   onPersist: persistDoc,

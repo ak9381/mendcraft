@@ -367,7 +367,7 @@ async function speaker(page) {
     const f = window.__mcFixtures ?? {};
     const replies = { ...(f.replies ?? {}) };
     replies['gemini.boardBetter'] = replies['gemini.board.speaker'];
-    window.__mcFixtures = { ...f, replies, devices: [{ id, cls: 'music', label: 'Speaker' }] };
+    window.__mcFixtures = { ...f, replies, devices: [{ id, cls: 'music', label: 'Speaker', volume: 50 }] };
   }, SPEAKER_ID);
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check(await page.evaluate((id) => { const d = window.__mcCanvas.store.get(id); return !!d?.sim && d.cls === 'music' && !d.trackTitle; }, SPEAKER_ID), 'the fixture speaker is registered, marked SIM, with no track');
@@ -422,6 +422,90 @@ async function speaker(page) {
   check(await page.evaluate((id) => !window.__mcCanvas.store.get(id), SPEAKER_ID), 'and no speaker is invented');
 }
 SECTIONS.speaker = speaker;
+
+// ---- gimbal: a generated gimbal tile drives the (SIM) stand through the same checked binding ----
+const STAND_NOTE = "Dropped 1 control the stand can't use.";
+const NO_PHONE_REFUSAL = 'No iPhone is paired with the stand. Nothing changed.';
+const gimbalTile = () => {
+  const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=gimbal]'))?.shadowRoot;
+  return r ? {
+    state: r.querySelector('[data-device-state]')?.textContent.trim() ?? '',
+    chips: [...r.querySelectorAll('[data-act=chip]')].map((b) => ({ label: b.textContent.trim(), pressed: b.getAttribute('aria-pressed') === 'true' })),
+    buttons: [...r.querySelectorAll('[data-act=button]')].map((b) => b.textContent.trim()),
+    readouts: [...r.querySelectorAll('[data-readout]')].map((x) => x.textContent.trim()),
+    standard: !!r.querySelector('[data-standard]'),
+  } : null;
+};
+const pressGimbalChip = (label) => [...([...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=gimbal]'))?.shadowRoot.querySelectorAll('[data-act=chip]') ?? [])]
+  .find((b) => b.textContent.trim() === label)?.click();
+const modeMessages = () => window.__mcCanvas.simRelayLog().filter((m) => m.kind === 'gimbalMode');
+
+async function gimbal(page) {
+  // The SIM iPhone with a stand docked (a fixture device of class gimbal);
+  // the Gemini pass is the recorded gimbal board.
+  await page.evaluateOnNewDocument(() => {
+    const f = window.__mcFixtures ?? {};
+    const replies = { ...(f.replies ?? {}) };
+    replies['gemini.boardBetter'] = replies['gemini.board.gimbal'];
+    window.__mcFixtures = { ...f, replies, devices: [{ id: 'gimbal', cls: 'gimbal', label: 'Gimbal' }] };
+  });
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check(await page.evaluate(() => Object.keys(window.__mcCanvas.store.all()).length === 0), 'the stand is not a store device (the iPhone reports it)');
+
+  // Pair the SIM phones (the SIM branch stands in for the chime).
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
+  check(!(await page.evaluate(() => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector('[data-device-cls=gimbal]')))),
+    'pairing a docked iPhone adds no gimbal tile by itself');
+
+  // "add gimbal controls" is an ordinary generation turn with a review.
+  await page.evaluate(() => window.__mcCanvas.run('add gimbal controls'));
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the gimbal review opens'))) return;
+  check((await page.evaluate(reviewText)).includes('Replay · written example'), 'the gimbal review says its reply is a hand-written example: "Replay · written example"');
+  const said = await page.evaluate(reviewNotes);
+  check(said.includes(STAND_NOTE), `the review says the "spin" cue was dropped (got ${JSON.stringify(said)})`);
+  check(!(await page.evaluate(gimbalTile)) && (await boardArtifacts(page)).length === 0, '0 gimbal tiles and 0 boards until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile') && [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector('[data-device-cls=gimbal]')), 10_000, 'a gimbal tile after Approve'))) return;
+  const kept = await page.evaluate(gimbalTile);
+  check(!kept.standard && JSON.stringify(kept.chips.map((c) => c.label)) === '["Follow me","Follow my hands","Hold still"]'
+    && JSON.stringify(kept.buttons) === '["Nod","Shake","Wake up"]', `the model's controls are there and "Spin" is not (got ${JSON.stringify(kept)})`);
+  check(kept.state === 'SIM · Holding still' && JSON.stringify(kept.chips.filter((c) => c.pressed).map((c) => c.label)) === '["Hold still"]',
+    `the status and the marked mode are the SIM iPhone's report (holding still) (got ${JSON.stringify(kept)})`);
+  check((await page.evaluate(modeMessages)).length === 0, 'no mode message before a press');
+
+  // Press "Follow my hands": one mode message, and the tile shows what the iPhone reported back.
+  await page.evaluate(pressGimbalChip, 'Follow my hands');
+  await waitFor(page, () => (window.__mcCanvas.simRelayLog().filter((m) => m.kind === 'gimbalMode').length > 0), 5_000, 'a mode message is sent');
+  const sent = await page.evaluate(modeMessages);
+  check(JSON.stringify(sent) === '[{"kind":"gimbalMode","text":"hands"}]', `the relay log shows one mode message (got ${JSON.stringify(sent)})`);
+  await waitFor(page, () => {
+    const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=gimbal]'))?.shadowRoot;
+    return /^SIM · Following your hands/.test(r?.querySelector('[data-device-state]')?.textContent ?? '');
+  }, 5_000, 'the tile shows the reported mode').then((ok) => ok && check(true, 'the tile follows the iPhone report: "SIM · Following your hands"'));
+  const after = await page.evaluate(gimbalTile);
+  check(after.chips.find((c) => c.label === 'Follow my hands')?.pressed === true, `"Follow my hands" is marked from the report (got ${JSON.stringify(after.chips)})`);
+
+  await sleep(1200); // past the save debounce
+  const stored = await boardArtifacts(page);
+  check(stored.length === 1 && stored[0].by === 'replay' && JSON.stringify(stored[0].data.plan).includes('"type":"gimbal"') && !JSON.stringify(stored[0].data.plan).includes('spin'),
+    `the gimbal board is stored, made by replay, without the dropped cue (got ${JSON.stringify(stored.map((a) => a.by))})`);
+
+  // The same board with no iPhone paired: the tile says so and a press is refused, nothing sent.
+  await page.evaluateOnNewDocument(() => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [] }; });
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, gimbalTile, 10_000, 'the gimbal board is back after the reload'))) return;
+  const away = await page.evaluate(gimbalTile);
+  check(/No iPhone paired/.test(away.state), `with no iPhone paired the tile says so (got ${JSON.stringify(away.state)})`);
+  const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  await page.evaluate(pressGimbalChip, 'Follow me');
+  await sleep(300);
+  const lines = await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark);
+  check(lines.includes(NO_PHONE_REFUSAL), `a press is refused: "${NO_PHONE_REFUSAL}" (got ${JSON.stringify(lines)})`);
+  check((await page.evaluate(modeMessages)).length === 0, 'and no mode message is sent');
+}
+SECTIONS.gimbal = gimbal;
 
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }

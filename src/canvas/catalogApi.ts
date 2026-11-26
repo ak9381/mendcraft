@@ -51,6 +51,8 @@ export const DeviceTileApi = {
       playingOn: CommonSchemas.DynamicString.optional(),
       source: CommonSchemas.DynamicString.optional(),
       status: CommonSchemas.DynamicString.optional(),
+      /** Gimbal: the mode the iPhone reported ('face' | 'hands' | 'hold' | ''). */
+      mode: CommonSchemas.DynamicString.optional(),
       pending: CommonSchemas.DynamicBoolean.optional(),
       error: CommonSchemas.DynamicString.optional(),
       sim: CommonSchemas.DynamicBoolean.optional(),
@@ -73,19 +75,6 @@ export const PlanBoardApi = {
     .strict(),
 };
 
-export const SwitchTileApi = {
-  name: 'SwitchTile',
-  schema: z
-    .object({
-      label: CommonSchemas.DynamicString,
-      on: CommonSchemas.DynamicBoolean,
-      pending: CommonSchemas.DynamicBoolean.optional(),
-      error: CommonSchemas.DynamicString.optional(),
-      onToggle: CommonSchemas.Action,
-    })
-    .strict(),
-};
-
 export const SceneTileApi = {
   name: 'SceneTile',
   schema: z
@@ -103,21 +92,6 @@ export const ConnectTileApi = {
     .object({
       label: CommonSchemas.DynamicString.optional(),
       onConnect: CommonSchemas.Action,
-    })
-    .strict(),
-};
-
-export const GimbalTileApi = {
-  name: 'GimbalTile',
-  schema: z
-    .object({
-      label: CommonSchemas.DynamicString.optional(),
-      docked: CommonSchemas.DynamicBoolean,
-      mode: CommonSchemas.DynamicString.optional(),
-      status: CommonSchemas.DynamicString,
-      error: CommonSchemas.DynamicString.optional(),
-      onMode: CommonSchemas.Action,
-      onCue: CommonSchemas.Action,
     })
     .strict(),
 };
@@ -242,10 +216,8 @@ export const CATALOG_SCHEMAS: Record<string, ZodTypeAny> = {
   Text: A2uiText.schema,
   DeviceTile: DeviceTileApi.schema,
   PlanBoard: PlanBoardApi.schema,
-  SwitchTile: SwitchTileApi.schema,
   SceneTile: SceneTileApi.schema,
   ConnectTile: ConnectTileApi.schema,
-  GimbalTile: GimbalTileApi.schema,
   Row: RowApi.schema,
   Grid: GridApi.schema,
   Card: CardApi.schema,

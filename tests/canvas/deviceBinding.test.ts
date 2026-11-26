@@ -61,8 +61,11 @@ describe('bindingIntent', () => {
   it('music and gimbal resolve to their own paths', () => {
     expect(bindingIntent('music', 'speaker-a', { playing: 'toggle' }, { cls: 'music', on: false, brightness: 0, playing: true })).toEqual({ intent: { deviceId: 'speaker-a', playing: false } });
     expect(bindingIntent('music', 'speaker-a', { volume: { step: 1 } }, { cls: 'music', on: false, brightness: 0, volume: 95 })).toEqual({ intent: { deviceId: 'speaker-a', volume: 100 } });
-    expect(bindingIntent('gimbal', 'gimbal', { gimbalMode: 'face' }, undefined)).toEqual({ gimbal: { mode: 'face' } });
-    expect(bindingIntent('gimbal', 'gimbal', { gimbalCue: 'yes' }, undefined)).toEqual({ gimbal: { cue: 'yes' } });
+    // The stand counts only as the paired iPhone reports it (gimbalBinding.test.ts).
+    const stand = { cls: 'gimbal' as const, on: false, brightness: 0 };
+    expect(bindingIntent('gimbal', 'gimbal', { gimbalMode: 'face' }, stand)).toEqual({ gimbal: { mode: 'face' } });
+    expect(bindingIntent('gimbal', 'gimbal', { gimbalCue: 'yes' }, stand)).toEqual({ gimbal: { cue: 'yes' } });
+    expect('refusal' in bindingIntent('gimbal', 'gimbal', { gimbalMode: 'face' }, undefined)).toBe(true);
   });
 });
 

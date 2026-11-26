@@ -12,7 +12,11 @@ export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRI
   // Task 3: the names sim-main's pairing and seeded room used.
   /Living room/, /Desk lamp/, /Ceiling light/,
   // Task 4: the speaker is a generated DeviceTile; no stand-in player, no seeded track.
-  /\bMusicTileElement\b/, /Morning light/, /Monsoon raga/];
+  /\bMusicTileElement\b/, /Morning light/, /Monsoon raga/,
+  // Task 5: the gimbal and the switch are generated DeviceTiles; nothing adds the gimbal by itself.
+  /\bGimbalTileElement\b/, /\bGimbalTileApi\b/, /\bSwitchTileElement\b/, /\bSwitchTileApi\b/,
+  /\bGIMBAL_MODE_BUTTONS\b/, /\bGIMBAL_CUE_BUTTONS\b/, /\bisAddGimbal\b/, /\bwithGimbalTile\b/,
+  /\baddGimbalTile\b/, /\bgimbalReported\b/, /\baddGimbal\b/];
 
 /** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
 const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [
