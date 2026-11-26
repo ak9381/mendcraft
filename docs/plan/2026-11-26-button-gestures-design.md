@@ -58,3 +58,6 @@ Two names for two views (in-app drawer vs second-display page) confuse. Ruling: 
 
 ## Phones
 Android (and the iPhone control layer) get the same shapes behind the Hands pill: R/L TU/TD map to Approve/Decline/Undo/Save in the phone shell; the open-palm highlight works on the phone's buttons.
+
+## Scroll gesture (26 Nov, Akash: "we definitely need scroll")
+Ruling: a peace sign that MOVES scrolls what's under the hand (board body, review list, drawer log, menus), else pans the canvas vertically — like two-finger trackpad scroll. Starts only after ≥40 px travel within 500 ms; then the peace hold (chip 2 / Tools) is cancelled for that shape. A still peace still fires its button after 2 s. Voice: "scroll up/down", "page up/down". Same on phones behind the Hands pill.
