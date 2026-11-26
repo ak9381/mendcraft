@@ -52,6 +52,14 @@ describe('createSpotifyAwareConnector', () => {
     expect(NO_DEVICE_NOTICE).toBe('Open Spotify on your phone so it shows up, then try again.');
   });
 
+  it('a browser player that never gets ready is given up on: says how to fix it (no bare timeout)', async () => {
+    const r = rig({ listDevices: async () => [], browserDevice: () => new Promise<string | undefined>(() => undefined), browserDeviceMs: 20 });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(r.calls).toEqual([]);
+    expect(ack).toEqual({ playing: false, source: 'spotify', playingOn: '' });
+    expect(r.said).toEqual([NO_DEVICE_NOTICE]);
+  });
+
   it('not connected: inner built-in player + the exact notice, no Spotify calls', async () => {
     const r = rig({ isConnected: () => false });
     const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });

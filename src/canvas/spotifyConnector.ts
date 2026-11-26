@@ -11,6 +11,8 @@ import type { DeviceState } from './surfacePlan';
 import type { SpotifyDevice, SpotifySearchHit } from '../music/spotifyApi';
 
 export const NOT_CONNECTED_NOTICE = "Spotify isn't connected — playing the built-in track.";
+/** How long the in-browser player gets to become ready before we give up on it. */
+export const BROWSER_DEVICE_MS = 4000;
 export const NO_DEVICE_NOTICE = 'Open Spotify on your phone so it shows up, then try again.';
 export const PREMIUM_NOTICE = 'Spotify needs Premium to control playback.';
 export const NO_ANSWER_NOTICE = "Spotify didn't respond.";
@@ -45,6 +47,8 @@ export interface SpotifyConnectorDeps {
   /** This browser as a Connect device (Web Playback SDK). Return undefined where
    *  it can't run (phone shell / iOS WKWebView) — it is then never offered. */
   browserDevice?(): Promise<string | undefined>;
+  /** Test hook: how long the in-browser player gets (default BROWSER_DEVICE_MS). */
+  browserDeviceMs?: number;
   pause?(): Promise<void>;
   resume?(): Promise<void>;
   next?(): Promise<{ title: string } | null>;
@@ -133,7 +137,14 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     try { devices = await deps.listDevices(); } catch { /* fall through to this browser */ }
     const hit = pickSpotifyDevice(devices, deps.speakerName?.(deviceId) ?? '');
     if (hit) return { id: hit.id, name: hit.name };
-    const browserId = await deps.browserDevice?.().catch(() => undefined);
+    // The in-browser player can hang (it never becomes ready): give it a few
+    // seconds, then say how to fix it instead of a bare "couldn't reach".
+    const browserId = deps.browserDevice
+      ? await Promise.race([
+        deps.browserDevice().catch(() => undefined),
+        new Promise<undefined>((r) => setTimeout(() => r(undefined), deps.browserDeviceMs ?? BROWSER_DEVICE_MS)),
+      ])
+      : undefined;
     return browserId ? { id: browserId, name: 'this browser' } : null;
   }
 
