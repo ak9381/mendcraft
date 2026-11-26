@@ -370,7 +370,7 @@ function memoryStorage(): Storage {
   } as Storage;
 }
 
-function setup(onItemCommit?: (frameId: string, key: string) => void, onItemNudged?: EditBoardOptions['onItemNudged']) {
+function setup(onItemCommit?: (frameId: string, key: string) => void, onItemNudged?: EditBoardOptions['onItemNudged'], flowOnly?: () => boolean, seed?: (s: Storage) => void) {
   const created: FakeEl[] = [];
   const createElement = (tag: string): EditEl => { const el = new FakeEl(tag); created.push(el); return el; };
   const root = new FakeEl('div');
@@ -388,10 +388,11 @@ function setup(onItemCommit?: (frameId: string, key: string) => void, onItemNudg
   };
 
   const storage = memoryStorage();
+  seed?.(storage);
   const ctl = mountEditBoard(root as unknown as EditEl, {
     storage, createElement, getAiPanelEl: () => aiPanel,
     getItems: (frameId) => itemsByFrame[frameId] ?? [],
-    onItemCommit, onItemNudged,
+    onItemCommit, onItemNudged, flowOnly,
   });
   const byClass = (cls: string) => created.filter((e) => e.classes.has(cls));
   const editBtn = byClass('mc-edit-toggle')[0];
@@ -400,6 +401,25 @@ function setup(onItemCommit?: (frameId: string, key: string) => void, onItemNudg
 }
 
 describe('mountEditBoard', () => {
+  it('flowOnly (the phone shell): a stored layout is never restored and Edit stays off — one column in the board flow', () => {
+    const legacy = { 'lamp-wiz-desk': { left: 12, top: 12, width: 90, height: 600 }, 'music-speaker-1': { left: 40, top: 12, width: 90, height: 600 } };
+    const { ctl, editBtn, columnF1, lamp, music, byClass } = setup(undefined, undefined, () => true, (s) => saveFrameLayout(s, 'f1', legacy));
+    ctl.setFocus('f1', true);
+    ctl.setEditing(true);
+    editBtn.click();
+    expect(ctl.editing).toBe(false);
+    expect(lamp.parentElement).toBe(columnF1);
+    expect(music.parentElement).toBe(columnF1);
+    expect(byClass('mc-edit-canvas')).toHaveLength(0);
+  });
+
+  it('without flowOnly the same stored layout is restored (desktop keeps her arrangement)', () => {
+    const legacy = { 'lamp-wiz-desk': { left: 12, top: 12, width: 300, height: 200 } };
+    const { ctl, lamp } = setup(undefined, undefined, undefined, (s) => saveFrameLayout(s, 'f1', legacy));
+    ctl.setFocus('f1', true);
+    expect(lamp.parentElement!.classes.has('mc-edit-item')).toBe(true);
+  });
+
   it('disables Edit with no focused board, enables it once one has tiles', () => {
     const { ctl, editBtn } = setup();
     expect(editBtn.disabled).toBe(true);

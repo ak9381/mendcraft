@@ -84,7 +84,11 @@ describe('corner chip + Facing pill never sit on the AI panel (C1); phone pill c
   it('the phone Hands pill is short and capped beside the centre mic', async () => {
     const { PHONE_HANDS_FACE_LINE } = await import('../../src/canvas/phoneHands');
     expect(PHONE_HANDS_FACE_LINE).toBe('Face phone');
-    expect(css).toMatch(/\.mc-phone-simple \.mc-phone-hands-pill \{[^}]*max-width: calc\(50vw - 58px/);
+    // Each side of the 84 px mic: half the width less half the mic, 10 px clear of it, 16 px gutter.
+    expect(css).toMatch(/--mc-phone-side-w: calc\(50vw - 42px - 10px - 16px\)/);
+    for (const pill of ['mc-phone-hands-pill', 'mc-phone-track-pill', 'mc-join-pill', 'mc-read-aloud']) {
+      expect(css).toMatch(new RegExp(`\\.mc-phone-simple \\.${pill}(?::not\\(\\[hidden\\]\\))? \\{[^}]*max-width: var\\(--mc-phone-side-w\\)`));
+    }
   });
   it('review buttons never wrap their label', () => {
     expect(css).toMatch(/\.mc-review-approve, \.mc-review-reject, \.mc-review-ask-else \{[^}]*white-space: nowrap/);
