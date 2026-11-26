@@ -223,7 +223,7 @@ export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; 
      *  what each has sent so far. Phone lines are never in the laptop snapshot. */
     replay(): void { phones.forEach((phone, id) => present(id, phone)); },
     /** Forget every announced phone (a phone dropped / the relay closed). */
-    clear(): void { phones.clear(); limiter.clear(); queues.clear(); draining.clear(); },
+    clear(): void { phones.clear(); limiter.clear(); queues.clear(); draining.clear(); lastBytes.clear(); },
     /** Returns whether the event was accepted: it reached the feed, or waits
      *  its turn (≤10/s per phone — over that it is queued, never dropped). */
     handle(text: string): boolean {

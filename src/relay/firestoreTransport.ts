@@ -10,7 +10,7 @@
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { validateMessage, type RelayMessage } from './protocol';
 import type { RelayTransport } from './transport';
-import { createRoomFeed, type RoomDoc } from './roomFeed';
+import { createRoomFeed, type RestartClock, type RoomDoc } from './roomFeed';
 
 export type FirestoreProbe =
   | { ok: true; transport: RelayTransport }
@@ -40,6 +40,8 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
       new Promise((_, reject) => setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS)),
     ]);
 
+    // One connection, one restart gap, however many rooms listen on it.
+    const restartClock: RestartClock = { last: -Infinity };
     const transport: RelayTransport = {
       kind: 'firestore',
       async publish(roomId, msg) {
@@ -62,19 +64,25 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
           return { at: null };
         }
       },
-      subscribe(roomId, onMsg, onError) {
+      subscribe(roomId, onMsg, onError, since) {
         // The live listener, backed by a slow catch-up read: onSnapshot can go
         // quiet without an error (see roomFeed.ts), which left a paired laptop
-        // deaf to its phone.
+        // deaf to its phone. Both are bounded by the session's start: the
+        // room's older history is never downloaded.
         const messages = fs.collection(db, 'rooms', roomId, 'messages');
         const toDoc = (d: { id: string; data(): Record<string, unknown> }): RoomDoc => {
           const data = d.data();
           const at = data.at as { toMillis?: () => number } | null | undefined;
           return { id: d.id, at: typeof at?.toMillis === 'function' ? at.toMillis() : null, data };
         };
+        const from = (at: number | null) => (at === null
+          ? fs.query(messages, fs.orderBy('at'))
+          : fs.query(messages, fs.where('at', '>=', fs.Timestamp.fromMillis(at)), fs.orderBy('at')));
         const feed = createRoomFeed({
-          listen: (onDocs, onListenError) => fs.onSnapshot(
-            fs.query(messages, fs.orderBy('at')),
+          since,
+          restartClock,
+          listen: (at, onDocs, onListenError) => fs.onSnapshot(
+            from(at),
             (snap) => {
               onDocs(snap.docChanges().filter((c) => c.type === 'added').map((c) => toDoc(c.doc)));
             },
@@ -86,12 +94,7 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
               onListenError();
             },
           ),
-          fetchSince: async (at) => {
-            const q = at === null
-              ? fs.query(messages, fs.orderBy('at'))
-              : fs.query(messages, fs.orderBy('at'), fs.startAt(fs.Timestamp.fromMillis(at)));
-            return (await fs.getDocsFromServer(q)).docs.map(toDoc);
-          },
+          fetchSince: async (at) => (await fs.getDocsFromServer(from(at))).docs.map(toDoc),
           restart: async () => { await fs.disableNetwork(db); await fs.enableNetwork(db); },
           onDoc: (data, at) => {
             const msg: RelayMessage | null = validateMessage(data);

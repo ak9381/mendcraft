@@ -236,8 +236,8 @@ describe('a reloaded laptop does not show phones from the room\'s history', () =
     h.mute('phone', true);
     const reloaded = await laptop(h.t, first.token);
     await flush(20);
-    expect(reloaded.session.state()).toBe('paired'); // an old hello was replayed…
-    expect(reloaded.shown).toEqual([]); // …but no phone is shown
+    expect(reloaded.session.state()).toBe('waiting'); // the old hello is history: not even "paired"
+    expect(reloaded.shown).toEqual([]); // and no phone is shown
 
     // A phone that IS there answers the new session and is shown.
     h.mute('phone', false);
@@ -331,8 +331,16 @@ describe('single-call boards, toast position, "show me a dashboard"', () => {
     expect(rule).not.toMatch(/\btop:/);
   });
 
-  it.each(['show me a dashboard', 'Show me a dashboard for my lights', 'show me a control panel for the lamp'])('"%s" → a board turn', (text) => {
+  it.each(['show me a dashboard', 'Show me a dashboard for my lights', 'show me a new board for the lamp'])('"%s" → a board turn', (text) => {
     expect(routeLine(text, { hasPlanBoard: false, devices: [] }).name).toBe('connectRoom');
+  });
+
+  it('"show me the (control) panel" is not a build unless it says dashboard or a new board', () => {
+    const w = { hasPlanBoard: false, devices: [] };
+    expect(routeLine('show me the control panel', w).name).not.toBe('connectRoom');
+    expect(routeLine('show me the panel', w).name).not.toBe('connectRoom');
+    expect(routeLine('show me board 2', w).name).not.toBe('connectRoom');
+    expect(routeLine('make a control panel for the lamp', w).name).toBe('connectRoom');
   });
 
   it('other "show" lines keep their routes', () => {
@@ -372,9 +380,9 @@ describe('SAFETY: replayed history never acts', () => {
     await flush(30);
     expect(ran).toEqual([]); // the old command did NOT run again
     expect(states).not.toContain('gone'); // the old bye did not "drop" a phone
-    // Only the handshake is taken from history (an old hello says nothing more
-    // than "someone was here"); it shows no phone (see the announce gate).
-    expect(reloaded.session.state()).toBe('paired');
+    // Not even the handshake: an old hello is not a phone in the room.
+    expect(reloaded.session.state()).toBe('waiting');
+    expect(h.log.get(first.token)!.filter((e) => e.msg.from === 'host' && e.msg.type === 'hello')).toHaveLength(1); // no ack for replayed hellos
 
     // A phone that is here now is heard.
     const back = await createGuestSession(h.t, first.token);
@@ -520,5 +528,79 @@ describe('retyping the code on a connected phone keeps the link', () => {
     expect(link.message()).toBe(LINK_LINES.badCode);
     expect(sessions).toHaveLength(1);
     await link.stop(); await host.stop();
+  });
+});
+
+describe('review fixes: bounded reads, no storm', () => {
+  it('a hung read blocks the next one until it really settles; the feed never reads the whole room', async () => {
+    const { createRoomFeed } = await import('../../src/relay/roomFeed');
+    const reads: number[] = [];
+    let release: (() => void) | null = null;
+    const timeouts: Array<() => void> = [];
+    let begun: number | null | undefined;
+    let tellStart: (at: number | null) => void = () => undefined;
+    const feed = createRoomFeed({
+      since: new Promise<number | null>((r) => { tellStart = r; }),
+      slackMs: 2000,
+      listen: (from) => { begun = from; return () => undefined; },
+      fetchSince: (at) => { reads.push(at); return new Promise((r) => { release = () => r([]); }); },
+      onDoc: () => undefined,
+      setInterval: () => 0, clearInterval: () => undefined,
+      setTimeout: (fn) => { timeouts.push(fn); return 0; },
+    });
+    await feed.catchUp();
+    expect(reads).toEqual([]); // the session start is not known: nothing is read (or listened to)
+    expect(begun).toBeUndefined();
+    tellStart(10_000);
+    await flush();
+    expect(begun).toBe(8000); // the listener itself starts at the session start, less the slack
+    const first = feed.catchUp();
+    timeouts.at(-1)!(); // the read's timeout gives up on it…
+    await first;
+    await feed.catchUp(); await feed.catchUp();
+    expect(reads).toEqual([8000]); // …but no second read while the first is still in flight
+    release!();
+    await flush();
+    const second = feed.catchUp();
+    release!();
+    await second;
+    expect(reads).toEqual([8000, 8000]);
+    feed.stop();
+  });
+
+  it('feeds on one connection share the restart gap; old ids are forgotten oldest-first', async () => {
+    const { createRoomFeed } = await import('../../src/relay/roomFeed');
+    const clock = { last: -Infinity };
+    let restarts = 0;
+    const mk = () => createRoomFeed({
+      restartClock: clock, now: () => 1000, seenMax: 3,
+      listen: (_from, onDocs) => { onDocs([1, 2, 3, 4, 5].map((n) => ({ id: `m${n}`, at: n, data: n }))); return () => undefined; },
+      fetchSince: () => Promise.reject(new Error('down')),
+      restart: async () => { restarts++; },
+      onDoc: () => undefined,
+      setInterval: () => 0, clearInterval: () => undefined,
+    });
+    const a = mk(); const b = mk();
+    await a.catchUp(); await b.catchUp();
+    expect(restarts).toBe(1);
+    a.stop(); b.stop();
+  });
+
+  it('the Firestore transport bounds the listener and the catch-up read by the session start', () => {
+    const src = read('src/relay/firestoreTransport.ts');
+    expect(src).toMatch(/fs\.where\('at', '>=', fs\.Timestamp\.fromMillis\(at\)\)/);
+    expect(src).toMatch(/listen: \(at, onDocs, onListenError\) => fs\.onSnapshot\(\s*from\(at\),/);
+    expect(src).toMatch(/fetchSince: async \(at\) => \(await fs\.getDocsFromServer\(from\(at\)\)\)/);
+  });
+
+  it('clear() forgets each phone\'s byte total', () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } }, setTimer: () => 0 });
+    rep.announce('android', 'dev-2222bbbb', true);
+    rep.handle(JSON.stringify({ k: 'bytes', id: 'dev-2222bbbb', bytes: 4600 }));
+    rep.clear();
+    sent.length = 0;
+    rep.announce('android', 'dev-2222bbbb', true);
+    expect(sent).toEqual([{ kind: 'bytes', total: 0, device: 'android', deviceLabel: 'Nothing phone' }]);
   });
 });

@@ -213,9 +213,10 @@ describe('room feed: a listener that goes quiet', () => {
     let restarts = 0;
     let hang = false;
     const timeouts: Array<() => void> = [];
+    const hung: Array<() => void> = [];
     const feed = createRoomFeed({
-      listen: (onDocs) => { listener = onDocs; return () => { listener = null; }; },
-      fetchSince: (since) => (hang ? new Promise<RoomDoc[]>(() => undefined) : Promise.resolve(server.filter((d) => since === null || (d.at ?? 0) >= since))),
+      listen: (_from, onDocs) => { listener = onDocs; return () => { listener = null; }; },
+      fetchSince: (since) => (hang ? new Promise<RoomDoc[]>((r) => { hung.push(() => r([])); }) : Promise.resolve(server.filter((d) => (d.at ?? 0) >= since))),
       restart: async () => { restarts++; },
       onDoc: (d) => { got.push(String(d)); },
       setInterval: () => 0, clearInterval: () => undefined,
@@ -227,7 +228,7 @@ describe('room feed: a listener that goes quiet', () => {
       server.push(d);
       if (heard) listener?.([d]);
     };
-    return { feed, push, got, restarts: () => restarts, setHang: (h: boolean) => { hang = h; }, timeouts, tick: (ms: number) => { at += ms; } };
+    return { feed, push, got, restarts: () => restarts, setHang: (h: boolean) => { hang = h; }, timeouts, hung, tick: (ms: number) => { at += ms; } };
   }
 
   it('delivers what the listener missed, once, in order', async () => {
@@ -248,6 +249,7 @@ describe('room feed: a listener that goes quiet', () => {
 
   it('restarts the connection when the listener keeps missing messages, or a read hangs', async () => {
     const r = room();
+    r.push('first', true); // the feed reads from the last message it saw
     for (let i = 0; i < STALE_READS_BEFORE_RESTART; i++) {
       r.push(`m${i}`, false);
       await r.feed.catchUp();
@@ -259,7 +261,12 @@ describe('room feed: a listener that goes quiet', () => {
     r.timeouts.at(-1)!();
     await read;
     expect(r.restarts()).toBe(1);
-    // …but a read that hangs after it does.
+    // …and no second read is started while the hung one is still in flight.
+    await r.feed.catchUp();
+    expect(r.hung).toHaveLength(1);
+    r.hung[0]!();
+    await new Promise((res) => setTimeout(res, 0));
+    // A read that hangs after the gap restarts again.
     r.tick(60_000);
     const again = r.feed.catchUp();
     r.timeouts.at(-1)!();
@@ -271,7 +278,7 @@ describe('room feed: a listener that goes quiet', () => {
   it('only valid relay messages reach a subscriber (the transport validates each doc)', () => {
     const ok: RelayMessage[] = [];
     const feed = createRoomFeed({
-      listen: (onDocs) => {
+      listen: (_from, onDocs) => {
         onDocs([
           { id: 'a', at: 1, data: { v: 1, from: 'phone', type: 'hello', at: {} } },
           { id: 'b', at: 2, data: { v: 1, from: 'phone', type: 'nope' } },

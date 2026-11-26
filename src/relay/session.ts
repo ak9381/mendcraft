@@ -114,8 +114,10 @@ export interface GuestSession extends SessionBase {
 
 /** Messages held while a session does not yet know its own start time. */
 const HELD_MAX = 500;
-/** How long before a start marker that could not be time-stamped is re-sent. */
+/** A start marker that could not be time-stamped is re-sent after this long,
+ *  doubling up to the max (messages keep waiting meanwhile — never guessed). */
 export const START_MARK_RETRY_MS = 3000;
+export const START_MARK_RETRY_MAX_MS = 30_000;
 
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   let state: PairState = 'idle';
@@ -132,6 +134,8 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   let startAt: number | null | undefined;
   let held: Array<{ msg: RelayMessage; meta?: RelayMeta }> = [];
   let onPeerCb: ((msg: RelayMessage) => void) | null = null;
+  let tellStart: (at: number | null) => void = () => undefined;
+  const startKnown = new Promise<number | null>((resolve) => { tellStart = resolve; });
   const isOld = (meta?: RelayMeta): boolean => typeof startAt === 'number' && typeof meta?.at === 'number' && meta.at < startAt;
 
   function setState(next: PairState): void {
@@ -149,15 +153,15 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
       stateCb = cb;
       cb(state);
     },
-    /** `always`: the join handshake — handled whatever its age (a hello only
-     *  says "someone is in the room"; it never acts). */
-    listen(onPeer: (msg: RelayMessage) => void, always: (msg: RelayMessage) => boolean = () => false) {
+    /** Nothing is exempt, the join handshake included: an old hello is not a
+     *  phone in the room. (Whoever IS there answers this session's own first
+     *  message — the laptop's whoIsThere, a phone's hello — with a new one.) */
+    listen(onPeer: (msg: RelayMessage) => void) {
       onPeerCb = onPeer;
       unsubscribe = transport.subscribe(
         roomId,
         (msg, meta) => {
           if (msg.from === role) return; // own echo
-          if (always(msg)) { onPeer(msg); return; }
           if (startAt === undefined) {
             held.push({ msg, meta });
             if (held.length > HELD_MAX) held.shift();
@@ -167,6 +171,7 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
           onPeer(msg);
         },
         () => setState(advancePair(state, 'listen-error')),
+        startKnown,
       );
       setState(advancePair(state, 'create'));
     },
@@ -174,6 +179,7 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
     setStart(at: number | null) {
       if (startAt !== undefined) return;
       startAt = at;
+      tellStart(at);
       const waiting = held;
       held = [];
       for (const h of waiting) if (!isOld(h.meta)) onPeerCb?.(h.msg);
@@ -183,11 +189,11 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
     async markStart(send: () => Promise<void | RelayMeta>, first?: void | RelayMeta | Promise<void | RelayMeta>) {
       let receipt: void | RelayMeta | null = null;
       try { receipt = first === undefined ? await send() : await first; } catch { receipt = { at: null }; }
-      for (;;) {
+      for (let wait = START_MARK_RETRY_MS; ; wait = Math.min(wait * 2, START_MARK_RETRY_MAX_MS)) {
         if (closed || startAt !== undefined) return;
         if (!receipt) { this.setStart(null); return; }
         if (receipt.at !== null) { this.setStart(receipt.at); return; }
-        await new Promise((r) => setTimeout(r, START_MARK_RETRY_MS));
+        await new Promise((r) => setTimeout(r, wait));
         if (closed) return;
         try { receipt = await send(); } catch { receipt = { at: null }; }
       }
@@ -302,6 +308,8 @@ export async function createHostSession(
     if (msg.type === 'hello') {
       const wasPaired = core.state === 'paired';
       core.setState(advancePair(core.state, 'peer-hello'));
+      // (Only a hello newer than this session gets here: replayed ones are
+      // history, so a reload never acks or "pairs" a phone that is gone.)
       // ALWAYS ack a phone hello — even when already paired — so a SECOND phone
       // joining the same room flips to paired too (two phones share one room and
       // ignore each other's messages, so only the host can confirm the newcomer).
@@ -342,7 +350,7 @@ export async function createHostSession(
     } else if (msg.type === 'music') {
       if (core.state === 'paired') musicCb?.(msg.music);
     }
-  }, (msg) => msg.type === 'hello');
+  });
   // This session starts at the server time of its own first message (which
   // also tells phones in the room its id): everything older in the room is
   // history and never acts.

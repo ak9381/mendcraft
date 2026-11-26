@@ -21,7 +21,9 @@ export interface RelayTransport {
    *  (rules denial, offline) so the caller can surface a real disconnected
    *  state instead of silently freezing on the last-known one. Returns an
    *  unsubscribe function. */
-  subscribe(roomId: string, onMsg: (msg: RelayMessage, meta?: RelayMeta) => void, onError?: () => void): () => void;
+  /** `since`: the caller's session start (server ms), once it knows it; a
+   *  transport with history uses it to never listen to or read anything older. */
+  subscribe(roomId: string, onMsg: (msg: RelayMessage, meta?: RelayMeta) => void, onError?: () => void, since?: Promise<number | null>): () => void;
   /** Map a typable short code → full room token while the host is waiting. */
   setAlias(code: string, roomId: string): Promise<void>;
   resolveAlias(code: string): Promise<string | null>;

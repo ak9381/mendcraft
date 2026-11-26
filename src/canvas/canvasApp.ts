@@ -496,8 +496,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pinch). The committed transfer + updated board ride the host `state`
   // snapshot, so both phones see it with no new Relay message type.
   let hostSession: HostSession | null = null;
-  /** The phone paired before hostSession was assigned: wake its gimbal then. */
-  let wakeOnSession = false;
   let screenLayout: ScreenLayout = coerceLayout(loadLayout(storage) ?? defaultLayout({ android: true, ios: true }));
   let snapshotRev = 0;
   let dragFrame: string | null = null;
@@ -604,6 +602,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (live === 'first') {
         refresh = false;
         livePairing?.stopChime(); livePairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+        // The docked iPhone wakes up — for a phone that is really here, once.
+        bodyLanguage('wakeup');
       }
       const prevSense = phoneSense.get(platform);
       if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
@@ -2632,9 +2632,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // A hello proves little (the room replays old ones on a reload):
           // the phone is shown once its announce names this session.
           askWhoIsThere();
-          // The docked iPhone wakes up. hostSession is set once startPhoneJoin
-          // resolves; a phone already in the room can pair a tick before that.
-          if (hostSession) bodyLanguage('wakeup'); else wakeOnSession = true;
         }
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
@@ -2687,7 +2684,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     hostSession = res.session;
     // Phones already in the room (remembered pairs) learn this session's id.
     void res.session.askWhoIsThere().catch(() => undefined);
-    if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
     showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a

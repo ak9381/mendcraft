@@ -138,7 +138,9 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     const before = { stopProof };
     if (keep) swapping = true;
     else { stopProof(); current = null; linkUp = null; }
-    set('joining', joiningLine);
+    // While a working link is kept the pill stays what it is (✓): only the
+    // line says a join is being tried.
+    if (keep && linkUp) set(linkUp, joiningLine); else set('joining', joiningLine);
     if (!keep) await prev?.stop();
     let self: object | null = null;
     // "Laptop ✓" is shown only on proof: the laptop echoed this phone's ping
@@ -199,6 +201,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     let wait: { nonce: string; timer: unknown } | null = null;
     let next: unknown = null;
     let dead = false;
+    let proved = false;
     const mineLive = (): boolean => !dead && current === res;
     const sendPing = (): void => {
       next = null;
@@ -221,7 +224,10 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       clearTimer(wait.timer);
       wait = null;
       linkUp = 'connected';
-      if (state !== 'connected' && state !== 'listening' && !swapping) set('connected', LINK_LINES.connected);
+      // This session's first proof always says so (it may have taken over
+      // from an older one whose line is still showing).
+      if ((!proved || state !== 'connected') && state !== 'listening' && !swapping) set('connected', LINK_LINES.connected);
+      proved = true;
       if (next !== null) clearTimer(next);
       next = setTimer(sendPing, PING_EVERY_MS);
     });
