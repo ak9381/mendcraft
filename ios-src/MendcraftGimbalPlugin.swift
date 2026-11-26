@@ -346,6 +346,9 @@ actor DockWatcher {
     private var lastSubjectsAt: Date?
     private var lastSubjectCount = 0
     private var lastForcedAt = Date.distantPast
+    /// Bumped by every setWanted(): an enforceOff() that awaited across a
+    /// web-layer choice must not leave its "off" behind.
+    private var trackingGen = 0
 
     /// Start one move (aim / cue). Call endMove() exactly once after it.
     private func beginMove() {
@@ -387,10 +390,12 @@ actor DockWatcher {
                 if change.state == .docked, let acc = change.accessory {
                     accessory = acc
                     watchTracking(acc)
+                    updateGuard()
                     // Fresh dock: re-apply the web layer's choice (if any).
                     if let wanted { try? await DockAccessoryManager.shared.setSystemTrackingEnabled(wanted) }
                 } else if change.state == .undocked {
                     accessory = nil
+                    updateGuard()
                     trackingTask?.cancel(); trackingTask = nil
                     lastSubjectsAt = nil; lastSubjectCount = 0
                 }
@@ -437,7 +442,7 @@ actor DockWatcher {
     /// Keep system tracking off while the web layer wants it off. `force`
     /// sends "off" even when DockKit reads back off (at most once a second).
     func enforceOff(force: Bool = false) async {
-        guard wanted == false, appActive else { return }
+        guard wanted == false, appActive, accessory != nil else { return }
         let on = DockAccessoryManager.shared.isSystemTrackingEnabled
         if !on && !force { return }
         if !on {
@@ -446,12 +451,19 @@ actor DockWatcher {
         } else {
             reasserts += 1
         }
+        let gen = trackingGen
         try? await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
+        // The web layer chose meanwhile (actor reentrancy across the await):
+        // our "off" may have landed after its "on" — put its choice back.
+        if gen != trackingGen, wanted == true {
+            try? await DockAccessoryManager.shared.setSystemTrackingEnabled(true)
+        }
     }
 
-    /// Run the guard exactly while tracking is wanted off and the app is active.
+    /// Run the guard exactly while tracking is wanted off, the app is active
+    /// and a stand is docked.
     private func updateGuard() {
-        if wanted == false && appActive {
+        if wanted == false && appActive && accessory != nil {
             if guardTask == nil {
                 guardTask = Task { [weak self] in
                     while !Task.isCancelled {
@@ -469,11 +481,25 @@ actor DockWatcher {
 
     func setWanted(_ enabled: Bool, keepAlive: Bool) async -> [String: Any] {
         wanted = enabled
+        trackingGen += 1
+        let gen = trackingGen
         keepAliveWanted = enabled && keepAlive
         updateGuard()
+        // Follow me during a move (aim / cue): the move's endMove() would put
+        // it back anyway — wait for it (≤ 3.5 s) so the read-back is true.
+        if enabled {
+            let until = Date().addingTimeInterval(3.5)
+            while movesInFlight > 0 && Date() < until && gen == trackingGen {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
         var errText: String?
         do {
             try await DockAccessoryManager.shared.setSystemTrackingEnabled(enabled)
+            // A racing write (an enforceOff in flight) landed after ours: once more.
+            if gen == trackingGen, wanted == enabled, DockAccessoryManager.shared.isSystemTrackingEnabled != enabled {
+                try await DockAccessoryManager.shared.setSystemTrackingEnabled(enabled)
+            }
         } catch {
             errText = error.localizedDescription
         }
@@ -623,25 +649,29 @@ actor DockWatcher {
         for (i, (yaw, ms)) in steps.enumerated() {
             // Room for this swing, its margin and a way back (~350 ms).
             if Date().addingTimeInterval(Double(ms + 200 + 350) / 1000).compare(deadline) == .orderedDescending {
-                await settle(acc, offset)
+                await settle(acc, offset, before: before)
                 return (false, "The gimbal shake ran out of time")
             }
             let p: Progress
             do {
                 p = try await acc.setOrientation(Vector3D(x: 0, y: yaw, z: 0), duration: .milliseconds(ms), relative: true)
             } catch {
-                await settle(acc, offset)
+                await settle(acc, offset, before: before)
                 return (false, error.localizedDescription)
             }
             await waitForMove(p, maxMs: ms + 200)
-            let done = !p.isCancelled && (p.isFinished || p.fractionCompleted >= 0.95)
+            // Not reported finished yet: give it 100 ms more (no "almost done" shortcut).
+            if !p.isFinished && !p.isCancelled { await waitForMove(p, maxMs: 100) }
+            let done = !p.isCancelled && p.isFinished
             offset += yaw * (done ? 1.0 : min(1.0, max(0.0, p.fractionCompleted)))
             if i == 0, let b = before, let now = await yawPosition(acc) { turned = abs(now - b) }
             if !done {
-                await settle(acc, offset)
+                await settle(acc, offset, before: before)
                 return (false, "The gimbal didn’t finish the shake")
             }
         }
+        // Whatever the moves say, end where we started (measured pose).
+        await closeDrift(acc, before: before)
         // DockKit reported positions and the stand never really turned: say so.
         if let t = turned, t < 3.0 * Double.pi / 180.0 {
             return (false, "The gimbal didn’t move for the shake")
@@ -701,10 +731,31 @@ actor DockWatcher {
 
     /// Undo a cut-short wiggle: move back by `offset`, in a detached task so
     /// the cancellation that stopped the wiggle doesn't stop this too.
-    private static func settle(_ acc: DockAccessory, _ offset: Double) async {
-        if abs(offset) < 0.001 { return }
+    /// With `before` (the measured yaw at the start), one closing move then
+    /// fixes what the estimate missed.
+    private static func settle(_ acc: DockAccessory, _ offset: Double, before: Double? = nil) async {
+        if abs(offset) >= 0.001 {
+            await Task.detached {
+                if let p = try? await acc.setOrientation(Vector3D(x: 0, y: -offset, z: 0), duration: .milliseconds(200), relative: true) {
+                    await DockWatcher.waitForMove(p, maxMs: 400)
+                }
+            }.value
+        }
+        await closeDrift(acc, before: before)
+    }
+
+    /// One closing relative move of (before − measured now) when the stand is
+    /// more than 1° off where it started; clamped to ±15°. Detached so a
+    /// cancellation doesn't stop it.
+    private static func closeDrift(_ acc: DockAccessory, before: Double?) async {
+        guard let b = before else { return }
         await Task.detached {
-            if let p = try? await acc.setOrientation(Vector3D(x: 0, y: -offset, z: 0), duration: .milliseconds(200), relative: true) {
+            guard let now = await DockWatcher.yawPosition(acc) else { return }
+            let err = b - now
+            if abs(err) <= Double.pi / 180.0 { return }
+            let lim = 15.0 * Double.pi / 180.0
+            let fix = max(-lim, min(lim, err))
+            if let p = try? await acc.setOrientation(Vector3D(x: 0, y: fix, z: 0), duration: .milliseconds(200), relative: true) {
                 await DockWatcher.waitForMove(p, maxMs: 400)
             }
         }.value

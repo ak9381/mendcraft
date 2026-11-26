@@ -305,14 +305,30 @@ describe('wiring (source checks)', () => {
     // Same pause / restore as the animations.
     expect(swift).toMatch(/private func shakeCue[\s\S]{0,200}beginMove\(\)[\s\S]{0,300}setSystemTrackingEnabled\(false\)[\s\S]{0,400}await endMove\(\)/);
     // ok only when every swing finished; cut short → move back by the offset.
-    expect(swift).toMatch(/if !done \{\s*await settle\(acc, offset\)/);
+    expect(swift).toMatch(/if !done \{\s*await settle\(acc, offset, before: before\)/);
+    // No "almost finished" shortcut; the measured pose closes any drift (>1°, ±15°).
+    expect(swift).not.toMatch(/fractionCompleted >= 0\.95/);
+    expect(swift).toMatch(/let done = !p\.isCancelled && p\.isFinished/);
+    expect(swift).toMatch(/if abs\(err\) <= Double\.pi \/ 180\.0 \{ return \}/);
+    expect(swift).toMatch(/let lim = 15\.0 \* Double\.pi \/ 180\.0/);
+    expect(swift).toMatch(/\/\/ Whatever the moves say, end where we started \(measured pose\)\.\s*await closeDrift\(acc, before: before\)/);
     expect(swift).toMatch(/relative: true\)/);
   });
 
   it('native keeps tracking OFF while the web layer wants it off (guard, capture-session start, tracked subjects)', () => {
     expect(swift).toMatch(/AVCaptureSession\.didStartRunningNotification/);
-    expect(swift).toMatch(/func enforceOff\(force: Bool = false\) async \{\s*guard wanted == false, appActive else \{ return \}/);
-    expect(swift).toMatch(/if wanted == false && appActive \{/);
+    expect(swift).toMatch(/func enforceOff\(force: Bool = false\) async \{\s*guard wanted == false, appActive, accessory != nil else \{ return \}/);
+    expect(swift).toMatch(/if wanted == false && appActive && accessory != nil \{/);
+    // Undock / dock re-evaluate the guard.
+    expect(swift).toMatch(/accessory = nil\s*updateGuard\(\)/);
+    expect(swift).toMatch(/watchTracking\(acc\)\s*updateGuard\(\)/);
+  });
+
+  it('native: Follow me never ends OFF after a racing enforceOff (generation counter), and waits out an in-flight move', () => {
+    expect(swift).toMatch(/wanted = enabled\s*trackingGen \+= 1/);
+    expect(swift).toMatch(/let gen = trackingGen\s*try\? await DockAccessoryManager\.shared\.setSystemTrackingEnabled\(false\)\s*[\s\S]{0,200}if gen != trackingGen, wanted == true \{\s*try\? await DockAccessoryManager\.shared\.setSystemTrackingEnabled\(true\)/);
+    expect(swift).toMatch(/while movesInFlight > 0 && Date\(\) < until && gen == trackingGen/);
+    expect(swift).toMatch(/if gen == trackingGen, wanted == enabled, DockAccessoryManager\.shared\.isSystemTrackingEnabled != enabled \{/);
     expect(swift).toMatch(/acc\.trackingStates/);
     expect(swift).toMatch(/"dockSubjects"/);
     expect(swift).toMatch(/"reasserts"/);
