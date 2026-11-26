@@ -8,7 +8,7 @@ import {
 } from './speechVoices';
 
 export interface RawVoice { voiceURI: string; name: string; lang: string; localService?: boolean; default?: boolean }
-export interface UtteranceLike { text: string; rate: number; pitch: number; lang: string; voice: RawVoice | null }
+export interface UtteranceLike { text: string; rate: number; pitch: number; lang: string; voice: RawVoice | null; onstart?: (() => void) | null }
 export interface SynthLike {
   getVoices(): RawVoice[];
   cancel(): void;
@@ -16,7 +16,11 @@ export interface SynthLike {
   addEventListener?(type: 'voiceschanged', f: () => void): void;
 }
 
-export interface SpeakOptions { lang?: string; voice?: SynthVoice | null; rate?: number }
+export interface SpeakOptions {
+  lang?: string; voice?: SynthVoice | null; rate?: number;
+  /** Fired when the voice actually starts on this line. */
+  onStart?: () => void;
+}
 
 export interface SpeakerOptions {
   /** null = this browser cannot speak (replies stay as text). */
@@ -37,6 +41,11 @@ export interface Speaker {
    *  it with and online voices are off (the browser's own default is never
    *  trusted: it can be a cloud voice). */
   speak(text: string, o?: SpeakOptions): boolean;
+  /** Say this AFTER whatever is being said (a reply spoken sentence by
+   *  sentence as it arrives). Same voice rule as speak(). */
+  enqueue(text: string, o?: SpeakOptions): boolean;
+  /** The browser's voice list has loaded (so a first line is not delayed). */
+  voicesReady(): boolean;
   stop(): void;
 }
 
@@ -64,7 +73,7 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     pickSpokenVoice(voices(), { lang, saved: loadSavedVoice(opts.storage), allowCloud: allowCloud() });
   let waiting: { text: string; o: SpeakOptions; at: number } | null = null;
 
-  function speak(text: string, o: SpeakOptions = {}): boolean {
+  function speak(text: string, o: SpeakOptions = {}, queue = false): boolean {
     const line = text.trim();
     if (!synth || !line) return false;
     const lang = o.lang ?? 'en-US';
@@ -89,8 +98,9 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
       u.pitch = SPEECH_PITCH;
       u.lang = match?.lang || lang;
       if (match) u.voice = match;
+      if (o.onStart) u.onstart = o.onStart;
       waiting = null;
-      synth.cancel(); // never over itself
+      if (!queue) synth.cancel(); // never over itself (a queued sentence follows the one before)
       synth.speak(u);
       return true;
     } catch { return false; }
@@ -104,11 +114,18 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     });
   } catch { /* no events here: a line said before the list loaded stays unsaid */ }
 
+  // Chrome loads its voice list lazily: the first getVoices() returns nothing
+  // and starts the load. Ask now, at startup, so the list is there by the
+  // time the first reply is spoken (it used to cost that reply up to 3 s).
+  raw();
+
   return {
     supported: !!synth,
     voices,
     voiceFor,
-    speak,
+    speak: (text, o) => speak(text, o),
+    enqueue: (text, o) => speak(text, o, true),
+    voicesReady: () => raw().length > 0,
     stop() { waiting = null; try { synth?.cancel(); } catch { /* nothing playing */ } },
   };
 }
