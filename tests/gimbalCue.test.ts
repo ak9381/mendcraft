@@ -284,7 +284,15 @@ describe('wiring (source checks)', () => {
     expect(swift).toMatch(/CAPPluginMethod\(name: "cue"/);
     expect(swift).toMatch(/acc\.animate\(motion: motion\)/);
     for (const m of ['.yes', '.no', '.wakeup']) expect(swift).toContain(`motion = ${m}`);
-    expect(swift).toMatch(/withTimeout\(ms: 3000\)/);
+    expect(swift).toMatch(/let budgetMs: UInt64 = kind == "wakeup" \? 4500 : 3000/);
+    expect(swift).toMatch(/withTimeout\(ms: budgetMs\)/);
+  });
+
+  it('native wake-up: the wiggle runs after the full animation, and a cut-short wiggle moves back', () => {
+    expect(swift).toMatch(/await DockWatcher\.waitForMove\(progress, maxMs: 2800\)\s*if progress\.isCancelled \{ return false \}\s*if kind == "wakeup" \{ return try await DockWatcher\.wiggle/);
+    expect(swift).toMatch(/await settle\(acc, offset\); return false/);
+    expect(swift).toMatch(/Vector3D\(x: 0, y: -offset, z: 0\)/);
+    expect(swift).toMatch(/Task\.detached/);
   });
 
   it('native: a timeout cancels the animation Progress; overlapping moves restore the pre-pause state', () => {

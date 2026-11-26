@@ -449,15 +449,18 @@ actor DockWatcher {
         var result: [String: Any]
         // Holds the animation's Progress so a timeout can cancel it.
         let box = ProgressBox()
+        // yes/no: 3 s in all. Wake-up: its own 4.5 s — the full animation
+        // (up to 2.8 s) and then the ~1 s wiggle, never cut short mid-wiggle.
+        let budgetMs: UInt64 = kind == "wakeup" ? 4500 : 3000
         do {
             try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
-            // animate() returns a Progress; whole thing bounded by 3 s.
-            let outcome = try await DockWatcher.withTimeout(ms: 3000) {
+            // animate() returns a Progress; whole thing bounded by budgetMs.
+            let outcome = try await DockWatcher.withTimeout(ms: budgetMs) {
                 try await withTaskCancellationHandler {
                     let progress = try await acc.animate(motion: motion)
                     box.set(progress)
-                    // Wake-up leaves room for the wiggle below (same 3 s budget).
-                    await DockWatcher.waitForMove(progress, maxMs: kind == "wakeup" ? 1700 : 2800)
+                    // Wait for the animation to really finish before the wiggle starts.
+                    await DockWatcher.waitForMove(progress, maxMs: 2800)
                     if progress.isCancelled { return false }
                     if kind == "wakeup" { return try await DockWatcher.wiggle(acc, box: box) }
                     return true
@@ -470,7 +473,7 @@ actor DockWatcher {
             switch outcome {
             case .some(true): result = ["ok": true]
             case .some(false): result = ["ok": false, "reason": "The gimbal animation was cancelled"]
-            case .none: result = ["ok": false, "reason": "The gimbal didn’t answer in 3 s"]
+            case .none: result = ["ok": false, "reason": "The gimbal didn’t answer in \(budgetMs / 1000 == 3 ? "3" : "4.5") s"]
             }
         } catch {
             result = ["ok": false, "reason": error.localizedDescription]
@@ -499,22 +502,39 @@ actor DockWatcher {
         }
     }
 
-    /// Poll the move's Progress until it finishes, at most `maxMs`.
     /// After .wakeup, a small friendly "hello" shake: ±6° yaw, twice (relative
     /// moves, back to where it started), ~1 s in all. Tracking is already
-    /// paused by the caller, which restores it afterwards. False if cancelled.
+    /// paused by the caller, which restores it afterwards. False if cancelled —
+    /// and then a compensating move puts the stand back where it started, so
+    /// it is never left ~6° off.
     static func wiggle(_ acc: DockAccessory, box: ProgressBox) async throws -> Bool {
         let step = 6.0 * Double.pi / 180.0
+        var offset = 0.0 // net yaw moved so far (radians)
         for yaw in [step, -2 * step, 2 * step, -step] {
-            if Task.isCancelled || box.isCancelled { return false }
+            if Task.isCancelled || box.isCancelled { await settle(acc, offset); return false }
             let p = try await acc.setOrientation(Vector3D(x: 0, y: yaw, z: 0), duration: .milliseconds(180), relative: true)
             box.set(p)
             await DockWatcher.waitForMove(p, maxMs: 260)
-            if p.isCancelled { return false }
+            // A cancelled step moved only part of the way.
+            offset += yaw * (p.isFinished && !p.isCancelled ? 1.0 : min(1.0, max(0.0, p.fractionCompleted)))
+            if p.isCancelled || Task.isCancelled { await settle(acc, offset); return false }
         }
         return true
     }
 
+    /// Undo a cut-short wiggle: move back by `offset`, in a detached task so
+    /// the cancellation that stopped the wiggle doesn't stop this too.
+    private static func settle(_ acc: DockAccessory, _ offset: Double) async {
+        if abs(offset) < 0.001 { return }
+        await Task.detached {
+            if let p = try? await acc.setOrientation(Vector3D(x: 0, y: -offset, z: 0), duration: .milliseconds(200), relative: true) {
+                await DockWatcher.waitForMove(p, maxMs: 400)
+            }
+        }.value
+    }
+
+    /// Poll the move's Progress until it finishes (or is cancelled), at most
+    /// `maxMs`; returns early if the calling task is cancelled.
     static func waitForMove(_ progress: Progress, maxMs: Int64) async {
         let start = Date()
         while !progress.isFinished && !progress.isCancelled {
