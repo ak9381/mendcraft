@@ -723,7 +723,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  a phone drops). The row alone missed a phone that announced while it was
    *  idle, leaving that phone's edge dark though the strip showed it. */
   const edgeLayout = (): ScreenLayout => pairedEdgeLayout(screenLayout, pairFirst.phones(), {
-    live: !!hostSession, announced: [...phoneSeenAt.keys()] as PhonePlatform[],
+    live: !!hostSession, announced: [...phoneSeenAt.keys()].filter((p) => phoneAnswering(p)) as PhonePlatform[],
   });
   const boardEdge = createBoardEdgeTransferController({
     getViewportWidth: () => viewport.getBoundingClientRect().width || (typeof window !== 'undefined' ? window.innerWidth : 0),
