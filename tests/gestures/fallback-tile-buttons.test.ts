@@ -15,6 +15,7 @@ interface FakeEl {
   style: Record<string, string>;
   children: FakeEl[];
   listeners: Record<string, Array<(e: unknown) => void>>;
+  attrs: Record<string, string>;
   setAttribute(name: string, value: string): void;
   appendChild(c: FakeEl): FakeEl;
   addEventListener(type: string, fn: (e: unknown) => void): void;
@@ -29,7 +30,8 @@ function makeFakeDoc() {
       style: {},
       children: [] as FakeEl[],
       listeners: {} as Record<string, Array<(e: unknown) => void>>,
-      setAttribute() {},
+      attrs: {} as Record<string, string>,
+      setAttribute(name: string, value: string) { el.attrs[name] = value; },
       appendChild(c: FakeEl) { el.children.push(c); return c; },
       addEventListener(type: string, fn: (e: unknown) => void) { (el.listeners[type] ??= []).push(fn); },
       fire(type: string, ev?: unknown) { (el.listeners[type] ?? []).forEach((fn) => fn(ev ?? {})); },
@@ -49,6 +51,12 @@ function findAll(el: FakeEl, pred: (e: FakeEl) => boolean): FakeEl[] {
 }
 function button(el: FakeEl, text: string): FakeEl {
   return findAll(el, (e) => e.tagName === 'BUTTON' && e.textContent === text)[0];
+}
+
+/** A level control's − / + step button (the contract the gesture code clicks). */
+function stepButton(el: FakeEl, level: string, dir: 'inc' | 'dec'): FakeEl {
+  const control = findAll(el, (e) => e.attrs['data-level'] === level)[0];
+  return findAll(control, (e) => e.tagName === 'BUTTON' && `data-level-${dir}` in e.attrs)[0];
 }
 
 function expandOne(tile: unknown) {
@@ -78,14 +86,14 @@ describe('fallback tile buttons: hand path (generic click dispatch)', () => {
   it('A2-003 pinch-tap on Dimmer fires lamp.dimmer', () => {
     const onAction = vi.fn();
     const el = renderTile('LampTile', { type: 'lamp', deviceId: 'lamp-1', label: 'Desk Lamp' }, onAction);
-    button(el, 'Dimmer').fire('click');
+    stepButton(el, 'brightness', 'dec').fire('click');
     expect((onAction.mock.calls[0][0] as FallbackAction).name).toBe('lamp.dimmer');
   });
 
   it('A2-004 pinch-tap on Brighter fires lamp.brighter', () => {
     const onAction = vi.fn();
     const el = renderTile('LampTile', { type: 'lamp', deviceId: 'lamp-1', label: 'Desk Lamp' }, onAction);
-    button(el, 'Brighter').fire('click');
+    stepButton(el, 'brightness', 'inc').fire('click');
     expect((onAction.mock.calls[0][0] as FallbackAction).name).toBe('lamp.brighter');
   });
 
@@ -110,14 +118,14 @@ describe('fallback tile buttons: hand path (generic click dispatch)', () => {
   it('A2-008 pinch-tap on Softer fires music.softer', () => {
     const onAction = vi.fn();
     const el = renderTile('MusicTile', { type: 'music', deviceId: 'music-1', label: 'HiFi' }, onAction);
-    button(el, 'Softer').fire('click');
+    stepButton(el, 'volume', 'dec').fire('click');
     expect((onAction.mock.calls[0][0] as FallbackAction).name).toBe('music.softer');
   });
 
   it('A2-009 pinch-tap on Louder fires music.louder', () => {
     const onAction = vi.fn();
     const el = renderTile('MusicTile', { type: 'music', deviceId: 'music-1', label: 'HiFi' }, onAction);
-    button(el, 'Louder').fire('click');
+    stepButton(el, 'volume', 'inc').fire('click');
     expect((onAction.mock.calls[0][0] as FallbackAction).name).toBe('music.louder');
   });
 

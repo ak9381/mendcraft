@@ -29,7 +29,7 @@ export interface RouteWorld {
 export type Route =
   | { name: 'paletteOpen' } | { name: 'paletteClose' }
   | { name: 'teach' } | { name: 'teachList' }
-  | { name: 'showAi' } | { name: 'monitor' } | { name: 'hideAi' }
+  | { name: 'showAi' } | { name: 'monitor' } | { name: 'activityTab' } | { name: 'hideAi' }
   | { name: 'tool'; tool: ToolVoice }
   | { name: 'scroll'; dir: 'up' | 'down'; page: boolean }
   | { name: 'packIntent'; intent: IntentKey }
@@ -81,6 +81,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (/^\s*teach a gesture\s*$/i.test(text)) return { name: 'teach' };
   if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) return { name: 'teachList' };
   if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) return { name: 'showAi' };
+  // "open AI activity" (optionally "in a new tab"): the log on its own page.
+  if (/^\s*open\s+(the\s+)?ai\s+activity(\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab)?\s*[.!]?\s*$/i.test(text) || /^\s*(show\s+)?ai\s+activity\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab\s*[.!]?\s*$/i.test(text)) return { name: 'activityTab' };
   if (/^\s*(open\s+)?(the\s+)?ai\s+monitor\s*$/i.test(text)) return { name: 'monitor' };
   if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) return { name: 'hideAi' };
   const tool = matchToolVoice(text);

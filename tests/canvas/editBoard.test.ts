@@ -116,7 +116,10 @@ describe('clampResize', () => {
     expect(clampResize({ left: 12, top: 12, width: 50, height: 50 }, bounds)).toEqual({ left: 12, top: 12, ...MIN_ITEM_SIZE });
   });
   it('never grows past MAX_ITEM_SIZE', () => {
-    expect(clampResize({ left: 12, top: 12, width: 5000, height: 5000 }, bounds)).toEqual({ left: 12, top: 12, ...MAX_ITEM_SIZE });
+    // A board tall enough that only the max (not the board edge) limits the tile.
+    const tall: Rect = { ...bounds, height: 2000 };
+    expect(clampResize({ left: 12, top: 12, width: 5000, height: 5000 }, tall)).toEqual({ left: 12, top: 12, ...MAX_ITEM_SIZE });
+    expect(MAX_ITEM_SIZE.height).toBeGreaterThanOrEqual(660); // the lamp tile in a three-column board
   });
   it('never grows past the board edge from the item’s own corner', () => {
     // right edge of bounds is at 788; an item at left:600 can only grow to 188 wide.

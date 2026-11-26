@@ -36,7 +36,7 @@ export function formatActivityLine(entry: ActivityEntry): string {
   return entry.text || 'AI activity';
 }
 
-export function createActivityLog(list?: HTMLElement | null, cap = ACTIVITY_LOG_CAP): ActivityLog {
+export function createActivityLog(list?: HTMLElement | null, cap = ACTIVITY_LOG_CAP, onPush?: (entry: ActivityEntry) => void): ActivityLog {
   const entries: ActivityEntry[] = [];
 
   function paint(): void {
@@ -54,6 +54,7 @@ export function createActivityLog(list?: HTMLElement | null, cap = ACTIVITY_LOG_
       entries.unshift(next);
       if (entries.length > cap) entries.length = cap;
       paint();
+      try { onPush?.(next); } catch { /* a listener never breaks the log */ }
       return next;
     },
     list: () => entries.slice(),

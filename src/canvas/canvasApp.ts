@@ -4,12 +4,12 @@
 // (for anything a model proposes) held in a Proposal until kept.
 import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
-import { cameraTransform, fitRects, focusOnInsets, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
+import { cameraTransform, fitRects, focusOnInsets, focusWholeBoard, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
 import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav';
 import { mountZoomHud } from './zoomHud';
 import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
-import { CANVAS_DOC_VERSION, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
+import { CANVAS_DOC_VERSION, FRAME_SIZE, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
 import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
@@ -40,7 +40,7 @@ import type { GimbalCueKind } from '../relay/protocol';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
-import { createDeviceStore, type DeviceConnector } from './deviceActions';
+import { createActQueue, createDeviceStore, simulatedAck, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
@@ -100,6 +100,7 @@ import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './edi
 import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
+import { createActivityBroadcast } from './activityFeed';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
@@ -246,11 +247,17 @@ export function seedDoc(): CanvasDoc {
   };
 }
 
+/** Widest a focused room dashboard is shown (three tile columns). */
+export const ROOM_MAX_W = 1280;
+
 /** The size a focused board is SHOWN at so it clears the chrome: narrower
  *  than `free` only when it fits ≥480 px, shorter than `freeH` (not on a
  *  phone). null = its own size fits. Pure; never persisted. */
-export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number; freeH: number; phone: boolean }): { w: number; h: number } | null {
-  const w = o.free >= 480 && rect.w > o.free ? o.free : rect.w;
+export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number; freeH: number; phone: boolean; room?: boolean }): { w: number; h: number } | null {
+  // A room dashboard also WIDENS into the free width (up to ROOM_MAX_W), so
+  // its tiles reflow into more columns instead of running off the bottom.
+  const w = o.room && !o.phone && o.free >= 480 ? Math.min(o.free, ROOM_MAX_W)
+    : o.free >= 480 && rect.w > o.free ? o.free : rect.w;
   const h = !o.phone && rect.h > o.freeH ? o.freeH : rect.h;
   return w === rect.w && h === rect.h ? null : { w, h };
 }
@@ -326,6 +333,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             <button data-cmd="reregister" class="mc-btn" hidden>Register again</button></section>
           <section class="mc-more-group" aria-label="Screens"><h3 class="mc-more-title">Screens</h3>
             <button data-cmd="monitor" class="mc-btn">AI monitor</button>
+            <button data-cmd="activity" class="mc-btn">Open AI activity in a new tab</button>
             <button data-cmd="swap" class="mc-btn" hidden>Swap phone sides</button></section>
           <section class="mc-more-group" aria-label="Demo"><h3 class="mc-more-title">Demo</h3>
             <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button></section>
@@ -370,6 +378,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 600px)').matches;
   if (phoneShell) {
     root.querySelector('[data-cmd=monitor]')?.remove();
+    root.querySelector('[data-cmd=activity]')?.remove();
     const badge = document.createElement('div');
     badge.className = 'mc-route-badge';
     badge.setAttribute('role', 'status');
@@ -427,7 +436,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
-  const activityLog = createActivityLog(aiPanel.querySelector<HTMLElement>('.mc-ai-live-log'));
+  // The same log on its own tab (activity.html), over the AI feed channel.
+  // A phone shell never broadcasts locally (see createCanvasAiFeed).
+  const activityCast = phoneShell ? null : createActivityBroadcast({ sim: !!opts.sim });
+  const activityLog = createActivityLog(aiPanel.querySelector<HTMLElement>('.mc-ai-live-log'), undefined, (e) => activityCast?.entry(e));
   // Engine bar: Nano + Gemini always visible (desktop only; CSS also hides it
   // in the phone shell). The terminals mirror their state into it; a failed
   // engine also pins the AI panel open so the reason stays readable.
@@ -435,7 +447,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const aiHold = new Set<EngineId>();
   // The laptop's AI feed (monitor.html). A phone shell also tees its terminals
   // into opts.phoneAiFeed, which forwards compact aiEvents to the laptop.
-  const aiFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
+  const canvasFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
+  const aiFeed = activityCast ? teeFeed(canvasFeed, activityCast.feed) : canvasFeed;
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true), sim: !!opts.sim });
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
@@ -960,12 +973,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const deviceIdSession = createDeviceIdSession();
   const simulatedConnector: DeviceConnector = {
     run: (i) => new Promise((res) => setTimeout(() => {
-      const cur = store.get(i.deviceId);
-      const ack: Partial<DeviceState> = { on: i.on ?? cur.on, brightness: i.brightness ?? cur.brightness };
-      if (i.playing !== undefined) ack.playing = i.playing;
-      if (i.volume !== undefined) ack.volume = i.volume;
-      if (i.next) { ack.trackTitle = TRACKS[(TRACKS.indexOf(cur.trackTitle ?? '') + 1 + TRACKS.length) % TRACKS.length]; ack.playing = true; }
-      res(ack);
+      res(simulatedAck(store.get(i.deviceId), i, TRACKS));
     }, 300)),
   };
   // ?sim=1 stays fully simulated and deterministic — no bridge probing at all.
@@ -1009,6 +1017,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     pause: () => spotifyApi.pause(spOpts()),
     resume: () => spotifyApi.play(spOpts()),
     next: async () => { await spotifyApi.next(spOpts()); const pb = await spotifyApi.getPlayback(spOpts()); return pb?.title ? { title: pb.title } : null; },
+    previous: async () => { await spotifyApi.previous(spOpts()); const pb = await spotifyApi.getPlayback(spOpts()); return pb?.title ? { title: pb.title } : null; },
+    nowPlaying: async () => { const pb = await spotifyApi.getPlayback(spOpts()); return pb?.title ? { title: pb.title, artist: pb.artist } : null; },
+    speakerName: (id) => deviceRefs().find((d) => d.id === id)?.label ?? '',
     setVolume: (pct) => spotifyApi.setVolumePercent(pct, spOpts()),
     say,
     status: musicWhere,
@@ -1021,6 +1032,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const sids = targets && targets.size ? targets : live;
     for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
+  // Every device command — tile press, gesture or voice — goes through this
+  // one per-device lane, so they can never overtake each other.
+  const actQueue = createActQueue(store);
+  // Speaker tiles say which player is behind them from the first paint:
+  // Spotify when she is connected, else the built-in player (labelled).
+  if (!opts.connector) {
+    const source = !opts.sim && loadTokens() ? 'spotify' as const : 'builtin' as const;
+    for (const [id, d] of Object.entries(store.all())) if (d.playing !== undefined) store.patch(id, { source });
+  }
   /** The lamps a board may show right now (managed ids in the device list). */
   const lampSlots = (): LampSlot[] => Object.keys(store.all()).filter(isManagedLampId).map((id) => ({ id, label: DEVICE_LABELS[id] ?? id }));
   /** Any plan about to be shown or applied names only lamps that exist: a
@@ -1092,13 +1112,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
       if (!cur || !id) return;
-      if (a.name === 'lamp.toggle' || a.name === 'switch.toggle') void store.act({ deviceId: id, on: !cur.on });
-      if (a.name === 'lamp.brighter') void store.act({ deviceId: id, on: true, brightness: lampStep(cur.brightness + 20) });
-      if (a.name === 'lamp.dimmer') void store.act({ deviceId: id, brightness: lampStep(cur.brightness - 20) });
-      if (a.name === 'music.playPause') void store.act({ deviceId: id, playing: !cur.playing });
-      if (a.name === 'music.next') void store.act({ deviceId: id, next: true });
-      if (a.name === 'music.louder') void store.act({ deviceId: id, volume: Math.min(100, (cur.volume ?? 50) + 10) });
-      if (a.name === 'music.softer') void store.act({ deviceId: id, volume: Math.max(0, (cur.volume ?? 50) - 10) });
+      // The pressed chip's own value (a preset key or a number).
+      const value = (a.context?.value ?? ext(a)?.value) as string | number | undefined;
+      const intent = tileIntent(a.name, id, cur, value);
+      // Level sets are calmed per device (one in flight, latest value wins).
+      if (intent) actQueue.act(intent);
     });
   });
 
@@ -1237,7 +1255,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // fitBoardWidth); that fit is display-only, never stored.
       const fit = focusId === f.id ? focusFit.get(f.id) : undefined;
       const w = fit?.w ?? f.rect.w, h = fit?.h ?? f.rect.h;
-      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: `${h}px` });
+      // A room dashboard never scrolls inside itself: the board is as tall as
+      // its tiles (its stored height is only the floor), so every tile shows.
+      const room = isRoomBoard(f.id);
+      if (room) el.dataset.kind = 'room'; else delete el.dataset.kind;
+      const floor = room ? Math.min(h, FRAME_SIZE.h) : 0;
+      Object.assign(el.style, { left: `${f.rect.x}px`, top: `${f.rect.y}px`, width: `${w}px`, height: room ? 'auto' : `${h}px`, minHeight: room ? `${phoneShell ? h : floor}px` : '' });
+      if (room) watchRoomHeight(el, f.id);
       el.querySelector('.mc-frame-title')!.textContent = f.title;
       // The kind chip only when it says something the title doesn't ("Floor plan" twice did not).
       const chip = el.querySelector<HTMLElement>('.mc-chip')!;
@@ -1385,13 +1409,52 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Also clamp height to the space above the phones strip + engine bar (the
     // board scrolls inside), so its bottom stays reachable.
     const freeH = Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32));
-    const fit = fitFocusedSize(f.rect, { free, freeH, phone: phoneShell });
+    const room = isRoomBoard(f.id);
+    const fit = fitFocusedSize(f.rect, { free, freeH, phone: phoneShell, room });
     const had = focusFit.get(f.id);
     if (fit) focusFit.set(f.id, fit); else focusFit.delete(f.id);
     if (had?.w !== fit?.w || had?.h !== fit?.h) sync();
+    if (room) {
+      // The board is as tall as its tiles at this width: measure, don't assume.
+      const real = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`)?.offsetHeight || 0;
+      return { ...f, rect: { ...f.rect, ...(fit ? { w: fit.w } : {}), h: real || fit?.h || f.rect.h } };
+    }
     return fit ? { ...f, rect: { ...f.rect, ...fit } } : f;
   }
-  function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
+  const isRoomBoard = (id: string): boolean => surfaces[id]?.kind === 'room';
+  function focusCam(f: Frame): Camera {
+    // A room dashboard shows whole (zooming out a little if it must); anything
+    // else keeps the 1:1 focus.
+    if (isRoomBoard(f.id) && !phoneShell) return focusWholeBoard(f.rect, vp(), insets());
+    return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]);
+  }
+  // A room board's height follows its tiles. Seen at its own width (overview)
+  // that height is stored, so "show everything" frames the real board; seen
+  // at a fitted focus width it is display-only and the camera re-frames it.
+  const roomWatched = new WeakSet<HTMLElement>();
+  let roomRefly = 0;
+  function watchRoomHeight(el: HTMLElement, id: string): void {
+    if (roomWatched.has(el) || typeof ResizeObserver === 'undefined') return;
+    roomWatched.add(el);
+    let lastH = el.offsetHeight;
+    new ResizeObserver(() => {
+      const f = reg.get(id);
+      const h = el.offsetHeight;
+      if (!f || !h || !isRoomBoard(id)) return;
+      const delta = Math.abs(h - lastH);
+      lastH = h;
+      if (focusId === id) {
+        // Re-frame only for a real change in size (a tile added or reflowed),
+        // not for a tile's error line appearing.
+        if (delta < 48 || phoneShell) return;
+        clearTimeout(roomRefly);
+        roomRefly = window.setTimeout(() => { const cur = focusId === id ? reg.get(id) : undefined; if (cur) void flyTo(focusCam(fitBoardWidth(cur))); }, 140);
+      } else if (!focusFit.has(id) && Math.abs(h - f.rect.h) > 1) {
+        reg.setRect(id, { ...f.rect, h });
+        persist();
+      }
+    }).observe(el);
+  }
   async function focus(id: string): Promise<void> {
     let f = reg.get(id); if (!f) return;
     focusId = id; lastFocus = id; phoneOverview = false; sync(); updateDock();
@@ -1493,7 +1556,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return t && t.type !== 'lamp' ? t.type : DEVICE_KINDS[id] ?? 'lamp';
   };
   const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: kindOf(id) }));
-  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume }));
+  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp }));
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
   // Set synchronously the instant a build/connect turn starts — before any
   // await, so a second trigger during the swarm build (double-click, run while
@@ -1748,6 +1811,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (phoneShell) return;
     const w = window.open('/monitor.html', 'mendcraft-monitor');
     if (!w) say('Allow pop-ups to open the AI monitor.');
+  }
+  /** The same activity log as the drawer, on its own tab (activity.html), newest first. */
+  function openActivity(): void {
+    if (phoneShell) return;
+    const w = window.open('/activity.html', 'mendcraft-activity');
+    if (!w) say('Allow pop-ups to open AI activity in a new tab.');
   }
   function ledgerTotalRender(): void {
     const lines = ledgerPanelLines(ledger);
@@ -2711,10 +2780,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (!refs.length) { say('No devices here yet.'); return true; }
         for (const d of refs) {
           const cur = d.brightness ?? 50;
-          if (intent === 'lampOn') void store.act({ deviceId: d.id, on: true });
-          else if (intent === 'lampOff') void store.act({ deviceId: d.id, on: false });
-          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
-          else void store.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
+          if (intent === 'lampOn') void actQueue.act({ deviceId: d.id, on: true });
+          else if (intent === 'lampOff') void actQueue.act({ deviceId: d.id, on: false });
+          else if (intent === 'brighter') void actQueue.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
+          else void actQueue.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
         say(statusText(sk, pack));
@@ -3375,6 +3444,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'teachList': openTeachList(); return true;
       case 'showAi': showAi(true, true); return true;
       case 'monitor': openMonitor(); return true;
+      case 'activityTab': openActivity(); return true;
       case 'hideAi': aiHold.clear(); showAi(false, true); say('AI activity hidden. It opens on a failure, from the engine bar, or say “show ai”.'); return true;
       case 'tool': {
         const press = (cmd: string) => root.querySelector<HTMLElement>(`[data-cmd="${cmd}"]`)?.click();
@@ -3444,7 +3514,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // "play <something>" on a speaker: a search, handled by the speaker connector
       // (Spotify when connected, honest built-in fallback otherwise).
       case 'musicSearch':
-        void store.act({ deviceId: r.deviceId, playing: true, query: r.query });
+        void actQueue.act({ deviceId: r.deviceId, playing: true, query: r.query });
         say(`Looking for ${r.query}…`);
         if (ranOn) nextChips?.markDone(ranOn, 'play-music');
         return true;
@@ -3454,7 +3524,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) {
-          const acted = store.act(i);
+          // Same per-device lane as a tile press: a spoken "off" drops a chip
+          // still waiting and runs in order behind what is already out.
+          const acted = actQueue.act(i);
           // "play music": once the player has really started, say what is
           // playing and where — not just "Playing."
           if (i.playing === true && pack?.lang !== 'kn') {
@@ -3516,7 +3588,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
@@ -3550,7 +3622,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     if (frame && frame !== focusId && !dragged && !t.closest<HTMLElement>('.mc-frame-title')?.dataset.dragged) void focus(frame);
   });
-  let drag: { x: number; y: number } | null = null; let dragged = false;
+  let drag: { x: number; y: number } | null = null; let dragged = false; let dragYOnly = false;
   // Touch two-finger pinch: same anchored transform as the two-hand gesture, so
   // a phone pinch zooms/pans the canvas exactly like a touch screen. Tracked by
   // pointerId in viewport-local px; while two fingers are down the single-finger
@@ -3594,7 +3666,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }, true);
   viewport.addEventListener('pointerdown', (e) => {
     if (phoneLocked()) return;
-    if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) return;
+    if (focusId && (e.target as HTMLElement).closest('.mc-frame.focused')) {
+      // A room dashboard taller than the screen is reached by moving the
+      // canvas: a touch drag anywhere on it, or a mouse drag on its
+      // background (never on a control), pans. Other boards keep the drag.
+      const onRoom = !!(e.target as HTMLElement).closest('.mc-frame[data-kind="room"]') && !editBoard.editing;
+      const first = (e.composedPath?.()[0] ?? e.target) as HTMLElement | null;
+      const onControl = !!first?.closest?.('button, a, input, select, textarea, summary, [role=button], [role=tab], [data-mc-drag-handle], [data-mc-resize-handle]');
+      if (!onRoom || (e.pointerType !== 'touch' && onControl)) return;
+      // On a phone the dashboard is one column: the canvas only moves up and down.
+      dragYOnly = phoneShell;
+    } else dragYOnly = false;
     if (e.pointerType === 'touch') {
       touchPts.set(e.pointerId, vpPoint(e));
       if (touchPts.size >= 2) { driveTouchPinch(e.timeStamp); return; }
@@ -3618,7 +3700,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
-    dragged = true; camera = panBy(camera, dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
+    dragged = true; camera = panBy(camera, dragYOnly ? 0 : dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
   };
   const onWindowPointerUp = (e: PointerEvent) => {
     if (e.pointerType === 'touch' && touchPts.delete(e.pointerId) && touchPts.size < 2) {
@@ -3761,7 +3843,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   viewport.addEventListener('wheel', (e) => {
     if (phoneLocked() || e.defaultPrevented) return;
     const target = e.target as HTMLElement;
-    if (focusId && target.closest('.mc-frame.focused')) return; // the plan renderer owns the wheel on a focused board
+    // The plan renderer owns the wheel on a focused plan board. A room
+    // dashboard has no scroll of its own: the wheel moves the canvas.
+    if (focusId && target.closest('.mc-frame.focused') && !target.closest('.mc-frame[data-kind="room"]')) return;
     const intent = wheelIntent(e);
     if (intent.kind === 'pan') {
       if (canScrollInside(target, intent.dx, intent.dy)) return;

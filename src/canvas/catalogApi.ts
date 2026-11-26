@@ -17,6 +17,15 @@ export const LampTileApi = {
       onToggle: CommonSchemas.Action,
       onBrighter: CommonSchemas.Action.optional(),
       onDimmer: CommonSchemas.Action.optional(),
+      temp: CommonSchemas.DynamicNumber.optional(),
+      color: CommonSchemas.DynamicString.optional(),
+      sceneId: CommonSchemas.DynamicNumber.optional(),
+      onLevel: CommonSchemas.Action.optional(),
+      onColor: CommonSchemas.Action.optional(),
+      onScene: CommonSchemas.Action.optional(),
+      onWhite: CommonSchemas.Action.optional(),
+      onWarmer: CommonSchemas.Action.optional(),
+      onCooler: CommonSchemas.Action.optional(),
     })
     .strict(),
 };
@@ -45,6 +54,10 @@ export const MusicTileApi = {
       onNext: CommonSchemas.Action.optional(),
       onLouder: CommonSchemas.Action.optional(),
       onSofter: CommonSchemas.Action.optional(),
+      source: CommonSchemas.DynamicString.optional(),
+      playingOn: CommonSchemas.DynamicString.optional(),
+      onPrevious: CommonSchemas.Action.optional(),
+      onVolume: CommonSchemas.Action.optional(),
     })
     .strict(),
 };

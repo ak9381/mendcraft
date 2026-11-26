@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedOrigin, isIPv4, sanitizeParams } from '../scripts/wizBridge.lib.mjs';
+import { isAllowedOrigin, isIPv4, validateParams } from '../scripts/wizBridge.lib.mjs';
 
 describe('wiz-bridge CORS origin allowlist', () => {
   it('allows known dev / app origins', () => {
@@ -30,14 +30,12 @@ describe('wiz-bridge IPv4 destination check', () => {
   });
 });
 
-describe('wiz-bridge param sanitizer', () => {
-  it('clamps known fields and drops unknown ones', () => {
-    expect(sanitizeParams({ state: true, dimming: 5000, temp: 1, r: -9, evil: 'drop me' })).toEqual({
-      state: true,
-      dimming: 100,
-      temp: 2200,
-      r: 0,
-    });
-    expect(sanitizeParams(null)).toEqual({});
+describe('wiz-bridge param check', () => {
+  it('refuses out-of-range and unknown params instead of clamping them', () => {
+    expect(validateParams({ state: true, dimming: 5000 }).ok).toBe(false);
+    expect(validateParams({ state: true, temp: 1 }).ok).toBe(false);
+    expect(validateParams({ state: true, evil: 'drop me' }).ok).toBe(false);
+    expect(validateParams(null).ok).toBe(false);
+    expect(validateParams({ state: true, dimming: 60 })).toEqual({ ok: true, params: { state: true, dimming: 60 } });
   });
 });
