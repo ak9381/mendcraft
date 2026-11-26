@@ -12,7 +12,8 @@ import {
   type GimbalCanvasController,
 } from '../../src/canvas/gimbalCanvas';
 import type { GimbalPlugin } from '../../src/devices/native';
-import { MAX_STEP_RAD } from '../../src/devices/native';
+import { DEFAULT_FOV, MAX_STEP_RAD } from '../../src/devices/native';
+import { HANDS_MAX_TRAVEL_RAD } from '../../src/devices/gimbalFollow';
 import type { Pt } from '../../src/input/handLogic';
 
 /** A 21-landmark hand whose wrist–middle-MCP midpoint sits at (x, y), camera space. */
@@ -232,7 +233,7 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       await c.onHandsFrame([], now);
       await c.onHandsFrame([], now + 50);
       expect(aimCalls).toHaveLength(0);
-      expect(c.diag!(now)).toEqual({ systemTracking: false, aimingAtHands: false });
+      expect(c.diag!(now)).toEqual({ systemTracking: false, aimingAtHands: false, signSuspect: '' });
       await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now + 100);
       expect(c.diag!(now + 200).aimingAtHands).toBe(true);
       now += 3000;
@@ -253,11 +254,61 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       for (let i = 0; i < 3; i++) await Promise.resolve();
       expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }, { enabled: false, keepAlive: false }]);
       // Hands seen, but DockKit is tracking: not claimed as aiming at hands.
-      expect(c.diag!(now)).toEqual({ systemTracking: true, aimingAtHands: false });
+      expect(c.diag!(now)).toEqual({ systemTracking: true, aimingAtHands: false, signSuspect: '' });
       // Rate-limited: no second re-assert within REASSERT_MIN_MS.
       await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now + 100);
       expect(trackingCalls).toHaveLength(2);
       expect(trackingCalls.some((t) => t.enabled)).toBe(false);
+    });
+
+    /** A stand that turns the WRONG way (inverted yaw sign) and a hand at a fixed
+     *  world angle; the camera x follows from the stand's real yaw. `clampEdge`:
+     *  she keeps her hand at the frame edge (so the error stops growing). */
+    async function invertedRun(clampEdge: boolean): Promise<{ standYaw: number; maxAbs: number; c: GimbalCanvasController }> {
+      let standYaw = 0; let maxAbs = 0;
+      fakePlugin.aim = vi.fn(async (o: { yaw: number }) => { standYaw -= o.yaw; maxAbs = Math.max(maxAbs, Math.abs(standYaw)); return { ok: true }; });
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 1e9 });
+      await c.setMode('hands');
+      const hand = (15 * Math.PI) / 180;
+      const half = Math.tan(DEFAULT_FOV.h / 2);
+      for (let i = 0; i < 400; i++) {
+        now += 100;
+        let x = 0.5 + Math.tan(hand - standYaw) / (2 * half);
+        if (clampEdge) x = Math.min(0.97, Math.max(0.03, x));
+        await c.onHandsFrame(x > 0 && x < 1 ? [{ points: OPEN_AT(x, 0.5) }] : [], now);
+        for (let k = 0; k < 4; k++) await Promise.resolve();
+      }
+      return { standYaw, maxAbs, c };
+    }
+
+    it('inverted yaw sign: the growing error stops the axis and the announce diagnostic says "yaw"', async () => {
+      const r = await invertedRun(false);
+      expect(r.c.diag!().signSuspect).toBe('yaw');
+      expect(r.maxAbs).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+      expect((fakePlugin.aim as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(3);
+    });
+
+    it('inverted yaw sign with the hand kept at the frame edge: travel stays within ±45°', async () => {
+      const r = await invertedRun(true);
+      expect(r.maxAbs).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+      expect(Math.abs(r.standYaw)).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+    });
+
+    it('correct sign: converges on the hand without stopping the axis', async () => {
+      let standYaw = 0;
+      fakePlugin.aim = vi.fn(async (o: { yaw: number }) => { standYaw += o.yaw; return { ok: true }; });
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 1e9 });
+      await c.setMode('hands');
+      const hand = (20 * Math.PI) / 180; const half = Math.tan(DEFAULT_FOV.h / 2);
+      for (let i = 0; i < 200; i++) {
+        now += 100;
+        await c.onHandsFrame([{ points: OPEN_AT(0.5 + Math.tan(hand - standYaw) / (2 * half), 0.5) }], now);
+        for (let k = 0; k < 4; k++) await Promise.resolve();
+      }
+      expect(Math.abs(hand - standYaw)).toBeLessThan((4 * Math.PI) / 180);
+      expect(c.diag!().signSuspect).toBe('');
     });
 
     it('reassertOff: hands / hold send "off" again; face never does', async () => {

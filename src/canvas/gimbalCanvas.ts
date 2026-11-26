@@ -72,6 +72,8 @@ export interface GimbalCanvasController {
   /** Re-assert "tracking off" (hands / hold / point) — e.g. after the camera
    *  session (re)started, which can make DockKit track again. */
   reassertOff?(): Promise<void>;
+  /** Re-read the plugin (isAvailable, TTL-bounded) so systemTracking is fresh. */
+  refresh?(): Promise<void>;
   /** Body language: nod yes / shake no / wake up (DockKit animate). Silent
    *  no-op (ok:false, no status) when there is no docked stand, an old build,
    *  or within GIMBAL_CUE_MIN_GAP_MS of the last cue. `status` is set only
@@ -82,6 +84,9 @@ export interface GimbalCanvasController {
 export interface GimbalDiag {
   systemTracking: boolean | null;
   aimingAtHands: boolean;
+  /** Axes the hands aim stopped because the error grew after its moves
+   *  ('' none, 'yaw', 'pitch', 'yaw+pitch') — the axis sign looks wrong. */
+  signSuspect: string;
 }
 /** A hand seen this recently counts as "aiming at hands". */
 export const AIMING_HAND_MS = 1500;
@@ -378,10 +383,16 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
     diag(now?: number): GimbalDiag {
       const t = now ?? clock();
+      const sus = gimbalFollow.diag().signSuspect;
       return {
         systemTracking,
         aimingAtHands: currentMode === 'hands' && systemTracking === false && t - lastHandAt < AIMING_HAND_MS,
+        signSuspect: [sus.yaw ? 'yaw' : '', sus.pitch ? 'pitch' : ''].filter(Boolean).join('+'),
       };
+    },
+
+    async refresh(): Promise<void> {
+      if (plugin) await checkPlugin();
     },
 
     async reassertOff(): Promise<void> {

@@ -4010,7 +4010,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let gimbalDocked = false;
   // "aiming at hands" goes false on its own once no hand is seen: re-check.
   if (phoneSensor && getGimbalPlugin() && typeof window !== 'undefined') {
-    const diagTimer = setInterval(() => { if (inputs.gimbal.mode() === 'hands') senseChanged(); }, 1000);
+    // Also re-reads the plugin (isAvailable, 5 s TTL) so systemTracking and
+    // the 'hands' / 'tracking' claims never go stale.
+    const diagTimer = setInterval(() => {
+      if (!gimbalDocked) return;
+      void (inputs.gimbal.refresh?.() ?? Promise.resolve()).catch(() => {}).finally(() => senseChanged());
+    }, 1000);
     addEventListener('pagehide', () => clearInterval(diagTimer), { once: true });
   }
   function senseChanged(): void {
@@ -4036,6 +4041,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
     if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
     if (diag) s.aimingAtHands = diag.aimingAtHands;
+    if (diag?.signSuspect) s.aimSign = diag.signSuspect;
     return s;
   }
   // ---- the gimbal tile (gimbalTile.ts) ----

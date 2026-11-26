@@ -28,6 +28,21 @@ export const HANDS_GAIN = 0.7;
 export const HANDS_SETTLE_MS = 250;
 /** A gap this long without a hand restarts the average. */
 export const HANDS_LOST_MS = 600;
+/** Never travel further than this per axis since entering hands mode. */
+export const HANDS_MAX_TRAVEL_RAD = (45 * Math.PI) / 180;
+/** After a move on an axis, the error on the SAME side grew by more than
+ *  max(HANDS_GROW_RAD, half that move): a stand turning the wrong way grows
+ *  it by the whole move. HANDS_GROW_STOP such moves stop that axis (until
+ *  hands mode is entered again) and the diagnostic says "sign?". */
+export const HANDS_GROW_RAD = (1 * Math.PI) / 180;
+export const HANDS_GROW_STOP = 1;
+
+export interface FollowDiag {
+  /** Net travel since entering hands mode (radians). */
+  travel: { yaw: number; pitch: number };
+  /** Axes stopped because the error grew after moves (sign looks inverted). */
+  signSuspect: { yaw: boolean; pitch: boolean };
+}
 
 export interface SmoothFollow {
   /** Relative move in radians (yaw + right, pitch + up). */
@@ -88,6 +103,8 @@ export interface GimbalFollow {
   /** Drive one camera frame. No-ops in hold, or when a move is already in flight. */
   onFrame(hands: readonly { points: readonly Pt[] }[], now: number): void;
   nudge(dir: NudgeDir): Promise<boolean>;
+  /** Smoothed hands follow: travel and sign diagnostics. */
+  diag(): FollowDiag;
 }
 
 export function createGimbalFollow(opts: {
@@ -112,6 +129,32 @@ export function createGimbalFollow(opts: {
   let settleUntil = -Infinity;
   /** A move just ended: the next frame starts the settle wait (frame clock). */
   let justMoved = false;
+  type Axis = 'yaw' | 'pitch';
+  const fresh = () => ({ travel: 0, lastErr: null as number | null, lastStep: 0, grows: 0, stopped: false });
+  let axes: Record<Axis, ReturnType<typeof fresh>> = { yaw: fresh(), pitch: fresh() };
+
+  /** One axis' step: dead zone, sign check, gain, travel bound. */
+  function axisStep(a: Axis, err: number): number {
+    const st = axes[a];
+    if (Math.abs(err) < HANDS_DEADBAND_RAD) { st.lastErr = null; st.grows = 0; return 0; }
+    if (st.lastErr !== null) {
+      // Moved toward the hand last time, yet the hand is further out on the
+      // same side: the stand may be turning the wrong way.
+      const grew = Math.sign(err) === Math.sign(st.lastErr)
+        && Math.abs(err) > Math.abs(st.lastErr) + Math.max(HANDS_GROW_RAD, Math.abs(st.lastStep) / 2);
+      st.grows = grew ? st.grows + 1 : 0;
+      if (st.grows >= HANDS_GROW_STOP) st.stopped = true;
+    }
+    if (st.stopped) return 0;
+    let step = err * HANDS_GAIN;
+    const lo = -HANDS_MAX_TRAVEL_RAD - st.travel;
+    const hi = HANDS_MAX_TRAVEL_RAD - st.travel;
+    step = Math.max(lo, Math.min(hi, step));
+    if (Math.abs(step) < 1e-6) { st.lastErr = null; return 0; }
+    st.lastErr = err;
+    st.lastStep = step;
+    return step;
+  }
 
   function smoothFrame(hands: readonly { points: readonly Pt[] }[], now: number, smooth: SmoothFollow): void {
     const raw = handsCentroid(hands);
@@ -124,12 +167,16 @@ export function createGimbalFollow(opts: {
     seen++;
     if (inflight || seen < HANDS_CONFIRM_FRAMES || now - lastAimAt < interval) return;
     const { yaw, pitch } = aimAngles(boxAround(ema), fov);
-    const y = Math.abs(yaw) < HANDS_DEADBAND_RAD ? 0 : yaw * HANDS_GAIN;
-    const p = Math.abs(pitch) < HANDS_DEADBAND_RAD ? 0 : pitch * HANDS_GAIN;
+    const y = axisStep('yaw', yaw);
+    const p = axisStep('pitch', pitch);
     if (y === 0 && p === 0) return;
     lastAimAt = now;
     inflight = true;
-    void smooth.move(y, p).catch(() => false).finally(() => {
+    void smooth.move(y, p).then((ok) => {
+      if (ok) { axes.yaw.travel += y; axes.pitch.travel += p; }
+      // A failed move proves nothing about the sign.
+      else { axes.yaw.lastErr = null; axes.pitch.lastErr = null; }
+    }, () => { axes.yaw.lastErr = null; axes.pitch.lastErr = null; }).finally(() => {
       inflight = false;
       // The picture moved with the stand: start the average again.
       ema = null; seen = 0; justMoved = true;
@@ -152,7 +199,15 @@ export function createGimbalFollow(opts: {
 
   return {
     mode: () => mode,
-    setMode(next) { mode = next; ema = null; seen = 0; },
+    setMode(next) {
+      // Entering hands mode starts a fresh travel budget and sign check.
+      if (next === 'hands' && mode !== 'hands') axes = { yaw: fresh(), pitch: fresh() };
+      mode = next; ema = null; seen = 0;
+    },
+    diag: () => ({
+      travel: { yaw: axes.yaw.travel, pitch: axes.pitch.travel },
+      signSuspect: { yaw: axes.yaw.stopped, pitch: axes.pitch.stopped },
+    }),
     onFrame(hands, now) {
       if (mode === 'hands' && opts.smooth) { smoothFrame(hands, now, opts.smooth); return; }
       if (inflight || mode === 'hold') return;

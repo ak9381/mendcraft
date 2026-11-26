@@ -8,7 +8,7 @@ import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS } from '../../src/canvas/p
 import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
   CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FOLLOWING_HANDS_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
-  NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, DIAG_AIMING_NO, DIAG_AIMING_YES, DIAG_TRACKING_OFF, DIAG_TRACKING_ON, TRACKING_ROW, type PhoneSenseStatus,
+  NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, DIAG_AIMING_NO, DIAG_AIMING_YES, DIAG_SIGN, DIAG_TRACKING_OFF, DIAG_TRACKING_ON, TRACKING_ROW, type PhoneSenseStatus,
 } from '../../src/canvas/phonePoint';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 import { routeLine } from '../../src/canvas/routeLine';
@@ -72,6 +72,9 @@ describe('connect-devices row: iPhone sub-states', () => {
     expect(phoneSubState(s, { ios: true })).toBe(`${FOLLOWING_HANDS_ROW} · ${DIAG_TRACKING_OFF} · ${DIAG_AIMING_YES}`);
     const t = coerceSenseStatus({ gimbal: 'ready', sensor: true, hands: false, canPoint: true, systemTracking: true, aimingAtHands: false });
     expect(phoneSubState(t, { ios: true })).toContain(`${DIAG_TRACKING_ON} · ${DIAG_AIMING_NO}`);
+    const u = coerceSenseStatus({ gimbal: 'hands', sensor: true, hands: false, canPoint: true, systemTracking: false, aimingAtHands: true, aimSign: 'yaw' });
+    expect(phoneSubState(u, { ios: true })).toContain(`${DIAG_SIGN} yaw`);
+    expect(coerceSenseStatus({ gimbal: 'hands', sensor: true, hands: false, canPoint: true, aimSign: '<b>' })!.aimSign).toBeUndefined();
     // Junk values are dropped; an older phone build shows no diagnostics.
     expect(coerceSenseStatus({ gimbal: 'ready', sensor: false, hands: false, canPoint: true, systemTracking: 'yes' })).toEqual({ gimbal: 'ready', sensor: false, hands: false, canPoint: true });
     expect(phoneSubState({ gimbal: 'none', sensor: false, hands: false, canPoint: true, systemTracking: true }, { ios: true })).not.toContain('DockKit');
