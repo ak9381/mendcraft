@@ -59,7 +59,7 @@ export interface PhoneHandsDeps {
   countsSuppressed?: () => boolean;
   /** Floor-plan hand edit: the frame's peace-and-move resize step. Returns
    *  which hands' peace sign it has claimed (no button hold for those). */
-  planFrame?: (selfie: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null) => (side: 'L' | 'R') => boolean;
+  planFrame?: (selfie: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null) => { claimedPeace: (side: 'L' | 'R') => boolean; noScrollPeace: (side: 'L' | 'R') => boolean };
 }
 
 export interface PhoneHands {
@@ -155,9 +155,9 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       fed = true;
     }
     // Gestures see every frame (an empty one lets a hold cancel / release).
-    const claimedPeace = deps.planFrame?.(selfie, t, op ? (op.handGate ?? null) : null);
+    const planPeace = deps.planFrame?.(selfie, t, op ? (op.handGate ?? null) : null);
     deps.gestures?.frame(selfie, t, {
-      ...(claimedPeace ? { claimedPeace } : {}),
+      ...(planPeace ?? {}),
       facing: op ? (op.handGate ?? null) : null,
       faceX: op ? op.box.cx : null,
       blocked: g || !!deps.gesturesBlocked?.(),

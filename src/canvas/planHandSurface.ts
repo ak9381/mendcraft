@@ -151,7 +151,19 @@ export function mountPlanHandSurface(o: {
     return b;
   };
 
+  let barKey = '';
   function buildBar(sel: HandSelection): void {
+    const key = JSON.stringify([sel.id, sel.axes.map((a) => a.key + a.name), sel.rotate, sel.label.replace(/[\d.]+ m/g, '')]);
+    if (key === barKey && bar.childElementCount) {
+      sel.axes.forEach((ax, i) => {
+        const g = bar.querySelectorAll<HTMLElement>('.mc-plan-size')[i];
+        if (!g) return;
+        g.setAttribute('aria-label', `${ax.name} ${mmToMetresLabel(ax.value)}`);
+        g.querySelector('.mc-plan-size-value')!.textContent = `${ax.name} ${mmToMetresLabel(ax.value)}`;
+      });
+      return;
+    }
+    barKey = key;
     bar.innerHTML = '';
     for (const ax of sel.axes) {
       const g = doc.createElement('div');
@@ -159,9 +171,9 @@ export function mountPlanHandSurface(o: {
       // The shared level-control contract (peace-and-move over it steps it).
       g.setAttribute('data-level', ax.name.toLowerCase());
       g.setAttribute('data-level-step', '100');
-      g.setAttribute('data-level-value', String(Math.round(ax.value)));
       g.setAttribute('role', 'group');
-      g.setAttribute('aria-label', `${sel.label} ${ax.name.toLowerCase()}`);
+      // levelReadout() shows this label next to the hand ("Length 3.10 m").
+      g.setAttribute('aria-label', `${ax.name} ${mmToMetresLabel(ax.value)}`);
       const dec = button('mc-plan-size-dec', '− 10 cm', `${ax.name} 10 centimetres shorter`, () => hand.step(ax.key, -1));
       dec.setAttribute('data-level-dec', '');
       const val = doc.createElement('span');
@@ -246,7 +258,7 @@ export function mountPlanHandSurface(o: {
     }
     bar.hidden = !sel;
     if (sel) buildBar(sel);
-    else if (bar.childElementCount) bar.innerHTML = '';
+    else if (bar.childElementCount) { bar.innerHTML = ''; barKey = ''; }
     paintHot(targets);
   }
 

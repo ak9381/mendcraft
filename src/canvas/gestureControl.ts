@@ -15,7 +15,10 @@ import {
   type GestureAction, type GestureBinding, type GestureEnv,
 } from './gestureBindings';
 import { handIconSvg, sideMark } from './gestureIcons';
-import { handScale, palmCenter } from './handFeel';
+import { handScale, palmCenter, type ReachBox } from './handFeel';
+import { mapToScreen, REACH } from './handPointer';
+import { createPeaceScroll, type ScrollHand } from './peaceScroll';
+import { createScrollDriver } from './gestureScroll';
 
 export interface GestureFrameContext {
   /** The hand gate: false = not facing (no gestures), null = unknown (allowed). */
@@ -34,6 +37,10 @@ export interface GestureFrameContext {
   /** This hand's peace sign is doing something else (a plan resize by
    *  peace-and-move): it is no button gesture and does not move the highlight. */
   claimedPeace?: (side: HandSide) => boolean;
+  /** This hand's peace must not SCROLL (a plan resize has armed on it or is
+   *  running). Wider than claimedPeace: it holds from the moment the peace
+   *  appears over a resizable plan element, so the scroll never starts first. */
+  noScrollPeace?: (side: HandSide) => boolean;
 }
 
 /** The open-palm highlight (palmHighlight.ts) as the controller sees it. */
@@ -58,6 +65,15 @@ export interface GestureControlOptions {
   highlight?: HighlightHook | null;
   /** The gesture layer turned on or off (Hands on / off). */
   onActive?: (on: boolean) => void;
+  /** Reach box (camera → screen) for the peace-scroll hand point; default laptop. */
+  reach?: () => ReachBox;
+  /** Peace-and-move over nothing scrollable: pan the canvas (screen px). */
+  onCanvasScroll?: (dx: number, dy: number) => void;
+  onCanvasScrollEnd?: () => void;
+  /** A level control stepped by the peace gesture. */
+  onLevel?: (el: HTMLElement, dir: 1 | -1, readout: string) => void;
+  /** Tick sound on level steps (off by default). */
+  levelTick?: () => boolean;
 }
 
 export interface GestureControl {
@@ -90,6 +106,9 @@ export const GESTURE_STALE_MS = 500;
 /** While a review is open (it is modal) only these act. */
 const REVIEW_KEYS: readonly GestureKey[] = ['R:thumbsUp', 'R:thumbsDown', 'L:thumbsDown'];
 const COUNT_SHAPES: readonly HandShape[] = ['one', 'peace', 'three'];
+/** Two peaces must persist this long (the hold grace) before they clear a
+ *  scroll latch and the two-hand Register hold takes over. */
+const TWO_PEACE_CLEAR_MS = 150;
 const BADGE_REFRESH_MS = 300;
 
 function isVisible(el: HTMLElement): boolean {
@@ -120,6 +139,14 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const { root, bindings } = opts;
   const doc = root.ownerDocument;
   const engine = createHoldEngine();
+  // Peace-and-move: scroll what is under the hand, or step a level control.
+  const scroll = createPeaceScroll();
+  /** Two peace hands seen continuously since (for clearing the scroll latches). */
+  let twoPeaceSince: number | null = null;
+  const scroller = createScrollDriver({
+    root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd,
+    onLevel: opts.onLevel, tickSound: opts.levelTick,
+  });
   const byKey = new Map<GestureKey, GestureBinding>(bindings.map((b) => [b.key, b]));
   const env = createDomGestureEnv(root, () => opts.highlight?.current() ?? null);
   let active = false;
@@ -298,6 +325,39 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       }
     }
     const blocked = !!ctx.blocked || ctx.facing === false;
+    // Peace-and-move first: a peace that started scrolling (or stepping a
+    // level) can't also fire its hold (R chip 2 / L Tools) until it changes shape.
+    const scrollHands: ScrollHand[] = [];
+    const reach = opts.reach?.() ?? REACH;
+    for (let k = 0; k < hands.length; k++) {
+      const rd = reads[k];
+      if (!rd || !hands[k]) continue;
+      const pc = palmCenter(hands[k]);
+      // A peace the plan resize has taken never scrolls or steps a level.
+      const taken = rd.shape === 'peace' && !!(ctx.noScrollPeace?.(rd.side) || ctx.claimedPeace?.(rd.side));
+      scrollHands.push({
+        side: rd.side, shape: taken ? 'other' : rd.shape,
+        point: mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, reach),
+        scalePx: (handScale(hands[k]) / Math.max(1e-6, reach.y1 - reach.y0)) * innerHeight,
+      });
+    }
+    // Finger-count suppression (a point capture armed or just ended) stops
+    // scrolling too: a pointing hand must never scroll.
+    const scrollBlocked = blocked || !!ctx.suppressCounts;
+    const sc = scroll.update(scrollHands, now, scrollBlocked);
+    scroller.frame(sc, now, scrollBlocked);
+    // Two peace hands: the two-hand hold (Register) decides — never one
+    // hand's peace hold with the other relabelled.
+    // Only once two peaces have been seen CONTINUOUSLY for the hold grace — a
+    // one-frame misread of the resting hand must not unlatch the scroller.
+    const twoPeace = handsRead.filter((h) => h.shape === 'peace').length >= 2;
+    if (!twoPeace) twoPeaceSince = null;
+    else if (twoPeaceSince === null) twoPeaceSince = now;
+    if (twoPeace && now - twoPeaceSince! >= TWO_PEACE_CLEAR_MS) scroll.clearLatches();
+    else {
+      for (const h of handsRead) if (h.shape === 'peace' && scroll.suppressed(h.hand)) h.shape = 'other';
+      for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
+    }
     opts.highlight?.update(blocked ? null : palm, now, { blocked, anyHand: handsRead.length > 0, open: palmOpen, direct: ctx.direct ?? null });
     const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked });
     if (s.fired) {
@@ -322,6 +382,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     root.classList.toggle('mc-gestures-on', on);
     opts.highlight?.setActive(on);
     opts.onActive?.(on);
+    scroller.setActive(on);
     if (on) {
       placeBadges(null);
       badgeTimer = setInterval(() => placeBadges(engine.state.key), BADGE_REFRESH_MS);
@@ -329,6 +390,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (badgeTimer) clearInterval(badgeTimer);
       badgeTimer = null;
       engine.reset();
+      scroll.reset();
       shapes = [];
       clearOverlays();
       if (staleTimer) { clearTimeout(staleTimer); staleTimer = null; }
@@ -339,13 +401,15 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const api: GestureControl = {
     read,
     frame,
-    busy: () => !!engine.state.key || shapes.some((x) => isFixedShape(x.shape)),
+    busy: () => !!engine.state.key || shapes.some((x) => isFixedShape(x.shape)) || scroller.busy(),
     debug: () => ({ polarity: polarity.polarity, polarityScore: polarity.score, shapes: shapes.slice(), key: engine.state.key, progress: engine.state.progress }),
     setActive,
     isActive: () => active,
     refresh: () => placeBadges(engine.state.key),
     lost() {
       engine.reset();
+      scroll.reset();
+      scroller.stop();
       shapes = [];
       clearOverlays();
       opts.highlight?.lost();
@@ -355,6 +419,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     destroy() {
       setActive(false);
       opts.highlight?.destroy();
+      scroller.destroy();
       layer.remove();
     },
   };

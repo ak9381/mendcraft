@@ -53,6 +53,9 @@ export interface PlanPeace {
   update(hands: readonly PeaceHand[], now: number, ctx: { blocked: boolean; targetAt(p: Pt): PeaceTarget | null }): PlanPeaceState;
   /** This hand's peace belongs to a resize: no hold, no scroll. */
   claimed(side: HandSide): boolean;
+  /** This hand's peace has armed on a resizable plan element (or is resizing):
+   *  the scroll gesture must not take it. A still peace keeps its 2 s hold. */
+  taken(side: HandSide): boolean;
   reset(): void;
   readonly state: PlanPeaceState;
 }
@@ -142,6 +145,7 @@ export function createPlanPeace(cfg: Partial<PlanPeaceConfig> = {}): PlanPeace {
   return {
     update,
     claimed: (s) => latched[s] || (phase === 'resizing' && side === s),
+    taken: (s) => latched[s] || ((phase === 'armed' || phase === 'resizing') && side === s),
     reset() { finish(false); latched.L = false; latched.R = false; },
     get state() { return state; },
   };
