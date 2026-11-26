@@ -93,17 +93,18 @@ import { loadSetup } from '../setup/setupState';
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
+import { phoneSayText } from './phoneSay';
 import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
-import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
+import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } from './nextSteps';
 import { nanoQueue } from '../ai/nanoQueue';
@@ -435,6 +436,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
+  // The phone shell hides the whole tools bar, and the status line with it:
+  // every say() line (a confirmation, a chat reply, a failure) also shows in
+  // a readable toast there, for as long as the status line holds it.
+  const phoneSayEl = phoneShell && typeof document !== 'undefined' ? document.createElement('p') : null;
+  if (phoneSayEl) {
+    phoneSayEl.className = 'mc-phone-say';
+    phoneSayEl.setAttribute('role', 'status');
+    phoneSayEl.setAttribute('aria-live', 'polite');
+    phoneSayEl.hidden = true;
+    root.append(phoneSayEl);
+  }
+  const showPhoneSay = (t: string): void => {
+    if (!phoneSayEl) return;
+    const text = phoneSayText(t);
+    phoneSayEl.textContent = text;
+    phoneSayEl.hidden = !text;
+  };
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   // The same log on its own tab (activity.html), over the AI feed channel.
   // A phone shell never broadcasts locally (see createCanvasAiFeed).
@@ -478,8 +496,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // pinch). The committed transfer + updated board ride the host `state`
   // snapshot, so both phones see it with no new Relay message type.
   let hostSession: HostSession | null = null;
-  /** The phone paired before hostSession was assigned: wake its gimbal then. */
-  let wakeOnSession = false;
   let screenLayout: ScreenLayout = coerceLayout(loadLayout(storage) ?? defaultLayout({ android: true, ios: true }));
   let snapshotRev = 0;
   let dragFrame: string | null = null;
@@ -538,6 +554,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // Phones that announced themselves → their AI activity on the laptop's monitor.
   const phoneAi = createPhoneAiRepublisher({ feed: aiFeed });
+  // A monitor that opens after the phone paired still shows it as connected.
+  aiFeed.onHello(() => phoneAi.replay());
+  // Only announces that name THIS laptop session are live (the room replays
+  // its whole history on a reload — old announces must not show a phone).
+  const announceGate = createAnnounceGate();
+  /** The pairing card on screen (chime + code), while there is one. */
+  let livePairing: { stopChime(): void; setStatus(text: string): void } | null = null;
+  const askWhoIsThere = (): void => { if (hostSession && announceGate.shouldAsk()) void hostSession.askWhoIsThere().catch(() => undefined); };
   /** A phone 'announce' (which side it is on), 'transfer' (a tile sent back) or
    *  'aiEvent' (its AI activity line), intercepted before dispatchRelayCommand.
    *  All carry JSON in cmd.text. */
@@ -554,9 +578,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       let deviceId: unknown;
       let native: unknown;
       let refresh = false;
+      let sid: unknown;
       let sense: PhoneSenseStatus | null = null;
       try {
-        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown };
+        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown; sid?: unknown };
+        sid = o.sid;
         if (o.platform === 'android' || o.platform === 'ios') platform = o.platform;
         sense = coerceSenseStatus(o);
         if (o.side === 'left' || o.side === 'right') wantedSide = o.side;
@@ -567,6 +593,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (!platform) return;
+      // Replayed from the room's history, or sent before the phone knew this
+      // session: not shown. Ask who is really here; a live phone answers.
+      const live = announceGate.check(sid, hostSession?.sid, typeof deviceId === 'string' ? deviceId : platform);
+      if (live === 'stale') { askWhoIsThere(); return; }
+      // This phone's first live announce of the session is a full one, even
+      // when it is the answer to whoIsThere (which arrives marked refresh).
+      if (live === 'first') {
+        refresh = false;
+        livePairing?.stopChime(); livePairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+        // The docked iPhone wakes up — for a phone that is really here, once.
+        bodyLanguage('wakeup');
+      }
       const prevSense = phoneSense.get(platform);
       if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
       if (JSON.stringify(prevSense) !== JSON.stringify(sense ?? undefined)) pairFirst.refresh();
@@ -833,12 +871,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     statusTimer = setTimeout(() => {
       statusTimer = null;
       if (statusEl.textContent !== t) return;
+      // The phone toast never waits on a review (the sheet covers it anyway).
+      if (reviewBusy()) showPhoneSay('');
       if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
       statusEl.textContent = '';
+      showPhoneSay('');
     }, statusFadeMs(t));
   };
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
+    showPhoneSay(t === LISTENING_STATUS ? '' : t);
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
@@ -1854,6 +1896,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
+  /** The same goal for a board Gemini makes in ONE call (no draft to improve). */
+  const ONE_CALL_ROOM_GOAL = 'Group the lights and add a room plan tile.';
   /** When the last AI turn (stream + its review) let go of the board. The
    *  next-step pick stays away from the model for a while after that: a
    *  timed-out Nano call can still be finishing inside Chrome. */
@@ -1943,7 +1987,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     turnBusy = true;
     try {
       if (!reg.get(frameId)) return null;
-      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', undefined, surfaces[frameId] ?? null,
+      // No on-device model: this "draft" runs on Gemini and is the only call,
+      // so it carries what the improve pass would have asked for.
+      const onlyCall = engineFor(engineId, '{}').id === 'gemini';
+      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', onlyCall ? ONE_CALL_ROOM_GOAL : undefined, surfaces[frameId] ?? null,
         () => { void connectRoom(frameId, utterance); });
       await holdSwarmMinimum();
       settleSwarm();
@@ -1951,21 +1998,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
       const handedOff = lastTurnHandedOff;
-      if (!handedOff) panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
+      if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
       return { ...out, summary: summaryOf(summary, out.plan), status, handedOff };
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
   }
   /** Review a draft as it is (Gemini already made it after a Nano handoff). */
-  async function proposeDraft(frameId: string, utterance: string, d: TurnDraft): Promise<boolean> {
+  async function proposeDraft(frameId: string, utterance: string, d: TurnDraft, madeBy = false): Promise<boolean> {
     if (turnBusy) return false;
     turnBusy = true;
-    try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status); }
+    try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status, undefined, madeBy); }
     finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink, madeBy = false): Promise<boolean> {
     // What she reviews is what will be applied: fitted to the lamps that
     // exist now (the swap may have happened while the model was writing).
     const plan = fitPlan(proposed);
@@ -2020,7 +2067,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
-      const planFacts = (): ReviewFacts => (link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance));
+      // One cloud call made it all (no on-device model): "Made by Gemini · N KB".
+      const planFacts = (): ReviewFacts => (link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind)
+        : madeBy ? madeByFacts(reviewFacts(si, utterance)) : reviewFacts(si, utterance));
       showReview({
         title: summary, card, extra: buildReviewExtra(),
         // A blank board still has a name ("Board 3"): diff against it, so the
@@ -2060,13 +2109,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // itself run in the cloud).
       const draft = await draftTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, draftSummary, 'guess');
       if (!draft) return;
-      if (draft.handedOff) {
-        // Gemini already made this draft (Nano couldn't finish): asking it to
-        // improve its own board would be a second cloud send for nothing.
+      // No on-device model here (the Nothing phone): the "draft" step itself
+      // ran on Gemini in the cloud. One call made the board.
+      const cloudDraft = !draft.handedOff && draft.si.engine === 'gemini';
+      if (draft.handedOff || cloudDraft) {
+        // Gemini already made this draft (Nano couldn't finish, or there is no
+        // Nano here): asking it to improve its own board would be a second
+        // cloud send for nothing.
         const line = 'Gemini made this draft, so there is no second pass.';
         panels.forEngine('gemini').log('note', line);
         aiPanel.querySelector('.mc-ai-state')!.textContent = line;
-        await proposeDraft(frameId, utterance, draft);
+        await proposeDraft(frameId, utterance, draft, cloudDraft);
         return;
       }
       panels.showHandoff('nano', 'group the lights and add a room plan');
@@ -2532,11 +2585,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
     phoneAi.clear();
+    announceGate.clear();
   }
   /** The relay is kept while the pair-first flow still has phones (live/asking). */
   const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
-    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); }
+    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); announceGate.clear(); }
     if (!sheetOpen) return;
     sheetOpen.sheet.unmount();
     sheetOpen.host.hidden = true;
@@ -2575,10 +2629,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
         if (st === 'paired') {
-          pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
-          // The docked iPhone wakes up. hostSession is set once startPhoneJoin
-          // resolves; a phone already in the room can pair a tick before that.
-          if (hostSession) bodyLanguage('wakeup'); else wakeOnSession = true;
+          // A hello proves little (the room replays old ones on a reload):
+          // the phone is shown once its announce names this session.
+          askWhoIsThere();
         }
         else if (st === 'disconnected' || st === 'gone') {
           pairFirst.clearReal();
@@ -2586,6 +2639,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // — no stale device labels — then ask the phones still here to
           // re-announce (they also re-announce every 20 s on their own).
           phoneAi.clear();
+          announceGate.clear();
           void hostSession?.askWhoIsThere().catch(() => undefined);
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
@@ -2628,7 +2682,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
-    if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
+    // Phones already in the room (remembered pairs) learn this session's id.
+    void res.session.askWhoIsThere().catch(() => undefined);
     showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
@@ -2636,7 +2691,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     republishCurrentBoard();
     if (opts.privacyGemini) attachPrivacyHub(res.session, () => activePeople(), opts.privacyGemini);
     sheetOpen = null; // the pairing card replaces the sheet in the same host
-    pairing = showPairing(open.host, {
+    pairing = livePairing = showPairing(open.host, {
       code: res.code,
       note: 'After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
       onClose: () => { disconnectPhones(); open.host.hidden = true; },

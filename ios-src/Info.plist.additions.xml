@@ -12,6 +12,10 @@
 -->
 <plist version="1.0">
 <dict>
+	<!-- The canvas is light in both system themes: dark status-bar content. -->
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDarkContent</string>
+
 	<!-- Camera: hand gestures, and the one photo of a device she points at. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Mendcraft reads your hand gestures and recognises devices you point at.</string>

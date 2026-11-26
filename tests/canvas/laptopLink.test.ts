@@ -278,6 +278,7 @@ describe('Join laptop: mic, timeout and reconnect safety', () => {
     await link.stop();
     expect(link.state()).toBe('idle');
     expect(await link.resume()).toBe(true);
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0)); // the laptop answers the ping
     expect(link.state()).toBe('connected');
     expect(binds.filter((b) => b !== null)).toHaveLength(2);
     expect(await link.resume()).toBe(false); // already connected: no-op

@@ -7,6 +7,8 @@ import {
   advancePair,
   createCueLimiter,
   cryptoRandom,
+  isSessionId,
+  parsePing,
   GIMBAL_CUE_RECEIVE_GAP_MS,
   isGimbalCue,
   type GimbalCueKind,
@@ -25,7 +27,7 @@ import {
   type PrivacyReply,
 } from './protocol';
 import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
-import type { RelayTransport } from './transport';
+import type { RelayMeta, RelayTransport } from './transport';
 
 export interface RelayFrame {
   mimeType: string;
@@ -36,7 +38,7 @@ interface SessionBase {
   state(): PairState;
   onState(cb: (state: PairState) => void): void;
   /** Publish 'bye' and stop listening. Safe to call twice. */
-  close(): Promise<void>;
+  close(opts?: { silent?: boolean }): Promise<void>;
 }
 
 export interface HostSession extends SessionBase {
@@ -58,7 +60,11 @@ export interface HostSession extends SessionBase {
   onPrivacyAsk(cb: (ask: PrivacyAsk) => void): void;
   /** Return a filled, cleaned answer (and the route line + byte count). */
   sendPrivacyReply(reply: PrivacyReply): Promise<void>;
-  /** Ask every phone still in the room to announce itself again. */
+  /** This host session's id (new on every page load). A phone echoes it in
+   *  its announce, so an announce replayed from the room's history — or meant
+   *  for an earlier session — can be told from a live one. */
+  readonly sid: string;
+  /** Ask every phone still in the room to announce itself again (carries `sid`). */
   askWhoIsThere(): Promise<void>;
   /** Ask the phone of `platform` to take the point-to-connect photo. */
   askSensePoint(platform: 'ios' | 'android'): Promise<void>;
@@ -94,17 +100,43 @@ export interface GuestSession extends SessionBase {
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
   /** The host asked phones to announce themselves again ('whoIsThere'). */
   onWhoIsThere(cb: () => void): void;
+  /** Round-trip proof that the laptop hears this phone: send a one-time
+   *  nonce; the host's echo arrives through onPong. */
+  ping(nonce: string): Promise<void>;
+  onPong(cb: (nonce: string) => void): void;
+  /** The host session id last learned (from a pong or a whoIsThere); null before. */
+  hostSid(): string | null;
   /** The host asked this phone to take the point-to-connect photo. */
   onSensePoint(cb: (platform: string) => void): void;
   /** The host asked for a gimbal body-language move (validated, rate-limited). */
   onGimbalCue(cb: (kind: GimbalCueKind) => void): void;
 }
 
+/** Messages held while a session does not yet know its own start time. */
+const HELD_MAX = 500;
+/** A start marker that could not be time-stamped is re-sent after this long,
+ *  doubling up to the max (messages keep waiting meanwhile — never guessed). */
+export const START_MARK_RETRY_MS = 3000;
+export const START_MARK_RETRY_MAX_MS = 30_000;
+
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   let state: PairState = 'idle';
   let stateCb: ((s: PairState) => void) | null = null;
   let unsubscribe: (() => void) | null = null;
   let closed = false;
+  // A room keeps every message ever sent and replays them all to a new
+  // listener (a laptop reload, a phone rejoin). Nothing older than THIS
+  // session may act: an old "turn off the lamp", an old bye, an old gimbal
+  // cue. The session's start is the SERVER time of its own first message (no
+  // device clock involved); until that is known, messages wait.
+  //   undefined — not known yet (hold); null — the transport has no server
+  //   clock (nothing to compare: deliver).
+  let startAt: number | null | undefined;
+  let held: Array<{ msg: RelayMessage; meta?: RelayMeta }> = [];
+  let onPeerCb: ((msg: RelayMessage) => void) | null = null;
+  let tellStart: (at: number | null) => void = () => undefined;
+  const startKnown = new Promise<number | null>((resolve) => { tellStart = resolve; });
+  const isOld = (meta?: RelayMeta): boolean => typeof startAt === 'number' && typeof meta?.at === 'number' && meta.at < startAt;
 
   function setState(next: PairState): void {
     if (next === state) return;
@@ -121,31 +153,76 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
       stateCb = cb;
       cb(state);
     },
+    /** Nothing is exempt, the join handshake included: an old hello is not a
+     *  phone in the room. (Whoever IS there answers this session's own first
+     *  message — the laptop's whoIsThere, a phone's hello — with a new one.) */
     listen(onPeer: (msg: RelayMessage) => void) {
+      onPeerCb = onPeer;
       unsubscribe = transport.subscribe(
         roomId,
-        (msg) => {
+        (msg, meta) => {
           if (msg.from === role) return; // own echo
+          if (startAt === undefined) {
+            held.push({ msg, meta });
+            if (held.length > HELD_MAX) held.shift();
+            return;
+          }
+          if (isOld(meta)) return; // history: never acts
           onPeer(msg);
         },
         () => setState(advancePair(state, 'listen-error')),
+        startKnown,
       );
       setState(advancePair(state, 'create'));
     },
-    async close() {
+    /** The session's start is known: drop what is older, deliver the rest. */
+    setStart(at: number | null) {
+      if (startAt !== undefined) return;
+      startAt = at;
+      tellStart(at);
+      const waiting = held;
+      held = [];
+      for (const h of waiting) if (!isOld(h.meta)) onPeerCb?.(h.msg);
+    },
+    /** Learn the start from a stamped send; re-send while the server time
+     *  could not be read (never guess: history must not act). */
+    async markStart(send: () => Promise<void | RelayMeta>, first?: void | RelayMeta | Promise<void | RelayMeta>) {
+      let receipt: void | RelayMeta | null = null;
+      try { receipt = first === undefined ? await send() : await first; } catch { receipt = { at: null }; }
+      for (let wait = START_MARK_RETRY_MS; ; wait = Math.min(wait * 2, START_MARK_RETRY_MAX_MS)) {
+        if (closed || startAt !== undefined) return;
+        if (!receipt) { this.setStart(null); return; }
+        if (receipt.at !== null) { this.setStart(receipt.at); return; }
+        await new Promise((r) => setTimeout(r, wait));
+        if (closed) return;
+        try { receipt = await send(); } catch { receipt = { at: null }; }
+      }
+    },
+    isClosed: () => closed,
+    /** `silent`: leave without a bye (this device stays in the room through
+     *  another session, so nobody should be told it left). */
+    async close(opts: { silent?: boolean } = {}) {
       if (closed) return;
       closed = true;
+      held = [];
       unsubscribe?.();
       unsubscribe = null;
-      try {
-        await transport.publish(roomId, { v: 1, from: role, type: 'bye' });
-      } catch {
-        // Transport already gone (offline, room deleted) — closing anyway.
+      if (!opts.silent) {
+        try {
+          await transport.publish(roomId, { v: 1, from: role, type: 'bye' });
+        } catch {
+          // Transport already gone (offline, room deleted) — closing anyway.
+        }
       }
       setState(advancePair(state, 'close'));
     },
   };
 }
+
+/** Pings that do not name this session: at most this many answers per gap
+ *  (a phone rejoining right away is answered; a replayed history is not). */
+export const UNSIGNED_PING_GAP_MS = 1500;
+export const UNSIGNED_PING_BURST = 3;
 
 /** How long the typable short code stays resolvable before it auto-expires,
  *  win or lose — the code is only 40 bits of entropy (brute-forceable in
@@ -176,6 +253,11 @@ export async function createHostSession(
     : generateRoomToken(random);
   const code = shortCodeOf(token);
   const core = makeCore('host', transport, token);
+  const sid = Array.from(random(6), (b) => (b % 36).toString(36)).join('') + Date.now().toString(36);
+  const now = opts.now ?? (() => Date.now());
+  // Pings that name no (or another) session are first contact — or history
+  // replayed on a reload: at most UNSIGNED_PING_BURST answers per UNSIGNED_PING_GAP_MS.
+  let unsignedPongs: number[] = [];
   let aliasCleared = false;
   async function clearAliasOnce(): Promise<void> {
     if (aliasCleared) return;
@@ -226,22 +308,42 @@ export async function createHostSession(
     if (msg.type === 'hello') {
       const wasPaired = core.state === 'paired';
       core.setState(advancePair(core.state, 'peer-hello'));
+      // (Only a hello newer than this session gets here: replayed ones are
+      // history, so a reload never acks or "pairs" a phone that is gone.)
       // ALWAYS ack a phone hello — even when already paired — so a SECOND phone
       // joining the same room flips to paired too (two phones share one room and
       // ignore each other's messages, so only the host can confirm the newcomer).
       void transport.publish(token, { v: 1, from: 'host', type: 'hello' }).catch(() => undefined);
-      // The short-code alias has done its job once any phone is in the room.
-      if (!wasPaired) {
-        clearTimeout(aliasTimer);
-        void clearAliasOnce();
-      }
+      // The short-code alias is NOT cleared on a hello: after a reload the
+      // room replays old hellos, which would kill the code before anyone
+      // typed it. It goes on live proof (a ping naming this session, below)
+      // or when its 5 minutes are up.
+      void wasPaired;
       // Replay the latest state so a phone (freshly joined or reloaded) populates
       // its board/layout immediately — today this only happened for a control
       // hello, which stranded a late-joining phone until the next change.
       if (lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
+    } else if (msg.type === 'cmd' && msg.cmd.kind === 'ping') {
+      const ping = parsePing(msg.cmd.text);
+      if (!ping) return;
+      if (ping.sid !== sid) {
+        unsignedPongs = unsignedPongs.filter((at) => now() - at < UNSIGNED_PING_GAP_MS);
+        if (unsignedPongs.length >= UNSIGNED_PING_BURST) return;
+        unsignedPongs.push(now());
+      } else {
+        // Only a phone that heard THIS session can name it: the short-code
+        // alias has done its job.
+        clearTimeout(aliasTimer);
+        void clearAliasOnce();
+      }
+      // A live ping is as good as a hello: the phone is in the room.
+      core.setState(advancePair(core.state, 'peer-hello'));
+      void transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'pong', text: JSON.stringify({ n: ping.n, sid }) } })
+        .catch(() => undefined);
     } else if (msg.type === 'cmd') {
+      if (msg.cmd.kind === 'pong') return; // host → phone only
       if (core.state === 'paired') commandCb?.(msg.cmd);
     } else if (msg.type === 'frame') {
       if (core.state === 'paired') frameCb?.({ mimeType: msg.mimeType, dataBase64: msg.dataBase64 });
@@ -249,11 +351,17 @@ export async function createHostSession(
       if (core.state === 'paired') musicCb?.(msg.music);
     }
   });
+  // This session starts at the server time of its own first message (which
+  // also tells phones in the room its id): everything older in the room is
+  // history and never acts.
+  const whoMsg: RelayMessage = { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } };
+  void core.markStart(() => (transport.publishStamped ? transport.publishStamped(token, whoMsg) : transport.publish(token, whoMsg)));
   await transport.setAlias(code, token);
 
   return {
     token,
     code,
+    sid,
     state: () => core.state,
     onState: (cb) => core.onState(cb),
     onCommand: (cb) => {
@@ -278,8 +386,7 @@ export async function createHostSession(
     },
     sendPrivacyReply: (reply) =>
       transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
-    askWhoIsThere: () =>
-      transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere' } }),
+    askWhoIsThere: () => transport.publish(token, whoMsg),
     askSensePoint: (platform) =>
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'sensePoint', text: JSON.stringify({ platform }) } }),
     sendGimbalCue: async (kind) => {
@@ -315,6 +422,8 @@ export async function createGuestSession(
 
   let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
   let whoCb: (() => void) | null = null;
+  let pongCb: ((nonce: string) => void) | null = null;
+  let hostSid: string | null = null;
   let senseCb: ((platform: string) => void) | null = null;
   let cueCb: ((kind: GimbalCueKind) => void) | null = null;
   // The receiver enforces its own gap (1.5 s, jitter-tolerant), whatever the sender does.
@@ -340,7 +449,13 @@ export async function createGuestSession(
       core.setState(advancePair(core.state, 'peer-hello'));
       lastSnapshot = snap;
       snapshotCb?.(snap);
+    } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'pong') {
+      const pong = parsePing(msg.cmd.text);
+      if (!pong) return;
+      if (pong.sid) hostSid = pong.sid;
+      pongCb?.(pong.n);
     } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'whoIsThere') {
+      if (isSessionId(msg.cmd.text)) hostSid = msg.cmd.text;
       // Say hello first: after another phone's bye the host sits in 'gone' and
       // ignores commands until a hello, so the re-announce would be dropped.
       void transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' })
@@ -362,7 +477,12 @@ export async function createGuestSession(
       }
     }
   });
-  await transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' });
+  // The phone's session starts at the server time of its own hello: an old
+  // board, an old gimbal cue or an old point request in the room never acts.
+  const helloMsg: RelayMessage = { v: 1, from: 'phone', type: 'hello' };
+  const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
+  const first = await hello();
+  if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
     roomId,
@@ -388,6 +508,13 @@ export async function createGuestSession(
     onWhoIsThere: (cb) => {
       whoCb = cb;
     },
+    ping: (nonce) => transport.publish(roomId, {
+      v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'ping', text: JSON.stringify(hostSid ? { n: nonce, sid: hostSid } : { n: nonce }) },
+    }),
+    onPong: (cb) => {
+      pongCb = cb;
+    },
+    hostSid: () => hostSid,
     sendPrivacyAsk: (ask, timeoutMs = 20000) =>
       new Promise<PrivacyReply>((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -401,7 +528,7 @@ export async function createGuestSession(
           reject(err);
         });
       }),
-    close: async () => {
+    close: async (opts?: { silent?: boolean }) => {
       // Reject outstanding privacyAsk waiters now — otherwise a mid-request
       // close() (e.g. remotePage's pagehide handler) leaves the caller
       // hanging for the full timeout instead of failing fast.
@@ -410,7 +537,7 @@ export async function createGuestSession(
         pending.delete(jobId);
         wait.reject(new Error('relay: session closed before the hub replied'));
       }
-      await core.close();
+      await core.close(opts);
     },
   };
 }
@@ -444,7 +571,12 @@ export async function createControlSession(
       core.setState(advancePair(core.state, 'peer-bye'));
     }
   });
-  await transport.publish(roomId, { v: 1, from: 'control', type: 'hello' });
+  // Like a phone: the dashboard's session starts at its own hello; older
+  // messages in the room (old run status, old boards) are history.
+  const helloMsg: RelayMessage = { v: 1, from: 'control', type: 'hello' };
+  const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
+  const first = await hello();
+  if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
     roomId,
