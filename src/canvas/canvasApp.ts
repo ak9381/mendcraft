@@ -2305,6 +2305,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
           if (!renderSurface(frameId)) throw new Error('Could not render the board');
           history.push({ frameId, before, after: plan, by: ranId, summary });
+          // A dashboard built while the iPhone reports a docked stand gets
+          // the gimbal controls too (local tile, no model involved).
+          if (plan.kind === 'room') queueMicrotask(() => gimbalOnNewDashboard(frameId));
           sync(); updateDock(); persist(); historyRender();
           // First build on an empty focused board: re-place it (no animation, before the
           // self-check measures) so a wide dashboard opens at its top-left on a phone.
@@ -3789,7 +3792,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (next === surfaces[id]) { if (o.voice) say(GIMBAL_ALREADY); return false; }
     surfaces[id] = next;
     renderSurface(id); sync(); persist();
-    say(o.voice ? GIMBAL_ADDED : `The iPhone is on its stand — ${GIMBAL_ADDED.charAt(0).toLowerCase()}${GIMBAL_ADDED.slice(1)}`);
+    const who = phoneSense.get('ios') ? 'The iPhone is on its stand' : 'SIM · the iPhone is on its stand';
+    say(o.voice ? GIMBAL_ADDED : `${who} — ${GIMBAL_ADDED.charAt(0).toLowerCase()}${GIMBAL_ADDED.slice(1)}`);
     return true;
   }
   /** The iPhone's reported stand changed (laptop: its announce; iPhone: the
@@ -3798,6 +3802,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (docked) gimbalError = '';
     if (docked && !wasDocked && !gimbalAutoAdded && !phoneShell && addGimbalTile()) { gimbalAutoAdded = true; return; }
     pushGimbal();
+  }
+  /** The iPhone (real, or the SIM one under ?sim=1) reports a stand. */
+  function standReported(): boolean {
+    const s = phoneSense.get('ios');
+    return (!!s && s.gimbal !== 'none') || simIphone();
+  }
+  function gimbalOnNewDashboard(frameId: string): void {
+    if (gimbalAutoAdded || phoneShell || !standReported() || dashboardId() !== frameId) return;
+    if (addGimbalTile()) gimbalAutoAdded = true;
   }
   function gimbalFail(why: string): void { gimbalError = why; say(why); pushGimbal(); }
   /** Follow me / follow my hands / hold still — voice and tile alike. */
