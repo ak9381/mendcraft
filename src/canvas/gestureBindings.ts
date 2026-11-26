@@ -8,7 +8,7 @@
 // palm-highlighted button. R thumbs down = Reject while a review is open,
 // else close the open dialog / menu / Tools.
 
-import { MIXED_KEY, keyShapes, keySide, type GestureKey } from './gestureHold';
+import { MIXED_KEY, MIXED_KEY_MIRROR, keyShapes, keySide, type GestureKey } from './gestureHold';
 
 export type GestureContext = 'approveOrPress' | 'declineOrClose';
 
@@ -43,6 +43,8 @@ export const LAPTOP_GESTURES: readonly GestureBinding[] = [
   { key: '2:thumbsUp', label: 'More', targets: ['.mc-more-btn'] },
   // Mixed: left thumbs UP + right thumbs DOWN together = Hover to click.
   { key: MIXED_KEY, label: 'Hover to click', targets: ['[data-cmd=dwell]'] },
+  // Its mirror: right thumbs UP + left thumbs DOWN = Read aloud on/off.
+  { key: MIXED_KEY_MIRROR, label: 'Read aloud', targets: ['.mc-read-aloud'] },
   { key: '2:thumbsDown', label: 'Simulate offline', targets: ['[data-cmd=offline]'] },
   { key: '2:one', label: 'Point at a device', targets: [], say: "connect what I'm pointing at" },
   { key: '2:peace', label: 'Register', targets: ['.mc-register-chip', '.mc-blank-register', '[data-cmd=reregister]'] },
@@ -55,6 +57,7 @@ export const PHONE_GESTURES: readonly GestureBinding[] = [
   { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose' },
   { key: 'L:thumbsDown', label: 'Undo', targets: ['[data-cmd=undo]'] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
+  { key: MIXED_KEY_MIRROR, label: 'Read aloud', targets: ['.mc-read-aloud'] },
 ];
 
 /** No two bindings in one table share a gesture. */
@@ -124,6 +127,7 @@ export const CLOSER_SELECTORS: readonly string[] = [
 /** Short human name for a gesture key, e.g. "Right thumbs up", "Both peace". */
 export function gestureName(key: GestureKey): string {
   if (key === MIXED_KEY) return 'Left thumbs up + right thumbs down';
+  if (key === MIXED_KEY_MIRROR) return 'Right thumbs up + left thumbs down';
   const side = keySide(key);
   const shape = keyShapes(key)[0];
   const s = side === 'R' ? 'Right' : side === 'L' ? 'Left' : 'Both hands';

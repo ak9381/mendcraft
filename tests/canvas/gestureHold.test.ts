@@ -1,6 +1,6 @@
 // The 2-second hold engine for the fixed button gestures (fake clock).
 import { describe, expect, it } from 'vitest';
-import { createHoldEngine, createPairGrace, gestureKeyOf, GESTURE_HOLD, MIXED_KEY, PAIR_GRACE_MS, type GestureHand, type GestureKey } from '../../src/canvas/gestureHold';
+import { createHoldEngine, createPairGrace, gestureKeyOf, GESTURE_HOLD, MIXED_KEY, MIXED_KEY_MIRROR, PAIR_GRACE_MS, type GestureHand, type GestureKey } from '../../src/canvas/gestureHold';
 import type { HandShape, HandSide } from '../../src/canvas/handShape';
 
 const hand = (shape: HandShape, side: HandSide, x = side === 'R' ? 0.7 : 0.3, y = 0.6): GestureHand => ({
@@ -176,7 +176,7 @@ describe('createHoldEngine', () => {
 
   it('mixed L thumbs up + R thumbs down is its own key; other mixes stay ambiguous', () => {
     expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('thumbsDown', 'R')])).toBe(MIXED_KEY);
-    expect(gestureKeyOf([hand('thumbsDown', 'L'), hand('thumbsUp', 'R')])).toBeNull();
+    expect(gestureKeyOf([hand('thumbsDown', 'L'), hand('thumbsUp', 'R')])).toBe(MIXED_KEY_MIRROR); // its mirror
     expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('peace', 'R')])).toBeNull();
     expect(hold(createHoldEngine(), () => [hand('thumbsUp', 'L'), hand('thumbsDown', 'R')], 0, 2100).fired).toEqual([MIXED_KEY]);
   });
@@ -196,7 +196,7 @@ describe('createHoldEngine', () => {
   });
 
   describe('pair grace (one-hand halves of bound two-hand gestures)', () => {
-    const BOUND: GestureKey[] = ['R:thumbsUp', 'L:thumbsUp', 'L:thumbsDown', 'R:thumbsDown', '2:thumbsUp', '2:thumbsDown', MIXED_KEY];
+    const BOUND: GestureKey[] = ['R:thumbsUp', 'L:thumbsUp', 'L:thumbsDown', 'R:thumbsDown', '2:thumbsUp', '2:thumbsDown', MIXED_KEY, MIXED_KEY_MIRROR];
     /** Run frames through grace + engine; returns fired keys with times. */
     function run(frames: (t: number) => GestureHand[], to: number, bound = BOUND) {
       const e = createHoldEngine();
@@ -255,6 +255,40 @@ describe('createHoldEngine', () => {
       g.observe([hand('thumbsUp', 'L')], 1000); // R lost
       expect(g.defer('L:thumbsUp', 1100)).toBe(true);
       expect(g.defer('L:thumbsUp', 1000 + PAIR_GRACE_MS + 1)).toBe(false);
+    });
+
+    it('mirror: R thumbs up + L thumbs down is its own key (Read aloud)', () => {
+      expect(gestureKeyOf([hand('thumbsUp', 'R'), hand('thumbsDown', 'L')])).toBe(MIXED_KEY_MIRROR);
+      expect(gestureKeyOf([hand('thumbsDown', 'L'), hand('thumbsUp', 'R')])).toBe(MIXED_KEY_MIRROR);
+    });
+
+    it('mirror forming, right first: Approve (R thumbs up) never fires on the way', () => {
+      // Only the mirror pairs R thumbs up here (no both-thumbs-up bound), so
+      // it is the mirror's grace that holds Approve.
+      const fired = run((t) => {
+        const R = hand('thumbsUp', 'R');
+        if (t < 1900) return [R];
+        if (t < 2150) return [R, hand('other', 'L')];
+        return [R, hand('thumbsDown', 'L')];
+      }, 4800, ['R:thumbsUp', 'L:thumbsDown', MIXED_KEY_MIRROR]);
+      expect(fired.map((f) => f.key)).toEqual([MIXED_KEY_MIRROR]);
+    });
+
+    it('mirror forming, left first: Undo (L thumbs down) never fires on the way', () => {
+      const fired = run((t) => {
+        const L = hand('thumbsDown', 'L');
+        if (t < 1900) return [L];
+        if (t < 2150) return [L, hand('open', 'R')];
+        return [L, hand('thumbsUp', 'R')];
+      }, 4800, ['R:thumbsUp', 'L:thumbsDown', MIXED_KEY_MIRROR]);
+      expect(fired.map((f) => f.key)).toEqual([MIXED_KEY_MIRROR]);
+    });
+
+    it('with the mirror bound, L thumbs up / R thumbs down are not held back by it', () => {
+      const g = createPairGrace(['L:thumbsUp', 'R:thumbsDown', MIXED_KEY_MIRROR]);
+      g.observe([hand('thumbsUp', 'L'), hand('other', 'R')], 0);
+      expect(g.defer('L:thumbsUp', 10)).toBe(false);
+      expect(g.defer('R:thumbsDown', 10)).toBe(false);
     });
 
     it('a key with no bound pair never waits', () => {

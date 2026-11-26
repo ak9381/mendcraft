@@ -40,6 +40,8 @@ Note anything off with its number.
 - [ ] E16 Badges sit at each button's top-left corner (hand + L/R/L+R tag) and never cover a label — check Save, New board, AI monitor, Re-register, More.
 - [ ] E17 Both thumbs up 2 s: the More menu opens (with Tools). Inside it, AI monitor is reachable by the palm highlight + right thumbs up, or say "open AI monitor".
 - [ ] E18 Left thumbs up + right thumbs down together for 2 s: Hover to click toggles. Raise the left thumb first and then the right: Save never fires on the way; L thumbs up alone (other hand down or resting) still Saves, R thumbs down alone still Declines.
+- [ ] E20 Read aloud: on a fresh profile replies are read aloud and the button below Talk says "Read aloud: On" (≥56 px, with a two-hand badge). Tap it: "Read aloud: Off", and any reply being spoken stops at once; More → Voice → "Read replies aloud" shows the same state (and vice versa). Reload: her choice is kept. On the phone the button sits above the Join pill, clear of the mic.
+- [ ] E21 Right thumbs up + left thumbs down together for 2 s toggles Read aloud. Raise the right thumb first, then the left: Approve (or the highlighted button) never fires on the way; left thumb down first: Undo never fires on the way.
 - [ ] E19 Open More (and on a phone, the menu sheet) with the camera preview showing: the menu is on top; the preview and "Facing this device" pill step aside while it is open and come back when it closes. Check at 1440×900 and 1280×800.
 - [ ] E15 Voice: "scroll down", "scroll up", "page down", "page up" move the open review / drawer / focused board (else the canvas).
 

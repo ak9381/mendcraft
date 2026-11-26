@@ -13,6 +13,8 @@
 //     zoom, and a hand that leaves mid-hold cancels it (no fire on return)
 //     and clears the light-up, HUD and highlight;
 //   - while a review is open, Save (left thumbs-up) waits behind it;
+//   - Read aloud: on by default, a 56 px button below Talk, toggled by right
+//     thumbs up + left thumbs down without firing Approve / Undo on the way;
 //   - peace-and-move (camera path, real hand scale): scrolls the element under
 //     the hand scroll-wheel style (hand down = scroll down) and never fires
 //     the peace hold; a still — or slowly drifting — peace still fires its
@@ -149,6 +151,7 @@ async function main() {
     check(approveBadge, 'Approve carries the right thumbs-up badge');
 
     let t = 10_000;
+    const log0f = () => page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
     // M2: the review is modal — a left thumbs-up (Save) waits behind it.
     const blockedSave = await holdShape([['thumbsUp', 'L']], t - 5000, 2100);
     const st0 = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
@@ -254,6 +257,41 @@ async function main() {
     check(dwell0 !== dwell1, `L thumbs up + R thumbs down toggles Hover to click (${dwell0} → ${dwell1})`);
     check(!/^Saved/.test(statusM1) || statusM1 === statusM0, `Save never fired while the mixed gesture formed ("${statusM1}")`);
     await page.evaluate(() => document.querySelector('[data-cmd=dwell]').click()); // back as it was
+    await presenceEmpty(t + 4800, 600);
+    t += 5600;
+    // Read aloud: on by default, a big button directly below Talk with its
+    // badge; the mirror gesture (R thumbs up + L thumbs down) toggles it —
+    // the right thumb first, and Approve / Undo never fire on the way;
+    // turning it off stops speech at once.
+    const ra = await page.evaluate(() => {
+      const b = document.querySelector('.mc-hand-cluster .mc-read-aloud');
+      const talk = document.querySelector('.mc-hand-cluster .mc-talk-control');
+      const badge = document.querySelector('.mc-gesture-badge[data-key="2:rUpLDown"]');
+      const r = b?.getBoundingClientRect(), tr = talk?.getBoundingClientRect();
+      return {
+        text: b?.textContent, pressed: b?.getAttribute('aria-pressed'), h: r?.height ?? 0,
+        below: !!r && !!tr && r.top >= tr.bottom - 1 && talk.nextElementSibling === b,
+        badge: !!badge && !badge.hidden,
+      };
+    });
+    check(ra.text === 'Read aloud: On' && ra.pressed === 'true', `Read aloud is ON by default ("${ra.text}")`);
+    check(ra.below && ra.h >= 56 && ra.badge, `the Read aloud button sits directly below Talk, ${Math.round(ra.h)} px tall, with its gesture badge`);
+    await page.evaluate(() => { window.__cancels = 0; const s = window.speechSynthesis; if (s) { const c = s.cancel.bind(s); s.cancel = () => { window.__cancels++; c(); }; } });
+    const logRA = await log0f();
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const R = g.hand('thumbsUp', 'R');
+      let tt = from;
+      for (let k = 0; k <= 57; k++) g.presence([R], (tt += 33)); // right thumb up 1.9 s
+      for (let k = 0; k <= 8; k++) g.presence([R, g.hand('relaxed', 'L')], (tt += 33)); // the left comes up…
+      for (let k = 0; k <= 70; k++) g.presence([R, g.hand('thumbsDown', 'L')], (tt += 33)); // …thumb down, held
+    }, t);
+    const raAfter = await page.evaluate(() => ({ text: document.querySelector('.mc-read-aloud')?.textContent, cancels: window.__cancels }));
+    const newRA = (await log0f()).replace(logRA, '');
+    check(raAfter.text === 'Read aloud: Off', `R thumbs up + L thumbs down toggles Read aloud ("${raAfter.text}")`);
+    check(!/Right thumbs up →|Left thumbs down →/.test(newRA) && /Right thumbs up \+ left thumbs down → Read aloud/.test(newRA), `Approve / Undo never fired on the way (${JSON.stringify(newRA.slice(0, 120))})`);
+    check(raAfter.cancels > 0, 'turning it off stops speech at once (speechSynthesis.cancel)');
+    await page.evaluate(() => document.querySelector('.mc-read-aloud').click()); // back on
     await presenceEmpty(t + 4800, 600);
     t += 5600;
 
