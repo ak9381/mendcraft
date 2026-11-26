@@ -95,7 +95,9 @@ describe('connect-devices row: iPhone sub-states', () => {
 
   it('the iPhone announces its gimbal diagnostics, and hands is only claimed with tracking read back off', () => {
     const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
-    expect(app).toMatch(/mode === 'hands' && phoneSensor\.running\(\) && trackingOn !== true \? 'hands' : 'ready'/);
+    // Native hands: claimed only while the native tracker runs; fallback: the web sensor.
+    expect(app).toMatch(/const handsLive = diag\?\.nativeHands \? !!diag\.handTracker : phoneSensor\.running\(\);/);
+    expect(app).toMatch(/mode === 'hands' && handsLive && trackingOn !== true \? 'hands' : 'ready'/);
     expect(app).toMatch(/s\.aimingAtHands = diag\.aimingAtHands/);
     expect(app).toMatch(/if \(live && !sensorWasLive\) void inputs\.gimbal\.reassertOff/);
   });

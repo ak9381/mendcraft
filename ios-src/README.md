@@ -43,9 +43,24 @@ The web layer (`src/canvas/gimbalCanvas.ts`) picks one of three modes:
 - **hands** — system tracking off and KEPT off (native re-reads
   `isSystemTrackingEnabled` every 0.4 s, on every in-process capture-session
   start and whenever DockKit reports tracked subjects, and turns it off again;
-  the web layer re-asserts when its camera goes live). The web layer aims at
-  her hands (smoothed, 4° dead zone, eased moves). No hand seen / no hand
-  tracker → the stand holds still. Never falls back to the face.
+  the web layer re-asserts when its camera goes live). **Native hand
+  tracking** (`startHandTracking` / `stopHandTracking` / `handTrackingStatus`,
+  `HandTracker` in the plugin): proven live, DockKit system tracking follows
+  the WebKit process's capture (the WKWebView `getUserMedia` camera) and our
+  `setSystemTrackingEnabled(false)` does not reach it — the stand kept
+  following her face. So the web layer turns its camera OFF first, and the
+  app's own front-camera `AVCaptureSession` (640×480, ≤15 fps, 8 fps when hot)
+  runs Vision `VNDetectHumanHandPoseRequest`; the most confident / largest
+  hand's box (joints, padded, smoothed) goes to
+  `DockAccessory.track([Observation(.object, rect)], cameraInformation:)`
+  (front camera, orientation `.corrected`, upright un-mirrored frames, rect
+  origin top-left). No hand → nothing is sent: the stand holds still. The
+  session stops on background, undock, Follow me, Hold still, page load and
+  plugin teardown, and restarts on resume / redock while hands is chosen.
+  Events: `handTracking` {running, aimingAtHands}. Unified log: subsystem
+  `app.mendcraft`, category `gimbal-hands`, lines starting `[hands]`.
+  Older builds / iOS: the web layer aims at her hands, yaw only (the stand
+  refuses pitch, DockKit error 16). Never falls back to the face.
 - **Shake** (`cue({kind:"no"})`) is our own relative yaw shake (±11°, three
   swings, ~1.2 s): DockKit's `.no` animation did not visibly move the stand.
 - **Diagnostics**: `isAvailable()` also returns `systemTracking`,

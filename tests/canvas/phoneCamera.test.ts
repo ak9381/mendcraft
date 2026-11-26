@@ -72,6 +72,27 @@ const frame = (hands = 0, handGate: boolean | null = null): PresenceFrame => ({
 });
 
 describe('phone camera hub', () => {
+  it('setYield: the lens goes to native code (stream stopped, uses kept), then comes back as it was', async () => {
+    const h = harness();
+    await h.cam.setUse('sense', true);
+    expect(h.cam.status()).toBe('live');
+    await h.cam.setYield!(true);
+    expect(h.streams[0].track.stop).toHaveBeenCalled();
+    expect(h.cam.status()).toBe('off');
+    expect(h.cam.uses()).toEqual(['sense']);
+    // A use turned on meanwhile does not open the camera while yielded.
+    await h.cam.setUse('hands', true);
+    expect(h.getUserMedia).toHaveBeenCalledTimes(1);
+    await h.cam.setYield!(false);
+    expect(h.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(h.cam.status()).toBe('live');
+    // Yield with nothing on → nothing reopens afterwards.
+    const g = harness();
+    await g.cam.setYield!(true);
+    await g.cam.setYield!(false);
+    expect(g.getUserMedia).not.toHaveBeenCalled();
+  });
+
   it('opens nothing until a use is turned on (permission only on toggle)', async () => {
     const h = harness();
     await new Promise((r) => setTimeout(r, 10));
