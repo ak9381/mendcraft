@@ -92,6 +92,32 @@ describe('engine bar', () => {
     expect(onOpen).toHaveBeenCalledWith('nano');
   });
 
+  it('a refusal fades back to Ready after ~6 s; a failure nobody calmed stays; a new turn is never overwritten', () => {
+    vi.useFakeTimers();
+    try {
+      const { bar, q } = mount();
+      const nano = q('.mc-engine-card[data-engine="nano"]');
+      const gemini = q('.mc-engine-card[data-engine="gemini"]');
+      bar.set('nano', 'failed', 'refused: 500% is not a brightness');
+      bar.set('gemini', 'failed', 'App Check blocked');
+      bar.calm('nano');
+      vi.advanceTimersByTime(5900);
+      expect(nano.attrs['data-state']).toBe('failed'); // still showing the refusal
+      vi.advanceTimersByTime(200);
+      expect(nano.attrs['data-state']).toBe('idle');
+      expect(nano.querySelector('.mc-engine-state')!.textContent).toBe('Ready');
+      expect(nano.querySelector('.mc-engine-line')!.hidden).toBe(true);
+      expect(gemini.attrs['data-state']).toBe('failed'); // a real failure is not calmed
+      // a new turn started inside the window keeps its own state
+      bar.set('nano', 'failed', 'refused');
+      bar.calm('nano');
+      vi.advanceTimersByTime(2000);
+      bar.set('nano', 'working', 'drafting');
+      vi.advanceTimersByTime(6000);
+      expect(nano.attrs['data-state']).toBe('working');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('a failed engine shows the failure state and reason (Review Focus 5)', () => {
     const { bar, q } = mount();
     bar.set('gemini', 'failed', 'App Check blocked');

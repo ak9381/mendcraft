@@ -12,9 +12,11 @@ Built for Google **#BuildHybridAI**.
 ## The demo flow (one canvas, five steps)
 
 1. **Open a new canvas** — `/canvas.html?fresh=1`.
-2. **Connect the room** — Mendcraft finds the lamp (real WiZ bulb through the
-   local bridge, or a labelled `SIM` lamp) and builds an interactive device
-   dashboard board.
+2. **Connect the room** — Mendcraft finds the lamp and builds an interactive
+   device dashboard board. With the local WiZ bridge running, the lamps are the
+   bulbs it really finds (one per bulb, with its real on/brightness; one bulb
+   in the room is one lamp on the canvas). Without it, two labelled `SIM`
+   lamps stand in.
 3. **Say "save"** — the dashboard is pinned to the side of the canvas.
 4. **Build the CAD plan** — a floor-plan board appears next to the pinned
    dashboard; DXF export works.
@@ -44,10 +46,10 @@ web it soft-fails with a clear note.
   (whitelisted tile types, safe ids) before A2UI renders it with Lit, and lands
   in the Proposal keep/drop buffer first.
 - **Byte ledger** — every cloud round trip is logged with its byte size, so the
-  canvas shows exactly what left the machine. Bytes are booked when a call
-  is issued (a hedge or retry counts again); a call stopped before its
-  request went out (no App Check token) books nothing and says "Nothing was
-  sent."
+  canvas shows exactly what left the machine. Bytes are booked on the real
+  `fetch` to the Gemini endpoint (a hedge or retry counts again); a call
+  that never issued a request, or whose request the network never delivered,
+  books nothing and says "Nothing was sent."
 - **App Check** (reCAPTCHA Enterprise) runs before any AI call.
 
 ## Privacy router: phones go through the desktop hub

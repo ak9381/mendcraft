@@ -24,10 +24,16 @@ export interface EngineBar {
   settle(): void;
   /** Swarm summary ("Nano · 1 call"); '' hides it. */
   setAgents(text: string): void;
+  /** A card showing Failed for something that is not a broken engine (a
+   *  refused request) goes back to Ready after `afterMs`. Only if it is
+   *  still Failed then — a new turn's state is never overwritten. */
+  calm(engine: EngineId, afterMs?: number): void;
   el: HTMLElement;
 }
 
 export const HANDOFF_MS = 1200;
+/** How long a refusal stays red on the card before it reads Ready again. */
+export const CALM_AFTER_MS = 6000;
 export const ENGINE_LINE_MAX = 60;
 
 const STATE_TEXT: Record<EngineState, string> = {
@@ -92,6 +98,7 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
   root.append(bar);
 
   let handoffTimer: ReturnType<typeof setTimeout> | null = null;
+  const calmTimers: Record<EngineId, ReturnType<typeof setTimeout> | null> = { nano: null, gemini: null };
 
   return {
     el: bar,
@@ -129,5 +136,17 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
     },
     setCloudBytes(n, sim = 0) { bytes.textContent = bytesText(n, sim); },
     setAgents(text) { agents.textContent = text; agents.hidden = !text; },
+    calm(engine, afterMs = CALM_AFTER_MS) {
+      const c = cards[engine];
+      if (calmTimers[engine]) clearTimeout(calmTimers[engine]!);
+      calmTimers[engine] = setTimeout(() => {
+        calmTimers[engine] = null;
+        if (c.card.getAttribute('data-state') !== 'failed') return;
+        c.card.setAttribute('data-state', 'idle');
+        c.state.textContent = STATE_TEXT.idle;
+        c.line.textContent = '';
+        c.line.hidden = true;
+      }, afterMs);
+    },
   };
 }

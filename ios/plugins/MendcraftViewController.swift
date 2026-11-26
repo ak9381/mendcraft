@@ -15,6 +15,13 @@ class MendcraftViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
     }
 
+    // The canvas is light whatever the system appearance: dark clock and
+    // icons in the status bar (the default is white ones in Dark Mode, which
+    // are invisible on the light canvas).
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .darkContent
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         // Do not re-enable here: disappearing a view is not leaving the app.

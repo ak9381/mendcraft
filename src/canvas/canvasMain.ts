@@ -17,6 +17,8 @@ import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, prepareHybrid, stre
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 import { installNanoTrace } from '../ai/nanoTrace';
+import { createWarmKeeper } from '../ai/nanoWarm';
+import { nanoQueue } from '../ai/nanoQueue';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
@@ -91,14 +93,24 @@ let nanoAvailable = false;
 async function refreshNanoAvailable(): Promise<boolean> {
   const lm = languageModel as (PromptApi & { availability?: (o?: unknown) => Promise<string> }) | undefined;
   if (!nanoStream || !lm?.availability) { nanoAvailable = false; return false; }
+  const was = nanoAvailable;
   try { nanoAvailable = (await lm.availability(NANO_CREATE_OPTIONS)) === 'available'; } catch { nanoAvailable = false; }
+  // The model just became usable (a download finished): load it now, so the
+  // cold start is not left for her first request.
+  if (nanoAvailable && !was) warmKeeper.kick();
   return nanoAvailable;
 }
+// Keeps Nano loaded: warms when the model becomes available, and once more
+// (10 s later, when the model is idle) if a warm-up was pushed aside or failed.
+const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });
 if (nanoStream) {
-  void refreshNanoAvailable().then((ok) => {
-    if (ok) return;
-    const again = setInterval(() => { void refreshNanoAvailable().then((now) => { if (now) clearInterval(again); }); }, 15_000);
-  });
+  // Soon after load — not "whenever idle": hand tracking keeps the page busy.
+  setTimeout(() => {
+    void refreshNanoAvailable().then((ok) => {
+      if (ok) return;
+      const again = setInterval(() => { void refreshNanoAvailable().then((now) => { if (now) clearInterval(again); }); }, 15_000);
+    });
+  }, 600);
 }
 
 const apple = {
@@ -295,17 +307,6 @@ if (!params.has('sim')) {
     const blocked = await cloudAccessProblem();
     if (blocked) console.warn(`[mendcraft] ${blocked.line}. ${blocked.hint ?? ''}`);
   });
-}
-
-// Load Nano while the page is idle, so the first board turn doesn't pay for a
-// cold model. Only when the model is already on this machine (warming must
-// never start a download), and the warm-up steps aside for any real request.
-if (nanoStream && languageModel) {
-  const warm = (): void => { void (async () => { if (await refreshNanoAvailable()) await warmBoardOnDevice(); })(); };
-  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-  // Soon after load, not "whenever idle": hand tracking keeps the page busy,
-  // and the cold start must be over before her first request.
-  afterFirstPaint(() => { if (ric) ric(warm, { timeout: 1200 }); else setTimeout(warm, 600); });
 }
 
 // ?replay=demo: play the journey once the canvas has painted. The outcome is
