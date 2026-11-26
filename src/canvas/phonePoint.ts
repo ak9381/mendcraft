@@ -21,6 +21,9 @@ export interface PhoneSenseStatus {
   /** This phone can take the point photo: sensing exists and its camera is
    *  not in error (denied, lost). */
   canPoint: boolean;
+  /** Hands on and live: she is facing THIS phone (its hands act) or not.
+   *  Absent while Hands is off. */
+  facing?: boolean;
 }
 
 export const NO_GIMBAL_ROW = 'No gimbal — pointing uses the laptop camera';
@@ -33,6 +36,9 @@ export const FOLLOWING_HANDS_ROW = 'Following your hands';
 /** Sensing only: the iPhone camera sees her; the stand is not claimed. */
 export const CAMERA_TRACKING_ROW = 'Camera tracking you';
 export const HANDS_ON_ROW = 'Hands: on';
+/** Hands on and she is facing this phone: it has her attention. */
+export const FACING_ROW = 'Hands: on · she is facing it';
+export const NOT_FACING_ROW = 'Hands: on · not facing';
 export const POINT_OUT_OF_FRAME = 'I can’t see what you’re pointing at — move the device into the camera’s view.';
 export const PHONE_POINT_LINE = 'Point at it and hold still — the iPhone camera takes one photo.';
 export const PHONE_POINT_FALLBACK = 'The iPhone camera isn’t available for this — using the laptop camera.';
@@ -44,7 +50,9 @@ export function coerceSenseStatus(o: unknown): PhoneSenseStatus | null {
   const r = o as Record<string, unknown>;
   const g = r.gimbal;
   if (g !== 'none' && g !== 'ready' && g !== 'tracking' && g !== 'hands') return null;
-  return { gimbal: g, sensor: r.sensor === true, hands: r.hands === true, canPoint: r.canPoint === true };
+  const out: PhoneSenseStatus = { gimbal: g, sensor: r.sensor === true, hands: r.hands === true, canPoint: r.canPoint === true };
+  if (typeof r.facing === 'boolean') out.facing = r.facing;
+  return out;
 }
 
 /** The connect-devices row sub-state for one phone ('' = nothing to add). */
@@ -59,7 +67,7 @@ export function phoneSubState(s: PhoneSenseStatus | null | undefined, opts: { si
   else if (s.gimbal === 'ready' || s.gimbal === 'hands') parts.push(GIMBAL_READY_ROW);
   else if (opts.ios) parts.push(s.canPoint ? NO_GIMBAL_CAN_POINT_ROW : NO_GIMBAL_ROW);
   if (s.gimbal !== 'none' && !s.canPoint && opts.ios) parts.push(CAMERA_UNAVAILABLE_ROW);
-  if (s.hands) parts.push(HANDS_ON_ROW);
+  if (s.hands) parts.push(s.facing === true ? FACING_ROW : s.facing === false ? NOT_FACING_ROW : HANDS_ON_ROW);
   return parts.length ? sim + parts.join(' · ') : '';
 }
 

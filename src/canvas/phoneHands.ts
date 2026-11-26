@@ -8,8 +8,11 @@
 //    (mc.phoneHands), off on first run. The camera is only requested when the
 //    pill turns it on.
 //  - A small "Camera on" indicator shows while the front camera is live.
-//  - Facing gate: the operator face's handGate from the same frames; unknown
-//    (no face / unsettled) never locks.
+//  - Facing gate: the SAME strict gate as the laptop (handFacing): only a
+//    settled face that faces THIS phone counts — no face seen = not facing.
+//    So with several devices on, the one she looks at owns her hands. A
+//    small "Facing phone / Not facing" pill (the laptop pill's style) shows
+//    it while Hands is on, and the relay announce carries it (onFacing).
 //  - Touch is never touched: nothing here listens to or cancels touch or
 //    pointer input, and every drawn layer is pointer-events: none.
 //  - Hand actions are not AI: nothing here reaches the AI feed / monitor.
@@ -28,6 +31,10 @@ import { palmCenter, type ReachBox } from './handFeel';
 import { cameraHandsFromSelfie, stampHandLabel } from './handSpace';
 import { CameraLostError, readPhoneHands, writePhoneHands, type PhoneCamera } from './phoneCamera';
 import type { GestureControl } from './gestureControl';
+import { presenceHandFacing } from './handFacing';
+
+export const PHONE_FACING_LINE = 'Facing phone';
+export const PHONE_AWAY_LINE = 'Not facing';
 
 export const PHONE_HANDS_ON_LINE = 'Hands on: point with your palm, tap a fist to click. Hold a fist to move or pan; two fists to zoom.';
 export const PHONE_HANDS_OFF_LINE = 'Hands off.';
@@ -60,6 +67,9 @@ export interface PhoneHandsDeps {
   /** Floor-plan hand edit: the frame's peace-and-move resize step. Returns
    *  which hands' peace sign it has claimed (no button hold for those). */
   planFrame?: (selfie: readonly (readonly { x: number; y: number }[])[], now: number, facing: boolean | null) => { claimedPeace: (side: 'L' | 'R') => boolean; noScrollPeace: (side: 'L' | 'R') => boolean };
+  /** This phone's facing state changed (true / false while Hands is live,
+   *  null when off) — the relay announce reports it to the laptop. */
+  onFacing?: (facing: boolean | null) => void;
 }
 
 export interface PhoneHands {
@@ -69,6 +79,10 @@ export interface PhoneHands {
   frame(f: PresenceFrame): void;
   readonly pill: HTMLButtonElement;
   readonly indicator: HTMLElement;
+  /** The small facing status pill. */
+  readonly facingPill: HTMLElement;
+  /** Facing THIS phone (the gate the hands obey): null while Hands is off. */
+  facing(): boolean | null;
   destroy(): void;
 }
 
@@ -88,7 +102,24 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
   indicator.setAttribute('aria-label', 'Front camera on');
   indicator.innerHTML = '<span class="mc-cam-on-dot" aria-hidden="true"></span>Camera';
   indicator.hidden = true;
-  root.append(pill, indicator);
+  // Same look as the laptop's "Facing this device" pill; placed by
+  // canvas.css (.mc-phone-facing) above the left pill row, never on the board.
+  const facingPill = doc.createElement('div');
+  facingPill.className = 'mc-phone-facing';
+  facingPill.setAttribute('role', 'status');
+  facingPill.setAttribute('aria-live', 'polite');
+  facingPill.hidden = true;
+  root.append(pill, indicator, facingPill);
+  let facingNow: boolean | null = null;
+  function setFacingNow(v: boolean | null): void {
+    if (v === facingNow) return;
+    facingNow = v;
+    facingPill.hidden = v === null;
+    facingPill.classList.toggle('is-facing', v === true);
+    facingPill.classList.toggle('is-away', v === false);
+    facingPill.textContent = v === null ? '' : v ? PHONE_FACING_LINE : PHONE_AWAY_LINE;
+    deps.onFacing?.(v);
+  }
 
   let on = false;
   let fed = false; // the pointer has hands in it (so a lock/stop calls lost())
@@ -124,6 +155,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     deps.gestures?.setActive(on && s === 'live');
     indicator.dataset.state = s;
     indicator.hidden = !(s === 'live' || s === 'starting');
+    if (!on || s !== 'live') setFacingNow(null);
     // The first start downloads the hand model (~11 MB): say so.
     const text = s === 'starting' && on ? 'Loading hand model…' : 'Camera';
     if (text !== indicatorText) {
@@ -136,12 +168,16 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     if (!on) return;
     const t = now();
     if (f.aspect && f.aspect > 0) deps.onAspect?.(f.aspect);
-    // Facing gate: only an explicit "turned away" locks (handPointer adds the
-    // hysteresis); no face / a stranger / unsettled = unknown = allowed.
+    // Facing gate (handFacing.presenceHandFacing): only a settled face that
+    // faces this phone; no face / a stranger / unsettled / turned = NOT
+    // facing. The pointer locks at once and settles before unlocking.
     const op = f.faces.find((x) => x.isOperator);
-    deps.pointer.setFacing?.(op ? (op.handGate ?? null) : null, t);
+    const facing = presenceHandFacing(f);
+    deps.pointer.setFacing?.(facing, t);
     const g = !!deps.pointer.handsLocked?.();
     if (g !== gateLocked) { gateLocked = g; paint(); }
+    if (deps.camera.status() === 'live') setFacingNow(!g);
+    const gateFacing = g ? false : facing;
     if (deps.locked?.()) { release(); return; }
     const selfie = f.hands.map((h) => stampHandLabel(h.points.slice(), h.label));
     // The frame's ONE shape read, shared with the pointer (cameraHandsFromSelfie
@@ -155,10 +191,10 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       fed = true;
     }
     // Gestures see every frame (an empty one lets a hold cancel / release).
-    const planPeace = deps.planFrame?.(selfie, t, op ? (op.handGate ?? null) : null);
+    const planPeace = deps.planFrame?.(selfie, t, gateFacing);
     deps.gestures?.frame(selfie, t, {
       ...(planPeace ?? {}),
-      facing: op ? (op.handGate ?? null) : null,
+      facing: gateFacing,
       faceX: op ? op.box.cx : null,
       blocked: g || !!deps.gesturesBlocked?.(),
       cameraAspect: deps.cameraAspect?.(),
@@ -218,6 +254,8 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
     frame,
     pill,
     indicator,
+    facingPill,
+    facing: () => facingNow,
     destroy() {
       pill.removeEventListener('click', onClick);
       offFrame(); offStatus();
@@ -226,7 +264,7 @@ export function mountPhoneHands(root: HTMLElement, deps: PhoneHandsDeps): PhoneH
       deps.gestures?.setActive(false);
       on = false;
       overlayEl?.remove();
-      pill.remove(); indicator.remove();
+      pill.remove(); indicator.remove(); facingPill.remove();
       root.classList.remove('is-phone-hands');
     },
   };

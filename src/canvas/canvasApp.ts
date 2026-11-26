@@ -264,7 +264,7 @@ export function seedDoc(): CanvasDoc {
 
 /** Phone shell: clear space between a board's end and the bottom chrome. */
 const PHONE_BOARD_GAP = 12;
-const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill, .mc-phone-hands-pill, .mc-read-aloud, .mc-cam-on';
+const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill, .mc-phone-hands-pill, .mc-read-aloud, .mc-cam-on, .mc-phone-facing';
 
 /** Widest a focused room dashboard is shown (three tile columns). */
 export const ROOM_MAX_W = 1280;
@@ -3580,6 +3580,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // a Hands pill next to Join laptop, persisted, off on first run. Same
   // pointer as the laptop; touch is untouched. Hand clicks/grabs only reach
   // the local activity log, never the AI feed that goes to the monitor.
+  let facingPillShown = false;
   const phoneHands = phoneShell && opts.phoneCamera && handPointer && typeof document !== 'undefined'
     ? mountPhoneHands(root, {
         camera: opts.phoneCamera,
@@ -3594,6 +3595,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         countsSuppressed,
         cameraAspect: () => handCameraAspect,
         planFrame: (selfie, t, facing) => planHandFrame(selfie as readonly (readonly CropPt[])[], t, facing),
+        // Which device has her attention: the re-announce carries it.
+        onFacing: (v) => {
+          senseChanged();
+          // The pill showing / hiding resizes the board area (canvas.css).
+          const shown = v !== null;
+          if (shown !== facingPillShown) { facingPillShown = shown; requestAnimationFrame(() => fitPhone()); }
+        },
       })
     : null;
 
@@ -3889,14 +3897,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     senseLast = k;
     for (const cb of senseSubs) cb();
   }
-  /** What this iPhone really has on (for its announce to the laptop). */
+  /** What this iPhone really has on (for its announce to the laptop). The
+   *  Android phone has no sensing layer: it announces only while its Hands
+   *  pill is on, so the laptop row can say whether she faces it. */
   function phoneSenseStatus(): PhoneSenseStatus | null {
-    if (!phoneSensor) return null;
+    const facing = phoneHands?.facing() ?? null;
+    if (!phoneSensor) return phoneHands?.isOn() ? { gimbal: 'none', sensor: false, hands: true, canPoint: false, ...(facing !== null ? { facing } : {}) } : null;
     // 'tracking' only when docked AND the plugin read back system tracking on
     // (gimbal mode 'face' is entered only on that confirmation).
     const mode = inputs.gimbal.mode();
     const gimbal = !gimbalDocked ? 'none' : mode === 'face' ? 'tracking' : mode === 'hands' && phoneSensor.running() ? 'hands' : 'ready';
-    return { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+    return { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error', ...(facing !== null ? { facing } : {}) };
   }
   // ---- the gimbal tile (gimbalTile.ts) ----
   /** What the tile shows: ONLY what the docked iPhone reported. */

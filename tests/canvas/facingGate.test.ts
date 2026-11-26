@@ -15,6 +15,10 @@ import type { HoldState } from '../../src/canvas/gestureHold';
 import type { FaceFrame } from '../../src/input/presence';
 import { synthFist, synthHand } from '../helpers/synthHands';
 import { cursorsOf, fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
+import { mountPhoneHands, PHONE_AWAY_LINE, PHONE_FACING_LINE } from '../../src/canvas/phoneHands';
+import { createPhoneCamera } from '../../src/canvas/phoneCamera';
+import { phoneReach } from '../../src/canvas/handFeel';
+import type { PresenceFrame } from '../../src/input/presence';
 
 const W = 1000;
 const H = 800;
@@ -304,5 +308,83 @@ describe('the one facing gate, through the real laptop hand path', () => {
     teach.mockClear();
     for (let i = 0; i < 20; i++) { t += FRAME; r3.presence({ faces: [] }, t); r3.frame([syntheticHand('open', 'R')], t); }
     expect(teach).not.toHaveBeenCalled();
+  });
+});
+
+// ---- the phones: the same gate, through mountPhoneHands + the REAL pointer.
+describe('the one facing gate on a phone (phoneHands + real pointer)', () => {
+  const PW = 390, PH = 844;
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).innerWidth = PW;
+    (globalThis as Record<string, unknown>).innerHeight = PH;
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).innerWidth;
+    delete (globalThis as Record<string, unknown>).innerHeight;
+  });
+
+  async function rig() {
+    let clock = 0;
+    const btn = fakeButton({ left: 150, top: 380, width: 90, height: 80 });
+    const pdoc = fakeHandDoc([btn], []);
+    const reach = () => phoneReach(null);
+    const hp = createHandPointer(pdoc, { reach, dwellClick: () => false });
+    let feed: ((f: PresenceFrame) => void) | null = null;
+    const camera = createPhoneCamera({
+      getUserMedia: async () => ({ getTracks: () => [], getVideoTracks: () => [] }) as unknown as MediaStream,
+      createTracker: (_e, onFrame) => { feed = onFrame; return { start: async () => {}, stop: () => {} } as never; },
+      doc: null, win: null, now: () => clock, setTimeout: () => 1, clearTimeout: () => undefined,
+    });
+    const gdoc = new GDoc();
+    const root = new GEl(gdoc);
+    const facings: (boolean | null)[] = [];
+    const hands = mountPhoneHands(root as unknown as HTMLElement, {
+      camera, pointer: hp, reach, storage: null, overlay: false, now: () => clock, onFacing: (v) => facings.push(v),
+    });
+    await hands.setOn(true);
+    // A camera-space hand whose palm lands on (x, y) through the phone reach box.
+    const r = reach();
+    const at = (x: number, y: number) => ({ x: r.x0 + (x / PW) * (r.x1 - r.x0), y: r.y0 + (y / PH) * (r.y1 - r.y0) });
+    const shift = (h: { x: number; y: number }[], x: number, y: number) => {
+      const ids = [0, 5, 9, 13, 17];
+      const c = { x: ids.reduce((a, i) => a + h[i].x, 0) / 5, y: ids.reduce((a, i) => a + h[i].y, 0) / 5 };
+      const want = at(x, y);
+      return h.map((p) => ({ ...p, x: p.x - c.x + want.x, y: p.y - c.y + want.y }));
+    };
+    const sendFrame = (hand: { x: number; y: number }[], faces: FaceFrame[]) => {
+      clock += FRAME;
+      feed!({ hands: [{ points: selfie(hand), label: 'Right' }] as unknown as PresenceFrame['hands'], rejectedHands: [], faces, facing: true, registered: false, paused: false, aspect: 640 / 480 });
+    };
+    const open = (faces: FaceFrame[], n: number) => { for (let i = 0; i < n; i++) sendFrame(shift(synthHand(500, 400, false, W, H), 195, 420), faces); };
+    const fistF = (faces: FaceFrame[], n: number) => { for (let i = 0; i < n; i++) sendFrame(shift(synthFist(500, 400, W, H), 195, 420), faces); };
+    const tap = (faces: FaceFrame[]) => { open(faces, 8); fistF(faces, 4); open(faces, 4); };
+    return { hp, btn, hands, tap, open, facings, cleanup: () => { hands.destroy(); hp.destroy(); } };
+  }
+
+  it('facing this phone: a fist tap clicks; no face seen: nothing, and its pill says "Not facing"', async () => {
+    const s = await rig();
+    s.tap([face(true)]);
+    expect(s.btn.click).toHaveBeenCalledTimes(1);
+    expect((s.hands.facingPill as unknown as GEl).textContent).toBe(PHONE_FACING_LINE);
+    s.tap([]);
+    expect(s.btn.click).toHaveBeenCalledTimes(1);
+    expect(s.hp.handsLocked!()).toBe(true);
+    expect((s.hands.facingPill as unknown as GEl).textContent).toBe(PHONE_AWAY_LINE);
+    expect(s.facings).toEqual([true, false]);
+    s.cleanup();
+  });
+
+  it(`facing the phone again: the ${FACING_RESUME_MS} ms settle first, then taps work`, async () => {
+    const s = await rig();
+    s.open([], 6);
+    s.open([face(true)], 4); // 132 ms back
+    expect(s.hp.handsLocked!()).toBe(true);
+    expect(s.hands.facing()).toBe(false);
+    s.open([face(true)], 8);
+    expect(s.hp.handsLocked!()).toBe(false);
+    expect(s.hands.facing()).toBe(true);
+    s.tap([face(true)]);
+    expect(s.btn.click).toHaveBeenCalledTimes(1);
+    s.cleanup();
   });
 });

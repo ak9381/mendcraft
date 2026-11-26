@@ -5,7 +5,7 @@
 // touch is never intercepted and hand actions never reach the AI feed.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { mountPhoneHands, PHONE_HANDS_FACE_LINE, PHONE_HANDS_LOST_LINE, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
+import { mountPhoneHands, PHONE_AWAY_LINE, PHONE_FACING_LINE, PHONE_HANDS_FACE_LINE, PHONE_HANDS_LOST_LINE, PHONE_HANDS_ON_LINE } from '../../src/canvas/phoneHands';
 import { CameraLostError, createPhoneCamera, PHONE_HANDS_KEY, phoneHandsAllowed, phoneSensingAllowed } from '../../src/canvas/phoneCamera';
 import { createPhoneSensor, PHONE_SENSOR_KEY, SENSOR_ON_LINE } from '../../src/canvas/phoneSensor';
 import { phoneReach } from '../../src/canvas/handFeel';
@@ -76,13 +76,15 @@ function setup(opts: { storage?: ReturnType<typeof memStorage>; gumFails?: Error
   const storage = opts.storage ?? memStorage();
   const root = fakeRoot();
   const aspects: number[] = [];
+  const onFacing = vi.fn();
   const hands = mountPhoneHands(root as unknown as HTMLElement, {
+    onFacing,
     camera, pointer, reach: () => phoneReach(null), storage, say, overlay: false,
     locked: opts.locked, onAspect: (a) => aspects.push(a), now: () => 1000,
     gestures: opts.gestures as never, gesturesBlocked: opts.gesturesBlocked, countsSuppressed: opts.countsSuppressed,
   });
   return {
-    hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, timers,
+    hands, camera, pointer, say, storage, root, getUserMedia, createTracker, aspects, timers, onFacing,
     feed: (f: PresenceFrame) => feed?.(f),
     lose: () => lost?.(),
     gate: (on: boolean) => { gated = on; },
@@ -158,7 +160,7 @@ describe('phone hand frames', () => {
     expect(s.pointer.lost).toHaveBeenCalled();
   });
 
-  it('facing gate: the operator handGate from the same frame; no face = unknown (null)', async () => {
+  it('facing gate: the same strict gate as the laptop — no face or an unsettled face = NOT facing', async () => {
     const s = setup();
     await s.hands.setOn(true);
     s.feed(frame({ handGate: false }));
@@ -166,9 +168,30 @@ describe('phone hand frames', () => {
     s.feed(frame({ handGate: true }));
     expect(s.pointer.setFacing).toHaveBeenLastCalledWith(true, 1000);
     s.feed(frame({ face: false }));
-    expect(s.pointer.setFacing).toHaveBeenLastCalledWith(null, 1000);
+    expect(s.pointer.setFacing).toHaveBeenLastCalledWith(false, 1000);
     s.feed(frame({ handGate: null }));
-    expect(s.pointer.setFacing).toHaveBeenLastCalledWith(null, 1000);
+    expect(s.pointer.setFacing).toHaveBeenLastCalledWith(false, 1000);
+  });
+
+  it('its own facing pill: hidden while Hands is off, "Facing phone" / "Not facing" from the gate, reported via onFacing', async () => {
+    const s = setup();
+    const pill = s.hands.facingPill as unknown as El;
+    expect(pill.hidden).toBe(true);
+    expect(s.hands.facing()).toBeNull();
+    await s.hands.setOn(true);
+    s.feed(frame({ handGate: true }));
+    expect(pill.hidden).toBe(false);
+    expect(pill.textContent).toBe(PHONE_FACING_LINE);
+    expect(s.hands.facing()).toBe(true);
+    s.gate(true); // the pointer locked (not facing / still settling)
+    s.feed(frame({ face: false }));
+    expect(pill.textContent).toBe(PHONE_AWAY_LINE);
+    expect(pill.classes.has('is-away')).toBe(true);
+    expect(s.hands.facing()).toBe(false);
+    await s.hands.setOn(false);
+    expect(pill.hidden).toBe(true);
+    expect(s.hands.facing()).toBeNull();
+    expect(s.onFacing.mock.calls.map((c) => c[0])).toEqual([true, false, null]);
   });
 
   it('look-to-edit lock: hands do nothing while the board is locked', async () => {
