@@ -4,6 +4,7 @@
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       { "source": "/monitor", "destination": "/monitor.html" },
+      { "source": "/activity", "destination": "/activity.html" },
       { "source": "/canvas", "destination": "/canvas.html" },
       { "source": "**", "destination": "/index.html" }
     ],

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { listDevices } from '../../src/music/spotifyApi';
-import { createSpotifyAwareConnector, NOT_CONNECTED_NOTICE, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
+import { BUILTIN_LABEL, createSpotifyAwareConnector, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, pickSpotifyDevice, playingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -42,12 +42,14 @@ describe('createSpotifyAwareConnector', () => {
     expect(r.calls).toEqual(['transfer:d-browser:false', 'play:jazz:d-browser']);
   });
 
-  it('no Marshall and no browser device (phone shell): built-in + notice', async () => {
+  it('connected, empty device list and no browser player: says how to fix it — never silent built-in playback', async () => {
     const r = rig({ listDevices: async () => [], browserDevice: async () => undefined });
     const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
     expect(r.calls).toEqual([]);
-    expect(ack.trackTitle).toBe('Built-in');
-    expect(r.said).toHaveLength(1);
+    expect(r.inner.run).not.toHaveBeenCalled();
+    expect(ack).toEqual({ playing: false, source: 'spotify', playingOn: '' });
+    expect(r.said).toEqual([NO_DEVICE_NOTICE]);
+    expect(NO_DEVICE_NOTICE).toBe('Open Spotify on your phone so it shows up, then try again.');
   });
 
   it('not connected: inner built-in player + the exact notice, no Spotify calls', async () => {
@@ -62,7 +64,7 @@ describe('createSpotifyAwareConnector', () => {
   it('search miss: notice, no fake title, playing false', async () => {
     const r = rig({ searchAndPlay: async () => { throw new Error('No Spotify match for “zzz”'); } });
     const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'zzz' });
-    expect(ack).toEqual({ playing: false });
+    expect(ack).toEqual({ playing: false, source: 'spotify' });
     expect(ack).not.toHaveProperty('trackTitle');
     expect(r.said[0]).toMatch(/No Spotify match/);
   });
@@ -74,14 +76,40 @@ describe('createSpotifyAwareConnector', () => {
     expect(r.calls).toEqual([]);
   });
 
-  it('transport goes to Spotify only after this connector started a Spotify play', async () => {
+  it('connected: every transport press goes to Spotify, never the built-in player', async () => {
     const pause = vi.fn(async () => {});
-    const r = rig({ pause });
-    await r.c.run({ deviceId: 'speaker-1', playing: false });
-    expect(pause).not.toHaveBeenCalled();
-    await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
-    expect(await r.c.run({ deviceId: 'speaker-1', playing: false })).toEqual({ playing: false });
+    const resume = vi.fn(async () => {});
+    const setVolume = vi.fn(async () => {});
+    const r = rig({ pause, resume, setVolume, nowPlaying: async () => ({ title: 'Blue in Green', artist: 'Miles Davis' }) });
+    // Play with no search: playback moves to the chosen device and starts there.
+    const play = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(r.calls).toEqual(['transfer:d-mar:true']);
+    expect(play).toMatchObject({ playing: true, trackTitle: 'Blue in Green', source: 'spotify', playingOn: 'Marshall Stanmore II' });
+    expect(r.said.at(-1)).toBe('Playing Blue in Green by Miles Davis on Marshall Stanmore II via Spotify.');
+    expect(await r.c.run({ deviceId: 'speaker-1', playing: false })).toMatchObject({ playing: false, source: 'spotify' });
     expect(pause).toHaveBeenCalledOnce();
+    // Play again: a plain resume on the same device, no second transfer.
+    await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(resume).toHaveBeenCalledOnce();
+    expect(r.calls).toEqual(['transfer:d-mar:true']);
+    expect(await r.c.run({ deviceId: 'speaker-1', volume: 80 })).toMatchObject({ volume: 80, source: 'spotify' });
+    expect(setVolume).toHaveBeenCalledWith(80);
+    expect(r.inner.run).not.toHaveBeenCalled();
+  });
+
+  it('previous / next go to Spotify and bring back the real title', async () => {
+    const r = rig({ next: async () => ({ title: 'Next One' }), previous: async () => ({ title: 'Earlier One' }) });
+    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toMatchObject({ playing: true, trackTitle: 'Next One', source: 'spotify' });
+    expect(await r.c.run({ deviceId: 'speaker-1', previous: true })).toMatchObject({ playing: true, trackTitle: 'Earlier One' });
+    expect(r.inner.run).not.toHaveBeenCalled();
+  });
+
+  it('not connected: transport uses the built-in player, labelled as such', async () => {
+    const r = rig({ isConnected: () => false });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(ack).toMatchObject({ playing: true, source: 'builtin', playingOn: '' });
+    expect(r.calls).toEqual([]);
+    expect(BUILTIN_LABEL).toBe('Built-in player — Spotify not connected');
   });
 });
 
@@ -96,14 +124,15 @@ describe('spotifyAware connector — fixes', () => {
   it('next() without a title clears trackTitle', async () => {
     const r = rig({ next: async () => null });
     await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
-    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toEqual({ playing: true, trackTitle: '' });
+    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toMatchObject({ playing: true, trackTitle: '' });
   });
 
-  it('no-device fallback says so and uses the built-in player', async () => {
+  it('the device list failing with no browser player: same honest notice, nothing plays', async () => {
     const r = rig({ listDevices: async () => { throw new Error('x'); }, browserDevice: undefined });
-    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
-    expect(r.said[0]).toBe('No Spotify speaker or browser player is available — playing the built-in track.');
-    expect(ack.trackTitle).toBe('Built-in');
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(r.said[0]).toBe(NO_DEVICE_NOTICE);
+    expect(ack.playing).toBe(false);
+    expect(r.inner.run).not.toHaveBeenCalled();
   });
 
   it('a slow Spotify play (>3s) still lands on the tile; a failure reverts it', async () => {
@@ -130,6 +159,48 @@ describe('spotifyAware connector — fixes', () => {
       expect(bad.playing).toBe(false);
       expect(bad.trackTitle).toBe('Morning light');
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('which Spotify device plays (a fake Spotify device list)', () => {
+  const dev = (id: string, name: string, type: string, isActive = false) => ({ id, name, type, isActive, volume: 0.5 });
+
+  it('prefers a device named like the speaker (its tile name, or a Marshall / Uxbridge)', () => {
+    const list = [dev('a', 'MacBook Pro', 'Computer', true), dev('b', 'iPhone', 'Smartphone'), dev('c', 'Uxbridge Voice', 'Speaker')];
+    expect(pickSpotifyDevice(list, 'Speaker')?.id).toBe('c');
+    expect(pickSpotifyDevice([...list, dev('d', 'Kitchen Sonos', 'Speaker')], 'Kitchen speaker')?.id).toBe('d');
+  });
+
+  it('then the active device, then a phone, then anything listed', () => {
+    expect(pickSpotifyDevice([dev('b', 'iPhone', 'Smartphone'), dev('a', 'MacBook Pro', 'Computer', true)], 'Speaker')?.id).toBe('a');
+    expect(pickSpotifyDevice([dev('a', 'MacBook Pro', 'Computer'), dev('b', 'iPhone', 'Smartphone')], 'Speaker')?.id).toBe('b');
+    expect(pickSpotifyDevice([dev('a', 'MacBook Pro', 'Computer'), dev('t', 'Living room TV', 'TV')], 'Speaker')?.id).toBe('a');
+    expect(pickSpotifyDevice([], 'Speaker')).toBeNull();
+  });
+
+  it('the speaker is on the iPhone\'s Bluetooth, so Spotify lists only "iPhone": play goes there and says so', async () => {
+    const r = rig({
+      listDevices: async () => [{ id: 'd-phone', name: 'iPhone', type: 'Smartphone', isActive: false, volume: 0.5 }],
+      speakerName: () => 'Marshall speaker',
+    });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
+    // Transfer to the chosen device BEFORE the play call.
+    expect(r.calls).toEqual(['transfer:d-phone:false', 'play:jazz:d-phone']);
+    expect(ack).toMatchObject({ playing: true, trackTitle: 'Real Title', source: 'spotify', playingOn: 'iPhone' });
+    expect(r.said).toEqual(['Playing Real Title by Real Artist on iPhone via Spotify.']);
+    expect(r.inner.run).not.toHaveBeenCalled();
+  });
+
+  it('this browser is used only when Spotify lists no device at all', async () => {
+    const r = rig({ listDevices: async () => [] });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
+    expect(r.calls).toEqual(['transfer:d-browser:false', 'play:jazz:d-browser']);
+    expect(ack.playingOn).toBe('this browser');
+  });
+
+  it('playingLine names the track, the artist and the device', () => {
+    expect(playingLine('Song', undefined, 'iPhone')).toBe('Playing Song on iPhone via Spotify.');
+    expect(playingLine('', undefined, 'iPhone')).toBe('Playing Spotify on iPhone via Spotify.');
   });
 });
 

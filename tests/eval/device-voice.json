@@ -11,7 +11,7 @@
     { "text": "please turn off the desk lamp", "expect": "wiz-desk:off", "tags": ["en", "off", "named"] },
     { "text": "turn down the lights", "expect": "wiz-desk:b20|wiz-ceiling:b50", "tags": ["en", "dim", "all"] },
     { "text": "turn up the lights", "expect": "wiz-desk:on:b60|wiz-ceiling:on:b90", "tags": ["en", "bright", "all"] },
-    { "text": "make it a bit warmer", "expect": "wiz-desk:b20|wiz-ceiling:b50", "tags": ["en", "warm", "all"] },
+    { "text": "make it a bit warmer", "expect": "wiz-desk:on:t3500|wiz-ceiling:on:t3500", "tags": ["en", "warm", "all"] },
     { "text": "lights to 50%", "expect": "wiz-desk:on:b50|wiz-ceiling:on:b50", "tags": ["en", "percent", "all"] },
     { "text": "pause the music", "expect": "speaker-1:pause", "tags": ["en", "music"] },
     { "text": "play the music", "expect": "speaker-1:play", "tags": ["en", "music"] },

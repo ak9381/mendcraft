@@ -239,6 +239,7 @@ export default defineConfig(({ mode, command }) => {
         spike: path.join(root, 'spike.html'),
         mobile: path.join(root, 'mobile.html'),
         monitor: path.join(root, 'monitor.html'),
+        activity: path.join(root, 'activity.html'),
       },
     },
   },

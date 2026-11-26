@@ -32,7 +32,16 @@ export class BridgeOfflineError extends Error {
   }
 }
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<{
+/** Thrown when the bridge answers 400: it validated the params and refused
+ *  them (out of range, unknown scene). The lamp did not change. */
+export class BridgeRefusedError extends Error {
+  constructor(message = 'bridge refused the request') {
+    super(message);
+    this.name = 'BridgeRefusedError';
+  }
+}
+
+type FetchLike =(input: string, init?: RequestInit) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;
@@ -105,6 +114,12 @@ export function createWizClient(
     } catch {
       // Connection refused / DNS / CORS network error — the bridge is down.
       throw new BridgeOfflineError();
+    }
+    if (res.status === 400) {
+      // The bridge is up and said no (its own range check): not "offline".
+      let why = '';
+      try { why = String(((await res.json()) as { error?: unknown })?.error ?? ''); } catch { /* no body */ }
+      throw new BridgeRefusedError(why || 'bridge refused the request');
     }
     if (!res.ok) throw new Error(`bridge error ${res.status}`);
     return res.json();

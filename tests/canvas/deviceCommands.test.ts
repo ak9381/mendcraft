@@ -36,11 +36,12 @@ describe('device voice commands', () => {
       .toEqual([{ deviceId: 'd', on: true, brightness: 100 }]);
   });
 
-  it('maps "warmer" to a dimmer step and says so', () => {
+  it('maps "warmer" / "cooler" to a white-temperature step (never a brightness change)', () => {
     const r = parseDeviceCommands('warmer', devices)!;
-    expect(r.intents).toEqual([{ deviceId: 'wiz-desk', brightness: 20 }, { deviceId: 'wiz-ceiling', brightness: 50 }]);
+    expect(r.intents).toEqual([{ deviceId: 'wiz-desk', on: true, temp: 3500 }, { deviceId: 'wiz-ceiling', on: true, temp: 3500 }]);
     expect(r.say.toLowerCase()).toContain('warm');
-    expect(r.say.toLowerCase()).toContain('dim');
+    const c = parseDeviceCommands('make the desk lamp cooler', [{ ...devices[0], temp: 6300 }, devices[1]])!;
+    expect(c.intents).toEqual([{ deviceId: 'wiz-desk', on: true, temp: 6500 }]); // stays inside 2200–6500 K
   });
 
   it('returns null when nothing device-like matches', () => {

@@ -5,6 +5,7 @@
 // get their turn).
 import type { DeviceIntent } from './deviceActions';
 import { lampStep } from './deviceGuard';
+import { VOLUME_PRESETS, colourFromSpeech, sceneFromSpeech, tempStep } from './lampPresets';
 import type { StatusKey } from './languagePack';
 
 export type DeviceKind = 'lamp' | 'music' | 'switch';
@@ -16,6 +17,8 @@ export interface DeviceRef {
   brightness?: number;
   playing?: boolean;
   volume?: number;
+  /** Lamp white in Kelvin, when known (so "warmer" / "cooler" step from it). */
+  temp?: number;
 }
 export interface DeviceCommandResult { intents: DeviceIntent[]; say: string; statusKey?: StatusKey }
 
@@ -63,6 +66,11 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     const play = /\b(play|resume)\b/.test(t);
     const pause = /\bpause\b/.test(t) || (musicNamed && /\bstop\b/.test(t));
     const next = /\bnext\b/.test(t);
+    const previous = /\bprevious\b/.test(t) || /\b(last|go back a?) (song|track)\b/.test(t) || (musicNamed && /\bgo back\b/.test(t));
+    // "volume to quiet / medium / loud": the tile's own preset chips, by voice.
+    const preset = musicNamed ? VOLUME_PRESETS.find((v) => new RegExp(`\\b${v.key}\\b`).test(t)) : undefined;
+    if (preset) return { intents: musics.map((d) => ({ deviceId: d.id, volume: preset.volume })), say: `Volume ${preset.label.toLowerCase()}.` };
+    if (previous) return { intents: musics.map((d) => ({ deviceId: d.id, previous: true })), say: 'Previous song.' };
     const louder = /\blouder\b/.test(t) || (musicNamed && /\b(up|higher|increase)\b/.test(t));
     const softer = /\b(softer|quieter)\b/.test(t) || (musicNamed && /\b(down|lower|decrease)\b/.test(t));
     if (play || pause || next || louder || softer) {
@@ -96,6 +104,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   // an "all" word (or none at all) applies to every lamp. A bare on/off needs a
   // named device or an all-word, else it is not a device command.
   const relative = warmer || cooler || dimmer || brighter;
+  const look = !!sceneFromSpeech(t) || !!colourFromSpeech(t);
   let targets: DeviceRef[];
   let all = false;
   const deictic = /\b(this|that|it)\b/.test(t);
@@ -107,8 +116,29 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   } else if ((percent || relative || hasAllWord) && lamps.length) {
     targets = lamps.slice();
     all = true;
+  } else if (look && lamps.length && /\b(scene|mode)\b/.test(t)) {
+    // "sunset scene" names no lamp: it is still about the lights.
+    targets = lamps.slice();
+    all = true;
   } else {
     return null;
+  }
+  // A colour / scene word only counts next to a lamp: a named one, the pointed
+  // one, a lights word, or the word "scene" itself.
+  const lampContext = look && (matched.length > 0 || hasAllWord || (deictic && !!opts?.pointed) || /\b(scene|mode)\b/.test(t));
+
+  // "make the lamp blue" / "set the lamp to sunset": a colour or a scene, never
+  // with an off or a percent in the same breath (those mean something else).
+  if (!percent && !offWord && lampContext) {
+    const scene = sceneFromSpeech(t);
+    const colour = scene ? null : colourFromSpeech(t);
+    if (scene) {
+      return { intents: targets.map((d) => ({ deviceId: d.id, on: true, sceneId: scene.sceneId })), say: `${labelList(targets, all)} set to ${scene.label}.` };
+    }
+    if (colour) {
+      const intents = targets.map((d) => (colour.rgb ? { deviceId: d.id, on: true, rgb: { ...colour.rgb } } : { deviceId: d.id, on: true, temp: colour.temp }));
+      return { intents, say: `${labelList(targets, all)} set to ${colour.label.toLowerCase()}.` };
+    }
   }
 
   if (percent) {
@@ -117,15 +147,10 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     return { intents, say: `${labelList(targets, all)} to ${v}%.` };
   }
 
+  // Warmer / cooler change the WHITE (colour temperature), not the brightness.
   if (warmer || cooler) {
-    const delta = warmer ? -BRIGHTNESS_STEP : BRIGHTNESS_STEP;
-    const verb = warmer ? 'dimmed' : 'brightened';
-    const intents = targets.map((d) => {
-      const brightness = lampStep(curBright(d) + delta);
-      return cooler ? { deviceId: d.id, on: true, brightness } : { deviceId: d.id, brightness };
-    });
-    const word = warmer ? 'Warmer' : 'Cooler';
-    return { intents, say: `${word} — ${verb} ${labelList(targets, all)} by ${BRIGHTNESS_STEP}%.`, statusKey: warmer ? 'dimmer' : 'brighter' };
+    const intents = targets.map((d) => ({ deviceId: d.id, on: true, temp: tempStep(d.temp, warmer ? -1 : 1) }));
+    return { intents, say: `${warmer ? 'Warmer' : 'Cooler'} white on ${labelList(targets, all)}.` };
   }
 
   if (dimmer || brighter) {

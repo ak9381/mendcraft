@@ -222,6 +222,58 @@ async function main() {
     await page.evaluate(() => window.__mcGestures.show(false));
     await wait(200);
     check(!(await visible('.mc-gesture-badge:not([hidden])')), 'badges hide when Hands goes off');
+
+    // 5) The device tiles' discrete controls are palm-highlight targets: an
+    //    open palm lands on a colour swatch / a preset chip inside the lamp
+    //    tile, and a held right thumbs-up presses it (one press = one action).
+    const dash = await browser.newPage();
+    await dash.setViewport({ width: 1440, height: 900 });
+    dash.on('pageerror', (e) => errors.push(String(e?.message || e)));
+    await dash.goto(`${BASE}/canvas.html?sim=1&hands=0&seed=1&fresh=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    check(await waitFor(dash, () => !!window.__mcGestures && !!document.querySelector('.mc-frame [data-focus]')), 'dashboard page is up');
+    await dash.evaluate(() => document.querySelector('.mc-frame [data-focus]').click());
+    check(await waitFor(dash, () => !!document.querySelector('.mc-frame.focused mc-lamp-tile')?.shadowRoot?.querySelector('[data-act=color]')), 'the lamp tile shows its colour swatches');
+    await wait(900); // the focus flight settles
+    await dash.evaluate(() => window.__mcGestures.show(true));
+    const tileRoot = () => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot;
+    const noSlider = await dash.evaluate(`(${tileRoot})().querySelectorAll('input[type=range], [role=slider]').length`);
+    check(noSlider === 0, 'the lamp tile has no slider');
+    const sizes = await dash.evaluate(`[...(${tileRoot})().querySelectorAll('button')].map((b) => Math.min(b.offsetWidth, b.offsetHeight))`);
+    check(sizes.length >= 26 && Math.min(...sizes) >= 56, `every lamp-tile control is at least 56 px (${sizes.length} controls, smallest ${Math.min(...sizes)} px)`);
+    let dt = 1000;
+    const aimAndPress = async (selector) => {
+      const aimed = await dash.evaluate((selector, from) => {
+        const g = window.__mcGestures;
+        const el = document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector(selector);
+        const r = el.getBoundingClientRect();
+        const at = g.palmFor(r.left + r.width / 2, r.top + r.height / 2);
+        for (let k = 0; k <= 30; k++) g.feed([g.hand('open', 'R', { at })], from + k * 33);
+        return { same: g.highlighted() === el, name: g.highlighted()?.textContent?.trim() ?? null };
+      }, selector, dt);
+      const fired = await dash.evaluate((from) => {
+        const g = window.__mcGestures;
+        const hand = g.hand('thumbsUp', 'R', { at: { x: 0.68, y: 0.7 } });
+        let f = null;
+        for (let t = from; t <= from + 2100; t += 33) { const s = g.feed([hand], t); if (s.fired) f = s.fired; }
+        for (let t = from + 2200; t <= from + 2800; t += 33) g.feed([], t);
+        return f;
+      }, dt + 1100);
+      dt += 5000;
+      await wait(700);
+      return { ...aimed, fired };
+    };
+    const lampState = () => dash.evaluate(() => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector('.state').textContent.trim());
+    const blue = await aimAndPress('[data-act=color][data-value=blue]');
+    check(blue.same, `an open palm highlights the Blue swatch inside the lamp tile (${blue.name})`);
+    const afterBlue = await lampState();
+    check(blue.fired === 'R:thumbsUp' && /Blue/.test(afterBlue), `right thumbs-up pressed it: the lamp is blue ("${afterBlue}")`);
+    const chip = await aimAndPress('[data-act=level][data-value="75"]');
+    const afterChip = await lampState();
+    check(chip.same && /75%/.test(afterChip), `palm + thumbs-up on the 75% chip sets the brightness ("${afterChip}")`);
+    const step = await aimAndPress('[data-level=brightness] [data-level-inc]');
+    const afterStep = await lampState();
+    check(step.same && /85%/.test(afterStep), `palm + thumbs-up on + is one step ("${afterStep}")`);
+    await dash.close();
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   } finally {
     await browser.close().catch(() => {});

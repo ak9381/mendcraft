@@ -1586,3 +1586,19 @@
 .mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
   border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
 .mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Room dashboards: every tile visible, no scroll inside the board ----
+   The board is as tall as its tiles (canvasApp.ts sets height:auto with the
+   stored height as a floor) and the tiles reflow into as many columns as fit.
+   On a phone that is one column, and the CANVAS moves — never a nested scroll. */
+.mc-frame[data-kind="room"] .mc-frame-body { overflow: visible; flex: 1 0 auto; mask-image: none !important; }
+.mc-frame.focused { z-index: 1; }
+.mc-frame[data-kind="room"] .mc-surface a2ui-basic-column {
+  display: grid !important; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 16px !important; align-items: stretch; }
+/* Wide things (a floor plan, nested layouts, tables) take the whole row. */
+.mc-frame[data-kind="room"] .mc-surface a2ui-basic-column > :is(mc-plan-board, mc-row, mc-grid, mc-card, mc-tabs, mc-split, mc-table-tile, .mc-edit-canvas) { grid-column: 1 / -1; }
+.mc-phone-simple .mc-frame[data-kind="room"] .mc-frame-body { padding: 12px; }
+/* AI drawer terminals: newest line on top, so the working cursor sits there too. */
+.mc-term-body { display: flex; flex-direction: column; }
+.mc-term-cursor { order: -1; }

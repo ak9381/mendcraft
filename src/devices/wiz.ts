@@ -15,6 +15,16 @@ export const DIM_MAX = 100;
 export const TEMP_MIN = 2200; // warm (Kelvin)
 export const TEMP_MAX = 6500; // cool (Kelvin)
 
+/** Every scene a WiZ bulb knows (setPilot `sceneId`), by id. */
+export const WIZ_SCENES: Readonly<Record<number, string>> = {
+  1: 'Ocean', 2: 'Romance', 3: 'Sunset', 4: 'Party', 5: 'Fireplace', 6: 'Cozy', 7: 'Forest', 8: 'Pastel colors',
+  9: 'Wake up', 10: 'Bedtime', 11: 'Warm white', 12: 'Daylight', 13: 'Cool white', 14: 'Night light', 15: 'Focus',
+  16: 'Relax', 17: 'True colors', 18: 'TV time', 19: 'Plant growth', 20: 'Spring', 21: 'Summer', 22: 'Fall',
+  23: 'Deep dive', 24: 'Jungle', 25: 'Mojito', 26: 'Club', 27: 'Christmas', 28: 'Halloween', 29: 'Candlelight',
+  30: 'Golden white', 31: 'Pulse', 32: 'Steampunk',
+};
+export const isWizScene = (n: number): boolean => Number.isInteger(n) && n in WIZ_SCENES;
+
 export interface Rgb {
   r: number;
   g: number;
@@ -38,7 +48,8 @@ export type LampIntent =
   | { kind: 'power'; on: boolean }
   | { kind: 'dim'; dimming: number }
   | { kind: 'temp'; temp: number }
-  | { kind: 'color'; rgb: Rgb };
+  | { kind: 'color'; rgb: Rgb }
+  | { kind: 'scene'; sceneId: number };
 
 /** A WiZ JSON-RPC message: `{ method, params }`. */
 export interface WizMessage {
@@ -80,6 +91,9 @@ export function pilotParamsForIntent(intent: LampIntent): Record<string, number 
         g: clampByte(intent.rgb.g),
         b: clampByte(intent.rgb.b),
       };
+    case 'scene':
+      // An unknown id is never guessed into another scene: the light just turns on.
+      return isWizScene(intent.sceneId) ? { state: true, sceneId: intent.sceneId } : { state: true };
   }
 }
 
