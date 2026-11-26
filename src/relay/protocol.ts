@@ -194,6 +194,12 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     text is exactly one of GIMBAL_MODES — never user content. The iPhone
 //     runs it through the same handler as the spoken phrase and re-announces
 //     what DockKit REALLY reports; the laptop never claims the switch itself.
+//   • 'attention' — host → phones: which device she is facing right now.
+//     text: JSON {f, sid} — f exactly one of laptop / ios / android / none,
+//     sid the host's session id (a phone only takes it when sid is the
+//     session it already knows). Sent when it changes, ≥ ATTENTION_MIN_GAP_MS
+//     apart (the latest value always goes out). Phones only honour it from
+//     the host.
 //   • 'ping' — phone → host: "are you really there?". text: JSON {n, sid?} —
 //     n is the phone's one-time nonce, sid the host session it believes it is
 //     talking to. 'pong' — host → phone: JSON {n, sid} echoing the nonce with
@@ -202,7 +208,7 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     message in the room is not. Handled inside the sessions.
 export type RelayCommandKind =
   | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
-  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong';
+  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong' | 'attention';
 
 /** The only DockKit animations the laptop may ask for (no user content). */
 export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
@@ -301,6 +307,20 @@ export function isSessionId(x: unknown): x is string {
 /** Which device she is facing (rides the host's pong; no user content). */
 export type AttentionWho = 'laptop' | 'ios' | 'android' | 'none';
 const ATTENTION: readonly string[] = ['laptop', 'ios', 'android', 'none'];
+/** Host → phones 'attention' at most this often (the latest always goes out). */
+export const ATTENTION_MIN_GAP_MS = 150;
+export function isAttentionWho(v: unknown): v is AttentionWho {
+  return typeof v === 'string' && ATTENTION.includes(v);
+}
+/** Parse an 'attention' payload {f, sid}; null when malformed. */
+export function parseAttention(text: unknown): { f: AttentionWho; sid: string } | null {
+  if (typeof text !== 'string' || text.length > PING_JSON_MAX) return null;
+  try {
+    const o = JSON.parse(text) as { f?: unknown; sid?: unknown };
+    if (!o || typeof o !== 'object' || !isAttentionWho(o.f) || !isSessionId(o.sid)) return null;
+    return { f: o.f, sid: o.sid };
+  } catch { return null; }
+}
 /** Parse a ping/pong payload; null when malformed. A pong may carry `f`:
  *  the device she is facing, as the host knows it. */
 export function parsePing(text: unknown): { n: string; sid: string | null; f?: AttentionWho } | null {
@@ -387,7 +407,7 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong', 'attention'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
 const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult', 'ping', 'pong'];
 
@@ -410,6 +430,8 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   // 'gimbalCue' carries one allow-listed word and nothing else.
   if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
   if (c.kind === 'gimbalMode') return isGimbalMode(c.text) ? { kind: 'gimbalMode', text: c.text } : null;
+  // 'attention' carries one allow-listed word and the host session id.
+  if (c.kind === 'attention') return parseAttention(c.text) ? { kind: 'attention', text: c.text as string } : null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;

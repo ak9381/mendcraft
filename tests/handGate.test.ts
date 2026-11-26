@@ -99,4 +99,16 @@ describe('createHandGate', () => {
     expect(g.update({ yaw: 50, pitch: 0 }, 1200)).toBe(true);
     expect(g.update({ yaw: 50, pitch: 0 }, 1400)).toBe(false);
   });
+
+  it('turned, then lost (a quick turn: one turned frame, then no face) → false at once, never the grace', () => {
+    const g = createHandGate();
+    feed(g, { yaw: 0, pitch: 0 }, 0, 1000);
+    expect(g.update({ yaw: 60, pitch: 0 }, 1200)).toBe(true); // one turned frame (debounce pending)
+    expect(g.update(null, 1400)).toBe(false); // lost: not the kept "true"
+    expect(g.update(null, 1600, 2500)).toBe(false); // even with a hand in view
+    // A frontal face lost (her hand in front of it) still keeps "true".
+    const h = createHandGate();
+    feed(h, { yaw: 0, pitch: 0 }, 0, 1000);
+    expect(h.update(null, 1200, 2500)).toBe(true);
+  });
 });

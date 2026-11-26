@@ -13,7 +13,9 @@ import { CANT_SEE_FACE_LINE, CANT_SEE_PILL, createLaptopHandRouter, HANDS_ALWAYS
 import { createHandGate } from '../../src/input/faceLogic';
 import { readHandsAlways, writeHandsAlways } from '../../src/canvas/handFacing';
 import { matchToolVoice } from '../../src/canvas/routeLine';
-import { parsePing } from '../../src/relay/protocol';
+import { parsePing, type RandomBytes } from '../../src/relay/protocol';
+import { createFakeTransport } from '../../src/relay/transport';
+import { createGuestSession, createHostSession } from '../../src/relay/session';
 import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 import type { HoldState } from '../../src/canvas/gestureHold';
 import type { FaceFrame } from '../../src/input/presence';
@@ -487,6 +489,9 @@ describe('the override and the shared attention', () => {
     expect(matchToolVoice('Keep my hands always on.')).toBe('handsAlways');
     expect(matchToolVoice('hands follow my face')).toBe('handsFollowFace');
     expect(matchToolVoice('hands on')).toBe('handsOn');
+    expect(matchToolVoice('turn off hands always on')).toBe('handsFollowFace');
+    expect(matchToolVoice('hands always on off')).toBe('handsFollowFace');
+    expect(matchToolVoice('turn on hands always on')).toBe('handsAlways');
   });
 
   it('the override is stored per device', () => {
@@ -504,5 +509,70 @@ describe('the override and the shared attention', () => {
     expect(parsePing(JSON.stringify({ n: 'abcd1', f: 'android' }))?.f).toBe('android');
     expect(parsePing(JSON.stringify({ n: 'abcd1', f: 'someone' }))?.f).toBeUndefined();
     expect(parsePing(JSON.stringify({ n: 'abcd1' }))).toEqual({ n: 'abcd1', sid: null });
+  });
+});
+
+describe('attention over the relay: pushed on a change, and never from a replayed pong', () => {
+  const seq = (start = 0): RandomBytes => (n) => Uint8Array.from({ length: n }, (_, i) => start + i);
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('a replayed / old pong never sets attention; an answer to this phone\u2019s own signed ping does', async () => {
+    const tr = createFakeTransport();
+    const host = await createHostSession(tr, seq());
+    host.setAttention!(() => 'laptop');
+    const guest = await createGuestSession(tr, host.token);
+    await flush();
+    await guest.ping('first1'); // learns the host sid (unsigned ping: no attention)
+    await flush();
+    expect(guest.hostSid()).toBe(host.sid);
+    expect(guest.attention!()).toBeNull();
+    // A pong nobody here asked for (replayed from the room): ignored.
+    await tr.publish(host.token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'pong', text: JSON.stringify({ n: 'nope99', sid: host.sid, f: 'ios' }) } });
+    await flush();
+    expect(guest.attention!()).toBeNull();
+    // An old session's pong for a nonce we did send: ignored too.
+    await guest.ping('mine22');
+    await tr.publish(host.token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'pong', text: JSON.stringify({ n: 'mine22', sid: 'old-session', f: 'ios' }) } });
+    await flush();
+    expect(guest.attention!()?.who ?? null).not.toBe('ios');
+    await guest.ping('mine33');
+    await flush();
+    expect(guest.attention!()?.who).toBe('laptop');
+  });
+
+  it('she turns to the laptop → the host pushes it, and a blind phone gates within ~300 ms', async () => {
+    (globalThis as Record<string, unknown>).innerWidth = 390;
+    (globalThis as Record<string, unknown>).innerHeight = 844;
+    const tr = createFakeTransport();
+    const host = await createHostSession(tr, seq(7));
+    const guest = await createGuestSession(tr, host.token);
+    await flush();
+    await guest.ping('hello1');
+    await flush();
+    // The phone: real pointer + phoneHands, othersFacing from the guest session.
+    let clock = 0;
+    const btn = fakeButton({ left: 150, top: 380, width: 90, height: 80 });
+    const hp = createHandPointer(fakeHandDoc([btn], []), { reach: () => phoneReach(null), dwellClick: () => false });
+    let feed: ((f: PresenceFrame) => void) | null = null;
+    const camera = createPhoneCamera({
+      getUserMedia: async () => ({ getTracks: () => [], getVideoTracks: () => [] }) as unknown as MediaStream,
+      createTracker: (_e, onFrame) => { feed = onFrame; return { start: async () => {}, stop: () => {} } as never; },
+      doc: null, win: null, now: () => clock, setTimeout: () => 1, clearTimeout: () => undefined,
+    });
+    const hands = mountPhoneHands(new GEl(new GDoc()) as unknown as HTMLElement, {
+      camera, pointer: hp, reach: () => phoneReach(null), storage: null, overlay: false, now: () => clock,
+      othersFacing: () => { const a = guest.attention!(); return !!a && a.who !== 'none' && a.who !== 'android'; },
+    });
+    await hands.setOn(true);
+    const frame = () => { clock += 33; feed!({ hands: [{ points: selfie(synthHand(500, 400, false, W, H)), label: 'Right' }] as unknown as PresenceFrame['hands'], rejectedHands: [], faces: [], facing: false, registered: false, paused: false, aspect: 640 / 480 }); };
+    for (let i = 0; i < 80; i++) frame(); // lying flat: no face → falls back to allowed
+    expect(hp.handsLocked!()).toBe(false);
+    host.sendAttention!('laptop'); // she faces the laptop
+    await flush();
+    frame();
+    expect(hp.handsLocked!()).toBe(true); // the next phone frame (≈ 33 ms) gates
+    hands.destroy(); hp.destroy();
+    delete (globalThis as Record<string, unknown>).innerWidth;
+    delete (globalThis as Record<string, unknown>).innerHeight;
   });
 });

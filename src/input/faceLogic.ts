@@ -291,6 +291,7 @@ export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
   let seenSince: number | null = null;
   let lastSeen = -Infinity;
   let last: boolean | null = null;
+  let lastPoseOut = false;
   let ok = true;
   let pending: boolean | null = null;
   let pendingSince = 0;
@@ -299,11 +300,19 @@ export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
   return {
     update(pose, now, graceOverride) {
       if (!pose) {
+        // Turned, then lost (a quick turn: one turned frame, then the face
+        // model loses her): not facing at once — never the grace's "true".
+        if (seenSince !== null && (pending === false || lastPoseOut)) {
+          ok = false; pending = null; last = false;
+          if (now - lastSeen < (graceOverride ?? grace)) return false;
+        }
         // A face that went missing (a hand in front of it) keeps its state.
         if (seenSince !== null && now - lastSeen < (graceOverride ?? grace)) return last;
         seenSince = null; pending = null; ok = true; last = null; return null;
       }
       lastSeen = now;
+      // Past the lock limits (the looser *Out band) on this very frame.
+      lastPoseOut = !handGatePoseOk(pose, true, g);
       if (seenSince === null) { seenSince = now; ok = true; pending = null; }
       const want = handGatePoseOk(pose, ok, g);
       if (want === ok) pending = null;
@@ -314,7 +323,7 @@ export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
       last = now - seenSince >= g.settleMs ? ok : null;
       return last;
     },
-    reset() { seenSince = null; ok = true; pending = null; last = null; lastSeen = -Infinity; },
+    reset() { seenSince = null; ok = true; pending = null; last = null; lastSeen = -Infinity; lastPoseOut = false; },
   };
 }
 

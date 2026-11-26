@@ -58,7 +58,8 @@ export function matchToolVoice(text: string): ToolVoice | null {
   if (/^(turn )?hands on$|^turn on (the )?hands$|^start hands$/.test(t)) return 'handsOn';
   if (/^(turn )?hands off$|^turn off (the )?hands$|^stop hands$/.test(t)) return 'handsOff';
   if (/^(turn )?(on |off )?hover to click( on| off)?$/.test(t)) return 'dwell';
-  if (/^(keep )?(my )?hands always on$|^always on hands$|^hands on always$/.test(t)) return 'handsAlways';
+  if (/^(turn off|stop|disable) (the )?(my )?hands always on$|^hands always on off$|^(turn )?(off )?always on hands off$/.test(t)) return 'handsFollowFace';
+  if (/^(turn on |enable )?(keep )?(my )?hands always on( on)?$|^always on hands$|^hands on always$/.test(t)) return 'handsAlways';
   if (/^(let )?(my )?hands follow my face$|^hands only when i look$/.test(t)) return 'handsFollowFace';
   if (/^(register|register again|re-?register)( me)?$/.test(t)) return 'register';
   if (/^(simulate offline|go offline)$/.test(t)) return 'offline';

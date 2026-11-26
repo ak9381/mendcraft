@@ -659,6 +659,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
       if (JSON.stringify(prevSense) !== JSON.stringify(sense ?? undefined)) {
         pairFirst.refresh();
+        pushAttention();
         if (platform === 'ios') gimbalReported(prevSense?.gimbal !== undefined && prevSense.gimbal !== 'none', !!sense && sense.gimbal !== 'none');
       }
       // A keep-alive re-announce only re-learns who the phone is for the AI
@@ -3594,6 +3595,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     for (const [p, s] of phoneSense) if (s.facing === true && (p === 'ios' || p === 'android')) return p;
     return 'none';
   }
+  /** Push who she faces to the phones when it changes (the session
+   *  rate-limits; the pong carries it too, as the fallback). */
+  function pushAttention(): void {
+    if (phoneShell || !hostSession?.sendAttention) return;
+    hostSession.sendAttention(attentionWho());
+  }
   function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
     handRouter.frame(hands, now);
   }
@@ -3798,6 +3805,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Point-to-connect is intentionally NOT gated on facing: you look at the
     // device you point at, not at this screen.
     handRouter.presence(f, now);
+    pushAttention();
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (scanPanel?.isOpen()) {
