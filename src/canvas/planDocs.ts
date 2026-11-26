@@ -66,6 +66,30 @@ export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>): Dra
   return out;
 }
 
+/** A board is about to render with these plan tiles: hand each its drawing.
+ *  Nothing is ever DELETED here — an AI rebuild or a morph may drop or rename
+ *  the plan tile and then be undone or rolled back (Undo, the self-check
+ *  rollback, a failed render after Approve); the drawing must still be there
+ *  when the tile comes back. Orphans are only left out when the canvas
+ *  document is written (storedDrawings). */
+export function feedDrawings(drawings: Drawings, frameId: string, planBoardIds: Iterable<string>): void {
+  for (const boardId of planBoardIds) setSavedPlanDoc(frameId, boardId, drawings[frameId]?.[boardId] ?? null);
+}
+
+/** What goes into the stored canvas document: only drawings whose plan tile
+ *  is on a board right now (`live`: frame id → its plan board ids). The
+ *  in-memory map is not touched, so this session's Undo still has them. */
+export function storedDrawings(drawings: Drawings, live: Record<string, readonly string[]>): Drawings {
+  const out: Drawings = {};
+  for (const [frameId, ids] of Object.entries(live)) {
+    for (const boardId of ids) {
+      const doc = drawings[frameId]?.[boardId];
+      if (doc) (out[frameId] ??= {})[boardId] = doc;
+    }
+  }
+  return out;
+}
+
 const docs = new Map<string, Record<string, unknown>>();
 const key = (frameId: string, boardId: string): string => `${frameId}:${boardId}`;
 

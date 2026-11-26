@@ -341,6 +341,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     // near it. Anywhere else (or with nothing selected) the fist pans the
     // plan — it never grabs whatever happens to be nearby.
     const id = sel.length === 1 ? sel[0] : null;
+    if (sel.length > 1) status('Select one item to move it.');
     // "Near" is measured to the selected element ITSELF (its box on screen plus
     // the hand reach), so a door in the middle of the selected wall, or a
     // closer neighbour, cannot steal the grab.

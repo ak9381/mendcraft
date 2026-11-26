@@ -60,5 +60,10 @@ Plan edits (hand or mouse) now land in the canvas history as `kind: 'plan'` entr
 - **Looking away** when the hand opens cancels the stroke.
 - Smaller / Bigger are in Undo. An Undo first closes any plan edit still inside its 350 ms grouping window, so it takes back one edit. The boards' hand UI refreshes at about 10 Hz. The user's own plan zoom survives hand edit going off and on.
 
+## Round 5 (26 Nov, re-review)
+- **Rendering never deletes a drawing.** An AI rebuild or a morph can drop or rename the plan tile and then be undone, rolled back by the self-check, or fail to render after Approve; the drawing stays in memory and is handed back when the tile returns. Orphaned drawings are only left out when the canvas document is written.
+- With more than one element selected a fist pans the plan and the banner says "Select one item to move it."
+- Merged the pair-grace work: Remove (R thumbs-down) and Rotate (L peace) wait under the pair grace like any one-hand hold.
+
 ## Not in this pass
 In the 3D view a held fist turns the model and two fists move the camera; there is no walk-through by hand. Typing a label's text needs voice or a keyboard. A plan Undo entry from before a board was re-rendered cannot be undone (the canvas says so). See `2026-11-26-hands-coverage.md`.

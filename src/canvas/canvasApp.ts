@@ -82,7 +82,7 @@ import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
-import { sanitizePlanDoc, setSavedPlanDoc, type Drawings } from './planDocs';
+import { feedDrawings, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
 import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
@@ -1222,11 +1222,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
     // Saved drawings reach the plan boards before they mount.
-    // A drawing belongs to its plan board id: an AI or morph edit of the board
-    // that keeps the plan tile keeps the drawing; a tile that is gone takes it along.
-    const planIds = new Set(planTilesOf(plan).map((t) => t.boardId));
-    for (const boardId of Object.keys(drawings[id] ?? {})) if (!planIds.has(boardId)) { delete drawings[id][boardId]; setSavedPlanDoc(id, boardId, null); }
-    for (const boardId of planIds) setSavedPlanDoc(id, boardId, drawings[id]?.[boardId] ?? null);
+    // A drawing belongs to its plan board id. Rendering never deletes one: an
+    // edit that drops the plan tile can still be undone or rolled back, and
+    // the drawing must be there when the tile returns (see planDocs.ts).
+    feedDrawings(drawings, id, planTilesOf(plan).map((t) => t.boardId));
     live.delete(id);
     processor.processMessages(g.messages as never);
     deviceSurfaces.track(id, plan);
@@ -1481,8 +1480,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- persistence ----
   let persistTimer = 0;
   function snapshot(): CanvasDoc {
-    const kept: Drawings = {};
-    for (const f of reg.list()) if (surfaces[f.id] && drawings[f.id] && Object.keys(drawings[f.id]).length) kept[f.id] = drawings[f.id];
+    // Stored: only drawings whose plan tile is on a board now.
+    const livePlans: Record<string, string[]> = {};
+    for (const f of reg.list()) if (surfaces[f.id]) livePlans[f.id] = planTilesOf(surfaces[f.id]).map((t) => t.boardId);
+    const kept = storedDrawings(drawings, livePlans);
     return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined, ...(Object.keys(kept).length ? { drawings: kept } : {}) };
   }
   function persist(now = false): boolean {

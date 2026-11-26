@@ -631,7 +631,7 @@ describe('contextual fixed gestures for the plan', () => {
   });
 });
 
-import { coerceDrawings, sanitizePlanDoc, savedPlanDoc, setSavedPlanDoc } from '../../src/canvas/planDocs';
+import { coerceDrawings, feedDrawings, sanitizePlanDoc, savedPlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from '../../src/canvas/planDocs';
 import { coerceSurfacePlan } from '../../src/canvas/surfacePlan';
 import { parseCanvasDoc } from '../../src/canvas/frames';
 import { buildSurfacePrompt } from '../../src/canvas/aiTurn';
@@ -737,6 +737,47 @@ describe('the drawing is stored BESIDE the board, never inside what is sent out'
     rig.hand.select(fresh.id);
     rig.hand.remove();
     expect(rig.doc().walls.map((w) => w.id)).toEqual(walls.slice(0, -1).map((w) => w.id));
+    rig.destroy();
+  });
+
+  it('an AI edit that drops the plan tile, then Undo: the drawing is back (rendering never deletes one)', () => {
+    const d = drawing();
+    const drawings: Drawings = { f1: { 'f1-cad': d } };
+    feedDrawings(drawings, 'f1', ['f1-cad']); // the board as it was
+    expect(savedPlanDoc('f1', 'f1-cad')).toBe(d);
+    feedDrawings(drawings, 'f1', []); // the AI rebuild: no plan tile any more
+    expect(drawings.f1['f1-cad']).toBe(d); // still held for this session
+    // While the tile is gone the drawing is not written to storage…
+    expect(storedDrawings(drawings, { f1: [] })).toEqual({});
+    feedDrawings(drawings, 'f1', ['f1-cad']); // Undo: the old surface renders again
+    expect(savedPlanDoc('f1', 'f1-cad')).toBe(d); // …and the board mounts with what was drawn
+    expect(storedDrawings(drawings, { f1: ['f1-cad'] })).toEqual({ f1: { 'f1-cad': d } });
+    setSavedPlanDoc('f1', 'f1-cad', null);
+  });
+
+  it('a morph that renames the plan tile and is rolled back by the self-check keeps the drawing', () => {
+    const d = drawing();
+    const drawings: Drawings = { f1: { 'f1-cad': d } };
+    feedDrawings(drawings, 'f1', ['plan-1']); // the morphed board (new plan board id): starts from its template
+    expect(savedPlanDoc('f1', 'plan-1')).toBeNull();
+    feedDrawings(drawings, 'f1', ['f1-cad']); // rollback to the board before the morph
+    expect(savedPlanDoc('f1', 'f1-cad')).toBe(d);
+    // A closed board (frame gone) takes its drawings out of what is stored.
+    expect(storedDrawings(drawings, {})).toEqual({});
+    setSavedPlanDoc('f1', 'f1-cad', null);
+  });
+
+  it('with several elements selected a fist pans, and says how to move one', () => {
+    const rig = planHandRig();
+    rig.apply({ op: 'add_wall', x1: 1000, y1: 2000, x2: 4000, y2: 2000 });
+    rig.apply({ op: 'add_wall', x1: 1000, y1: 3000, x2: 4000, y2: 3000 });
+    const before = rig.doc().walls.map((w) => ({ ...w.a }));
+    rig.apply({ op: 'select_set', ids: rig.doc().walls.map((w) => w.id) });
+    rig.journal.flush(); rig.entries.length = 0;
+    rig.stroke({ x: 450, y: 500 }, { x: 550, y: 500 });
+    expect(rig.doc().walls.map((w) => ({ ...w.a }))).toEqual(before);
+    expect(rig.statuses).toContain('Select one item to move it.');
+    expect(rig.entries).toHaveLength(0);
     rig.destroy();
   });
 
