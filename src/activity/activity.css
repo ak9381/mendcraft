@@ -40,7 +40,8 @@ html, body { margin: 0; min-height: 100%; background: var(--ink); color: var(--t
 .act-time { font-family: var(--mono); font-size: 0.72em; color: var(--dim); font-variant-numeric: tabular-nums; }
 .act-kind { color: var(--c); font-weight: 600; }
 .act-who { display: block; font-size: 0.68em; font-weight: 500; color: var(--dim); }
-.act-text { color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+/* A whole model prompt is one entry, not a wall: four lines, then cut. */
+.act-text { color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .act-row[data-bold="true"] .act-text { font-weight: 600; }
 .act-sim { display: inline-block; margin-left: 10px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--amber); color: var(--amber);
   font-size: 0.62em; font-weight: 600; vertical-align: middle; }
