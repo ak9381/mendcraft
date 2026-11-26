@@ -2876,6 +2876,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return edit && edit.armed(p.x, p.y) ? edit : null;
   }
   const planPeace = createPlanPeace();
+  /** One hand frame's plan work (laptop and phone): peace-and-move over a
+   *  plan with a wall / room / dimension selected resizes it — that hand's
+   *  peace is then no button gesture — and the boards' hand UI is refreshed. */
+  function planHandFrame(hands: readonly (readonly CropPt[])[], now: number, facing: boolean | null): (side: 'L' | 'R') => boolean {
+    if (gestures?.isActive()) {
+      planPeace.update(peaceHandsOf(hands, phoneShell ? phoneReach(phoneCamAspect) : undefined, handCameraAspect), now, {
+        blocked: gesturesBlocked() || facing === false,
+        targetAt: (p) => { const e = planEditAt(p); return e?.resizable() ? e : null; },
+      });
+    }
+    refreshPlanHands();
+    return (side) => planPeace.claimed(side);
+  }
   if (typeof root.addEventListener === 'function') {
     root.addEventListener(PLAN_EDIT_EVENT, (e) => {
       const d = (e as CustomEvent<PlanEditDetail>).detail;
@@ -2906,20 +2919,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // grab (board move / pan) and two-fist zoom.
     const cam = cameraHandsFromSelfie(hands);
     handPointer?.update(cam, now);
-    // Peace-and-move over a plan with a wall / room / dimension selected
-    // resizes it; that hand's peace is then no button gesture.
-    if (gestures?.isActive()) {
-      planPeace.update(peaceHandsOf(hands, undefined, handCameraAspect), now, {
-        blocked: gesturesBlocked() || gestureFacing === false,
-        targetAt: (p) => { const e = planEditAt(p); return e?.resizable() ? e : null; },
-      });
-    }
+    const claimedPeace = planHandFrame(hands, now, gestureFacing);
     gestures?.frame(hands, now, {
       facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
       suppressCounts: countsSuppressed(),
-      claimedPeace: (side) => planPeace.claimed(side),
+      claimedPeace,
     });
-    refreshPlanHands();
     if (!hands.length) return;
     // Taught gestures obey the same guards as built-ins: never while the
     // hands are locked (not facing the screen) or a fist grab is running —
@@ -2945,6 +2950,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         gesturesBlocked,
         countsSuppressed,
         cameraAspect: () => handCameraAspect,
+        planFrame: (selfie, t, facing) => planHandFrame(selfie as readonly (readonly CropPt[])[], t, facing),
       })
     : null;
 

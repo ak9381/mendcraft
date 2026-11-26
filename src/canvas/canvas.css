@@ -1461,6 +1461,8 @@
 
 /* ---- floor plan: HAND EDIT (docs/plan/2026-11-26-plan-hands-design.md) ----
    Everything here shows only while Hands is on (.mc-gestures-on on the root). */
+/* A board's title is a fist target (tap = focus, hold = move): never under 48 px. */
+.mc-gestures-on .mc-frame-title { display: inline-flex; align-items: center; min-height: 48px; }
 .mc-plan-hand-toggle { display: none; }
 .mc-gestures-on .mc-plan-hand-toggle { display: inline-block; }
 .mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer { display: none; }

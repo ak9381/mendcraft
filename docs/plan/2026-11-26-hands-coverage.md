@@ -1,0 +1,102 @@
+# Hands coverage — can a hand do it?
+
+Date: 26 Nov 2026 · Branch `plan-hands` · Companion to `2026-11-26-plan-hands-design.md`
+
+## How this was checked
+- Read of the live hand pipeline (`handPointer.ts`, `palmHighlight.ts`, `gestureControl.ts`, `gestureBindings.ts`) for what each kind of control receives.
+- A headless survey (Chrome, 1440 × 900 and a 412 × 915 phone) that lists every usable interactive control in these states: blank canvas, Tools open, Tools › More, review open, after the demo journey (three boards in overview), board in Edit, AI drawer open, and the phone screens `pair`, `canvas`, `dashboard`, `approval`, `gimbal`.
+- `npm run e2e:gestures` (fixed gestures, highlight, real camera path) and `npm run e2e:plan-hands` (the plan editor) drive the paths marked **tested**.
+- Not checked on a real camera in this pass. Everything below is from code, unit tests and synthetic frames.
+
+## The rule that covers most of it
+Any `button`, link, `role=button/tab/switch/checkbox/menuitem/option` or `summary` that is visible, enabled and on top is reachable three ways with no extra work: **open palm highlight → right thumbs-up 2 s**, **fist tap** on it (backup click), and — where it has one — its **fixed shape**. A fist held on a `[data-mc-drag-handle]` / `[data-mc-resize-handle]` drags it. Text fields, sliders and `select` are the exceptions.
+
+## Canvas (laptop / tablet)
+| Surface | Can hands do it? | How | Gap |
+|---|---|---|---|
+| Toolbar (New, Show all, Save, Undo, History, …) | Yes | Highlight + thumbs-up, fist tap. Save = L thumbs-up, Undo = L thumbs-down, New = L 1 finger | — |
+| Tools chip and palette | Yes | L peace (when no plan element with Rotate is selected), highlight, fist tap. R thumbs-down closes it | — |
+| Tools › More (Hands, Hover to click, Register again, monitor, offline, …) | Yes | Highlight + thumbs-up; monitor = both thumbs up, offline = both thumbs down, Register = both peace | — |
+| Say box (text field) | Partly | Fist tap focuses it | No way to enter text by hand. Use Talk (L 3 fingers). By design |
+| Hand cluster (Register, Edit / Done, Tools, Talk, Undo, Reset layout) | Yes, tested | Fixed shapes with badges; highlight | — |
+| Review dialog: Approve / Reject | Yes, tested | R thumbs-up / R thumbs-down (modal: only these and Undo act) | — |
+| Review dialog: move and resize | Yes | Held fist on the title bar / the corner handle (44 px) | Corner handle is 44 px, under the 56 px target |
+| Review dialog: "Show the work" (`summary`), Ask for something else | Yes | Highlight + thumbs-up, fist tap (direct hit needed for confirm actions) | The review's long list scrolls only by mouse today — covered by the scroll gesture when it lands |
+| Next-step chips | Yes, tested | R 1 finger / peace / 3 fingers; highlight | A 4th chip has no fixed shape (highlight only) |
+| Board: focus | Yes | Fist tap on the title | Title was 39 px tall. **Fixed:** ≥ 48 px while Hands is on |
+| Board: move | Yes, tested | Held fist on the board or its title | — |
+| Board: resize | No | — | Boards have no resize handle for any input |
+| Board: close / pin | Partly | A board has no close or pin button of its own. The dock's Unpin and the phone's "Pin on this device" are buttons (highlight, fist tap) | Closing a board is voice / typed command only |
+| Board Edit mode: move / resize tiles | Yes | Held fist on a tile's move or resize handle (44 px) | Handles are 44 px |
+| Board to a paired phone (edge transfer) | Yes | Held fist drags the board to the screen edge | — |
+| Dock (pinned tile, Unpin, agent chips) | Yes | Highlight + thumbs-up, fist tap | — |
+| Pairing card (code, Close, Swap sides) | Yes | Highlight; R thumbs-down closes | — |
+| AI drawer: open | Yes | Engine cards, both thumbs up for the monitor | — |
+| AI drawer: close, history Undo, dock chips | Yes | Highlight; R thumbs-down closes; L thumbs-down = Undo | — |
+| AI drawer: move / resize a terminal | Yes | Held fist on the title bar / corner | Title bar grip is 23 px tall |
+| AI drawer: read the log (scroll) | No | — | Needs the peace-and-move scroll (other builder) |
+| Zoom HUD (−, +, Fit) | Yes | Highlight, fist tap; two fists zoom, one fist on bare canvas pans | — |
+| Monitor link | Yes | Both thumbs up; highlight | Opens a second window that has no hand control of its own |
+| Lamp tile (On / Off, Dimmer, Brighter) | Yes | Highlight (shadow DOM is walked), fist tap | Stepping only; no continuous level until the `data-level` gesture lands |
+| Music tile (Play / Pause, Softer, Louder, Next) | Yes | Same | Same |
+| Form tiles with a slider (`input[type=range]`) or `select` | No | The pointer can target them but a fist tap only focuses | Sliders need the level gesture; `select` has no hand path |
+| Scan / register panel, teach-a-gesture panel, connect sheet | Yes | Their buttons; R thumbs-down = Cancel / Close | Teach capture itself is hand-driven already |
+| Canvas: pan / zoom | Yes, tested | One fist on bare canvas; two fists | — |
+| Overview (several boards zoomed out) | Partly | The highlight's crowd magnifier spreads small neighbours into a spaced row | After the demo journey every tile button is about 40 × 21 px on screen. Focus the board first (fist tap its title) |
+
+## Floor-plan editor (this branch)
+| Surface | Can hands do it? | How | Gap |
+|---|---|---|---|
+| Palette: Select, Wall, Room, Door, Window, Opening, Dimension, Measure, Stairs, Text, Column | Yes, tested | Highlight + thumbs-up, fist tap; ≥ 64 × 56 px while Hands is on | No fixed shape per tool: all 15 shape slots are taken |
+| Furniture flyout (13 components) | Yes, tested | Same; 3 columns of ≥ 56 px, not clipped | — |
+| Check, 3D, DXF, Hand edit | Yes | Same; ≥ 56 px | DXF triggers a browser download |
+| Draw wall / room / dimension / opening / stairs | Yes, tested | Held fist = pen down, open hand = end; live length in metres | — |
+| Measure | Yes | Held fist reads a length | The reading is not kept (fist-drag with Dimension to keep one) |
+| Place door / window / opening / column / furniture / stairs | Yes, tested | Fist tap; doors and windows snap to the nearest wall | — |
+| Text label | Partly | Fist tap drops a "Note" label | Its text needs voice or a keyboard |
+| Select an element | Yes, tested | Palm highlight snaps to element handles; thumbs-up or fist tap | On a dense plan handles shrink to 32 px; the crowd magnifier helps. Wall-pinned dimensions have no handle (select the wall) |
+| Move an element | Yes, tested | Held fist (Select), 10 cm grid | A dimension cannot be moved (it follows its wall) |
+| Resize wall / room / dimension / door / furniture | Yes, tested | Peace-and-move, or the − 10 cm / + 10 cm steppers (`data-level`) | — |
+| Rotate furniture, flip door swing | Yes, tested | L peace 2 s, or the Rotate / Flip swing button | 90° steps only |
+| Remove | Yes, tested | R thumbs-down 2 s, or Remove | — |
+| Undo a plan edit | Yes, tested | L thumbs-down (canvas Undo) | No Redo on the canvas |
+| Multi-select, marquee, copy / paste, duplicate | No | — | Mouse and keyboard only. The properties panel's Duplicate button is reachable |
+| Properties panel (thickness, sill, height, name) | Partly | Its step buttons are ≥ 56 px while Hands is on | Number and text fields need a keyboard |
+| Pan the plan inside its board | Yes | Held fist on empty floor with Select and nothing selected | — |
+| Zoom the plan inside its board | No | Two fists zoom the whole canvas instead | The plan fits small (about 200 px for an 8 × 6 m plan in a 420 px board), so hand drawing is fine-grained. Zoom the canvas with two fists first |
+| 3D view | Yes | Held fist turns the model (**added**) | No hand dolly or walk-through |
+| Fullscreen, Move to screen | Yes | Buttons, ≥ 56 px while Hands is on | — |
+| Trash zone (drag to delete) | Not needed | Remove replaces it | — |
+
+## Phone shells (Android, iPhone control layer; Hands pill on)
+| Surface | Can hands do it? | How | Gap |
+|---|---|---|---|
+| Phone menu and pills (Join laptop, Hands, menu items) | Yes | Highlight + thumbs-up, fist tap (wider magnet on phones) | — |
+| Approve / Reject | Yes | R thumbs-up / R thumbs-down | — |
+| Undo, Save | Yes | L thumbs-down / L thumbs-up | — |
+| Board chips | Yes | Highlight, fist tap | Chips are 38 px tall |
+| Tiles (`mc-m-tile`), dock card handle | Yes | Highlight, fist tap; held fist on the handle | — |
+| Say field | Partly | Fist tap focuses | Text needs Talk |
+| Next-step chips, Tools, New, Talk by fixed shape | No | Highlight only | The phone table binds 4 shapes (Approve, Reject, Undo, Save) |
+| Floor plan on a phone | Yes in code | Same surface, same strokes; peace-and-move resize is wired through `phoneHands` (**added**); R thumbs-down = Remove | Not run on a phone. No L peace = Rotate on phones (use the Rotate button) |
+| Pair, gimbal screens | Yes | One or two large buttons each | — |
+
+## Fixed in this pass
+1. The whole plan editor (was mouse-only in the live pipeline).
+2. Plan edits now reach the canvas history, so Undo covers them.
+3. 3D view turns with a held fist.
+4. Plan palette, flyout, toolbar, fullscreen and panel buttons ≥ 56 px while Hands is on.
+5. Board titles ≥ 48 px while Hands is on.
+6. Peace-and-move resize on the phone shell.
+
+## Left open
+1. **Scroll** (review list, AI log, long boards) and **sliders** — the peace-and-move scroll / `data-level` work covers both. At merge: a peace hand that `planPeace` has claimed must not also scroll.
+2. **Text entry** (say box, labels, number fields) — voice only.
+3. **`select` controls** in generated form tiles.
+4. **Board resize and close** — no handle or button exists for any input.
+5. **Plan zoom inside the board**, and the plan's small default fit.
+6. **Multi-select / marquee / copy-paste** on the plan.
+7. **44 px handles** (review corner, tile move / resize, terminal grip 23 px) — under the 56 px target.
+8. **Overview** — tile buttons are small until a board is focused.
+9. **Phone**: fixed shapes for chips / Tools / Talk; board chips 38 px; nothing here was run on a device.
+10. **Monitor window** — no hand control of its own.

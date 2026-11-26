@@ -40,4 +40,4 @@ Snapping while drawing: existing wall endpoints and midpoints first (28 px reach
 Plan edits (hand or mouse) now land in the canvas history as `kind: 'plan'` entries ("Drew a wall 3.00 m · You"), so the one Undo (button, voice, L thumbs-down) takes back the last plan edit by sending the plan engine its own `undo` op the right number of times. Mouse edits create no proposals or self-checks today, so hand edits create none either.
 
 ## Not in this pass
-Two fists over the plan still zoom the canvas, not the plan view. The 3D view has no hand orbit in the fist pipeline. Typing a label's text needs voice or a keyboard. See `2026-11-26-hands-coverage.md`.
+Two fists over the plan still zoom the canvas, not the plan view. In the 3D view a held fist turns the model; there is no hand dolly or walk-through. Typing a label's text needs voice or a keyboard. See `2026-11-26-hands-coverage.md`.
