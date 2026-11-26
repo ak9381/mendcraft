@@ -49,6 +49,7 @@ import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { answeringDevices, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
@@ -1925,6 +1926,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"connect","label":"Connect a device"}]}',
     nanoPlan: '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}',
   };
+  // ?sim=1 only: the e2e can make the scripted model write a given reply
+  // (e2e-room-rebuild: a reply that is only a Connect tile).
+  if (opts.sim && typeof window !== 'undefined') (window as unknown as { __mcScripts?: Record<string, string> }).__mcScripts = SCRIPTS;
   // Model streams in flight (any engine, fallbacks included): the replay's
   // "is a turn still running?" for turns that don't hold turnBusy.
   let streamsOut = 0;
@@ -1953,6 +1957,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return t && t.type !== 'lamp' ? t.type : DEVICE_KINDS[id] ?? 'lamp';
   };
   const deviceHints = (): DeviceHint[] => Object.keys(store.all()).map((id) => ({ id, label: labelOf(id), kind: kindOf(id) }));
+  /** A room turn's device list: what answers right now, read from the store
+   *  at the moment of the turn (a lamp found after the bridge was allowed
+   *  mid-session is in it; a remembered "Not reachable" bulb is not). */
+  const roomDeviceHints = (): DeviceHint[] => answeringDevices(store.all(), { label: labelOf, kind: kindOf, live: liveLamps });
   const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp }));
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
   // Set synchronously the instant a build/connect turn starts — before any
@@ -2274,6 +2282,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   type PlanSummary = string | ((plan: SurfacePlan) => string);
   // Titles come from what she will see: the fitted plan (real lamps, no plan tile on a room).
   const summaryOf = (summary: PlanSummary, plan: SurfacePlan): string => (typeof summary === 'function' ? summary(fitPlan(plan)) : summary);
+  /** A room turn's reply as she will review it: fitted to the lamps that
+   *  exist, with every device tile that is still real kept (the board's own,
+   *  put back when the reply left them out), a tile for each device that
+   *  answers, and the gimbal tile while the iPhone reports a stand — the same
+   *  whichever engine wrote it (Nano, Gemini improving, Gemini after a
+   *  handoff). What was put back is said in that engine's terminal. */
+  function roomPlan(frameId: string, proposed: SurfacePlan, si: SentInfo): SurfacePlan {
+    const fitted = fitPlan(planForBoard(frameId, proposed));
+    if (fitted.kind !== 'room' || reg.get(frameId)?.kind === 'plan') return fitted;
+    const kept = keepRoomDevices(fitted, {
+      before: surfaces[frameId] ?? null,
+      answering: roomDeviceHints(),
+      known: new Set(Object.keys(store.all())),
+      stand: !phoneShell && standReported(),
+    });
+    const line = keptRoomLine(kept);
+    if (line) panels.forEngine(si.engine).log('note', line);
+    return kept.plan;
+  }
 
   /** Stream one model turn into the ghost; the plan and its ledger receipt
    *  (the SentInfo token live bookings — cloudSent / cloudRetract — are
@@ -2285,7 +2312,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const engine = engineFor(engineId, script.replace('BOARD', frameId));
     let sentInfo: SentInfo | null = null;
     lastTurnHandedOff = false;
-    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: deviceHints(), current, frameId, want: task === 'floorplan' ? 'plan' : 'room' }, engine, {
+    const want = task === 'floorplan' ? 'plan' as const : 'room' as const;
+    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: want === 'room' ? roomDeviceHints() : deviceHints(), current, frameId, want }, engine, {
       onSent: (s) => { sentInfo = s; onSi?.(s); aiSent(utterance, s, { task, defer: true }); },
       onFallback: aiFellBack,
       onCloudSend: cloudSent,
@@ -2343,7 +2371,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status,
           tried ? { si: tried, kind: 'fallback', retry: () => { drop(); setTimeout(() => { void connectRoom(frameId, utterance); }, 0); } } : undefined);
       }
-      return await proposePlan(frameId, utterance, out.plan, out.si, summaryOf(summary, planForBoard(frameId, out.plan)), status, improve ? { si: improve.si, kind: 'improved' } : undefined);
+      const kept = roomPlan(frameId, out.plan, out.si);
+      return await proposePlan(frameId, utterance, kept, out.si, summaryOf(summary, kept), status, improve ? { si: improve.si, kind: 'improved' } : undefined);
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
@@ -2361,11 +2390,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         () => { void connectRoom(frameId, utterance); });
       await finishSwarm();
       if (!out) { ghost(frameId, null); return null; }
-      const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
+      // Nano's draft or Gemini's handoff alike: the real tiles are kept.
+      const plan = roomPlan(frameId, out.plan, out.si);
+      const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); return null; }
       const handedOff = lastTurnHandedOff;
-      if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
-      return { ...out, summary: summaryOf(summary, planForBoard(frameId, out.plan)), status, handedOff };
+      if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(plan)}, for Gemini to improve`);
+      return { plan, si: out.si, summary: summaryOf(summary, plan), status, handedOff };
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
   }
   /** Review a draft as it is (Gemini already made it after a Nano handoff). */
