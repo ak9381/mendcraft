@@ -37,18 +37,23 @@ function manualTimers() {
  *  silently stopped delivering). */
 function historyTransport() {
   const base = createFakeTransport();
-  const log = new Map<string, RelayMessage[]>();
+  const log = new Map<string, Array<{ msg: RelayMessage; at: number | null }>>();
   const muted = new Set<string>();
+  const send = async (roomId: string, msg: RelayMessage) => {
+    if (muted.has(msg.from)) return { at: null }; // the write lands nowhere anyone hears
+    const entry = { msg, at: null as number | null };
+    log.set(roomId, [...(log.get(roomId) ?? []), entry]);
+    const meta = await base.publishStamped!(roomId, msg);
+    entry.at = meta.at;
+    return meta;
+  };
   const t: RelayTransport = {
     ...base,
-    async publish(roomId, msg) {
-      if (muted.has(msg.from)) return; // the write lands nowhere anyone hears
-      log.set(roomId, [...(log.get(roomId) ?? []), msg]);
-      await base.publish(roomId, msg);
-    },
+    async publish(roomId, msg) { await send(roomId, msg); },
+    publishStamped: (roomId, msg) => send(roomId, msg),
     subscribe(roomId, onMsg, onError) {
       const past = [...(log.get(roomId) ?? [])];
-      queueMicrotask(() => { for (const m of past) onMsg(m); });
+      queueMicrotask(() => { for (const m of past) onMsg(m.msg, { at: m.at }); });
       return base.subscribe(roomId, onMsg, onError);
     },
   };
@@ -334,5 +339,186 @@ describe('single-call boards, toast position, "show me a dashboard"', () => {
     expect(routeLine('show ai', { hasPlanBoard: false, devices: [] }).name).toBe('showAi');
     expect(routeLine('show tools', { hasPlanBoard: false, devices: [] }).name).toBe('paletteOpen');
     expect(routeLine('show history', { hasPlanBoard: false, devices: [] }).name).toBe('history');
+  });
+});
+
+describe('SAFETY: replayed history never acts', () => {
+  it('after a laptop reload an old "turn off the lamp" and an old bye do nothing; a new command runs', async () => {
+    const h = historyTransport();
+    const ran: string[] = [];
+    const states: string[] = [];
+    const open = async (token?: string) => {
+      const res = await startPhoneJoin({
+        transport: h.t, token, chime: () => undefined,
+        onState: (st) => { states.push(st); },
+        onCommand: (cmd) => { if (cmd.kind === 'command') ran.push(cmd.text ?? ''); },
+      });
+      if ('error' in res) throw new Error('host');
+      return res;
+    };
+    const first = await open();
+    const guest = await createGuestSession(h.t, first.token);
+    await flush();
+    await guest.sendCommand({ kind: 'command', text: 'turn off the lamp' });
+    await flush();
+    expect(ran).toEqual(['turn off the lamp']); // it ran once, live
+    await guest.close(); // a bye is now in the room's history too
+    await flush();
+
+    // The laptop reloads into the same room: everything above is replayed.
+    await first.stop(); // the old page is gone
+    ran.length = 0; states.length = 0;
+    const reloaded = await open(first.token);
+    await flush(30);
+    expect(ran).toEqual([]); // the old command did NOT run again
+    expect(states).not.toContain('gone'); // the old bye did not "drop" a phone
+    // Only the handshake is taken from history (an old hello says nothing more
+    // than "someone was here"); it shows no phone (see the announce gate).
+    expect(reloaded.session.state()).toBe('paired');
+
+    // A phone that is here now is heard.
+    const back = await createGuestSession(h.t, first.token);
+    await flush();
+    await back.sendCommand({ kind: 'command', text: 'turn on the lamp' });
+    await flush();
+    expect(ran).toEqual(['turn on the lamp']);
+    await back.close(); await reloaded.stop();
+  });
+
+  it('old run requests and old commands already in the room are not replayed into a laptop that opens it', async () => {
+    const h = historyTransport();
+    const token = 'ABCDEFGHJKMNPQRSTVWXYZ02';
+    await h.t.publish(token, { v: 1, from: 'control', type: 'run', run: { runId: 'r1', recipeId: 'lights-off', device: 'lamp' } });
+    await h.t.publish(token, { v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'command', text: 'turn off the lamp' } });
+    const host = await createHostSession(h.t, undefined, { token });
+    const runs: string[] = []; const cmds: string[] = [];
+    host.onRun((r) => { runs.push(r.recipeId); });
+    host.onCommand((c) => { cmds.push(c.kind); });
+    // A phone is in the room, so commands would be delivered if they were let through.
+    const guest = await createGuestSession(h.t, token);
+    await flush(30);
+    expect(runs).toEqual([]);
+    expect(cmds).toEqual([]);
+    await guest.close(); await host.close();
+  });
+
+  it('a phone that rejoins is not handed the room\'s old cues or point requests', async () => {
+    const h = historyTransport();
+    const host = await createHostSession(h.t, undefined, { token: TOKEN });
+    const first = await createGuestSession(h.t, TOKEN);
+    await flush();
+    expect(await host.sendGimbalCue('yes')).toBe(true);
+    await host.askSensePoint('ios');
+    await flush();
+    await first.close({ silent: true });
+
+    const again = await createGuestSession(h.t, TOKEN);
+    const cues: string[] = []; const points: string[] = [];
+    again.onGimbalCue((k) => { cues.push(k); });
+    again.onSensePoint((p) => { points.push(p); });
+    await flush(30);
+    expect(cues).toEqual([]);
+    expect(points).toEqual([]);
+    expect(again.state()).toBe('paired'); // the laptop answered THIS hello
+    await again.close(); await host.close();
+  });
+
+  it('a transport with no server clock still delivers (nothing to compare)', async () => {
+    const base = createFakeTransport();
+    const plain: RelayTransport = { ...base, publishStamped: undefined, subscribe: (room, onMsg, onError) => base.subscribe(room, (m) => onMsg(m), onError) };
+    const host = await createHostSession(plain, undefined, { token: TOKEN });
+    const cmds: string[] = [];
+    host.onCommand((c) => { cmds.push(c.kind); });
+    const guest = await createGuestSession(plain, TOKEN);
+    await flush();
+    await guest.sendCommand({ kind: 'undo' });
+    await flush();
+    expect(cmds).toEqual(['undo']);
+    await guest.close(); await host.close();
+  });
+});
+
+describe('retyping the code on a connected phone keeps the link', () => {
+  async function connected() {
+    const h = historyTransport();
+    const hostStates: string[] = [];
+    const host = await startPhoneJoin({ transport: h.t, chime: () => undefined, onState: (st) => { hostStates.push(st); } });
+    if ('error' in host) throw new Error('host');
+    const timers = manualTimers();
+    const sessions: unknown[] = [];
+    const link = createLaptopLink({
+      storage: memoryStorage(), platform: 'android', native: true,
+      onSnapshot: () => undefined,
+      onSession: (s) => { sessions.push(s); },
+      joinExtras: { transport: h.t, keepAliveTimers: { setInterval: () => 0, clearInterval: () => undefined } },
+      setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+      createListener: () => ({ start: async () => 'listening' as const, stop: () => undefined }),
+    });
+    await link.joinWithCode(host.code, true);
+    await flush();
+    expect(link.state()).toBe('connected');
+    return { h, host, hostStates, timers, link, sessions };
+  }
+
+  it('the code was retired: "Already connected to this laptop", still ✓, still proving', async () => {
+    const { h, host, hostStates, timers, link, sessions } = await connected();
+    timers.fire(PING_EVERY_MS); // the second ping names the session: the laptop retires the code
+    await flush();
+    expect(await h.t.resolveAlias(host.rawCode)).toBeNull();
+
+    await link.joinWithCode(host.code, true);
+    await flush();
+    expect(link.state()).toBe('connected');
+    expect(link.message()).toBe('Already connected to this laptop.');
+    expect(sessions).toHaveLength(1); // the same session, never closed
+    expect(hostStates).not.toContain('gone'); // the laptop was never told the phone left
+    // The kept link still proves itself.
+    h.mute('phone', true);
+    timers.fire(PING_EVERY_MS);
+    await flush();
+    timers.fire(PING_TIMEOUT_MS);
+    expect(link.state()).toBe('reconnecting');
+    await link.stop(); await host.stop();
+  });
+
+  it('the code still resolves: the new session takes over without a bye', async () => {
+    const { host, hostStates, link, sessions } = await connected();
+    await link.joinWithCode(host.code, true);
+    await flush();
+    expect(link.state()).toBe('connected');
+    expect(link.message()).toBe(LINK_LINES.connected);
+    expect(sessions).toHaveLength(2);
+    expect(hostStates).not.toContain('gone');
+    await link.stop(); await host.stop();
+  });
+
+  it('tapping Join laptop (listening) and then typing a retired code still keeps the link', async () => {
+    const { h, host, hostStates, timers, link, sessions } = await connected();
+    timers.fire(PING_EVERY_MS);
+    await flush();
+    expect(await h.t.resolveAlias(host.rawCode)).toBeNull();
+    void link.startJoin(); // the pill was tapped: the mic opens, the link is untouched
+    await flush();
+    await link.joinWithCode(host.code, true);
+    await flush();
+    expect(link.state()).toBe('connected');
+    expect(link.message()).toBe('Already connected to this laptop.');
+    expect(sessions).toHaveLength(1);
+    expect(hostStates).not.toContain('gone');
+    // Closing the panel while listening goes back to ✓, not to "Join laptop".
+    void link.startJoin();
+    await flush();
+    link.cancel();
+    expect(link.state()).toBe('connected');
+    await link.stop(); await host.stop();
+  });
+
+  it('a wrong code on a connected phone says so and keeps the link', async () => {
+    const { host, link, sessions } = await connected();
+    await link.joinWithCode('!!', true);
+    expect(link.state()).toBe('connected');
+    expect(link.message()).toBe(LINK_LINES.badCode);
+    expect(sessions).toHaveLength(1);
+    await link.stop(); await host.stop();
   });
 });

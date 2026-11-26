@@ -48,6 +48,20 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
           at: fs.serverTimestamp(),
         });
       },
+      // The server time a message got: a session's start marker (what is
+      // older than it in the room is history, see session.ts).
+      async publishStamped(roomId, msg) {
+        const ref = await fs.addDoc(fs.collection(db, 'rooms', roomId, 'messages'), {
+          ...msg,
+          at: fs.serverTimestamp(),
+        });
+        try {
+          const at = (await fs.getDocFromServer(ref)).data()?.at as { toMillis?: () => number } | undefined;
+          return { at: typeof at?.toMillis === 'function' ? at.toMillis() : null };
+        } catch {
+          return { at: null };
+        }
+      },
       subscribe(roomId, onMsg, onError) {
         // The live listener, backed by a slow catch-up read: onSnapshot can go
         // quiet without an error (see roomFeed.ts), which left a paired laptop
@@ -79,9 +93,9 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
             return (await fs.getDocsFromServer(q)).docs.map(toDoc);
           },
           restart: async () => { await fs.disableNetwork(db); await fs.enableNetwork(db); },
-          onDoc: (data) => {
+          onDoc: (data, at) => {
             const msg: RelayMessage | null = validateMessage(data);
-            if (msg) onMsg(msg);
+            if (msg) onMsg(msg, { at });
           },
           onError,
         });

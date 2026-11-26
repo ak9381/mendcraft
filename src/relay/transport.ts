@@ -5,16 +5,23 @@
 
 import { fitsRoomMessageRules, validateMessage, type RelayMessage } from './protocol';
 
+/** When the room's server stored a message (ms). null = not known (yet). */
+export interface RelayMeta { at: number | null }
+
 export interface RelayTransport {
   readonly kind: 'fake' | 'firestore';
   /** Append a message to the room's channel. */
   publish(roomId: string, msg: RelayMessage): Promise<void>;
+  /** Append a message and resolve with the server time it was stored at
+   *  ({at: null} when that could not be read back). Absent on a transport
+   *  with no server clock. */
+  publishStamped?(roomId: string, msg: RelayMessage): Promise<RelayMeta>;
   /** Listen for messages in a room (including ones this client sent — callers
    *  filter by `from`). `onError` fires when the underlying listener drops
    *  (rules denial, offline) so the caller can surface a real disconnected
    *  state instead of silently freezing on the last-known one. Returns an
    *  unsubscribe function. */
-  subscribe(roomId: string, onMsg: (msg: RelayMessage) => void, onError?: () => void): () => void;
+  subscribe(roomId: string, onMsg: (msg: RelayMessage, meta?: RelayMeta) => void, onError?: () => void): () => void;
   /** Map a typable short code → full room token while the host is waiting. */
   setAlias(code: string, roomId: string): Promise<void>;
   resolveAlias(code: string): Promise<string | null>;
@@ -23,26 +30,34 @@ export interface RelayTransport {
 
 /** In-memory transport: both "devices" live in the same page (tests, sim). */
 export function createFakeTransport(): RelayTransport {
-  const rooms = new Map<string, Set<(msg: RelayMessage) => void>>();
+  const rooms = new Map<string, Set<(msg: RelayMessage, meta?: RelayMeta) => void>>();
   const aliases = new Map<string, string>();
+  let clock = 0; // the fake room's "server time": one tick per message
+
+  async function deliver(roomId: string, msg: RelayMessage): Promise<RelayMeta> {
+    // Round-trip through validation like a real wire would, and deliver on a
+    // microtask so a publish inside a handler can't recurse synchronously.
+    const valid = validateMessage(JSON.parse(JSON.stringify(msg)));
+    if (!valid) throw new Error('relay: refused to publish a malformed message');
+    // Mirrors firestore.rules' write-shape check, so the sim/test path fails
+    // the same way a real Firestore write would.
+    if (!fitsRoomMessageRules({ ...valid, at: new Date() })) {
+      throw new Error('relay: refused to publish a message the room rules would reject');
+    }
+    const meta: RelayMeta = { at: ++clock };
+    const handlers = rooms.get(roomId);
+    if (!handlers) return meta;
+    await Promise.resolve();
+    for (const h of [...handlers]) h(valid, meta);
+    return meta;
+  }
 
   return {
     kind: 'fake',
     async publish(roomId, msg) {
-      // Round-trip through validation like a real wire would, and deliver on a
-      // microtask so a publish inside a handler can't recurse synchronously.
-      const valid = validateMessage(JSON.parse(JSON.stringify(msg)));
-      if (!valid) throw new Error('relay: refused to publish a malformed message');
-      // Mirrors firestore.rules' write-shape check, so the sim/test path fails
-      // the same way a real Firestore write would.
-      if (!fitsRoomMessageRules({ ...valid, at: new Date() })) {
-        throw new Error('relay: refused to publish a message the room rules would reject');
-      }
-      const handlers = rooms.get(roomId);
-      if (!handlers) return;
-      await Promise.resolve();
-      for (const h of [...handlers]) h(valid);
+      await deliver(roomId, msg);
     },
+    publishStamped: (roomId, msg) => deliver(roomId, msg),
     subscribe(roomId, onMsg) {
       let handlers = rooms.get(roomId);
       if (!handlers) {

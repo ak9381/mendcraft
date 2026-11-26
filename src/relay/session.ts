@@ -27,7 +27,7 @@ import {
   type PrivacyReply,
 } from './protocol';
 import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
-import type { RelayTransport } from './transport';
+import type { RelayMeta, RelayTransport } from './transport';
 
 export interface RelayFrame {
   mimeType: string;
@@ -38,7 +38,7 @@ interface SessionBase {
   state(): PairState;
   onState(cb: (state: PairState) => void): void;
   /** Publish 'bye' and stop listening. Safe to call twice. */
-  close(): Promise<void>;
+  close(opts?: { silent?: boolean }): Promise<void>;
 }
 
 export interface HostSession extends SessionBase {
@@ -112,11 +112,27 @@ export interface GuestSession extends SessionBase {
   onGimbalCue(cb: (kind: GimbalCueKind) => void): void;
 }
 
+/** Messages held while a session does not yet know its own start time. */
+const HELD_MAX = 500;
+/** How long before a start marker that could not be time-stamped is re-sent. */
+export const START_MARK_RETRY_MS = 3000;
+
 function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   let state: PairState = 'idle';
   let stateCb: ((s: PairState) => void) | null = null;
   let unsubscribe: (() => void) | null = null;
   let closed = false;
+  // A room keeps every message ever sent and replays them all to a new
+  // listener (a laptop reload, a phone rejoin). Nothing older than THIS
+  // session may act: an old "turn off the lamp", an old bye, an old gimbal
+  // cue. The session's start is the SERVER time of its own first message (no
+  // device clock involved); until that is known, messages wait.
+  //   undefined — not known yet (hold); null — the transport has no server
+  //   clock (nothing to compare: deliver).
+  let startAt: number | null | undefined;
+  let held: Array<{ msg: RelayMessage; meta?: RelayMeta }> = [];
+  let onPeerCb: ((msg: RelayMessage) => void) | null = null;
+  const isOld = (meta?: RelayMeta): boolean => typeof startAt === 'number' && typeof meta?.at === 'number' && meta.at < startAt;
 
   function setState(next: PairState): void {
     if (next === state) return;
@@ -133,26 +149,64 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
       stateCb = cb;
       cb(state);
     },
-    listen(onPeer: (msg: RelayMessage) => void) {
+    /** `always`: the join handshake — handled whatever its age (a hello only
+     *  says "someone is in the room"; it never acts). */
+    listen(onPeer: (msg: RelayMessage) => void, always: (msg: RelayMessage) => boolean = () => false) {
+      onPeerCb = onPeer;
       unsubscribe = transport.subscribe(
         roomId,
-        (msg) => {
+        (msg, meta) => {
           if (msg.from === role) return; // own echo
+          if (always(msg)) { onPeer(msg); return; }
+          if (startAt === undefined) {
+            held.push({ msg, meta });
+            if (held.length > HELD_MAX) held.shift();
+            return;
+          }
+          if (isOld(meta)) return; // history: never acts
           onPeer(msg);
         },
         () => setState(advancePair(state, 'listen-error')),
       );
       setState(advancePair(state, 'create'));
     },
-    async close() {
+    /** The session's start is known: drop what is older, deliver the rest. */
+    setStart(at: number | null) {
+      if (startAt !== undefined) return;
+      startAt = at;
+      const waiting = held;
+      held = [];
+      for (const h of waiting) if (!isOld(h.meta)) onPeerCb?.(h.msg);
+    },
+    /** Learn the start from a stamped send; re-send while the server time
+     *  could not be read (never guess: history must not act). */
+    async markStart(send: () => Promise<void | RelayMeta>, first?: void | RelayMeta | Promise<void | RelayMeta>) {
+      let receipt: void | RelayMeta | null = null;
+      try { receipt = first === undefined ? await send() : await first; } catch { receipt = { at: null }; }
+      for (;;) {
+        if (closed || startAt !== undefined) return;
+        if (!receipt) { this.setStart(null); return; }
+        if (receipt.at !== null) { this.setStart(receipt.at); return; }
+        await new Promise((r) => setTimeout(r, START_MARK_RETRY_MS));
+        if (closed) return;
+        try { receipt = await send(); } catch { receipt = { at: null }; }
+      }
+    },
+    isClosed: () => closed,
+    /** `silent`: leave without a bye (this device stays in the room through
+     *  another session, so nobody should be told it left). */
+    async close(opts: { silent?: boolean } = {}) {
       if (closed) return;
       closed = true;
+      held = [];
       unsubscribe?.();
       unsubscribe = null;
-      try {
-        await transport.publish(roomId, { v: 1, from: role, type: 'bye' });
-      } catch {
-        // Transport already gone (offline, room deleted) — closing anyway.
+      if (!opts.silent) {
+        try {
+          await transport.publish(roomId, { v: 1, from: role, type: 'bye' });
+        } catch {
+          // Transport already gone (offline, room deleted) — closing anyway.
+        }
       }
       setState(advancePair(state, 'close'));
     },
@@ -288,7 +342,12 @@ export async function createHostSession(
     } else if (msg.type === 'music') {
       if (core.state === 'paired') musicCb?.(msg.music);
     }
-  });
+  }, (msg) => msg.type === 'hello');
+  // This session starts at the server time of its own first message (which
+  // also tells phones in the room its id): everything older in the room is
+  // history and never acts.
+  const whoMsg: RelayMessage = { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } };
+  void core.markStart(() => (transport.publishStamped ? transport.publishStamped(token, whoMsg) : transport.publish(token, whoMsg)));
   await transport.setAlias(code, token);
 
   return {
@@ -319,8 +378,7 @@ export async function createHostSession(
     },
     sendPrivacyReply: (reply) =>
       transport.publish(token, { v: 1, from: 'host', type: 'privacyReply', reply }),
-    askWhoIsThere: () =>
-      transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } }),
+    askWhoIsThere: () => transport.publish(token, whoMsg),
     askSensePoint: (platform) =>
       transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'sensePoint', text: JSON.stringify({ platform }) } }),
     sendGimbalCue: async (kind) => {
@@ -411,7 +469,12 @@ export async function createGuestSession(
       }
     }
   });
-  await transport.publish(roomId, { v: 1, from: 'phone', type: 'hello' });
+  // The phone's session starts at the server time of its own hello: an old
+  // board, an old gimbal cue or an old point request in the room never acts.
+  const helloMsg: RelayMessage = { v: 1, from: 'phone', type: 'hello' };
+  const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
+  const first = await hello();
+  if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
     roomId,
@@ -457,7 +520,7 @@ export async function createGuestSession(
           reject(err);
         });
       }),
-    close: async () => {
+    close: async (opts?: { silent?: boolean }) => {
       // Reject outstanding privacyAsk waiters now — otherwise a mid-request
       // close() (e.g. remotePage's pagehide handler) leaves the caller
       // hanging for the full timeout instead of failing fast.
@@ -466,7 +529,7 @@ export async function createGuestSession(
         pending.delete(jobId);
         wait.reject(new Error('relay: session closed before the hub replied'));
       }
-      await core.close();
+      await core.close(opts);
     },
   };
 }
@@ -500,7 +563,12 @@ export async function createControlSession(
       core.setState(advancePair(core.state, 'peer-bye'));
     }
   });
-  await transport.publish(roomId, { v: 1, from: 'control', type: 'hello' });
+  // Like a phone: the dashboard's session starts at its own hello; older
+  // messages in the room (old run status, old boards) are history.
+  const helloMsg: RelayMessage = { v: 1, from: 'control', type: 'hello' };
+  const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
+  const first = await hello();
+  if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
     roomId,

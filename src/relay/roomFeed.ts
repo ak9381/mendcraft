@@ -22,7 +22,7 @@ export interface RoomFeedDeps {
   fetchSince(at: number | null): Promise<RoomDoc[]>;
   /** Restart the underlying connection (the listener stays subscribed). */
   restart?(): Promise<void>;
-  onDoc(data: unknown): void;
+  onDoc(data: unknown, at: number | null): void;
   onError?(): void;
   pollMs?: number;
   fetchTimeoutMs?: number;
@@ -75,7 +75,7 @@ export function createRoomFeed(deps: RoomFeedDeps): RoomFeed {
       if (seen.has(d.id)) continue;
       seen.add(d.id);
       fresh++;
-      try { deps.onDoc(d.data); } catch { /* one bad handler never stops the feed */ }
+      try { deps.onDoc(d.data, d.at); } catch { /* one bad handler never stops the feed */ }
     }
     return fresh;
   };

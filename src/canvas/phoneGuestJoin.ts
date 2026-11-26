@@ -38,7 +38,9 @@ export interface PhoneGuestJoinDeps {
 export type PhoneGuestJoinSuccess = {
   roomId: string;
   session: GuestSession;
-  stop: () => Promise<void>;
+  /** `silent`: leave without a bye (this phone stays in the room through a
+   *  newer session of its own). */
+  stop: (opts?: { silent?: boolean }) => Promise<void>;
 };
 
 export type PhoneGuestJoinFailure = {
@@ -85,7 +87,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
       });
     }
     if (deps.platform) announcePhone(session, deps.platform, { deviceId, native: deps.native });
-    return { roomId, session, stop: () => session.close() };
+    return { roomId, session, stop: (opts) => session.close(opts) };
   } catch {
     return { error: 'needs network' };
   }
@@ -174,14 +176,14 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
   let stopped = false;
   return {
     ...res,
-    stop: async () => {
+    stop: async (opts?: { silent?: boolean }) => {
       if (stopped) return;
       stopped = true;
       stopAnnouncing();
       // Only if this session is still the bound one (a stale join torn down
       // late must not unbind the join that replaced it).
       deps.aiForwarder?.bind(null, session);
-      await session.close();
+      await session.close(opts);
     },
   };
 }

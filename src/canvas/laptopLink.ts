@@ -49,6 +49,7 @@ export const LINK_LINES = {
   timeout: "Didn't hear the laptop chime. Tap Join laptop to listen again, or type the code.",
   lost: 'Lost the laptop connection. Tap Join laptop to reconnect.',
   reconnecting: 'Laptop — reconnecting…',
+  already: 'Already connected to this laptop.',
   sim: 'Pairing needs a real laptop session. Open the app without ?sim=1 and play the chime on the laptop.',
 } as const;
 
@@ -100,10 +101,20 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
   let listener: ChimeListener | null = null;
   let listenTimer: unknown = null;
   let resetTimer: unknown = null;
-  let current: { stop(): Promise<void> } | null = null;
+  let current: { stop(opts?: { silent?: boolean }): Promise<void> } | null = null;
   let attempt = 0;
   let stopProof: () => void = () => undefined;
   let pingSeq = 0;
+  /** A new join is being tried while a working link is kept: that link goes
+   *  on proving itself, but does not touch the status line meanwhile. */
+  let swapping = false;
+  /** What the live session's proof last showed (null: no working link). The
+   *  status line can be showing something else meanwhile — listening for a
+   *  chime, a mic error — without the link being any less there. */
+  let linkUp: 'connected' | 'reconnecting' | null = null;
+  const linkLine = (): string => (linkUp === 'reconnecting' ? LINK_LINES.reconnecting : LINK_LINES.connected);
+  /** A mic/listen problem while a link is up: say it, keep showing the link. */
+  const setProblem = (line: string): void => { if (linkUp) set(linkUp, line); else set('error', line); };
 
   const set = (s: LinkState, m: string): void => {
     if (resetTimer !== null) { clearTimer(resetTimer); resetTimer = null; }
@@ -118,19 +129,26 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
 
   async function connect(code: string, joiningLine: string, failLine?: string): Promise<boolean> {
     const mine = ++attempt;
-    stopProof();
-    set('joining', joiningLine);
+    swapping = false;
     const prev = current;
-    current = null;
-    await prev?.stop();
+    // A link that works is kept until the new join is in: retyping the code
+    // on a connected phone (or a code the laptop has already retired) must
+    // never drop it.
+    const keep = !!prev && linkUp !== null;
+    const before = { stopProof };
+    if (keep) swapping = true;
+    else { stopProof(); current = null; linkUp = null; }
+    set('joining', joiningLine);
+    if (!keep) await prev?.stop();
+    let self: object | null = null;
     // "Laptop ✓" is shown only on proof: the laptop echoed this phone's ping
     // within PING_TIMEOUT_MS. Joining the room proves nothing (the room holds
     // old messages, and a laptop whose listener went quiet still looks paired).
     let live = false;
     let proveNow: () => void = () => undefined;
     const onState = (st: PairState): void => {
-      if (!live || mine !== attempt) return;
-      if (st === 'gone' || st === 'disconnected') { stopProof(); set('error', LINK_LINES.lost); }
+      if (!live || current !== self || swapping) return;
+      if (st === 'gone' || st === 'disconnected') { stopProof(); linkUp = null; set('error', LINK_LINES.lost); }
       // The laptop said hello again: ask for proof right away.
       else if (st === 'paired' && state !== 'connected') proveNow();
     };
@@ -147,12 +165,29 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     });
     if (mine !== attempt) { if (!('error' in res)) void res.stop(); return false; }
     if ('error' in res) {
+      if (keep && current === prev) {
+        // The working link stays. A code that no longer resolves was retired
+        // because this phone already proved itself to that laptop.
+        swapping = false;
+        set(linkUp ?? 'connected', res.error === 'room not found' ? LINK_LINES.already
+          : res.error === 'needs network' ? LINK_LINES.needsNetwork : LINK_LINES.badCode);
+        return false;
+      }
       set('error', failLine ?? (res.error === 'needs network' ? LINK_LINES.needsNetwork
         : res.error === 'room not found' ? LINK_LINES.noRoom : LINK_LINES.badCode));
       return false;
     }
+    if (keep && prev) {
+      // The new session is in: retire the old one. In the same room it leaves
+      // without a bye — this phone never left, so the laptop is not told so.
+      swapping = false;
+      before.stopProof();
+      linkUp = null;
+      void prev.stop({ silent: (prev as { roomId?: string }).roomId === res.roomId });
+    }
     res.session.onSnapshot((snap) => deps.onSnapshot(snap));
     current = res;
+    self = res;
     deps.onSession?.(res.session);
     live = true;
     const s = res.session as Partial<Pick<GuestSession, 'ping' | 'onPong'>>;
@@ -163,7 +198,8 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     }
     let wait: { nonce: string; timer: unknown } | null = null;
     let next: unknown = null;
-    const mineLive = (): boolean => mine === attempt && current === res;
+    let dead = false;
+    const mineLive = (): boolean => !dead && current === res;
     const sendPing = (): void => {
       next = null;
       if (!mineLive() || wait) return;
@@ -173,7 +209,8 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
         wait = null;
         if (!mineLive()) return;
         // No answer in time: say so, and keep asking.
-        if (state !== 'error') set('reconnecting', LINK_LINES.reconnecting);
+        linkUp = 'reconnecting';
+        if (state !== 'error' && state !== 'listening' && !swapping) set('reconnecting', LINK_LINES.reconnecting);
         sendPing();
       }, PING_TIMEOUT_MS);
       wait = { nonce, timer };
@@ -183,7 +220,8 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       if (!wait || wait.nonce !== nonce || !mineLive()) return;
       clearTimer(wait.timer);
       wait = null;
-      if (state !== 'connected') set('connected', LINK_LINES.connected);
+      linkUp = 'connected';
+      if (state !== 'connected' && state !== 'listening' && !swapping) set('connected', LINK_LINES.connected);
       if (next !== null) clearTimer(next);
       next = setTimer(sendPing, PING_EVERY_MS);
     });
@@ -192,6 +230,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       sendPing();
     };
     stopProof = (): void => {
+      dead = true;
       if (wait) { clearTimer(wait.timer); wait = null; }
       if (next !== null) { clearTimer(next); next = null; }
     };
@@ -223,7 +262,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       const l = makeListener({
         onCode: (code) => { stopListening(); void connect(code, LINK_LINES.heard); },
         onError: (reason) => {
-          if (listener === l) set('error', reason === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
+          if (listener === l) setProblem(reason === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
         },
       });
       listener = l;
@@ -232,14 +271,14 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
         listenTimer = null;
         if (listener !== l) return;
         stopListening();
-        set('error', LINK_LINES.timeout);
+        setProblem(LINK_LINES.timeout);
       }, LISTEN_TIMEOUT_MS);
       const r = await l.start();
       // Cancelled (or restarted) while the mic permission prompt was up.
       if (listener !== l) { l.stop(); return; }
       if (r === 'denied' || r === 'unsupported') {
         stopListening();
-        set('error', r === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
+        setProblem(r === 'denied' ? LINK_LINES.micDenied : LINK_LINES.micUnsupported);
       }
     },
     async joinWithCode(code, typed = true) {
@@ -250,7 +289,8 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     cancel() {
       const wasListening = listener !== null;
       stopListening();
-      if (wasListening && state === 'listening') set('idle', LINK_LINES.idle);
+      // Back to what the link really is (still connected, if it was).
+      if (wasListening && state === 'listening') { if (linkUp) set(linkUp, linkLine()); else set('idle', LINK_LINES.idle); }
     },
     rejoinSaved,
     async resume() {
@@ -260,6 +300,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     async stop() {
       attempt++;
       stopProof();
+      linkUp = null;
       stopListening();
       const prev = current;
       current = null;
