@@ -38,7 +38,9 @@ export interface PhoneGuestJoinDeps {
 export type PhoneGuestJoinSuccess = {
   roomId: string;
   session: GuestSession;
-  stop: () => Promise<void>;
+  /** `silent`: leave without a bye (this phone stays in the room through a
+   *  newer session of its own). */
+  stop: (opts?: { silent?: boolean }) => Promise<void>;
 };
 
 export type PhoneGuestJoinFailure = {
@@ -85,7 +87,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
       });
     }
     if (deps.platform) announcePhone(session, deps.platform, { deviceId, native: deps.native });
-    return { roomId, session, stop: () => session.close() };
+    return { roomId, session, stop: (opts) => session.close(opts) };
   } catch {
     return { error: 'needs network' };
   }
@@ -94,7 +96,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
 /** Tell the laptop which phone this is, so it can place it (Nothing left,
  *  iPhone right by default) and send a board to THIS phone only. Best-effort. */
 export function announcePhone(
-  session: Pick<GuestSession, 'sendCommand'>,
+  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'hostSid'>>,
   platform: PhonePlatform,
   extra: { deviceId?: string; native?: boolean; refresh?: boolean; status?: () => object | null } = {},
 ): void {
@@ -106,6 +108,11 @@ export function announcePhone(
     if (extra.deviceId) body.deviceId = extra.deviceId;
     if (extra.native !== undefined) body.native = extra.native;
     if (extra.refresh) body.refresh = true;
+    // sid: the laptop session this phone last heard from. The laptop only
+    // takes an announce that names its CURRENT session as live (an announce
+    // replayed from the room's history names an old one, or none).
+    const sid = session.hostSid?.();
+    if (sid) body.sid = sid;
     // iPhone sensing: gimbal / sensor / hand-control state for the laptop's
     // connect-devices row (phonePoint.ts). Only what is really on.
     const st = extra.status?.();
@@ -126,7 +133,7 @@ function isShort(raw: string): boolean {
 export const RE_ANNOUNCE_MS = 20_000;
 
 export function keepAnnouncing(
-  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere'>>,
+  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere' | 'hostSid'>>,
   platform: PhonePlatform,
   extra: { deviceId?: string; native?: boolean; status?: () => object | null },
   timers: { setInterval(fn: () => void, ms: number): unknown; clearInterval(id: unknown): void } = {
@@ -148,6 +155,9 @@ export interface PhoneSessionDeps extends PhoneGuestJoinDeps {
   keepAliveTimers?: Parameters<typeof keepAnnouncing>[3];
   /** Extra announce fields (iPhone sensing status), read at each announce. */
   announceStatus?: () => object | null;
+  /** False once a newer join has superseded this one: a join that finishes
+   *  late must not take the AI-feed forwarder from the one that replaced it. */
+  isCurrent?: () => boolean;
 }
 
 /** The ONE way a phone joins the laptop's room — chime first-join, typed code
@@ -158,7 +168,7 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
   const res = await joinPhoneAsGuest(deps);
   if ('error' in res) return res;
   const { session } = res;
-  deps.aiForwarder?.bind(session);
+  if (deps.isCurrent?.() !== false) deps.aiForwarder?.bind(session);
   const deviceId = deps.storage ? ensureDeviceId(deps.storage) : undefined;
   const stopAnnouncing = deps.platform
     ? keepAnnouncing(session, deps.platform, { deviceId, native: deps.native, status: deps.announceStatus }, deps.keepAliveTimers)
@@ -166,12 +176,14 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
   let stopped = false;
   return {
     ...res,
-    stop: async () => {
+    stop: async (opts?: { silent?: boolean }) => {
       if (stopped) return;
       stopped = true;
       stopAnnouncing();
-      deps.aiForwarder?.bind(null);
-      await session.close();
+      // Only if this session is still the bound one (a stale join torn down
+      // late must not unbind the join that replaced it).
+      deps.aiForwarder?.bind(null, session);
+      await session.close(opts);
     },
   };
 }

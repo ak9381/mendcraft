@@ -13,7 +13,7 @@ import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 import { palmCenter } from '../../src/canvas/handFeel';
 import { REACH } from '../../src/canvas/handPointer';
 import { classifyHandShape, type HandShape, type HandSide } from '../../src/canvas/handShape';
-import { createHoldEngine, type GestureHand } from '../../src/canvas/gestureHold';
+import { createHoldEngine, createPairGrace, type GestureHand } from '../../src/canvas/gestureHold';
 import { LAPTOP_GESTURES, PHONE_GESTURES, badgeSelectors, duplicateKeys, resolveGesture, type GestureEnv } from '../../src/canvas/gestureBindings';
 import { handScale } from '../../src/canvas/handFeel';
 import type { Pt } from '../../src/input/handLogic';
@@ -607,6 +607,20 @@ describe('contextual fixed gestures for the plan', () => {
   it('L peace = Rotate while the plan shows Rotate, otherwise Tools', () => {
     expect(resolveGesture(binding('L:peace'), env({ [ROTATE]: { id: 'rot' }, '.mc-tools-chip': { id: 'tools' } }))).toEqual({ kind: 'click', el: { id: 'rot' }, label: 'Rotate' });
     expect(resolveGesture(binding('L:peace'), env({ '.mc-tools-chip': { id: 'tools' } }))).toEqual({ kind: 'click', el: { id: 'tools' }, label: 'Tools' });
+  });
+
+  it('Remove and Rotate wait under the pair grace like any one-hand hold (both thumbs down / both peace are bound)', () => {
+    const grace = createPairGrace(LAPTOP_GESTURES.map((b) => b.key));
+    // The right hand has held thumbs-down; the LEFT hand just changed shape (it may be joining a pair).
+    grace.observe([{ shape: 'thumbsDown', hand: 'R' }], 0);
+    grace.observe([{ shape: 'thumbsDown', hand: 'R' }, { shape: 'thumbsDown', hand: 'L' }], 1000);
+    expect(grace.defer('R:thumbsDown', 1010)).toBe(true); // Remove does not fire into a forming both-thumbs-down
+    expect(grace.defer('R:thumbsDown', 1000 + 5000)).toBe(false);
+    grace.observe([{ shape: 'peace', hand: 'L' }], 7000);
+    grace.observe([{ shape: 'peace', hand: 'L' }, { shape: 'peace', hand: 'R' }], 8000);
+    expect(grace.defer('L:peace', 8010)).toBe(true); // Rotate does not fire into a forming both-peace (Register)
+    // Nothing new shares L peace or R thumbs-down as a one-hand key.
+    expect(LAPTOP_GESTURES.filter((b) => b.key === 'L:peace' || b.key === 'R:thumbsDown').map((b) => b.label)).toEqual(['Reject', 'Tools']);
   });
 
   it('the badge follows the same priority, and no table gained a duplicate gesture', () => {

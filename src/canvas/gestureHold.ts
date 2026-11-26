@@ -16,7 +16,18 @@ import { FIXED_SHAPES, type HandShape, type HandSide } from './handShape';
 
 export type FixedShape = 'thumbsUp' | 'thumbsDown' | 'one' | 'peace' | 'three';
 /** 'R:thumbsUp', 'L:peace', '2:three' (both hands). */
-export type GestureKey = `${HandSide | '2'}:${FixedShape}`;
+/** The one MIXED two-hand gesture: left thumbs UP + right thumbs DOWN. */
+export const MIXED_KEY = '2:lUpRDown' as const;
+export type GestureKey = `${HandSide | '2'}:${FixedShape}` | typeof MIXED_KEY;
+
+/** The hand shapes a key shows (for icons and names): the mixed key is two. */
+export function keyShapes(key: GestureKey): FixedShape[] {
+  if (key === MIXED_KEY) return ['thumbsUp', 'thumbsDown'];
+  return [key.split(':')[1] as FixedShape];
+}
+export function keySide(key: GestureKey): HandSide | '2' {
+  return key.split(':')[0] as HandSide | '2';
+}
 
 export interface GestureHand {
   shape: HandShape;
@@ -35,6 +46,10 @@ export interface HoldInput {
   /** Something else owns the hands right now (a fist grab, a capture step):
    *  no hold runs. */
   blocked?: boolean;
+  /** At completion, a hold may be DEFERRED (it stays full, not fired) — e.g.
+   *  L thumbs-up (Save) while the other hand is still forming the mixed
+   *  L-up + R-down gesture. */
+  defer?: (key: GestureKey) => boolean;
 }
 
 export interface HoldState {
@@ -75,6 +90,11 @@ export function gestureKeyOf(hands: readonly Pick<GestureHand, 'shape' | 'hand'>
   if (fixed.length === 1) return `${fixed[0].hand}:${fixed[0].shape as FixedShape}`;
   const [a, b] = fixed;
   if (fixed.length === 2 && a.shape === b.shape && a.hand !== b.hand) return `2:${a.shape as FixedShape}`;
+  // The mixed pair: left thumbs UP + right thumbs DOWN (Hover to click).
+  if (fixed.length === 2 && a.hand !== b.hand) {
+    const l = a.hand === 'L' ? a : b, r = a.hand === 'L' ? b : a;
+    if (l.shape === 'thumbsUp' && r.shape === 'thumbsDown') return MIXED_KEY;
+  }
   return null; // two different shapes (or two "right" hands): never guess
 }
 
@@ -151,6 +171,7 @@ export function createHoldEngine(cfg: Partial<HoldConfig> = {}): HoldEngine {
     }
 
     if (now - startedAt >= c.holdMs) {
+      if (input.defer?.(key)) return out(null, now); // full, waiting: the other hand is still forming
       const fired = key;
       cancel();
       spent = true; clearSince = null;
@@ -164,5 +185,52 @@ export function createHoldEngine(cfg: Partial<HoldConfig> = {}): HoldEngine {
     update,
     reset() { cancel(); spent = false; clearSince = null; state = { key: null, progress: 0, fired: null }; },
     get state() { return state; },
+  };
+}
+
+// ---------------------------------------------------------------- pair grace
+
+/** How recently the OTHER hand must have been steady before a one-hand key
+ *  that is half of a bound two-hand gesture may fire. */
+export const PAIR_GRACE_MS = 400;
+
+/**
+ * Pair grace: a one-hand hold that is HALF of a bound two-hand gesture waits
+ * (stays full, not fired) while the other hand changed shape — appeared,
+ * disappeared or moved between shapes — within PAIR_GRACE_MS: it may be
+ * forming (or just broke out of) the pair.
+ *  - X:shape waits on the other hand whenever `2:shape` is bound
+ *    (R thumbs up / Approve vs both thumbs up / More; L thumbs down / Undo
+ *    vs both thumbs down…);
+ *  - L thumbs up and R thumbs down also wait when the mixed L-up + R-down
+ *    is bound.
+ */
+export interface PairGrace {
+  observe(hands: readonly Pick<GestureHand, 'shape' | 'hand'>[], now: number): void;
+  defer(key: GestureKey, now: number): boolean;
+}
+
+export function createPairGrace(bound: readonly GestureKey[], graceMs = PAIR_GRACE_MS): PairGrace {
+  const has = new Set(bound);
+  const last: Record<HandSide, { shape: HandShape | null; at: number }> = { L: { shape: null, at: -Infinity }, R: { shape: null, at: -Infinity } };
+  return {
+    observe(hands, now) {
+      for (const side of ['L', 'R'] as const) {
+        const cur = hands.find((h) => h.hand === side)?.shape ?? null;
+        // Every change counts, the hand appearing or disappearing included.
+        if (cur !== last[side].shape) last[side] = { shape: cur, at: now };
+      }
+    },
+    defer(key, now) {
+      if (key === MIXED_KEY) return false;
+      const side = keySide(key);
+      if (side === '2') return false;
+      const shape = keyShapes(key)[0];
+      const pairs = has.has(`2:${shape}` as GestureKey)
+        || (has.has(MIXED_KEY) && ((side === 'L' && shape === 'thumbsUp') || (side === 'R' && shape === 'thumbsDown')));
+      if (!pairs) return false;
+      const other: HandSide = side === 'L' ? 'R' : 'L';
+      return now - last[other].at < graceMs;
+    },
   };
 }

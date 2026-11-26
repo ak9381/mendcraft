@@ -268,7 +268,14 @@ describe('host session short-code alias TTL', () => {
     const guest = await createGuestSession(t, host.token);
     await vi.advanceTimersByTimeAsync(0);
     expect(host.state()).toBe('paired');
-    expect(await t.resolveAlias(host.code)).toBeNull(); // cleared on pair, not by the timer
+    // A hello alone keeps the code (old hellos are replayed after a reload);
+    // it goes once the phone names this session in a ping.
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    await guest.ping('p1-aaaa');
+    await vi.advanceTimersByTimeAsync(0);
+    await guest.ping('p2-bbbb');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await t.resolveAlias(host.code)).toBeNull(); // cleared on proof, not by the timer
     await vi.advanceTimersByTimeAsync(ALIAS_TTL_MS);
     await guest.close();
     await host.close();
@@ -294,7 +301,11 @@ describe('host + guest sessions over the fake transport', () => {
     await flush();
     expect(host.state()).toBe('paired');
     expect(guest.state()).toBe('paired');
-    expect(await t.resolveAlias(host.code)).toBeNull(); // alias cleared on pair
+    await guest.ping('p1-aaaa'); // learns the host's session id from the pong
+    await flush();
+    await guest.ping('p2-bbbb'); // names it: live proof
+    await flush();
+    expect(await t.resolveAlias(host.code)).toBeNull(); // alias cleared on proof
 
     await guest.sendCommand({ kind: 'undo' });
     await guest.sendCommand({ kind: 'command', text: 'add a door' });

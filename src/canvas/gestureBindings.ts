@@ -8,7 +8,7 @@
 // palm-highlighted button. R thumbs down = Reject while a review is open,
 // else close the open dialog / menu / Tools.
 
-import type { GestureKey } from './gestureHold';
+import { MIXED_KEY, keyShapes, keySide, type GestureKey } from './gestureHold';
 
 export type GestureContext = 'approveOrPress' | 'declineOrClose';
 
@@ -53,7 +53,10 @@ export const LAPTOP_GESTURES: readonly GestureBinding[] = [
   { key: 'L:one', label: 'New board', targets: ['[data-cmd=new]'] },
   { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'], when: [PLAN_ROTATE] },
   { key: 'L:three', label: 'Talk', targets: ['.mc-fab-mic'] },
-  { key: '2:thumbsUp', label: 'AI monitor', targets: ['[data-cmd=monitor]'] },
+  // Both thumbs up opens More (AI monitor lives there, by voice and by palm).
+  { key: '2:thumbsUp', label: 'More', targets: ['.mc-more-btn'] },
+  // Mixed: left thumbs UP + right thumbs DOWN together = Hover to click.
+  { key: MIXED_KEY, label: 'Hover to click', targets: ['[data-cmd=dwell]'] },
   { key: '2:thumbsDown', label: 'Simulate offline', targets: ['[data-cmd=offline]'] },
   { key: '2:one', label: 'Point at a device', targets: [], say: "connect what I'm pointing at" },
   { key: '2:peace', label: 'Register', targets: ['.mc-register-chip', '.mc-blank-register', '[data-cmd=reregister]'] },
@@ -147,7 +150,9 @@ export const CLOSER_SELECTORS: readonly string[] = [
 
 /** Short human name for a gesture key, e.g. "Right thumbs up", "Both peace". */
 export function gestureName(key: GestureKey): string {
-  const [side, shape] = key.split(':') as [string, string];
+  if (key === MIXED_KEY) return 'Left thumbs up + right thumbs down';
+  const side = keySide(key);
+  const shape = keyShapes(key)[0];
   const s = side === 'R' ? 'Right' : side === 'L' ? 'Left' : 'Both hands';
   const n: Record<string, string> = { thumbsUp: 'thumbs up', thumbsDown: 'thumbs down', one: '1 finger', peace: 'peace', three: '3 fingers' };
   return `${s} ${n[shape] ?? shape}`;

@@ -129,6 +129,12 @@ export function combineFacts(main: ReviewFacts, other: ReviewFacts, kind: 'impro
   return { ...main, sim: !!(main.sim || other.sim), bytes, sentWhat, chain, ...(simBytes > 0 ? { simBytes } : { simBytes: undefined }) };
 }
 
+/** One engine made the whole change in one call (a phone with no on-device
+ *  model: Gemini drafts, and nothing improves its own draft): "Made by Gemini · 2.1 KB". */
+export function madeByFacts(facts: ReviewFacts): ReviewFacts {
+  return { ...facts, chain: `Made by ${engineName(facts.engine)} · ${stepBytes(facts)}` };
+}
+
 /** What a turn told the ledger (aiTurn's SentInfo shape, kept structural). */
 export interface ReviewTurn { engine: string; sent: string | null; routeLine: string; sim: boolean }
 

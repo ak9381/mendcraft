@@ -1346,7 +1346,7 @@ describe('UI fixes from the live run', () => {
     const rule = sheet.match(/\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*\}/)?.[0] ?? '';
     expect(rule).toContain('top: calc(var(--mc-bar-h, 64px) + 12px);');
     // its box ends above the preview (216) and the Facing pill
-    expect(rule).toContain('bottom: calc(16px + 216px + 8px + 54px + 12px + env(safe-area-inset-bottom, 0px));');
+    expect(rule).toContain('bottom: calc(16px + 216px + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));');
     expect(rule).toContain('flex-wrap: wrap-reverse;'); // too many buttons for the height: a second column, not a cut-off one
     expect(sheet).toMatch(/@media \(max-width: 1240px\) \{\s*\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{\s*bottom: calc\(96px \+ 216px/);
     // the base rule (camera off) is unchanged: centred on the right edge

@@ -49,9 +49,33 @@ export function isIndianEnglish(voice: SynthVoice): boolean {
   return lang === 'en-in' || /indian english/i.test(voice.name);
 }
 
+/** A voice whose audio is made off this device: the text to speak is sent to
+ *  the voice's provider. Never used unless the person opts in. */
+export function isCloudVoice(voice: SynthVoice): boolean {
+  return voice.localService === false;
+}
+
+/** How good a voice sounds, by what the platforms call it:
+ *  3 = Apple "(Premium)"; 2 = Apple "(Enhanced)" / Siri, or another natural /
+ *  neural voice; 1 = Android's on-device Google voices ("en-us-x-sfg-local");
+ *  0 = the ordinary compact voice. */
+export function voiceTier(voice: SynthVoice): 0 | 1 | 2 | 3 {
+  const id = `${voice.name} ${voice.voiceURI}`;
+  if (/\bpremium\b/i.test(id)) return 3;
+  if (NATURAL_RE.test(id) || /\bsiri\b/i.test(id)) return 2;
+  if (/-x-[a-z0-9]+-local\b/i.test(id) || /#(fe)?male_\d+-local\b/i.test(id)) return 1;
+  return 0;
+}
+
+/** macOS's joke voices (Bad News, Bells, Zarvox…): never an automatic pick. */
+const NOVELTY_RE = /\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|deranged|hysterical|pipe organ)\b/i;
+export function isNoveltyVoice(voice: SynthVoice): boolean {
+  return NOVELTY_RE.test(voice.name);
+}
+
 function qualityScore(voice: SynthVoice): number {
-  let score = 0;
-  if (isNaturalVoice(voice)) score += 100;
+  let score = voiceTier(voice) * 100;
+  if (isNoveltyVoice(voice)) score -= 150;
   if (voice.localService !== false) score += 20;
   if (isKannada(voice) || isIndianEnglish(voice)) score += 15;
   if (voice.default) score += 5;
@@ -82,7 +106,11 @@ function findSaved(voices: readonly SynthVoice[], saved?: SavedVoice | null): Sy
 
 function bestForLang(voices: readonly SynthVoice[], lang: string): SynthVoice | null {
   const matches = rankVoices(voices.filter((v) => langMatches(v, lang)));
-  return matches[0] ?? null;
+  if (!matches.length) return null;
+  // Same quality: the voice for the exact region asked for ("en-GB") first.
+  const top = voiceTier(matches[0]);
+  const exact = matches.find((v) => voiceTier(v) === top && !isNoveltyVoice(v) && normLang(v.lang) === normLang(lang));
+  return exact ?? matches[0];
 }
 
 /**
@@ -92,9 +120,13 @@ function bestForLang(voices: readonly SynthVoice[], lang: string): SynthVoice | 
  * first), any English, first available, or null.
  */
 export function pickSpokenVoice(
-  voices: readonly SynthVoice[],
-  opts: { lang?: string; saved?: SavedVoice | null } = {},
+  all: readonly SynthVoice[],
+  opts: { lang?: string; saved?: SavedVoice | null; allowCloud?: boolean } = {},
 ): SynthVoice | null {
+  // On-device voices only: a voice with localService === false sends the text
+  // to a cloud TTS, so it is never picked — not even a saved one — unless she
+  // opted in (allowCloud).
+  const voices = opts.allowCloud ? all : all.filter((v) => !isCloudVoice(v));
   if (voices.length === 0) return null;
   const want = opts.lang ?? 'en-US';
   const wantBase = baseLang(want) || 'en';
@@ -297,4 +329,81 @@ export function toSynthVoice(voice: {
     localService: voice.localService,
     default: voice.default,
   };
+}
+
+// ---- nicer voice: clarity settings, cloud opt-in, the Mac download hint ----
+
+/** A little slower than normal speech: clearer, never rushed. */
+export const SPEECH_RATE = 0.95;
+export const SPEECH_PITCH = 1;
+
+export const CLOUD_VOICE_KEY = 'mendcraft:spoken-voice-cloud';
+export const VOICE_HINT_KEY = 'mendcraft:spoken-voice-hint-shown';
+export const READ_ALOUD_KEY = 'mendcraft:read-replies-aloud';
+
+function flag(key: string, store?: Storage): boolean {
+  try { return storageOf(store)?.getItem(key) === '1'; } catch { return false; }
+}
+function setFlag(key: string, on: boolean, store?: Storage): void {
+  try { const s = storageOf(store); if (on) s?.setItem(key, '1'); else s?.removeItem(key); } catch { /* private mode: in-memory only */ }
+}
+/** Has she opted in to online voices (text leaves the device to be spoken)? Off unless '1'. */
+export const loadAllowCloud = (store?: Storage): boolean => flag(CLOUD_VOICE_KEY, store);
+export const saveAllowCloud = (on: boolean, store?: Storage): void => setFlag(CLOUD_VOICE_KEY, on, store);
+/** Canvas: read status replies aloud. Off unless '1'. */
+export const loadReadAloud = (store?: Storage): boolean => flag(READ_ALOUD_KEY, store);
+export const saveReadAloud = (on: boolean, store?: Storage): void => setFlag(READ_ALOUD_KEY, on, store);
+
+export type SpeechPlatform = 'mac' | 'ios' | 'android' | 'other';
+/** Which OS's voices we are looking at (iPadOS reports itself as a Mac with touch). */
+export function speechPlatform(ua: string, maxTouchPoints = 0): SpeechPlatform {
+  if (/android/i.test(ua)) return 'android';
+  if (/iphone|ipad|ipod/i.test(ua) || (/macintosh/i.test(ua) && maxTouchPoints > 1)) return 'ios';
+  if (/macintosh|mac os x/i.test(ua)) return 'mac';
+  return 'other';
+}
+
+export const MAC_VOICE_HINT = "For a nicer voice: System Settings → Accessibility → Spoken Content → System voice → Manage Voices → download 'Ava (Premium)'.";
+
+/** True on a Mac that has voices but no Premium / Enhanced one in this
+ *  language: the place to say how to get one (we never download anything). */
+export function needsMacVoiceHint(voices: readonly SynthVoice[], platform: SpeechPlatform, lang = 'en-US'): boolean {
+  if (platform !== 'mac' || voices.length === 0) return false;
+  return !voices.some((v) => !isCloudVoice(v) && langMatches(v, lang) && voiceTier(v) >= 2);
+}
+/** The hint, once: null if it does not apply or was already shown. Marks it shown. */
+export function macVoiceHintOnce(voices: readonly SynthVoice[], platform: SpeechPlatform, lang = 'en-US', store?: Storage): string | null {
+  if (!needsMacVoiceHint(voices, platform, lang) || flag(VOICE_HINT_KEY, store)) return null;
+  setFlag(VOICE_HINT_KEY, true, store);
+  return MAC_VOICE_HINT;
+}
+
+/** The voices the picker lists for a language, best first: on-device only
+ *  unless she allowed online voices; joke voices left out; at most `max`. */
+export function listPickerVoices(voices: readonly SynthVoice[], opts: { lang?: string; allowCloud?: boolean; max?: number } = {}): SynthVoice[] {
+  const lang = opts.lang ?? 'en-US';
+  const usable = voices.filter((v) => (opts.allowCloud || !isCloudVoice(v)) && !isNoveltyVoice(v) && langMatches(v, lang));
+  const first = bestForLang(usable, lang);
+  const ranked = rankVoices(usable);
+  const ordered = first ? [first, ...ranked.filter((v) => v !== first)] : ranked;
+  return ordered.slice(0, opts.max ?? 12);
+}
+
+/** "Ava (Premium)" stays as it is; the tag says what kind of voice it is. */
+export function voiceKindLabel(voice: SynthVoice): string {
+  if (isCloudVoice(voice)) return 'Online — text is sent to be spoken';
+  const tier = voiceTier(voice);
+  return tier === 3 ? 'Premium · on this device' : tier === 2 ? 'Enhanced · on this device' : 'On this device';
+}
+
+/** Can `voice` speak text written in `lang`? (An English voice reading Kannada is noise.) */
+export function voiceSpeaks(voice: SynthVoice | null, lang: string): boolean {
+  if (!voice) return baseLang(lang) === 'en';
+  return langMatches(voice, lang);
+}
+
+/** The voices a picker may list or use: on-device ones, plus online ones only
+ *  after she turned online voices on. */
+export function usableVoices(voices: readonly SynthVoice[], allowCloud: boolean): SynthVoice[] {
+  return voices.filter((v) => allowCloud || !isCloudVoice(v));
 }

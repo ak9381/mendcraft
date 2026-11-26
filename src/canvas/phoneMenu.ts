@@ -17,6 +17,7 @@ export const PHONE_PRIMARY = ['ai', 'new'] as const;
 export const PHONE_GROUPS: ReadonlyArray<{ title: string; cmds: readonly string[] }> = [
   { title: 'Canvas', cmds: ['everything', 'save', 'undo'] },
   { title: 'Hands and gestures', cmds: ['hands', 'dwell', 'reregister', 'teach', 'gestures'] },
+  { title: 'Sound', cmds: ['voice'] },
   { title: 'Testing', cmds: ['offline'] },
 ];
 

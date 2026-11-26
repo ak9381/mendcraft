@@ -7,8 +7,10 @@ import {
   isIndianEnglish,
   isKannada,
   isNaturalVoice,
+  loadAllowCloud,
   loadSavedVoice,
   rankVoices,
+  usableVoices,
   saveVoice,
   type SavedVoice,
   type SynthVoice,
@@ -97,7 +99,9 @@ export function createVoicePanel(opts: VoicePanelOptions): VoicePanel {
   root.append(header, lead, list, empty, footer);
 
   function currentVoices(): SynthVoice[] {
-    return rankVoices(opts.getVoices());
+    // Online voices (their text is sent away to be spoken) are not listed —
+    // so cannot be previewed or picked — unless she turned them on.
+    return rankVoices(usableVoices(opts.getVoices(), loadAllowCloud()));
   }
 
   function choose(voice: SynthVoice): void {

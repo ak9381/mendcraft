@@ -2,6 +2,7 @@
 // leave the device: no Relay, no upload, no cloud speech. The encoder/decoder
 // themselves live in src/relay/soundPairing.ts and are unit-tested in Node.
 
+import { createSpeaker } from '../ai/speaker';
 import {
   decodePairingChime,
   encodePairingChime,
@@ -124,10 +125,9 @@ export function speakPairingCode(grouped: string): void {
     .map((ch) => (ch === ',' || ch === ' ' ? ch : ch))
     .join(' ')
     .replace(/ , /g, ', ');
-  const u = new SpeechSynthesisUtterance(spoken);
-  u.rate = 0.85;
-  try { speechSynthesis.cancel(); } catch { /* ignore */ }
-  speechSynthesis.speak(u);
+  // The same chosen on-device voice as every other spoken line; slower, so
+  // each letter of the code is heard.
+  createSpeaker().speak(spoken, { rate: 0.85 });
 }
 
 /**

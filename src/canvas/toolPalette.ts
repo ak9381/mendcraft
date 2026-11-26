@@ -45,7 +45,13 @@ export function mountToolPalette(root: HTMLElement, win: Window = window, o: { o
     moreMenu.hidden = !on;
     moreBtn.setAttribute('aria-expanded', String(on));
   }
-  moreBtn?.addEventListener('click', () => setMore(!!moreMenu?.hidden));
+  // Opening More while the palette is closed (a gesture or voice pressed the
+  // hidden button) opens the palette too, so the menu is actually on screen.
+  moreBtn?.addEventListener('click', () => {
+    const opening = !!moreMenu?.hidden;
+    if (opening && !openState && !phone) open();
+    setMore(opening);
+  });
   tools.id = 'mc-tool-palette';
   tools.setAttribute('aria-label', 'Tools');
 

@@ -9,7 +9,7 @@
 
 import type { Pt } from '../input/handLogic';
 import { classifyHandShape, createHandPolarity, isFixedShape, stampShape, type HandShape, type HandSide, type LabelPolarity } from './handShape';
-import { createHoldEngine, type FixedShape, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
+import { createHoldEngine, createPairGrace, keyShapes, keySide, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
 import {
   CLOSER_SELECTORS, badgeSelectors, gestureName, resolveGesture,
   type GestureAction, type GestureBinding, type GestureEnv,
@@ -143,6 +143,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const scroll = createPeaceScroll();
   /** Two peace hands seen continuously since (for clearing the scroll latches). */
   let twoPeaceSince: number | null = null;
+  const pairGrace = createPairGrace(bindings.map((b) => b.key));
   const scroller = createScrollDriver({
     root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd,
     onLevel: opts.onLevel, tickSound: opts.levelTick,
@@ -168,13 +169,14 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const badges = new Map<GestureKey, HTMLElement>();
   for (const b of bindings) {
     if (!b.targets.length && !b.when?.length) continue;
-    const [side, shape] = b.key.split(':') as ['L' | 'R' | '2', FixedShape];
+    const side = keySide(b.key);
+    const shapes = keyShapes(b.key);
     const el = doc.createElement('div');
-    el.className = 'mc-gesture-badge';
+    el.className = shapes.length > 1 ? 'mc-gesture-badge is-pair' : 'mc-gesture-badge';
     el.dataset.key = b.key;
-    el.dataset.shape = shape;
+    el.dataset.shape = shapes.join('+');
     el.title = `${gestureName(b.key)}: ${b.label}`;
-    el.innerHTML = `${handIconSvg(shape)}<span class="mc-gesture-side">${sideMark(side)}</span>`;
+    el.innerHTML = `${shapes.map(handIconSvg).join('')}<span class="mc-gesture-side">${sideMark(side)}</span>`;
     el.hidden = true;
     layer.append(el);
     badges.set(b.key, el);
@@ -204,8 +206,9 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (!el || !onTop(el)) { badge.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       badge.hidden = false;
-      // 24px circle at the button's top-right corner, 8px outside it.
-      badge.style.transform = `translate(${Math.round(r.right - 16)}px, ${Math.round(r.top - 8)}px)`;
+      // Centred on the button's TOP-LEFT corner, its side tag above-left:
+      // clear of the label (and the layer never takes clicks).
+      badge.style.transform = `translate(${Math.round(r.left - 12)}px, ${Math.round(r.top - 12)}px)`;
       badge.classList.toggle('is-holding', holding === b.key);
     }
   }
@@ -214,9 +217,9 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   function hudShow(key: GestureKey | null, action: GestureAction | null, progress: number): void {
     if (!key || !action) { hud.hidden = true; return; }
     hud.hidden = false;
-    const shape = key.split(':')[1] as FixedShape;
+    const shapes = keyShapes(key);
     const icon = hud.querySelector<HTMLElement>('.mc-gesture-hud-icon')!;
-    if (icon.dataset.shape !== shape) { icon.dataset.shape = shape; icon.innerHTML = handIconSvg(shape); }
+    if (icon.dataset.shape !== shapes.join('+')) { icon.dataset.shape = shapes.join('+'); icon.innerHTML = shapes.map(handIconSvg).join(''); }
     const what = action.kind === 'click' ? `${action.label === 'Press' ? `Press ${nameOf(action.el)}` : action.label}`
       : action.kind === 'say' ? action.label : action.why;
     hud.querySelector('.mc-gesture-hud-text')!.textContent = `${gestureName(key)} · ${what}`;
@@ -359,7 +362,13 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
     }
     opts.highlight?.update(blocked ? null : palm, now, { blocked, anyHand: handsRead.length > 0, open: palmOpen, direct: ctx.direct ?? null });
-    const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked });
+    // Pair grace: a one-hand hold that is half of a bound two-hand gesture
+    // (R thumbs up vs both thumbs up, L thumbs up vs L-up + R-down…) waits
+    // while the other hand is still changing — appearing, leaving, or
+    // forming its shape.
+    pairGrace.observe(handsRead, now);
+    const defer = (key: GestureKey): boolean => pairGrace.defer(key, now);
+    const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked, defer });
     if (s.fired) {
       clearOverlays();
       act(s.fired);
