@@ -250,19 +250,24 @@ describe('createSentBoardMemo', () => {
   const focus = { kind: 'room', title: 'Focus', tiles: [] } as unknown as SurfacePlan;
   it('routine republishes keep the sent board (with its target) until the focus changes', () => {
     const m = createSentBoardMemo();
-    expect(m.current('f1', focus)).toEqual({ board: focus });
+    expect(m.current('f1', focus)).toEqual({ board: focus, frameId: 'f1' });
     m.remember({ boardFor: 'ios', board: BOARD }, 'f1', focus);
-    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios' });
-    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios' });
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f1' });
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f1' });
     // The focused board was edited (new plan object) → mirror the focus again, for good.
     const edited = { ...focus } as SurfacePlan;
-    expect(m.current('f1', edited)).toEqual({ board: edited });
-    expect(m.current('f1', focus)).toEqual({ board: focus });
+    expect(m.current('f1', edited)).toEqual({ board: edited, frameId: 'f1' });
+    expect(m.current('f1', focus)).toEqual({ board: focus, frameId: 'f1' });
+  });
+  it('remembers which board the sent plan came from (its drawings ride along)', () => {
+    const m = createSentBoardMemo();
+    m.remember({ boardFor: 'ios', board: BOARD, frameId: 'f9' }, 'f1', focus);
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f9' });
   });
   it('focusing another board ends the memo', () => {
     const m = createSentBoardMemo();
     m.remember({ boardFor: 'android', board: BOARD }, 'f1', focus);
-    expect(m.current('f2', null)).toEqual({ board: null });
+    expect(m.current('f2', null)).toEqual({ board: null, frameId: 'f2' });
   });
 });
 

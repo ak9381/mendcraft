@@ -18,6 +18,7 @@
     "e2e:gestures": "node scripts/e2e-gestures.mjs",
     "e2e:plan-hands": "node scripts/e2e-plan-hands.mjs",
     "e2e:phone-layout": "node scripts/e2e-phone-layout.mjs",
+    "e2e:phone-plan": "node scripts/e2e-phone-plan.mjs",
     "e2e:laptop-layout": "node scripts/e2e-laptop-layout.mjs",
     "e2e:room-rebuild": "node scripts/e2e-room-rebuild.mjs"
   },

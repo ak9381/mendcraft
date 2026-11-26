@@ -5,6 +5,9 @@
 // so nothing drawn (room names, labels, sizes) can reach the cloud through
 // those, and a prompt never grows with the drawing. A model or a relayed
 // board can also never supply a drawing: surface plans have no field for one.
+// A board sent to one of her own phones carries its drawing BESIDE the
+// surface plan in the relay snapshot (`boardDrawings`, re-sanitized on the
+// phone; see coerceBoardDrawings below), never inside it.
 //
 // The drawing never travels through the A2UI message either: the canvas
 // hands it to the plan board through this registry when the board mounts.
@@ -100,4 +103,51 @@ export function setSavedPlanDoc(frameId: string, boardId: string, doc: Record<st
 
 export function savedPlanDoc(frameId: string, boardId: string): Record<string, unknown> | null {
   return docs.get(key(frameId, boardId)) ?? null;
+}
+
+// ---- drawings that ride with a board sent to a phone ------------------------
+// A board sent to a phone (the relay `state` snapshot) carries its plan
+// drawings BESIDE the surface plan (`boardDrawings`), never inside it, so the
+// surface plan stays what models and morph edits see. The phone renders the
+// drawing the laptop has now, not the template. Both ends run this: the
+// laptop before publishing, the phone (via coerceSnapshot) on arrival.
+
+// Size: each drawing is bounded by sanitizePlanDoc (PLAN_DOC_MAX_CHARS); the
+// drawings then SHARE the whole snapshot's budget (UTF-8 bytes + Firestore
+// field count), which buildControlSnapshot enforces by shedding the largest
+// drawing first (relay/controlSnapshot.ts: SNAPSHOT_MAX_BYTES / _FIELDS).
+const BOARD_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** Every plan tile's board id on a board (they may sit inside containers). */
+export function planBoardIds(plan: { tiles?: unknown } | null | undefined): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown, depth: number): void => {
+    if (depth > 12 || out.length >= 8) return;
+    if (Array.isArray(node)) { node.forEach((n) => walk(n, depth + 1)); return; }
+    if (!node || typeof node !== 'object') return;
+    const o = node as Record<string, unknown>;
+    if (o.type === 'plan') { if (typeof o.boardId === 'string' && !out.includes(o.boardId)) out.push(o.boardId); return; }
+    for (const k of Object.keys(o)) walk(o[k], depth + 1);
+  };
+  walk(plan?.tiles, 0);
+  return out;
+}
+
+/** The drawings for `plan`'s plan tiles out of untrusted `raw` (board id →
+ *  plan doc): each sanitized, only ids the board really has, the selection
+ *  left out. A drawing that fails is dropped and counted — the phone then
+ *  shows that board's template, never a half drawing. Size is the snapshot's
+ *  shared budget (see above), not checked here. */
+export function coerceBoardDrawings(raw: unknown, plan: { tiles?: unknown } | null | undefined): { drawings: Record<string, Record<string, unknown>>; dropped: number } {
+  const drawings: Record<string, Record<string, unknown>> = {};
+  let dropped = 0;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !plan) return { drawings, dropped };
+  for (const id of planBoardIds(plan)) {
+    if (!BOARD_ID_RE.test(id) || !Object.prototype.hasOwnProperty.call(raw, id)) continue;
+    const clean = sanitizePlanDoc((raw as Record<string, unknown>)[id]);
+    if (!clean) { dropped++; continue; }
+    const { selectedId: _s, selectedIds: _ss, ...doc } = clean;
+    drawings[id] = doc;
+  }
+  return { drawings, dropped };
 }

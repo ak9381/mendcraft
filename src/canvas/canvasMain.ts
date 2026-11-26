@@ -23,6 +23,7 @@ import { nanoQueue } from '../ai/nanoQueue';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
+import { coerceSnapshot } from '../relay/controlSnapshot';
 import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
 import { mountReplayBanner } from './replayBanner';
 
@@ -303,6 +304,14 @@ afterFirstPaint(() => {
       const storage = (() => { try { return localStorage; } catch { return null; } })();
       announcePhone(guestSession, phonePlatform, { deviceId: storage ? ensureDeviceId(storage) : undefined, native: isPhone, refresh: true, status: () => h.phoneSenseStatus() });
     });
+    // Sim + dev/e2e build: feed a relay `state` snapshot (wire JSON) through the
+    // SAME path a real one takes (coerceSnapshot, then applyGuestSnapshot).
+    if (sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1')) {
+      (window as unknown as { __mcGuestSnapshot?: (raw: unknown) => boolean }).__mcGuestSnapshot = (raw) => {
+        const snap = coerceSnapshot(raw);
+        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform);
+      };
+    }
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });
     void link.rejoinSaved();
     // Native webviews rarely fire pagehide on backgrounding: close the mic when

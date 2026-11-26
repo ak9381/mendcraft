@@ -328,9 +328,15 @@ export async function createHostSession(
   // next change. Pairing state is unaffected by control presence.
   let lastSnapshot: ControlSnapshot | null = null;
 
+  // Only a snapshot the room ACCEPTED is kept for replay: a rejected one (too
+  // big, rules) would just be rejected again on every hello.
+  let publishSeq = 0;
+  let keptSeq = 0;
   function publishState(snapshot: ControlSnapshot): Promise<void> {
-    lastSnapshot = snapshot;
-    return transport.publish(token, { v: 1, from: 'host', type: 'state', snapshot });
+    const seq = ++publishSeq;
+    return transport.publish(token, { v: 1, from: 'host', type: 'state', snapshot }).then(() => {
+      if (seq > keptSeq) { keptSeq = seq; lastSnapshot = snapshot; }
+    });
   }
 
   core.listen((msg) => {
