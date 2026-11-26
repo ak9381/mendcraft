@@ -91,6 +91,8 @@ export interface HandMode {
   readout: string | null;
   /** A stroke or resize is running. */
   live: boolean;
+  /** A short message for the hand ("Move closer to a wall…"), or null. */
+  note: string | null;
 }
 
 export interface PlanHandEdit {
@@ -230,6 +232,11 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
   const reachMm = () => Math.max(600, HAND_WALL_REACH_PX / ctx.scale());
   const toolId = () => tools.activeId();
   const changed = () => host.onChange?.();
+  // The last thing the hand was told ("Move closer to a wall…"): the banner
+  // shows it for a few seconds (the mouse hint pill is hidden in hand edit).
+  let note: { text: string; at: number } | null = null;
+  const NOTE_MS = 3500;
+  const status = (text: string): void => { note = { text, at: Date.now() }; ctx.setStatus(text); };
 
   // ---- live steps → one undo step
   let steps = 0;
@@ -341,7 +348,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
       const o = d.openings.find((q) => q.id === id)!;
       return { ...base, ids: [id], offset0: o.offset, wallId: o.wallId };
     }
-    if (elem === 'dim') { ctx.setStatus('A dimension follows what it measures — move the wall instead.'); return null; }
+    if (elem === 'dim') { status('A dimension follows what it measures — move the wall instead.'); return null; }
     return { ...base, ids: [id] };
   }
 
@@ -374,7 +381,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     else if (tool === 'dim' || tool === 'measure') { const a = measureSnap(world, d.walls, snapMm()).point; stroke = tool === 'dim' ? { kind: 'dim', a, b: a } : { kind: 'measure', a, b: a }; }
     else if (tool === 'opening') {
       const hit = nearestWall(world, d.walls, reachMm());
-      if (!hit) { ctx.setStatus(d.walls.length ? 'Start the opening on a wall.' : 'Draw a wall first — an opening sits in a wall.'); return false; }
+      if (!hit) { status(d.walls.length ? 'Start the opening on a wall.' : 'Draw a wall first — an opening sits in a wall.'); return false; }
       stroke = { kind: 'opening', wall: hit.wall, t0: hit.t, t1: hit.t };
     }
     else if (tool === 'stairs') { tools.down(pinch(x, y)); stroke = { kind: 'tool', last: { x, y } }; }
@@ -442,11 +449,11 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     if (!apply) { rollback(); ctx.render(); return done(); }
     if (s.kind === 'wall') {
       const len = dist(s.a, s.b);
-      if (len < 150) ctx.setStatus('Too short for a wall — keep your fist closed and move further.');
+      if (len < 150) status('Too short for a wall — keep your fist closed and move further.');
       else if (commit([{ op: 'add_wall', x1: s.a.x, y1: s.a.y, x2: s.b.x, y2: s.b.y, thickness: DEFAULTS.thickness }], `Drew a wall ${m(len)}`)) lingering = `Wall: ${m(len)}`;
     } else if (s.kind === 'room') {
       const r = normRect(s.a, s.b);
-      if (r.w < 300 || r.h < 300) ctx.setStatus('Room too small — drag a larger rectangle.');
+      if (r.w < 300 || r.h < 300) status('Room too small — drag a larger rectangle.');
       else if (commit([{ op: 'add_room', x: r.x, y: r.y, w: r.w, h: r.h }], `Drew a room ${m(r.w)} × ${m(r.h)}`)) lingering = `Room: ${m(r.w)} × ${m(r.h)}`;
     } else if (s.kind === 'dim') {
       const len = dist(s.a, s.b);
@@ -478,7 +485,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
   // ---- taps
   function pinDimension(world: Point): void {
     const hit = nearestWall(world, doc().walls, reachMm());
-    if (!hit) { ctx.setStatus('Fist-tap closer to a wall to dimension it.'); return; }
+    if (!hit) { status('Fist-tap closer to a wall to dimension it.'); return; }
     if (ctx.apply({ op: 'add_dim', target: hit.wall.id }).ok) host.onEdit?.(`Added a dimension on a ${m(wallLength(hit.wall))} wall`);
   }
 
@@ -490,7 +497,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     if (hosted) {
       const name = tool === 'door' ? 'door' : tool === 'window' ? 'window' : 'opening';
       const hit = nearestWall(world, d.walls, reachMm());
-      if (!hit) { ctx.setStatus(d.walls.length ? `Move closer to a wall to place the ${name}.` : `Draw a wall first — a ${name} sits in a wall.`); return; }
+      if (!hit) { status(d.walls.length ? `Move closer to a wall to place the ${name}.` : `Draw a wall first — a ${name} sits in a wall.`); return; }
       const width = tool === 'window' ? DEFAULTS.windowWidth : DEFAULTS.doorWidth;
       const offset = clampOpeningOffset(snapValueToGrid(hit.t), width, wallLength(hit.wall));
       const env: Env = { op: hosted, target: hit.wall.id, offset, width, ...(tool === 'door' ? { swing: 'left' } : {}) };
@@ -513,7 +520,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
       ctx.setOverlay(null);
       return;
     }
-    ctx.setStatus('Keep your fist closed and move to draw.');
+    status('Keep your fist closed and move to draw.');
   }
 
   function tap(x: number, y: number): void {
@@ -597,7 +604,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
   function remove(): boolean {
     const d = doc();
     const ids = d.selectedIds?.length ? d.selectedIds : d.selectedId ? [d.selectedId] : [];
-    if (!ids.length) { ctx.setStatus('Nothing is selected to remove.'); return false; }
+    if (!ids.length) { status('Nothing is selected to remove.'); return false; }
     const what = ids.length === 1 ? handLabel(d, ids[0]) : `${ids.length} elements`;
     const envs = ids.map((id) => ({ op: 'delete', target: id }));
     const ok = ctx.apply(envs.length === 1 ? envs[0] : { op: 'batch', ops: envs }).ok;
@@ -607,7 +614,7 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
 
   function rotate(): boolean {
     const sel = selection();
-    if (!sel?.rotate) { ctx.setStatus('Select furniture or a door to rotate it.'); return false; }
+    if (!sel?.rotate) { status('Select furniture or a door to rotate it.'); return false; }
     const ok = ctx.apply(sel.kind === 'fixture' ? { op: 'rotate', target: sel.id, angle: 90 } : { op: 'rotate', target: sel.id }).ok;
     if (ok) { host.onEdit?.(sel.kind === 'fixture' ? `Rotated ${sel.label}` : 'Flipped the door swing'); changed(); }
     return ok;
@@ -715,14 +722,15 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     const tool = toolId();
     const sel = selection();
     const busy = !!stroke || !!resize;
-    const base = { tool, live: busy, readout: readout ?? lingering ?? (tool === 'select' ? sel?.readout ?? null : null) };
+    if (note && (busy || Date.now() - note.at > NOTE_MS)) note = null;
+    const base = { tool, live: busy, note: note?.text ?? null, readout: readout ?? lingering ?? (tool === 'select' ? sel?.readout ?? null : null) };
     if (tool === 'select') {
       let text = 'Select — point an open palm at a wall, room or door, then hold a thumbs-up';
       if (stroke?.kind === 'move') text = `Moving ${stroke.label} — open your hand to drop it`;
       else if (stroke?.kind === 'pan') text = 'Moving the plan view — open your hand to stop';
       else if (resize) text = `Resizing ${sel?.label ?? ''} — move your peace sign, change shape to finish`;
       else if (sel) {
-        const bits = [sel.movable ? 'fist to move' : '', sel.axes.length ? 'peace-and-move to resize' : '', sel.rotate ? `left peace to ${sel.rotate.toLowerCase()}` : '', 'right thumbs-down to remove'].filter(Boolean);
+        const bits = [sel.movable ? 'fist: move' : '', sel.axes.length ? 'peace-and-move: resize' : '', sel.rotate ? `left peace: ${sel.rotate.toLowerCase()}` : '', 'right thumbs-down: remove'].filter(Boolean);
         text = `${sel.label} selected — ${bits.join(' · ')}`;
       }
       return { ...base, kind: 'select', text };

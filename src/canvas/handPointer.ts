@@ -116,6 +116,9 @@ export interface HandSurfaceEdit {
   fistEnd(): void;
   /** Hand lost, looked away, or a second fist took over: apply nothing. */
   fistCancel(): void;
+  /** Two fists that both closed on this surface: zoom / pan the surface's
+   *  own view (the plan), not the canvas. Absent = the canvas zooms. */
+  zoom2?(phase: 'start' | 'move' | 'end', a: { x: number; y: number }, b: { x: number; y: number }): void;
 }
 /** Marks a surface's element handle (a pointer-events:none proxy button the
  *  palm highlight can snap to): it is exempt from the on-top-at-centre clip. */
@@ -1265,7 +1268,8 @@ type GrabMode =
   | { kind: 'handle'; slot: number; el: HTMLElement; last: P }
   /** A held fist on an armed hand-edit surface (the floor plan): pen down. */
   | { kind: 'surface'; slot: number; edit: HandSurfaceEdit; last: P }
-  | { kind: 'zoom'; a: P; b: P };
+  /** Two fists. `edit`: both closed on one hand-edit surface, which zooms itself. */
+  | { kind: 'zoom'; a: P; b: P; edit?: HandSurfaceEdit };
 
 /** Per-slot fist bookkeeping for tap vs grab. */
 interface FistState {
@@ -1429,7 +1433,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     else if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
     else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
     else if (g.kind === 'handle') fireHandle(g.el, 'pointerup', g.last);
-    else opts.onWorldZoom?.({ phase: 'end', a: g.a, b: g.b });
+    else zoomEv('end', g.a, g.b, g.edit);
+  }
+  function zoomEv(phase: 'start' | 'move' | 'end', a: P, b: P, edit?: HandSurfaceEdit): void {
+    if (edit?.zoom2) edit.zoom2(phase, a, b);
+    else opts.onWorldZoom?.({ phase, a, b });
   }
   /** One holding fist on slot i starts its grab, judged where it closed. */
   function startOneFist(i: number): void {
@@ -1563,8 +1571,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (fisted[0] && fisted[1]) {
         if (slots[0].isReleasing() || slots[1].isReleasing()) return; // inside the release grace: hold still
         const a = slots[0].rawPoint(), b = slots[1].rawPoint();
-        setGrab({ kind: 'zoom', a, b });
-        opts.onWorldZoom?.({ phase: 'move', a, b });
+        const edit = grab.edit;
+        setGrab({ kind: 'zoom', a, b, edit });
+        zoomEv('move', a, b, edit);
         return;
       }
       endGrab();
@@ -1585,8 +1594,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
     if (ready[0] && ready[1]) {
       const a = slots[0].rawPoint(), b = slots[1].rawPoint();
-      setGrab({ kind: 'zoom', a, b });
-      opts.onWorldZoom?.({ phase: 'start', a, b });
+      // Both fists closed on the same hand-edit surface: it zooms its own view.
+      const ea = slots[0].editSurfaceAt(fist[0].closeP), eb = slots[1].editSurfaceAt(fist[1].closeP);
+      const edit = ea && ea === eb && ea.zoom2 ? ea : undefined;
+      setGrab({ kind: 'zoom', a, b, edit });
+      zoomEv('start', a, b, edit);
       return;
     }
     // One fist ready while the other hand is still closing: wait for it,

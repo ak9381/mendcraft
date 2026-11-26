@@ -45,6 +45,8 @@ export function createFrameRegistry(initial: readonly Frame[] = []) {
     setPinned(id: string, on: boolean) { const f = find(id); if (f) f.pinned = on; },
     setKind(id: string, kind: FrameKind) { const f = find(id); if (f) f.kind = kind; },
     remove(id: string) { const i = frames.findIndex((f) => f.id === id); if (i < 0) return false; frames.splice(i, 1); return true; },
+    /** Put a closed board back as it was (Undo of "Close board"). */
+    restore(f: Frame) { if (find(f.id) || frames.length >= MAX_FRAMES) return false; frames.push(copy(f)); return true; },
   };
 }
 export type FrameRegistry = ReturnType<typeof createFrameRegistry>;

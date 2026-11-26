@@ -41,6 +41,8 @@ export interface PlanHandRig {
   board: { phase: string }[];
   pans: { phase: string }[];
   zooms: { phase: string }[];
+  /** Two-fist events the plan surface itself received (opts.zoom2). */
+  planZooms: { phase: string; a: { x: number; y: number }; b: { x: number; y: number } }[];
   /** Hand edit on / off for the surface (off = the fist moves the board). */
   armed: boolean;
   t: number;
@@ -55,7 +57,7 @@ export interface PlanHandRig {
   destroy(): void;
 }
 
-export function planHandRig(buttons: FakeEl[] = []): PlanHandRig {
+export function planHandRig(buttons: FakeEl[] = [], opts: { zoom2?: boolean } = {}): PlanHandRig {
   (globalThis as Record<string, unknown>).innerWidth = W;
   (globalThis as Record<string, unknown>).innerHeight = H;
   const controller = createPlanController();
@@ -99,6 +101,7 @@ export function planHandRig(buttons: FakeEl[] = []): PlanHandRig {
     fistMove: (x, y) => hand.fistMove(x, y),
     fistEnd: () => hand.fistEnd(),
     fistCancel: () => hand.fistCancel(),
+    ...(opts.zoom2 ? { zoom2: (phase, a, b) => { if (phase !== 'end' && hand.busy()) hand.fistCancel(); rig.planZooms.push({ phase, a, b }); } } : {}),
   };
   (surface as unknown as { __mcHandSurface: unknown }).__mcHandSurface = {
     beginDrag: () => false, drag: () => {}, endDrag: () => {}, tap: () => {}, handEdit: edit,
@@ -127,7 +130,7 @@ export function planHandRig(buttons: FakeEl[] = []): PlanHandRig {
   const feedFist = (x: number, y: number) => { rig.t += FRAME; hp.update([synthFist(x, y, W, H)], rig.t); };
   Object.assign(rig, {
     hp, controller, tools, hand, journal, entries, doc, statuses, board, pans, zooms,
-    armed: true, t: 0,
+    armed: true, t: 0, planZooms: [],
     apply: (op: Record<string, unknown>) => { const r = controller.applyOp(op); if (!r.ok) throw new Error(r.error ?? 'op failed'); },
     open(x: number, y: number, frames = 1) { for (let i = 0; i < frames; i++) feedOpen(x, y); },
     fist(x: number, y: number, frames = 1) { for (let i = 0; i < frames; i++) feedFist(x, y); },

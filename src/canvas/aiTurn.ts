@@ -489,7 +489,9 @@ export interface HistoryEntry {
   at: number;
   undone: boolean;
   /** 'surface' (default) edits a board; 'lang' swaps the UI language pack. */
-  kind?: 'surface' | 'lang' | 'layout' | 'plan';
+  kind?: 'surface' | 'lang' | 'layout' | 'plan' | 'close';
+  /** kind 'close': the board that was closed (`before` holds its surface). */
+  closedFrame?: import('./frames').Frame;
   /** kind 'plan': a floor-plan drawing edit — the plan engine's own undo
    *  steps it is made of, and the board mount it belongs to. */
   planSteps?: number;

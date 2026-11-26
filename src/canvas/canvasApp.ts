@@ -81,7 +81,8 @@ import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { createHandPointer, deepElementFromPoint, handSurfaceAt, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
-import { createPlanPeace, peaceHandsOf } from './planPeace';
+import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
+import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
 import { createPalmHighlight } from './palmHighlight';
@@ -1199,7 +1200,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el = document.createElement('section');
       el.className = 'mc-frame';
       el.dataset.frame = f.id;
-      el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span></div>
+      el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span>
+          <span class="mc-frame-hand-acts"><button type="button" class="mc-btn mc-frame-smaller" data-frame-act="smaller" aria-label="Make this board smaller">Smaller</button><button type="button" class="mc-btn mc-frame-bigger" data-frame-act="bigger" aria-label="Make this board bigger">Bigger</button><button type="button" class="mc-btn mc-frame-close" data-frame-act="close" aria-label="Close this board">Close board</button></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
       const fb = el.querySelector<HTMLElement>('.mc-frame-body')!;
@@ -1299,6 +1301,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function applyCamera(): void {
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
+    root.style.setProperty('--mc-z', camera.z.toFixed(3)); // hand targets keep their on-screen size in overview
     const g = 40 * camera.z;
     viewport.style.backgroundSize = `${g}px ${g}px`;
     viewport.style.backgroundPosition = `${-camera.x * camera.z}px ${-camera.y * camera.z}px`;
@@ -1394,9 +1397,63 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return fit ? { ...f, rect: { ...f.rect, ...fit } } : f;
   }
   function focusCam(f: Frame): Camera { return focusOnInsets(f.rect, vp(), insets(), 16, !!surfaces[f.id]); }
+  // ---- board buttons for hands (the focused board's header, Hands on):
+  // Smaller / Bigger and Close board. Close is undoable.
+  const BOARD_SIZE = { minW: 480, maxW: 2400, minH: 360, maxH: 1600, step: 1.2 };
+  /** The space a focused board can use (the same as fitBoardWidth). */
+  function freeBoardSpace(): { w: number; h: number } {
+    const ins = insets();
+    return { w: Math.floor(vp().w - ins.left - ins.right - 32), h: Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32)) };
+  }
+  function refit(id: string): void {
+    sync(); persist();
+    const f = reg.get(id);
+    if (!f || focusId !== id) return;
+    void flyTo(focusCam(fitBoardWidth(f))).then(() => window.dispatchEvent(new Event('resize')));
+  }
+  function resizeBoard(id: string, dir: 1 | -1): void {
+    const f = reg.get(id); if (!f) return;
+    const k = dir > 0 ? BOARD_SIZE.step : 1 / BOARD_SIZE.step;
+    const free = freeBoardSpace();
+    // "Bigger" on a focused board that already fills the screen has nothing to show.
+    if (dir > 0 && focusId === id && f.rect.w >= free.w && f.rect.h >= free.h) { say(`${f.title} already fills the screen.`); return; }
+    const w = Math.round(Math.min(BOARD_SIZE.maxW, Math.max(BOARD_SIZE.minW, f.rect.w * k)));
+    const h = Math.round(Math.min(BOARD_SIZE.maxH, Math.max(BOARD_SIZE.minH, f.rect.h * k)));
+    if (w === f.rect.w && h === f.rect.h) { say(dir > 0 ? `${f.title} is as big as it gets.` : `${f.title} is as small as it gets.`); return; }
+    reg.setRect(id, { ...f.rect, w, h });
+    refit(id);
+    say(`${f.title} is ${dir > 0 ? 'bigger' : 'smaller'}.`);
+  }
+  function closeBoard(id: string): void {
+    const f = reg.get(id); if (!f) return;
+    if (reviewBusy()) { say('Finish the review first — keep or drop, then close the board.'); return; }
+    const surface = surfaces[id] ?? null;
+    // Tear the A2UI surface down too, so Undo can build it again under the same id.
+    if (live.has(id)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: id } }] as never); } catch { /* already gone */ } }
+    live.delete(id); deviceSurfaces.untrack(id);
+    reg.remove(id);
+    delete surfaces[id];
+    history.push({ frameId: id, before: surface, after: null, by: 'her', summary: `Closed ${f.title}`, kind: 'close', closedFrame: f });
+    if (focusId === id) { focusId = null; void overview(); } else sync();
+    updateDock(); persist(); historyRender();
+    say(`Closed ${f.title}. Say “undo” to bring it back.`);
+  }
+  /** Hands on and a floor-plan board in focus: give it the whole free space,
+   *  so the plan can show at 60–80 px per metre. Returns true if it grew. */
+  function growPlanBoardForHands(id: string): boolean {
+    const f = reg.get(id);
+    if (!f || phoneShell || !gestures?.isActive()) return false;
+    if (!world.querySelector(`[data-frame="${id}"] mc-plan-board`)) return false;
+    const free = freeBoardSpace();
+    if (f.rect.w >= free.w && f.rect.h >= free.h) return false;
+    reg.setRect(id, { ...f.rect, w: Math.max(f.rect.w, free.w), h: Math.max(f.rect.h, free.h) });
+    return true;
+  }
   async function focus(id: string): Promise<void> {
     let f = reg.get(id); if (!f) return;
-    focusId = id; lastFocus = id; phoneOverview = false; sync(); updateDock();
+    focusId = id; lastFocus = id; phoneOverview = false;
+    if (growPlanBoardForHands(id)) { persist(); f = reg.get(id)!; }
+    sync(); updateDock();
     f = fitBoardWidth(f);
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
@@ -2595,6 +2652,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
     if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`); return; }
+    if (h.kind === 'close' && h.closedFrame) {
+      if (!reg.restore(h.closedFrame)) { historyRender(); say(`Could not bring “${h.closedFrame.title}” back.`); return; }
+      if (h.before) surfaces[h.frameId] = h.before;
+      sync();
+      if (h.before) renderSurface(h.frameId);
+      updateDock(); persist(); historyRender();
+      say(`Undid: ${h.summary}.`);
+      return;
+    }
     if (h.kind === 'plan') {
       // A floor-plan drawing edit (hand or mouse): the plan engine takes it
       // back with its own undo steps — no copy of the plan lives here.
@@ -2861,8 +2927,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
         highlight: palmHighlight,
-        // Hands on / off: the plan boards show or hide their hand-edit UI.
-        onActive: () => refreshPlanHands(true),
+        // Hands on / off: the plan boards show or hide their hand-edit UI,
+        // and a focused plan board takes the whole free space for drawing.
+        onActive: (on) => {
+          if (on && focusId && growPlanBoardForHands(focusId)) refit(focusId);
+          refreshPlanHands(true);
+        },
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
         // Peace-and-move over nothing scrollable pans the canvas (dx/dy are
         // content motion; scroll-wheel style: hand down = see what is below);
@@ -2884,6 +2954,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return edit && edit.armed(p.x, p.y) ? edit : null;
   }
   const planPeace = createPlanPeace();
+  /** Peace-and-move on a plan size stepper: one levelControl.adjustLevel step
+   *  (a click on its own − / + button) per 30 px of travel, up = longer. */
+  function levelPeaceTarget(el: HTMLElement): PeaceTarget {
+    let done = 0;
+    return {
+      resizeBegin: () => true,
+      resizeTravel(_dx, dy) {
+        const want = Math.trunc(-dy / LEVEL_STEP_PX); // screen y grows downward: up = more
+        while (done !== want) {
+          const dir = want > done ? 1 : -1;
+          if (!adjustLevel(el, dir)) { done = want; break; }
+          done += dir;
+        }
+      },
+      resizeEnd() {},
+      resizeCancel() {},
+    };
+  }
   /** One hand frame's plan work (laptop and phone): peace-and-move over a
    *  plan with a wall / room / dimension selected resizes it — that hand's
    *  peace is then no button gesture — and the boards' hand UI is refreshed. */
@@ -2891,7 +2979,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (gestures?.isActive()) {
       planPeace.update(peaceHandsOf(hands, phoneShell ? phoneReach(phoneCamAspect) : undefined, handCameraAspect), now, {
         blocked: gesturesBlocked() || facing === false,
-        targetAt: (p) => { const e = planEditAt(p); return e?.resizable() ? e : null; },
+        targetAt: (p) => {
+          // On a size stepper (a `data-level` control): the shared level step,
+          // taken where the peace APPEARED, so drifting off the 56 px row
+          // while moving up does not turn it into a scroll.
+          const hit = deepElementFromPoint(document, p.x, p.y) as HTMLElement | null;
+          const size = hit?.closest?.<HTMLElement>('.mc-plan-hand-on .mc-plan-size[data-level]');
+          if (size) return levelPeaceTarget(size);
+          const e = planEditAt(p);
+          return e?.resizable() ? e : null;
+        },
       });
     }
     refreshPlanHands();
@@ -3591,6 +3688,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const t = e.target as HTMLElement;
     const act = t.closest<HTMLElement>('[data-act]');
     const frame = t.closest<HTMLElement>('.mc-frame')?.dataset.frame;
+    const boardAct = t.closest<HTMLElement>('[data-frame-act]')?.dataset.frameAct;
+    if (boardAct && frame) {
+      if (boardAct === 'close') closeBoard(frame);
+      else resizeBoard(frame, boardAct === 'bigger' ? 1 : -1);
+      return;
+    }
     if (act && frame) {
       if (act.dataset.act === 'connect') void connectRoom(frame);
       else if (act.dataset.act === 'talk') micFab?.toggle();

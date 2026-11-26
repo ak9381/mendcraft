@@ -85,11 +85,22 @@ export function createPlanRenderer(
     return `${r(b.min.x)},${r(b.min.y)},${r(b.max.x)},${r(b.max.y)}`;
   }
 
+  // Hand edit: a comfortable fist stroke (150–250 px) should be 2–3 m, so the
+  // plan is held between 60 and 80 px per metre, with only the palette and
+  // the hand banner / bar kept clear. Larger plans overflow and are panned.
+  let handFit = false;
+  const HAND_SCALE = { min: 0.06, max: 0.08 };
+  function handInsets(): { left: number; top: number; right: number; bottom: number } {
+    const host = container.getBoundingClientRect();
+    const pal = (container.querySelector('.mc-palette') as HTMLElement | null)?.getBoundingClientRect();
+    return { left: pal && pal.width > 8 ? pal.right - host.left + 12 : 16, top: 16, right: 16, bottom: 44 };
+  }
+
   function fitView(): void {
     fitSig = boundsSig();
     const b = planBounds(doc());
     const rect = svg.getBoundingClientRect();
-    const inset = overlayInsets();
+    const inset = handFit ? handInsets() : overlayInsets();
     const W = Math.max(120, (rect.width || 800) - inset.left - inset.right);
     const H = Math.max(120, (rect.height || 600) - inset.top - inset.bottom);
     if (!b) {
@@ -103,9 +114,9 @@ export function createPlanRenderer(
     // reserve that band (+label headroom) on those two sides and a little
     // breathing room on the others — otherwise the bottom "8.00 m" dimension and
     // its label clip at the viewport edge after zoom-to-fit.
-    const pad = 700; // breathing room (mm)
+    const pad = handFit ? 400 : 700; // breathing room (mm)
     const band = 900; // outer-dimension offset (matches OUT in render())
-    const label = 650; // headroom for the dimension text at fit scale (mm)
+    const label = handFit ? 350 : 650; // headroom for the dimension text at fit scale (mm)
     const minX = b.min.x - band - label;
     const minY = b.min.y - band - label;
     const maxX = b.max.x + pad;
@@ -113,8 +124,13 @@ export function createPlanRenderer(
     const w = maxX - minX;
     const h = maxY - minY;
     scale = Math.min(W / w, H / h, 0.3);
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
+    const fitScale = scale;
+    if (handFit) scale = Math.max(HAND_SCALE.min, Math.min(HAND_SCALE.max, scale));
+    // Held above the fit (the plan overflows): centre the walls themselves,
+    // not the outer-dimension band around them.
+    const tight = handFit && scale > fitScale;
+    const cx = tight ? (b.min.x + b.max.x) / 2 : (minX + maxX) / 2;
+    const cy = tight ? (b.min.y + b.max.y) / 2 : (minY + maxY) / 2;
     originX = inset.left + W / 2 - cx * scale;
     originY = inset.top + H / 2 + cy * scale;
   }
@@ -414,7 +430,7 @@ export function createPlanRenderer(
     if (!fitted) {
       fitView();
       fitted = true;
-    } else if (!toolBusy && !liveGesture && !panning && !toolChainBusy() && boundsSig() !== fitSig) {
+    } else if (!handFit && !toolBusy && !liveGesture && !panning && !toolChainBusy() && boundsSig() !== fitSig) {
       // A discrete edit (voice/text/keyboard) changed the overall size — reframe
       // so the result stays fully visible (e.g. stretching the shared wall to
       // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
@@ -974,6 +990,13 @@ export function createPlanRenderer(
       return aimAt(clientX, clientY, radiusPx);
     },
     handHost: () => ({ ctx, tools: toolCtl }),
+    setHandFit(on) {
+      if (on === handFit) return;
+      handFit = on;
+      fitView();
+      fitted = true;
+      render();
+    },
     toggle3D,
     is3D: () => !!view3d || !!loading3d,
     zoom(factor) {
@@ -993,7 +1016,8 @@ export function createPlanRenderer(
       const rect = svg.getBoundingClientRect();
       const cx = clientX - rect.left;
       const cy = clientY - rect.top;
-      const f = Math.min(4, Math.max(0.25, factor));
+      // Never past 10–400 px per metre: a runaway two-hand zoom stays usable.
+      const f = Math.min(4, Math.max(0.25, factor, 0.01 / scale), 0.4 / scale);
       originX = cx - (cx - originX) * f;
       originY = cy - (cy - originY) * f;
       scale *= f;

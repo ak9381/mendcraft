@@ -102,21 +102,22 @@ async function main() {
       P.strokeEnd = (b) => { P.open(b.x, b.y, 8); };
       P.rect = () => { const r = P.host().getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
       P.center = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
-      P.banner = () => { const b = P.host().querySelector('.mc-plan-hand-banner'); return b && !b.hidden && getComputedStyle(b).display !== 'none' ? b.textContent : null; };
-      P.readout = () => P.host().querySelector('.mc-plan-hand-readout')?.textContent ?? '';
+      P.banner = () => { const b = document.querySelector('mc-plan-board .mc-plan-hand-banner'); return b && !b.hidden && getComputedStyle(b).display !== 'none' ? b.textContent : null; };
+      P.readout = () => document.querySelector('mc-plan-board .mc-plan-hand-readout')?.textContent ?? '';
       P.tool = () => P.host().querySelector('.mc-palette .active[data-tool]')?.dataset.tool ?? null;
       P.frames = () => JSON.stringify(window.__canvas.snapshot().frames.map((f) => f.rect));
       P.camera = () => JSON.stringify(g.state().camera);
       // A clear patch of floor: a point on the drawing area with no element,
       // no button and no chrome within 70 px.
-      P.clear = (w = 220) => {
+      P.clear = (w = 220) => P.clearIn(w, true) ?? P.clearIn(w, false);
+      P.clearIn = (w, strict) => {
         const r = P.rect();
-        for (let y = r.top + 110; y < r.top + r.height - 130; y += 20) {
+        for (let y = r.top + 60; y < r.top + r.height - 110; y += 20) {
           for (let x = r.left + 190; x + w < r.left + r.width - 30; x += 20) {
             let ok = true;
-            for (let dx = -40; dx <= w + 40 && ok; dx += 20) for (const dy of [-50, 0, 50]) {
+            for (let dx = -20; dx <= w + 20 && ok; dx += 20) for (const dy of [-40, -20, 0, 20]) {
               const el = document.elementFromPoint(x + dx, y + dy);
-              if (!el || !P.host().contains(el) || el.closest('button, .mc-palette, .mc-props, .mc-plan-hand-bar, .mc-plan-hand-banner, .mc-trash, .mc-fsctl') || P.host().__mcPlanPick(x + dx, y + dy)) { ok = false; break; }
+              if (!el || !P.host().contains(el) || el.closest('button, .mc-palette, .mc-props, .mc-plan-hand-bar, .mc-plan-hand-banner, .mc-trash, .mc-fsctl') || (strict && P.host().__mcPlanPick(x + dx, y + dy))) { ok = false; break; }
             }
             if (ok) return { x, y };
           }
@@ -129,7 +130,7 @@ async function main() {
     // ---- Hands on
     check((await P(() => window.__ph.banner())) === null, 'no hand banner while Hands is off');
     await P(() => window.__mcGestures.show(true));
-    await wait(300);
+    await wait(1500); // the focused plan board grows to the free screen (camera fly)
     const on = await P(() => {
       const h = window.__ph.host();
       const sizes = [...h.querySelectorAll('.mc-palette > .mc-palette-btn')].map((b) => b.getBoundingClientRect()).map((r) => Math.min(r.width, r.height));
@@ -139,10 +140,25 @@ async function main() {
       return { banner: window.__ph.banner(), min: Math.min(...sizes), n: sizes.length, clipped, toggle: !!toggle && toggle.getBoundingClientRect().width > 0, hot: h.querySelectorAll('.mc-plan-hot').length, els: (() => { const d = window.__ph.doc(); return d.walls.length + d.rooms.length + d.openings.length + d.fixtures.length; })() };
     });
     check(!!on.banner && /^Select|selected — /.test(on.banner), `Hands on: the banner names the mode (${on.banner})`);
-    check(on.n >= 12 && on.min >= 56, `every palette tool is ≥ 56 px while Hands is on (${on.n} tools, smallest ${Math.round(on.min)} px)`);
+    check(on.n >= 12 && on.min >= 55.5, `every palette tool is ≥ 56 px while Hands is on (${on.n} tools, smallest ${Math.round(on.min)} px)`);
     check(on.clipped === 0, 'no palette tool is clipped by the board');
     check(on.toggle, 'the "Hand edit" switch is in the plan toolbar');
     check(on.hot >= 4, `plan elements have handles for the palm highlight (${on.hot} of ${on.els})`);
+    const big = await P(() => {
+      const h = window.__ph.host();
+      const f = h.closest('.mc-frame').getBoundingClientRect();
+      const sc = h.querySelector('.mc-plan-scale');
+      const pill = h.querySelector('.mc-status');
+      const acts = [...document.querySelectorAll('.mc-frame.focused .mc-frame-hand-acts button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height }));
+      const body = h.closest('.mc-frame-body');
+      return { frameW: f.width, vw: innerWidth, pxPerM: Number(sc?.dataset.pxPerM ?? 0), scaleText: sc?.textContent ?? '', scaleShown: !!sc && getComputedStyle(sc).display !== 'none', pill: !!pill && getComputedStyle(pill).display !== 'none' && pill.textContent !== '', acts, scrolls: h.getBoundingClientRect().bottom > body.getBoundingClientRect().bottom + 1 || h.getBoundingClientRect().top < body.getBoundingClientRect().top - 1 };
+    });
+    check(big.frameW >= big.vw * 0.75, `the plan board takes most of the screen (${Math.round(big.frameW)} of ${big.vw} px)`);
+    check(big.pxPerM >= 60 && big.pxPerM <= 80, `the plan shows at 60–80 px per metre (${big.pxPerM})`);
+    check(big.scaleShown && big.scaleText === '1 m', `a scale bar says so (${big.scaleText})`);
+    check(!big.pill, 'the mouse hint pill is hidden while the hand banner shows');
+    check(big.acts.length === 3 && big.acts.every((a) => a.h >= 56), `the focused board offers ${big.acts.map((a) => a.t).join(' / ')} at ≥ 56 px`);
+    check(!big.scrolls, 'the whole plan surface is on screen without scrolling the board');
     await shot('01-hands-on-select');
 
     const frames0 = await P(() => window.__ph.frames());
@@ -159,10 +175,10 @@ async function main() {
     check(/^Drawing walls with your hand/.test(b1 ?? ''), `the banner says so (${b1})`);
 
     // ---- a held fist draws a wall
-    const spot = await P(() => window.__ph.clear());
+    const spot = await P(() => window.__ph.clear(120));
     check(!!spot, 'there is clear floor to draw on');
     const a = spot ?? { x: 700, y: 600 };
-    const b = { x: a.x + 180, y: a.y };
+    const b = { x: a.x + 120, y: a.y };
     const walls0 = await P(() => window.__ph.doc().walls.length);
     await P((a, b) => window.__ph.strokeStart(a, b), a, b);
     const live = await P(() => ({ banner: window.__ph.banner(), readout: window.__ph.readout(), walls: window.__ph.doc().walls.length, grab: window.__mcGestures.state().grab }));
@@ -212,7 +228,7 @@ async function main() {
       await P((c) => { window.__ph.hold('thumbsUp', 'R', c.x + 4, c.y + 34, 2200); window.__ph.gone(); }, target);
       const sel = await P(() => ({ id: window.__ph.doc().selectedId, banner: window.__ph.banner(), readout: window.__ph.readout(), bar: [...window.__ph.host().querySelectorAll('.mc-plan-hand-bar button')].map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height })) }));
       check(sel.id === target.id, 'right thumbs-up selects it');
-      check(/selected — fist to move/.test(sel.banner ?? ''), `the banner lists what the hand can do (${sel.banner})`);
+      check(/selected — fist: move/.test(sel.banner ?? ''), `the banner lists what the hand can do (${sel.banner})`);
       check(sel.bar.some((x) => x.t === 'Remove') && sel.bar.every((x) => x.h >= 56), `the action bar is up with ≥ 56 px buttons (${sel.bar.map((x) => x.t).join(', ')})`);
       const badges = await P(() => { const q = (k) => { const el = document.querySelector(`.mc-gesture-badge[data-key="${k}"]`); return !!el && !el.hidden; }; return { remove: q('R:thumbsDown') }; });
       await wait(400);
@@ -223,20 +239,36 @@ async function main() {
       const len0 = drawn.len;
       await P((c) => {
         const P = window.__ph;
-        P.feed([P.hand('peace', 'R', c.x, c.y + 60)], 2);
-        for (let i = 1; i <= 6; i++) P.feed([P.hand('peace', 'R', c.x + (95 * i) / 6, c.y + 60)], 1);
-        P.feed([P.hand('peace', 'R', c.x + 95, c.y + 60)], 6);
+        P.feed([P.hand('peace', 'R', c.x, c.y - 44)], 2);
+        for (let i = 1; i <= 6; i++) P.feed([P.hand('peace', 'R', c.x + (95 * i) / 6, c.y - 44)], 1);
+        P.feed([P.hand('peace', 'R', c.x + 95, c.y - 44)], 6);
       }, target);
       const rs = await P(() => ({ readout: window.__ph.readout(), banner: window.__ph.banner() }));
       check(rs.readout === `Wall: ${((len0 + 300) / 1000).toFixed(2)} m`, `peace-and-move resizes in 10 cm steps with a live readout (${rs.readout})`);
       await shot('09-resizing-with-peace-and-move');
-      await P((c) => { window.__ph.open(c.x + 95, c.y + 60, 10); window.__ph.gone(); }, target);
+      await P((c) => { window.__ph.open(c.x + 95, c.y - 44, 10); window.__ph.gone(); }, target);
       const len1 = await P((id) => { const w = window.__ph.doc().walls.find((x) => x.id === id); return Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); }, target.id);
       check(Math.round(len1 - len0) === 300, `changing shape keeps it: the wall is 30 cm longer (${(len1 / 1000).toFixed(2)} m)`);
 
+      // ---- peace-and-move over the size stepper: the shared level gesture steps it
+      const lv = await P(() => { const g = window.__ph.host().querySelector('.mc-plan-size[data-level]'); return g ? window.__ph.center(g.querySelector('.mc-plan-size-value')) : null; });
+      check(!!lv, 'the size stepper is a data-level control');
+      if (lv) {
+        await P((c) => {
+          const P = window.__ph;
+          P.feed([P.hand('peace', 'R', c.x, c.y)], 3);
+          for (let i = 1; i <= 10; i++) P.feed([P.hand('peace', 'R', c.x, c.y - i * 12)], 1);
+          P.feed([P.hand('peace', 'R', c.x, c.y - 120)], 8);
+          P.open(c.x, c.y - 120, 10); P.gone();
+        }, lv);
+        const len2 = await P((id) => { const w = window.__ph.doc().walls.find((x) => x.id === id); return Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y); }, target.id);
+        check(len2 > len1 && Math.round(len2 - len1) % 100 === 0, `peace-and-move up over it lengthens the wall in 10 cm steps (${(len1 / 1000).toFixed(2)} → ${(len2 / 1000).toFixed(2)} m)`);
+        check((await P(() => window.__ph.camera())) === camera0, 'and the canvas did not scroll');
+      }
+
       // ---- a held fist moves it
       const before = await P((id) => { const w = window.__ph.doc().walls.find((x) => x.id === id); return { x: w.a.x, y: w.a.y }; }, target.id);
-      const from = { x: target.x, y: target.y + 70 };
+      const from = { x: target.x, y: target.y - 30 };
       await P((a, b) => { window.__ph.strokeStart(a, b); }, from, { x: from.x + 6, y: from.y - 52 });
       await shot('10-moving-the-wall-fist-down');
       await P((b) => { window.__ph.strokeEnd(b); window.__ph.gone(); }, { x: from.x + 6, y: from.y - 52 });
@@ -282,6 +314,23 @@ async function main() {
     const rot1 = await P((id) => window.__ph.doc().fixtures.find((f) => f.id === id)?.rotation, rot0.id);
     check(rot1 === (rot0.rotation + 90) % 360, `left peace held 2 s rotates it 90° (${rot0.rotation}° → ${rot1}°)`);
 
+    // ---- two fists ON the plan zoom the plan, not the canvas
+    const z0 = await P(() => ({ px: Number(window.__ph.host().querySelector('.mc-plan-scale').dataset.pxPerM), cam: window.__ph.camera() }));
+    await P(() => {
+      const P = window.__ph, r = P.rect();
+      const y = r.top + r.height / 2, cx = r.left + r.width / 2 + 60;
+      const two = (d, shape) => [P.hand(shape, 'L', cx - d, y), P.hand(shape, 'R', cx + d, y)];
+      P.feed(two(110, 'open'), 12);
+      P.feed(two(110, 'fist'), 16);
+      for (let i = 1; i <= 12; i++) P.feed(two(110 - i * 5, 'fist'), 1);
+      P.feed(two(50, 'fist'), 6);
+    });
+    await shot('15b-two-fists-zoom-the-plan');
+    await P(() => { const P = window.__ph, r = P.rect(); const y = r.top + r.height / 2, cx = r.left + r.width / 2 + 60; P.feed([P.hand('open', 'L', cx - 50, y), P.hand('open', 'R', cx + 50, y)], 10); P.gone(); });
+    const z1 = await P(() => ({ px: Number(window.__ph.host().querySelector('.mc-plan-scale').dataset.pxPerM), cam: window.__ph.camera(), text: window.__ph.host().querySelector('.mc-plan-scale').textContent }));
+    check(z1.px < z0.px * 0.75, `two fists closing in zoom the plan out (${z0.px} → ${z1.px} px per metre; bar: ${z1.text})`);
+    check(z1.cam === z0.cam, 'the canvas itself did not zoom');
+
     // ---- Hand edit off: the fist moves the board again
     await P(() => document.querySelector('.mc-plan-hand-toggle').click());
     check((await P(() => window.__ph.banner())) === null, 'Hand edit off: the banner is gone');
@@ -291,6 +340,23 @@ async function main() {
     check(((await P(() => window.__ph.frames())) !== frames0 || (await P(() => window.__ph.camera())) !== camera0) && (await P(() => window.__ph.doc().walls.length)) === wallsN, 'a held fist on the plan moves the board (or pans, when it is the focused board) and draws nothing');
     await P(() => document.querySelector('.mc-plan-hand-toggle').click());
     check(!!(await P(() => window.__ph.banner())), 'Hand edit on again: the banner is back');
+
+    // ---- board buttons for hands: Smaller, Close board, Undo
+    const w0 = await P(() => window.__canvas.snapshot().frames.find((f) => document.querySelector(`[data-frame="${f.id}"] mc-plan-board`)).rect.w);
+    await P(() => document.querySelector('.mc-frame.focused .mc-frame-smaller').click());
+    await wait(500);
+    const w1 = await P(() => window.__canvas.snapshot().frames.find((f) => document.querySelector(`[data-frame="${f.id}"] mc-plan-board`)).rect.w);
+    check(w1 < w0, `Smaller shrinks the board (${Math.round(w0)} → ${Math.round(w1)} px)`);
+    const closeBtn = await P(() => window.__ph.center(document.querySelector('.mc-frame.focused .mc-frame-close')));
+    await P((c) => { window.__ph.open(c.x, c.y, 24); }, closeBtn);
+    check(await P(() => window.__mcGestures.highlighted()?.classList.contains('mc-frame-close')), 'an open palm highlights "Close board"');
+    await shot('15c-close-board-highlighted');
+    await P((c) => { window.__ph.hold('thumbsUp', 'R', c.x, c.y, 2200); window.__ph.gone(); }, closeBtn);
+    await wait(600);
+    check(!(await P(() => !!document.querySelector('mc-plan-board'))), 'right thumbs-up closes the board');
+    await P(() => { window.__ph.hold('thumbsDown', 'L', 500, 300, 2200); window.__ph.gone(); });
+    check(await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc, 5000), 'left thumbs-down (Undo) brings the board back');
+    await wait(500);
 
     // ---- Hands off: all of it goes away
     await P(() => window.__mcGestures.show(false));

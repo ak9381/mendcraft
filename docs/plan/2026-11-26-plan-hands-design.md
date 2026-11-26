@@ -39,5 +39,12 @@ Snapping while drawing: existing wall endpoints and midpoints first (28 px reach
 ## Undo and history
 Plan edits (hand or mouse) now land in the canvas history as `kind: 'plan'` entries ("Drew a wall 3.00 m · You"), so the one Undo (button, voice, L thumbs-down) takes back the last plan edit by sending the plan engine its own `undo` op the right number of times. Mouse edits create no proposals or self-checks today, so hand edits create none either.
 
+## Round 2 (26 Nov, after the first review)
+- **Size for a hand.** With Hands on, focusing a floor-plan board grows it to the free screen, and hand edit holds the plan between 60 and 80 px per metre (a 120–240 px stroke is 2–3 m). A "1 m" bar shows the scale. The view no longer re-frames after each edit while hand edit is on.
+- **Two fists on the plan** zoom and pan the plan itself. Both fists must close on the plan surface; otherwise two fists zoom the canvas as before.
+- **Banner** moved into the plan's toolbar row so it never covers the drawing. The mouse hint pill is hidden while it shows; a problem message for the hand ("Draw a wall first…") takes the banner line for about 3 s.
+- **Scroll / level merge.** `planPeace.taken(side)` (armed or resizing) keeps the scroll gesture off that hand; `claimed(side)` keeps the 2 s hold off it. Peace-and-move over the size steppers goes through the shared `levelControl.adjustLevel`.
+- **Board buttons** for hands on the focused board's header: Smaller, Bigger, Close board (Close is one Undo away).
+
 ## Not in this pass
-Two fists over the plan still zoom the canvas, not the plan view. In the 3D view a held fist turns the model; there is no hand dolly or walk-through. Typing a label's text needs voice or a keyboard. See `2026-11-26-hands-coverage.md`.
+In the 3D view a held fist turns the model and two fists move the camera; there is no walk-through by hand. Typing a label's text needs voice or a keyboard. Plan drawing edits are not stored with the board. See `2026-11-26-hands-coverage.md`.

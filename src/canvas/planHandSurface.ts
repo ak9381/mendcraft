@@ -131,6 +131,15 @@ export function mountPlanHandSurface(o: {
   bannerReadout.className = 'mc-plan-hand-readout';
   banner.append(bannerText, bannerReadout);
 
+  // The scale: a bar that is 1 m (or 5 m when zoomed far out) on the plan.
+  const scaleEl = doc.createElement('div');
+  scaleEl.className = 'mc-plan-scale';
+  scaleEl.setAttribute('aria-hidden', 'true');
+  const scaleBar = doc.createElement('span');
+  scaleBar.className = 'mc-plan-scale-bar';
+  const scaleText = doc.createElement('span');
+  scaleEl.append(scaleBar, scaleText);
+
   const bar = doc.createElement('div');
   bar.className = 'mc-plan-hand-bar';
   bar.setAttribute('role', 'toolbar');
@@ -139,7 +148,12 @@ export function mountPlanHandSurface(o: {
 
   const hot = doc.createElement('div');
   hot.className = 'mc-plan-hot-layer';
-  host.append(hot, banner, bar);
+  host.append(hot, bar, scaleEl);
+  // The banner sits in the plan's toolbar row (beside Check / 3D / DXF), so
+  // it never covers the drawing; without a toolbar it floats over the plan.
+  const toolbar = board.querySelector<HTMLElement>('.mc-plan-extras');
+  (toolbar ?? host).append(banner);
+  banner.classList.toggle('is-floating', !toolbar);
 
   const button = (cls: string, text: string, label: string, act: () => void): HTMLButtonElement => {
     const b = doc.createElement('button');
@@ -223,24 +237,31 @@ export function mountPlanHandSurface(o: {
 
   const handsOn = (): boolean => !!host.closest('.mc-gestures-on');
   const layoutEditing = (): boolean => !!host.closest('.mc-edit-canvas.mc-editing');
-  const usable = (): boolean => on && handsOn() && !layoutEditing() && host.isConnected;
+  // An unfocused board is view-only (its body is inert): a fist there moves the board.
+  const usable = (): boolean => on && handsOn() && !layoutEditing() && host.isConnected && !host.closest('[inert]');
   const active = (): boolean => usable() && !view.is3D?.();
   /** The 3D view is showing: a held fist turns the model (nothing to edit). */
   const in3d = (): boolean => usable() && !!view.is3D?.();
   let orbit: { x: number; y: number } | null = null;
+  let two: { mid: { x: number; y: number }; span: number } | null = null;
 
   let sig = '';
+  let fitOn = false;
   function refresh(force = false): void {
     const act = active();
+    // Hand edit on: the plan is shown at 60–80 px per metre.
+    if (act !== fitOn) { fitOn = act; view.setHandFit?.(act); }
     const mode = act ? hand.mode() : null;
     const sel = act && mode!.tool === 'select' && !hand.busy() ? hand.selection() : null;
     const targets = act && !hand.busy() ? hand.targets() : [];
     const r = host.getBoundingClientRect();
     const turning = !act && in3d();
-    const next = JSON.stringify([act, turning, !!orbit, mode, sel, targets.map((t) => [t.id, Math.round(t.x - r.left), Math.round(t.y - r.top), t.label])]);
+    const pxPerM = (view.screenScale?.() ?? 0) * 1000;
+    const next = JSON.stringify([act, turning, !!orbit, Math.round(pxPerM), mode, sel, targets.map((t) => [t.id, Math.round(t.x - r.left), Math.round(t.y - r.top), t.label])]);
     if (!force && next === sig) return;
     sig = next;
     host.classList.toggle('mc-plan-hand-on', act || turning);
+    board.classList.toggle('mc-plan-hands', act || turning);
     host.dataset.handTool = mode?.tool ?? '';
     banner.hidden = !mode && !turning;
     if (turning) {
@@ -249,8 +270,17 @@ export function mountPlanHandSurface(o: {
       banner.classList.toggle('is-live', !!orbit);
       banner.dataset.kind = '3d';
     }
+    scaleEl.hidden = !act || pxPerM <= 0;
+    if (!scaleEl.hidden) {
+      const metres = pxPerM >= 36 ? 1 : pxPerM * 5 >= 36 ? 5 : 10;
+      scaleBar.style.width = `${Math.round(pxPerM * metres)}px`;
+      scaleText.textContent = `${metres} m`;
+      scaleEl.dataset.pxPerM = String(Math.round(pxPerM));
+    }
+    // A message for the hand takes the banner line for a few seconds.
+    banner.classList.toggle('is-note', !!mode?.note);
     if (mode) {
-      bannerText.textContent = mode.text;
+      bannerText.textContent = mode.note ?? mode.text;
       bannerReadout.textContent = mode.readout ?? '';
       bannerReadout.hidden = !mode.readout;
       banner.classList.toggle('is-live', mode.live);
@@ -285,6 +315,25 @@ export function mountPlanHandSurface(o: {
       if (orbit) { view.orbit3D?.(x - orbit.x, y - orbit.y); orbit = { x, y }; return; }
       hand.fistMove(x, y);
     },
+    zoom2(phase, a, b) {
+      if (phase === 'end') { two = null; view.setLiveGesture?.(false); refresh(true); return; }
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const span = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+      if (phase === 'start' || !two) {
+        if (hand.busy()) { hand.fistCancel(); hand.resizeCancel(); }
+        two = { mid, span };
+        view.setLiveGesture?.(true);
+        return;
+      }
+      // 3D: the fists' spread moves the camera in and out.
+      if (view.is3D?.()) { view.dolly3D?.(span / two.span); two = { mid, span }; return; }
+      // Zoom about the previous midpoint, then carry it to the new one, so
+      // the plan under each fist follows that fist.
+      view.zoomAt?.(span / two.span, two.mid.x, two.mid.y);
+      view.panByPx?.(mid.x - two.mid.x, mid.y - two.mid.y);
+      two = { mid, span };
+      refresh();
+    },
     fistEnd() { if (orbit) orbit = null; else hand.fistEnd(); refresh(); },
     fistCancel() { if (orbit) orbit = null; else hand.fistCancel(); refresh(); },
     resizable: () => active() && !!hand.selection()?.axes.length,
@@ -311,7 +360,8 @@ export function mountPlanHandSurface(o: {
       host.removeEventListener('click', onClick);
       doc.defaultView?.removeEventListener('mouseup', onUp);
       journal.dispose();
-      banner.remove(); bar.remove(); hot.remove();
+      view.setHandFit?.(false);
+      banner.remove(); bar.remove(); hot.remove(); scaleEl.remove();
     },
   };
   mounted.add(api);

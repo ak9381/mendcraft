@@ -242,6 +242,39 @@ describe('plan hands: who gets the fist', () => {
     expect(rig.zooms.some((e) => e.phase === 'start')).toBe(true);
   });
 
+  it('two fists that both close ON the plan zoom the plan itself, not the canvas', () => {
+    rig.destroy();
+    rig = planHandRig([], { zoom2: true });
+    rig.tools.activate('wall');
+    for (let i = 0; i < 10; i++) rig.hp.update([synthHand(400, 450, false, W, H), synthHand(600, 450, false, W, H)], (rig.t += FRAME));
+    for (let i = 0; i < 16; i++) rig.hp.update(twoFists(400, 450, 600, 450), (rig.t += FRAME));
+    for (let i = 1; i <= 10; i++) rig.hp.update(twoFists(400 - i * 8, 450, 600 + i * 8, 450), (rig.t += FRAME));
+    expect(rig.planZooms[0]?.phase).toBe('start');
+    const moves = rig.planZooms.filter((e) => e.phase === 'move');
+    expect(moves.length).toBeGreaterThan(3);
+    const span = (e: { a: { x: number }; b: { x: number } }) => Math.abs(e.b.x - e.a.x);
+    expect(span(moves.at(-1)!)).toBeGreaterThan(span(rig.planZooms[0]) + 80);
+    expect(rig.zooms).toHaveLength(0); // the canvas did not zoom
+    expect(rig.doc().walls).toHaveLength(0);
+    for (let i = 0; i < 8; i++) rig.hp.update([synthHand(320, 450, false, W, H), synthHand(680, 450, false, W, H)], (rig.t += FRAME));
+    expect(rig.planZooms.at(-1)?.phase).toBe('end');
+  });
+
+  it('one fist on the plan and one off it still zoom the canvas', () => {
+    rig.destroy();
+    rig = planHandRig([], { zoom2: true });
+    for (let i = 0; i < 10; i++) rig.hp.update([synthHand(400, 450, false, W, H), synthHand(950, 450, false, W, H)], (rig.t += FRAME));
+    for (let i = 0; i < 20; i++) rig.hp.update(twoFists(400, 450, 950, 450), (rig.t += FRAME));
+    expect(rig.planZooms).toHaveLength(0);
+    expect(rig.zooms.some((e) => e.phase === 'start')).toBe(true);
+  });
+
+  it('a message for the hand rides in the banner for a few seconds', () => {
+    rig.tools.activate('door');
+    rig.tap(400, 400); // no wall anywhere
+    expect(rig.hand.mode().note).toBe('Draw a wall first — a door sits in a wall.');
+  });
+
   it('a fist TAP with the Wall tool draws nothing (drawing needs a held fist)', () => {
     rig.tools.activate('wall');
     rig.tap(400, 400);
@@ -263,7 +296,7 @@ describe('plan hands: who gets the fist', () => {
   });
 });
 
-import { synthFist } from '../helpers/synthHands';
+import { synthFist, synthHand } from '../helpers/synthHands';
 const twoFists = (x1: number, y1: number, x2: number, y2: number) => [synthFist(x1, y1, W, H), synthFist(x2, y2, W, H)];
 
 describe('plan hands: drawing and placing tools', () => {
@@ -423,7 +456,7 @@ describe('plan hands: select, move, rotate, resize', () => {
     rig.tools.activate('select');
     rig.apply({ op: 'add_wall', x1: 1000, y1: 2000, x2: 4000, y2: 2000 });
     rig.hand.select(rig.doc().walls[0].id);
-    expect(rig.hand.mode().text).toBe('Wall 3.00 m selected — fist to move · peace-and-move to resize · right thumbs-down to remove');
+    expect(rig.hand.mode().text).toBe('Wall 3.00 m selected — fist: move · peace-and-move: resize · right thumbs-down: remove');
   });
 });
 
