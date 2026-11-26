@@ -782,6 +782,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   pairedRow.setAttribute('aria-label', 'Connected devices');
   pairedRow.hidden = true;
   root.appendChild(pairedRow);
+  /** Past the pairing step the "N phones connected · Disconnect" row lives
+   *  INSIDE the engine bar (the bottom chrome row), so it takes no height of
+   *  its own and never floats over a board. While pairing (the pairing card
+   *  is up) and wherever the bar is not shown, it floats above the bar. */
+  const barShown = (): boolean => !!engineBar && (typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 601px)').matches);
+  function dockPairedRow(): void {
+    const dock = barShown() && pairFirst.phase() !== 'pairing';
+    const host = dock && engineBar ? engineBar.el : root;
+    if (pairedRow.parentElement !== host) host.appendChild(pairedRow);
+    pairedRow.classList.toggle('is-docked', dock);
+  }
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
   /** The host session's short code was re-opened for more phones (pair-first). */
@@ -832,9 +843,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }));
       const rowWasHidden = pairedRow.hidden;
       pairedRow.hidden = !html || phoneShell;
+      dockPairedRow();
       // The row changes the bottom inset: re-fit the focused board above it.
       if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
+      // Docked, a phone's sub-state may be cut short: the full row is its title.
+      pairedRow.title = pairedRow.classList.contains('is-docked') ? (pairedRow.querySelector('.mc-paired-phone') ? [...pairedRow.querySelectorAll('.mc-paired-phone')].map((e) => e.textContent?.trim()).join(' · ') : '') : '';
       showArrangeStrip(true);
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
@@ -1442,14 +1456,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Height the bottom chrome takes: the engine bar, plus the phones arrange
    *  strip and the connected-device row when they float above it. */
   const bottomInset = () => {
-    let b = engineBar ? (engineBar.el.offsetHeight || 68) + 24 : 92;
     const h = viewport.getBoundingClientRect().bottom || vp().h;
+    // 8 px clear of the engine bar's real top (it sits lower and slimmer on
+    // a short window, see canvas.css).
+    const barTop = engineBar?.el.offsetHeight ? engineBar.el.getBoundingClientRect().top : 0;
+    let b = engineBar ? (barTop ? Math.round(h - barTop) + 8 : 68 + 24) : 92;
     for (const el of [arrangeStrip, pairedRow]) {
+      if (el.classList.contains('is-docked')) continue; // inside the engine bar: no height of its own
       if (!el.hidden && el.offsetHeight) b = Math.max(b, Math.round(h - el.getBoundingClientRect().top) + DOCK_GAP);
     }
     return b;
   };
-  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset() });
+  /** How high a room board's head may go when lifting it clears its chip
+   *  row of the bottom chrome: under the open Tools bar, else to the bar's
+   *  own top edge (a passing status line may sit over the head for a moment;
+   *  never chips under the bottom chrome). */
+  const topFloor = () => (root.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)') ? barH() : 16);
+  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset(), topFloor: topFloor() });
 
   function clearDock(): void {
     // Delete the dock surface in the processor too: forgetting it only here made
@@ -4593,7 +4616,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
   // A focused board is re-fitted at its SHOWN size (a room board is widened
   // or narrowed for the window), not its stored one.
-  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (!pairedRow.hidden) dockPairedRow(); if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.

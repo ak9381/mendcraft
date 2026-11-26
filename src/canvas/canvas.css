@@ -1420,6 +1420,13 @@
 @media (min-width: 1241px) { .mc-engine-bar { max-width: max(680px, min(760px, calc(100vw - 600px))); } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
+/* A short window (a 656 px laptop window): one line per engine card and a
+   lower bar, so a room board's chip row fits above it (bottomInset measures
+   the bar's real top). Cards stay 44 px targets. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-engine-bar { bottom: 10px; padding: 4px 12px 4px 4px; }
+  .mc-engine-card { min-height: 44px; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 4px 12px 4px 10px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mc-engine-card, .mc-engine-card[data-state="working"] .mc-engine-dot,
   .mc-engine-bar.is-handoff .mc-engine-link-line, .mc-engine-bar.is-handoff .mc-engine-link-head { animation: none; transition: none; }
@@ -1473,6 +1480,16 @@
   .mc-canvas:not(.mc-phone-simple) .mc-face-preview { width: 192px; height: 144px; }
   .mc-canvas:not(.mc-phone-simple) .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
   .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
+}
+/* A shorter window still (a 656 px laptop window): the six buttons come down
+   to the 44 px touch floor with 6 px gaps, so the column (6 × 44 + 5 × 6 =
+   294 px) still fits between the top bar and the camera preview instead of
+   wrapping Edit into a second column. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 6px; }
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster > *,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-fab-mic,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-read-aloud { min-height: 44px; }
 }
 @media (max-width: 1240px) {
   .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
@@ -1626,6 +1643,34 @@
 .mc-paired-check { color: #1a7f37; font-weight: 700; }
 .mc-paired-wait { color: var(--text-dim, #777); }
 .mc-phone-simple .mc-paired-row { display: none !important; }
+/* Docked (past pairing, canvasApp dockPairedRow): a section of the engine
+   bar, in the bottom chrome row — no height of its own, never over a board.
+   Each phone's sub-state is a second, quieter line (ellipsis; the full text
+   is the row's title). Disconnect stays a full 44 px target. */
+.mc-engine-bar .mc-paired-row.is-docked {
+  position: static; transform: none; left: auto; bottom: auto; z-index: auto;
+  flex: 0 1 auto; min-width: 0; max-width: 340px;
+  display: grid; grid-template-columns: auto auto auto auto; grid-auto-flow: row;
+  align-items: center; column-gap: 6px; row-gap: 0;
+  padding: 0 0 0 12px; border: 0; border-left: 1px solid var(--border); border-radius: 0;
+  background: transparent; box-shadow: none; font-size: 14px; line-height: 1.25;
+}
+.mc-engine-bar .mc-paired-row.is-docked[hidden] { display: none; }
+.mc-paired-row.is-docked .mc-paired-count { white-space: nowrap; font-weight: 600; }
+.mc-paired-row.is-docked .mc-chip { justify-self: start; }
+.mc-paired-row.is-docked .mc-paired-phone {
+  grid-row: 2; grid-column: 1 / 4; width: 0; min-width: 100%; /* never widens the row */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-dim);
+}
+.mc-paired-row.is-docked .mc-paired-phone ~ .mc-paired-phone { display: none; }
+.mc-paired-row.is-docked .mc-paired-disconnect { grid-column: 4; grid-row: 1 / 3; min-height: 44px; padding: 0 14px; font-size: 14px; }
+/* Room for it: the bar may grow up to the corners (zoom HUD left, camera
+   preview right), and the "· on this device / cloud" captions give way. */
+@media (min-width: 1241px) {
+  .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) { max-width: max(760px, calc(100vw - 640px)); }
+}
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-where { display: none; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-card { width: 168px; flex-basis: 150px; }
 
 /* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
    It is its own flex row under .mc-frame-body (which shrinks to make room),
