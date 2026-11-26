@@ -49,7 +49,7 @@ import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
-import { answeringDevices, keepRoomDevices, keptRoomLine } from './roomRebuild';
+import { answeringDevices, createDismissals, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
@@ -117,6 +117,7 @@ import { createReadAloud } from '../ai/readAloud';
 import { clearSavedVoice, isCloudVoice, loadAllowCloud, loadReadAloud, loadSavedVoice, resolveChangeVoice, saveReadAloud, saveVoice, speechPlatform, type ChangeVoiceIntent } from '../ai/speechVoices';
 import { mountVoiceSheet } from './voiceSheet';
 import { mountEngineBar, type EngineBar } from './engineBar';
+import { createWarmBar } from './warmBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
@@ -929,7 +930,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const offNanoBusy = onNanoBusyHandoff((label) => { panels.show(); panels.showHandoff('nano', `Nano busy → Gemini (${label})`); });
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
-  const history = createCanvasHistory();
+  const history = (() => {
+    const h = createCanvasHistory();
+    // Every board change she makes or keeps is seen here: what she took off
+    // a board stays off it (roomRebuild.createDismissals).
+    return { ...h, push: (e: Parameters<typeof h.push>[0]) => {
+      // (try: a change recorded while the canvas is still mounting has no device list yet)
+      try { if (!e.kind || e.kind === 'surface') dismissals.note(e.frameId, e.before, e.after, (k) => (k === 'gimbal' ? standReported() : roomDeviceHints().some((d) => d.id === k))); } catch { /* nothing to remember yet */ }
+      return h.push(e);
+    } };
+  })();
+  const dismissals = createDismissals();
   const ledger = createCanvasLedger();
   // A7-024: a request that failed mid-flight offers Retry (re-sends the same
   // request). Any later status line means the moment has passed — hide it.
@@ -1926,9 +1937,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     geminiRoom: '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"connect","label":"Connect a device"}]}',
     nanoPlan: '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}',
   };
-  // ?sim=1 only: the e2e can make the scripted model write a given reply
-  // (e2e-room-rebuild: a reply that is only a Connect tile).
-  if (opts.sim && typeof window !== 'undefined') (window as unknown as { __mcScripts?: Record<string, string> }).__mcScripts = SCRIPTS;
+  // Dev server (or a VITE_E2E=1 build) + ?sim=1 only: the e2e can make the
+  // scripted model write a given reply (e2e-room-rebuild: only a Connect
+  // tile). Anywhere else — a production build — the scripts are frozen and
+  // not exposed.
+  const e2eHooks = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
+  if (e2eHooks && opts.sim && typeof window !== 'undefined') (window as unknown as { __mcScripts?: Record<string, string> }).__mcScripts = SCRIPTS;
+  else Object.freeze(SCRIPTS);
   // Model streams in flight (any engine, fallbacks included): the replay's
   // "is a turn still running?" for turns that don't hold turnBusy.
   let streamsOut = 0;
@@ -2279,20 +2294,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The background warm-up (canvasMain → hybrid.warmBoardOnDevice) is
    *  loading the model: the engine bar says "Nano is loading the model…"
    *  until it has (or gave up). A turn that starts meanwhile owns the card. */
-  let warmShown = false;
-  function nanoWarming(state: 'loading' | 'loaded' | 'failed'): void {
-    if (!engineBar) return;
-    if (state === 'loading') {
-      if (turnBusy) return;
-      warmShown = true;
-      engineBar.set('nano', 'working', NANO_LOADING_LINE);
-      return;
-    }
-    if (!warmShown) return;
-    warmShown = false;
-    if (turnBusy) return;
-    engineBar.set('nano', 'idle', state === 'loaded' ? 'Nano has loaded the model.' : '');
-  }
+  const nanoWarming = createWarmBar({ bar: engineBar, busy: () => turnBusy, lastTurnEndedAt: () => lastTurnEndedAt });
   /** The last streamed turn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
@@ -2305,14 +2307,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  answers, and the gimbal tile while the iPhone reports a stand — the same
    *  whichever engine wrote it (Nano, Gemini improving, Gemini after a
    *  handoff). What was put back is said in that engine's terminal. */
-  function roomPlan(frameId: string, proposed: SurfacePlan, si: SentInfo): SurfacePlan {
+  function roomPlan(frameId: string, proposed: SurfacePlan, si: SentInfo, utterance: string): SurfacePlan {
     const fitted = fitPlan(planForBoard(frameId, proposed));
     if (fitted.kind !== 'room' || reg.get(frameId)?.kind === 'plan') return fitted;
+    const before = surfaces[frameId] ?? null;
     const kept = keepRoomDevices(fitted, {
-      before: surfaces[frameId] ?? null,
+      before,
       answering: roomDeviceHints(),
-      known: new Set(Object.keys(store.all())),
       stand: !phoneShell && standReported(),
+      utterance,
+      dismissed: dismissals.of(frameId, before),
+      fit: fitPlan,
     });
     const line = keptRoomLine(kept);
     if (line) panels.forEngine(si.engine).log('note', line);
@@ -2388,7 +2393,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return await proposePlan(frameId, utterance, improve.plan, improve.si, improve.summary, improve.status,
           tried ? { si: tried, kind: 'fallback', retry: () => { drop(); setTimeout(() => { void connectRoom(frameId, utterance); }, 0); } } : undefined);
       }
-      const kept = roomPlan(frameId, out.plan, out.si);
+      const kept = roomPlan(frameId, out.plan, out.si, utterance);
       return await proposePlan(frameId, utterance, kept, out.si, summaryOf(summary, kept), status, improve ? { si: improve.si, kind: 'improved' } : undefined);
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
@@ -2408,7 +2413,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       await finishSwarm();
       if (!out) { ghost(frameId, null); return null; }
       // Nano's draft or Gemini's handoff alike: the real tiles are kept.
-      const plan = roomPlan(frameId, out.plan, out.si);
+      const plan = roomPlan(frameId, out.plan, out.si, utterance);
       const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); return null; }
       const handedOff = lastTurnHandedOff;
@@ -4008,6 +4013,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function gimbalOnNewDashboard(frameId: string): void {
     if (gimbalAutoAdded || phoneShell || !standReported() || dashboardId() !== frameId) return;
+    // She took the gimbal tile off this board (e.g. kept "only the lamps"): it stays off.
+    if (dismissals.of(frameId, surfaces[frameId] ?? null).has('gimbal')) return;
     if (addGimbalTile()) gimbalAutoAdded = true;
   }
   function gimbalFail(why: string): void { gimbalError = why; say(why); pushGimbal(); }

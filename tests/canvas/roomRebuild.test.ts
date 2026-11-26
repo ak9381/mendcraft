@@ -1,49 +1,53 @@
 // "build the dashboard" on an existing dashboard: the live run reviewed a
 // plan that was only "Connect a device" (the speaker and gimbal tiles gone,
 // the answering WiZ lamp ignored). These pin the deterministic floor under
-// every room turn, whichever engine wrote it.
+// every room turn, whichever engine wrote it — and that it never overrides
+// her: a board she narrowed, or a tile she took off, stays that way.
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { runSurfaceTurn, NANO_STILL_LOADING, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
-import { answeringDevices, keepRoomDevices, keptRoomLine, leafTiles } from '../../src/canvas/roomRebuild';
+import { answeringDevices, createDismissals, keepRoomDevices, keptRoomLine, leafTiles, narrowingOf, ROW_MAX_CHILDREN, type KeepRoomDevicesInput } from '../../src/canvas/roomRebuild';
+import { fitLampTiles } from '../../src/canvas/realLamps';
 import { draftSummary, roomSummary } from '../../src/canvas/planTruth';
 import { diffPlans } from '../../src/canvas/planDiff';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
-import type { DeviceState, SurfacePlan } from '../../src/canvas/surfacePlan';
+import type { DeviceState, SurfacePlan, TileSpec } from '../../src/canvas/surfacePlan';
 import { MAX_TILES } from '../../src/canvas/surfacePlan';
 
 const CONNECT_ONLY = '{"kind":"room","title":"Smart Home Dashboard","tiles":[{"type":"connect","label":"Connect a device"}]}';
+const connectOnly = (): SurfacePlan => JSON.parse(CONNECT_ONLY);
 const dashboard: SurfacePlan = {
   kind: 'room', title: 'Smart Home Dashboard',
   tiles: [{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }, { type: 'gimbal', label: 'Gimbal' }],
 };
+const lampOn = (unreachable = false): DeviceState => ({ on: true, brightness: 80, sim: unreachable, unreachable });
 const store: Record<string, DeviceState> = {
-  'wiz-lamp-1': { on: true, brightness: 80, sim: false, unreachable: false },
+  'wiz-lamp-1': lampOn(),
   'speaker-1': { on: false, playing: false, volume: 40 } as DeviceState,
 };
-const labels: Record<string, string> = { 'wiz-lamp-1': 'Lamp', 'speaker-1': 'Speaker' };
+const labels: Record<string, string> = { 'wiz-lamp-1': 'Lamp', 'wiz-lamp-2': 'Desk lamp', 'speaker-1': 'Speaker' };
 const kinds: Record<string, string> = { 'speaker-1': 'music' };
 const hints = (all: Record<string, DeviceState>, live = true) => answeringDevices(all, { label: (id) => labels[id] ?? id, kind: (id) => kinds[id] ?? 'lamp', live });
-const deviceIds = (p: SurfacePlan) => leafTiles(p.tiles).flatMap((t) => ('deviceId' in t ? [t.deviceId] : []));
+const deviceIds = (p: SurfacePlan) => leafTiles(p.tiles).flatMap((t) => ('deviceId' in t ? [t.deviceId] : [])).sort();
+const hasGimbal = (p: SurfacePlan) => leafTiles(p.tiles).some((t) => t.type === 'gimbal');
+const keep = (proposed: SurfacePlan, o: Partial<KeepRoomDevicesInput> & { all?: Record<string, DeviceState> } = {}) =>
+  keepRoomDevices(proposed, { before: dashboard, answering: hints(o.all ?? store), stand: true, ...o });
 
 describe('answeringDevices: the room turn is told about every device that answers', () => {
   it('a found WiZ lamp and the speaker are both listed', () => {
     expect(hints(store).map((d) => d.id)).toEqual(['wiz-lamp-1', 'speaker-1']);
   });
   it('a remembered lamp that is not reachable is left out; a seeded SIM lamp only on a SIM canvas', () => {
-    const all = { ...store, 'wiz-lamp-2': { on: false, brightness: 50, sim: true, unreachable: true }, 'wiz-desk': { on: true, brightness: 50, sim: true } };
+    const all = { ...store, 'wiz-lamp-2': lampOn(true), 'wiz-desk': { on: true, brightness: 50, sim: true } };
     expect(hints(all).map((d) => d.id)).toEqual(['wiz-lamp-1', 'speaker-1']);
     expect(hints(all, false).map((d) => d.id)).toEqual(['wiz-lamp-1', 'speaker-1', 'wiz-desk']);
   });
 });
 
 describe('keepRoomDevices: a rebuild never drops a real device tile', () => {
-  const known = new Set(Object.keys(store));
   it('a reply with only a Connect tile gets the speaker, the gimbal and the lamp back', () => {
-    const proposed: SurfacePlan = JSON.parse(CONNECT_ONLY);
-    const k = keepRoomDevices(proposed, { before: dashboard, answering: hints(store), known, stand: true });
-    expect(deviceIds(k.plan).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
-    expect(leafTiles(k.plan.tiles).some((t) => t.type === 'gimbal')).toBe(true);
+    const k = keep(connectOnly());
+    expect(deviceIds(k.plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+    expect(hasGimbal(k.plan)).toBe(true);
     expect(k.restored).toEqual(['Speaker', 'Gimbal']);
     expect(k.added).toEqual(['Lamp']);
     expect(keptRoomLine(k)).toBe('Kept Speaker and Gimbal (the reply left them out); added Lamp (it answers here).');
@@ -55,28 +59,112 @@ describe('keepRoomDevices: a rebuild never drops a real device tile', () => {
     expect(draftSummary(k.plan)).toBe('Draft: 1 lamp and 1 speaker found in this room');
     expect(roomSummary(k.plan)).toMatch(/^This room: 1 lamp and 1 speaker/);
   });
-  it('a gimbal tile joins a new dashboard while the iPhone reports a stand, not otherwise', () => {
+  it('a board tile for a lamp that is not reachable is not put back (and never named as kept)', () => {
+    const before: SurfacePlan = { kind: 'room', title: 'x', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Desk lamp' }, ...dashboard.tiles] };
+    const k = keep(connectOnly(), { before, all: { ...store, 'wiz-lamp-2': lampOn(true) } });
+    expect(deviceIds(k.plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+    expect(keptRoomLine(k)).not.toMatch(/Desk lamp/);
+  });
+  it('the gimbal tile is kept or added only while the iPhone reports a stand', () => {
     const proposed: SurfacePlan = { kind: 'room', title: 'x', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] };
-    expect(leafTiles(keepRoomDevices(proposed, { before: null, answering: [], known, stand: true }).plan.tiles).map((t) => t.type)).toEqual(['lamp', 'gimbal']);
-    expect(keepRoomDevices(proposed, { before: null, answering: [], known, stand: false }).plan).toBe(proposed);
+    expect(leafTiles(keep(proposed, { before: null, answering: [] }).plan.tiles).map((t) => t.type)).toEqual(['lamp', 'gimbal']);
+    expect(keep(proposed, { before: null, answering: [], stand: false }).plan).toBe(proposed);
+    // the stand went away: the old board's gimbal tile is not put back
+    const k = keep(connectOnly(), { stand: false });
+    expect(hasGimbal(k.plan)).toBe(false);
+    expect(k.restored).toEqual(['Speaker']);
   });
   it('a tile for a device that is gone is not brought back; a plan that already has everything is untouched', () => {
     const before: SurfacePlan = { kind: 'room', title: 'x', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-9', label: 'Old lamp' }] };
     const proposed: SurfacePlan = { kind: 'room', title: 'x', tiles: [{ type: 'card', title: 'All', children: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] }] };
-    const k = keepRoomDevices(proposed, { before, answering: hints(store), known, stand: false });
+    const k = keep(proposed, { before, stand: false });
     expect(k.plan).toBe(proposed);
     expect(keptRoomLine(k)).toBe('');
   });
   it('a floor plan is never touched', () => {
     const plan: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b-cad', template: 'studio' }] };
-    expect(keepRoomDevices(plan, { before: dashboard, answering: hints(store), known, stand: true }).plan).toBe(plan);
+    expect(keep(plan).plan).toBe(plan);
   });
+});
+
+describe('she narrows the board: the floor follows her words', () => {
+  const lampsOnly: SurfacePlan = { kind: 'room', title: 'Lights', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] };
+  it('narrowing words count only with a device or kind named after them', () => {
+    expect(narrowingOf('build me a dashboard with only the lamps')).toMatchObject({ mode: 'only', kinds: new Set(['lamp']) });
+    expect(narrowingOf('build the dashboard without the speaker')).toMatchObject({ mode: 'without', kinds: new Set(['music']) });
+    expect(narrowingOf('remove the gimbal')).toMatchObject({ mode: 'without', kinds: new Set(['gimbal']) });
+    expect(narrowingOf('only the desk lamp', [{ id: 'wiz-lamp-2', label: 'Desk lamp' }])?.ids).toEqual(new Set(['wiz-lamp-2']));
+    expect(narrowingOf('build the dashboard')).toBeNull();
+    expect(narrowingOf('just build the dashboard')).toBeNull();
+    expect(narrowingOf('connect everything in this room, no rush')).toBeNull();
+  });
+  it('"only the lamps": the speaker and gimbal are not put back, no other kind is added', () => {
+    const k = keep(lampsOnly, { utterance: 'build me a dashboard with only the lamps' });
+    expect(k.plan).toBe(lampsOnly);
+    expect(keptRoomLine(k)).toBe('');
+  });
+  it('"only the lamps" with a reply that forgot a lamp: only lamps are added', () => {
+    const all = { ...store, 'wiz-lamp-2': lampOn() };
+    const k = keep(connectOnly(), { utterance: 'only the lamps', all });
+    expect(deviceIds(k.plan)).toEqual(['wiz-lamp-1', 'wiz-lamp-2']);
+    expect(hasGimbal(k.plan)).toBe(false);
+  });
+  it('"without the speaker": everything else is still kept', () => {
+    const k = keep(connectOnly(), { utterance: 'build the dashboard without the speaker' });
+    expect(deviceIds(k.plan)).toEqual(['wiz-lamp-1']);
+    expect(hasGimbal(k.plan)).toBe(true);
+  });
+  it('a tile she took off stays off on a later plain rebuild; a lamp that only went missing while unreachable comes back', () => {
+    const d = createDismissals();
+    const real = (all: Record<string, DeviceState>) => (k: string) => k === 'gimbal' || hints(all).some((h) => h.id === k);
+    // turn 1: she kept "only the lamps" — the speaker and gimbal went off by her choice
+    const withLamp: SurfacePlan = { ...dashboard, tiles: [...dashboard.tiles, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] };
+    d.note('b1', withLamp, lampsOnly, real(store));
+    // turn 2: a plain rebuild whose reply forgets everything
+    const k = keep(connectOnly(), { before: lampsOnly, dismissed: d.of('b1', lampsOnly), utterance: 'build the dashboard' });
+    expect(deviceIds(k.plan)).toEqual(['wiz-lamp-1']);
+    expect(hasGimbal(k.plan)).toBe(false);
+
+    // a lamp flips unreachable → reachable between two turns
+    const d2 = createDismissals();
+    const off = { ...store, 'wiz-lamp-1': lampOn(true) };
+    const t1 = keep(connectOnly(), { before: withLamp, all: off });
+    expect(deviceIds(t1.plan)).toEqual(['speaker-1']); // unreachable: not put back
+    d2.note('b1', withLamp, t1.plan, real(off)); // she kept it while the lamp was unreachable
+    expect(d2.of('b1', t1.plan).has('wiz-lamp-1')).toBe(false);
+    const t2 = keep(connectOnly(), { before: t1.plan, dismissed: d2.of('b1', t1.plan) });
+    expect(deviceIds(t2.plan)).toEqual(['speaker-1', 'wiz-lamp-1']); // answers again: back on the board
+    expect(t2.added).toEqual(['Lamp']);
+  });
+});
+
+describe('placement and fitting', () => {
+  const stats = (n: number): TileSpec[] => Array.from({ length: n }, (_, i) => ({ type: 'stat' as const, label: `S${i}`, value: '1' }));
   it('a full board keeps its top-level cap: the extras share one row', () => {
-    const stats = Array.from({ length: MAX_TILES }, (_, i) => ({ type: 'stat' as const, label: `S${i}`, value: '1' }));
-    const proposed: SurfacePlan = { kind: 'room', title: 'x', tiles: stats };
-    const k = keepRoomDevices(proposed, { before: dashboard, answering: hints(store), known, stand: true });
-    expect(k.plan.tiles.length).toBeLessThanOrEqual(MAX_TILES);
-    expect(deviceIds(k.plan).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
+    const k = keep({ kind: 'room', title: 'x', tiles: stats(MAX_TILES) });
+    expect(k.plan.tiles.length).toBe(MAX_TILES);
+    expect(deviceIds(k.plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+  });
+  it('a full board ending in a row: the extras extend that row (no row inside a row)', () => {
+    const tiles: TileSpec[] = [...stats(MAX_TILES - 1), { type: 'row', children: stats(2) }];
+    const k = keep({ kind: 'room', title: 'x', tiles });
+    const last = k.plan.tiles[k.plan.tiles.length - 1];
+    expect(last.type).toBe('row');
+    expect(last.type === 'row' && last.children.some((c) => c.type === 'row')).toBe(false);
+    expect(last.type === 'row' && last.children.length).toBe(5);
+  });
+  it('past the row cap the joined tiles become a grid', () => {
+    const tiles: TileSpec[] = [...stats(MAX_TILES - 1), { type: 'row', children: stats(ROW_MAX_CHILDREN) }];
+    const k = keep({ kind: 'room', title: 'x', tiles });
+    const last = k.plan.tiles[k.plan.tiles.length - 1];
+    expect(last.type).toBe('grid');
+    expect(deviceIds(k.plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+  });
+  it('the result is fitted, and the line names only tiles that survive the fit', () => {
+    // a fit that knows no lamps (the bulb went between reply and review)
+    const k = keep(connectOnly(), { fit: (p) => fitLampTiles(p, []) });
+    expect(deviceIds(k.plan)).toEqual(['speaker-1']);
+    expect(keptRoomLine(k)).toBe('Kept Speaker and Gimbal (the reply left them out).');
   });
 });
 
@@ -93,20 +181,8 @@ describe('the Gemini handoff path gets the same floor (fake engines)', () => {
     expect(prompts[0]).toMatch(/Device 1: Lamp \(lamp\)/);
     expect(prompts[0]).toMatch(/Device 2: Speaker \(music\)/);
     expect(plan && deviceIds(plan)).toEqual([]);
-    const k = keepRoomDevices(plan!, { before: dashboard, answering: req.devices, known: new Set(Object.keys(store)), stand: true });
-    expect(deviceIds(k.plan).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
-    expect(leafTiles(k.plan.tiles).some((t) => t.type === 'gimbal')).toBe(true);
-  });
-});
-
-describe('canvasApp wires the floor into every room turn', () => {
-  const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
-  const fn = (name: string): string => { const at = src.indexOf(`async function ${name}(`); return src.slice(at, src.indexOf('\n  }\n', at)); };
-  it('the room prompt lists the devices that answer (not every id in the store)', () => {
-    expect(fn('streamTurn')).toContain('roomDeviceHints()');
-  });
-  it('the draft (Nano or its Gemini handoff) and the improved turn both keep the real tiles before the review and its headline', () => {
-    expect(fn('draftTurn')).toMatch(/roomPlan\(frameId, out\.plan, out\.si\)/);
-    expect(fn('aiTurn')).toMatch(/roomPlan\(frameId, out\.plan, out\.si\)/);
+    const k = keep(plan!, { utterance: req.utterance, answering: req.devices });
+    expect(deviceIds(k.plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+    expect(hasGimbal(k.plan)).toBe(true);
   });
 });

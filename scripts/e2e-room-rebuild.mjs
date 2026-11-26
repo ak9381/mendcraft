@@ -100,6 +100,28 @@ async function main() {
     check(afterLeaves.some((t) => t.type === 'gimbal'), 'rebuild keeps the gimbal tile');
     check(afterLeaves.some((t) => t.type === 'lamp'), 'rebuild keeps the lamp tile');
     check(firstDevices.every((id) => afterDevices.includes(id)), `every device tile is still there (${afterDevices.join(', ')})`);
+
+    // 4. She narrows it: "only the lamps" — the speaker and gimbal go, and a
+    //    later plain rebuild (reply: only Connect) does not bring them back.
+    const rebuild = async (utterance, reply, what) => {
+      await page.evaluate((r) => { window.__mcScripts.nanoRoom = r; window.__mcScripts.geminiRoom = r; }, reply);
+      await page.evaluate((u) => window.__canvas.run(u), utterance);
+      if (!(await waitFor(reviewOpen, 60_000, `${what} review`))) return null;
+      await page.evaluate(() => window.__canvas.keep());
+      await waitFor(() => !document.querySelector('.mc-proposal-keep'), 10_000, `${what} review closed`);
+      await sleep(1200);
+      return leaves((await page.evaluate(dashboard))?.plan?.tiles);
+    };
+    const LAMPS_ONLY = JSON.stringify({ kind: 'room', title: 'Lights', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] });
+    const narrowed = await rebuild('build me a dashboard with only the lamps', LAMPS_ONLY, 'narrowed');
+    if (narrowed) {
+      check(!narrowed.some((t) => t.type === 'music') && !narrowed.some((t) => t.type === 'gimbal'), `"only the lamps" keeps only lamps (${narrowed.map((t) => t.type).join(', ')})`);
+      const again = await rebuild('build the dashboard', CONNECT_ONLY, 'plain rebuild after narrowing');
+      if (again) {
+        check(!again.some((t) => t.type === 'music'), 'a later plain rebuild does not re-add the speaker she took off');
+        check(again.filter((t) => t.type === 'lamp').length === 2, 'the lamps she kept are still there');
+      }
+    }
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
     if (failures.length) {
       const shot = join(tmpdir(), 'e2e-room-rebuild-failure.png');
