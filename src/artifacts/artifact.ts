@@ -45,13 +45,36 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
-/** Lower-case, hyphen-joined slug of one id part. */
-const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const PART_RE = /^[a-z0-9][a-z0-9-]*$/;
+/** One id part, kept as it is when it is already in the id charset, else
+ *  hex-encoded (`x` + UTF-8 hex), so two different parts never share an id. */
+const encodePart = (s: string): string => (PART_RE.test(s) ? s : `x${[...new TextEncoder().encode(s)].map((b) => b.toString(16).padStart(2, '0')).join('')}`);
+const fnv = (s: string, seed: number): string => {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+};
 
-/** `<kind>-<part>-<part>…`, slugged and cut to the 64-character id limit. */
+/** `<kind>-<part>` for one part; with more parts every part but the last is
+ *  length-prefixed (`plan-2-f2-f2-cad` = frame "f2", board "f2-cad"), so
+ *  hyphenated parts can't run together. Nothing is slugged away. An id that
+ *  would pass 64 characters becomes `<kind>-h<64-bit hash>` of the full form. */
 export function artifactId(kind: ArtifactKind, ...parts: string[]): string {
-  const tail = parts.map(slug).filter(Boolean).join('-');
-  return `${kind}-${tail}`.slice(0, 64).replace(/-+$/, '');
+  const enc = parts.map(encodePart);
+  const body = enc.map((p, i) => (i < enc.length - 1 ? `${p.length}-${p}` : p)).join('-');
+  const id = `${kind}-${body}`;
+  return id.length <= 64 ? id : `${kind}-h${fnv(id, 0x811c9dc5)}${fnv(id, 0x9e3779b1)}`;
+}
+
+/** The frame a board or plan artifact id belongs to (null for other kinds or
+ *  a hashed id). Reads the length prefix, so hyphenated frame ids work. */
+export function frameIdOfArtifactId(id: string): string | null {
+  if (id.startsWith('board-')) return id.slice('board-'.length) || null;
+  const m = /^plan-(\d+)-/.exec(id);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const rest = id.slice(m[0].length);
+  return rest.length > n && rest[n] === '-' ? rest.slice(0, n) : null;
 }
 
 /** What a board artifact holds: the frame it sits in and its surface plan. */
@@ -141,5 +164,6 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (k === 'board' && !FRAME_ID_RE.test(id.slice('board-'.length))) return bad('bad board id');
   const d = coerceData(k, data);
   if (!d.ok) return d;
+  if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
   return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' } };
 }

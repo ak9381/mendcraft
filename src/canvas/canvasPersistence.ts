@@ -8,7 +8,7 @@ import { CANVAS_DOC_VERSION, FRAME_GAP, MAX_FRAMES, parseCanvasDoc, type CanvasD
 import type { Camera } from './camera';
 import type { SurfacePlan } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
-import { artifactId, ARTIFACT_TITLE_MAX, type Artifact, type ArtifactBy, type BoardData, type PlanData } from '../artifacts/artifact';
+import { artifactId, ARTIFACT_TITLE_MAX, frameIdOfArtifactId, type Artifact, type ArtifactBy, type BoardData, type PlanData } from '../artifacts/artifact';
 
 export const LAYOUT_KEY = 'mc.canvas.v1';
 
@@ -33,9 +33,15 @@ export function coerceLayout(raw: unknown): CanvasLayout | null {
 
 const boardFrameId = (a: Artifact): string => a.id.slice('board-'.length);
 
+export const tooManyBoardsWhy = `more than ${MAX_FRAMES} boards; this one was not opened`;
+/** Said at boot when boards past MAX_FRAMES were left closed. */
+export const tooManyBoardsLine = (n: number): string => `${n} stored board${n === 1 ? ' was' : 's were'} not opened (the canvas holds ${MAX_FRAMES}). ${n === 1 ? 'It is' : 'They are'} still stored.`;
+
 /** Layout + (already checked) artifacts → a canvas document, or null when
- *  there is nothing to open or the joined document fails parseCanvasDoc. */
-export function joinCanvasDoc(layout: CanvasLayout | null, artifacts: Artifact[]): CanvasDoc | null {
+ *  there is nothing to open or the joined document fails parseCanvasDoc.
+ *  Boards past MAX_FRAMES are not opened; each is reported to `onDrop`
+ *  (newest boards are the ones left out). They stay in the store. */
+export function joinCanvasDoc(layout: CanvasLayout | null, artifacts: Artifact[], onDrop?: (d: { id: string; why: string }) => void): CanvasDoc | null {
   const boards = artifacts.filter((a) => a.kind === 'board');
   if (!layout && !boards.length) return null;
   const frames: Frame[] = (layout?.frames ?? []).map((f) => ({ ...f, rect: { ...f.rect } }));
@@ -47,7 +53,7 @@ export function joinCanvasDoc(layout: CanvasLayout | null, artifacts: Artifact[]
     const known = frames.find((f) => f.id === id);
     if (known) { known.kind = data.frame.kind; known.title = data.frame.title; }
     else {
-      if (frames.length >= MAX_FRAMES) return null;
+      if (frames.length >= MAX_FRAMES) { onDrop?.({ id: a.id, why: tooManyBoardsWhy }); continue; }
       const right = frames.length ? Math.max(...frames.map((f) => f.rect.x + f.rect.w)) + FRAME_GAP : 0;
       frames.push({ id, kind: data.frame.kind, title: data.frame.title, rect: { ...data.frame.rect, x: right, y: 0 }, pinned: data.frame.pinned });
     }
@@ -73,14 +79,29 @@ export function joinCanvasDoc(layout: CanvasLayout | null, artifacts: Artifact[]
   });
 }
 
+/** Stored artifacts the joined document does not show: boards not opened
+ *  (over the cap, or every one when the join failed — `doc` null) and the
+ *  drawings of those boards. A save must never remove or overwrite these. */
+export function unjoinedIds(doc: CanvasDoc | null, artifacts: readonly Artifact[]): Set<string> {
+  const shown = new Set(doc ? Object.keys(doc.surfaces) : []);
+  const out = new Set<string>();
+  for (const a of artifacts) {
+    if (a.kind !== 'board' && a.kind !== 'plan') continue;
+    const frameId = a.kind === 'plan' ? String((a.data as { frameId?: unknown }).frameId ?? '') : frameIdOfArtifactId(a.id);
+    if (!doc || !frameId || !shown.has(frameId)) out.add(a.id);
+  }
+  return out;
+}
+
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const titleOf = (s: string): string => s.replace(/[<>]/g, '').slice(0, ARTIFACT_TITLE_MAX) || 'Untitled';
 
 /** A canvas document → its layout, the artifacts to write (new, or whose
  *  data changed: v + 1, by and at from now), and the ids to remove (boards
  *  and drawings no longer on the canvas). A stored pack is never removed
- *  here: switching back to English keeps the pack she approved. */
-export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string) => ArtifactBy, now: number): { layout: CanvasLayout; put: Artifact[]; remove: string[] } {
+ *  here: switching back to English keeps the pack she approved. Ids in
+ *  `keep` (see unjoinedIds) are never removed or overwritten. */
+export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string) => ArtifactBy, now: number, keep: ReadonlySet<string> = new Set()): { layout: CanvasLayout; put: Artifact[]; remove: string[] } {
   const layout: CanvasLayout = {
     version: doc.version, camera: { ...doc.camera }, focusId: doc.focusId,
     frames: doc.frames.map((f) => ({ ...f, rect: { ...f.rect } })),
@@ -106,11 +127,12 @@ export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string
   }
   const put: Artifact[] = [];
   for (const n of next) {
+    if (keep.has(n.id)) continue;
     const old = before.get(n.id);
     if (old && same(old.data, n.data) && old.title === n.title) continue;
     put.push({ ...n, v: old ? old.v + 1 : 1, by: by(n.id), at: now, status: 'approved' });
   }
   const live = new Set(next.map((n) => n.id));
-  const remove = prev.filter((a) => (a.kind === 'board' || a.kind === 'plan') && !live.has(a.id)).map((a) => a.id);
+  const remove = prev.filter((a) => (a.kind === 'board' || a.kind === 'plan') && !live.has(a.id) && !keep.has(a.id)).map((a) => a.id);
   return { layout, put, remove };
 }

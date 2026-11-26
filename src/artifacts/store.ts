@@ -89,11 +89,25 @@ const rowId = (row: unknown): string => {
   return typeof id === 'string' && id ? id.slice(0, 64) : '(no id)';
 };
 
+export const STORE_READ_FAILED_LINE = "Stored boards couldn't be read. This session starts empty; nothing stored was changed.";
+export const overCapLine = (n: number): string => `${n} older stored item${n === 1 ? ' was' : 's were'} not loaded (the limit is ${ARTIFACT_MAX_COUNT}).`;
+
+export interface LoadedArtifacts {
+  /** Checked, newest first, at most ARTIFACT_MAX_COUNT. */
+  ok: Artifact[];
+  /** Rows that failed their check (with why). */
+  dropped: { id: string; why: string }[];
+  /** Well-formed rows past ARTIFACT_MAX_COUNT: kept in the store, not loaded. */
+  overCap: string[];
+  /** The store could not be read at all (nothing was loaded). */
+  readFailed?: boolean;
+}
+
 /** Every stored row through `coerceArtifact`, newest first, at most
  *  ARTIFACT_MAX_COUNT. A row that fails is dropped (with why); the rest load. */
-export async function loadArtifacts(store: ArtifactStore): Promise<{ ok: Artifact[]; dropped: { id: string; why: string }[] }> {
+export async function loadArtifacts(store: ArtifactStore): Promise<LoadedArtifacts> {
   let rows: unknown[];
-  try { rows = await store.list(); } catch { rows = []; }
+  try { rows = await store.list(); } catch { return { ok: [], dropped: [], overCap: [], readFailed: true }; }
   const ok: Artifact[] = [];
   const dropped: { id: string; why: string }[] = [];
   const seen = new Set<string>();
@@ -105,6 +119,6 @@ export async function loadArtifacts(store: ArtifactStore): Promise<{ ok: Artifac
     ok.push(r.value);
   }
   ok.sort((a, b) => b.at - a.at);
-  for (const a of ok.splice(ARTIFACT_MAX_COUNT)) dropped.push({ id: a.id, why: `more than ${ARTIFACT_MAX_COUNT} stored items` });
-  return { ok, dropped };
+  const overCap = ok.splice(ARTIFACT_MAX_COUNT).map((a) => a.id);
+  return { ok, dropped, overCap };
 }

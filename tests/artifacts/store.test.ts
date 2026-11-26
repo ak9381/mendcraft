@@ -53,6 +53,14 @@ describe('ArtifactStore', () => {
     expect(r.ok[0].at).toBe(1000 + ARTIFACT_MAX_COUNT + 4);
     expect(r.ok.every((a, i) => i === 0 || r.ok[i - 1].at >= a.at)).toBe(true);
     expect(r.ok.some((a) => a.at < 1005)).toBe(false);
+    // Over-cap rows are not a failed check: their own list, still stored.
+    expect(r.dropped).toEqual([]);
+    expect(r.overCap).toHaveLength(5);
+  });
+
+  it('a store that cannot be read loads nothing and says so', async () => {
+    const r = await loadArtifacts({ list: () => Promise.reject(new Error('gone')), put: async () => {}, remove: async () => {}, clear: async () => {} });
+    expect(r).toEqual({ ok: [], dropped: [], overCap: [], readFailed: true });
   });
 
   it('falls back to memory when indexedDB.open throws', async () => {

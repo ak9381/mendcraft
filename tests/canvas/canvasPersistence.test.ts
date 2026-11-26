@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { coerceLayout, joinCanvasDoc, splitCanvasDoc, type CanvasLayout } from '../../src/canvas/canvasPersistence';
+import { coerceLayout, joinCanvasDoc, splitCanvasDoc, tooManyBoardsWhy, unjoinedIds, type CanvasLayout } from '../../src/canvas/canvasPersistence';
+import { emptyDoc } from '../../src/canvas/firstOpen';
 import { CANVAS_DOC_VERSION, type CanvasDoc } from '../../src/canvas/frames';
 import { LANG_STRING_KEYS } from '../../src/canvas/languagePack';
 import type { Artifact } from '../../src/artifacts/artifact';
@@ -31,7 +32,7 @@ describe('canvasPersistence', () => {
     const d = doc();
     const { layout, put, remove } = splitCanvasDoc(d, [], by, 5000);
     expect(remove).toEqual([]);
-    expect(put.map((a) => a.id).sort()).toEqual(['board-f1', 'board-f2', 'pack-kn', 'plan-f2-f2-cad']);
+    expect(put.map((a) => a.id).sort()).toEqual(['board-f1', 'board-f2', 'pack-kn', 'plan-2-f2-f2-cad']);
     expect(put.every((a) => a.v === 1 && a.at === 5000 && a.by === 'gemini' && a.status === 'approved')).toBe(true);
     // The layout holds no content: no surfaces, drawings or pack.
     expect(Object.keys(layout).sort()).toEqual(['camera', 'focusId', 'frames', 'lang', 'version']);
@@ -66,12 +67,40 @@ describe('canvasPersistence', () => {
     d3.frames = d3.frames.filter((f) => f.id !== 'f2');
     delete d3.surfaces.f2; delete d3.drawings; d3.focusId = null;
     const third = splitCanvasDoc(d3, first, by, 3000);
-    expect(third.remove.sort()).toEqual(['board-f2', 'plan-f2-f2-cad']);
+    expect(third.remove.sort()).toEqual(['board-f2', 'plan-2-f2-f2-cad']);
   });
 
   it('join returns null when parseCanvasDoc refuses the result', () => {
-    const tooMany: Artifact[] = Array.from({ length: 41 }, (_, i) => board(`f${i + 1}`));
-    expect(joinCanvasDoc(null, tooMany)).toBeNull();
+    // A layout whose focus names a frame that is not there is refused whole.
+    const bad = { version: CANVAS_DOC_VERSION, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [{ id: 'F1', kind: 'note', title: 'x', rect: { x: 0, y: 0, w: 1, h: 1 }, pinned: false }] } as CanvasLayout;
+    expect(joinCanvasDoc(bad, [board('f1')])).toBeNull();
+  });
+
+  it('41 stored boards: 40 open, 1 is reported, and a save removes nothing', () => {
+    const stored: Artifact[] = Array.from({ length: 41 }, (_, i) => board(`f${i + 1}`, { at: 1000 + i }));
+    const dropped: { id: string; why: string }[] = [];
+    const doc = joinCanvasDoc(null, stored, (d) => dropped.push(d));
+    expect(doc?.frames).toHaveLength(40);
+    expect(dropped).toEqual([{ id: 'board-f41', why: tooManyBoardsWhy }]);
+    const keep = unjoinedIds(doc, stored);
+    expect([...keep]).toEqual(['board-f41']);
+    const out = splitCanvasDoc(doc!, stored.filter((a) => !keep.has(a.id)), by, 9000, keep);
+    expect(out.remove).toEqual([]);
+    // Opened boards may get their new position stored; the closed one is untouched.
+    expect(out.put.map((x) => x.id)).not.toContain('board-f41');
+  });
+
+  it('a refused document removes and overwrites nothing on the first save', () => {
+    const stored: Artifact[] = [board('f1'), board('f2')];
+    const keep = unjoinedIds(null, stored);
+    expect([...keep].sort()).toEqual(['board-f1', 'board-f2']);
+    // She opens a blank canvas and makes a board that reuses id f1.
+    const d = emptyDoc();
+    d.frames = [{ id: 'f1', kind: 'room', title: 'New', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }];
+    d.surfaces = { f1: { kind: 'room', title: 'New', tiles: [{ type: 'stat', label: 'A', value: '1' }] } };
+    const out = splitCanvasDoc(d, [], by, 9000, keep);
+    expect(out.remove).toEqual([]);
+    expect(out.put.map((a) => a.id)).not.toContain('board-f1');
   });
 
   it('coerceLayout refuses a layout with a bad camera and keeps only layout fields', () => {

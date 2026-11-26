@@ -24,16 +24,16 @@ import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
 import { createReplayEngines } from './replayEngine';
-import { coerceLayout, joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc } from './canvasPersistence';
-import { loadArtifacts, openArtifactStore, STORE_FALLBACK_LINE } from '../artifacts/store';
-import type { Artifact, ArtifactBy } from '../artifacts/artifact';
+import { coerceLayout, joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
+import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
+import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
 
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */
 const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
-const replayOn = testBuild && params.has('sim');
+const replayOn = testBuild && params.get('sim') === '1';
 type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string> } };
 const mcWindow = window as McWindow;
 
@@ -46,7 +46,20 @@ if (params.has('fresh') && testBuild) await artifactStore.clear().catch(() => un
 const loaded = await loadArtifacts(artifactStore);
 let artifacts: Artifact[] = loaded.ok;
 const layout = (() => { try { return coerceLayout(JSON.parse(layoutStorage?.getItem(LAYOUT_KEY) ?? 'null')); } catch { return null; } })();
-const startDoc = joinCanvasDoc(layout, artifacts);
+const joinDropped: { id: string; why: string }[] = [];
+const startDoc = joinCanvasDoc(layout, artifacts, (d) => joinDropped.push(d));
+// What the canvas does not show is never removed or overwritten by a save:
+// boards past the cap, every board when the join failed, over-cap rows.
+const keepIds = new Set([...unjoinedIds(startDoc, artifacts), ...loaded.overCap]);
+artifacts = artifacts.filter((a) => !keepIds.has(a.id));
+if (keepIds.size) console.warn(`[mendcraft] ${keepIds.size} stored item(s) not on the canvas are kept as they are.`);
+const storeNotes = [
+  persistent ? '' : STORE_FALLBACK_LINE,
+  loaded.readFailed ? STORE_READ_FAILED_LINE : '',
+  loaded.overCap.length ? overCapLine(loaded.overCap.length) : '',
+  joinDropped.length ? tooManyBoardsLine(joinDropped.length) : '',
+  !startDoc && keepIds.size > 0 ? "Stored boards couldn't be opened together. Nothing stored was changed." : '',
+].filter(Boolean);
 if (testBuild) mcWindow.__mcArtifacts = artifactStore;
 
 // People directory: tokens in cloud prompts, real names filled back on device.
@@ -201,15 +214,16 @@ let guestSession: PhoneGuestSessionLike | null = null;
 /** Who made a change: her own (hand edits, renames) unless the last kept
  *  history entry for that board says an engine; a replayed reply is 'replay'. */
 function artifactMaker(id: string): ArtifactBy {
-  const frameId = /^(?:board|plan)-([a-z0-9]+)/.exec(id)?.[1];
+  const frameId = frameIdOfArtifactId(id);
   const last = frameId ? handle?.history().filter((h) => h.frameId === frameId && !h.undone).at(-1) : undefined;
   if (!last || last.by === 'her') return 'person';
   return replayOn ? 'replay' : last.by;
 }
 /** Every save: the layout now, the changed artifacts without waiting. */
 function persistDoc(doc: CanvasDoc): void {
-  const out = splitCanvasDoc(doc, artifacts, artifactMaker, Date.now());
-  layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout));
+  const out = splitCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds);
+  // A full localStorage (quota) must not stop the artifacts being kept.
+  try { layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
   const gone = new Set(out.remove);
   const put = new Map(out.put.map((a) => [a.id, a]));
   artifacts = [...artifacts.filter((a) => !gone.has(a.id) && !put.has(a.id)), ...put.values()];
@@ -223,7 +237,7 @@ handle = mountCanvas(root, {
   onPersist: persistDoc,
   artifactBy: (frameId) => artifacts.find((a) => a.id === `board-${frameId}`)?.by,
   dropped: loaded.dropped,
-  storeNote: persistent ? undefined : STORE_FALLBACK_LINE,
+  storeNote: storeNotes.length ? storeNotes.join(' ') : undefined,
   phoneCamera,
   phoneSensing: phoneSensingAllowed(phoneShell, phonePlatform),
   sendPointResult: (text) => { void guestSession?.sendCommand({ kind: 'pointResult', text }).catch(() => undefined); },

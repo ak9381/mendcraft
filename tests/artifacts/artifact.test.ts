@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARTIFACT_MAX_CHARS, artifactId, coerceArtifact } from '../../src/artifacts/artifact';
+import { ARTIFACT_MAX_CHARS, artifactId, coerceArtifact, frameIdOfArtifactId } from '../../src/artifacts/artifact';
 import { coerceSurfacePlan } from '../../src/canvas/surfacePlan';
 import { board, PLAN } from './sample';
 
@@ -64,7 +64,7 @@ describe('coerceArtifact', () => {
 
   it('a plan artifact keeps only the sanitized drawing', () => {
     const r = coerceArtifact({
-      id: 'plan-f2-f2-cad', kind: 'plan', v: 1, title: 'Floor plan', by: 'gemini', at: 1, status: 'approved',
+      id: 'plan-2-f2-f2-cad', kind: 'plan', v: 1, title: 'Floor plan', by: 'gemini', at: 1, status: 'approved',
       data: { frameId: 'f2', boardId: 'f2-cad', doc: { walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 3, y: 0 }, thickness: 0.1, evil: 'x' }], openings: [] } },
     });
     expect(r.ok).toBe(true);
@@ -73,10 +73,32 @@ describe('coerceArtifact', () => {
 });
 
 describe('artifactId', () => {
-  it('slugs its parts and stays within 64 characters', () => {
+  it('keeps ids in the charset as they are and length-prefixes multi-part ids', () => {
     expect(artifactId('board', 'f1')).toBe('board-f1');
-    expect(artifactId('connector', 'WiZ Bulb')).toBe('connector-wiz-bulb');
-    expect(artifactId('plan', 'f2', 'f2-cad')).toBe('plan-f2-f2-cad');
-    expect(artifactId('steps', 'x'.repeat(100)).length).toBeLessThanOrEqual(64);
+    expect(artifactId('pack', 'kn')).toBe('pack-kn');
+    expect(artifactId('plan', 'f2', 'f2-cad')).toBe('plan-2-f2-f2-cad');
+    expect(frameIdOfArtifactId('plan-2-f2-f2-cad')).toBe('f2');
+    expect(frameIdOfArtifactId('board-my-room-2')).toBe('my-room-2');
+  });
+
+  it('never collides: hyphens and slug-like parts stay distinct', () => {
+    expect(artifactId('plan', 'a-b', 'c')).not.toBe(artifactId('plan', 'a', 'b-c'));
+    expect(artifactId('connector', 'WiZ Bulb')).not.toBe(artifactId('connector', 'wiz-bulb'));
+    expect(artifactId('connector', 'WiZ Bulb')).toMatch(/^connector-x[0-9a-f]+$/);
+  });
+
+  it('a long id is hashed within 64 characters, and differs per input', () => {
+    const a = artifactId('steps', 'x'.repeat(100)), b = artifactId('steps', `${'x'.repeat(99)}y`);
+    expect(a.length).toBeLessThanOrEqual(64);
+    expect(a).toMatch(/^steps-h[0-9a-f]{16}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it('a plan artifact whose id does not match its board is refused', () => {
+    const r = coerceArtifact({
+      id: 'plan-f2-f2-cad', kind: 'plan', v: 1, title: 'Floor plan', by: 'gemini', at: 1, status: 'approved',
+      data: { frameId: 'f2', boardId: 'f2-cad', doc: { walls: [], openings: [] } },
+    });
+    expect(r.ok).toBe(false);
   });
 });

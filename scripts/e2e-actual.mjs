@@ -96,8 +96,9 @@ const SECTIONS = {
     check(still.length === 1 && still[0].title === 'Desk', `a corrupt row leaves the good board alone (got ${JSON.stringify(still)})`);
     await waitFor(page, (line) => document.body.innerText.includes(line), 5_000, `the dropped line is visible: "${DROPPED_LINE}"`, DROPPED_LINE)
       .then((ok) => ok && check(true, 'the dropped line is visible'));
+    await sleep(1200); // past the save debounce: the boot-time save must not remove or rewrite anything
     const stored = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.map((a) => a.id).sort()));
-    check(JSON.stringify(stored) === JSON.stringify(['board-bad', 'board-f1']), `the store is untouched by loading (got ${JSON.stringify(stored)})`);
+    check(JSON.stringify(stored) === JSON.stringify(['board-bad', 'board-f1']), `the store is untouched by loading and the first save (got ${JSON.stringify(stored)})`);
   },
 };
 
