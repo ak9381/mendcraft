@@ -4,7 +4,7 @@
 // (for anything a model proposes) held in a Proposal until kept.
 import '@a2ui/lit/v0_9';
 import { MessageProcessor } from '@a2ui/web_core/v0_9';
-import { cameraTransform, fitRects, focusOnInsets, focusWholeBoard, lerpCamera, MIN_Z, panBy, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
+import { cameraTransform, fitRects, focusOnInsets, focusWholeBoard, lerpCamera, MIN_Z, panBy, ROOM_MIN_Z, twoHandCamera, zoomAbout, type Camera, type Viewport } from './camera';
 import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav';
 import { mountZoomHud } from './zoomHud';
 import { attachBoardDrag } from './boardDrag';
@@ -84,14 +84,14 @@ import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { armedSurfaceAt, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
+import { armedSurfaceAt, collectControls, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
 import { feedDrawings, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
 import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
-import { createPalmHighlight } from './palmHighlight';
+import { createPalmHighlight, nearRects, placeBubble } from './palmHighlight';
 import { LAPTOP_GESTURES, PHONE_GESTURES } from './gestureBindings';
 import { syntheticHand } from './handShapeFixtures';
 import type { PhoneCamera } from './phoneCamera';
@@ -268,6 +268,21 @@ const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill,
 
 /** Widest a focused room dashboard is shown (three tile columns). */
 export const ROOM_MAX_W = 1280;
+/** A room board too tall for the screen at its fitted width may widen to
+ *  this (shown at the ROOM_MIN_Z zoom the camera then uses anyway), so its
+ *  tiles get wide enough to sit in one row instead of running off the bottom. */
+export const ROOM_WIDE_MAX_W = 1680;
+/** Re-opening the code for one more phone failed; the paired phones are fine. */
+export const REPAIR_FAILED_LINE = 'Couldn’t reopen pairing — your phones are still connected.';
+
+/** The wider width to try for a room board that does not fit `freeH` at
+ *  `w` (null: no wider try). `free`/`freeH` are screen px; at `minZ` the
+ *  board may be up to free/minZ wide and still fit across. Pure. */
+export function roomWidenWidth(o: { w: number; h: number; free: number; freeH: number; minZ: number }): number | null {
+  if (o.h <= o.freeH) return null;
+  const wide = Math.floor(Math.min(ROOM_WIDE_MAX_W, o.free / o.minZ));
+  return wide > o.w + 40 ? wide : null;
+}
 
 /** The size a focused board is SHOWN at so it clears the chrome: narrower
  *  than `free` only when it fits ≥480 px, shorter than `freeH` (not on a
@@ -769,6 +784,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.appendChild(pairedRow);
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
+  /** The host session's short code was re-opened for more phones (pair-first). */
+  let admissionOpen = false;
   let flowOpening = false;
   let flowOwnsHost = false; // only the pair-first flow may auto-hide the pairing host
   /** iPhone sensing status per announced phone (phonePoint.ts), from its
@@ -824,6 +841,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
       if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }
+      // Pairing is over: the short code goes (it only admits phones while pairing).
+      if (admissionOpen && pairFirst.phase() !== 'pairing') { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); }
       nextChips?.refresh();
       if (gimbalWired) pushGimbal();
     },
@@ -1574,9 +1593,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const box = row.getBoundingClientRect();
       const over = box.bottom - limit;
       if (over <= 0) continue;
-      // No higher than just under the board's title bar.
+      // No higher than just under the board's title bar — and never onto a
+      // tile: only the empty space under the board's content may be used.
       const room = box.top - (frameEl.getBoundingClientRect().top + 64 * z);
-      const lift = Math.min(over, Math.max(0, room));
+      const content = frameEl.querySelector<HTMLElement>('.mc-surface')?.getBoundingClientRect();
+      const free = content && content.height > 0 ? box.top - content.bottom - 4 : room;
+      const lift = Math.min(over, Math.max(0, room), Math.max(0, free));
       if (lift <= 0) continue;
       row.style.transform = `translateY(${-(lift / z).toFixed(1)}px)`;
       row.classList.add('is-lifted');
@@ -1716,8 +1738,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (had?.w !== fit?.w || had?.h !== fit?.h) sync();
     if (room) {
       // The board is as tall as its tiles at this width: measure, don't assume.
-      const real = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`)?.offsetHeight || 0;
-      return { ...f, rect: { ...f.rect, ...(fit ? { w: fit.w } : {}), h: real || fit?.h || f.rect.h } };
+      const el = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`);
+      let real = el?.offsetHeight || 0;
+      let w = fit?.w ?? f.rect.w;
+      // Too tall to show whole? Wider (zoomed out to the floor it would hit
+      // anyway) lets the tiles sit side by side: try it, keep it if shorter.
+      const wide = !phoneShell && real ? roomWidenWidth({ w, h: real, free, freeH, minZ: ROOM_MIN_Z }) : null;
+      if (wide && el) {
+        const prev = focusFit.get(f.id);
+        focusFit.set(f.id, { w: wide, h: fit?.h ?? f.rect.h });
+        sync();
+        const tall = el.offsetHeight || 0;
+        if (tall && tall < real) { real = tall; w = wide; }
+        else { if (prev) focusFit.set(f.id, prev); else focusFit.delete(f.id); sync(); }
+      }
+      return { ...f, rect: { ...f.rect, w, h: real || fit?.h || f.rect.h } };
     }
     return fit ? { ...f, rect: { ...f.rect, ...fit } } : f;
   }
@@ -2946,8 +2981,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneSeenAt.clear();
     if (gimbalWired) pushGimbal();
   }
-  /** The relay is kept while the pair-first flow still has phones (live/asking). */
-  const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
+  /** The relay is kept while the pair-first flow still has phones (pairing
+   *  again for one more, asking, or live). */
+  const relayKept = (): boolean => pairFirst.phase() !== 'idle' && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
     if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); announceGate.clear(); }
     if (!sheetOpen) return;
@@ -2973,9 +3009,43 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sheetOpen = { frameId: id, host, sheet };
     say('Connect a device: point at it, say its name, or join a phone.');
   }
+  /** Close the card that was admitting one more phone, keeping the relay. */
+  function endExtraPairing(session: HostSession): void {
+    livePairing?.stopChime();
+    livePairing = null;
+    admissionOpen = false;
+    void session.endAdmission().catch(() => undefined);
+    pairFirst.abandon(); // pairing → live: the phones stay listed and connected
+  }
   async function joinPhone(frameId: string): Promise<boolean> {
     const open = sheetOpen; if (!open || open.frameId !== frameId) return false;
-    if (pairingStop && relayKept()) { open.sheet.setStatus(`${pairFirst.phones().length} phone(s) already connected. Use Disconnect in the Connected row to end it.`); return true; }
+    if (pairingStop && hostSession && relayKept()) {
+      // Phones are already paired: keep THIS host session (same room, same
+      // session id, so their pings keep being answered) and just open the
+      // code again so the chime admits one more phone.
+      const session = hostSession;
+      livePairing?.stopChime();
+      admissionOpen = true;
+      try { await session.admitMore(); } catch {
+        admissionOpen = false;
+        if (sheetOpen === open) open.sheet.setStatus(REPAIR_FAILED_LINE);
+        return false;
+      }
+      if (sheetOpen !== open || hostSession !== session) return false;
+      void session.askWhoIsThere().catch(() => undefined);
+      republishCurrentBoard();
+      sheetOpen = null;
+      const n = pairFirst.phones().length;
+      livePairing = showPairing(open.host, {
+        code: session.code,
+        note: `${n} phone${n === 1 ? ' stays' : 's stay'} connected. Hold the next phone near the laptop.`,
+        // X ends only this extra pairing: the code closes, the chime stops,
+        // and the phones already here stay connected (Disconnect is the chip).
+        onClose: () => { endExtraPairing(session); open.host.hidden = true; },
+      });
+      pairingHost = open.host;
+      return true;
+    }
     if (simEnv() || !net.isOnline()) {
       open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
       return false;
@@ -3044,6 +3114,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     hostSession = res.session;
     // Phones already in the room (remembered pairs) learn this session's id.
     void res.session.askWhoIsThere().catch(() => undefined);
+    // Pair-first pairs phones one after another: the first phone's proof must
+    // not retire the code the next phone is about to hear.
+    if (pairFirst.phase() === 'pairing') { admissionOpen = true; void res.session.admitMore().catch(() => undefined); }
     showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
@@ -3346,15 +3419,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onTooltip: (text, el) => {
           if (!handTip) return;
           if (!text || !el) { handTip.hidden = true; return; }
-          const r = el.getBoundingClientRect();
+          const b = el.getBoundingClientRect();
           handTip.textContent = text;
           handTip.hidden = false;
-          // Clamp inside the screen; flip below a control at the top edge
-          // (phone bar, dock) so the bubble never renders off-screen.
-          const below = r.top < 40;
-          handTip.classList.toggle('below', below);
-          handTip.style.left = `${Math.min(innerWidth - 8, Math.max(8, r.left + r.width / 2))}px`;
-          handTip.style.top = `${below ? r.bottom + 8 : r.top - 8}px`;
+          // Beside the control, on screen, never over it or its neighbours.
+          const r = { left: b.left, top: b.top, width: b.width, height: b.height };
+          const near = nearRects(r, collectControls(document).filter((c) => c !== el).map((c) => { const q = c.getBoundingClientRect(); return { left: q.left, top: q.top, width: q.width, height: q.height }; }));
+          const at = placeBubble(r, { w: handTip.offsetWidth || 160, h: handTip.offsetHeight || 32 }, near, { w: innerWidth, h: innerHeight });
+          handTip.classList.add('is-placed');
+          handTip.style.left = `${Math.round(at.left)}px`;
+          handTip.style.top = `${Math.round(at.top)}px`;
         },
       })
     : null;
@@ -4511,7 +4585,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     else if (!isTypingTarget(e.target)) e.preventDefault();
   };
   const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
-  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(f); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  // A focused board is re-fitted at its SHOWN size (a room board is widened
+  // or narrowed for the window), not its stored one.
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
@@ -4531,6 +4607,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('resize', onWindowResize);
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
+  // Leaving the page: the short code must not outlive the pairing (best effort).
+  const onPageHide = (): void => { if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); } };
+  addEventListener('pagehide', onPageHide);
   function destroy(): void {
     // Pending writes and timers go first, so nothing fires into a torn-down
     // canvas — but a pending board write is flushed, not dropped (the last
@@ -4575,6 +4654,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('resize', onWindowResize);
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
+    removeEventListener('pagehide', onPageHide);
     barRo?.disconnect();
   }
   // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
@@ -4653,7 +4733,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Big floating mic: tap, keyboard or pinch toggles listening. The only talk control.
   const micFab = typeof document !== 'undefined' ? mountMicFab(root, voice, say, { getStatus: () => statusEl.textContent ?? '', holdToTalk: phoneShell }) : null;
   micFabRef = micFab;
-  // Hand-reachable cluster at the TOP RIGHT: Register, Edit, Tools, Talk.
+  // Hand-reachable cluster on the right edge: Register, Tools, Talk, Read
+  // aloud, Undo, Edit.
   // Kept clear of the edges and of the facing banner (top-left).
   // The phone-simple shell leaves the mic in the root so CSS can pin it
   // to the bottom centre — no Register/Edit/Tools cluster on phones.
@@ -4678,7 +4759,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     undoBtn.textContent = 'Undo';
     undoBtn.dataset.i18n = 'undo';
     const readBtn = root.querySelector('.mc-read-aloud');
-    for (const node of [registerBtn, editBtn, toolsChip, talk, readBtn, undoBtn, resetBtn]) {
+    // One column, in this order (Reset joins Edit while editing).
+    for (const node of [registerBtn, toolsChip, talk, readBtn, undoBtn, editBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
   }

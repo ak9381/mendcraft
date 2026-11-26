@@ -77,6 +77,14 @@ export interface HostSession extends SessionBase {
    *  limit or not paired, true once published. A failed publish rejects and
    *  does not start a gap. */
   sendGimbalCue(kind: GimbalCueKind): Promise<boolean>;
+  /** Open the short code again so MORE phones can join this same session
+   *  (re-running "connect devices"): phones already here keep their link and
+   *  this session id. The code stays open until endAdmission() or
+   *  ALIAS_TTL_MS, whichever is first; a ping from a paired phone does not
+   *  close it meanwhile. */
+  admitMore(): Promise<void>;
+  /** Close the short code now (pairing is over). */
+  endAdmission(): Promise<void>;
   /** Ask the docked iPhone to switch gimbal mode (an allow-listed word, no
    *  user content). Resolves false when not paired, true once published. */
   sendGimbalMode(mode: GimbalModeKind): Promise<boolean>;
@@ -267,12 +275,15 @@ export async function createHostSession(
   // replayed on a reload: at most UNSIGNED_PING_BURST answers per UNSIGNED_PING_GAP_MS.
   let unsignedPongs: number[] = [];
   let aliasCleared = false;
+  /** admitMore() is holding the code open for another phone. */
+  let admitting = false;
   async function clearAliasOnce(): Promise<void> {
     if (aliasCleared) return;
     aliasCleared = true;
+    admitting = false;
     await transport.clearAlias(code).catch(() => undefined);
   }
-  const aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
+  let aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
   let musicCb: ((music: MusicStatus) => void) | null = null;
@@ -342,9 +353,9 @@ export async function createHostSession(
         unsignedPongs = unsignedPongs.filter((at) => now() - at < UNSIGNED_PING_GAP_MS);
         if (unsignedPongs.length >= UNSIGNED_PING_BURST) return;
         unsignedPongs.push(now());
-      } else {
+      } else if (!admitting) {
         // Only a phone that heard THIS session can name it: the short-code
-        // alias has done its job.
+        // alias has done its job (unless it was re-opened for another phone).
         clearTimeout(aliasTimer);
         void clearAliasOnce();
       }
@@ -427,6 +438,21 @@ export async function createHostSession(
       return true;
     },
     publishState,
+    admitMore: async () => {
+      if (core.isClosed()) return;
+      clearTimeout(aliasTimer);
+      admitting = true;
+      aliasCleared = false;
+      aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
+      await transport.setAlias(code, token);
+      // A fresh host message vouches for the reopened code (resolveRoomId
+      // only honours a code whose host spoke within ALIAS_TTL_MS).
+      await transport.publish(token, whoMsg).catch(() => undefined);
+    },
+    endAdmission: async () => {
+      clearTimeout(aliasTimer);
+      await clearAliasOnce();
+    },
     close: async () => {
       clearTimeout(aliasTimer);
       await clearAliasOnce();
@@ -465,7 +491,9 @@ export async function createGuestSession(
   }>();
   core.listen((msg) => {
     if (msg.type === 'hello') core.setState(advancePair(core.state, 'peer-hello'));
-    else if (msg.type === 'bye') core.setState(advancePair(core.state, 'peer-bye'));
+    // Only the laptop leaving ends this phone's link: another phone's (or a
+    // dashboard's) bye in the same room says nothing about the laptop.
+    else if (msg.type === 'bye' && msg.from === 'host') core.setState(advancePair(core.state, 'peer-bye'));
     else if (msg.type === 'state') {
       // Untrusted wire data: rebuild through coerceSnapshot before anyone reads
       // a field (board/layout/transfer included). A host 'state' also means the
@@ -628,11 +656,20 @@ export async function createControlSession(
   };
 }
 
-/** Resolve what the phone user provided (token or short code) to a room id. */
+/** Resolve what the phone user provided (token or short code) to a room id.
+ *  A short code is only honoured while it is fresh: the transport's
+ *  aliasFreshAt (when it has one) must be within ALIAS_TTL_MS of now, so an
+ *  alias left behind by a laptop that vanished (no pagehide, crash) stops
+ *  resolving on its own. */
 export async function resolveRoomId(
   transport: RelayTransport,
   input: { kind: 'token'; token: string } | { kind: 'code'; code: string },
+  opts: { now?: () => number } = {},
 ): Promise<string | null> {
   if (input.kind === 'token') return input.token;
-  return transport.resolveAlias(input.code);
+  const room = await transport.resolveAlias(input.code);
+  if (!room || !transport.aliasFreshAt) return room;
+  const at = await transport.aliasFreshAt(input.code, room).catch(() => null);
+  const now = (opts.now ?? Date.now)();
+  return at !== null && now - at <= ALIAS_TTL_MS ? room : null;
 }

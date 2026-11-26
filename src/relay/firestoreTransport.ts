@@ -17,6 +17,8 @@ export type FirestoreProbe =
   | { ok: false; reason: string };
 
 const PROBE_TIMEOUT_MS = 5000;
+/** How many of a room's newest messages are scanned for the host's proof that its short code is live. */
+const ALIAS_PROOF_SCAN = 12;
 
 /**
  * Try to stand up a Firestore transport. Resolves {ok:false} (never throws)
@@ -114,6 +116,20 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
       },
       async clearAlias(code) {
         await fs.deleteDoc(fs.doc(db, 'rooms', code));
+      },
+      // firestore.rules lets the alias doc hold only {room}, so it cannot
+      // carry a createdAt: the room's newest HOST message (server time)
+      // vouches for it instead. A host that is gone stops vouching; while it
+      // is here its own 5-minute timer (and endAdmission) clear the alias.
+      async aliasFreshAt(_code, roomId) {
+        const recent = await fs.getDocsFromServer(fs.query(
+          fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at', 'desc'), fs.limit(ALIAS_PROOF_SCAN),
+        ));
+        for (const d of recent.docs) {
+          const data = d.data() as { from?: unknown; at?: { toMillis?: () => number } | null };
+          if (data.from === 'host' && typeof data.at?.toMillis === 'function') return data.at.toMillis();
+        }
+        return null;
       },
     };
     return { ok: true, transport };

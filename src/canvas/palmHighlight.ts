@@ -220,6 +220,51 @@ export function createHighlightCore<T>(cfg: Partial<HighlightConfig> = {}): High
   };
 }
 
+/** Where a small name bubble goes beside `target` so it covers neither the
+ *  target nor any of `avoid` (its neighbours): above, then left, below,
+ *  right — each clamped on screen; if every side hits something, the side
+ *  that covers least. Pure: rects in, top-left out. */
+export function placeBubble(
+  target: Rect,
+  size: { w: number; h: number },
+  avoid: readonly Rect[],
+  vp: { w: number; h: number },
+  gap = 10,
+  margin = 8,
+): { left: number; top: number; side: 'above' | 'left' | 'below' | 'right' } {
+  const cx = target.left + target.width / 2, cy = target.top + target.height / 2;
+  const clampX = (x: number) => Math.max(margin, Math.min(vp.w - margin - size.w, x));
+  const clampY = (y: number) => Math.max(margin, Math.min(vp.h - margin - size.h, y));
+  const sides = [
+    { side: 'above' as const, left: clampX(cx - size.w / 2), top: target.top - gap - size.h, fits: target.top - gap - size.h >= margin },
+    { side: 'left' as const, left: target.left - gap - size.w, top: clampY(cy - size.h / 2), fits: target.left - gap - size.w >= margin },
+    { side: 'below' as const, left: clampX(cx - size.w / 2), top: target.top + target.height + gap, fits: target.top + target.height + gap + size.h <= vp.h - margin },
+    { side: 'right' as const, left: target.left + target.width + gap, top: clampY(cy - size.h / 2), fits: target.left + target.width + gap + size.w <= vp.w - margin },
+  ];
+  const covered = (l: number, t: number): number => [target, ...avoid].reduce((sum, r) => {
+    const ix = Math.min(l + size.w, r.left + r.width) - Math.max(l, r.left);
+    const iy = Math.min(t + size.h, r.top + r.height) - Math.max(t, r.top);
+    return sum + (ix > 0 && iy > 0 ? ix * iy : 0);
+  }, 0);
+  let best = sides[0], bestCover = Infinity;
+  for (const c of sides) {
+    if (!c.fits) continue;
+    const cover = covered(c.left, c.top);
+    if (cover === 0) return { left: c.left, top: c.top, side: c.side };
+    if (cover < bestCover) { best = c; bestCover = cover; }
+  }
+  return { left: clampX(best.left), top: clampY(best.top), side: best.side };
+}
+
+/** The bubble's neighbours: controls whose box comes within `px` of the
+ *  target (the target itself is left out by identity, not by position, so a
+ *  neighbour that happens to share its box still counts). */
+export function nearRects(target: Rect, all: readonly Rect[], px = 240): Rect[] {
+  return all.filter((r) => r !== target
+    && r.left < target.left + target.width + px && r.left + r.width > target.left - px
+    && r.top < target.top + target.height + px && r.top + r.height > target.top - px);
+}
+
 // ---------------------------------------------------------------- DOM
 
 export interface PalmHighlightOptions {
@@ -293,6 +338,7 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
   }
 
   let shownRow = '';
+  let labelSize: { w: number; h: number } | null = null;
   function render(v: HighlightView<HTMLElement>): void {
     const show = active && !!v.current && !!v.rect;
     layer.hidden = !show;
@@ -304,12 +350,18 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
     const name = nameOf(v.current) || 'this';
     if (label.dataset.name !== name) {
       label.dataset.name = name;
-      label.innerHTML = `<span class="mc-highlight-name"></span><span class="mc-highlight-how">${hint}<span>R · hold 2 s</span></span>`;
+      label.title = name;
+      label.innerHTML = `<span class="mc-highlight-name"></span><span class="mc-highlight-how">${hint}<span>R · 2 s</span></span>`;
       label.querySelector('.mc-highlight-name')!.textContent = name;
+      labelSize = null; // measured once per name, not every frame
     }
-    const below = r.top < 90;
-    label.classList.toggle('below', below);
-    label.style.transform = `translate(${Math.round(r.left + r.width / 2)}px, ${Math.round(below ? r.top + r.height + 14 : r.top - 14)}px)`;
+    labelSize ??= { w: label.offsetWidth || 200, h: label.offsetHeight || 34 };
+    // A compact glass bubble beside the button — never on it or on the
+    // buttons around it (the magnified row's slots, when that is open).
+    const others = v.expanded ? v.expanded.slots : targets.map((t) => t.rect);
+    const at = placeBubble(r, labelSize, nearRects(r, others), { w: innerWidth, h: innerHeight });
+    label.dataset.side = at.side;
+    label.style.transform = `translate(${Math.round(at.left)}px, ${Math.round(at.top)}px)`;
     if (v.expanded) {
       const key = v.expanded.items.map((el) => nameOf(el)).join('|');
       if (key !== shownRow) {
@@ -340,6 +392,17 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
 
   function clear(): void {
     core.reset(); smooth = null; lastPalmAt = -Infinity; render(core.view);
+  }
+
+  // Automated browsers only (layout e2e): show the highlight on a control.
+  if (typeof navigator !== 'undefined' && navigator.webdriver && doc.defaultView) {
+    (doc.defaultView as unknown as { __mcPalmHighlightTest?: unknown }).__mcPalmHighlightTest = {
+      show(el: HTMLElement) {
+        active = true; refreshTargets(0, true); core.adopt(el);
+        const b = el.getBoundingClientRect();
+        render({ current: el, point: null, rect: { left: b.left, top: b.top, width: b.width, height: b.height }, expanded: null });
+      },
+    };
   }
 
   return {
