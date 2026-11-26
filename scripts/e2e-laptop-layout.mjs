@@ -185,6 +185,29 @@ async function settle(page) {
 /** Pair two SIM phones ("connect devices" under ?sim=1), camera on, Tools
  *  closed: the connected strip, the board, the chips, the cluster, the
  *  camera preview and the More button must all keep clear of each other. */
+/** Undo's rect (and every cluster button's) stays put while the top bar
+ *  changes: Tools open, Tools closed, a status toast showing. A palm aimed
+ *  at a button must never find it moved. */
+async function clusterHoldsStill(page, label) {
+  const rects = () => page.evaluate(() => [...document.querySelectorAll('.mc-hand-cluster > *')].filter((e) => e.getClientRects().length)
+    .map((e) => { const r = e.getBoundingClientRect(); return `${e.className.split(' ').pop()}:${[r.left, r.top, r.width, r.height].map((v) => Math.round(v)).join(',')}`; }).join(' '));
+  const undo = () => page.evaluate(() => { const r = document.querySelector('.mc-hand-cluster .mc-cluster-undo')?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height].map((v) => Math.round(v)).join(',') : 'none'; });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const toolsOpen = () => page.evaluate(() => !!document.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)'));
+  const base = await rects(), u0 = await undo();
+  await wait(1200); // the Tools chip ignores a second press within its latch
+  await page.evaluate(() => document.querySelector('.mc-hand-cluster .mc-tools-chip')?.click()); await wait(1200);
+  const opened = await toolsOpen();
+  const uOpen = await undo(), rOpen = await rects();
+  await page.evaluate(() => document.querySelector('.mc-hand-cluster .mc-tools-chip')?.click()); await wait(1200);
+  const uClosed = await undo();
+  await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = 'Swapped: Nothing on the left, iPhone on the right. Say undo to put them back where they were before.'; }); await wait(400);
+  const uToast = await undo(), rToast = await rects();
+  await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = ''; }); await wait(200);
+  check(opened && u0 !== 'none' && uOpen === u0 && uClosed === u0 && uToast === u0, `${label}: Undo holds still — Tools open, closed, toast (${u0} | ${uOpen} | ${uClosed} | ${uToast})`);
+  check(rOpen === base && rToast === base, `${label}: no cluster button moves with the top bar`);
+}
+
 async function pairedRun(browser, vp, tiles) {
   console.log(`-- ${vp.name}`);
   const { page, errors } = await openBoard(browser, vp, roomDoc(tiles));
@@ -380,6 +403,7 @@ async function main() {
       if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name.replace(' ', '-')}.png`) });
       if (!board.extras) { check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`); await page.close(); continue; }
 
+      await clusterHoldsStill(page, `${vp.name} camera off`);
       // Camera on: the face preview owns the bottom-right corner; the cluster
       // lives above it — one column unless the window is too short.
       await page.evaluate(() => { const p = document.querySelector('.mc-face-preview'); if (p) p.hidden = false; });
@@ -389,6 +413,7 @@ async function main() {
       checkCluster(cam, `${vp.name} camera on`, { allowWrap: colH > cam.vh - 64 - 260 });
       const prev = await page.evaluate(() => { const p = document.querySelector('.mc-face-preview'); const r = p?.getBoundingClientRect(); return r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null; });
       check(!prev || !cam.items.some((i) => overlap(i.box, prev)), `${vp.name} camera on: cluster clear of the camera preview`);
+      await clusterHoldsStill(page, `${vp.name} camera on`);
       if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name.replace(' ', '-')}-camera.png`) });
 
       // Hand-hover label: compact, one line, never over the button or its neighbours.

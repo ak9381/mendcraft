@@ -1461,9 +1461,11 @@
    being centred on the whole screen, so its last button is never behind the
    preview. One column with tighter gaps; only a window too short for that
    wraps a second column (to the right, reading on in order) — buttons never
-   overlap and never shrink. */
+   overlap and never shrink. Its box is FIXED (not var(--mc-bar-h)): the top
+   bar growing for Tools or a status line must never move a button under a
+   pointing palm — the open Tools bar (z 51) may pass over it instead. */
 .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
-  top: calc(var(--mc-bar-h, 64px) + 12px);
+  top: 76px;
   bottom: calc(16px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   transform: none;
   justify-content: center;
