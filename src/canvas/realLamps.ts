@@ -2,9 +2,16 @@
 // two seeded lamps ('wiz-desk', 'wiz-ceiling') so it works with nothing
 // connected; they are simulated and labelled SIM. When the local WiZ bridge
 // answers, they are replaced by what the bridge really finds: one device per
-// bulb IP, called "Lamp", "Lamp 2", …, with the bulb's real on/brightness.
+// bulb, called "Lamp", "Lamp 2", …, with the bulb's real on/brightness.
 // One bulb in the room means one lamp on the canvas — and one lamp id in the
 // list the models are given.
+//
+// Lamp ids are managed here: the seeded ids and 'wiz-lamp-N'. A board may
+// only show a managed lamp id that is in the device list right now; any
+// other (a seeded lamp after the swap, a bulb that has gone, a plan written
+// from a prompt built before discovery, a saved board from another session)
+// is given the first current lamp that board does not already show, or
+// removed — never left as a dead "unknown device" tile.
 import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
 import type { WizClient } from '../devices/wizClient';
 
@@ -12,9 +19,15 @@ import type { WizClient } from '../devices/wizClient';
 export const SEEDED_LAMP_IDS = ['wiz-desk', 'wiz-ceiling'] as const;
 export const LAMP_IDS_KEY = 'mendcraft.wizLamps';
 const CONNECT_LABEL = 'Connect a device';
+const REAL_LAMP_ID = /^wiz-lamp-\d{1,3}$/;
+/** The most bulbs remembered (older, absent ones are forgotten first). */
+export const LAMP_MEMORY_MAX = 8;
+
+/** A lamp id this module manages (seeded, or one it gave a real bulb). */
+export const isManagedLampId = (id: string): boolean => REAL_LAMP_ID.test(id) || (SEEDED_LAMP_IDS as readonly string[]).includes(id);
 
 export interface RealLamp {
-  /** 'wiz-lamp-1', 'wiz-lamp-2', … — stable for a bulb's IP across reloads.
+  /** 'wiz-lamp-1', 'wiz-lamp-2', … — stable for a bulb across reloads.
    *  Never the IP itself: an id travels (plans, the phone, a redacted prompt). */
   id: string;
   /** The bulb's LAN address ('' = the bridge's configured default bulb). */
@@ -32,37 +45,100 @@ const byIp = (a: string, b: string): number => {
   return a.localeCompare(b);
 };
 
-function loadIds(storage: IdStore): Record<string, string> {
-  try {
-    const raw = JSON.parse(storage?.getItem(LAMP_IDS_KEY) ?? '{}') as unknown;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    const out: Record<string, string> = {};
-    for (const [ip, id] of Object.entries(raw as Record<string, unknown>)) if (typeof id === 'string' && /^wiz-lamp-\d{1,3}$/.test(id)) out[ip] = id;
-    return out;
-  } catch { return {}; }
+/** What is kept about a bulb between sessions is a hash of its address, never
+ *  the address: enough to give the same bulb the same id again. */
+export function lampKey(ip: string): string {
+  if (!ip) return 'default';
+  // Two rounds of FNV-1a (different offsets) → 16 hex characters.
+  const round = (seed: number): string => {
+    let h = seed >>> 0;
+    for (let i = 0; i < ip.length; i++) { h ^= ip.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, '0');
+  };
+  return `h${round(0x811c9dc5)}${round(0x9e3779b1)}`;
 }
 
-/** One id per bulb IP: a bulb seen before keeps its id; a new one takes the
- *  lowest free number. */
+interface LampMemory {
+  /** lampKey(ip) → id, oldest first. */
+  ids: Record<string, string>;
+  /** The lamp ids of the last successful discovery, in board order. */
+  last: string[];
+}
+
+function loadMemory(storage: IdStore): LampMemory {
+  const empty: LampMemory = { ids: {}, last: [] };
+  try {
+    const raw = JSON.parse(storage?.getItem(LAMP_IDS_KEY) ?? 'null') as { ids?: unknown; last?: unknown } | null;
+    if (!raw || typeof raw !== 'object' || !raw.ids || typeof raw.ids !== 'object') return empty; // also drops an old IP-keyed map
+    const ids: Record<string, string> = {};
+    for (const [key, id] of Object.entries(raw.ids as Record<string, unknown>)) {
+      if (typeof id === 'string' && REAL_LAMP_ID.test(id) && /^(default|h[0-9a-f]{16})$/.test(key)) ids[key] = id;
+    }
+    const known = new Set(Object.values(ids));
+    const last = Array.isArray(raw.last) ? raw.last.filter((id): id is string => typeof id === 'string' && known.has(id)) : [];
+    return { ids, last: [...new Set(last)] };
+  } catch { return empty; }
+}
+
+function saveMemory(storage: IdStore, m: LampMemory): void {
+  try { storage?.setItem(LAMP_IDS_KEY, JSON.stringify({ v: 2, ids: m.ids, last: m.last })); } catch { /* ids still work for this session */ }
+}
+
+/** The lamp ids the bridge last really found on this machine (empty: never). */
+export function rememberedLampIds(storage: IdStore = null): string[] {
+  return loadMemory(storage).last;
+}
+
+/** One id per bulb: a bulb seen before keeps its id; a new one takes the
+ *  lowest free number. The bridge's "default bulb" (no address known) and
+ *  that same single bulb found later under its address are one bulb: the id
+ *  carries over, in either direction. Bulbs not seen for a long time are
+ *  forgotten once more than LAMP_MEMORY_MAX are remembered. */
 export function assignLampIds(ips: readonly string[], storage: IdStore = null): Record<string, string> {
-  const known = loadIds(storage);
-  const used = new Set(Object.values(known));
-  const out: Record<string, string> = {};
-  for (const ip of ips) {
-    if (known[ip]) { out[ip] = known[ip]; continue; }
-    let n = 1;
-    while (used.has(`wiz-lamp-${n}`)) n++;
-    out[ip] = known[ip] = `wiz-lamp-${n}`;
-    used.add(out[ip]);
+  const m = loadMemory(storage);
+  const keys = ips.map(lampKey);
+  // The default-bulb entry and a lone addressed bulb are the same bulb.
+  if (ips.length === 1) {
+    const [key] = keys;
+    if (!m.ids[key]) {
+      if (key !== 'default' && m.ids.default) { m.ids[key] = m.ids.default; delete m.ids.default; }
+      else if (key === 'default' && m.last.length === 1) {
+        const only = Object.entries(m.ids).find(([, id]) => id === m.last[0]);
+        if (only) { delete m.ids[only[0]]; m.ids.default = only[1]; }
+      }
+    }
   }
-  try { storage?.setItem(LAMP_IDS_KEY, JSON.stringify(known)); } catch { /* ids still work for this session */ }
+  const used = new Set(Object.values(m.ids));
+  const out: Record<string, string> = {};
+  ips.forEach((ip, i) => {
+    const key = keys[i];
+    let id = m.ids[key];
+    if (!id) {
+      let n = 1;
+      while (used.has(`wiz-lamp-${n}`)) n++;
+      id = `wiz-lamp-${n}`;
+      used.add(id);
+    }
+    // Re-insert so the map stays ordered oldest-seen first.
+    delete m.ids[key];
+    m.ids[key] = id;
+    out[ip] = id;
+  });
+  // Prune: forget the longest-unseen bulbs beyond the cap (never a present one).
+  const present = new Set(keys);
+  for (const key of Object.keys(m.ids)) {
+    if (Object.keys(m.ids).length <= LAMP_MEMORY_MAX) break;
+    if (!present.has(key)) delete m.ids[key];
+  }
+  m.last = ips.map((ip) => out[ip]);
+  saveMemory(storage, m);
   return out;
 }
 
 export const lampLabel = (index: number): string => (index === 0 ? 'Lamp' : `Lamp ${index + 1}`);
 
-/** Ask the bridge what is really there. Null = the bridge is down (keep the
- *  seeded SIM lamps). An empty list = the bridge is up and no bulb answered. */
+/** Ask the bridge what is really there. Null = the bridge is down. An empty
+ *  list = the bridge is up and no bulb answered. */
 export async function discoverRealLamps(client: WizClient, storage: IdStore = null): Promise<RealLamp[] | null> {
   if (!(await client.health())) return null;
   let found: Array<{ ip: string; state?: { on: boolean; dimming?: number } | null }> = [];
@@ -91,33 +167,42 @@ export async function discoverRealLamps(client: WizClient, storage: IdStore = nu
   return lamps;
 }
 
-/** Which real lamp takes each seeded lamp's place on boards that already
- *  show one (in order); a seeded lamp with no real bulb left is removed. */
-export function seededLampMap(lamps: readonly RealLamp[]): Record<string, RealLamp | null> {
-  const map: Record<string, RealLamp | null> = {};
-  SEEDED_LAMP_IDS.forEach((id, i) => { map[id] = lamps[i] ?? null; });
-  return map;
-}
+/** A current lamp a board may show. */
+export interface LampSlot { id: string; label: string }
 
-/** Rewrite a board for the real lamps: a seeded lamp's tile becomes its real
- *  lamp's (id and name), or goes when there is no such bulb. Returns the same
- *  plan object when nothing on it was seeded. */
-export function remapSeededLamps(plan: SurfacePlan, lamps: readonly RealLamp[]): SurfacePlan {
-  const map = seededLampMap(lamps);
-  const used = new Set<string>();
+const isDeviceTile = (t: TileSpec): t is Extract<TileSpec, { deviceId: string }> => t.type === 'lamp' || t.type === 'switch' || t.type === 'music';
+
+/** Make a board show only lamps that exist. A managed lamp id that is not in
+ *  `lamps` (a seeded lamp after the swap, a vanished bulb, a remembered lamp
+ *  on a machine that never saw it) becomes the first current lamp THIS board
+ *  does not already show — so a board with one lamp tile keeps a lamp
+ *  whenever there is one — and is removed only when none is left. Every other
+ *  tile is untouched. Returns the same plan object when nothing changed. */
+export function fitLampTiles(plan: SurfacePlan, lamps: readonly LampSlot[]): SurfacePlan {
+  const current = new Set(lamps.map((l) => l.id));
+  // Lamps this board already shows keep their place; the rest are free.
+  const shown = new Set<string>();
+  const scan = (tiles: TileSpec[]): void => {
+    for (const t of tiles) {
+      if (isDeviceTile(t)) { if (current.has(t.deviceId)) shown.add(t.deviceId); }
+      else if (t.type === 'row' || t.type === 'grid' || t.type === 'card') scan(t.children);
+      else if (t.type === 'tabs') t.tabs.forEach((tab) => scan(tab.children));
+      else if (t.type === 'split') { scan(t.first); scan(t.second); }
+    }
+  };
+  scan(plan.tiles);
+  const free = lamps.filter((l) => !shown.has(l.id));
   let changed = false;
   const walk = (tiles: TileSpec[]): TileSpec[] => {
     const out: TileSpec[] = [];
     for (const t of tiles) {
-      if ((t.type === 'lamp' || t.type === 'switch' || t.type === 'music') && t.deviceId in map) {
+      if (isDeviceTile(t) && isManagedLampId(t.deviceId) && !current.has(t.deviceId)) {
         changed = true;
-        const real = map[t.deviceId];
-        if (!real || used.has(real.id)) continue;
-        used.add(real.id);
-        out.push({ ...t, deviceId: real.id, label: real.label });
+        const next = free.shift();
+        if (next) out.push({ ...t, deviceId: next.id, label: next.label });
       } else if (t.type === 'row' || t.type === 'grid' || t.type === 'card') {
         const children = walk(t.children);
-        if (children.length) out.push({ ...t, children });
+        if (children.length) out.push(children === t.children ? t : { ...t, children });
       } else if (t.type === 'tabs') {
         const tabs = t.tabs.map((tab) => ({ ...tab, children: walk(tab.children) })).filter((tab) => tab.children.length);
         if (tabs.length) out.push({ ...t, tabs });
@@ -134,6 +219,11 @@ export function remapSeededLamps(plan: SurfacePlan, lamps: readonly RealLamp[]):
   return { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] };
 }
 
+/** Rewrite a board for the real lamps (see fitLampTiles). */
+export function remapSeededLamps(plan: SurfacePlan, lamps: readonly RealLamp[]): SurfacePlan {
+  return fitLampTiles(plan, lamps);
+}
+
 /** The parts of the canvas a lamp swap touches (kept structural for tests). */
 export interface LampSwapTarget {
   store: { all(): Record<string, DeviceState>; add(id: string, s: DeviceState): void; remove(id: string): void };
@@ -145,15 +235,17 @@ export interface LampSwapTarget {
   ips: Map<string, string>;
 }
 
-/** Make the canvas's lamps the bridge's bulbs: the seeded SIM lamps leave the
- *  device list, each found bulb joins it with its real state, and boards that
- *  showed a seeded lamp now show the real one. Returns the ids of the boards
- *  that changed (to re-render). The speaker and every other device stay. */
+/** Set the canvas's lamps to exactly `lamps`: every other managed lamp id
+ *  leaves the device list (the seeded SIM lamps, a bulb that has gone), each
+ *  given lamp joins it, and every board is fitted to the new list. Returns
+ *  the ids of the boards that changed (to re-render). The speaker and every
+ *  other device stay. */
 export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[]): string[] {
-  for (const id of SEEDED_LAMP_IDS) { target.store.remove(id); delete target.labels[id]; }
-  // A bulb that has gone since the last look leaves too.
   const now = new Set(lamps.map((l) => l.id));
-  for (const id of Object.keys(target.store.all())) if (/^wiz-lamp-\d+$/.test(id) && !now.has(id)) { target.store.remove(id); delete target.labels[id]; target.ips.delete(id); }
+  for (const id of Object.keys(target.store.all())) {
+    if (isManagedLampId(id) && !now.has(id)) { target.store.remove(id); delete target.labels[id]; target.ips.delete(id); }
+  }
+  for (const id of SEEDED_LAMP_IDS) delete target.labels[id];
   for (const lamp of lamps) {
     target.store.add(lamp.id, lamp.state);
     target.labels[lamp.id] = lamp.label;
@@ -161,8 +253,18 @@ export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[
   }
   const changed: string[] = [];
   for (const [frameId, plan] of Object.entries(target.surfaces)) {
-    const next = remapSeededLamps(plan, lamps);
+    const next = fitLampTiles(plan, lamps);
     if (next !== plan) { target.surfaces[frameId] = next; changed.push(frameId); }
   }
   return changed;
+}
+
+/** The lamps to start with when the bridge has not answered (yet, or at all):
+ *  the bulbs it last really found on this machine, shown as SIM until it does
+ *  — so boards saved with those lamps open with live tiles, not dead ones.
+ *  Null when no bulb was ever found here (the seeded lamps stay). */
+export function rememberedLamps(storage: IdStore = null): RealLamp[] | null {
+  const ids = rememberedLampIds(storage);
+  if (!ids.length) return null;
+  return ids.map((id, i) => ({ id, ip: '', label: lampLabel(i), state: { on: false, brightness: 50, sim: true } }));
 }
