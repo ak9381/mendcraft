@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
 import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_LOAD_MAX_MS, ON_DEVICE_MAX_RUN_MS, STILL_LOADING, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
-import { geminiFailLine, GHOST_EVERY_MS, NANO_STILL_LOADING, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
+import { geminiFailLine, GHOST_EVERY_MS, NANO_STILL_LOADING, nanoLoadView, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
 import { buildNanoPlanRequest, expandNanoPlan, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
@@ -1781,7 +1781,7 @@ describe('one-review room title', () => {
 describe('live trace: a model that loads back is not out of time', () => {
   /** An on-device model whose session takes `loadMs` to create (an evicted
    *  model loading back), then answers `answerMs` later. */
-  function slowLoadSdk(loadMs: number, answerMs = 1_000, reply = NANO_OK) {
+  function slowLoadSdk(loadMs: number, answerMs = 1_000, reply = NANO_OK, sessionAt = loadMs) {
     let aborted = 0;
     setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
       (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
@@ -1790,6 +1790,7 @@ describe('live trace: a model that loads back is not out of time', () => {
         generateContent: () => never(),
         generateContentStream: async () => {
           if (!Number.isFinite(loadMs)) await never<void>();
+          if (sessionAt < loadMs) setTimeout(() => { model.chromeAdapter.oldSession = {}; }, sessionAt);
           await tick(loadMs);
           model.chromeAdapter.oldSession = {};
           const stream = (async function* () { await tick(answerMs); yield { text: () => reply, inferenceSource: 'on_device' }; })();
@@ -1804,16 +1805,16 @@ describe('live trace: a model that loads back is not out of time', () => {
   it('a 17.7 s load then a 3 s answer stays on device: the 20 s starts once the session exists', async () => {
     vi.useFakeTimers();
     slowLoadSdk(17_737, 3_000);
-    const loading: boolean[] = [];
+    const loading: string[] = [];
     let readyAt = -1;
     const t0 = Date.now();
     const out = streamOnDevice({ prompt: 'p', queue: createNanoQueue(1), onLoading: (l) => loading.push(l), onReady: () => { readyAt = Date.now() - t0; } }).then((t) => t, (e: Error) => `ERR ${e.message}`);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(loading).toEqual([true]); // "Nano is loading the model…"
+    expect(loading).toEqual(['loading']); // "Nano is loading the model…"
     await vi.advanceTimersByTimeAsync(20_000);
     expect(await out).toBe(NANO_OK);
     expect(readyAt).toBeGreaterThanOrEqual(17_737);
-    expect(loading).toEqual([true, false]);
+    expect(loading).toEqual(['loading', 'loaded']);
   });
 
   it('once the session exists the answer still has only 20 s', async () => {
@@ -1827,7 +1828,7 @@ describe('live trace: a model that loads back is not out of time', () => {
   it('a load past its own ceiling is given up and named honestly', async () => {
     vi.useFakeTimers();
     const sdk = slowLoadSdk(Infinity);
-    const loading: boolean[] = [];
+    const loading: string[] = [];
     const q = createNanoQueue(1);
     const out = streamOnDevice({ prompt: 'p', queue: q, onLoading: (l) => loading.push(l) }).then(() => 'ok', (e: Error) => e.message);
     await vi.advanceTimersByTimeAsync(ON_DEVICE_LOAD_MAX_MS - 1_000);
@@ -1836,27 +1837,81 @@ describe('live trace: a model that loads back is not out of time', () => {
     expect(await out).toBe(STILL_LOADING);
     expect(STILL_LOADING).toBe(NANO_STILL_LOADING);
     expect(ON_DEVICE_LOAD_MAX_MS).toBe(45_000);
-    expect(loading).toEqual([true, false]);
+    expect(loading).toEqual(['loading', 'gave-up']); // never "loaded"
     expect(sdk.aborted()).toBe(1);
     expect(q.idle()).toBe(true);
   });
 
+  it('a session that turns up after the call gave up starts no clock and tells nobody', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(50_000, 1_000);
+    const loading: string[] = [];
+    let readies = 0;
+    const q = createNanoQueue(1);
+    const out = streamOnDevice({ prompt: 'p', queue: q, onLoading: (l) => loading.push(l), onReady: () => { readies++; } }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_LOAD_MAX_MS + 100);
+    expect(await out).toBe(STILL_LOADING);
+    const timersAfterEnd = vi.getTimerCount();
+    // create() finally resolves 5 s later: no 20 s timer is armed, no late news
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(timersAfterEnd);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_MAX_RUN_MS + 1_000);
+    expect(readies).toBe(0);
+    expect(loading).toEqual(['loading', 'gave-up']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a call stopped while loading reports "failed", never "loaded", and a late session is ignored', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(10_000, 1_000);
+    const loading: string[] = [];
+    let readies = 0;
+    const ctl = new AbortController();
+    const out = streamOnDevice({ prompt: 'p', queue: createNanoQueue(1), signal: ctl.signal, onLoading: (l) => loading.push(l), onReady: () => { readies++; } }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(3_000);
+    ctl.abort();
+    expect(await out).toBe('stopped');
+    await vi.advanceTimersByTimeAsync(10_000 + ON_DEVICE_MAX_RUN_MS + 1_000);
+    expect(readies).toBe(0);
+    expect(loading).toEqual(['loading', 'failed']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the bar and terminal: only a real load says "loaded"; giving up just takes the line down', () => {
+    expect(nanoLoadView('loading')).toEqual({ note: 'Nano is loading the model…', bar: 'Nano is loading the model…' });
+    expect(nanoLoadView('loaded')).toEqual({ note: 'Nano has loaded the model.', bar: 'Nano is drafting…' });
+    expect(nanoLoadView('gave-up')).toEqual({ note: null, bar: '' });
+    expect(nanoLoadView('failed')).toEqual({ note: null, bar: '' });
+  });
+
+  it('an engine that never reports anything still gets its clock after 15 s in line', async () => {
+    vi.useFakeTimers();
+    let handoffs = 0;
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async (_p, onText) => { onText(GEMINI_OK); return GEMINI_OK; } }, stream: () => never<string>() };
+    const p = runSurfaceTurn(req, nano, { onHandoff: () => { handoffs++; } }, { nanoTimeoutMs: 20_000, deviceIdSession: createDeviceIdSession() });
+    await vi.advanceTimersByTimeAsync(34_000);
+    expect(handoffs).toBe(0);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await p)?.title).toBe('Living room');
+    expect(handoffs).toBe(1);
+  });
+
   it('the turn: loading is not counted against the budget, and the bar is told', async () => {
     vi.useFakeTimers();
-    const loadingSeen: boolean[] = [];
+    const loadingSeen: string[] = [];
     let handoffs = 0;
     // onStart at once, 18 s of loading, then the session exists and Nano answers in 3 s
     const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async () => GEMINI_OK }, stream: (_p, onText, so) => new Promise<string>((resolve) => {
       so?.onStart?.();
-      so?.onLoading?.(true);
-      setTimeout(() => { so?.onLoading?.(false); so?.onReady?.(); }, 18_000);
+      so?.onLoading?.('loading');
+      setTimeout(() => { so?.onLoading?.('loaded'); so?.onReady?.(); }, 18_000);
       setTimeout(() => { onText(NANO_OK); resolve(NANO_OK); }, 21_000);
     }) };
     const p = runSurfaceTurn(req, nano, { onNanoLoading: (l) => loadingSeen.push(l), onHandoff: () => { handoffs++; } }, { nanoTimeoutMs: 20_000 });
     await vi.advanceTimersByTimeAsync(22_000);
     expect((await p)?.tiles).toHaveLength(2);
     expect(handoffs).toBe(0);
-    expect(loadingSeen).toEqual([true, false]);
+    expect(loadingSeen).toEqual(['loading', 'loaded']);
   });
 
   it('the turn: a model still loading at its ceiling hands off and says so', async () => {

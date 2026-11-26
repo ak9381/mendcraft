@@ -15,7 +15,7 @@ import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type S
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
-import { createCanvasHistory, geminiFailLine, NANO_LOADING_LINE, NANO_STILL_LOADING, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { createCanvasHistory, geminiFailLine, NANO_LOADING_LINE, NANO_STILL_LOADING, nanoLoadView, type NanoLoadState, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pickPointChoice, pointConnectFromIdentity, pointFailureReceipt, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
 import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, phoneCropFraction, pointerInCrop, rayOutOfFrame, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
 import { createPhoneSensor, type PhoneSensor } from './phoneSensor';
@@ -2064,12 +2064,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The on-device model is loading back (it was evicted, or this is its
    *  first use): say so on the Nano card and in its terminal instead of
    *  looking stuck. Loading is not counted against Nano's reply budget. */
-  function nanoLoading(loading: boolean): void {
-    const line = loading ? NANO_LOADING_LINE : 'Nano has loaded the model.';
-    panels.forEngine('nano').log('note', line);
-    engineBar?.set('nano', 'working', loading ? NANO_LOADING_LINE : 'Nano is drafting…');
+  function nanoLoading(load: NanoLoadState): void {
+    const view = nanoLoadView(load);
     const state = aiPanel.querySelector('.mc-ai-state');
-    if (state) state.textContent = line;
+    engineBar?.set('nano', 'working', view.bar);
+    if (view.note) {
+      panels.forEngine('nano').log('note', view.note);
+      if (state) state.textContent = view.note;
+    } else if (state?.textContent === NANO_LOADING_LINE) state.textContent = '';
   }
   /** The last streamed turn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;

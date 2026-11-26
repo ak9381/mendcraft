@@ -54,8 +54,8 @@ export interface StreamOptions {
    *  reply deadline counts from here: not from the time spent waiting in
    *  line, and not from the time the model took to load. */
   onReady?: () => void;
-  /** On device: the model is taking a while to load (true) / has loaded (false). */
-  onLoading?: (loading: boolean) => void;
+  /** On device: the model is taking a while to load, then how that ended. */
+  onLoading?: (state: NanoLoadState) => void;
   /** Cloud: one model call really left this device (hedges and retries each
    *  count). Bytes are booked here, not when the turn was started. */
   onCloudSend?: () => void;
@@ -181,9 +181,10 @@ export interface TurnUi {
    *  retry is another one). Book the bytes here — `onSent` only opens the
    *  turn; a call that never left books nothing. */
   onCloudSend?(s: SentInfo): void;
-  /** The on-device model is loading (true) — say "Nano is loading the
-   *  model…" — or has finished loading and is answering (false). */
-  onNanoLoading?(loading: boolean): void;
+  /** The on-device model is loading ('loading') — say "Nano is loading the
+   *  model…" — then 'loaded' (it is answering), 'gave-up' (its load
+   *  ceiling ran out) or 'failed' (stopped or broke while loading). */
+  onNanoLoading?(state: NanoLoadState): void;
   /** A call booked by onCloudSend turned out never to have left: un-book it. */
   onCloudRetract?(s: SentInfo): void;
   onText?(full: string): void;
@@ -273,6 +274,16 @@ export const NANO_LOAD_MAX_MS = 45_000;
 /** What the on-device engine reports when that ceiling ran out. */
 export const NANO_STILL_LOADING = 'was still loading the model';
 export const NANO_LOADING_LINE = 'Nano is loading the model…';
+/** Where a slow on-device model load stands. */
+export type NanoLoadState = 'loading' | 'loaded' | 'gave-up' | 'failed';
+/** What the Nano terminal notes and the engine bar says for a load state.
+ *  A load that never finished notes nothing (the handoff or the error says
+ *  what happened) and only takes the loading line down. */
+export function nanoLoadView(state: NanoLoadState): { note: string | null; bar: string } {
+  if (state === 'loading') return { note: NANO_LOADING_LINE, bar: NANO_LOADING_LINE };
+  if (state === 'loaded') return { note: 'Nano has loaded the model.', bar: 'Nano is drafting…' };
+  return { note: null, bar: '' };
+}
 
 /** A failure a second identical call cannot fix: don't spend a retry on it. */
 function worthRetry(e: unknown): boolean {
@@ -429,9 +440,17 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   const TIMED_OUT = Symbol('nano-timeout');
   let begin!: () => void;
   const began = new Promise<void>((r) => { begin = r; });
-  // Backstop only (an engine that never reports its session): the clock
-  // starts anyway once the longest allowed wait in line and load have passed.
-  void sleep(opts.nanoQueueWaitMs ?? NANO_QUEUE_WAIT_MS + NANO_LOAD_MAX_MS).then(begin);
+  // Backstops only. An engine that reports nothing gets its clock after the
+  // longest allowed wait in line, as before. One that took the call (onStart)
+  // but never says its session exists gets it once the load ceiling has
+  // passed — by then its engine has either reported ready or given up.
+  let started = false;
+  void sleep(opts.nanoQueueWaitMs ?? NANO_QUEUE_WAIT_MS).then(() => { if (!started) begin(); });
+  const onStart = (): void => {
+    if (started) return;
+    started = true;
+    void sleep(NANO_LOAD_MAX_MS + 1_000).then(begin);
+  };
   const deadline = began.then(() => sleep(budgetMs)).then(() => { if (!over) ctl?.abort(); return TIMED_OUT; });
   const timed = async (p: Promise<string>): Promise<string> => {
     p.catch(() => undefined); // an aborted stream may reject after the deadline already won
@@ -442,7 +461,7 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   // The 20 s budget is for Nano ANSWERING. It starts when the session exists
   // (onReady) — a model that was evicted and takes 18 s to load back has not
   // used any of it. Loading has its own ceiling, inside the engine.
-  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onReady: begin, onLoading: (loading) => ui.onNanoLoading?.(loading) };
+  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onStart, onReady: begin, onLoading: (state) => ui.onNanoLoading?.(state) };
   let why: string;
   let unsupported = false;
   try {
