@@ -64,7 +64,7 @@ import {
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
 import {
-  clearSavedVoice, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase,
+  clearSavedVoice, loadAllowCloud, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase, SPEECH_PITCH, SPEECH_RATE,
   resolveChangeVoice, saveVoice, toSynthVoice, type ChangeVoiceIntent, type SynthVoice,
 } from './ai/speechVoices';
 import { createVoicePanel } from './ui/voicePanel';
@@ -533,11 +533,12 @@ function say(message: string): void {
 function speakSynth(message: string, lang: Language = DEFAULT_LANGUAGE): void {
   if (!('speechSynthesis' in window)) return;
   const raw = window.speechSynthesis.getVoices();
-  const picked = pickSpokenVoice(raw.map(toSynthVoice), { lang: lang.speechLang, saved: loadSavedVoice() });
+  const picked = pickSpokenVoice(raw.map(toSynthVoice), { lang: lang.speechLang, saved: loadSavedVoice(), allowCloud: loadAllowCloud() });
   const voice = picked ? raw.find((v) => v.voiceURI === picked.voiceURI) ?? null : null;
   if (!voice && !isEnglish(lang)) return;
   const utter = new SpeechSynthesisUtterance(message);
-  utter.rate = 1.1;
+  utter.rate = SPEECH_RATE; // a little slower than normal: clearer
+  utter.pitch = SPEECH_PITCH;
   utter.lang = lang.speechLang;
   if (voice) utter.voice = voice;
   window.speechSynthesis.cancel();
@@ -1073,7 +1074,8 @@ function speakWithVoice(text: string, voice: SynthVoice | null): void {
   }
   srLive.textContent = text;
   const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 1.1;
+  utter.rate = SPEECH_RATE; // a little slower than normal: clearer
+  utter.pitch = SPEECH_PITCH;
   if (voice) {
     utter.lang = voice.lang;
     const raw = window.speechSynthesis.getVoices().find((x) => x.voiceURI === voice.voiceURI);
@@ -1086,7 +1088,7 @@ function speakWithVoice(text: string, voice: SynthVoice | null): void {
 const voicePanel = createVoicePanel({
   getVoices: listSynthVoices,
   onChange: (saved) => {
-    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved });
+    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved, allowCloud: loadAllowCloud() });
     const text = saved ? `Voice set to ${saved.name ?? 'your pick'}.` : 'Back to the usual voice.';
     if (muted) { srLive.textContent = text; return; } // mute still wins for the confirm
     speakWithVoice(text, voice);

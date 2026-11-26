@@ -13,6 +13,7 @@ import { routePlanExtra, type PlanExtra } from './planExtras';
 import { spotifySearchQuery } from './spotifyConnector';
 import { matchPaletteCommand } from './toolPalette';
 import { parseMusicIntent } from '../music/musicIntent';
+import { parseChangeVoice, type ChangeVoiceIntent } from '../ai/speechVoices';
 
 export interface RouteWorld {
   /** A plan board that can run the CAD extras (the focused one, else any in overview). */
@@ -29,6 +30,7 @@ export interface RouteWorld {
 export type Route =
   | { name: 'paletteOpen' } | { name: 'paletteClose' }
   | { name: 'teach' } | { name: 'teachList' }
+  | { name: 'voice'; intent: ChangeVoiceIntent }
   | { name: 'showAi' } | { name: 'monitor' } | { name: 'activityTab' } | { name: 'hideAi' }
   | { name: 'tool'; tool: ToolVoice }
   | { name: 'scroll'; dir: 'up' | 'down'; page: boolean }
@@ -80,6 +82,9 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (palette === 'close') return { name: 'paletteClose' };
   if (/^\s*teach a gesture\s*$/i.test(text)) return { name: 'teach' };
   if (/^\s*(custom gestures|my gestures)\s*$/i.test(text)) return { name: 'teachList' };
+  // "change voice" / "use the Ava voice" / "preview voice": the spoken voice picker.
+  const voice = parseChangeVoice(text);
+  if (voice) return { name: 'voice', intent: voice };
   if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) return { name: 'showAi' };
   // "open AI activity" (optionally "in a new tab"): the log on its own page.
   if (/^\s*open\s+(the\s+)?ai\s+activity(\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab)?\s*[.!]?\s*$/i.test(text) || /^\s*(show\s+)?ai\s+activity\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab\s*[.!]?\s*$/i.test(text)) return { name: 'activityTab' };

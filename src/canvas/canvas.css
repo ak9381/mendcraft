@@ -1661,3 +1661,29 @@
 .mc-scroll-badge { position: absolute; left: 0; top: 0; translate: -100% 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px;
   border-radius: 999px; background: #FFC83D; color: #2B2B2B; font: 700 12px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .mc-level-readout.is-pulse { animation: none; } }
+
+/* ---- Voice sheet (voiceSheet.ts): installed voices, nicest first, each with Test ---- */
+.mc-voice-sheet { position: fixed; z-index: 70; right: 24px; top: calc(var(--mc-bar-h, 0px) + 24px); width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px - var(--mc-bar-h, 0px)); overflow: auto; overscroll-behavior: contain; display: grid; gap: 12px; padding: 20px;
+  border-radius: 20px; background: var(--panel); border: 2px solid var(--border); box-shadow: 0 16px 40px rgb(0 0 0 / 0.16); color: var(--text); }
+.mc-voice-sheet[hidden] { display: none; }
+.mc-voice-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-voice-title { margin: 0; font-size: 24px; font-weight: 650; }
+.mc-voice-note { margin: 0; font-size: 16px; line-height: 1.4; color: var(--text-dim); }
+.mc-voice-hint { margin: 0; padding: 12px 14px; border-radius: 12px; background: rgb(154 95 28 / 0.10); border: 1px solid rgb(154 95 28 / 0.35);
+  font-size: 16px; line-height: 1.45; color: var(--text); }
+.mc-voice-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.mc-voice-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.mc-voice-sheet .mc-btn { min-height: 56px; }
+.mc-voice-pick { display: grid; gap: 2px; justify-items: start; text-align: left; padding: 8px 14px; border-radius: 14px; }
+.mc-voice-pick[aria-pressed="true"], .mc-voice-toggle[aria-pressed="true"] { border-color: var(--action-fill); background: rgb(154 95 28 / 0.10); box-shadow: inset 0 0 0 1px var(--action-fill); }
+.mc-voice-name { font-size: 18px; font-weight: 650; }
+.mc-voice-kind { font-size: 15px; font-weight: 500; color: var(--text-dim); }
+.mc-voice-test { min-width: 84px; border-radius: 14px; }
+.mc-voice-foot { display: grid; gap: 12px; padding-top: 4px; border-top: 1px solid var(--border); }
+.mc-voice-toggle { text-align: left; padding: 8px 14px; border-radius: 14px; }
+.mc-voice-toggle::before { content: 'Off · '; color: var(--text-dim); }
+.mc-voice-toggle[aria-pressed="true"]::before { content: 'On · '; color: var(--action-fill); }
+@media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: auto; max-height: 76vh; } }
+.mc-voice-sheet .mc-voice-pick { display: grid; justify-content: stretch; }
+.mc-voice-pick > span { justify-self: start; }

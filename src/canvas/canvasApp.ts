@@ -101,6 +101,9 @@ import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
+import { createSpeaker } from '../ai/speaker';
+import { clearSavedVoice, isCloudVoice, loadAllowCloud, loadReadAloud, loadSavedVoice, resolveChangeVoice, saveVoice, speechPlatform, type ChangeVoiceIntent } from '../ai/speechVoices';
+import { mountVoiceSheet } from './voiceSheet';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
@@ -335,6 +338,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             <button data-cmd="monitor" class="mc-btn">AI monitor</button>
             <button data-cmd="activity" class="mc-btn">Open AI activity in a new tab</button>
             <button data-cmd="swap" class="mc-btn" hidden>Swap phone sides</button></section>
+          <section class="mc-more-group" aria-label="Sound"><h3 class="mc-more-title">Sound</h3>
+            <button data-cmd="voice" class="mc-btn">Voice</button></section>
           <section class="mc-more-group" aria-label="Demo"><h3 class="mc-more-title">Demo</h3>
             <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button></section>
         </div>
@@ -837,8 +842,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       statusEl.textContent = '';
     }, statusFadeMs(t));
   };
+  // Speaking aloud (ai/speaker.ts): the nicest on-device voice, a little
+  // slower for clarity, never over itself. Replies are read aloud only when
+  // she turned that on in More → Voice; the status line is always written.
+  // The voice choice lives in the same store as the canvas (memory in a replay).
+  const voiceStore = storage as Storage;
+  const speaker = createSpeaker({ storage: voiceStore });
+  let readAloud = loadReadAloud(voiceStore);
+  const spokenLang = (t: string): string => (/[\u0C80-\u0CFF]/.test(t) ? 'kn-IN' : 'en-US');
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
+    if (readAloud && t && t !== LISTENING_STATUS) speaker.speak(t.replace(/^SIM · /, ''), { lang: spokenLang(t) });
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
@@ -3050,6 +3064,27 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // review dialog and mount after it, so opening one on top of an open review
   // would cover Approve/Reject. Keep the review the single gate (same guard the
   // morph flow uses) and tell the user to finish it first.
+  // ---- Voice: pick the voice replies are spoken with (More → Voice, "change voice") ----
+  const voiceLang = (): string => (pack?.lang === 'kn' ? 'kn-IN' : 'en-US');
+  const voiceSheet = mountVoiceSheet(root, {
+    speaker, lang: voiceLang, storage: voiceStore, say,
+    platform: speechPlatform(typeof navigator !== 'undefined' ? navigator.userAgent : '', typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0),
+    onReadAloud: (on) => { readAloud = on; if (!on) speaker.stop(); },
+  });
+  // Browsers fill their voice list late: repaint an open sheet when it lands.
+  try { (globalThis as { speechSynthesis?: { addEventListener?(t: string, f: () => void): void } }).speechSynthesis?.addEventListener?.('voiceschanged', () => voiceSheet.refresh()); } catch { /* no speech here */ }
+  /** "change voice" / "use the Ava voice" / "preview voice" / "default voice". */
+  function changeVoice(intent: ChangeVoiceIntent): void {
+    const out = resolveChangeVoice(intent, speaker.voices().filter((v) => loadAllowCloud(voiceStore) || !isCloudVoice(v)), loadSavedVoice(voiceStore), voiceLang());
+    if (out.action === 'set' && out.voice) saveVoice(out.voice, voiceStore);
+    if (out.action === 'reset') clearSavedVoice(voiceStore);
+    if (out.action === 'open' || out.action === 'not-found') voiceSheet.open(); else voiceSheet.refresh();
+    const wasReading = readAloud;
+    readAloud = false; // the line below is spoken once, with the voice it is about
+    say(out.say);
+    readAloud = wasReading;
+    speaker.speak(out.say, { voice: out.voice });
+  }
   function openTeach(): void {
     if (reviewDialog.isOpen()) { say('Finish the review first — keep or drop, then teach a gesture.'); return; }
     teachPanel.open();
@@ -3442,6 +3477,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'paletteClose': closeTools(); return true;
       case 'teach': openTeach(); return true;
       case 'teachList': openTeachList(); return true;
+      case 'voice': changeVoice(r.intent); return true;
       case 'showAi': showAi(true, true); return true;
       case 'monitor': openMonitor(); return true;
       case 'activityTab': openActivity(); return true;
@@ -3600,7 +3636,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
