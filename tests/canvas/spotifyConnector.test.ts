@@ -60,6 +60,22 @@ describe('createSpotifyAwareConnector', () => {
     expect(r.said).toEqual([NO_DEVICE_NOTICE]);
   });
 
+  it('play: asks again while Spotify still says nothing plays, then shows the real title', async () => {
+    let n = 0;
+    const nowPlaying = async () => (++n < 3 ? null : { title: 'Vanilla Twilight', artist: 'Owl City' });
+    const r = rig({ nowPlaying, nowPlayingGapMs: 1 });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(n).toBe(3);
+    expect(ack.trackTitle).toBe('Vanilla Twilight');
+  });
+
+  it('play: Spotify never names the song — no title at all, never the placeholder', async () => {
+    const r = rig({ nowPlaying: async () => null, nowPlayingTries: 2, nowPlayingGapMs: 1 });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(ack.playing).toBe(true);
+    expect(ack.trackTitle).toBe('');
+  });
+
   it('not connected: inner built-in player + the exact notice, no Spotify calls', async () => {
     const r = rig({ isConnected: () => false });
     const ack = await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });

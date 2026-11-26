@@ -13,6 +13,9 @@ import type { SpotifyDevice, SpotifySearchHit } from '../music/spotifyApi';
 export const NOT_CONNECTED_NOTICE = "Spotify isn't connected — playing the built-in track.";
 /** How long the in-browser player gets to become ready before we give up on it. */
 export const BROWSER_DEVICE_MS = 4000;
+/** Asking Spotify what plays right after starting it: this many times, this far apart. */
+export const NOW_PLAYING_TRIES = 5;
+export const NOW_PLAYING_GAP_MS = 600;
 export const NO_DEVICE_NOTICE = 'Open Spotify on your phone so it shows up, then try again.';
 export const PREMIUM_NOTICE = 'Spotify needs Premium to control playback.';
 export const NO_ANSWER_NOTICE = "Spotify didn't respond.";
@@ -49,6 +52,9 @@ export interface SpotifyConnectorDeps {
   browserDevice?(): Promise<string | undefined>;
   /** Test hook: how long the in-browser player gets (default BROWSER_DEVICE_MS). */
   browserDeviceMs?: number;
+  /** Test hooks for settledNowPlaying (defaults NOW_PLAYING_TRIES / NOW_PLAYING_GAP_MS). */
+  nowPlayingTries?: number;
+  nowPlayingGapMs?: number;
   pause?(): Promise<void>;
   resume?(): Promise<void>;
   next?(): Promise<{ title: string } | null>;
@@ -179,6 +185,19 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     return true;
   }
 
+  /** Right after a transfer Spotify still answers "nothing playing" for a
+   *  moment: ask again a few times before giving up on the title. */
+  async function settledNowPlaying(): Promise<{ title: string; artist?: string } | null> {
+    if (!deps.nowPlaying) return null;
+    const tries = deps.nowPlayingTries ?? NOW_PLAYING_TRIES;
+    for (let i = 0; i < tries; i++) {
+      const np = await deps.nowPlaying().catch(() => null);
+      if (np?.title) return np;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, deps.nowPlayingGapMs ?? NOW_PLAYING_GAP_MS));
+    }
+    return null;
+  }
+
   /** One speaker action on Spotify. Throws what Spotify threw. */
   async function transport(intent: DeviceIntent): Promise<Partial<DeviceState>> {
     if (intent.next || intent.previous) {
@@ -197,9 +216,11 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
       // after that Play is a plain resume there.
       if (!(await ensureTarget(intent.deviceId, true))) return noDevice();
       if (!fresh && deps.resume) await deps.resume();
-      const np = await deps.nowPlaying?.().catch(() => null);
+      const np = await settledNowPlaying();
       deps.say(spotifyPlayingLine(np?.title ?? '', np?.artist, target!.name));
-      return spotify({ playing: true, ...(np?.title ? { trackTitle: np.title } : {}) });
+      // Never keep the built-in player's placeholder title: what Spotify says
+      // is playing, or no title at all.
+      return spotify({ playing: true, trackTitle: np?.title ?? '' });
     }
     if (intent.volume !== undefined) {
       if (!(await ensureTarget(intent.deviceId, false))) return noDevice();
