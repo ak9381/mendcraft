@@ -920,16 +920,17 @@
   z-index: 10000;
   transform: translate(-50%, -100%);
   pointer-events: none;
-  max-width: min(260px, calc(100vw - 16px));
-  padding: 4px 8px;
-  border-radius: 6px;
+  max-width: min(220px, calc(100vw - 16px));
+  box-sizing: border-box;
+  padding: 6px 12px;
   font-size: 15px;
-  line-height: 1.3;
-  white-space: normal;
-  background: rgb(20 20 24 / 0.92);
-  color: #f5f5f7;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+/* Placed by canvasApp (placeBubble): its left/top are the bubble's corner. */
+.mc-hand-tooltip.is-placed, .mc-hand-tooltip.is-placed.below { transform: none; }
 .mc-hand-tooltip.below { transform: translate(-50%, 0); }
 .mc-hand-tooltip[hidden] { display: none; }
 
@@ -984,7 +985,7 @@
   z-index: 80;
 }
 
-/* Mid-screen right-side cluster: Register, Edit, Tools, Talk.
+/* Mid-screen right-side cluster: Register, Tools, Talk, Read aloud, Undo, Edit.
    Docked to the right edge (24px) so it never sits on top of a board: Fit
    and the overview take clusterInset() out of the board area. The hand
    reach box maps to the full screen (handPointer.mapToScreen), so the edge
@@ -1439,28 +1440,37 @@
 /* The camera preview owns the bottom-right corner while it shows: the hand
    cluster then lives in the space ABOVE it (and its Facing pill) instead of
    being centred on the whole screen, so its last button is never behind the
-   preview. If the buttons do not fit that space in one column they wrap into
-   a second one to the left — they never overlap and never shrink. */
+   preview. One column with tighter gaps; only a window too short for that
+   wraps a second column (to the right, reading on in order) — buttons never
+   overlap and never shrink. */
 .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
   top: calc(var(--mc-bar-h, 64px) + 12px);
-  bottom: calc(16px + 216px + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  bottom: calc(16px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   transform: none;
   justify-content: center;
-  flex-wrap: wrap-reverse;
-  align-content: flex-start;
+  flex-wrap: wrap;
+  align-content: flex-end;
+  gap: 12px;
   column-gap: 16px;
   max-width: none;
 }
 .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster > * { width: 168px; }
+/* A short window: a smaller camera preview leaves the cluster room for one column. */
+@media (max-height: 860px) and (min-width: 601px) {
+  .mc-canvas { --mc-cam-h: 144px; }
+  .mc-canvas .mc-face-preview { width: 192px; height: 144px; }
+  .mc-canvas .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
+}
 @media (max-width: 1240px) {
   .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
-    bottom: calc(96px + 216px + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    bottom: calc(96px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   }
 }
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
   .mc-canvas .mc-face-preview { bottom: calc(96px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
-  .mc-canvas .mc-facing-banner { bottom: calc(96px + 216px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas .mc-facing-banner { bottom: calc(96px + var(--mc-cam-h, 216px) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 }
 /* The chip + pill own the bottom-right corner: the AI panel's foot stops above them.
    chip = 16 + 216; pill = chip + 8 + ~38. */
@@ -1745,12 +1755,24 @@
 .mc-highlight-layer[hidden], .mc-highlight-row[hidden] { display: none; }
 .mc-highlight-ring { position: absolute; left: 0; top: 0; border: 4px solid #E0A800; border-radius: 16px;
   box-shadow: 0 0 0 3px rgb(255 255 255 / 0.85), 0 0 18px rgb(224 168 0 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
-.mc-highlight-label { position: absolute; left: 0; top: 0; translate: -50% -100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 6px 14px 6px; border-radius: 14px; background: #2B2B2B; color: #FFFFFF; box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); white-space: nowrap; }
-.mc-highlight-label.below { translate: -50% 0; }
-.mc-highlight-name { font: 700 26px/1.15 system-ui, sans-serif; }
-.mc-highlight-how { display: flex; align-items: center; gap: 6px; font: 600 15px/1 system-ui, sans-serif; color: #FFC83D; }
-.mc-highlight-how .mc-gi { width: 18px; height: 18px; }
+/* The hovered button's name: a compact glass bubble placed BESIDE the button
+   (palmHighlight.placeBubble) so it never covers it or its neighbours. One
+   line, ≤ 220 px, the name ellipsized; the press hint trails it. */
+.mc-highlight-label, .mc-hand-tooltip {
+  --mc-glass-bg: rgb(255 255 255 / 0.55);
+  background: var(--mc-glass-bg); color: #2B2B2B;
+  -webkit-backdrop-filter: blur(12px) saturate(1.4); backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid rgb(43 43 43 / 0.14); border-radius: 12px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.12), 0 1px 2px rgb(0 0 0 / 0.06);
+}
+.mc-highlight-label { position: absolute; left: 0; top: 0; display: flex; flex-direction: row; align-items: center; gap: 8px;
+  box-sizing: border-box; max-width: 220px; padding: 6px 12px; font-size: 15px; white-space: nowrap; }
+.mc-highlight-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 650 15px/1.25 system-ui, sans-serif; }
+.mc-highlight-how { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; font: 600 15px/1.25 system-ui, sans-serif; color: #7A5200; }
+.mc-highlight-how .mc-gi { width: 16px; height: 16px; }
+@media (prefers-reduced-transparency: reduce) {
+  .mc-highlight-label, .mc-hand-tooltip { --mc-glass-bg: #FFFFFF; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
 .mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
   border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }
 .mc-highlight-slot { position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px;
@@ -1819,6 +1841,12 @@
 /* Wide things (a floor plan, nested layouts, tables) take the whole row. */
 .mc-frame[data-kind="room"] .mc-surface a2ui-basic-column > :is(mc-plan-board, mc-row, mc-grid, mc-card, mc-tabs, mc-split, mc-table-tile, .mc-edit-canvas) { grid-column: 1 / -1; }
 .mc-phone-simple .mc-frame[data-kind="room"] .mc-frame-body { padding: 12px; }
+/* Laptop room board: a slimmer head, body and chip row so a lamp + music
+   board fits above the engine bar at 1550×700 with its chips under the tiles. */
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-head { padding-block: 10px; }
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-body { padding: 16px 20px 12px; }
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding: 8px 20px 10px; }
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: 52px; }
 /* AI drawer terminals: newest line on top, so the working cursor sits there too. */
 .mc-term-body { display: flex; flex-direction: column; }
 .mc-term-cursor { order: -1; }
