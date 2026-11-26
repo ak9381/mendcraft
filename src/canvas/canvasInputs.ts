@@ -13,6 +13,7 @@ import {
   createGimbalCanvasController,
   parseGimbalSpeech,
   NO_GIMBAL_WHY,
+  HANDS_PAUSED,
   type GimbalCanvasController,
 } from './gimbalCanvas';
 import { cameraHandsFromSelfie } from './handSpace';
@@ -113,8 +114,10 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
       }
       activeHandsStop = null;
     }
-    // No hand frames any more: hands mode would silently stop following.
-    if (gimbal.mode() === 'hands') report(gimbal.setMode('face'));
+    // No hand frames any more: hands mode simply holds still (tracking stays
+    // off) — it never falls back to the face — and follows again when frames
+    // return. Other modes: restore the chosen tracking state.
+    if (gimbal.mode() === 'hands') { if (!opts.sensing?.()) on.status?.(HANDS_PAUSED); }
     else void gimbal.release().catch(() => {});
   }
 

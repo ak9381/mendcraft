@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCanvasInputs, type CanvasInputsCallbacks } from '../../src/canvas/canvasInputs';
 import type { CanvasHandEvent, CanvasHandsStop } from '../../src/canvas/canvasHands';
-import type { GimbalCanvasController } from '../../src/canvas/gimbalCanvas';
+import { HANDS_PAUSED, type GimbalCanvasController } from '../../src/canvas/gimbalCanvas';
 
 function createFakeGimbal(overrides: Partial<GimbalCanvasController> = {}): GimbalCanvasController {
   return {
@@ -182,19 +182,31 @@ describe('canvasInputs', () => {
     expect(onStatus).toHaveBeenCalledWith('Couldn’t turn DockKit tracking off: boom');
   });
 
-  it('stopping hands while the gimbal follows hands switches it to face (never a silent stop)', async () => {
+  it('stopping hands while the gimbal follows hands holds still — never falls back to the face (never a silent stop)', async () => {
     const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
     const fakeGimbal = createFakeGimbal({
       mode: vi.fn(() => 'hands' as const),
-      setMode: vi.fn(async () => ({ ok: true, status: 'DockKit tracking on — needs a camera app/camera running' })),
+      setMode: vi.fn(async () => ({ ok: true, status: 'x' })),
     });
     const onStatus = vi.fn();
     const inputs = createCanvasInputs({ hands: vi.fn(() => stopFn as unknown as CanvasHandsStop), gimbal: fakeGimbal, on: { status: onStatus } });
     await inputs.start({} as HTMLElement);
     inputs.stop();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fakeGimbal.setMode).toHaveBeenCalledWith('face');
+    expect(fakeGimbal.setMode).not.toHaveBeenCalled();
     expect(fakeGimbal.release).not.toHaveBeenCalled();
-    expect(onStatus).toHaveBeenCalledWith('DockKit tracking on — needs a camera app/camera running');
+    expect(onStatus).toHaveBeenCalledWith(HANDS_PAUSED);
+  });
+
+  it('stopping hands while the iPhone sensing layer still feeds frames: nothing changes, nothing said', async () => {
+    const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
+    const fakeGimbal = createFakeGimbal({ mode: vi.fn(() => 'hands' as const) });
+    const onStatus = vi.fn();
+    const inputs = createCanvasInputs({ hands: vi.fn(() => stopFn as unknown as CanvasHandsStop), gimbal: fakeGimbal, sensing: () => true, on: { status: onStatus } });
+    await inputs.start({} as HTMLElement);
+    inputs.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fakeGimbal.setMode).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
   });
 });

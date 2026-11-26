@@ -14,6 +14,26 @@ export type NudgeDir = 'left' | 'right' | 'up' | 'down';
 /** Minimum time between two hands-follow moves. */
 export const FOLLOW_INTERVAL_MS = 700;
 
+/** Smoothed hands follow (gimbalCanvas 'hands' mode): the target is an
+ *  exponential average of the hands' centroid, it must be seen on
+ *  HANDS_CONFIRM_FRAMES frames in a row (a one-frame false hand never moves
+ *  the stand), moves inside HANDS_DEADBAND_RAD are skipped, and each move
+ *  covers HANDS_GAIN of the error so the stand eases in without overshoot.
+ *  After a move the average restarts (the picture moved with the stand) and
+ *  frames are ignored for HANDS_SETTLE_MS. No hand → nothing moves. */
+export const HANDS_SMOOTHING = 0.5;
+export const HANDS_CONFIRM_FRAMES = 2;
+export const HANDS_DEADBAND_RAD = (4 * Math.PI) / 180;
+export const HANDS_GAIN = 0.7;
+export const HANDS_SETTLE_MS = 250;
+/** A gap this long without a hand restarts the average. */
+export const HANDS_LOST_MS = 600;
+
+export interface SmoothFollow {
+  /** Relative move in radians (yaw + right, pitch + up). */
+  move: (yaw: number, pitch: number) => Promise<boolean>;
+}
+
 /** One 8° nudge — enough to reframe, small enough not to whip the stand. */
 export const NUDGE_RAD = (8 * Math.PI) / 180;
 
@@ -75,6 +95,8 @@ export function createGimbalFollow(opts: {
   nudge?: (yaw: number, pitch: number) => Promise<boolean>;
   intervalMs?: number;
   fov?: { h: number; v: number };
+  /** Smoothed hands follow (see HANDS_*): moves go here instead of aim(). */
+  smooth?: SmoothFollow;
 }): GimbalFollow {
   // ≥ 700 ms between moves by default: native aim() resolves only after the
   // move completes, and the `inflight` flag below keeps moves from stacking.
@@ -83,6 +105,36 @@ export function createGimbalFollow(opts: {
   let mode: FollowMode = 'hands';
   let lastAimAt = 0;
   let inflight = false;
+  /** Smoothed target (hands mode with opts.smooth). */
+  let ema: Pt | null = null;
+  let seen = 0;
+  let lastSeenAt = -Infinity;
+  let settleUntil = -Infinity;
+  /** A move just ended: the next frame starts the settle wait (frame clock). */
+  let justMoved = false;
+
+  function smoothFrame(hands: readonly { points: readonly Pt[] }[], now: number, smooth: SmoothFollow): void {
+    const raw = handsCentroid(hands);
+    if (!raw) return;
+    if (now - lastSeenAt > HANDS_LOST_MS) { ema = null; seen = 0; }
+    lastSeenAt = now;
+    if (justMoved) { justMoved = false; settleUntil = now + HANDS_SETTLE_MS; }
+    if (now < settleUntil) return;
+    ema = ema ? { x: ema.x + HANDS_SMOOTHING * (raw.x - ema.x), y: ema.y + HANDS_SMOOTHING * (raw.y - ema.y) } : raw;
+    seen++;
+    if (inflight || seen < HANDS_CONFIRM_FRAMES || now - lastAimAt < interval) return;
+    const { yaw, pitch } = aimAngles(boxAround(ema), fov);
+    const y = Math.abs(yaw) < HANDS_DEADBAND_RAD ? 0 : yaw * HANDS_GAIN;
+    const p = Math.abs(pitch) < HANDS_DEADBAND_RAD ? 0 : pitch * HANDS_GAIN;
+    if (y === 0 && p === 0) return;
+    lastAimAt = now;
+    inflight = true;
+    void smooth.move(y, p).catch(() => false).finally(() => {
+      inflight = false;
+      // The picture moved with the stand: start the average again.
+      ema = null; seen = 0; justMoved = true;
+    });
+  }
 
   function targetOf(hands: readonly { points: readonly Pt[] }[]): Pt | null {
     if (mode === 'hold') return null;
@@ -100,8 +152,9 @@ export function createGimbalFollow(opts: {
 
   return {
     mode: () => mode,
-    setMode(next) { mode = next; },
+    setMode(next) { mode = next; ema = null; seen = 0; },
     onFrame(hands, now) {
+      if (mode === 'hands' && opts.smooth) { smoothFrame(hands, now, opts.smooth); return; }
       if (inflight || mode === 'hold') return;
       if (now - lastAimAt < interval) return;
       const target = targetOf(hands);

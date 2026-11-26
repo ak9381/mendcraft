@@ -8,7 +8,7 @@ import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS } from '../../src/canvas/p
 import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
   CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FOLLOWING_HANDS_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
-  NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, TRACKING_ROW, type PhoneSenseStatus,
+  NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, DIAG_AIMING_NO, DIAG_AIMING_YES, DIAG_TRACKING_OFF, DIAG_TRACKING_ON, TRACKING_ROW, type PhoneSenseStatus,
 } from '../../src/canvas/phonePoint';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
 import { routeLine } from '../../src/canvas/routeLine';
@@ -47,7 +47,7 @@ describe('connect-devices row: iPhone sub-states', () => {
     expect(app).toMatch(/if \(!o\.skipIphone && iphone\?\.canPoint && hostSession\)/);
     expect(app).toMatch(/canPoint: opts\.phoneCamera\?\.status\(\) !== 'error'/);
     expect(app).toMatch(/res\.reason === 'no-camera'\) \{[\s\S]{0,120}pointTurn\(wait\.frameId, \{ skipIphone: true \}\)/);
-    expect(app).toMatch(/gimbal = !gimbalDocked \? 'none' : mode === 'face' \? 'tracking'/);
+    expect(app).toMatch(/const gimbal = !gimbalDocked \? 'none'\s*: mode === 'face' \? \(trackingOn === false \? 'ready' : 'tracking'\)/);
   });
 
   it('SIM: the iPhone sub-state is labelled SIM', () => {
@@ -64,6 +64,24 @@ describe('connect-devices row: iPhone sub-states', () => {
     expect(asking).toContain(GIMBAL_READY_ROW);
     // No sub-state function: the row is unchanged.
     expect(pairedRowHtml([iphone], 'asking')).not.toContain('mc-paired-sub');
+  });
+
+  it('live-test diagnostics ride the announce: DockKit tracking on/off and aiming at hands yes/no in the row', () => {
+    const s = coerceSenseStatus({ gimbal: 'hands', sensor: true, hands: false, canPoint: true, systemTracking: false, aimingAtHands: true });
+    expect(s).toEqual({ gimbal: 'hands', sensor: true, hands: false, canPoint: true, systemTracking: false, aimingAtHands: true });
+    expect(phoneSubState(s, { ios: true })).toBe(`${FOLLOWING_HANDS_ROW} · ${DIAG_TRACKING_OFF} · ${DIAG_AIMING_YES}`);
+    const t = coerceSenseStatus({ gimbal: 'ready', sensor: true, hands: false, canPoint: true, systemTracking: true, aimingAtHands: false });
+    expect(phoneSubState(t, { ios: true })).toContain(`${DIAG_TRACKING_ON} · ${DIAG_AIMING_NO}`);
+    // Junk values are dropped; an older phone build shows no diagnostics.
+    expect(coerceSenseStatus({ gimbal: 'ready', sensor: false, hands: false, canPoint: true, systemTracking: 'yes' })).toEqual({ gimbal: 'ready', sensor: false, hands: false, canPoint: true });
+    expect(phoneSubState({ gimbal: 'none', sensor: false, hands: false, canPoint: true, systemTracking: true }, { ios: true })).not.toContain('DockKit');
+  });
+
+  it('the iPhone announces its gimbal diagnostics, and hands is only claimed with tracking read back off', () => {
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toMatch(/mode === 'hands' && phoneSensor\.running\(\) && trackingOn !== true \? 'hands' : 'ready'/);
+    expect(app).toMatch(/s\.aimingAtHands = diag\.aimingAtHands/);
+    expect(app).toMatch(/if \(live && !sensorWasLive\) void inputs\.gimbal\.reassertOff/);
   });
 
   it('coerceSenseStatus: only well-formed sensing fields', () => {

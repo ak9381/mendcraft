@@ -1,8 +1,10 @@
 // Canvas-level gimbal behaviour built on src/devices/gimbalFollow.ts and native.ts.
 // Modes (iPhone docked on a DockKit stand only):
 //   face  — DockKit's own subject tracking (system tracking ON). We never aim.
-//   hands — system tracking OFF; we aim at her hands, only while a hand
-//           tracker is producing frames. Without one we say so and use face.
+//   hands — system tracking OFF (and kept off: re-asserted whenever the
+//           iPhone reads it back on); we aim at her hands from the hand
+//           tracker's frames, smoothed (gimbalFollow smooth). No hand seen /
+//           no tracker → the stand holds still. NEVER falls back to the face.
 //   hold  — both off: the stand stays put.
 //   point — hold while a point is captured (no aiming during the steady hold).
 // The status text only claims following when the plugin reports DockKit
@@ -62,6 +64,14 @@ export interface GimbalCanvasController {
   /** The native app saw the stand dock/undock. false→true re-applies face
    *  (unless she chose hold/hands); returns that result, else null. */
   noteDocked?(docked: boolean): Promise<GimbalResult | null>;
+  /** What the iPhone really reports, for the announce diagnostics:
+   *  systemTracking = DockKit read-back (null = not known yet);
+   *  aimingAtHands = hands mode, tracking read back OFF, and a hand seen in
+   *  the last AIMING_HAND_MS. */
+  diag?(now?: number): GimbalDiag;
+  /** Re-assert "tracking off" (hands / hold / point) — e.g. after the camera
+   *  session (re)started, which can make DockKit track again. */
+  reassertOff?(): Promise<void>;
   /** Body language: nod yes / shake no / wake up (DockKit animate). Silent
    *  no-op (ok:false, no status) when there is no docked stand, an old build,
    *  or within GIMBAL_CUE_MIN_GAP_MS of the last cue. `status` is set only
@@ -69,13 +79,24 @@ export interface GimbalCanvasController {
   gimbalCue(kind: GimbalCueKind): Promise<GimbalResult>;
 }
 
+export interface GimbalDiag {
+  systemTracking: boolean | null;
+  aimingAtHands: boolean;
+}
+/** A hand seen this recently counts as "aiming at hands". */
+export const AIMING_HAND_MS = 1500;
+/** JS-side re-assert of "tracking off" at most this often. */
+export const REASSERT_MIN_MS = 1000;
+
 export const NO_GIMBAL_WHY = 'The gimbal works in the iPhone app';
 /** Inside the native app, when the plugin gives no reason. */
 export const NO_STAND_WHY = 'No DockKit stand docked';
 export const FACE_ON_STATUS = 'DockKit tracking on — needs a camera app/camera running';
 export const FACE_ON_KEEPALIVE_STATUS = 'DockKit tracking on — camera keep-alive running (test option)';
-export const HANDS_NEED_TRACKER = 'Hand following needs a hand tracker — following your face instead';
+export const HANDS_NEED_TRACKER = 'Hand following needs the hand tracker — the gimbal holds still until it sees your hands';
 export const HANDS_ON_STATUS = 'Gimbal follows your hands (DockKit tracking off)';
+/** Hand frames stopped in hands mode: the stand holds still (never the face). */
+export const HANDS_PAUSED = 'Hand tracking off — the gimbal holds still until it sees your hands again';
 export const HOLD_STATUS = 'Gimbal holding still (DockKit tracking off)';
 export const POINT_STATUS = 'Gimbal holding still while you point';
 export const SCAN_LIVE_WHY = 'Room scan isn’t available yet — point at a device or name it.';
@@ -163,6 +184,20 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   const why = (): string => (plugin ? lastReason || NO_STAND_WHY : NO_GIMBAL_WHY);
   let availInflight: Promise<boolean> | null = null;
   const cueLimiter = createCueLimiter(GIMBAL_CUE_MIN_GAP_MS, clock);
+  /** DockKit system tracking as the iPhone last read it back (null = unknown). */
+  let systemTracking: boolean | null = null;
+  let lastHandAt = -Infinity;
+  let lastReassertAt = -Infinity;
+  const offMode = (): boolean => currentMode === 'hands' || currentMode === 'hold' || currentMode === 'point';
+  const noteTracking = (v: unknown): void => { if (typeof v === 'boolean') systemTracking = v; };
+  /** Tracking read back ON while we want it off: turn it off again (rate-limited). */
+  function maybeReassert(): void {
+    if (!offMode() || systemTracking !== true) return;
+    const t = clock();
+    if (t - lastReassertAt < REASSERT_MIN_MS) return;
+    lastReassertAt = t;
+    void setTracking(false).catch(() => {});
+  }
 
   /** isAvailable() at most once per TTL (it crosses the native bridge). */
   async function checkPlugin(): Promise<boolean> {
@@ -175,10 +210,12 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       try {
         const a = await plugin.isAvailable();
         value = !!a.available;
+        noteTracking(a.systemTracking);
         lastReason = value ? '' : (a.reason || NO_STAND_WHY);
       } catch (e) { value = false; lastReason = e instanceof Error ? e.message : NO_STAND_WHY; }
       avail = { value, at: clock() };
       availInflight = null;
+      maybeReassert();
       return value;
     })();
     return availInflight;
@@ -186,6 +223,20 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
   const gimbalFollow: GimbalFollow = createGimbalFollow({
     intervalMs: Math.max(FOLLOW_INTERVAL_MS, opts.followIntervalMs ?? FOLLOW_INTERVAL_MS),
+    // Hands mode: smoothed target, dead zone, eased moves (gimbalFollow.ts).
+    smooth: {
+      move: async (yaw, pitch) => {
+        if (!plugin || currentMode !== 'hands') return false;
+        try {
+          const res = await plugin.aim({ yaw, pitch, seconds: 0.5 });
+          noteTracking(res.systemTracking);
+          maybeReassert();
+          return res.ok;
+        } catch {
+          return false;
+        }
+      },
+    },
     aim: async (box) => {
       if (!plugin) return false;
       const { yaw, pitch } = aimAngles(box);
@@ -204,6 +255,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     if (!plugin?.setSystemTrackingEnabled) return { ok: false, enabled: false, keepAlive: false, error: OLD_BUILD_WHY };
     try {
       const r = await plugin.setSystemTrackingEnabled({ enabled, keepAlive: enabled && keepAlive });
+      noteTracking(r.enabled);
       return { ok: r.ok !== false, enabled: r.enabled === true, keepAlive: r.keepAlive === true, error: r.error };
     } catch (e) {
       return { ok: false, enabled: false, keepAlive: false, error: e instanceof Error ? e.message : String(e) };
@@ -247,8 +299,11 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       }
       if (mode === 'face') return enterFace();
       if (mode === 'hands') {
-        if (!opts.handsRunning?.()) return enterFace(HANDS_NEED_TRACKER);
-        return enterOff('hands');
+        // Never the face: without a tracker the stand holds still (tracking
+        // off) and starts following as soon as hand frames arrive.
+        const r = await enterOff('hands');
+        if (r.ok && !opts.handsRunning?.()) return { ok: false, why: HANDS_NEED_TRACKER };
+        return r;
       }
       return enterOff(mode);
     },
@@ -268,7 +323,9 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       if (!(await checkPlugin())) {
         return { ok: false, why: why() };
       }
-      gimbalFollow.onFrame(hands, now ?? clock());
+      const t = now ?? clock();
+      if (hands.some((h) => h.points.length >= 21)) lastHandAt = t;
+      gimbalFollow.onFrame(hands, t);
       return { ok: true };
     },
 
@@ -317,6 +374,20 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
       } catch (e) {
         return { ok: false, why: e instanceof Error ? e.message : String(e) };
       }
+    },
+
+    diag(now?: number): GimbalDiag {
+      const t = now ?? clock();
+      return {
+        systemTracking,
+        aimingAtHands: currentMode === 'hands' && systemTracking === false && t - lastHandAt < AIMING_HAND_MS,
+      };
+    },
+
+    async reassertOff(): Promise<void> {
+      if (!plugin || !offMode()) return;
+      lastReassertAt = clock();
+      await setTracking(false);
     },
 
     async setKeepAlive(on: boolean): Promise<GimbalResult> {
