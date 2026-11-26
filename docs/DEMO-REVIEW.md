@@ -46,3 +46,22 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 - "connect everything in this room" on the phone → review on the phone, Approve by a real tap → full-width readable board (lamp + speaker tiles). 
 - Glitches (sent to the phone builder): AI monitor's Android tab never shows the phone's activity ("Not connected"); "make a dashboard…" routed to chat and the reply never showed; Gemini called twice on the phone (draft + improve, 4.6 KB); review sheet under the status bar, a truncated "What left" line, mic overlapping the sheet; white status-bar icons; empty status after "turn on the desk lamp".
 - AI monitor (laptop tab) works: history, refusal, "Sent again: 2 calls, 770 B in all" for the Kannada retry.
+
+## Live run — 26 Nov, evening (preview build, real Nano + Gemini, both phones)
+
+| Step | Result |
+|---|---|
+| Chime pairing, both phones | ✓ both joined; closing the card used to disconnect them — fixed (`Closing the pairing card keeps phones…`) |
+| Re-pair after laptop reload | ✓ "connect devices" — remembered phones rejoin, no chime |
+| Connected devices board | ✓ laptop, iPhone, Nothing ticked; WiZ row says Chrome blocks local network; iPhone says "Gimbal: no stand" |
+| Dashboard (Nano draft → Gemini) | ✓ swarm cursors visible ("Nano · board draft", "Nano · Music"); speaker tile only (lamp blocked, no stand reported) |
+| Spotify → iPhone → Marshall | ✓ plays when the Spotify app is open on the iPhone. Fixed: no device used to time out as "Couldn't reach the music player" (now says "Open Spotify on your phone…"); tile showed placeholder "Morning light" instead of the real song (now waits for Spotify's title) |
+| Floor plan on its own board | ✓ Nano on device, nothing left the laptop; 3D view + turn buttons + mouse orbit work |
+| Offline (simulated) | ✓ Nano-only; Gemini card now says **Offline** (said "Ready") |
+| "add a study next to bedroom 2" | ✗→fixing: "next" was read as "Next song" (fixed + tests); the plan edit fell to small talk that promised an action it never did (builder on it: voice plan edits + honest chat guard) |
+| Board → phone (drag to right edge, held) | ✓ Nothing phone (right) shows the new two-bedroom plan |
+| Kannada | ✓ Gemini pack, 770 B; undo restores English |
+| Try to break it (speaker 150%) | ✓ refused "Volume goes from 0 to 100 %. Nothing changed." — took ~25 s waiting for Nano; now capped at 8 s |
+| Layout at 1550×656 | ✗→fixing: paired strip covers the board; chip bar under the Nano/Gemini pill; Disconnect appears where Continue was; hand cluster jumps ~20 px |
+
+**Needs Akash:** Chrome site settings for the preview → "Apps on device" → Allow (lamp + pointing at the bulb); dock the iPhone on the gimbal (it reports no stand); after reloading the laptop, say "connect devices" once.
