@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  NEXT_PROMPT, createPairFirst, isBuildDashboard, pairedRowHtml, parseConnectDevices,
+  DISCONNECT_ARM_MS, NEXT_PROMPT, createPairFirst, isBuildDashboard, pairedRowHtml, parseConnectDevices,
 } from '../../src/canvas/pairedRow';
 
 function setup(o: { sim?: boolean; pairingOk?: boolean; busy?: { v: boolean } } = {}) {
@@ -181,5 +183,22 @@ describe('live phones survive reopening', () => {
     pf.abandon();
     pf.clearReal();
     expect(pf.phase()).toBe('idle');
+  });
+});
+
+describe('Disconnect after Continue (double press / tremor)', () => {
+  it('leads the connected row, away from where Continue sat at the end', () => {
+    const live = pairedRowHtml([{ id: 'a', label: 'iPhone', sim: true }, { id: 'b', label: 'Nothing phone', sim: true }], 'live');
+    const pairing = pairedRowHtml([{ id: 'a', label: 'iPhone', sim: true }], 'pairing');
+    expect(pairing.trim().endsWith('Continue</button>')).toBe(true);
+    expect(live.startsWith('<button type="button" class="mc-btn mc-paired-disconnect">')).toBe(true);
+  });
+
+  it('ignores presses for a second after it appears', () => {
+    expect(DISCONNECT_ARM_MS).toBeGreaterThanOrEqual(1000);
+    const app = readFileSync(join(__dirname, '../../src/canvas/canvasApp.ts'), 'utf8');
+    expect(app).toMatch(/const disconnectArm = createClickCooldown\(DISCONNECT_ARM_MS\)/);
+    expect(app).toMatch(/if \(disconnectBtn && !hadDisconnect\) disconnectArm\.arm\(/);
+    expect(app).toMatch(/if \(!disconnectArm\.ready\(performance\.now\(\)\)\) return;\s*disconnectPhones\(\)/);
   });
 });

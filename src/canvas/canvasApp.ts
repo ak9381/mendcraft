@@ -28,7 +28,8 @@ import { openEndedAsk } from './openEndedAsk';
 import { cleanReply, createSentenceFeed } from './liveReply';
 import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
-import { createPairFirst, isBuildDashboard, pairedRowHtml } from './pairedRow';
+import { createPairFirst, DISCONNECT_ARM_MS, isBuildDashboard, pairedRowHtml } from './pairedRow';
+import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -793,6 +794,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairedRow.parentElement !== host) host.appendChild(pairedRow);
     pairedRow.classList.toggle('is-docked', dock);
   }
+  /** Disconnect ignores presses for DISCONNECT_ARM_MS after it appears. */
+  const disconnectArm = createClickCooldown(DISCONNECT_ARM_MS);
+  let hadDisconnect = false;
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
   /** The host session's short code was re-opened for more phones (pair-first). */
@@ -851,7 +855,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pairedRow.title = pairedRow.classList.contains('is-docked') ? (pairedRow.querySelector('.mc-paired-phone') ? [...pairedRow.querySelectorAll('.mc-paired-phone')].map((e) => e.textContent?.trim()).join(' · ') : '') : '';
       showArrangeStrip(true);
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
-      pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
+      // Just appeared (Continue was pressed a moment ago): not armed yet.
+      const disconnectBtn = pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect');
+      if (disconnectBtn && !hadDisconnect) disconnectArm.arm(performance.now());
+      hadDisconnect = !!disconnectBtn && !pairedRow.hidden;
+      disconnectBtn?.addEventListener('click', () => {
+        if (!disconnectArm.ready(performance.now())) return;
+        disconnectPhones(); say('Phones disconnected.');
+      });
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
       if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }

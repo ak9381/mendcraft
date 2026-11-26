@@ -192,6 +192,27 @@ async function pairedRun(browser, vp, tiles) {
     const i = document.querySelector('#mc-say-in'); const f = document.querySelector('.mc-say');
     if (i && f) { i.value = 'connect devices'; f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }
   });
+  // Both SIM phones in: press Continue, then at once press again where it
+  // was and Disconnect itself (a double click / a tremor's repeated fist).
+  // Disconnect is elsewhere, and ignores presses for a second after it appears.
+  const two = await page.waitForFunction(() => document.querySelectorAll('.mc-paired-row .mc-paired-chip').length >= 2 && !!document.querySelector('.mc-paired-continue:not([disabled])'), { timeout: 10_000 }).then(() => true, () => false);
+  if (two) {
+    const tap = await page.evaluate(() => {
+      const c = document.querySelector('.mc-paired-continue');
+      const r = c.getBoundingClientRect();
+      const at = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      c.click();
+      const d = document.querySelector('.mc-paired-row .mc-paired-disconnect');
+      const dr = d?.getBoundingClientRect();
+      const under = !!dr && at.x >= dr.left && at.x <= dr.right && at.y >= dr.top && at.y <= dr.bottom;
+      document.elementFromPoint(at.x, at.y)?.click();
+      d?.click();
+      return { shown: !!d, under };
+    });
+    check(tap.shown && !tap.under, `${vp.name}: Disconnect never appears under the Continue just pressed`);
+    await new Promise((r) => setTimeout(r, 200));
+    check(await page.evaluate(() => /2 phones connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? '')), `${vp.name}: a press on Disconnect right as it appears is ignored`);
+  } else check(false, `${vp.name}: Continue offered once two SIM phones joined`);
   const joined = await page.waitForFunction(() => /2 phones connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? ''), { timeout: 12_000 }).then(() => true, () => false);
   check(joined, `${vp.name}: two SIM phones paired, connected strip shown`);
   // Back on the room board, Tools closed, camera on, status line cleared, as

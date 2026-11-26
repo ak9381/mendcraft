@@ -13,6 +13,10 @@ export interface PairedPhone {
   sim: boolean;
 }
 
+/** Disconnect ignores presses this long after it appears (a double click
+ *  or a tremor's repeated fist on the control that was there before). */
+export const DISCONNECT_ARM_MS = 1000;
+
 export const NEXT_PROMPT = 'What do you want to connect next? Point at it, name it, or say build the dashboard.';
 
 /** "connect devices", "connect my devices and make a dashboard", "connect all devices". */
@@ -193,7 +197,9 @@ export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPh
     const n = phones.length;
     const sim = phones.some((p) => p.sim) ? ' <span class="mc-chip">SIM</span>' : '';
     const subs = phones.map((p) => { const t = sub(p); return t ? ` <span class="mc-paired-phone">${esc(p.label)}:${t}</span>` : ''; }).join('');
-    return `<span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}${subs}<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button>`;
+    // Disconnect leads the row: Continue (the last thing pressed) sat at its
+    // END, so a second press or a repeated fist must not land on Disconnect.
+    return `<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button><span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}${subs}`;
   }
   const chips = phones.length
     ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}${sub(p)}</span>`).join('')
