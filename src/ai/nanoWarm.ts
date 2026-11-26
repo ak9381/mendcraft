@@ -74,3 +74,56 @@ export function createWarmKeeper(deps: WarmKeeperDeps): WarmKeeper {
     stop() { stopped = true; drop(); },
   };
 }
+
+/** The page's warm schedule: after first paint (a frame, then a short
+ *  delay), at the first idle moment — bounded by `idleTimeoutMs`, since hand
+ *  tracking keeps the page busy — ask whether Nano is usable (asking warms
+ *  it, see canvasMain's refreshNanoAvailable), then keep asking: every 15 s
+ *  until it is, once a minute after. The warm-up's own loading/loaded state
+ *  is passed on (the engine bar line). `stop()` cancels every pending
+ *  callback and the subscription. On-device only: nothing here calls Gemini. */
+export interface WarmScheduleDeps {
+  refresh(): Promise<boolean>;
+  available(): boolean;
+  /** Subscribe to the warm-up's state (hybrid.onWarmState); returns unsubscribe. */
+  subscribe?(cb: (state: 'loading' | 'loaded' | 'failed') => void): () => void;
+  onState?(state: 'loading' | 'loaded' | 'failed'): void;
+  raf?: (cb: () => void) => unknown;
+  cancelRaf?: (id: unknown) => void;
+  idle?: (cb: () => void, o: { timeout: number }) => unknown;
+  cancelIdle?: (id: unknown) => void;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (id: unknown) => void;
+  idleTimeoutMs?: number;
+}
+export const WARM_AFTER_PAINT_MS = 400;
+export const WARM_IDLE_TIMEOUT_MS = 1500;
+export function startWarmSchedule(d: WarmScheduleDeps): { stop(): void } {
+  const setTimer = d.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = d.clearTimer ?? ((id) => clearTimeout(id as ReturnType<typeof setTimeout>));
+  let stopped = false;
+  let rafId: unknown = null, idleId: unknown = null;
+  const timers = new Set<unknown>();
+  const later = (fn: () => void, ms: number): void => { const id = setTimer(() => { timers.delete(id); if (!stopped) fn(); }, ms); timers.add(id); };
+  const unsubscribe = d.subscribe?.((s) => { if (!stopped) d.onState?.(s); }) ?? null;
+  const poll = (): void => { later(() => { void d.refresh().finally(() => { if (!stopped) poll(); }); }, d.available() ? 60_000 : 15_000); };
+  const first = (): void => { idleId = null; if (stopped) return; void d.refresh(); poll(); };
+  const whenIdle = (): void => {
+    if (stopped) return;
+    if (d.idle) idleId = d.idle(first, { timeout: d.idleTimeoutMs ?? WARM_IDLE_TIMEOUT_MS });
+    else later(first, 300);
+  };
+  const afterPaint = (): void => { rafId = null; later(whenIdle, WARM_AFTER_PAINT_MS); };
+  if (d.raf) rafId = d.raf(afterPaint); else afterPaint();
+  return {
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      if (rafId != null) d.cancelRaf?.(rafId);
+      if (idleId != null) d.cancelIdle?.(idleId);
+      for (const id of timers) clearTimer(id);
+      timers.clear();
+      unsubscribe?.();
+    },
+  };
+}

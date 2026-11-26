@@ -5,8 +5,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createNanoQueue } from '../../src/ai/nanoQueue';
-import { onOnDeviceUnloaded, setModelsForTest, streamOnDevice, warmBoardOnDevice, type TextGenModel } from '../../src/ai/hybrid';
-import { createWarmKeeper } from '../../src/ai/nanoWarm';
+import { ON_DEVICE_LOAD_MAX_MS, STILL_LOADING, onOnDeviceUnloaded, onWarmState, setModelsForTest, streamOnDevice, warmBoardOnDevice, type TextGenModel, type WarmState } from '../../src/ai/hybrid';
+import { createWarmKeeper, startWarmSchedule, WARM_AFTER_PAINT_MS, WARM_IDLE_TIMEOUT_MS } from '../../src/ai/nanoWarm';
+import { createWarmBar, WARM_LINE_MS, WARM_LOADED_LINE } from '../../src/canvas/warmBar';
+import { NANO_LOADING_LINE } from '../../src/canvas/aiTurn';
 import { createReplyTrace } from '../../src/ai/replyTrace';
 import { createSpeaker, type RawVoice, type UtteranceLike } from '../../src/ai/speaker';
 import { createVoiceController, INTERIM_GRACE_MS } from '../../src/input/voice';
@@ -22,6 +24,129 @@ const onDevice = (text: string) => ({ text: () => text, inferenceSource: 'on_dev
 afterEach(() => { setModelsForTest(null); vi.useRealTimers(); });
 
 describe('1. the model is warm before she asks', () => {
+  it('the warm-up says it is loading the model and when it has (the engine bar shows it)', async () => {
+    let finishWarm!: () => void;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => ({ chromeAdapter: {}, generateContent: () => new Promise((r) => { finishWarm = () => r({ response: onDevice('{"ok":true}') }); }) }) as unknown as TextGenModel });
+    const states: WarmState[] = [];
+    const off = onWarmState((s) => states.push(s));
+    const warm = warmBoardOnDevice(createNanoQueue(1));
+    await tick(2);
+    expect(states).toEqual(['loading']);
+    finishWarm();
+    expect(await warm).toBe(true);
+    expect(states).toEqual(['loading', 'loaded']);
+    off();
+  });
+
+  it('a request during a warm-up that is still loading: "loading" at once, the 20 s clock never starts, and at the 45 s ceiling (wait included) the honest still-loading — no second create', async () => {
+    vi.useFakeTimers();
+    let creates = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => { creates++; return { chromeAdapter: {}, generateContent: () => never() } as unknown as TextGenModel; } });
+    const q = createNanoQueue(1);
+    void warmBoardOnDevice(q, { createMaxMs: 10 * 60_000 });
+    await vi.advanceTimersByTimeAsync(5);
+    const loading: string[] = [];
+    let started = 0;
+    const request = streamOnDevice({ prompt: 'p', queue: q, onStart: () => { started++; }, onLoading: (s) => loading.push(s) }).then(() => 'answered', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(started).toBe(1);
+    expect(loading).toEqual(['loading']);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_LOAD_MAX_MS);
+    expect(await request).toBe(STILL_LOADING);
+    expect(loading).toEqual(['loading', 'gave-up']);
+    expect(creates).toBe(1); // only the warm-up's create
+  });
+
+  it('while warming, the engine bar shows "Nano is loading the model…"; "loaded" clears by itself; a turn owns the card', () => {
+    vi.useFakeTimers();
+    const sets: Array<[string, string, string | undefined]> = [];
+    let busy = false, ended = 0;
+    const bar = { set: (e: string, st: string, line?: string) => { sets.push([e, st, line]); } };
+    const warmBar = createWarmBar({ bar: bar as never, busy: () => busy, lastTurnEndedAt: () => ended });
+    warmBar('loading');
+    expect(sets.at(-1)).toEqual(['nano', 'working', NANO_LOADING_LINE]);
+    warmBar('loaded');
+    expect(sets.at(-1)).toEqual(['nano', 'idle', WARM_LOADED_LINE]);
+    vi.advanceTimersByTime(WARM_LINE_MS);
+    expect(sets.at(-1)).toEqual(['nano', 'idle', '']);
+    // a turn that ran meanwhile keeps its own line
+    sets.length = 0;
+    warmBar('loading'); warmBar('loaded');
+    ended = Date.now() + 1;
+    vi.advanceTimersByTime(WARM_LINE_MS);
+    expect(sets.at(-1)).toEqual(['nano', 'idle', WARM_LOADED_LINE]);
+    // a turn already running: the warm-up writes nothing
+    sets.length = 0; busy = true;
+    warmBar('loading'); warmBar('loaded');
+    expect(sets).toEqual([]);
+  });
+
+  it('the page schedule: after first paint, then at the first idle moment (with a deadline), it asks for Nano and keeps polling; stop() cancels everything', async () => {
+    vi.useFakeTimers();
+    const rafs: Array<() => void> = [];
+    const idles: Array<{ cb: () => void; timeout: number }> = [];
+    let refreshes = 0, unsubscribed = 0, cancelledIdle = 0;
+    const states: string[] = [];
+    let emit!: (s: 'loading' | 'loaded' | 'failed') => void;
+    const sched = startWarmSchedule({
+      refresh: async () => { refreshes++; return false; },
+      available: () => false,
+      subscribe: (cb) => { emit = cb; return () => { unsubscribed++; }; },
+      onState: (s) => states.push(s),
+      raf: (cb) => { rafs.push(cb); return rafs.length; },
+      cancelRaf: () => undefined,
+      idle: (cb, o) => { idles.push({ cb, timeout: o.timeout }); return idles.length; },
+      cancelIdle: () => { cancelledIdle++; },
+    });
+    expect(refreshes).toBe(0); // nothing before first paint
+    rafs[0]();
+    await vi.advanceTimersByTimeAsync(WARM_AFTER_PAINT_MS);
+    expect(idles).toHaveLength(1);
+    expect(idles[0].timeout).toBe(WARM_IDLE_TIMEOUT_MS);
+    idles[0].cb();
+    expect(refreshes).toBe(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(refreshes).toBe(2);
+    emit('loading');
+    expect(states).toEqual(['loading']);
+    sched.stop();
+    expect(unsubscribed).toBe(1);
+    emit('loaded');
+    expect(states).toEqual(['loading']);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshes).toBe(2);
+    // stopped before the idle moment: that callback is cancelled
+    const s2 = startWarmSchedule({ refresh: async () => { refreshes++; return false; }, available: () => false, idle: (cb) => { idles.push({ cb, timeout: 0 }); return 9; }, cancelIdle: () => { cancelledIdle++; } });
+    await vi.advanceTimersByTimeAsync(WARM_AFTER_PAINT_MS);
+    s2.stop();
+    expect(cancelledIdle).toBe(1);
+  });
+
+  it('a request while the warm-up is only QUEUED (not loading) goes through the queue at once — no waiting on it, no "loading"', async () => {
+    let creates = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => { creates++; return { generateContent: async () => ({ response: onDevice(creates === 1 ? 'Hello there.' : '{"ok":true}') }) } as unknown as TextGenModel; } });
+    const q = createNanoQueue(1);
+    let release!: () => void;
+    const hold = q.run(() => new Promise<void>((r) => { release = r; })); // something holds the model
+    const warm = warmBoardOnDevice(q); // queued behind it, not loading
+    await tick(2);
+    const loading: string[] = [];
+    const request = streamOnDevice({ prompt: 'hi', queue: q, onLoading: (s) => loading.push(s) });
+    await tick(5);
+    release();
+    await hold;
+    expect(await request).toBe('Hello there.'); // the request ran first (higher priority)
+    expect(loading).toEqual([]);
+    expect(await warm).toBe(true);
+  });
+
+  it('the warm-up never calls the cloud', () => {
+    const hybrid = read('src/ai/hybrid.ts');
+    const warm = hybrid.slice(hybrid.indexOf('export function warmBoardOnDevice('), hybrid.indexOf('export const warmUpInFlight'));
+    expect(warm).toContain('onDeviceModelFor(');
+    expect(warm).not.toMatch(/streamCanvasPlan|cloudModel|PREFER_IN_CLOUD|ONLY_IN_CLOUD|generateWithBudget/);
+  });
+
   it('a request that arrives during the warm-up waits for it — the load is never aborted, no second create starts', async () => {
     let finishWarm!: () => void;
     let aborted = 0, creates = 0;
@@ -48,15 +173,17 @@ describe('1. the model is warm before she asks', () => {
     const hybrid = read('src/ai/hybrid.ts');
     const warm = hybrid.slice(hybrid.indexOf('export function warmBoardOnDevice('), hybrid.indexOf('export const warmUpInFlight'));
     expect(warm).not.toMatch(/preemptible|stepped aside/);
-    expect(warm).toContain('{ priority: -1, maxWaitMs: 0 }');
+    expect(warm).toContain('{ priority: -1, maxWaitMs: WARM_QUEUE_WAIT_MS }');
     expect(hybrid).toContain("nanoTrace('on-device call: waiting for the warm-up that is loading the model');");
   });
 
-  it('the warm-up runs a real tiny prompt, and the page starts it 300 ms after load', () => {
+  it('the warm-up runs a real tiny prompt, and the page wires the warm schedule', () => {
     const hybrid = read('src/ai/hybrid.ts');
     expect(hybrid).toContain("model.generateContent('Reply with JSON only: {\"ok\":true}')");
     const main = read('src/canvas/canvasMain.ts');
-    expect(main).toMatch(/void refreshNanoAvailable\(\);\s*const poll = [\s\S]*?\}, 300\);/);
+    // the page runs the schedule tested above, with the real warm state, and stops it on teardown
+    expect(main).toContain('subscribe: onWarmState,');
+    expect(main).toContain("addEventListener('pagehide', () => warmSchedule.stop());");
     expect(main).toContain('if (nanoAvailable && !was) warmKeeper.kick();');
   });
 

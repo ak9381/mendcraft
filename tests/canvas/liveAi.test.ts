@@ -326,18 +326,22 @@ describe('A: on-device concurrency cap', () => {
     expect(await later).toBe('later');
   });
 
-  it('I4: the real warm-up is the lowest job, pre-emptible, and never waits in line', async () => {
+  it('I4: the real warm-up is the lowest job and waits in line behind a busy model (it no longer skips)', async () => {
     const { stats } = fakeSdk('{"ok":true}');
     const q = createNanoQueue(1);
     expect(await warmBoardOnDevice(q)).toBe(true);
     expect(stats.prompts).toBe(1);
     expect(stats.params[0].createOptions.initialPrompts).toBeUndefined();
-    // busy model: the warm-up gives up at once instead of queueing behind it
+    // busy model at page load (a next-step pick): the warm-up waits its turn
+    // and then loads the model, instead of giving up at once
     setModelsForTest(null);
-    fakeSdk('{"ok":true}');
+    const again = fakeSdk('{"ok":true}');
     const hold = q.run(() => tick(20));
-    expect(await warmBoardOnDevice(q)).toBe(false);
+    const warm = warmBoardOnDevice(q);
+    expect(again.stats.prompts).toBe(0);
     await hold;
+    expect(await warm).toBe(true);
+    expect(again.stats.prompts).toBe(1);
   });
 
   it('SDK on-device models share the queue too (one at a time; busy means skipped)', async () => {
@@ -1055,12 +1059,13 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
     expect(creates).toBe(2);
   });
 
-  it('the warm-up starts soon after load, with a deadline rather than "whenever idle"', async () => {
+  it('the warm-up starts soon after load: after first paint, idle-bounded by a deadline', async () => {
     const { readFileSync } = await import('node:fs');
     const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
     expect(main).toContain('const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });');
     expect(main).toContain('if (nanoAvailable && !was) warmKeeper.kick();'); // every time the model becomes available
-    expect(main).toMatch(/void refreshNanoAvailable\(\);\s*const poll = [\s\S]*?\}, 300\);/); // 300 ms after load, then kept up
+    // after first paint, at the first idle moment but never later than its deadline, then kept up
+    expect(main).toContain('refresh: refreshNanoAvailable,'); // startWarmSchedule (fastReply.test) runs it after first paint, idle-bounded
     expect(main).toContain('onOnDeviceUnloaded(() => { warmKeeper.reset(); warmKeeper.kick(); });'); // re-warm after an eviction
     expect(main).toContain('if (!nanoAvailable && was) warmKeeper.reset();');
   });
