@@ -1,28 +1,43 @@
 // PEACE-AND-MOVE SCROLL (design 26 Nov, "we definitely need scroll"): a peace
-// sign (index + middle up) that MOVES scrolls what is under the hand — like a
-// two-finger trackpad scroll (natural: the content follows the hand). Pure,
+// sign (index + middle up) that MOVES scrolls what is under the hand. Pure,
 // clock-injected; gestureControl applies the deltas to the DOM.
 //
+// Direction (Akash, 26 Nov: option B): SCROLL-WHEEL style — the hand moves
+// DOWN = show what is below (the content moves up), like voice "scroll down".
+// One constant (SCROLL_STYLE) flips it to trackpad / natural.
+//
 // Conflict with the fixed "peace" hold (R peace = chip 2, L peace = Tools):
-//  - a peace ARMS when it appears; it starts scrolling only after ≥ startPx
-//    of travel within windowMs of appearing — a peace held still never
-//    scrolls, so its 2 s hold still fires;
+//  - the first ignoreMs after a peace appears never count (the hand settles);
+//  - it starts scrolling only after travel > startScales HAND SCALES (above
+//    the hold's own drift limit, so a trembling peace stays a hold), measured
+//    on the SMOOTHED point, in one consistent direction, within windowMs;
 //  - once scrolling starts, that hand's peace hold is suppressed until the
 //    hand shows a different shape (suppressed(side));
-//  - two peace hands at once (the two-hand Register hold) never scroll.
+//  - two peace hands at once (the two-hand Register hold) never scroll, and
+//    clear both latches (clearLatches) so Register — not one hand's Tools —
+//    is what a second V means.
 // Ends: the shape changes (after a short grace) → release, with the last
 // velocity for a short glide; the hand is lost, or blocked (not facing, a fist
-// grab) → stops at once, no glide.
+// grab, a point capture) → stops at once, no glide.
 
 import type { Pt } from '../input/handLogic';
 import { createOneEuroFilter } from '../input/oneEuro';
 import type { HandShape, HandSide } from './handShape';
 
+/** 'wheel': hand down = scroll down (show below). 'natural': content follows the hand. */
+export const SCROLL_STYLE: 'wheel' | 'natural' = 'wheel';
+
 export interface PeaceScrollConfig {
-  /** Travel (px, either axis) that starts a scroll… */
-  startPx: number;
-  /** …within this long of the peace appearing. */
+  /** Travel (smoothed, hand scales, dominant axis) that starts a scroll — above
+   *  the hold engine's maxDriftScales (0.6), so drift that keeps a hold alive
+   *  never scrolls. */
+  startScales: number;
+  /** Frames in the first ignoreMs after the peace appears are the hand settling. */
+  ignoreMs: number;
+  /** The start travel must happen within this long of the peace appearing. */
   windowMs: number;
+  /** Net travel ÷ path length along the axis: one consistent direction. */
+  minConsistency: number;
   /** Scroll px per px of hand travel. */
   gain: number;
   /** Per-frame hand motion under this (px, after smoothing) scrolls nothing. */
@@ -32,8 +47,10 @@ export interface PeaceScrollConfig {
 }
 
 export const PEACE_SCROLL: PeaceScrollConfig = {
-  startPx: 40,
-  windowMs: 500,
+  startScales: 0.8,
+  ignoreMs: 150,
+  windowMs: 900,
+  minConsistency: 0.8,
   gain: 1.5,
   deadZonePx: 1.5,
   graceMs: 120,
@@ -44,6 +61,8 @@ export interface ScrollHand {
   shape: HandShape;
   /** Palm centre on screen (CSS px). */
   point: Pt;
+  /** Hand scale on screen (CSS px): wrist → middle knuckle. */
+  scalePx: number;
 }
 
 export type ScrollEnd = 'release' | 'lost' | 'blocked';
@@ -53,18 +72,19 @@ export interface PeaceScrollState {
   side: HandSide | null;
   /** Screen point of the scrolling hand (smoothed). */
   point: Pt | null;
-  /** Scroll to apply THIS frame, natural direction (content follows the hand). */
+  /** Scroll to apply THIS frame, as scrollTop/scrollLeft deltas (+ = show
+   *  what is below / to the right), already in SCROLL_STYLE's direction. */
   dx: number;
   dy: number;
   /** True on the frame scrolling starts (resolve the target then). */
   started: boolean;
   /** Set on the frame a scroll ends. */
   ended: ScrollEnd | null;
-  /** Release velocity (px/ms, already × gain) for a glide; 0 unless ended = 'release'. */
+  /** Release velocity (scroll px/ms) for a glide; 0 unless ended = 'release'. */
   vx: number;
   vy: number;
-  /** Raw hand travel since the peace appeared (px, unsmoothed, no gain) —
-   *  level controls step by it (one step per ~30 px). */
+  /** Smoothed hand travel since scrolling STARTED (px, screen; the start
+   *  travel is not counted) — level controls step by it. */
   travel: Pt;
 }
 
@@ -72,11 +92,14 @@ export interface PeaceScroll {
   update(hands: readonly ScrollHand[], now: number, blocked: boolean): PeaceScrollState;
   /** This hand's peace HOLD must not run (it scrolled; until its shape changes). */
   suppressed(side: HandSide): boolean;
+  /** Forget both latches (two peaces: the two-hand hold decides). */
+  clearLatches(): void;
   reset(): void;
   readonly state: PeaceScrollState;
 }
 
 const IDLE: PeaceScrollState = { phase: 'idle', side: null, point: null, dx: 0, dy: 0, started: false, ended: null, vx: 0, vy: 0, travel: { x: 0, y: 0 } };
+const SIGN = SCROLL_STYLE === 'wheel' ? 1 : -1;
 
 export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceScroll {
   const c: PeaceScrollConfig = { ...PEACE_SCROLL, ...cfg };
@@ -84,7 +107,11 @@ export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceSc
   let phase: PeaceScrollState['phase'] = 'idle';
   let side: HandSide | null = null;
   let startAt = 0;
-  let startPt: Pt = { x: 0, y: 0 };
+  /** Smoothed point at the end of the settle time (the travel origin). */
+  let origin: Pt | null = null;
+  /** Path length along each axis since the origin (for consistency). */
+  let pathX = 0, pathY = 0;
+  let scrollOrigin: Pt = { x: 0, y: 0 };
   let last: Pt | null = null;
   let lastT = 0;
   let missingSince: number | null = null;
@@ -93,7 +120,7 @@ export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceSc
   let state: PeaceScrollState = IDLE;
 
   function toIdle(): void {
-    phase = 'idle'; side = null; last = null; missingSince = null; vel.length = 0; euro.reset();
+    phase = 'idle'; side = null; last = null; origin = null; pathX = 0; pathY = 0; missingSince = null; vel.length = 0; euro.reset();
   }
   function end(kind: ScrollEnd, now: number): PeaceScrollState {
     const wasScrolling = phase === 'scrolling';
@@ -122,7 +149,7 @@ export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceSc
       // Two peace hands = the two-hand hold (Register): never a scroll.
       if (peaces.length !== 1 || latched[peaces[0].side]) return (state = IDLE);
       const h = peaces[0];
-      phase = 'armed'; side = h.side; startAt = now; startPt = { ...h.point };
+      phase = 'armed'; side = h.side; startAt = now; origin = null; pathX = 0; pathY = 0;
       euro.reset();
       last = euro.filter(h.point.x, h.point.y, now);
       lastT = now;
@@ -139,39 +166,50 @@ export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceSc
     missingSince = null;
 
     const p = euro.filter(mine.point.x, mine.point.y, now);
+    const prev = last!;
+    last = p;
+    const stepX = p.x - prev.x, stepY = p.y - prev.y;
     if (phase === 'armed') {
-      const travel = Math.max(Math.abs(mine.point.x - startPt.x), Math.abs(mine.point.y - startPt.y));
+      lastT = now;
+      if (now - startAt < c.ignoreMs) return (state = { ...IDLE, phase, side, point: p }); // settling
+      if (!origin) { origin = { ...p }; return (state = { ...IDLE, phase, side, point: p }); }
+      pathX += Math.abs(stepX); pathY += Math.abs(stepY);
+      const nx = p.x - origin.x, ny = p.y - origin.y;
+      const vertical = Math.abs(ny) >= Math.abs(nx);
+      const net = vertical ? Math.abs(ny) : Math.abs(nx);
+      const path = vertical ? pathY : pathX;
+      const scale = Math.max(1, mine.scalePx);
       if (now - startAt > c.windowMs) {
-        phase = 'still'; // held still: a hold candidate, never a scroll
-      } else if (travel >= c.startPx) {
+        phase = 'still'; // held (or drifting): a hold candidate, never a scroll
+      } else if (net / scale > c.startScales && net >= c.minConsistency * path) {
         phase = 'scrolling';
         latched[side!] = true;
-        last = p; lastT = now;
-        return (state = { ...IDLE, phase, side, point: p, started: true, travel: { x: mine.point.x - startPt.x, y: mine.point.y - startPt.y } });
+        scrollOrigin = { ...p };
+        return (state = { ...IDLE, phase, side, point: p, started: true });
       }
-      last = p; lastT = now;
       return (state = { ...IDLE, phase, side, point: p });
     }
     if (phase === 'still') {
-      last = p; lastT = now;
+      lastT = now;
       return (state = { ...IDLE, phase, side, point: p });
     }
     // scrolling
     latched[side!] = true;
-    let dx = (p.x - last!.x) * c.gain;
-    let dy = (p.y - last!.y) * c.gain;
-    if (Math.abs(dx) < c.deadZonePx * c.gain) dx = 0;
-    if (Math.abs(dy) < c.deadZonePx * c.gain) dy = 0;
+    let dx = SIGN * stepX * c.gain;
+    let dy = SIGN * stepY * c.gain;
+    if (Math.abs(stepX) < c.deadZonePx) dx = 0;
+    if (Math.abs(stepY) < c.deadZonePx) dy = 0;
     const dt = Math.max(1, now - lastT);
     vel.push({ vx: dx / dt, vy: dy / dt, t: now });
     if (vel.length > 6) vel.shift();
-    last = p; lastT = now;
-    return (state = { ...IDLE, phase, side, point: p, dx, dy, travel: { x: mine.point.x - startPt.x, y: mine.point.y - startPt.y } });
+    lastT = now;
+    return (state = { ...IDLE, phase, side, point: p, dx, dy, travel: { x: p.x - scrollOrigin.x, y: p.y - scrollOrigin.y } });
   }
 
   return {
     update,
     suppressed: (s) => latched[s] || (phase === 'scrolling' && side === s),
+    clearLatches() { latched.L = false; latched.R = false; },
     reset() { toIdle(); latched.L = false; latched.R = false; state = IDLE; },
     get state() { return state; },
   };

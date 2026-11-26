@@ -2775,8 +2775,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
         highlight: palmHighlight,
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
-        // Peace-and-move over nothing scrollable pans the canvas (content
-        // follows the hand, like the fist pan); persisted when it ends.
+        // Peace-and-move over nothing scrollable pans the canvas (dx/dy are
+        // content motion; scroll-wheel style: hand down = see what is below);
+        // persisted when it ends.
         onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = panBy(camera, dx, dy); applyCamera(); },
         onCanvasScrollEnd: () => persist(),
         onLevel: (_el, _dir, readout) => activityLog.push({ kind: 'gesture', text: `Peace and move → ${readout}`, target: null }),

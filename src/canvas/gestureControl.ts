@@ -16,7 +16,7 @@ import {
 } from './gestureBindings';
 import { handIconSvg, sideMark } from './gestureIcons';
 import { handScale, palmCenter, type ReachBox } from './handFeel';
-import { mapToScreen } from './handPointer';
+import { mapToScreen, REACH } from './handPointer';
 import { createPeaceScroll, type ScrollHand } from './peaceScroll';
 import { createScrollDriver } from './gestureScroll';
 
@@ -309,16 +309,29 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     // Peace-and-move first: a peace that started scrolling (or stepping a
     // level) can't also fire its hold (R chip 2 / L Tools) until it changes shape.
     const scrollHands: ScrollHand[] = [];
+    const reach = opts.reach?.() ?? REACH;
     for (let k = 0; k < hands.length; k++) {
       const rd = reads[k];
       if (!rd || !hands[k]) continue;
       const pc = palmCenter(hands[k]);
-      scrollHands.push({ side: rd.side, shape: rd.shape, point: mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, opts.reach?.()) });
+      scrollHands.push({
+        side: rd.side, shape: rd.shape,
+        point: mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, reach),
+        scalePx: (handScale(hands[k]) / Math.max(1e-6, reach.y1 - reach.y0)) * innerHeight,
+      });
     }
-    const sc = scroll.update(scrollHands, now, blocked);
-    scroller.frame(sc);
-    for (const h of handsRead) if (h.shape === 'peace' && scroll.suppressed(h.hand)) h.shape = 'other';
-    for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
+    // Finger-count suppression (a point capture armed or just ended) stops
+    // scrolling too: a pointing hand must never scroll.
+    const scrollBlocked = blocked || !!ctx.suppressCounts;
+    const sc = scroll.update(scrollHands, now, scrollBlocked);
+    scroller.frame(sc, now, scrollBlocked);
+    // Two peace hands: the two-hand hold (Register) decides — never one
+    // hand's peace hold with the other relabelled.
+    if (handsRead.filter((h) => h.shape === 'peace').length >= 2) scroll.clearLatches();
+    else {
+      for (const h of handsRead) if (h.shape === 'peace' && scroll.suppressed(h.hand)) h.shape = 'other';
+      for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
+    }
     opts.highlight?.update(blocked ? null : palm, now, { blocked, anyHand: handsRead.length > 0, open: palmOpen, direct: ctx.direct ?? null });
     const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked });
     if (s.fired) {

@@ -1,9 +1,10 @@
 // The DOM side of the peace-and-move gesture (peaceScroll.ts decides WHEN):
 //  - over a level control (levelControl.ts) it steps the level — one step per
-//    LEVEL_STEP_PX of hand travel, a big "Volume 60 %" readout by the hand;
+//    LEVEL_STEP_PX of hand travel (hysteresis, rate-limited), a big
+//    "Volume 60 %" readout by the hand;
 //  - else over a scrollable element (board body, review plan list, AI
-//    drawer, menus) it scrolls that element, natural direction (content
-//    follows the hand), with a short glide on release;
+//    drawer, menus) it scrolls that element in SCROLL_STYLE's direction
+//    (wheel: hand down = show below), with a short glide on release;
 //  - else it pans the canvas (onCanvasScroll).
 // While it runs: a small "Scrolling" hint by the hand and an outline on the
 // target. While Hands is on, every area that actually overflows shows a
@@ -14,7 +15,13 @@ import { deepElementFromPoint } from './handPointer';
 import { createMomentum, scrollableAncestor } from './handScroll';
 import { handIconSvg } from './gestureIcons';
 import type { PeaceScrollState } from './peaceScroll';
-import { adjustLevel, levelControlAt, levelReadout, levelStepsFor } from './levelControl';
+import { adjustLevel, createLevelStepper, levelControlAt, levelReadout, type LevelStepper } from './levelControl';
+
+/** The scroll areas the "move to scroll" hint looks at (cheap: no page scan). */
+export const KNOWN_SCROLLERS = [
+  '.mc-frame-body', '.mc-review-plan', '.mc-ai-body', '.mc-menu-sheet', '.mc-dock',
+  '.mc-teach-card', '.mc-connect-sheet', '.mc-scan-panel', '[data-scrollable]',
+].join(', ');
 
 export interface ScrollDriverOptions {
   root: HTMLElement;
@@ -28,7 +35,8 @@ export interface ScrollDriverOptions {
 }
 
 export interface ScrollDriver {
-  frame(s: PeaceScrollState): void;
+  /** `blocked`: not facing / a fist grab / a point capture — stops any glide. */
+  frame(s: PeaceScrollState, now: number, blocked?: boolean): void;
   setActive(on: boolean): void;
   /** Stop at once (hand lost, gestures off): no glide. */
   stop(): void;
@@ -37,7 +45,7 @@ export interface ScrollDriver {
 }
 
 type Target = { kind: 'element'; el: HTMLElement; x: boolean; y: boolean }
-  | { kind: 'level'; el: HTMLElement; applied: number }
+  | { kind: 'level'; el: HTMLElement; stepper: LevelStepper }
   | { kind: 'canvas' };
 
 const BADGE_REFRESH_MS = 1000;
@@ -51,6 +59,7 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
   const glide = createMomentum({ friction: 0.992, minSpeed: 0.02 });
   let glideRaf = 0;
   let glideTarget: Target | null = null;
+  let lastDir: 'up' | 'down' = 'down';
 
   const layer = doc.createElement('div');
   layer.className = 'mc-scroll-layer';
@@ -67,19 +76,22 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
   const badges: HTMLElement[] = [];
   let badgeTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** dx / dy are scroll deltas (+ = show what is below / right). */
   function apply(t: Target, dx: number, dy: number): void {
     if (t.kind === 'element') {
-      if (t.y && dy) t.el.scrollTop -= dy;
-      if (t.x && dx) t.el.scrollLeft -= dx;
+      if (t.y && dy) t.el.scrollTop += dy;
+      if (t.x && dx) t.el.scrollLeft += dx;
     } else if (t.kind === 'canvas') {
-      if (dx || dy) opts.onCanvasScroll?.(dx, dy);
+      // The canvas camera pans by CONTENT motion: showing what is below
+      // moves the content up.
+      if (dx || dy) opts.onCanvasScroll?.(-dx, -dy);
     }
   }
 
   function resolve(p: Pt): Target {
     const hit = deepElementFromPoint(doc, p.x, p.y);
     const level = levelControlAt(hit);
-    if (level) return { kind: 'level', el: level, applied: 0 };
+    if (level) return { kind: 'level', el: level, stepper: createLevelStepper() };
     const sc = hit ? scrollableAncestor(hit) : null;
     if (sc && sc.el !== doc.documentElement && sc.el !== doc.body) return { kind: 'element', el: sc.el, x: sc.x, y: sc.y };
     return { kind: 'canvas' };
@@ -144,8 +156,9 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     }
   }
 
-  function frame(s: PeaceScrollState): void {
+  function frame(s: PeaceScrollState, now: number, blocked = false): void {
     if (!active) return;
+    if (blocked && glideRaf) stopGlide();
     if (s.started && s.point) {
       stopGlide();
       target = resolve(s.point);
@@ -153,11 +166,11 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     }
     if (s.phase === 'scrolling' && target && s.point) {
       if (target.kind === 'level') {
-        const want = levelStepsFor(s.travel.y);
-        while (target.applied !== want) {
-          const dir: 1 | -1 = want > target.applied ? 1 : -1;
-          if (!adjustLevel(target.el, dir)) { target.applied = want; break; }
-          target.applied += dir;
+        // Smoothed travel since the scroll started (the start travel is not
+        // counted), hysteresis, ≤ 1 step / 150 ms: a wobble is never a burst
+        // of lamp commands.
+        const dir = target.stepper.update(-s.travel.y, now);
+        if (dir && adjustLevel(target.el, dir)) {
           tick();
           try { (navigator as Navigator & { vibrate?: (ms: number) => boolean }).vibrate?.(8); } catch { /* no haptics */ }
           readout.classList.remove('is-pulse');
@@ -168,7 +181,8 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
         showHint(s.point, levelReadout(target.el), target);
       } else {
         apply(target, s.dx, s.dy);
-        showHint(s.point, 'Scrolling', target);
+        if (s.dy) lastDir = s.dy > 0 ? 'down' : 'up';
+        showHint(s.point, `Scrolling ${lastDir}`, target);
       }
       return;
     }
@@ -185,13 +199,14 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
   function overflowing(): HTMLElement[] {
     const out: HTMLElement[] = [];
     const view = doc.defaultView;
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+    const scrolls = (o?: string) => o === 'auto' || o === 'scroll' || o === 'overlay';
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>(KNOWN_SCROLLERS))) {
       if (out.length >= MAX_BADGES) break;
-      if (el.closest('.mc-scroll-layer, .mc-gesture-layer, .mc-highlight-layer, [hidden]')) continue;
-      if (el.scrollHeight - el.clientHeight <= 4 && el.scrollWidth - el.clientWidth <= 4) continue;
+      if (el.closest('[hidden]')) continue;
+      const canY = el.scrollHeight - el.clientHeight > 4, canX = el.scrollWidth - el.clientWidth > 4;
+      if (!canY && !canX) continue;
       const cs = view?.getComputedStyle(el);
-      const scrolls = (o?: string) => o === 'auto' || o === 'scroll' || o === 'overlay';
-      if (!(scrolls(cs?.overflowY) && el.scrollHeight - el.clientHeight > 4) && !(scrolls(cs?.overflowX) && el.scrollWidth - el.clientWidth > 4)) continue;
+      if (!(canY && scrolls(cs?.overflowY)) && !(canX && scrolls(cs?.overflowX))) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 120 || r.height < 60 || r.bottom <= 0 || r.top >= innerHeight) continue;
       out.push(el);
@@ -204,7 +219,7 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     while (badges.length < els.length) {
       const b = doc.createElement('div');
       b.className = 'mc-scroll-badge';
-      b.innerHTML = `${handIconSvg('peace')}<span>move to scroll</span>`;
+      b.innerHTML = `${handIconSvg('peace')}<span>move down to scroll</span>`;
       layer.append(b);
       badges.push(b);
     }

@@ -70,7 +70,40 @@ export function levelReadout(el: HTMLElement): string {
   return `${name} ${pct} %`;
 }
 
-/** Steps owed for a hand travel (px, screen y grows downward): up = +. */
-export function levelStepsFor(travelY: number, stepPx = LEVEL_STEP_PX): number {
-  return Math.trunc(-travelY / stepPx);
+/** Hysteresis for stepping back: a step taken at n·stepPx is only undone
+ *  once the hand is back past n·stepPx − LEVEL_BACK_PX. */
+export const LEVEL_BACK_PX = 15;
+/** At most one step per this long — every step can be a real device command
+ *  (a WiZ lamp), so a wobble must never become a burst. */
+export const LEVEL_MIN_GAP_MS = 150;
+
+export interface LevelStepper {
+  /** `up`: smoothed hand travel UP since the gesture started (px). Returns the
+   *  step to apply now (+1 / −1) or 0. */
+  update(up: number, now: number): 1 | -1 | 0;
+  readonly steps: number;
+  reset(): void;
+}
+
+/** Steps a level from hand travel: one step per stepPx, hysteresis backPx
+ *  for undoing a step, at most one step per minGapMs (it catches up while
+ *  the hand stays past the next threshold). */
+export function createLevelStepper(opts: { stepPx?: number; backPx?: number; minGapMs?: number } = {}): LevelStepper {
+  const step = opts.stepPx ?? LEVEL_STEP_PX;
+  const back = opts.backPx ?? LEVEL_BACK_PX;
+  const gap = opts.minGapMs ?? LEVEL_MIN_GAP_MS;
+  let n = 0;
+  let lastAt = -Infinity;
+  return {
+    update(up, now) {
+      if (now - lastAt < gap) return 0;
+      const upAt = n >= 0 ? (n + 1) * step : n * step + back;
+      const downAt = n <= 0 ? (n - 1) * step : n * step - back;
+      if (up >= upAt) { n += 1; lastAt = now; return 1; }
+      if (up <= downAt) { n -= 1; lastAt = now; return -1; }
+      return 0;
+    },
+    get steps() { return n; },
+    reset() { n = 0; lastAt = -Infinity; },
+  };
 }
