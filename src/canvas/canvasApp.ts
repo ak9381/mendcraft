@@ -1614,11 +1614,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The focused board's next-step chips stay visible: when the board runs
    *  under the engine bar, its chip row is lifted to sit just above the bar
    *  (never above the board's own head). */
+  // A row or its board that changes height (Hands on adds the board's hand
+  // buttons and gesture badges, a chip is added) re-pins the row.
+  const chipRowRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => keepChipsVisible()) : null;
+  const chipRowsSeen = new WeakSet<HTMLElement>();
   function keepChipsVisible(): void {
     if (phoneShell) return;
     for (const row of world.querySelectorAll<HTMLElement>('.mc-next')) {
+      if (chipRowRo && !chipRowsSeen.has(row)) { chipRowsSeen.add(row); chipRowRo.observe(row); if (row.parentElement) chipRowRo.observe(row.parentElement); }
       row.style.transform = '';
       row.classList.remove('is-lifted');
+      delete row.dataset.pinned;
       const frameEl = row.parentElement;
       if (!frameEl) continue;
       const z = camera.z || 1;
@@ -1627,16 +1633,46 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const box = row.getBoundingClientRect();
       const over = box.bottom - limit;
       if (over <= 0) continue;
-      // No higher than just under the board's title bar — and never onto a
-      // tile: only the empty space under the board's content may be used.
+      // No higher than just under the board's title bar. A board that runs
+      // under the bottom chrome (taller than the screen even at its lowest
+      // zoom) keeps its chip row PINNED just above that chrome: sticky, the
+      // tiles scroll under it, so the next steps never need a scroll.
       const room = box.top - (frameEl.getBoundingClientRect().top + 64 * z);
-      const content = frameEl.querySelector<HTMLElement>('.mc-surface')?.getBoundingClientRect();
-      const free = content && content.height > 0 ? box.top - content.bottom - 4 : room;
-      const lift = Math.min(over, Math.max(0, room), Math.max(0, free));
+      const lift = Math.min(over, Math.max(0, room));
       if (lift <= 0) continue;
       row.style.transform = `translateY(${-(lift / z).toFixed(1)}px)`;
       row.classList.add('is-lifted');
+      row.dataset.pinned = 'bottom';
     }
+  }
+  /** The focused room board's element, when it is taller than the space
+   *  between the top inset and the bottom chrome (so the canvas scrolls). */
+  function tallRoomEl(): HTMLElement | null {
+    if (phoneShell || !focusId || !isRoomBoard(focusId)) return null;
+    const el = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`);
+    if (!el) return null;
+    const h = el.getBoundingClientRect().height;
+    return h > vp().h - barH() - bottomInset() + 1 ? el : null;
+  }
+  /** A vertical canvas pan (hand scroll, voice, wheel) on a tall focused room
+   *  board scrolls THROUGH the board and stops at its ends: its head no lower
+   *  than its framed top, its foot no higher than the bottom chrome. */
+  function clampRoomPan(next: Camera): Camera {
+    const el = tallRoomEl();
+    if (!el || next.z !== camera.z) return next;
+    const view = viewport.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const top0 = r.top - view.top;
+    const hi = barH() + 16; // its framed top (focusWholeBoard's margin)
+    // At the end the chip row's own (unlifted) foot sits exactly where the
+    // pinned row does, so the row never moves while the board scrolls.
+    const row = el.querySelector<HTMLElement>('.mc-next');
+    const rowFoot = row && row.offsetParent === el ? (row.offsetTop + row.offsetHeight) * camera.z : r.height;
+    const lo = vp().h - bottomInset() - rowFoot; // chip row's foot on the bottom chrome
+    const top = top0 - (next.y - camera.y) * camera.z;
+    // Never pulled back from where it already is (a zoom or a drag left it there).
+    const want = Math.min(Math.max(top, Math.min(lo, top0)), Math.max(hi, top0));
+    return want === top ? next : { ...next, y: camera.y + (top0 - want) / camera.z };
   }
   function applyCamera(): void {
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
@@ -3498,8 +3534,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Peace-and-move over nothing scrollable pans the canvas (dx/dy are
         // content motion; scroll-wheel style: hand down = see what is below);
         // persisted when it ends.
-        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = panBy(camera, dx, dy); applyCamera(); },
+        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = clampRoomPan(panBy(camera, dx, dy)); applyCamera(); },
         onCanvasScrollEnd: () => persist(),
+        // The hint sits at the right end of the board's pinned chip row: on
+        // the board, never over its head buttons (Smaller / Bigger / Close).
+        canvasScrollAreas: () => { const el = tallRoomEl(); const row = el?.querySelector<HTMLElement>('.mc-next'); return row ? [row] : el ? [el] : []; },
         onLevel: (_el, _dir, readout) => activityLog.push({ kind: 'gesture', text: `Peace and move → ${readout}`, target: null }),
         levelTick: () => { try { return storage.getItem('mc.levelTick') === '1'; } catch { return false; } },
       })
@@ -4278,7 +4317,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     // Nothing scrolls: move the canvas (scroll down = see what is below).
     const amount = page ? vp().h * 0.85 : 120;
-    camera = panBy(camera, 0, -sign * amount);
+    camera = clampRoomPan(panBy(camera, 0, -sign * amount));
     applyCamera(); persist();
   }
   function run(text: string): boolean {
@@ -4636,6 +4675,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ? new ResizeObserver(() => { root.style.setProperty('--mc-bar-h', `${barH()}px`); })
     : null;
   if (barEl && barRo) barRo.observe(barEl);
+  // The engine bar settling (its states, a docked phones row) moves the
+  // bottom limit: re-pin the focused board's chip row above it.
+  const engineRo = typeof ResizeObserver !== 'undefined' && engineBar ? new ResizeObserver(() => keepChipsVisible()) : null;
+  if (engineRo && engineBar) engineRo.observe(engineBar.el);
   const onWindowOnline = () => setOnline(true);
   const onWindowOffline = () => setOnline(false);
   addEventListener('pointermove', onWindowPointerMove);
@@ -4696,6 +4739,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('offline', onWindowOffline);
     removeEventListener('pagehide', onPageHide);
     barRo?.disconnect();
+    engineRo?.disconnect();
+    chipRowRo?.disconnect();
   }
   // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
   // Every zoom path drops focus first: a focused board is 1:1 only.
@@ -4736,7 +4781,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (canScrollInside(target, intent.dx, intent.dy)) return;
       e.preventDefault();
       cancelAnimationFrame(flight); zoomGoal = null;
-      camera = panBy(camera, -intent.dx, -intent.dy);
+      camera = clampRoomPan(panBy(camera, -intent.dx, -intent.dy));
       applyCamera();
       clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
       return;

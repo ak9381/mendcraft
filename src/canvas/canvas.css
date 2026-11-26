@@ -1424,8 +1424,9 @@
    lower bar, so a room board's chip row fits above it (bottomInset measures
    the bar's real top). Cards stay 44 px targets. */
 @media (max-height: 720px) and (min-width: 601px) {
-  .mc-engine-bar { bottom: 10px; padding: 4px 12px 4px 4px; }
+  .mc-engine-bar { bottom: 8px; padding: 4px 12px 4px 4px; }
   .mc-engine-card { min-height: 44px; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 4px 12px 4px 10px; }
+  .mc-engine-where { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mc-engine-card, .mc-engine-card[data-state="working"] .mc-engine-dot,
@@ -1915,7 +1916,12 @@
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-head { padding-block: 10px; }
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-body { padding: 16px 20px 12px; }
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding: 8px 20px 10px; }
-.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: 52px; }
+/* …but never under 44 px ON SCREEN: at the 0.8 zoom floor that is 55 px. */
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: max(52px, calc(44px / var(--mc-z, 1))); }
+/* A short window: a slimmer chip row (the chips stay ≥ 44 px on screen). */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding-block: 5px; }
+}
 /* AI drawer terminals: newest line on top, so the working cursor sits there too. */
 .mc-term-body { display: flex; flex-direction: column; }
 .mc-term-cursor { order: -1; }

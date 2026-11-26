@@ -502,6 +502,21 @@ describe('room dashboards: every tile visible, no scroll inside the board', () =
     expect((0 - huge.y) * huge.z).toBeCloseTo(16);
   });
 
+  it('a board a little too tall for the insets is lifted so its foot (chip row) sits on the bottom inset', () => {
+    // 1550x656: top inset 32 (mostly empty gap), bottom chrome 102; the board is 670 tall at z 0.8 = 536.
+    const vp = { w: 1550, h: 656 };
+    const insets = { top: 32, left: 0, right: 200, bottom: 102, topFloor: 16 };
+    const r = { x: 0, y: 0, w: 1270, h: 670 };
+    const cam = focusWholeBoard(r, vp, insets);
+    expect(cam.z).toBe(ROOM_MIN_Z);
+    const top = (r.y - cam.y) * cam.z, bottom = (r.y + r.h - cam.y) * cam.z;
+    expect(bottom).toBeCloseTo(vp.h - insets.bottom);
+    expect(top).toBeGreaterThanOrEqual(insets.topFloor);
+    // Without a lower floor it stays pinned at top + margin (the old framing).
+    const pinned = focusWholeBoard(r, vp, { ...insets, topFloor: undefined });
+    expect((r.y - pinned.y) * pinned.z).toBeCloseTo(48);
+  });
+
   it('with no scroll of its own, the wheel and a touch drag on a room board move the canvas', () => {
     expect(app).toMatch(/closest\('\.mc-frame\.focused'\) && !target\.closest\('\.mc-frame\[data-kind="room"\]'\)\) return;/);
     expect(app).toMatch(/dragYOnly = phoneShell;/);
