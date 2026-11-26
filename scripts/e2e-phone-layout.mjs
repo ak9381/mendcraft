@@ -8,6 +8,9 @@
 //   E2E_URL=http://localhost:5173 npm run e2e:phone-layout
 //   SHOTS=/some/dir … writes one PNG per viewport (top + scrolled to bottom).
 //
+// Also a Floor plan board at iPhone 440×956 and Android 412×915: the drawing
+// tools wait behind "Tools", the plan fits the board area, labels never overlap.
+//
 // Same stack as e2e-journey.mjs: puppeteer-core + an installed Chrome.
 
 import { existsSync, mkdirSync } from 'node:fs';
@@ -65,6 +68,49 @@ const VIEWPORTS = [
   { name: 'iphone-390x844', width: 390, height: 844, dpr: 3, ios: true },
   { name: 'browser-390x844', width: 390, height: 844, dpr: 3, ios: false },
 ];
+
+// A Floor plan board as a phone receives it: Studio 6×4 + Bedroom 3×4 (the
+// live bug's plan) and a small 1.5×1.5 store room, drawn (stored beside the
+// board under `drawings`, like a sent board's drawing).
+function rectRoom(id, name, x, y, w, h) {
+  const p = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  const walls = p.map((a, i) => ({ id: `${id}-w${i}`, a, b: p[(i + 1) % 4], thickness: 150 }));
+  return { walls, room: { id, name, wallIds: walls.map((w) => w.id) } };
+}
+const PLAN_ROOMS = [rectRoom('r1', 'Studio', 0, 0, 6000, 4000), rectRoom('r2', 'Bedroom', 6000, 0, 3000, 4000), rectRoom('r3', 'Store', 9000, 0, 1500, 1500)];
+const PLAN_DOC = {
+  version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+  frames: [{ id: 'f1', kind: 'plan', title: 'Floor plan', rect: { x: 0, y: 0, w: 1180, h: 760 }, pinned: false }],
+  surfaces: { f1: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'board-cad', template: 'studio' }] } },
+  drawings: { f1: { 'board-cad': { walls: PLAN_ROOMS.flatMap((r) => r.walls), openings: [], rooms: PLAN_ROOMS.map((r) => r.room), dims: [], fixtures: [], texts: [] } } },
+};
+const PLAN_VIEWPORTS = [
+  { name: 'iphone-440x956', width: 440, height: 956, dpr: 3, ios: true },
+  { name: 'android-412x915', width: 412, height: 915, dpr: 2.625, ios: false },
+];
+
+/** In the page: the plan board, its tools and its drawn labels. */
+function measurePlan() {
+  const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+  const shown = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
+  const host = document.querySelector('mc-plan-board .mc-plan-board');
+  const vp = document.querySelector('.mc-viewport');
+  const walls = host ? [...host.querySelectorAll('svg polygon')].map(box).filter((b) => b.width > 0 || b.height > 0) : [];
+  const drawing = walls.length ? { left: Math.min(...walls.map((b) => b.left)), right: Math.max(...walls.map((b) => b.right)), top: Math.min(...walls.map((b) => b.top)), bottom: Math.max(...walls.map((b) => b.bottom)) } : null;
+  const labels = host ? [...host.querySelectorAll('svg text')].filter((t) => t.textContent && getComputedStyle(t).display !== 'none').map((t) => ({ text: t.textContent, box: box(t) })) : [];
+  const overlaps = [];
+  for (let a = 0; a < labels.length; a++) for (let b = a + 1; b < labels.length; b++) {
+    const A = labels[a].box, B = labels[b].box;
+    if (Math.min(A.right, B.right) - Math.max(A.left, B.left) > 1 && Math.min(A.bottom, B.bottom) - Math.max(A.top, B.top) > 1) overlaps.push(`${labels[a].text} × ${labels[b].text}`);
+  }
+  const toggle = document.querySelector('.mc-plan-tools-toggle');
+  return {
+    host: host ? box(host) : null, viewport: vp ? box(vp) : null, drawing,
+    palette: shown(host?.querySelector('.mc-palette')), trash: shown(host?.querySelector('.mc-trash')), status: shown(host?.querySelector('.mc-status')),
+    toggle: shown(toggle), expanded: toggle?.getAttribute('aria-expanded'),
+    labels: labels.map((l) => l.text), overlaps,
+  };
+}
 
 /** In the page: every tile box, the frame, and the bottom chrome. */
 function measure() {
@@ -221,6 +267,45 @@ async function main() {
         check(!!f.viewport && f.viewport.bottom <= f.pill.top && (!camBox || f.viewport.bottom <= camBox.top), `${vp.name}: the board area ends above the facing pill and the Camera dot (${Math.round(f.viewport?.bottom ?? -1)} ≤ ${Math.round(f.pill.top)})`);
         if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-facing.png`) });
       }
+      check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
+      await page.close();
+    }
+
+    // ---- a Floor plan board on the phone: read-mostly, fitted, labels clear ----
+    for (const vp of PLAN_VIEWPORTS) {
+      console.log(`-- plan ${vp.name}`);
+      const page = await browser.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(String(e?.message || e)));
+      await page.setViewport({ width: vp.width, height: vp.height, deviceScaleFactor: vp.dpr, isMobile: true, hasTouch: true });
+      await page.evaluateOnNewDocument((doc, ios) => {
+        if (ios) window.webkit = { messageHandlers: { bridge: { postMessage() {} } } };
+        try { localStorage.setItem('mc.canvas.v1', JSON.stringify(doc)); } catch { /* checks fail below */ }
+      }, PLAN_DOC, vp.ios);
+      await page.goto(`${BASE}/canvas.html?sim=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForSelector('mc-plan-board .mc-plan-board svg', { timeout: 20_000 });
+      await page.evaluate(() => document.fonts.ready);
+      await new Promise((r) => setTimeout(r, 1200));
+      const m = await page.evaluate(measurePlan);
+      check(!m.palette && !m.trash && !m.status, `${vp.name}: drawing tools tucked away by default`);
+      check(m.toggle && m.expanded === 'false', `${vp.name}: a "Tools" toggle is shown`);
+      check(!!m.host && !!m.viewport && m.host.bottom <= m.viewport.bottom + 1 && m.host.left >= 0 && m.host.right <= vp.width, `${vp.name}: the plan area fits the board area (${Math.round(m.host?.bottom ?? -1)} ≤ ${Math.round(m.viewport?.bottom ?? -1)})`);
+      check(!!m.host && m.host.height >= 0.45 * m.viewport.height, `${vp.name}: the plan area uses the screen (${Math.round(m.host?.height ?? 0)} px of ${Math.round(m.viewport?.height ?? 0)})`);
+      const d = m.drawing;
+      check(!!d && d.left >= m.host.left - 1 && d.right <= m.host.right + 1 && d.top >= m.host.top - 1 && d.bottom <= m.host.bottom + 1, `${vp.name}: the whole plan is in view`);
+      check(!!d && (d.right - d.left) >= 0.6 * m.host.width, `${vp.name}: the plan is fitted to the width (${Math.round(d ? d.right - d.left : 0)} of ${Math.round(m.host?.width ?? 0)} px)`);
+      check(m.labels.includes('Studio') && m.labels.includes('Bedroom'), `${vp.name}: room names drawn (${m.labels.join(' | ')})`);
+      check(m.overlaps.length === 0, `${vp.name}: no two plan labels overlap${m.overlaps.length ? ` — ${m.overlaps.join('; ')}` : ''}`);
+      if (SHOTS) await page.screenshot({ path: join(SHOTS, `plan-${vp.name}.png`) });
+      await page.tap('.mc-plan-tools-toggle');
+      await new Promise((r) => setTimeout(r, 400));
+      const t = await page.evaluate(measurePlan);
+      check(t.palette && t.expanded === 'true', `${vp.name}: "Tools" brings the palette back`);
+      check(t.overlaps.length === 0, `${vp.name}: labels stay clear with the tools open${t.overlaps.length ? ` — ${t.overlaps.join('; ')}` : ''}`);
+      if (SHOTS) await page.screenshot({ path: join(SHOTS, `plan-${vp.name}-tools.png`) });
+      await page.tap('.mc-plan-tools-toggle');
+      await new Promise((r) => setTimeout(r, 300));
+      check(!(await page.evaluate(measurePlan)).palette, `${vp.name}: "Tools" again tucks them away`);
       check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
       await page.close();
     }
