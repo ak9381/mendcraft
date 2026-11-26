@@ -55,10 +55,10 @@ Any `button`, link, `role=button/tab/switch/checkbox/menuitem/option` or `summar
 | Place door / window / opening / column / furniture / stairs | Yes, tested | Fist tap; doors and windows snap to the nearest wall | — |
 | Text label | Partly | Fist tap drops a "Note" label | Its text needs voice or a keyboard |
 | Select an element | Yes, tested | Palm highlight snaps to element handles; thumbs-up or fist tap | On a dense plan handles shrink to 32 px; the crowd magnifier helps. Wall-pinned dimensions have no handle (select the wall) |
-| Move an element | Yes, tested | Held fist (Select), 10 cm grid | A dimension cannot be moved (it follows its wall) |
+| Move an element | Yes, tested | Held fist that closes on or near the selected element (Select), 10 cm grid, at least 20 cm | Select it first: a fist never grabs an unselected element. A dimension cannot be moved (it follows its wall) |
 | Resize wall / room / dimension / door / furniture | Yes, tested | Peace-and-move over the plan (10 cm per 30 px), or the − 10 cm / + 10 cm steppers. The steppers are `data-level` controls, so peace-and-move over them steps through the shared `adjustLevel` | — |
 | Rotate furniture, flip door swing | Yes, tested | L peace 2 s, or the Rotate / Flip swing button | 90° steps only |
-| Remove | Yes, tested | R thumbs-down 2 s, or Remove | — |
+| Remove | Yes, tested | R thumbs-down 2 s, or Remove | If Tools, a menu, a dialog or the AI drawer is open, thumbs-down closes that first |
 | Undo a plan edit | Yes, tested | L thumbs-down (canvas Undo) | No Redo on the canvas |
 | Multi-select, marquee, copy / paste, duplicate | No | — | Mouse and keyboard only. The properties panel's Duplicate button is reachable |
 | Properties panel (thickness, sill, height, name) | Partly | Its step buttons are ≥ 56 px while Hands is on | Number and text fields need a keyboard |
@@ -98,6 +98,7 @@ Any `button`, link, `role=button/tab/switch/checkbox/menuitem/option` or `summar
 2. **`select` controls** in generated form tiles.
 3. **Multi-select / marquee / copy-paste** on the plan.
 4. **Plan Undo across a re-render**: the drawing is now stored with the board (round 3), but a plan Undo entry made before the board was re-rendered or reloaded cannot be taken back.
-5. **Phone**: fixed shapes for chips / Tools / Talk / Rotate; nothing here was run on a device.
-6. **Monitor window** — no hand control of its own.
-7. **Real camera**: every result here is from synthetic frames.
+5. **Drawings stay on this device**: a board sent to a paired phone or relayed arrives with its plan template, not what was drawn (by design: drawings are kept out of everything that is sent).
+6. **Phone**: fixed shapes for chips / Tools / Talk / Rotate; nothing here was run on a device.
+7. **Monitor window** — no hand control of its own.
+8. **Real camera**: every result here is from synthetic frames.
