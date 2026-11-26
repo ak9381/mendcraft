@@ -9,7 +9,7 @@
 
 import type { Pt } from '../input/handLogic';
 import { classifyHandShape, createHandPolarity, isFixedShape, stampShape, type HandShape, type HandSide, type LabelPolarity } from './handShape';
-import { createHoldEngine, keyShapes, keySide, MIXED_KEY, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
+import { createHoldEngine, createPairGrace, keyShapes, keySide, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
 import {
   CLOSER_SELECTORS, gestureName, resolveGesture,
   type GestureAction, type GestureBinding, type GestureEnv,
@@ -100,8 +100,6 @@ const COUNT_SHAPES: readonly HandShape[] = ['one', 'peace', 'three'];
 /** Two peaces must persist this long (the hold grace) before they clear a
  *  scroll latch and the two-hand Register hold takes over. */
 const TWO_PEACE_CLEAR_MS = 150;
-/** L thumbs-up / R thumbs-down wait while the other hand changed shape this recently. */
-const MIXED_GRACE_MS = 400;
 const BADGE_REFRESH_MS = 300;
 
 function isVisible(el: HTMLElement): boolean {
@@ -136,8 +134,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const scroll = createPeaceScroll();
   /** Two peace hands seen continuously since (for clearing the scroll latches). */
   let twoPeaceSince: number | null = null;
-  /** Each hand's current shape and when it last changed (mixed-gesture grace). */
-  const shapeOf: Record<HandSide, { shape: HandShape | null; at: number }> = { L: { shape: null, at: -Infinity }, R: { shape: null, at: -Infinity } };
+  const pairGrace = createPairGrace(bindings.map((b) => b.key));
   const scroller = createScrollDriver({
     root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd,
     onLevel: opts.onLevel, tickSound: opts.levelTick,
@@ -349,19 +346,12 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
     }
     opts.highlight?.update(blocked ? null : palm, now, { blocked, anyHand: handsRead.length > 0, open: palmOpen, direct: ctx.direct ?? null });
-    // Mixed-gesture grace: L thumbs-up (Save) / R thumbs-down (Reject) wait
-    // while the OTHER hand is still changing shape — it may be forming the
-    // mixed L-up + R-down (Hover to click).
-    for (const side of ['L', 'R'] as const) {
-      const cur = handsRead.find((h) => h.hand === side)?.shape ?? null;
-      if (cur !== shapeOf[side].shape) shapeOf[side] = { shape: cur, at: now };
-    }
-    const defer = (key: GestureKey): boolean => {
-      const other = key === 'L:thumbsUp' ? 'R' : key === 'R:thumbsDown' ? 'L' : null;
-      if (!other || !bindings.some((b) => b.key === MIXED_KEY)) return false;
-      const o = shapeOf[other];
-      return o.shape !== null && now - o.at < MIXED_GRACE_MS;
-    };
+    // Pair grace: a one-hand hold that is half of a bound two-hand gesture
+    // (R thumbs up vs both thumbs up, L thumbs up vs L-up + R-down…) waits
+    // while the other hand is still changing — appearing, leaving, or
+    // forming its shape.
+    pairGrace.observe(handsRead, now);
+    const defer = (key: GestureKey): boolean => pairGrace.defer(key, now);
     const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked, defer });
     if (s.fired) {
       clearOverlays();

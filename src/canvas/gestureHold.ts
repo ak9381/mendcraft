@@ -187,3 +187,50 @@ export function createHoldEngine(cfg: Partial<HoldConfig> = {}): HoldEngine {
     get state() { return state; },
   };
 }
+
+// ---------------------------------------------------------------- pair grace
+
+/** How recently the OTHER hand must have been steady before a one-hand key
+ *  that is half of a bound two-hand gesture may fire. */
+export const PAIR_GRACE_MS = 400;
+
+/**
+ * Pair grace: a one-hand hold that is HALF of a bound two-hand gesture waits
+ * (stays full, not fired) while the other hand changed shape — appeared,
+ * disappeared or moved between shapes — within PAIR_GRACE_MS: it may be
+ * forming (or just broke out of) the pair.
+ *  - X:shape waits on the other hand whenever `2:shape` is bound
+ *    (R thumbs up / Approve vs both thumbs up / More; L thumbs down / Undo
+ *    vs both thumbs down…);
+ *  - L thumbs up and R thumbs down also wait when the mixed L-up + R-down
+ *    is bound.
+ */
+export interface PairGrace {
+  observe(hands: readonly Pick<GestureHand, 'shape' | 'hand'>[], now: number): void;
+  defer(key: GestureKey, now: number): boolean;
+}
+
+export function createPairGrace(bound: readonly GestureKey[], graceMs = PAIR_GRACE_MS): PairGrace {
+  const has = new Set(bound);
+  const last: Record<HandSide, { shape: HandShape | null; at: number }> = { L: { shape: null, at: -Infinity }, R: { shape: null, at: -Infinity } };
+  return {
+    observe(hands, now) {
+      for (const side of ['L', 'R'] as const) {
+        const cur = hands.find((h) => h.hand === side)?.shape ?? null;
+        // Every change counts, the hand appearing or disappearing included.
+        if (cur !== last[side].shape) last[side] = { shape: cur, at: now };
+      }
+    },
+    defer(key, now) {
+      if (key === MIXED_KEY) return false;
+      const side = keySide(key);
+      if (side === '2') return false;
+      const shape = keyShapes(key)[0];
+      const pairs = has.has(`2:${shape}` as GestureKey)
+        || (has.has(MIXED_KEY) && ((side === 'L' && shape === 'thumbsUp') || (side === 'R' && shape === 'thumbsDown')));
+      if (!pairs) return false;
+      const other: HandSide = side === 'L' ? 'R' : 'L';
+      return now - last[other].at < graceMs;
+    },
+  };
+}
