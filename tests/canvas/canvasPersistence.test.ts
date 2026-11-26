@@ -72,6 +72,25 @@ describe('canvasPersistence', () => {
     expect(third.remove.sort()).toEqual(['board-f2', 'plan-2-f2-f2-cad']);
   });
 
+  it('a move, rename or pin keeps the stored maker; only a content change takes a new one', () => {
+    // Stored by an engine (or a laptop, on a phone) in an earlier session.
+    const stored = splitCanvasDoc(doc(), [], () => 'replay', 1000).put;
+    const fresh = () => joinCanvasDoc(null, stored)!; // after a reload: no history, no memory
+    const her = () => 'person' as const;
+    const moved = fresh();
+    moved.frames = moved.frames.map((f) => (f.id === 'f1' ? { ...f, rect: { ...f.rect, x: 400 }, title: 'Study', pinned: false } : f));
+    const out = splitCanvasDoc(moved, stored, her, 2000).put;
+    expect(out.map((a) => [a.id, a.v, a.by])).toEqual([['board-f1', 2, 'replay']]);
+    // Her own content edit after the reload: hers.
+    const edited = fresh();
+    edited.surfaces.f1 = { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'Temperature', value: '19 °C' }] };
+    expect(splitCanvasDoc(edited, stored, her, 3000).put.map((a) => [a.id, a.by])).toEqual([['board-f1', 'person']]);
+    // A drawing changed by hand is hers too; an unchanged one keeps its maker.
+    const drawn = fresh();
+    drawn.drawings = { f2: { 'f2-cad': { ...DRAWING, walls: [] } } };
+    expect(splitCanvasDoc(drawn, stored, her, 4000).put.map((a) => [a.id, a.by])).toEqual([['plan-2-f2-f2-cad', 'person']]);
+  });
+
   it('join returns null when parseCanvasDoc refuses the result', () => {
     // A layout whose focus names a frame that is not there is refused whole.
     const bad = { version: CANVAS_DOC_VERSION, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [{ id: 'F1', kind: 'note', title: 'x', rect: { x: 0, y: 0, w: 1, h: 1 }, pinned: false }] } as CanvasLayout;

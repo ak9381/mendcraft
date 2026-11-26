@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyGuestSnapshot, phoneRouteBadge } from '../../src/canvas/phoneCanvasRuntime';
+import { applyGuestSnapshot, BOARD_NO_MAKER_LINE, phoneRouteBadge } from '../../src/canvas/phoneCanvasRuntime';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
 import { buildControlSnapshot, coerceSnapshot } from '../../src/relay/controlSnapshot';
 
@@ -24,27 +24,36 @@ describe('phoneRouteBadge', () => {
 });
 
 describe('applyGuestSnapshot', () => {
+  const by = 'gemini' as const;
   it('applies a Relay board snapshot and ignores empty ones', () => {
     const show = vi.fn();
     expect(applyGuestSnapshot({}, show)).toBe(false);
     expect(show).not.toHaveBeenCalled();
-    expect(applyGuestSnapshot({ board }, show)).toBe(true);
-    expect(show).toHaveBeenCalledWith(board, {});
+    expect(applyGuestSnapshot({ board, boardBy: by }, show)).toBe(true);
+    expect(show).toHaveBeenCalledWith(board, {}, { by });
   });
   it('a board sent to one phone shows only on that phone', () => {
     const ios = vi.fn();
     const android = vi.fn();
-    expect(applyGuestSnapshot({ board, boardFor: 'ios' }, ios, 'ios')).toBe(true);
-    expect(applyGuestSnapshot({ board, boardFor: 'ios' }, android, 'android')).toBe(false);
-    expect(ios).toHaveBeenCalledWith(board, {});
+    expect(applyGuestSnapshot({ board, boardFor: 'ios', boardBy: by }, ios, 'ios')).toBe(true);
+    expect(applyGuestSnapshot({ board, boardFor: 'ios', boardBy: by }, android, 'android')).toBe(false);
+    expect(ios).toHaveBeenCalledWith(board, {}, { by });
     expect(android).not.toHaveBeenCalled();
     // An untargeted board still mirrors to every phone.
-    expect(applyGuestSnapshot({ board }, android, 'android')).toBe(true);
+    expect(applyGuestSnapshot({ board, boardBy: by }, android, 'android')).toBe(true);
   });
-  it("passes on who made the board, and the snapshot keeps only a known maker", () => {
+  it('a board that does not say who made it is refused, and the phone says so', () => {
     const show = vi.fn();
-    expect(applyGuestSnapshot({ board, boardBy: 'gemini' }, show)).toBe(true);
-    expect(show).toHaveBeenCalledWith(board, {}, { by: 'gemini' });
+    const said: string[] = [];
+    expect(applyGuestSnapshot({ board }, show, 'ios', (l) => said.push(l))).toBe(false);
+    expect(show).not.toHaveBeenCalled();
+    expect(said).toEqual([BOARD_NO_MAKER_LINE]);
+    expect(BOARD_NO_MAKER_LINE).toBe("Couldn't take the board — it doesn't say who made it. Nothing changed.");
+    // A board for the other phone is ignored quietly, maker or not.
+    expect(applyGuestSnapshot({ board, boardFor: 'android' }, show, 'ios', (l) => said.push(l))).toBe(false);
+    expect(said).toHaveLength(1);
+  });
+  it('the snapshot keeps only a known maker', () => {
     const real: SurfacePlan = { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'Temperature', value: '21 °C' }] };
     const wire = (boardBy: unknown) => coerceSnapshot(JSON.parse(JSON.stringify({ ...buildControlSnapshot({ board: real }), boardBy })));
     expect(wire('replay')?.board).toBeTruthy();

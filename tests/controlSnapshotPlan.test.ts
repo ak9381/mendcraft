@@ -44,7 +44,7 @@ describe('board snapshot carries the CURRENT plan drawing', () => {
   });
 
   it('the phone hands the drawing to its board (and only the targeted phone)', () => {
-    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 4, board: BOARD, boardFor: 'android', boardDrawings: { 'board-cad': edited() } }))))!;
+    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 4, board: BOARD, boardFor: 'android', boardBy: 'gemini', boardDrawings: { 'board-cad': edited() } }))))!;
     const show = vi.fn();
     expect(applyGuestSnapshot(snap, show, 'android')).toBe(true);
     expect(names(show.mock.calls[0][1]['board-cad'])).toEqual(['Bedroom', 'Studio']);
@@ -110,11 +110,11 @@ describe('board snapshot carries the CURRENT plan drawing', () => {
   });
 
   it('the phone is told when a drawing was left out', () => {
-    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ board: BOARD, boardDrawings: { 'board-cad': withTexts(1550, 'ಕ'.repeat(190)) } }))))!;
+    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ board: BOARD, boardBy: 'gemini', boardDrawings: { 'board-cad': withTexts(1550, 'ಕ'.repeat(190)) } }))))!;
     expect(snap.boardDrawings).toBeUndefined();
     const show = vi.fn();
     applyGuestSnapshot(snap, show, 'ios');
-    expect(show).toHaveBeenCalledWith(BOARD, {}, { drawingsOmitted: 1 });
+    expect(show).toHaveBeenCalledWith(BOARD, {}, { drawingsOmitted: 1, by: 'gemini' });
   });
 
   it('a rejected publish is not kept for replay to late joiners', async () => {

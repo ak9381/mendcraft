@@ -37,21 +37,25 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
   return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
 }
 
+/** Said on the phone when a board arrives without a maker it can keep it under. */
+export const BOARD_NO_MAKER_LINE = "Couldn't take the board — it doesn't say who made it. Nothing changed.";
+
 export function applyGuestSnapshot(
   snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy'> & { omitted?: { drawings?: number } },
   showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy'] }) => void,
   platform?: PhonePlatform,
+  onRefuse?: (line: string) => void,
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
   if (snap.boardFor && snap.boardFor !== platform) return false;
+  // A board is kept under the name of whoever made it: no maker, no board.
+  if (!snap.boardBy) { onRefuse?.(BOARD_NO_MAKER_LINE); return false; }
   // The board's current plan drawings ride with it (the phone re-checks them).
   // A drawing left out (too big for the relay) is said on the phone. Who made
   // the board on the laptop rides with it too: the phone keeps it under that name.
   const omitted = snap.omitted?.drawings ?? 0;
-  const info = { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), ...(snap.boardBy ? { by: snap.boardBy } : {}) };
-  if (Object.keys(info).length) showBoard(snap.board, snap.boardDrawings ?? {}, info);
-  else showBoard(snap.board, snap.boardDrawings ?? {});
+  showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy });
   return true;
 }
 

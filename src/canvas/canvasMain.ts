@@ -233,12 +233,18 @@ function artifactMaker(id: string): ArtifactBy {
   if (!last || last.by === 'her') return 'person';
   return replayOn ? 'replay' : last.by;
 }
-/** Who made the board on a frame: what the next save would record when it has
- *  history this session, else what its stored artifact says. */
+/** Who made the board on a frame, as the next save would record it: the
+ *  stored artifact's maker while its content is unchanged, else the maker of
+ *  this session's change. Undefined for a board nobody made (never stored, no
+ *  history): such a board is not sent to a phone. */
 function boardMaker(frameId: string): ArtifactBy | undefined {
   const id = `board-${frameId}`;
+  const plan = handle?.snapshot().surfaces[frameId];
+  if (!plan) return undefined;
+  const stored = artifacts.find((a) => a.id === id);
+  if (stored && JSON.stringify((stored.data as { plan?: unknown }).plan) === JSON.stringify(plan)) return stored.by;
   const touched = !!handle?.receivedBy(frameId) || !!handle?.history().some((h) => h.frameId === frameId && !h.undone);
-  return touched ? artifactMaker(id) : artifacts.find((a) => a.id === id)?.by;
+  return touched ? artifactMaker(id) : undefined;
 }
 /** Every save: the layout now, the changed artifacts without waiting. */
 function persistDoc(doc: CanvasDoc): void {
@@ -337,7 +343,7 @@ afterFirstPaint(() => {
       native: isPhone,
       sim,
       aiForwarder: phoneAiFeed,
-      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform); },
+      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say); },
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;
@@ -370,7 +376,7 @@ afterFirstPaint(() => {
     if (sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1')) {
       (window as unknown as { __mcGuestSnapshot?: (raw: unknown) => boolean }).__mcGuestSnapshot = (raw) => {
         const snap = coerceSnapshot(raw);
-        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform);
+        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say);
       };
     }
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });

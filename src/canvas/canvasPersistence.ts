@@ -109,6 +109,13 @@ const titleOf = (s: string): string => s.replace(/[<>]/g, '').slice(0, ARTIFACT_
  *  and drawings no longer on the canvas). A stored pack is never removed
  *  here: switching back to English keeps the pack she approved. Ids in
  *  `keep` (see unjoinedIds) are never removed or overwritten. */
+/** What an artifact shows (its maker's work), apart from where it sits. */
+function contentOf(kind: Artifact['kind'], data: Record<string, unknown>): unknown {
+  if (kind === 'board') return (data as { plan?: unknown }).plan;
+  if (kind === 'plan') return (data as { doc?: unknown }).doc;
+  return data;
+}
+
 export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string) => ArtifactBy, now: number, keep: ReadonlySet<string> = new Set()): { layout: CanvasLayout; put: Artifact[]; remove: string[] } {
   const layout: CanvasLayout = {
     version: doc.version, camera: { ...doc.camera }, focusId: doc.focusId,
@@ -138,7 +145,10 @@ export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string
     if (keep.has(n.id)) continue;
     const old = before.get(n.id);
     if (old && same(old.data, n.data) && old.title === n.title) continue;
-    put.push({ ...n, v: old ? old.v + 1 : 1, by: by(n.id), at: now, status: 'approved' });
+    // Moving, renaming or pinning a board changes no content: it keeps its
+    // maker. Only a change to what it shows is credited to whoever made it.
+    const contentSame = old && same(contentOf(old.kind, old.data), contentOf(n.kind, n.data));
+    put.push({ ...n, v: old ? old.v + 1 : 1, by: contentSame ? old.by : by(n.id), at: now, status: 'approved' });
   }
   const live = new Set(next.map((n) => n.id));
   const remove = prev.filter((a) => (a.kind === 'board' || a.kind === 'plan') && !live.has(a.id) && !keep.has(a.id)).map((a) => a.id);

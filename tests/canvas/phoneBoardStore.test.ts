@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mountCanvas, type CanvasHandle } from '../../src/canvas/canvasApp';
 import { applyGuestSnapshot } from '../../src/canvas/phoneCanvasRuntime';
 import { buildControlSnapshot, coerceSnapshot } from '../../src/relay/controlSnapshot';
-import { splitCanvasDoc } from '../../src/canvas/canvasPersistence';
+import { joinCanvasDoc, splitCanvasDoc } from '../../src/canvas/canvasPersistence';
+import { board as sampleBoard } from '../artifacts/sample';
 import { coerceArtifact, frameIdOfArtifactId, type Artifact } from '../../src/artifacts/artifact';
 import type { CanvasDoc } from '../../src/canvas/frames';
 
@@ -103,4 +104,51 @@ describe('a board received on the phone', () => {
     expect(h.frames()).toEqual([]);
     expect(saved.flatMap((d) => stored(h, d)).filter((a) => a.kind === 'board')).toEqual([]);
   });
+});
+
+describe('the laptop sends only a board that says who made it', () => {
+  type Win = { __mcLastBoardSnapshot?: { board?: unknown; boardBy?: string; boardFor?: string } };
+  async function laptop(by: 'gemini' | undefined): Promise<{ h: CanvasHandle; saved: CanvasDoc[] }> {
+    delete (window as Win).__mcLastBoardSnapshot;
+    if (!globalThis.matchMedia) (globalThis as { matchMedia?: unknown }).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const saved: CanvasDoc[] = [];
+    const doc = joinCanvasDoc(null, [sampleBoard('f1', { title: 'Desk' })]) as CanvasDoc;
+    const root = document.createElement('div');
+    document.body.append(root);
+    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, sim: true, connector: { run: async () => ({}) }, doc, onPersist: (d) => saved.push(d), artifactBy: () => by });
+    const h = handle;
+    // Two SIM phones (dev/test build + sim), then back to the stored board.
+    h.run('connect devices');
+    await vi.waitFor(() => expect(h.edgeLayout().right).toBeTruthy(), { timeout: 6000 });
+    await h.focus('f1');
+    return { h, saved };
+  }
+
+  it('a board with no known maker is not sent, and the laptop says so', async () => {
+    const { h } = await laptop(undefined);
+    const mark = h.statusMark();
+    expect(await h.sendBoard('right')).toBe(false);
+    expect(h.statusSince(mark)).toContain("Couldn't send the board — it doesn't say who made it. Nothing was sent.");
+    expect((window as Win).__mcLastBoardSnapshot?.board).toBeUndefined();
+  }, 15000);
+
+  it('a board with a maker goes with it', async () => {
+    const { h } = await laptop('gemini');
+    expect(await h.sendBoard('right')).toBe(true);
+    const snap = (window as Win).__mcLastBoardSnapshot;
+    expect(snap?.board).toBeTruthy();
+    expect(snap?.boardBy).toBe('gemini');
+  }, 15000);
+
+  it('the fixed Connected devices table is never stored', async () => {
+    const { h, saved } = await laptop('gemini');
+    expect(h.frames().some((f) => f.title === 'Connected devices')).toBe(true);
+    h.save();
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    for (const d of saved) {
+      expect(d.frames.map((f) => f.title)).not.toContain('Connected devices');
+      expect(splitCanvasDoc(d, [], () => 'person', 1).put.map((a) => a.title)).not.toContain('Connected devices');
+    }
+    expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1']);
+  }, 15000);
 });

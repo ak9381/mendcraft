@@ -339,6 +339,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
     viewportWidth: window.innerWidth,
   }));
+  /** Phone shell: frames holding a board from the laptop (received now, or
+   *  stored from before — a phone's stored boards came from the laptop). */
+  const receivedFrames = new Set<string>(phoneShell ? Object.keys(doc.surfaces ?? {}) : []);
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -606,6 +609,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Sim + dev/e2e build only: no relay, so the snapshot a send WOULD publish
   // is kept for the e2e (window.__mcLastBoardSnapshot, JSON as on the wire).
   const simWire = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') && typeof window !== 'undefined';
+  const BOARD_NO_MAKER_SEND_LINE = "Couldn't send the board — it doesn't say who made it. Nothing was sent.";
   /** SIM phones (scripted joins, labelled SIM): a dev or e2e build with ?sim=1
    *  only. Everywhere else pairing is the real chime and relay, or says why not. */
   const simPhones = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1');
@@ -623,6 +627,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     try {
       // The board's CURRENT drawing rides beside it (never inside the surface
       // plan), so the phone shows the plan as edited, not its template.
+      // A board nobody made (no maker known) is never sent: the phone would
+      // have no name to keep it under. The rest of the snapshot still goes.
+      const boardBy = board && frameId ? opts.artifactBy?.(frameId) : undefined;
+      if (!boardBy) board = null;
       const boardDrawings = board ? boardDrawingsOf(frameId, board) : null;
       const snap = buildControlSnapshot({
         rev: ++snapshotRev,
@@ -630,7 +638,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ...(board ? { board } : {}),
         ...(board && boardFor ? { boardFor } : {}),
         // Who made it rides along, so the phone keeps it under that name.
-        ...(board && frameId && opts.artifactBy?.(frameId) ? { boardBy: opts.artifactBy(frameId) } : {}),
+        ...(boardBy ? { boardBy } : {}),
         ...(boardDrawings && Object.keys(boardDrawings).length ? { boardDrawings } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
@@ -796,6 +804,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     getBoard: (id) => surfaces[id] ?? null,
     onGlow: (g) => setEdgeGlow(g.side, g.glow),
     onCommit: (s) => {
+      if (!opts.artifactBy?.(s.frameId)) { say(BOARD_NO_MAKER_SEND_LINE); return; }
       if (hostSession) {
         // Only the phone on that side shows it (boardFor); the other ignores it.
         sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
@@ -1355,9 +1364,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Any plan about to be shown or applied names only lamps that exist: a
    *  seeded lamp after the swap, a bulb that has gone, or a plan written from
    *  a prompt built before discovery is fitted to the current lamps. */
-  // The phone reaches no lamp itself: a lamp on a board the laptop sent stays,
-  // and shows "Not connected" here, instead of being dropped or re-bound.
-  const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(phoneShell ? plan : fitLampTiles(plan, lampSlots()));
+  // The phone reaches no lamp itself: a lamp on a board the laptop sent (this
+  // session, or kept from an earlier one) stays, and shows "Not connected"
+  // here, instead of being dropped or re-bound.
+  const fitPlan = (plan: SurfacePlan, frameId?: string): SurfacePlan => roomWithoutPlanTiles(frameId && receivedFrames.has(frameId) ? plan : fitLampTiles(plan, lampSlots()));
   /** A turn on the floor-plan board is a floor plan, whatever kind the model
    *  wrote (a 'room' reply there would otherwise lose its plan tile). */
   const planForBoard = (frameId: string, plan: SurfacePlan): SurfacePlan =>
@@ -1557,7 +1567,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!surfaces[id]) return false;
     // Backstop: whatever reached this board (a saved board from another
     // session, a script, a shared board) shows only lamps that exist.
-    const plan = surfaces[id] = fitPlan(surfaces[id]);
+    const plan = surfaces[id] = fitPlan(surfaces[id], id);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.
@@ -1922,13 +1932,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const kept = storedDrawings(drawings, livePlans);
     return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined, ...(Object.keys(kept).length ? { drawings: kept } : {}) };
   }
+  /** What is stored: everything but the fixed "Connected devices" table, which
+   *  no model made and nobody approved (it is rebuilt from live facts; Task 8
+   *  replaces it with a generated board). */
+  function storedDoc(): CanvasDoc {
+    const doc = snapshot();
+    const dev = devicesBoardId();
+    if (!dev) return doc;
+    const surfacesKept = { ...doc.surfaces };
+    delete surfacesKept[dev];
+    return { ...doc, frames: doc.frames.filter((f) => f.id !== dev), surfaces: surfacesKept, focusId: doc.focusId === dev ? null : doc.focusId };
+  }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
       // The caller keeps the document (layout + artifacts); without one it
       // lives in memory for this page only.
       let ok = true;
-      if (opts.onPersist) { try { opts.onPersist(snapshot()); } catch { ok = false; } }
+      if (opts.onPersist) { try { opts.onPersist(storedDoc()); } catch { ok = false; } }
       tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
       return ok;
     };
@@ -5353,6 +5374,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     surfaces[id] = plan;
     if (info.by) receivedMakers.set(id, { by: info.by, entries: entriesOn(id) });
     else receivedMakers.delete(id);
+    receivedFrames.add(id);
     // The drawing the laptop has now replaces whatever this phone had for
     // these plan tiles (re-checked here: never trust the snapshot). A board
     // sent without one shows its template, not a stale copy.
@@ -5888,6 +5910,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     /** Which phone is on which edge now (only phones that can take a board). */
     edgeLayout: () => edgeLayout(),
     sendBoard,
+    /** Say a status line (the phone's relay refusals). */
+    say: (line: string) => say(line),
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,

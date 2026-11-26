@@ -234,12 +234,17 @@ async function phones(page) {
   await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
   if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) return;
   check((await page.evaluate(reviewText)).includes('Replay'), 'the dashboard review names "Replay"');
-  // (Pairing still opens the fixed "Connected devices" table board; Task 8 replaces it.)
-  const early = (await boardArtifacts(page)).filter((a) => a.title !== 'Connected devices');
-  check(early.length === 0, `no dashboard is stored until Approve (got ${JSON.stringify(early.map((a) => a.title))})`);
+  // Pairing still opens the fixed "Connected devices" table (Task 8 replaces
+  // it with a generated board). It is on the canvas but never stored.
+  check((await frames(page)).some((f) => f.title === 'Connected devices'), 'pairing shows the Connected devices table');
+  await sleep(1200); // past the save debounce
+  const early = await boardArtifacts(page);
+  check(early.length === 0, `nothing is stored until Approve, not even the devices table (got ${JSON.stringify(early.map((a) => a.title))})`);
   await page.evaluate(() => window.__mcCanvas.keep());
   if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'the dashboard is on the laptop'))) return;
   await sleep(1200); // past the save debounce: the board is stored with its maker
+  const laptopBoards = await boardArtifacts(page);
+  check(laptopBoards.length === 1 && laptopBoards[0].by === 'replay', `the laptop stores only the dashboard, made by replay (got ${JSON.stringify(laptopBoards.map((a) => [a.title, a.by]))})`);
 
   // Send it to the right-hand phone.
   const right = await page.evaluate(() => window.__mcCanvas.edgeLayout().right);
@@ -284,12 +289,20 @@ async function phones(page) {
     const afterForged = await boardArtifacts(target.p);
     check(afterForged.length === 1 && !JSON.stringify(afterForged[0].data).includes('Blast') && !(await target.p.evaluate(phoneTileText)).includes('Blast'), 'the 500 % chip is not shown or kept');
 
+    // A board that does not say who made it is refused, and the phone says so.
+    const nameless = JSON.parse(JSON.stringify(snap));
+    nameless.rev += 3;
+    delete nameless.boardBy;
+    nameless.board.title = 'Nameless';
+    check(!(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), nameless)), 'a board with no maker is refused');
+    check(await target.p.evaluate(() => document.body.innerText.includes("Couldn't take the board — it doesn't say who made it. Nothing changed.")), 'the phone says why');
+
     // A payload that is not a plan stores nothing.
     const junk = { ...JSON.parse(JSON.stringify(snap)), rev: snap.rev + 2, board: { kind: 'room', tiles: 'nope' } };
     check(!(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), junk)), 'a payload that is not a plan is refused');
     await sleep(800);
     const afterJunk = await boardArtifacts(target.p);
-    check(afterJunk.length === 1 && afterJunk[0].v === afterForged[0].v, 'and nothing new is stored');
+    check(afterJunk.length === 1 && afterJunk[0].v === afterForged[0].v && afterJunk[0].title !== 'Nameless', 'and nothing new is stored');
 
     // The phone opens with what it kept.
     if (!(await open(target.p, 'sim=1&hands=0'))) return;
@@ -297,11 +310,24 @@ async function phones(page) {
       .then((ok) => ok && check(true, 'the phone opens with the board it kept'));
     const again = await boardArtifacts(target.p);
     check(again.length === 1 && again[0].by === 'replay', 'still made by replay after the reload');
+    // Pinning it after the reload (a change that is not its content) keeps its maker.
+    await target.p.evaluate(() => window.__mcCanvas.run('pin this'));
+    await sleep(1200);
+    const pinned = await boardArtifacts(target.p);
+    check(pinned.length === 1 && pinned[0].v > again[0].v && pinned[0].data.frame.pinned && pinned[0].by === 'replay', `pinned after a reload: written again, still by replay (got ${JSON.stringify(pinned.map((a) => [a.v, a.data.frame.pinned, a.by]))})`);
     check(target.errs.length === 0 && other.errs.length === 0, `no page errors on the phones${[...target.errs, ...other.errs].length ? `: ${[...target.errs, ...other.errs].slice(0, 3).join(' | ')}` : ''}`);
   } finally {
     await target.c.close();
     await other.c.close();
   }
+  // The laptop too: after a reload, pinning the engine's board keeps its maker.
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  const dash = (await boardArtifacts(page))[0];
+  await page.evaluate((id) => window.__mcCanvas.focus(id), dash.id.replace(/^board-/, ''));
+  await page.evaluate(() => window.__mcCanvas.run('pin this'));
+  await sleep(1200);
+  const pinnedL = (await boardArtifacts(page)).find((a) => a.id === dash.id);
+  check(!!pinnedL && pinnedL.v > dash.v && pinnedL.data.frame.pinned && pinnedL.by === 'replay', `laptop: pinned after a reload, still by replay (got ${JSON.stringify(pinnedL && [pinnedL.v, pinnedL.data.frame.pinned, pinnedL.by])})`);
 }
 SECTIONS.phones = phones;
 
