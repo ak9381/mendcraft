@@ -134,7 +134,7 @@ export function sceneFromSpeech(text: string): { sceneId: number; label: string 
   const t = ` ${normName(text)} `;
   const all = Object.entries(WIZ_SCENES)
     .map(([id, label]) => ({ sceneId: Number(id), label, n: normName(label) }))
-    .concat([{ sceneId: 6, label: 'Cozy', n: 'cosy' }])
+    .concat([{ sceneId: 6, label: 'Cozy', n: 'cosy' }, { sceneId: 15, label: 'Focus', n: 'reading' }, { sceneId: 15, label: 'Focus', n: 'study' }])
     // "warm white" / "daylight" are whites on the colour row, not scenes, when spoken.
     .filter((s) => s.sceneId !== 11 && s.sceneId !== 12 && s.sceneId !== 13)
     .sort((a, b) => b.n.length - a.n.length);

@@ -739,3 +739,11 @@ describe('a spoken device command says its status only once the lane has answere
     expect(deviceCase).not.toMatch(/\n\s*say\(dc\.say\)/);
   });
 });
+
+import { sceneFromSpeech as sceneWords } from '../../src/canvas/lampPresets';
+describe('spoken scene aliases', () => {
+  it('"reading" and "study" mean the Focus scene', () => {
+    expect(sceneWords('lamp to reading scene')).toEqual({ sceneId: 15, label: 'Focus' });
+    expect(sceneWords('study light please')).toEqual({ sceneId: 15, label: 'Focus' });
+  });
+});
