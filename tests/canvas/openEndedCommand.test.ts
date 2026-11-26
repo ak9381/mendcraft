@@ -25,7 +25,7 @@ describe('canvasApp.run() open-ended fallback', () => {
     expect(body).toContain('openEndedAsk(text, nano, gemini');
     expect(body).toContain('panels.forEngine(r.engineId).log(');
     // the reply is shown and spoken as it streams, then booked once at the end
-    expect(body).toContain('live.update(full);');
+    expect(body).toContain('live.update(safe);');
     expect(body).toContain("aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);");
     expect(body).toContain('live.end(reply);');
   });

@@ -171,7 +171,7 @@ describe('2. the reply is shown and spoken as it arrives', () => {
     expect(live).toContain('const ok = readAloudLines.sentence(sentence, !spokeAny, { onStart: () => replyTrace.spoken() });');
     expect(live).toContain('statusLog.push(t);'); // the final line is booked once, like say()
     const turn = src.slice(src.indexOf('async function openEndedTurn('), src.indexOf('// ---- commands ----'));
-    expect(turn).toContain('live.update(full);');
+    expect(turn).toContain('live.update(safe);'); // only guard-cleared clauses (openEndedAsk.guardSafePrefix)
     expect(turn).toContain('live.end(reply);');
     expect(turn).not.toContain('say(reply)'); // never spoken a second time, whole
     expect(src).toMatch(/function run\(text: string\): boolean \{\s*\/\/ New input: whatever was still being read aloud stops now\.\s*speaker\.stop\(\);/);
@@ -181,8 +181,10 @@ describe('2. the reply is shown and spoken as it arrives', () => {
 describe('3. replies are short, so Nano finishes fast', () => {
   it('the instruction is one short line asking for one or two short sentences and no emoji', () => {
     const p = buildOpenEndedPrompt('hi how are you');
-    expect(p).toBe('Reply in one or two short, friendly sentences. Plain words, no emoji, no lists.\nShe said: "hi how are you"');
-    expect(p.length).toBeLessThan(120); // every character is read before the first is written
+    expect(p).toBe('You can only chat; you never change boards, devices or plans, so never say you will. One or two short, friendly sentences, plain words, no emoji.\nShe said: "hi how are you"');
+    // every character is read before the first is written (the "chat only"
+    // clause is the one addition: a reply must never promise an action)
+    expect(p.length).toBeLessThan(180);
   });
 
   it('the chat call carries an output cap, and an on-device call that reaches it stops and frees the model', async () => {

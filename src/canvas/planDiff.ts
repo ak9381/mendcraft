@@ -6,6 +6,7 @@
 
 import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
 import { buildPlanTemplate, isPlanTemplateName } from '../plan/templates';
+import type { PlanDoc } from '../plan/doc';
 
 export type PlanChangeOp = 'add' | 'change' | 'remove';
 
@@ -255,4 +256,49 @@ export function languagePackChanges(language: string, labelCount: number): PlanC
 export function diffTile(before: TileSpec | null, after: TileSpec, ctx: PlanDiffContext = {}): PlanChange[] {
   const wrap = (tiles: TileSpec[]): SurfacePlan => ({ kind: 'room', title: '', tiles });
   return diffPlans(wrap(before ? [before] : []), wrap([after]), ctx);
+}
+
+type RoomGeom = { size: string; at: string } | null;
+function roomGeom(doc: PlanDoc, id: string): RoomGeom {
+  const room = doc.rooms.find((r) => r.id === id);
+  const walls = (room?.wallIds ?? []).map((w) => doc.walls.find((x) => x.id === w)).filter((w): w is PlanDoc['walls'][number] => !!w);
+  if (!walls.length) return null;
+  const xs = walls.flatMap((w) => [w.a.x, w.b.x]);
+  const ys = walls.flatMap((w) => [w.a.y, w.b.y]);
+  const m = (mm: number): string => String(Math.round(mm / 100) / 10);
+  return { size: `${m(Math.max(...xs) - Math.min(...xs))} × ${m(Math.max(...ys) - Math.min(...ys))} m`, at: `${Math.round(Math.min(...xs))},${Math.round(Math.min(...ys))}` };
+}
+
+/** A floor-plan DRAWING edit (a voice / typed plan edit): rooms by id, then
+ *  by name — added, removed, renamed, resized, moved — and the door, window
+ *  and stairs counts, in plain words. */
+export function diffPlanDocs(before: PlanDoc, after: PlanDoc): PlanChange[] {
+  const out: PlanChange[] = [];
+  const used = new Set<string>();
+  for (const r of after.rooms) {
+    const prev = before.rooms.find((p) => p.id === r.id && !used.has(p.id)) ?? before.rooms.find((p) => p.name === r.name && !used.has(p.id));
+    const b = roomGeom(after, r.id);
+    if (!prev) { out.push({ op: 'add', label: r.name, detail: `room${b ? ` · ${b.size}` : ''}` }); continue; }
+    used.add(prev.id);
+    const a = roomGeom(before, prev.id);
+    const parts: string[] = [];
+    if (prev.name !== r.name) parts.push(`renamed to ${r.name}`);
+    if (a?.size !== b?.size) parts.push(`was ${a?.size ?? '—'}, now ${b?.size ?? '—'}`);
+    else if (a?.at !== b?.at) parts.push('moved');
+    if (parts.length) out.push({ op: 'change', label: prev.name, detail: parts.join(' · ') });
+  }
+  for (const p of before.rooms) {
+    if (used.has(p.id)) continue;
+    const a = roomGeom(before, p.id);
+    out.push({ op: 'remove', label: p.name, detail: `room${a ? ` · ${a.size}` : ''}` });
+  }
+  const count = (doc: PlanDoc, kind: string): number => doc.openings.filter((o) => o.kind === kind).length;
+  for (const [kind, label] of [['door', 'Doors'], ['window', 'Windows']] as const) {
+    const x = count(before, kind), y = count(after, kind);
+    if (x !== y) out.push({ op: 'change', label, detail: `${x}, now ${y}` });
+  }
+  const stairs = (doc: PlanDoc): number => doc.fixtures.filter((f) => f.kind === 'stairs').length;
+  if (stairs(after) > stairs(before)) out.push({ op: 'add', label: 'Stairs' });
+  else if (stairs(after) < stairs(before)) out.push({ op: 'remove', label: 'Stairs' });
+  return out.length ? out : [{ op: 'change', label: NO_VISIBLE_CHANGE }];
 }

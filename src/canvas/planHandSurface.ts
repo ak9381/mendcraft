@@ -53,6 +53,10 @@ export interface PlanHandSurface extends HandSurfaceEdit {
   refresh(force?: boolean): void;
   /** Canvas Undo for one journal entry. Returns engine steps undone. */
   undo(steps: number, epoch: number): number;
+  /** A reviewed, approved whole-plan edit (voice / typed plan edit): the
+   *  drawing becomes `doc` in ONE engine step, journaled as one edit named
+   *  `summary`, so the canvas Undo takes exactly it back. */
+  applyDoc(doc: unknown, summary: string): boolean;
   dispose(): void;
 }
 
@@ -438,6 +442,18 @@ export function mountPlanHandSurface(o: {
       view.render();
       refresh(true);
       return n;
+    },
+    applyDoc(next, summary) {
+      if (hand.busy()) { hand.fistCancel(); hand.resizeCancel(); }
+      // An open mouse / keyboard edit becomes its own entry first.
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      journal.flush();
+      const r = controller.restoreSnapshot?.(next);
+      if (!r?.ok) return false;
+      journal.external(summary);
+      view.render();
+      refresh(true);
+      return true;
     },
     dispose() {
       mounted.delete(api);

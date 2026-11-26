@@ -11,6 +11,7 @@ import { isAddGimbal } from './gimbalTile';
 import { routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
 import { parseConnectDevices } from './pairedRow';
 import { routePlanExtra, type PlanExtra } from './planExtras';
+import { isPlanEditAsk, isPlanEditOnPlanBoard } from './planEdit';
 import { spotifySearchQuery } from './spotifyConnector';
 import { matchPaletteCommand } from './toolPalette';
 import { parseMusicIntent } from '../music/musicIntent';
@@ -19,6 +20,12 @@ import { parseChangeVoice, type ChangeVoiceIntent } from '../ai/speechVoices';
 export interface RouteWorld {
   /** A plan board that can run the CAD extras (the focused one, else any in overview). */
   hasPlanBoard: boolean;
+  /** The focused board holds the floor plan (its drawing is mounted). */
+  planFocused?: boolean;
+  /** A floor-plan board exists anywhere on the canvas. */
+  planBoardExists?: boolean;
+  /** The room names on the focused plan ("Bedroom 2"): a bare edit there must name one. */
+  planRooms?: readonly string[];
   devices: readonly DeviceRef[];
   /** The device the hand is pointing at, if any. */
   pointed?: DeviceRef | null;
@@ -47,6 +54,7 @@ export type Route =
   | { name: 'connectDevices'; dashboard: boolean }
   | { name: 'connectRoom' }
   | { name: 'floorPlan' }
+  | { name: 'planEdit' }
   | { name: 'connectSheet' } | { name: 'connectByName' }
   | { name: 'openEnded' };
 export type RouteName = Route['name'];
@@ -138,10 +146,16 @@ export function routeLine(text: string, world: RouteWorld): Route {
   const cd = parseConnectDevices(text);
   if (cd) return { name: 'connectDevices', dashboard: cd.dashboard };
   if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) return { name: 'connectRoom' };
+  // "add a study next to bedroom 2": an edit to the plan that is already
+  // there (a review of the change), never chat and never a fresh draft.
+  if ((world.planBoardExists || world.planFocused) && isPlanEditAsk(text) && !isBuildBoardAsk(text)) return { name: 'planEdit' };
   if (/\bfloor\s*plans?\b/i.test(text)) return { name: 'floorPlan' };
   if (isBuildBoardAsk(text)) return { name: 'connectRoom' };
   const ask = connectAsk(text);
   if (ask === 'sheet') return { name: 'connectSheet' };
   if (ask === 'byName') return { name: 'connectByName' };
+  // On the floor-plan board, an edit verb with a room of THIS plan, or with
+  // "it" and a size or side ("make it bigger"), is a plan edit.
+  if (world.planFocused && isPlanEditOnPlanBoard(text, world.planRooms ?? [])) return { name: 'planEdit' };
   return { name: 'openEnded' };
 }
