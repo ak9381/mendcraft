@@ -36,6 +36,14 @@ export interface VoiceHooks {
   /** Fired for fatal recognition errors (not no-speech / aborted). */
   onError?: (code: string, message: string) => void;
   onListening?: (listening: boolean) => void;
+  /** What she said was handed over. `sinceStopMs`: how long after the mic was
+   *  asked to stop (null: it was still listening). `from`: a final result,
+   *  the last interim (the final was slow), or the recognizer ending. */
+  onHeard?: (info: { sinceStopMs: number | null; from: 'final' | 'interim' | 'end' }) => void;
+  /** After the mic is asked to stop, how long to wait for the final result
+   *  before acting on the last interim words (ms). */
+  interimGraceMs?: number;
+  now?: () => number;
   /** Injectable ctor for tests. */
   recognitionCtor?: SpeechRecognitionCtor | null;
 }
@@ -55,6 +63,11 @@ export interface VoiceController {
 }
 
 const TRANSIENT = new Set(['no-speech', 'aborted']);
+/** Chrome can take a second or more after stop() to deliver the final result
+ *  and end. The words are already known from the interim results, so once the
+ *  mic has been asked to stop the last interim is used if the final has not
+ *  arrived this soon. */
+export const INTERIM_GRACE_MS = 350;
 const LANG_FALLBACKS = ['en-IN', 'en-US'];
 
 /** Honest one-line reason for a SpeechRecognition error code. */
@@ -96,6 +109,20 @@ export function createVoiceController(
   let wantListening = false;
   let lastInterim = '';
   let langTriedFallback = false;
+  const now = hooks.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const graceMs = hooks.interimGraceMs ?? INTERIM_GRACE_MS;
+  /** When the mic was asked to stop (0: it is listening / never stopped). */
+  let stopAskedAt = 0;
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The interim was acted on: the same turn's late final / end is ignored. */
+  let handedOver = false;
+  const dropGrace = (): void => { if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; } };
+  function heard(text: string, from: 'final' | 'interim' | 'end'): void {
+    dropGrace();
+    lastInterim = '';
+    try { hooks.onHeard?.({ sinceStopMs: stopAskedAt ? now() - stopAskedAt : null, from }); } catch { /* timing only */ }
+    onCommand(text);
+  }
 
   if (Ctor) {
     recognition = new Ctor();
@@ -109,12 +136,14 @@ export function createVoiceController(
       const text = last?.[0]?.transcript?.trim();
       if (!text) return;
       if (last?.isFinal === false) {
+        if (handedOver) return;
         lastInterim = text;
         hooks.onInterim?.(text);
         return;
       }
-      lastInterim = '';
-      onCommand(text);
+      // The final result: act on it now — never wait for the recognizer to end.
+      if (handedOver) { lastInterim = ''; return; } // this turn's words were already used
+      heard(text, 'final');
     };
 
     recognition.onerror = (ev: Event) => {
@@ -146,11 +175,10 @@ export function createVoiceController(
         return;
       }
       // Don't throw away the last heard words just because a final never arrived.
-      if (lastInterim) {
-        const leftover = lastInterim;
-        lastInterim = '';
-        onCommand(leftover);
-      }
+      if (lastInterim && !handedOver) heard(lastInterim, 'end');
+      dropGrace();
+      lastInterim = '';
+      handedOver = false;
       hooks.onListening?.(false);
     };
   }
@@ -161,6 +189,9 @@ export function createVoiceController(
     if (!recognition) return;
     if (wantListening) {
       lastInterim = '';
+      stopAskedAt = 0;
+      handedOver = false;
+      dropGrace();
       try {
         recognition.start();
       } catch (err) {
@@ -174,7 +205,19 @@ export function createVoiceController(
         }
       }
     } else {
+      stopAskedAt = now();
       try { recognition.stop(); } catch { /* already stopped */ }
+      // She has stopped talking and the words are known: if the recognizer is
+      // slow to finalise, use them now. Its late final (or end) is then ignored.
+      dropGrace();
+      if (lastInterim) {
+        graceTimer = setTimeout(() => {
+          graceTimer = null;
+          if (!lastInterim || handedOver) return;
+          handedOver = true;
+          heard(lastInterim, 'interim');
+        }, graceMs);
+      }
     }
   }
 
@@ -214,6 +257,7 @@ export function createVoiceController(
     pushToTalkActive = false;
     wantListening = false;
     lastInterim = '';
+    dropGrace();
     try { recognition?.stop(); } catch { /* ignore */ }
     hooks.onListening?.(false);
   }

@@ -25,6 +25,9 @@ export interface WarmKeeper {
   kick(): void;
   /** A real on-device call finished: the model is loaded, nothing to do. */
   markWarm(): void;
+  /** The model was unloaded (a call failed, or it stopped being available):
+   *  forget that it was warm, so the next kick loads it again. */
+  reset(): void;
   warmed(): boolean;
   stop(): void;
 }
@@ -66,6 +69,7 @@ export function createWarmKeeper(deps: WarmKeeperDeps): WarmKeeper {
   return {
     kick() { drop(); void attempt(1); },
     markWarm() { warmed = true; drop(); },
+    reset() { warmed = false; },
     warmed: () => warmed,
     stop() { stopped = true; drop(); },
   };

@@ -25,6 +25,8 @@ import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
 import { openEndedAsk } from './openEndedAsk';
+import { cleanReply, createSentenceFeed } from './liveReply';
+import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
 import { createPairFirst, isBuildDashboard, pairedRowHtml } from './pairedRow';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -906,6 +908,49 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     fadeStatus(t);
     if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };
+
+  /** A reply shown and spoken AS IT ARRIVES: each chunk goes straight to the
+   *  status line (and the phone toast), and each sentence is handed to the
+   *  speaker the moment it is complete — she reads and hears the start of the
+   *  answer while the rest is still being written. `end` books the final
+   *  line exactly like say() does, without saying anything twice. */
+  function liveSay(): { update(full: string): void; end(final: string): void; started(): boolean } {
+    const feed = createSentenceFeed({ firstAtClause: true });
+    let shown = false;
+    let spokeAny = false;
+    const speakNext = (sentence: string): void => {
+      if (!readAloud || !sentence) return;
+      const o = { lang: spokenLang(sentence), onStart: () => replyTrace.spoken() };
+      // The first sentence replaces whatever was being said; the rest queue.
+      const ok = spokeAny ? speaker.enqueue(sentence, o) : speaker.speak(sentence, o);
+      spokeAny = spokeAny || ok;
+    };
+    return {
+      started: () => shown,
+      update(full) {
+        const t = cleanReply(full);
+        if (!t) return;
+        if (!shown) { shown = true; hideRetry(); replyTrace.firstChunk(); }
+        statusEl.textContent = t;
+        showPhoneSay(t);
+        for (const sentence of feed.push(t)) speakNext(sentence);
+      },
+      end(final) {
+        const t = cleanReply(final);
+        if (!shown) replyTrace.firstChunk();
+        statusEl.textContent = t; hideRetry();
+        showPhoneSay(t);
+        // Sentences that completed only now, then whatever is left.
+        for (const sentence of feed.push(`${t} `)) speakNext(sentence);
+        const rest = feed.flush(t);
+        if (rest) speakNext(rest);
+        statusLog.push(t);
+        if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
+        fadeStatus(t);
+        replyTrace.done();
+      },
+    };
+  }
 
   /** Gimbal body language: nod 'yes' on an Approve, shake 'no' on a refusal,
    *  'wakeup' when a phone pairs. In the iPhone app (gimbal plugin present) it
@@ -3639,9 +3684,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return { prompt: cloud ? protectTurn(text, prompt).promptText : prompt, onCloudSend: () => cloudSent(si) };
     };
     let r: Awaited<ReturnType<typeof openEndedAsk>>;
+    // The reply is shown and read aloud as it is written, not when it is done.
+    replyTrace.asked();
+    const live = liveSay();
     try {
       r = await openEndedAsk(text, nano, gemini, (full) => {
         aiPanel.querySelector('.mc-ai-state')!.textContent = full;
+        live.update(full);
       }, prepare);
     } catch (e) {
       const why = `No answer. ${geminiFailLine(e)}`;
@@ -3654,8 +3703,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const reply = r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply;
     // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
-    aiPanel.querySelector('.mc-ai-state')!.textContent = reply;
-    say(reply);
+    aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);
+    live.end(reply);
     settleEngines();
     autoHideAi();
   }
@@ -3746,6 +3795,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyCamera(); persist();
   }
   function run(text: string): boolean {
+    // New input: whatever was still being read aloud stops now.
+    speaker.stop();
     captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
