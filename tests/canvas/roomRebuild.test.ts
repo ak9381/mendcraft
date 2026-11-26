@@ -5,7 +5,7 @@
 // her: a board she narrowed, or a tile she took off, stays that way.
 import { describe, expect, it } from 'vitest';
 import { runSurfaceTurn, NANO_STILL_LOADING, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
-import { answeringDevices, createDismissals, keepRoomDevices, keptRoomLine, leafTiles, narrowingOf, ROW_MAX_CHILDREN, type KeepRoomDevicesInput } from '../../src/canvas/roomRebuild';
+import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine, leafTiles, narrowingOf, ROW_MAX_CHILDREN, type KeepRoomDevicesInput } from '../../src/canvas/roomRebuild';
 import { fitLampTiles } from '../../src/canvas/realLamps';
 import { draftSummary, roomSummary } from '../../src/canvas/planTruth';
 import { diffPlans } from '../../src/canvas/planDiff';
@@ -97,6 +97,16 @@ describe('she narrows the board: the floor follows her words', () => {
     expect(narrowingOf('build the dashboard')).toBeNull();
     expect(narrowingOf('just build the dashboard')).toBeNull();
     expect(narrowingOf('connect everything in this room, no rush')).toBeNull();
+    expect(narrowingOf('build the dashboard with no speaker')).toMatchObject({ mode: 'without', kinds: new Set(['music']) });
+    expect(narrowingOf('only my lamps and the speaker')).toMatchObject({ mode: 'only', kinds: new Set(['lamp', 'music']) });
+  });
+  it('no false narrowings: the kind must follow the word, and "don\'t" cancels it', () => {
+    expect(narrowingOf('just build me a dashboard for my lights')).toBeNull();
+    expect(narrowingOf('no problem, build the lights dashboard')).toBeNull();
+    expect(narrowingOf("don't remove the speaker")).toBeNull();
+    expect(narrowingOf('do not drop the gimbal')).toBeNull();
+    expect(narrowingOf('never remove my lamps')).toBeNull();
+    expect(narrowingOf('only build it once, with the lamps')).toBeNull();
   });
   it('"only the lamps": the speaker and gimbal are not put back, no other kind is added', () => {
     const k = keep(lampsOnly, { utterance: 'build me a dashboard with only the lamps' });
@@ -135,6 +145,39 @@ describe('she narrows the board: the floor follows her words', () => {
     const t2 = keep(connectOnly(), { before: t1.plan, dismissed: d2.of('b1', t1.plan) });
     expect(deviceIds(t2.plan)).toEqual(['speaker-1', 'wiz-lamp-1']); // answers again: back on the board
     expect(t2.added).toEqual(['Lamp']);
+  });
+});
+
+describe('dismissals: only her changes, and they survive a reload', () => {
+  const real = (k: string) => k === 'gimbal' || hints(store).some((h) => h.id === k);
+  const withLamp: SurfacePlan = { ...dashboard, tiles: [...dashboard.tiles, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] };
+  const noSpeaker: SurfacePlan = { ...withLamp, tiles: withLamp.tiles.filter((t) => t.type !== 'music') };
+  // what canvasApp's history wrapper does with each push (and proposePlan on keep)
+  const record = (d: ReturnType<typeof createDismissals>, e: { by: string; kind?: string; before: SurfacePlan; after: SurfacePlan }, kept = false) => {
+    if (isHerChange(e, { kept })) d.note('b1', e.before, e.after, real);
+  };
+  it('a Gemini self-check fix (or a morph patch) that drops a tile is NOT a dismissal; her edit and her kept review are', () => {
+    const d = createDismissals();
+    record(d, { by: 'gemini', before: withLamp, after: noSpeaker }); // self-check fix, never reviewed
+    expect(d.of('b1', noSpeaker).size).toBe(0);
+    expect(deviceIds(keep(connectOnly(), { before: noSpeaker, dismissed: d.of('b1', noSpeaker) }).plan)).toEqual(['speaker-1', 'wiz-lamp-1']);
+    record(d, { by: 'her', before: withLamp, after: noSpeaker }); // e.g. sent the tile to the phone
+    expect([...d.of('b1', noSpeaker)]).toEqual(['speaker-1']);
+    const d2 = createDismissals();
+    record(d2, { by: 'gemini', before: withLamp, after: noSpeaker }, true); // a review she kept
+    expect([...d2.of('b1', noSpeaker)]).toEqual(['speaker-1']);
+    expect(isHerChange({ by: 'her', kind: 'layout' })).toBe(false);
+  });
+  it('round-trips through storage, only for boards that still exist', () => {
+    const d = createDismissals();
+    d.note('b1', withLamp, noSpeaker, real);
+    d.note('b2', withLamp, noSpeaker, real);
+    const saved = JSON.parse(JSON.stringify(d.toJSON((id) => id === 'b1')));
+    expect(saved).toEqual({ b1: ['speaker-1'] });
+    const back = createDismissals(saved);
+    expect([...back.of('b1', noSpeaker)]).toEqual(['speaker-1']);
+    expect(back.of('b2', noSpeaker).size).toBe(0);
+    expect(createDismissals({ b1: [1, null] as unknown as string[] }).of('b1', null).size).toBe(0);
   });
 });
 

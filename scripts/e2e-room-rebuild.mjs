@@ -116,6 +116,15 @@ async function main() {
     const narrowed = await rebuild('build me a dashboard with only the lamps', LAMPS_ONLY, 'narrowed');
     if (narrowed) {
       check(!narrowed.some((t) => t.type === 'music') && !narrowed.some((t) => t.type === 'gimbal'), `"only the lamps" keeps only lamps (${narrowed.map((t) => t.type).join(', ')})`);
+      // A reload in between: what she took off is remembered beside the saved boards.
+      await sleep(800); // the save is debounced
+      await page.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForFunction(() => !!window.__canvas && !!window.__mcScripts, { timeout: 20_000 });
+      await sleep(1500);
+      const reloaded = await page.evaluate(dashboard);
+      check(!!reloaded, 'the dashboard is back after the reload');
+      if (reloaded) await page.evaluate((id) => window.__canvas.focus(id), reloaded.id);
+      await sleep(800);
       const again = await rebuild('build the dashboard', CONNECT_ONLY, 'plain rebuild after narrowing');
       if (again) {
         check(!again.some((t) => t.type === 'music'), 'a later plain rebuild does not re-add the speaker she took off');

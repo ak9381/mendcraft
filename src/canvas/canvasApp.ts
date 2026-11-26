@@ -49,7 +49,7 @@ import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
-import { answeringDevices, createDismissals, keepRoomDevices, keptRoomLine } from './roomRebuild';
+import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
@@ -930,17 +930,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const offNanoBusy = onNanoBusyHandoff((label) => { panels.show(); panels.showHandoff('nano', `Nano busy → Gemini (${label})`); });
   const dockEl = root.querySelector<HTMLElement>('.mc-dock')!;
   const dockSurfaceEl = dockEl.querySelector<HTMLElement>('.mc-dock-surface')!;
+  // What she took off a board stays off it (roomRebuild.createDismissals):
+  // only HER changes count — her own edits (by 'her') here, and the reviews
+  // she keeps (proposePlan) — never a Gemini self-check fix or morph patch.
+  // Kept beside the saved doc (per frame id), so it survives a reload.
+  const DISMISSED_KEY = 'mendcraft.dismissedTiles';
+  let storedDismissals: Record<string, string[]> = {};
+  try { storedDismissals = stored && !opts.showcase && !opts.fresh ? JSON.parse(storage.getItem(DISMISSED_KEY) ?? '{}') ?? {} : {}; } catch { storedDismissals = {}; }
+  const dismissals = createDismissals(storedDismissals && typeof storedDismissals === 'object' ? storedDismissals : {});
+  function noteDismissal(frameId: string, before: SurfacePlan | null, after: SurfacePlan | null): void {
+    // (try: a change recorded while the canvas is still mounting has no device list yet)
+    try { dismissals.note(frameId, before, after, (k) => (k === 'gimbal' ? standReported() : roomDeviceHints().some((d) => d.id === k))); } catch { /* nothing to remember yet */ }
+  }
   const history = (() => {
     const h = createCanvasHistory();
-    // Every board change she makes or keeps is seen here: what she took off
-    // a board stays off it (roomRebuild.createDismissals).
     return { ...h, push: (e: Parameters<typeof h.push>[0]) => {
-      // (try: a change recorded while the canvas is still mounting has no device list yet)
-      try { if (!e.kind || e.kind === 'surface') dismissals.note(e.frameId, e.before, e.after, (k) => (k === 'gimbal' ? standReported() : roomDeviceHints().some((d) => d.id === k))); } catch { /* nothing to remember yet */ }
+      if (isHerChange(e)) noteDismissal(e.frameId, e.before, e.after);
       return h.push(e);
     } };
   })();
-  const dismissals = createDismissals();
   const ledger = createCanvasLedger();
   // A7-024: a request that failed mid-flight offers Retry (re-sends the same
   // request). Any later status line means the moment has passed — hide it.
@@ -1729,7 +1737,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
-    const write = (): boolean => tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+    const write = (): boolean => {
+      const ok = tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+      tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
+      return ok;
+    };
     if (now) return write();
     persistTimer = window.setTimeout(write, 250);
     return true;
@@ -2454,6 +2466,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           surfaces[frameId] = plan; reg.rename(frameId, plan.title); reg.setKind(frameId, plan.kind === 'plan' ? 'plan' : 'room');
           if (!renderSurface(frameId)) throw new Error('Could not render the board');
           history.push({ frameId, before, after: plan, by: ranId, summary });
+          // She kept this review: what it took off the board is her choice.
+          if (isHerChange({ by: ranId }, { kept: true })) noteDismissal(frameId, before, plan);
           // A dashboard built while the iPhone reports a docked stand gets
           // the gimbal controls too (local tile, no model involved).
           if (plan.kind === 'room') queueMicrotask(() => gimbalOnNewDashboard(frameId));

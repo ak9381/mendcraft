@@ -21,13 +21,34 @@ export function tileKeys(p: SurfacePlan | null): string[] {
   return p ? leafTiles(p.tiles).flatMap((t) => (t.type === 'gimbal' ? ['gimbal'] : 'deviceId' in t ? [t.deviceId] : [])) : [];
 }
 
+/** Which board changes are hers (and so can take a tile off for good): a
+ *  change she made herself (by 'her': a tile sent to a phone, an edit), or
+ *  a review she kept. A Gemini self-check fix or a morph patch is applied
+ *  without that review, so a tile it drops is not a dismissal. */
+export function isHerChange(e: { by: string; kind?: string }, o: { kept?: boolean } = {}): boolean {
+  if (e.kind && e.kind !== 'surface') return false;
+  return e.by === 'her' || !!o.kept;
+}
+
 /** The tiles she took off a board (a narrowed rebuild she kept, a tile sent
  *  to a phone, an edit): a later rebuild never puts them back. Only a tile
  *  whose device was real at that moment counts — a lamp that went missing
- *  while it was unreachable comes back once it answers again. */
-export function createDismissals() {
+ *  while it was unreachable comes back once it answers again.
+ *  Not remembered: undoing a change (undo restores the old board without a
+ *  new history push), so a tile the floor added and she then undid can be
+ *  added again by the next rebuild — say "without the …" to keep it off. */
+export function createDismissals(initial: Record<string, readonly string[]> = {}) {
   const byFrame = new Map<string, Set<string>>();
+  for (const [frameId, keys] of Object.entries(initial)) {
+    if (Array.isArray(keys)) byFrame.set(frameId, new Set(keys.filter((k): k is string => typeof k === 'string' && k.length <= 64).slice(0, 64)));
+  }
   return {
+    /** For storage, beside the surfaces: frame id → keys (only frames in `keep`). */
+    toJSON(keep: (frameId: string) => boolean = () => true): Record<string, string[]> {
+      const out: Record<string, string[]> = {};
+      for (const [frameId, set] of byFrame) if (set.size && keep(frameId)) out[frameId] = [...set];
+      return out;
+    },
     /** A board changed from `before` to `after`. */
     note(frameId: string, before: SurfacePlan | null, after: SurfacePlan | null, real: (key: string) => boolean): void {
       if (!before || !after) return;
@@ -88,31 +109,61 @@ function tileTypeFor(kind: string): 'lamp' | 'music' | 'switch' {
 }
 
 export type RoomKind = 'lamp' | 'music' | 'switch' | 'gimbal';
-const KIND_WORDS: ReadonlyArray<[RegExp, RoomKind]> = [
-  [/\b(lamps?|lights?|bulbs?|wiz)\b/, 'lamp'],
-  [/\b(speakers?|music|spotify|player)\b/, 'music'],
-  [/\b(switch(?:es)?|plugs?|fans?|tvs?)\b/, 'switch'],
-  [/\b(gimbal|stand|dock)\b/, 'gimbal'],
+const KIND_WORDS: ReadonlyArray<[string, RoomKind]> = [
+  ['lamps?|lights?|bulbs?|wiz', 'lamp'],
+  ['speakers?|music|spotify|player', 'music'],
+  ['switch(?:es)?|plugs?|fans?|tvs?', 'switch'],
+  ['gimbal|stand|dock', 'gimbal'],
 ];
 /** She narrowed the board: "only the lamps", "just the speaker", "without
  *  the gimbal", "remove the desk lamp". Kinds and device ids she named. */
 export interface Narrowing { mode: 'only' | 'without'; kinds: Set<RoomKind>; ids: Set<string> }
-const ONLY_RE = /\b(only|just)\b/i;
-const WITHOUT_RE = /\b(without|except|no|remove|drop|minus|leave out|take off)\b/i;
+const NARROW_RE = /\b(only|just|without|except|no|remove|drop|minus)\b/g;
+/** At most a determiner / possessive between the word and what it names. */
+const DET = '(?:(?:the|my|our|a|any)\\s+)?';
+/** "don't / do not / never" (one word may sit between) cancels the word. */
+const NEGATED = /\b(?:don['’]?t|do not|never)\s+(?:\w+\s+)?$/;
+const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** What her words narrow the board to, or null (a plain "build the
- *  dashboard": the reply only forgot tiles, so they are put back). A
- *  narrowing word counts only with a device or kind named right after it. */
+ *  dashboard": the reply only forgot tiles, so they are put back). The
+ *  narrowing word must be followed straight away (at most a determiner or
+ *  possessive between) by a device or a kind: "only the lamps", "no
+ *  speaker". "just build me a dashboard for my lights" and "no problem, …"
+ *  are not narrowings, and "don't remove the speaker" is cancelled. "…, the
+ *  speaker" / "and the speaker" after the first name extends the list. */
 export function narrowingOf(utterance: string, devices: readonly { id: string; label: string }[] = []): Narrowing | null {
-  const text = utterance.toLowerCase();
-  for (const [re, mode] of [[ONLY_RE, 'only'], [WITHOUT_RE, 'without']] as const) {
-    const m = re.exec(text);
-    if (!m) continue;
-    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 60);
+  const text = utterance.toLowerCase().replace(/\s+/g, ' ');
+  // Device names (longest first: "desk lamp" before the kind "lamp"), then
+  // kinds. Whole words: "the lamps" is the kind, not the device "Lamp".
+  const names: Array<{ re: RegExp; kind?: RoomKind; id?: string }> = [
+    ...[...devices].filter((d) => d.label).sort((x, y) => y.label.length - x.label.length)
+      .map((d) => ({ re: new RegExp(`${DET}${esc(d.label.toLowerCase())}\\b`, 'y'), id: d.id })),
+    ...KIND_WORDS.map(([w, kind]) => ({ re: new RegExp(`${DET}(?:${w})\\b`, 'y'), kind })),
+  ];
+  const nameAt = (pos: number): { end: number; kind?: RoomKind; id?: string } | null => {
+    for (const n of names) {
+      n.re.lastIndex = pos;
+      const m = n.re.exec(text);
+      if (m) return { end: pos + m[0].length, kind: n.kind, id: n.id };
+    }
+    return null;
+  };
+  for (const m of text.matchAll(NARROW_RE)) {
+    const at = m.index ?? 0;
+    if (NEGATED.test(text.slice(0, at))) continue;
+    const mode = m[1] === 'only' || m[1] === 'just' ? 'only' as const : 'without' as const;
     const kinds = new Set<RoomKind>();
-    for (const [k, kind] of KIND_WORDS) if (k.test(after)) kinds.add(kind);
-    const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Whole words: "the lamps" is the kind, not the device called "Lamp".
-    const ids = new Set(devices.filter((d) => d.label && new RegExp(`\\b${esc(d.label.toLowerCase())}\\b`).test(after)).map((d) => d.id));
+    const ids = new Set<string>();
+    let pos = at + m[0].length;
+    while (text[pos] === ' ') {
+      const hit = nameAt(pos + 1);
+      if (!hit) break;
+      if (hit.id) ids.add(hit.id); else if (hit.kind) kinds.add(hit.kind);
+      pos = hit.end;
+      const more = /^(?:,(?: and| or)?| and| or| &)(?= )/.exec(text.slice(pos));
+      if (!more) break;
+      pos += more[0].length;
+    }
     if (kinds.size || ids.size) return { mode, kinds, ids };
   }
   return null;
