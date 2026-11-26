@@ -18,6 +18,8 @@ import { join } from 'node:path';
 const require = createRequire(import.meta.url);
 const BASE = (process.env.E2E_URL || 'http://localhost:5173').replace(/\/$/, '');
 const SHOTS = process.env.SHOTS || '';
+/** ONLY=<text>: run just the viewports/boards whose name contains it. */
+const ONLY = process.env.ONLY || '';
 
 function findChrome() {
   return [
@@ -49,17 +51,31 @@ const BOARDS = [
 ];
 
 const VIEWPORTS = [
+  // The live window at 100 %: a short laptop window.
+  { name: 'laptop-1550x656', width: 1550, height: 656 },
   { name: 'laptop-1440x900', width: 1440, height: 900 },
   { name: 'laptop-1550x700', width: 1550, height: 700 },
   { name: 'laptop-1280x800', width: 1280, height: 800 },
   // The live window: 1550×656 at 80 % browser zoom.
   { name: 'laptop-1550x656-zoom80', width: 1938, height: 820 },
 ];
+// With two (SIM) phones paired the "2 phones connected · … · Disconnect"
+// strip is on screen: it must never cover the focused board, and Disconnect
+// stays reachable. Camera on, as in the live run.
+const GIMBAL = { type: 'gimbal', label: 'Phone stand' };
+const PAIRED_BOARDS = [
+  { name: 'lamp+music', tiles: [LAMP, MUSIC] },
+  { name: 'lamp+music+gimbal', tiles: [LAMP, MUSIC, GIMBAL] },
+];
+const PAIRED_VIEWPORTS = [
+  { name: 'paired-1550x656', width: 1550, height: 656 },
+  { name: 'paired-1440x900', width: 1440, height: 900 },
+];
 const CLUSTER_ORDER = ['register', 'tools', 'talk', 'read', 'undo', 'edit'];
 
 /** In the page: board, tiles, chip row, cluster. */
 function measure() {
-  const TAGS = 'mc-lamp-tile, mc-music-tile, mc-switch-tile, mc-scene-tile, mc-connect-tile, mc-stat-tile, mc-chart-tile';
+  const TAGS = 'mc-lamp-tile, mc-music-tile, mc-switch-tile, mc-scene-tile, mc-connect-tile, mc-stat-tile, mc-chart-tile, mc-gimbal-tile';
   const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
   const shown = (el) => { if (!el || el.hidden) return false; const cs = getComputedStyle(el); return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getClientRects().length > 0; };
   const frame = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame');
@@ -90,6 +106,28 @@ function measure() {
   };
 }
 
+/** In the page: each visible next-step chip whose centre does NOT hit-test
+ *  to the chip itself (something — the engine bar, the zoom box, the phones
+ *  strip — sits over it). Shadow DOM aware. */
+function coveredChips() {
+  const deepHit = (x, y) => {
+    let el = document.elementFromPoint(x, y);
+    while (el?.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner; }
+    return el;
+  };
+  const within = (hit, chip) => { for (let n = hit; n; n = n.parentNode || n.host) if (n === chip) return true; return false; };
+  const frame = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame');
+  const chips = frame ? [...frame.querySelectorAll('.mc-next .mc-next-chip')].filter((c) => c.getClientRects().length) : [];
+  const out = [];
+  for (const c of chips) {
+    const r = c.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const hit = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? deepHit(x, y) : null;
+    if (!hit || !within(hit, c)) out.push(`${c.textContent.trim()} → ${hit ? `${hit.tagName.toLowerCase()}.${[...hit.classList].join('.')}` : 'off screen'}`);
+  }
+  return { n: chips.length, covered: out };
+}
+
 const overlap = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
 
 function checkCluster(m, label, { allowWrap }) {
@@ -115,6 +153,147 @@ function checkCluster(m, label, { allowWrap }) {
   check(!overlapBoard, `${label}: cluster never covers the board`);
 }
 
+async function openBoard(browser, vp, doc) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e?.message || e)));
+  await page.setViewport({ width: vp.width, height: vp.height, deviceScaleFactor: 1 });
+  await page.evaluateOnNewDocument((d) => {
+    try { localStorage.setItem('mc.canvas.v1', JSON.stringify(d)); } catch { /* checks fail on their own */ }
+  }, doc);
+  await page.goto(`${BASE}/canvas.html?sim=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('.mc-frame mc-lamp-tile', { timeout: 20_000 });
+  await page.waitForSelector('.mc-frame .mc-next .mc-next-chip', { timeout: 10_000 }).catch(() => undefined);
+  await page.evaluate(() => document.fonts.ready);
+  await new Promise((r) => setTimeout(r, 1500));
+  await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = ''; });
+  await new Promise((r) => setTimeout(r, 50));
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await settle(page);
+  return { page, errors };
+}
+
+/** The board's box must hold still for three polls in a row. */
+async function settle(page) {
+  for (let i = 0, last = '', same = 0; i < 40 && same < 3; i++) {
+    const now = await page.evaluate(() => { const f = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame'); const r = f?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') : ''; });
+    same = now === last ? same + 1 : 0; last = now;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/** Pair two SIM phones ("connect devices" under ?sim=1), camera on, Tools
+ *  closed: the connected strip, the board, the chips, the cluster, the
+ *  camera preview and the More button must all keep clear of each other. */
+async function pairedRun(browser, vp, tiles) {
+  console.log(`-- ${vp.name}`);
+  const { page, errors } = await openBoard(browser, vp, roomDoc(tiles));
+  await page.evaluate(() => {
+    const i = document.querySelector('#mc-say-in'); const f = document.querySelector('.mc-say');
+    if (i && f) { i.value = 'connect devices'; f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }
+  });
+  const joined = await page.waitForFunction(() => /2 phones connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? ''), { timeout: 12_000 }).then(() => true, () => false);
+  check(joined, `${vp.name}: two SIM phones paired, connected strip shown`);
+  // Back on the room board, Tools closed, camera on, status line cleared, as
+  // on the live screen.
+  await page.evaluate(() => {
+    const i = document.querySelector('#mc-say-in'); const f = document.querySelector('.mc-say');
+    if (i && f) { i.value = 'go to living room'; f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }
+  });
+  await new Promise((r) => setTimeout(r, 600));
+  await page.evaluate(async () => {
+    const open = () => document.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)');
+    if (open()) document.querySelector('.mc-tools-chip')?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = '';
+  });
+  await new Promise((r) => setTimeout(r, 300));
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await new Promise((r) => setTimeout(r, 300));
+  await settle(page);
+  // Camera on (headless has none: show the preview box as the live run does).
+  await page.evaluate(() => { const p = document.querySelector('.mc-face-preview'); if (p) p.hidden = false; });
+  await new Promise((r) => setTimeout(r, 300));
+  const m = await page.evaluate(measure);
+  const extra = await page.evaluate(() => {
+    const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return r.width ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null; };
+    const row = document.querySelector('.mc-paired-row:not([hidden])');
+    const dis = row?.querySelector('.mc-paired-disconnect');
+    const d = box(dis);
+    const hit = d ? document.elementFromPoint((d.left + d.right) / 2, (d.top + d.bottom) / 2) : null;
+    const strip = document.querySelector('.mc-arrange:not(.mc-paired-row):not([hidden])');
+    return {
+      row: box(row), dis: d, disHit: !!(hit && dis && (hit === dis || dis.contains(hit))),
+      strip: box(strip),
+      cam: box(document.querySelector('.mc-face-preview:not([hidden])')),
+      more: box(document.querySelector('.mc-more-btn')),
+      bar: box(document.querySelector('.mc-engine-bar')),
+    };
+  });
+  check(!!extra.row, `${vp.name}: connected strip visible`);
+  check(!!m.frame && m.tiles.length === tiles.length, `${vp.name}: the room board is focused (${m.tiles.length} tiles)`);
+  // Never over the board: clear of it, or docked in the bottom chrome row
+  // (inside the engine bar — a board taller than the screen at its lowest
+  // zoom runs under that row and the canvas scrolls; nothing floats higher).
+  const docked = !!(extra.row && extra.bar && extra.row.top >= extra.bar.top - 1 && extra.row.bottom <= extra.bar.bottom + 1);
+  if (extra.row && m.frame) check(docked || !overlap(extra.row, m.frame), `${vp.name}: connected strip never covers the board (strip ${Math.round(extra.row.top)}–${Math.round(extra.row.bottom)}, board bottom ${Math.round(m.frame.bottom)}, bar top ${Math.round(extra.bar?.top ?? -1)})`);
+  // A board taller than the screen even at its lowest zoom is pinned to the
+  // top and the canvas scrolls (by design): its foot is under the bottom row
+  // until scrolled to. Everything else must show whole, clear of all chrome.
+  const tall = !!(m.frame && extra.bar && m.frame.bottom > extra.bar.top);
+  if (tall) {
+    console.log(`     (board taller than the screen at z ${m.z}: pinned to the top, the canvas scrolls)`);
+    check(m.frame.top >= 0 && m.frame.top <= 80, `${vp.name}: a too-tall board is pinned to the top (${Math.round(m.frame.top)})`);
+  }
+  if (extra.row && !tall) { const under = m.tiles.filter((t) => overlap(t.box, extra.row)).map((t) => t.tag); check(under.length === 0, `${vp.name}: connected strip covers no tile${under.length ? ` — ${under.join(', ')}` : ''}`); }
+  const camOver = extra.cam ? m.tiles.filter((t) => overlap(t.box, extra.cam)).map((t) => t.tag) : [];
+  check(camOver.length === 0, `${vp.name}: camera preview covers no tile${camOver.length ? ` — ${camOver.join(', ')}` : ''}`);
+  if (extra.row && m.items.length) check(!m.items.some((i) => overlap(i.box, extra.row)), `${vp.name}: connected strip clear of the hand cluster`);
+  if (extra.row && extra.cam) check(!overlap(extra.row, extra.cam), `${vp.name}: connected strip clear of the camera preview`);
+  if (extra.row && extra.bar && !docked) check(!overlap(extra.row, extra.bar), `${vp.name}: connected strip clear of the engine bar`);
+  check(!!extra.dis && extra.disHit && extra.dis.bottom <= m.vh && extra.dis.top >= 0, `${vp.name}: Disconnect on screen and clickable`);
+  const hits = m.chips.flatMap((c) => m.tiles.filter((t) => overlap(c, t.box)).map((t) => t.tag));
+  check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
+  if (extra.row && !tall) check(!m.chips.some((c) => overlap(c, extra.row)), `${vp.name}: chips clear of the connected strip`);
+  if (tall) {
+    // Scroll the canvas down by the overhang (wheel over the board): the chips come clear.
+    await page.mouse.move(m.frame.left + 40, m.frame.top + 200);
+    await page.mouse.wheel({ deltaY: Math.ceil(m.frame.bottom - extra.bar.top + 16) });
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const hitT = await page.evaluate(coveredChips);
+  check(hitT.n > 0 && hitT.covered.length === 0, `${vp.name}: every chip's centre clicks the chip${tall ? ' after scrolling' : ''} (${hitT.n})${hitT.covered.length ? ` — ${hitT.covered.join('; ')}` : ''}`);
+  checkCluster(m, `${vp.name} camera on`, { allowWrap: false });
+  check(!extra.cam || !m.items.some((i) => overlap(i.box, extra.cam)), `${vp.name}: cluster clear of the camera preview`);
+  check(!extra.more || !m.items.some((i) => overlap(i.box, extra.more)), `${vp.name}: cluster clear of the More button`);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}.png`) });
+  // The More menu, opened, covers no cluster button and the cluster none of it.
+  const menu = await page.evaluate(async () => {
+    const btn = document.querySelector('.mc-more-btn');
+    const tools = document.querySelector('.mc-tools-chip');
+    if (!btn) return null;
+    if (btn.getClientRects().length === 0 && tools) { tools.click(); await new Promise((r) => setTimeout(r, 200)); }
+    if (btn.getAttribute('aria-expanded') !== 'true') btn.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const mm = document.querySelector('.mc-more-menu:not([hidden])');
+    if (!mm) return null;
+    // Every menu button paints on top: no cluster button over it.
+    const covered = [...mm.querySelectorAll('button')].filter((b) => {
+      const r = b.getBoundingClientRect();
+      if (!r.width || r.bottom > innerHeight) return false;
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !hit || !mm.contains(hit);
+    }).map((b) => b.textContent.trim());
+    return { covered };
+  });
+  if (menu) {
+    check(menu.covered.length === 0, `${vp.name}: nothing covers the open More menu${menu.covered.length ? ` — ${menu.covered.join(', ')}` : ''}`);
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-more.png`) });
+  }
+  check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
+  await page.close();
+}
+
 async function main() {
   const chrome = findChrome();
   if (!chrome) { console.error('e2e-laptop-layout: no Chrome found (set CHROME_PATH).'); return 2; }
@@ -131,6 +310,7 @@ async function main() {
   try {
     for (const vp0 of VIEWPORTS) for (const board of BOARDS) {
       const vp = { ...vp0, name: `${vp0.name} ${board.name}` };
+      if (ONLY && !vp.name.includes(ONLY)) continue;
       console.log(`-- ${vp.name}`);
       const page = await browser.newPage();
       const errors = [];
@@ -165,6 +345,10 @@ async function main() {
       check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
       const lastTile = Math.max(...m.tiles.map((t) => t.box.bottom));
       check(m.chips.every((c) => c.top >= lastTile - 1), `${vp.name}: chip row is below the board's content`);
+      if (board.whole) {
+        const hitT = await page.evaluate(coveredChips);
+        check(hitT.n > 0 && hitT.covered.length === 0, `${vp.name}: every chip's centre clicks the chip (${hitT.n})${hitT.covered.length ? ` — ${hitT.covered.join('; ')}` : ''}`);
+      }
       check(!!m.frame && m.frame.width >= Math.min(900, m.vw * 0.55), `${vp.name}: board wide enough (${Math.round(m.frame?.width ?? 0)} px)`);
       check(m.scrollers.length === 0, `${vp.name}: no inner scroll${m.scrollers.length ? ` — ${m.scrollers.join(', ')}` : ''}`);
       if (board.whole) {
@@ -215,6 +399,7 @@ async function main() {
       check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
       await page.close();
     }
+    for (const vp of PAIRED_VIEWPORTS) for (const board of PAIRED_BOARDS) if (!ONLY || `${vp.name}-${board.name}`.includes(ONLY)) await pairedRun(browser, { ...vp, name: `${vp.name}-${board.name}` }, board.tiles);
   } finally {
     await browser.close();
   }
