@@ -13,7 +13,9 @@ import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNano
 import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
 import { cloudFetchWatched, isGeminiRequestUrl, watchCloudFetch } from '../../src/ai/cloudFetchWatch';
 import { createWarmKeeper } from '../../src/ai/nanoWarm';
-import { applyRealLamps, assignLampIds, discoverRealLamps, remapSeededLamps, SEEDED_LAMP_IDS } from '../../src/canvas/realLamps';
+import { applyRealLamps, assignLampIds, discoverRealLamps, fitLampTiles, LAMP_IDS_KEY, LAMP_MEMORY_MAX, lampKey, rememberedLampIds, rememberedLamps, remapSeededLamps, SEEDED_LAMP_IDS } from '../../src/canvas/realLamps';
+import { playingLine } from '../../src/canvas/spotifyConnector';
+import { previewHasFrames } from '../../src/ui/faceOverlay';
 import type { WizClient } from '../../src/devices/wizClient';
 import type { DeviceState } from '../../src/canvas/surfacePlan';
 import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
@@ -677,7 +679,65 @@ describe('I3: bytes are booked when a call really leaves', () => {
     const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
     expect(hybrid).not.toMatch(/SEND_ASSUMED_AFTER_MS|countingSends|assumeAfterMs/);
     expect(hybrid).toContain('const watch = watchCloudFetch(sent.text, { onIssued: hooks.onSend, onUndelivered: hooks.onRetract });');
-    expect(hybrid).toMatch(/finally \{\s*watch\.stop\(\);/);
+    // the watch is handed to the hedge and stops when every leg has settled
+    expect(hybrid).toContain('(handedOver = true, () => watch.stop()),');
+    expect(hybrid).toMatch(/finally \{\s*if \(!handedOver\) watch\.stop\(\);/);
+  });
+
+  it('review 1: overlapping board turns are told apart by their whole prompt, not a shared opening', async () => {
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    const g = globalThis as unknown as { fetch: (url: string, init?: { body?: unknown }) => Promise<unknown> };
+    const opening = 'You build one board on a smart canvas. Reply with JSON only, matching: '.repeat(5); // > 160 shared characters
+    const promptA = `${opening}She said: "connect everything in this room"`;
+    const promptB = `${opening}She said: "draw the floor plan"`;
+    let a = 0, b = 0;
+    const wa = watchCloudFetch(promptA, { onIssued: () => { a++; } });
+    const wb = watchCloudFetch(promptB, { onIssued: () => { b++; } });
+    await g.fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: promptA }] }] }) });
+    expect([a, b]).toEqual([1, 0]); // B's turn is not charged for A's request
+    await g.fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: promptB }] }] }) });
+    expect([a, b]).toEqual([1, 1]);
+    // a body that cannot be read is nobody's while two calls are running…
+    await g.fetch(GEMINI_URL, { body: new Uint8Array([1, 2, 3]) });
+    await g.fetch(GEMINI_URL);
+    expect([a, b]).toEqual([1, 1]);
+    wb.stop();
+    // …and the one running call's when there is only one
+    await g.fetch(GEMINI_URL, { body: new Uint8Array([1, 2, 3]) });
+    expect([a, b]).toEqual([2, 1]);
+    wa.stop();
+    f.restore();
+  });
+
+  it('review 2: the hedge’s losing leg keeps being counted after the race is won', async () => {
+    vi.useFakeTimers();
+    const unquiet = quiet();
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    const fetchIt = (prompt: string): Promise<unknown> => (globalThis as unknown as { fetch: FakeFetch }).fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+    // the primary is slow: its first reply (bad) only arrives after the backup has won, and then it retries
+    let releasePrimary!: () => void;
+    let primaryCalls = 0;
+    const primary: TextGenModel = { generateContent: async (prompt) => {
+      primaryCalls++;
+      await fetchIt(prompt);
+      if (primaryCalls === 1) await new Promise<void>((r) => { releasePrimary = r; });
+      return { response: { text: () => 'sorry, no' } };
+    } };
+    const backup: TextGenModel = { generateContent: async (prompt) => { await fetchIt(prompt); return { response: { text: () => GEMINI_OK } }; } };
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: primary, canvasCloudHedge: backup });
+    let sends = 0;
+    const call = streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    await vi.advanceTimersByTimeAsync(2100); // the hedge starts after 2 s and wins
+    expect(JSON.parse(await call).title).toBe('Living room');
+    expect(sends).toBe(2); // primary + backup
+    expect(cloudFetchWatched()).toBe(true); // the primary is still out: keep watching
+    releasePrimary(); // its bad reply arrives; it retries once — a third request
+    await vi.advanceTimersByTimeAsync(50);
+    expect(primaryCalls).toBe(2);
+    expect(sends).toBe(3);
+    expect(cloudFetchWatched()).toBe(false); // every leg has settled: fetch is restored
+    f.restore();
+    unquiet();
   });
 
   it('App Check 403 through the cloud seam: the line says nothing was sent, and nothing is counted', async () => {
@@ -1110,10 +1170,112 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const wiring = src.slice(src.indexOf('void discoverRealLamps(wizClient, storage)'), src.indexOf('void discoverRealLamps(wizClient, storage)') + 900);
     expect(wiring).toContain('bridgeStatus.up = lamps !== null;');
     expect(wiring).toMatch(/if \(lamps === null \|\| opts\.devices\) \{\s*for \(const id of Object\.keys\(store\.all\(\)\)\) if \(isWizDevice\(id\)\) store\.setSim\(id, lamps === null\);\s*return;/);
-    expect(wiring).toContain('applyRealLamps({ store, surfaces, labels: DEVICE_LABELS, ips: lampIps }, lamps)');
+    expect(src).toContain('const lampSwap = { store, surfaces, labels: DEVICE_LABELS, ips: lampIps };');
+    expect(wiring).toContain('applyRealLamps(lampSwap, lamps)');
     expect(src).toContain("bulbIp: (id) => lampIps.get(id) ?? ''");
     // ?sim=1 never talks to the bridge at all
     expect(src).toContain('const wizClient = opts.sim ? null :');
+  });
+
+  it('review 3: a plan accepted after the swap can never keep a seeded or stale lamp id', async () => {
+    const lamps = [{ id: 'wiz-lamp-1', label: 'Lamp' }];
+    // a SIM script / a plan from a prompt built before discovery
+    const script: SurfacePlan = JSON.parse('{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}');
+    expect(fitLampTiles(script, lamps).tiles).toEqual([
+      { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' },
+      { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+      { type: 'plan', boardId: 'room-plan', template: 'oneRoom' },
+      { type: 'connect', label: 'Connect a device' },
+    ]);
+    // the scan's seeded spec
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, lamps).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // a bulb that has gone
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-7', label: 'Lamp 7' }, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] }, lamps).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // ids this module does not manage are never touched (a device she named herself)
+    const own: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk-lamp', label: 'WiZ desk lamp' }, { type: 'lamp', deviceId: 'reading-lamp', label: 'Reading lamp' }] };
+    expect(fitLampTiles(own, lamps)).toBe(own);
+    // every path a plan takes to a board goes through the fit
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const plan = fitPlan(proposed);'); // what she reviews and applies
+    expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
+    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => fitLampTiles(plan, lampSlots());');
+  });
+
+  it('review 5: a board keeps a lamp whenever there is one — the first real lamp it does not already show', () => {
+    const one = [{ id: 'wiz-lamp-1', label: 'Lamp' }];
+    const two = [...one, { id: 'wiz-lamp-2', label: 'Lamp 2' }];
+    // a board with ONLY "Ceiling light" (the second seeded lamp) and one bulb: it gets the bulb
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] }, one).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // per board, not globally: two boards each showing one seeded lamp both get the one bulb
+    const c = { ...(() => { const state: Record<string, DeviceState> = { 'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 } }; return { state, store: { all: () => ({ ...state }), add: (id: string, s: DeviceState) => { state[id] = s; }, remove: (id: string) => { delete state[id]; } } }; })(), labels: {} as Record<string, string>, ips: new Map<string, string>(),
+      surfaces: {
+        desk: { kind: 'room', title: 'Desk', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] },
+        hall: { kind: 'room', title: 'Hall', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] },
+      } as Record<string, SurfacePlan> };
+    applyRealLamps(c, [{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 60, sim: false } }]);
+    expect(c.surfaces.desk.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    expect(c.surfaces.hall.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // a lamp already on the board is not given out twice
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, two).tiles)
+      .toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
+  });
+
+  it('review 4: after a session with the bridge up, a reload with it down still opens with working lamps', async () => {
+    const storage = memory();
+    await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 62 }] }).client, storage);
+    // reload, bridge down: the saved board holds wiz-lamp-1, the store starts with the seeded lamps
+    expect(rememberedLampIds(storage)).toEqual(['wiz-lamp-1']);
+    const start = rememberedLamps(storage)!;
+    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: false, brightness: 50, sim: true } }]); // SIM until the bridge answers
+    const c = seededCanvas();
+    c.surfaces.room = { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };
+    const changed = applyRealLamps(c, start);
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']); // the board's lamp exists: no dead tile
+    expect(c.state['wiz-lamp-1'].sim).toBe(true);
+    expect(changed).toEqual([]); // the saved board is shown as it was
+    // a machine that never saw a bulb keeps the seeded lamps
+    expect(rememberedLamps(memory())).toBeNull();
+    // the bridge comes back with a different bulb only: the vanished lamp's tile is refitted, not left dead
+    const next = (await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.99', on: false }] }).client, storage))!;
+    expect(next[0].id).toBe('wiz-lamp-2');
+    applyRealLamps(c, next);
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-2']);
+    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp' });
+    const src = (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const remembered = rememberedLamps\(storage\);\s*if \(remembered\) applyRealLamps\(lampSwap, remembered\);/);
+  });
+
+  it('review 4: the bridge’s default bulb and the same bulb found later under its address keep one id', async () => {
+    const storage = memory();
+    const asDefault = (await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: true, dimming: 30 } }).client, storage))!;
+    expect(asDefault[0]).toMatchObject({ id: 'wiz-lamp-1', ip: '' });
+    const byAddress = (await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true }] }).client, storage))!;
+    expect(byAddress[0]).toMatchObject({ id: 'wiz-lamp-1', ip: '192.168.1.40' }); // same bulb, same id
+    const backToDefault = (await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: false } }).client, storage))!;
+    expect(backToDefault[0].id).toBe('wiz-lamp-1');
+  });
+
+  it('minor: no bulb address is stored — only a hash — and old entries are pruned', async () => {
+    const storage = memory();
+    await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40' }, { ip: '192.168.1.7' }] }).client, storage);
+    const raw = storage.data[LAMP_IDS_KEY];
+    expect(raw).not.toMatch(/192\.168|\d+\.\d+\.\d+\.\d+/);
+    expect(Object.keys((JSON.parse(raw) as { ids: Record<string, string> }).ids).every((k) => /^h[0-9a-f]{16}$/.test(k))).toBe(true);
+    expect(lampKey('192.168.1.40')).toBe(lampKey('192.168.1.40'));
+    expect(lampKey('192.168.1.40')).not.toBe(lampKey('192.168.1.41'));
+    expect(lampKey('')).toBe('default');
+    // an old map keyed by raw IP is dropped, not migrated
+    const old = memory();
+    old.data[LAMP_IDS_KEY] = JSON.stringify({ '192.168.1.40': 'wiz-lamp-1' });
+    expect(rememberedLampIds(old)).toEqual([]);
+    assignLampIds(['192.168.1.40'], old);
+    expect(old.data[LAMP_IDS_KEY]).not.toContain('192.168');
+    // pruning: many bulbs over time never grow the memory past the cap, and present bulbs are kept
+    for (let i = 1; i <= 20; i++) assignLampIds([`10.0.0.${i}`], storage);
+    const ids = (JSON.parse(storage.data[LAMP_IDS_KEY]) as { ids: Record<string, string> }).ids;
+    expect(Object.keys(ids).length).toBeLessThanOrEqual(LAMP_MEMORY_MAX);
+    expect(ids[lampKey('10.0.0.20')]).toBeDefined();
   });
 
   it('two bulbs → “Lamp” and “Lamp 2”, one id per IP, stable across reloads and when a bulb joins', async () => {
@@ -1149,6 +1311,130 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     expect(remapSeededLamps({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, []).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
     const untouched: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };
     expect(remapSeededLamps(untouched, one!)).toBe(untouched);
+  });
+});
+
+describe('UI fixes from the live run', () => {
+  const css = async (): Promise<string> => (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvas.css', import.meta.url), 'utf8');
+  const app = async (): Promise<string> => (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+
+  it('(a) the next-step chips are lifted above the engine bar when the board runs under it', async () => {
+    const src = await app();
+    const fn = src.slice(src.indexOf('function keepChipsVisible(): void {'), src.indexOf('function applyCamera(): void {'));
+    expect(fn).toContain('const limit = (view.bottom || vp().h) - bottomInset();'); // the bar's own height
+    expect(fn).toContain("row.classList.add('is-lifted');");
+    expect(fn).toMatch(/const room = box\.top - \(frameEl\.getBoundingClientRect\(\)\.top \+ 64 \* z\);/); // never above the board's head
+    expect(src).toMatch(/zoomHud\?\.setZoom\(camera\.z\);\s*keepChipsVisible\(\);/); // on every camera move
+    expect(src).toContain('onRender: keepChipsVisible,'); // and whenever the row is redrawn
+    expect(await css()).toMatch(/\.mc-next\.is-lifted \{ position: relative; z-index: 3;/);
+  });
+
+  it('(b) the camera preview stays hidden until the camera delivers a frame', async () => {
+    const live = { active: true, getVideoTracks: () => [{ readyState: 'live' }] };
+    expect(previewHasFrames({ srcObject: null, readyState: 0, videoWidth: 0 })).toBe(false); // camera off / denied
+    expect(previewHasFrames({ srcObject: live as never, readyState: 0, videoWidth: 0 })).toBe(false); // starting: no frame yet
+    expect(previewHasFrames({ srcObject: live as never, readyState: 4, videoWidth: 640 })).toBe(true);
+    expect(previewHasFrames({ srcObject: { active: false, getVideoTracks: () => [{ readyState: 'ended' }] } as never, readyState: 4, videoWidth: 640 })).toBe(false); // camera stopped
+    const overlay = (await import('node:fs')).readFileSync(new URL('../../src/ui/faceOverlay.ts', import.meta.url), 'utf8');
+    expect(overlay).toContain('host.hidden = true;');
+    expect(overlay).toContain("for (const ev of ['loadeddata', 'playing', 'resize', 'emptied', 'ended', 'pause']) v.addEventListener?.(ev, reveal);");
+    expect(await css()).toContain('.mc-canvas .mc-face-preview[hidden] { display: none; }');
+  });
+
+  it('(c) with the preview showing, the hand cluster is laid out above it — nothing overlaps', async () => {
+    const sheet = await css();
+    const rule = sheet.match(/\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('top: calc(var(--mc-bar-h, 64px) + 12px);');
+    // its box ends above the preview (216) and the Facing pill
+    expect(rule).toContain('bottom: calc(16px + 216px + 8px + 54px + 12px + env(safe-area-inset-bottom, 0px));');
+    expect(rule).toContain('flex-wrap: wrap-reverse;'); // too many buttons for the height: a second column, not a cut-off one
+    expect(sheet).toMatch(/@media \(max-width: 1240px\) \{\s*\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{\s*bottom: calc\(96px \+ 216px/);
+    // the base rule (camera off) is unchanged: centred on the right edge
+    expect(sheet).toMatch(/\.mc-hand-cluster \{[^}]*top:\s*50%/s);
+  });
+
+  it('(d) “play music” says what is playing and where', async () => {
+    expect(playingLine({ spotify: false, target: '' }, 'Morning light')).toBe('Playing Morning light on the built-in player.');
+    expect(playingLine({ spotify: true, target: 'iPhone' }, '')).toBe('Playing on iPhone via Spotify.');
+    expect(playingLine({ spotify: true, target: 'this browser' }, 'Blue in Green')).toBe('Playing Blue in Green on this browser via Spotify.');
+    expect(playingLine(null)).toBe('Playing on the built-in player.');
+    const src = await app();
+    expect(src).toContain("if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`);");
+    expect(src).toContain('status: musicWhere,');
+    // the connector keeps "where" current
+    const { createSpotifyAwareConnector } = await import('../../src/canvas/spotifyConnector');
+    const where = { spotify: false, target: '' };
+    const said: string[] = [];
+    const connector = createSpotifyAwareConnector({
+      inner: { run: async () => ({ playing: true }) }, isConnected: () => true,
+      listDevices: async () => [{ id: 'd1', name: 'Marshall Emberton' } as never], transferPlayback: async () => undefined,
+      searchAndPlay: async () => ({ hit: { name: 'Blue in Green', artist: 'Miles Davis' } as never, deviceNote: '' }),
+      browserDevice: async () => undefined, say: (t) => said.push(t), status: where,
+    });
+    await connector.run({ deviceId: 'speaker-1', playing: true, query: 'blue in green' });
+    expect(where.spotify).toBe(true);
+    expect(said.at(-1)).toMatch(/^Playing Blue in Green by Miles Davis on .+ via Spotify\.$/);
+    expect(playingLine(where, 'Blue in Green')).toMatch(/via Spotify\.$/);
+  });
+
+  it('(e) the review footer keeps “what left” and its size on one line', async () => {
+    const sheet = await css();
+    expect(sheet).toMatch(/\.mc-review-left \{ display: block;[^}]*white-space: nowrap;/);
+    expect(sheet).toMatch(/\.mc-review-left-what \{ display: inline-block; max-width: calc\(100% - 9ch\);/);
+    expect(sheet).toMatch(/\.mc-review-left-bytes \{ display: inline;/);
+    expect(sheet).not.toMatch(/\.mc-review-left \{ display: flex/); // flex items lay out, and copy, as separate lines
+  });
+});
+
+describe('demo-run glitches', () => {
+  const read = async (f: string): Promise<string> => (await import('node:fs')).readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8');
+
+  it('(g) the Kannada route line says Gemini, not the internal name', async () => {
+    const { ROUTE_LINES } = await import('../../src/ux/routeCatalog');
+    expect(ROUTE_LINES.kannada).toBe('Gemini handles Kannada better. Only your words were sent.');
+    const { honestyLines } = await import('../../src/canvas/reviewDialog');
+    expect(honestyLines({ engine: 'gemini', sim: false, why: ROUTE_LINES.kannada, sentWhat: 'the key list and your request.', bytes: 385 }).why).toBe('Why Gemini: Gemini handles Kannada better. Only your words were sent.');
+    for (const f of ['src/ux/routeCatalog.ts', 'src/canvas/canvasApp.ts']) expect(await read(f)).not.toContain('Deep understands');
+  });
+
+  it('(h) an open review follows the ledger: a hedge leg booked while it is open shows in its footer', async () => {
+    const { createReviewReceipts, honestyLines } = await import('../../src/canvas/reviewDialog');
+    const receipts = createReviewReceipts();
+    const kn = { engine: 'gemini', sent: 'the key list and your request.', routeLine: 'Gemini handles Kannada better. Only your words were sent.', sim: false };
+    receipts.record(kn, 385);
+    expect(honestyLines(receipts.facts(kn)).left).toBe('What left this device: the key list and your request · 385 B');
+    receipts.record(kn, 385); // the hedge's second request, booked while the review is open
+    expect(honestyLines(receipts.facts(kn)).left).toBe('What left this device: the key list and your request · 770 B');
+    const src = await read('src/canvas/canvasApp.ts');
+    expect(src).toContain('if (reviewLive && reviewDialog.isOpen() && reviewLive.tokens.includes(s)) reviewDialog.setFacts(reviewLive.facts());');
+    expect(src.match(/refreshReviewFor\(s\);/g)).toHaveLength(2); // on a send and on a take-back
+    expect(src).toContain('}, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });');
+    expect(src).toContain('}, { tokens: [si, link?.si], facts: planFacts });');
+    expect(await read('src/canvas/reviewDialog.ts')).toContain('setFacts(facts) { if (open && !honesty.hidden) renderFacts(facts); },');
+  });
+
+  it('(i) a try-to-break refusal calms the Nano card', async () => {
+    const src = await read('src/canvas/canvasApp.ts');
+    const turn = src.slice(src.indexOf('async function breakTurn('), src.indexOf('// ---- commands ----'));
+    expect(turn).toContain("engineBar?.calm('nano');");
+  });
+
+  it('(j) the pairing card’s title stays put while the card scrolls, and its note does not repeat the status', async () => {
+    const css = await read('src/canvas/canvas.css');
+    expect(css).toMatch(/\.mc-connect-head, \.mc-pairing-head \{\s*position: sticky;\s*top: -24px;/);
+    const src = await read('src/canvas/canvasApp.ts');
+    expect(src).toContain("note: 'After the first pair the phone is remembered");
+    expect(src).not.toMatch(/note: 'Playing a chime/);
+  });
+
+  it('(k) dark status-bar icons on the light canvas, Android and iOS', async () => {
+    const styles = await read('android/app/src/main/res/values/styles.xml');
+    expect(styles).toContain('<item name="android:windowLightStatusBar">true</item>');
+    const activity = await read('android/app/src/main/java/app/mendcraft/relay/MainActivity.java');
+    expect(activity).toContain('bars.setAppearanceLightStatusBars(true);');
+    for (const f of ['ios-src/MendcraftViewController.swift', 'ios/plugins/MendcraftViewController.swift']) {
+      expect(await read(f)).toMatch(/override var preferredStatusBarStyle: UIStatusBarStyle \{\s*return \.darkContent/);
+    }
   });
 });
 
@@ -1212,6 +1498,19 @@ describe('re-review fixes', () => {
     expect(aborted).toBe(1); // its session was stopped
     expect(q.idle()).toBe(true);
     expect(WARM_PROMPT_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('minor: a warm-up pushed aside ends at once and leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => ({ chromeAdapter: {}, generateContent: () => never() }) as unknown as TextGenModel });
+    const q = createNanoQueue(1);
+    const warm = warmBoardOnDevice(q);
+    await vi.advanceTimersByTimeAsync(300); // it is polling for its session
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    expect(await q.run(async () => 'plan', { priority: 10 })).toBe('plan');
+    expect(await warm).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(vi.getTimerCount()).toBe(0); // the session poll stopped with it
   });
 
   it('warm-up: a real on-device call already loaded the model, so there is nothing to warm', async () => {

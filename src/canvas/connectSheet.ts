@@ -163,13 +163,18 @@ export function mountConnectSheet(
   };
 }
 
+export const PAIR_PLAYING = 'Playing a chime — hold your phone near this laptop. No typing, no scanning.';
+export const PAIR_TAP = 'Tap “Tap to play the chime” — this browser needs a tap before it can play sound. Then hold your phone near this laptop.';
+
 export function showPairing(
   host: HTMLElement,
   opts: PairingOptions,
 ): PairingView {
   const codeFormatted = formatPairingCode(opts.code);
-  const noteDefault = 'Playing a chime — hold your phone near this laptop. No typing, no scanning.';
-  const noteHtml = `<p class="mc-pair-note">${esc(opts.note ?? noteDefault)}</p>`;
+  // The status line says what is happening; the note only adds to it — the
+  // same sentence is never printed twice.
+  const note = (opts.note ?? '').trim();
+  const noteHtml = `<p class="mc-pair-note"${note && note !== PAIR_PLAYING ? '' : ' hidden'}>${esc(note === PAIR_PLAYING ? '' : note)}</p>`;
 
   const html = `
     <section class="mc-pairing-card" role="region" aria-label="Pair phone to canvas">
@@ -177,7 +182,7 @@ export function showPairing(
         <h3 class="mc-prop-title">Pair phone</h3>
         <button type="button" class="mc-btn mc-pairing-close" aria-label="Close pairing view">✕</button>
       </div>
-      <p class="mc-pair-status" role="status" aria-live="polite">Playing a chime — hold your phone near this laptop. No typing, no scanning.</p>
+      <p class="mc-pair-status" role="status" aria-live="polite">${PAIR_PLAYING}</p>
       <div class="mc-pair-actions">
         <button type="button" class="mc-btn primary mc-pair-play" data-mc-play-chime>Play chime again</button>
         <button type="button" class="mc-btn mc-pair-speak" data-mc-speak-code>Say the code aloud</button>
@@ -196,15 +201,22 @@ export function showPairing(
   const noteEl = host.querySelector<HTMLElement>('.mc-pair-note');
 
   let loop: ChimeLoop | null = null;
+  const playButton = (): HTMLElement | null => host.querySelector<HTMLElement>('.mc-pair-play');
+  /** The browser only lets a page make sound after she has clicked, tapped or
+   *  pressed a key on it. Until then the chime is NOT playing: say so, and
+   *  make the button the way to start it. */
+  const showAudible = (audible: boolean): void => {
+    if (statusEl && (statusEl.textContent === PAIR_PLAYING || statusEl.textContent === PAIR_TAP)) statusEl.textContent = audible ? PAIR_PLAYING : PAIR_TAP;
+    const b = playButton();
+    if (b) b.textContent = audible ? 'Play chime again' : 'Tap to play the chime';
+  };
+  const ensureLoop = (): ChimeLoop => (loop ??= createChimeLoop({ code: normalizeCode(opts.code), everyMs: opts.chimeEveryMs, onAudible: showAudible }));
   const playOnce = async () => {
     if (opts.playChime) {
       await opts.playChime();
       return;
     }
-    if (!loop) {
-      loop = createChimeLoop({ code: formatPairingCode(opts.code).replace(/-/g, ''), everyMs: opts.chimeEveryMs });
-    }
-    await loop.playOnce();
+    await ensureLoop().playOnce();
   };
 
   const startLoop = () => {
@@ -212,10 +224,7 @@ export function showPairing(
       void playOnce();
       return;
     }
-    if (!loop) {
-      loop = createChimeLoop({ code: normalizeCode(opts.code), everyMs: opts.chimeEveryMs });
-    }
-    loop.start();
+    ensureLoop().start();
   };
 
   const stopChime = () => {
@@ -238,7 +247,8 @@ export function showPairing(
   }
 
   const playBtn = host.querySelector<HTMLElement>('.mc-pair-play');
-  playBtn?.addEventListener('click', () => { void playOnce(); });
+  // Her own click is the gesture the browser needs: start the loop from it.
+  playBtn?.addEventListener('click', () => { if (opts.playChime) void playOnce(); else { const l = ensureLoop(); l.stop(); l.start(); } });
   const speakBtn = host.querySelector<HTMLElement>('.mc-pair-speak');
   speakBtn?.addEventListener('click', () => speak());
 

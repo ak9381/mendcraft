@@ -25,6 +25,24 @@ export interface SpotifyConnectorDeps {
   next?(): Promise<{ title: string } | null>;
   setVolume?(percent: number): Promise<void>;
   say(text: string): void;
+  /** Where the music is really playing — kept current here so the canvas can
+   *  say it ("on iPhone via Spotify" / "on the built-in player"). */
+  status?: MusicWhere;
+}
+
+export interface MusicWhere {
+  /** Spotify is carrying the speaker right now. */
+  spotify: boolean;
+  /** The Spotify device's own name ('this browser', 'iPhone', a speaker). */
+  target: string;
+}
+
+/** "Playing Morning light on the built-in player." / "Playing on iPhone via
+ *  Spotify." — what plays (when known) and where, never a made-up title. */
+export function playingLine(where: MusicWhere | null | undefined, title?: string): string {
+  const what = title?.trim() ? `Playing ${title.trim()}` : 'Playing';
+  if (where?.spotify) return `${what} on ${where.target || 'Spotify'} via Spotify.`;
+  return `${what} on the built-in player.`;
 }
 
 export function isSpeakerDevice(deviceId: string): boolean {
@@ -61,9 +79,11 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     return null;
   }
 
+  const mark = (spotify: boolean, target = ''): void => { if (deps.status) { deps.status.spotify = spotify; deps.status.target = target; } };
   async function fallback(intent: DeviceIntent, notice: string): Promise<Partial<DeviceState>> {
     deps.say(notice);
     spotifyActive = false;
+    mark(false);
     const { query: _q, ...rest } = intent;
     return deps.inner.run(rest);
   }
@@ -82,11 +102,13 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           await deps.transferPlayback(target.id, false);
           const { hit } = await deps.searchAndPlay(intent.query, target.id);
           spotifyActive = true;
-          deps.say(`Playing ${hit.name}${hit.artist ? ` by ${hit.artist}` : ''} on ${target.name}.`);
+          mark(true, target.name);
+          deps.say(`Playing ${hit.name}${hit.artist ? ` by ${hit.artist}` : ''} on ${target.name} via Spotify.`);
           return { playing: true, trackTitle: hit.name, sim: false };
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
           spotifyActive = false;
+          mark(false);
           deps.say(/^No Spotify match/i.test(msg) ? `${msg}.` : `Couldn't play “${intent.query}” on Spotify.`);
           // Nothing played, and no title is made up: the tile just stops.
           return { playing: false };

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   mountConnectSheet,
   showPairing,
+  PAIR_PLAYING,
+  PAIR_TAP,
   formatPairingCode,
   sanitizeDeviceName,
   buildPairingCard,
@@ -148,6 +150,45 @@ describe('connectSheet', () => {
       expect(host.innerHTML).not.toContain('data:image/png;base64,mockqr');
       expect(host.innerHTML).not.toContain('Type this code on your phone');
       expect(host.innerHTML).toContain('Relay active');
+    });
+
+    it('the pairing card says "Playing a chime…" once: the note only adds to the status line', () => {
+      const count = (html: string): number => html.split('Playing a chime').length - 1;
+      const a = createMockElement('div');
+      showPairing(a, { code: 'WXYZ-5678', autoPlay: false }); // no note
+      expect(count(a.innerHTML)).toBe(1);
+      const b = createMockElement('div');
+      showPairing(b, { code: 'WXYZ-5678', autoPlay: false, note: PAIR_PLAYING }); // a caller repeating it
+      expect(count(b.innerHTML)).toBe(1);
+      const c = createMockElement('div');
+      showPairing(c, { code: 'WXYZ-5678', autoPlay: false, note: 'After the first pair the phone is remembered.' });
+      expect(count(c.innerHTML)).toBe(1);
+      expect(c.innerHTML).toContain('After the first pair the phone is remembered.');
+    });
+
+    it('a chime the browser will not play yet is not reported as playing', async () => {
+      const { createChimeLoop, resumeForPlayback } = await import('../../src/ux/pairingChime');
+      // no tap on the page yet: resume() never settles and the context stays suspended
+      const suspended = { state: 'suspended', resume: () => new Promise<void>(() => undefined) };
+      expect(await resumeForPlayback(suspended as never, 5)).toBe(false);
+      const heard: boolean[] = [];
+      let started = 0;
+      let state = 'suspended';
+      const ctx = {
+        get state() { return state; }, sampleRate: 48000, destination: {},
+        resume: () => new Promise<void>(() => undefined),
+        createBuffer: () => ({ getChannelData: () => ({ set() {} }) }),
+        createBufferSource: () => ({ buffer: null, connect() {}, start() { started++; }, stop() {} }),
+      };
+      const loop = createChimeLoop({ code: 'WXYZ5678', audioContext: () => ctx as never, onAudible: (ok) => heard.push(ok) });
+      await loop.playOnce();
+      expect(heard).toEqual([false]);
+      expect(started).toBe(0); // nothing was played, and nothing said it was
+      state = 'running'; // she tapped: the browser lets the page make sound
+      await loop.playOnce();
+      expect(heard).toEqual([false, true]);
+      expect(started).toBe(1);
+      expect(PAIR_TAP).toMatch(/needs a tap/);
     });
 
     it('escapes an untrusted note instead of injecting it as HTML', () => {

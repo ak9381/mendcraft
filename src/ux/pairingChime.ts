@@ -32,13 +32,29 @@ function getAudioContextCtor(): (typeof AudioContext) | null {
   return w?.webkitAudioContext ?? null;
 }
 
-async function playBuffer(ctx: AudioCtx, samples: Float32Array, sampleRate: number): Promise<AudioBufferSourceNode> {
+/** How long a suspended AudioContext gets to resume before the chime is
+ *  reported as not playing. Without a user gesture on the page, resume()
+ *  never settles — the page is simply silent. */
+export const CHIME_RESUME_WAIT_MS = 400;
+
+/** Try to make the context audible. False = the browser is holding it back
+ *  until she clicks, taps or presses a key on the page. */
+export async function resumeForPlayback(ctx: Pick<AudioContext, 'state' | 'resume'>, waitMs = CHIME_RESUME_WAIT_MS): Promise<boolean> {
+  if (ctx.state === 'running') return true;
+  try {
+    await Promise.race([ctx.resume(), new Promise<void>((r) => setTimeout(r, waitMs))]);
+  } catch { /* not allowed yet */ }
+  return (ctx.state as string) === 'running';
+}
+
+/** Null when the browser would not let the page make sound (nothing played). */
+async function playBuffer(ctx: AudioCtx, samples: Float32Array, sampleRate: number): Promise<AudioBufferSourceNode | null> {
+  if (!(await resumeForPlayback(ctx))) return null;
   const buf = ctx.createBuffer(1, samples.length, sampleRate);
   buf.getChannelData(0).set(samples);
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(ctx.destination);
-  if (ctx.state === 'suspended') await ctx.resume();
   src.start();
   return src;
 }
@@ -49,6 +65,11 @@ export function createChimeLoop(opts: {
   everyMs?: number;
   /** Injected player (tests). Default uses Web Audio. */
   play?: (samples: Float32Array, sampleRate: number) => Promise<void>;
+  /** Told after every attempt whether sound really came out (false: the
+   *  browser is waiting for a tap before it lets the page play). */
+  onAudible?: (audible: boolean) => void;
+  /** Injected AudioContext factory (tests). */
+  audioContext?: () => AudioCtx;
 }): ChimeLoop {
   const everyMs = opts.everyMs ?? CHIME_REPEAT_MS;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -62,11 +83,15 @@ export function createChimeLoop(opts: {
       await opts.play(samples, PAIRING_SAMPLE_RATE);
       return;
     }
-    const Ctor = getAudioContextCtor();
-    if (!Ctor) return;
-    if (!ctx) ctx = new Ctor();
+    if (!ctx) {
+      const Ctor = opts.audioContext ? null : getAudioContextCtor();
+      if (!Ctor && !opts.audioContext) return;
+      ctx = opts.audioContext ? opts.audioContext() : new Ctor!();
+    }
     try { current?.stop(); } catch { /* already ended */ }
-    current = await playBuffer(ctx, samples, PAIRING_SAMPLE_RATE);
+    const played = await playBuffer(ctx, samples, PAIRING_SAMPLE_RATE);
+    if (played) current = played;
+    try { opts.onAudible?.(!!played); } catch { /* the label is a courtesy */ }
   }
 
   return {

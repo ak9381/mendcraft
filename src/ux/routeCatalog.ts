@@ -24,7 +24,7 @@ export const ROUTE_LINES = {
   escalation: ESCALATION_ROUTE,
   imageIdeas: 'Image ideas need Deep. Sent the room outline and your words.',
   connector: 'Writing a device connector needs Deep.',
-  kannada: 'Kannada sentence: Deep understands it better. Sent your words only.',
+  kannada: 'Gemini handles Kannada better. Only your words were sent.',
   browser: 'Opened Pinterest in your browser. Your search words went to Pinterest.',
 } as const;
 
