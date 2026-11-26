@@ -4,7 +4,9 @@ import {
   FACE_ON_KEEPALIVE_STATUS,
   FACE_ON_STATUS,
   followWhileBuilding,
+  HANDS_FALLBACK_STATUS,
   HANDS_NEED_TRACKER,
+  HANDS_PAUSED,
   HANDS_ON_STATUS,
   HOLD_STATUS,
   parseGimbalSpeech,
@@ -403,7 +405,7 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
         fallbackTracker: async (on) => { order.push(`fallback:${on}`); },
         ...extra,
       });
-      const settle = async (): Promise<void> => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+      const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
       it('hands: tracking off, the WebView camera OFF before the native start; claimed only while it runs', async () => {
         let now = 10_000;
@@ -468,6 +470,59 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
         order.length = 0;
         await c.setMode('hold');
         expect(order).toEqual(['fallback:false']);
+      });
+
+      it('"hands" then "face" while the native start is pending → native stopped, camera restored, face wins', async () => {
+        let finish!: (v: { ok: boolean; running: boolean }) => void;
+        fakePlugin.startHandTracking = vi.fn(() => { order.push('native:start'); return new Promise((res) => { finish = res; }); });
+        const c = make();
+        await settle();
+        order.length = 0;
+        const hands = c.setMode('hands');
+        await settle();
+        expect(order).toEqual(['camera:off', 'native:start']);
+        const face = await c.setMode('face');
+        expect(face.ok).toBe(true);
+        expect(c.mode()).toBe('face');
+        finish({ ok: true, running: true });
+        const r = await hands;
+        expect(r.status).toBeUndefined();
+        expect(order.slice(2)).toEqual(['native:stop:superseded', 'camera:restore']);
+        expect(c.mode()).toBe('face');
+        expect(c.nativeHands!()).toBe(false);
+        expect(order).not.toContain('fallback:true');
+      });
+
+      it('native dies in hands mode → says paused; not back in time → stops native, yaw-only fallback, honest status', async () => {
+        vi.useFakeTimers();
+        try {
+          const said: string[] = [];
+          fakePlugin.handTrackingStatus = vi.fn(async () => ({ handTracking: false, aimingAtHands: false }));
+          const c = make({ say: (t: string) => said.push(t), nativeLostMs: 3000 });
+          await c.setMode('hands');
+          order.length = 0;
+          listener!({ running: false, aimingAtHands: false });
+          expect(said).toEqual([HANDS_PAUSED]);
+          await vi.advanceTimersByTimeAsync(3100);
+          expect(order).toEqual(['native:stop:mode change', 'camera:restore', 'fallback:true']);
+          expect(said[1]).toBe(HANDS_FALLBACK_STATUS);
+          expect(c.nativeHands!()).toBe(false);
+          expect(c.mode()).toBe('hands');
+        } finally { vi.useRealTimers(); }
+      });
+
+      it('native comes back within the grace time → no fallback', async () => {
+        vi.useFakeTimers();
+        try {
+          const c = make({ say: () => {}, nativeLostMs: 3000 });
+          await c.setMode('hands');
+          order.length = 0;
+          listener!({ running: false, aimingAtHands: false });
+          listener!({ running: true, aimingAtHands: false });
+          await vi.advanceTimersByTimeAsync(4000);
+          expect(order).toEqual([]);
+          expect(c.nativeHands!()).toBe(true);
+        } finally { vi.useRealTimers(); }
       });
 
       it('old build (no startHandTracking): the web fallback, as before', async () => {

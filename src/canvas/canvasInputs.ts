@@ -45,7 +45,7 @@ export interface CanvasInputsOptions {
   sensing?: () => boolean;
   /** Passed to the gimbal controller (gimbalCanvas.ts): the native hand
    *  tracker's camera hand-off, the fallback web tracker, change pings. */
-  gimbalNative?: Pick<GimbalCanvasOptions, 'yieldCamera' | 'fallbackTracker' | 'onChange' | 'nativeHandsOptions'>;
+  gimbalNative?: Pick<GimbalCanvasOptions, 'yieldCamera' | 'fallbackTracker' | 'onChange' | 'nativeHandsOptions' | 'say' | 'nativeLostMs'>;
   on?: CanvasInputsCallbacks;
 }
 

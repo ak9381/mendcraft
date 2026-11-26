@@ -60,6 +60,10 @@ export interface GimbalCanvasOptions {
   fallbackTracker?: (on: boolean) => Promise<void>;
   /** The native tracker's state changed (re-announce, repaint the tile). */
   onChange?: () => void;
+  /** Status lines the controller says on its own (native tracker lost). */
+  say?: (text: string) => void;
+  /** How long a lost native tracker may stay lost before the fallback (ms). */
+  nativeLostMs?: number;
   /** Native start options (live test): see GimbalPlugin.startHandTracking. */
   nativeHandsOptions?: () => { corrected?: boolean; mirrored?: boolean } | undefined;
   now?: () => number;
@@ -129,6 +133,10 @@ export const HANDS_NEED_TRACKER = 'Hand following needs the hand tracker — the
 export const HANDS_ON_STATUS = 'Gimbal follows your hands (DockKit tracking off)';
 /** The native hand tracker runs (the WebView camera is off). */
 export const HANDS_NATIVE_STATUS = 'Following your hands — the gimbal holds still when it can’t see them';
+/** The native tracker stopped and did not come back: the web tracker took over. */
+export const HANDS_FALLBACK_STATUS = 'The iPhone’s own hand tracker stopped — following your hands with the web tracker (pan only)';
+/** A lost native tracker gets this long to come back before the fallback. */
+export const NATIVE_LOST_MS = 3000;
 /** Hand frames stopped in hands mode: the stand holds still (never the face). */
 export const HANDS_PAUSED = 'Hand tracking off — the gimbal holds still until it sees your hands again';
 export const HOLD_STATUS = 'Gimbal holding still (DockKit tracking off)';
@@ -233,11 +241,58 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   let lastNativeError = '';
   const canNative = (): boolean => !!plugin?.startHandTracking && !!opts.yieldCamera;
   let nativeEvents = false;
+  /** Bumped by every setMode: an older request that awaited gives up. */
+  let modeGen = 0;
+  /** The mode the LATEST setMode asked for (currentMode lags behind its awaits). */
+  let requestedMode: GimbalCanvasMode | null = null;
+  let lostTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearLost = (): void => { if (lostTimer !== null) { clearTimeout(lostTimer); lostTimer = null; } };
+  /** The native session went away in hands mode (runtime error, camera
+   *  taken…). Say so; if it is not back within NATIVE_LOST_MS, fall back
+   *  to the web tracker (yaw-only) and say that. Undocked / hidden: wait. */
+  function nativeLost(): void {
+    if (lostTimer !== null || !nativeOn || currentMode !== 'hands') return;
+    opts.say?.(HANDS_PAUSED);
+    const gen = modeGen;
+    const arm = (): void => {
+      lostTimer = setTimeout(() => {
+        lostTimer = null;
+        void (async () => {
+          if (gen !== modeGen || !nativeOn || currentMode !== 'hands' || nativeRunning) return;
+          const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+          let docked = true;
+          try { docked = !!(await plugin?.isAvailable())?.available; } catch { docked = false; }
+          if (gen !== modeGen || !nativeOn || currentMode !== 'hands' || nativeRunning) return;
+          if (hidden || !docked) { arm(); return; }
+          try {
+            const st = await plugin?.handTrackingStatus?.();
+            if (st?.handTracking === true) { nativeRunning = true; return; }
+          } catch { /* keep */ }
+          if (gen !== modeGen || !nativeOn || currentMode !== 'hands' || nativeRunning) return;
+          await stopNative();
+          if (gen !== modeGen || currentMode !== 'hands') return;
+          if (opts.fallbackTracker && !fallbackOn) {
+            fallbackOn = true;
+            try { await opts.fallbackTracker(true); } catch { /* the status says so */ }
+          }
+          opts.say?.(HANDS_FALLBACK_STATUS);
+          opts.onChange?.();
+        })();
+      }, opts.nativeLostMs ?? NATIVE_LOST_MS);
+    };
+    arm();
+  }
+  function nativeState(running: boolean): void {
+    const was = nativeRunning;
+    nativeRunning = running;
+    if (running) clearLost();
+    else if (was || nativeOn) nativeLost();
+  }
   if (plugin?.addListener) {
     try {
       void Promise.resolve(plugin.addListener('handTracking', (e) => {
         nativeEvents = true;
-        nativeRunning = !!e?.running;
+        nativeState(!!e?.running);
         nativeAimUntil = e?.aimingAtHands && nativeRunning ? Infinity : -Infinity;
         opts.onChange?.();
       })).catch(() => {});
@@ -247,13 +302,15 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   if (plugin?.stopHandTracking) void Promise.resolve().then(() => plugin.stopHandTracking?.({ reason: 'page load' })).catch(() => {});
   function noteNative(st: { handTracking?: boolean; aimingAtHands?: boolean; lastHandMs?: number } | undefined): void {
     if (!st) return;
-    if (typeof st.handTracking === 'boolean') nativeRunning = st.handTracking;
+    if (typeof st.handTracking === 'boolean' && nativeOn) nativeState(st.handTracking);
+    else if (typeof st.handTracking === 'boolean') nativeRunning = st.handTracking;
     if (!nativeRunning || st.aimingAtHands === false) nativeAimUntil = -Infinity;
     else if (nativeEvents) { if (st.aimingAtHands) nativeAimUntil = Infinity; }
     else if (typeof st.lastHandMs === 'number' && st.lastHandMs >= 0) nativeAimUntil = clock() + (NATIVE_AIM_MS - st.lastHandMs);
   }
   /** Leave native hands: stop the native session FIRST, then give the lens back. */
   async function stopNative(): Promise<void> {
+    clearLost();
     if (!nativeOn) return;
     nativeOn = false;
     nativeRunning = false;
@@ -267,18 +324,32 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     fallbackOn = false;
     try { await opts.fallbackTracker?.(false); } catch { /* best effort */ }
   }
+  /** A newer setMode overtook this hands request. */
+  const superseded = (gen: number): boolean => gen !== modeGen || requestedMode !== 'hands';
+  /** Undo a superseded start. A newer HANDS request owns the native tracker
+   *  and the camera hand-off, so then nothing is undone here. */
+  async function abandonNative(): Promise<GimbalResult> {
+    if (requestedMode !== 'hands') {
+      try { await plugin?.stopHandTracking?.({ reason: 'superseded' }); } catch { /* ignore */ }
+      try { await opts.yieldCamera?.(false); } catch { /* ignore */ }
+    }
+    return { ok: true };
+  }
   /** Try the native tracker. null = not possible here (use the fallback). */
-  async function startNative(): Promise<GimbalResult | null> {
+  async function startNative(gen: number): Promise<GimbalResult | null> {
     if (!canNative() || !plugin?.startHandTracking) return null;
     await stopFallback();
+    if (superseded(gen)) return abandonNative();
     // The WebView camera off first: while it runs, DockKit keeps following her face.
     try { await opts.yieldCamera?.(true); } catch { /* still try */ }
+    if (superseded(gen)) return abandonNative();
     let r: Awaited<ReturnType<NonNullable<GimbalPlugin['startHandTracking']>>>;
     try {
       r = await plugin.startHandTracking(opts.nativeHandsOptions?.() ?? {});
     } catch (e) {
       r = { ok: false, running: false, error: e instanceof Error ? e.message : String(e) };
     }
+    if (superseded(gen)) return abandonNative();
     noteTracking(r.enabled);
     if (r.ok && r.running) {
       nativeOn = true;
@@ -289,7 +360,9 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     }
     // Native didn't start: give the lens back; the caller falls back.
     try { await plugin.stopHandTracking?.({ reason: 'start failed' }); } catch { /* ignore */ }
+    if (superseded(gen)) return abandonNative();
     try { await opts.yieldCamera?.(false); } catch { /* ignore */ }
+    if (superseded(gen)) return abandonNative();
     lastNativeError = r.error || 'the native hand tracker didn’t start';
     return null;
   }
@@ -371,10 +444,12 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     }
   }
 
-  async function enterFace(prefix?: string): Promise<GimbalResult> {
+  async function enterFace(prefix?: string, gen?: number): Promise<GimbalResult> {
     await stopNative();
     await stopFallback();
     const r = await setTracking(true);
+    // A newer setMode won meanwhile: it owns the mode (never overwrite it).
+    if (gen !== undefined && gen !== modeGen) return { ok: true };
     if (!r.enabled) {
       // Not following — do not claim it. Custom follow stays in hold.
       currentMode = 'hold';
@@ -389,9 +464,10 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     return { ok: true, status: prefix ? `${prefix}. ${status}` : status };
   }
 
-  async function enterOff(mode: 'hands' | 'hold' | 'point'): Promise<GimbalResult> {
+  async function enterOff(mode: 'hands' | 'hold' | 'point', gen?: number): Promise<GimbalResult> {
     if (mode !== 'hands') { await stopNative(); await stopFallback(); }
     const r = await setTracking(false);
+    if (gen !== undefined && gen !== modeGen) return { ok: true };
     currentMode = mode;
     gimbalFollow.setMode(mode === 'hands' ? 'hands' : 'hold');
     const status = mode === 'hands' ? HANDS_ON_STATUS : mode === 'point' ? POINT_STATUS : HOLD_STATUS;
@@ -406,18 +482,22 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
     mode: () => currentMode,
     async setMode(mode: GimbalCanvasMode, o?: { explicit?: boolean }): Promise<GimbalResult> {
       if (o?.explicit) explicit = mode;
+      const gen = ++modeGen;
+      requestedMode = mode;
       if (!(await checkPlugin())) {
         return { ok: false, why: why() };
       }
-      if (mode === 'face') return enterFace();
+      if (mode === 'face') return enterFace(undefined, gen);
       if (mode === 'hands') {
         // Never the face: without a tracker the stand holds still (tracking
         // off) and starts following as soon as hand frames arrive.
-        const r = await enterOff('hands');
+        const r = await enterOff('hands', gen);
+        if (gen !== modeGen) return { ok: true };
         if (!r.ok) return r;
         if (nativeOn && nativeRunning) return { ok: true, status: HANDS_NATIVE_STATUS };
-        const n = await startNative();
+        const n = await startNative(gen);
         if (n) return n;
+        if (superseded(gen)) return { ok: true };
         // Fallback: the web hand tracker + our yaw-only aim.
         if (opts.fallbackTracker && !fallbackOn) {
           fallbackOn = true;
@@ -426,7 +506,7 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
         if (!opts.handsRunning?.()) return { ok: false, why: lastNativeError ? `${HANDS_NEED_TRACKER} (${lastNativeError})` : HANDS_NEED_TRACKER };
         return r;
       }
-      return enterOff(mode);
+      return enterOff(mode, gen);
     },
 
     async onPoint(): Promise<GimbalResult> {

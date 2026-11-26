@@ -4031,6 +4031,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       yieldCamera: async (on) => { await opts.phoneCamera?.setYield?.(on); },
       fallbackTracker: async (on) => { await phoneSensor?.request('follow', on); },
       onChange: () => { senseChanged(); },
+      say,
       nativeHandsOptions: () => {
         // Live test switches (localStorage): mc.gimbalHandsRaw=1 → raw sensor
         // buffers + device orientation; mc.gimbalHandsMirror=1 → mirrored rect.
@@ -4145,7 +4146,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const gimbal = !gimbalDocked ? 'none'
       : mode === 'face' ? (trackingOn === false ? 'ready' : 'tracking')
       : mode === 'hands' && handsLive && trackingOn !== true ? 'hands' : 'ready';
-    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running() || !!diag?.handTracker, hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running() || !!diag?.handTracker, hands: !!phoneHands?.isOn() && !opts.phoneCamera?.yielded?.(), canPoint: opts.phoneCamera?.status() !== 'error' };
     if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
     if (diag) s.aimingAtHands = diag.aimingAtHands;
     if (diag?.signSuspect) s.aimSign = diag.signSuspect;
