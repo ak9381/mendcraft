@@ -135,6 +135,9 @@ export function createDomGestureEnv(root: HTMLElement, highlight: () => HTMLElem
   };
 }
 
+/** The same "nothing to press" hint is said at most once in this long. */
+export const HINT_QUIET_MS = 10_000;
+
 export function createGestureControl(opts: GestureControlOptions): GestureControl {
   const { root, bindings } = opts;
   const doc = root.ownerDocument;
@@ -261,11 +264,20 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     return resolveGesture(b, env);
   }
 
-  function act(key: GestureKey): void {
+  // A hold that has nothing to press says why ONCE: a resting hand misread
+  // as the same shape re-fires every hold, and its hint used to be re-said
+  // (and read aloud) on every repeat. The HUD still shows it each time.
+  let lastWhy: { text: string; at: number } | null = null;
+  function act(key: GestureKey, now: number): void {
     const b = byKey.get(key);
     if (!b) return;
     const a = resolve(b);
-    if (a.kind === 'none') { opts.say?.(a.why); return; }
+    if (a.kind === 'none') {
+      if (lastWhy && lastWhy.text === a.why && now - lastWhy.at < HINT_QUIET_MS) return;
+      lastWhy = { text: a.why, at: now };
+      opts.say?.(a.why);
+      return;
+    }
     if (a.kind === 'say') {
       opts.run?.(a.text);
       opts.onFire?.({ key, name: gestureName(key), label: a.label, target: null });
@@ -389,7 +401,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     const s = engine.update({ hands: handsRead, facing: ctx.facing, now, blocked: ctx.blocked, defer });
     if (s.fired) {
       clearOverlays();
-      act(s.fired);
+      act(s.fired, now);
     } else if (s.key) {
       const b = byKey.get(s.key);
       const a = b ? resolve(b) : null;
