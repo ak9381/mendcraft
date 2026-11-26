@@ -26,6 +26,7 @@ import { ensureDeviceId } from '../relay/pairingStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
 import { mountReplayBanner } from './replayBanner';
+import { openFresh } from './canvasStore';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   const m = new Map<string, string>();
@@ -43,7 +44,12 @@ if (replayDemo) {
   history.replaceState(null, '', `${location.pathname}?${q.toString()}${location.hash}`);
 }
 const params = new URLSearchParams(location.search);
-if (params.has('fresh')) localStorage.removeItem('mc.canvas.v1');
+// ?fresh=1 starts blank — but the saved boards are copied aside first (never
+// just deleted), and `fresh` leaves the address bar so a later reload of this
+// tab (a redeploy, F5) opens what she built here instead of wiping it again.
+// A failed copy means this open is NOT fresh (nothing is reset).
+const freshOpen = openFresh((() => { try { return localStorage; } catch { return null; } })(), location.href);
+if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
 
 // People directory: tokens in cloud prompts, real names filled back on device.
 // ?sim=1: seed one example person (Sharma / client / [Client A]) in a fresh,
@@ -199,7 +205,7 @@ const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
 // laptop's point request and re-announces its sensing status.
 let guestSession: PhoneGuestSessionLike | null = null;
 handle = mountCanvas(root, {
-  voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
+  voice, engines, seed: params.has('seed'), fresh: freshOpen.fresh || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   phoneCamera,
   phoneSensing: phoneSensingAllowed(phoneShell, phonePlatform),
   sendPointResult: (text) => { void guestSession?.sendCommand({ kind: 'pointResult', text }).catch(() => undefined); },

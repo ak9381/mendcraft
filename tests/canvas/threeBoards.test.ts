@@ -122,7 +122,8 @@ describe('review fixes: honest rows over time', () => {
   });
   it('the devices board is the frame it was made as, not any board with that title', () => {
     expect(app).not.toMatch(/isDevicesBoard\(/);
-    expect(app).toMatch(/devicesFrame = id;\s*try \{ storage\.setItem\(DEVICES_BOARD_KEY, id\); \}/);
+    expect(app).toMatch(/devicesFrame = id; \/\/ saved in the doc/);
+    expect(app).toMatch(/devicesBoard: devices/);
   });
 });
 

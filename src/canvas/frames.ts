@@ -5,7 +5,12 @@ import { coerceSurfacePlan, type SurfacePlan } from './surfacePlan';
 import { coerceLanguagePack, type LanguagePack } from './languagePack';
 
 export type FrameKind = 'room' | 'plan' | 'note';
-export interface Frame { id: string; kind: FrameKind; title: string; rect: Rect; pinned: boolean }
+export interface Frame {
+  id: string; kind: FrameKind; title: string; rect: Rect; pinned: boolean;
+  /** A phone: this board was received from the laptop (only these are ever
+   *  treated as copies of one another — never her own boards). */
+  from?: 'laptop';
+}
 export interface CanvasDoc {
   version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan>;
   /** Active non-English UI pack (validated), persisted so it works offline. */
@@ -13,6 +18,9 @@ export interface CanvasDoc {
   /** What was drawn on floor-plan boards: frame id → plan board id → plan
    *  document. Beside `surfaces`, never inside them (see planDocs.ts). */
   drawings?: Drawings;
+  /** The frame that is the Connected devices board (by id, never by title).
+   *  Kept IN the doc, so it can never point at a board of another doc. */
+  devicesBoard?: string;
 }
 
 export const CANVAS_DOC_VERSION = 1;
@@ -48,6 +56,8 @@ export function createFrameRegistry(initial: readonly Frame[] = []) {
     setRect(id: string, rect: Rect) { const f = find(id); if (f) f.rect = { ...rect }; },
     setPinned(id: string, on: boolean) { const f = find(id); if (f) f.pinned = on; },
     setKind(id: string, kind: FrameKind) { const f = find(id); if (f) f.kind = kind; },
+    /** A phone: mark a board as received from the laptop. */
+    markFromLaptop(id: string) { const f = find(id); if (f) f.from = 'laptop'; },
     remove(id: string) { const i = frames.findIndex((f) => f.id === id); if (i < 0) return false; frames.splice(i, 1); return true; },
     /** Put a closed board back as it was (Undo of "Close board"). */
     restore(f: Frame) { if (find(f.id) || frames.length >= MAX_FRAMES) return false; frames.push(copy(f)); return true; },
@@ -57,34 +67,51 @@ export type FrameRegistry = ReturnType<typeof createFrameRegistry>;
 
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Validate a stored document; anything off returns null (start fresh, never half-load). */
-export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
-  if (!raw || typeof raw !== 'object') return null;
+/** Validate a stored document. Anything that would lose or misplace her
+ *  boards (a bad frame, a board whose plan can't be read, another version)
+ *  returns doc: null — the caller then keeps the raw text safe
+ *  (canvasStore.ts) and never half-loads it. Harmless slips are repaired
+ *  instead of refusing the whole doc, and each repair is named in
+ *  `repaired` (the caller keeps the raw text aside before saving over it):
+ *  a camera out of range is reset, a focus or devices-board id with no frame
+ *  is cleared, a plan for a board that is gone (or an empty one) is left out. */
+export function parseCanvasDocReport(raw: unknown): { doc: CanvasDoc | null; repaired: string[] } {
+  const no = { doc: null, repaired: [] };
+  if (!raw || typeof raw !== 'object') return no;
   const d = raw as Record<string, unknown>;
-  if (d.version !== CANVAS_DOC_VERSION) return null;
-  const c = d.camera as Record<string, unknown> | undefined;
-  if (!c || !fin(c.x) || !fin(c.y) || !fin(c.z) || c.z < MIN_Z || c.z > MAX_Z) return null;
-  if (!Array.isArray(d.frames) || d.frames.length > MAX_FRAMES) return null;
+  if (d.version !== CANVAS_DOC_VERSION) return no;
+  if (!Array.isArray(d.frames) || d.frames.length > MAX_FRAMES) return no;
+  const repaired: string[] = [];
   const frames: Frame[] = [];
   const seen = new Set<string>();
   for (const f of d.frames as Record<string, unknown>[]) {
     const r = f?.rect as Record<string, unknown> | undefined;
-    if (typeof f?.id !== 'string' || !ID_RE.test(f.id) || seen.has(f.id)) return null;
-    if (!KINDS.includes(f.kind as FrameKind) || typeof f.title !== 'string') return null;
-    if (!r || !fin(r.x) || !fin(r.y) || !fin(r.w) || !fin(r.h) || r.w <= 0 || r.h <= 0) return null;
-    if (f.pinned !== undefined && typeof f.pinned !== 'boolean') return null;
+    if (typeof f?.id !== 'string' || !ID_RE.test(f.id) || seen.has(f.id)) return no;
+    if (!KINDS.includes(f.kind as FrameKind)) return no;
+    if (!r || !fin(r.x) || !fin(r.y) || !fin(r.w) || !fin(r.h) || r.w <= 0 || r.h <= 0) return no;
+    if (typeof f.title !== 'string') repaired.push(`board ${f.id}: title`);
+    if (f.pinned !== undefined && typeof f.pinned !== 'boolean') repaired.push(`board ${f.id}: pinned`);
     seen.add(f.id);
-    frames.push({ id: f.id, kind: f.kind as FrameKind, title: cleanTitle(f.title), rect: { x: r.x, y: r.y, w: r.w, h: r.h }, pinned: f.pinned === true });
+    frames.push({
+      id: f.id, kind: f.kind as FrameKind, title: cleanTitle(f.title), rect: { x: r.x, y: r.y, w: r.w, h: r.h }, pinned: f.pinned === true,
+      ...(f.from === 'laptop' ? { from: 'laptop' as const } : {}),
+    });
   }
-  const focusId = d.focusId ?? null;
-  if (focusId !== null && (typeof focusId !== 'string' || !seen.has(focusId))) return null;
+  const c = d.camera as Record<string, unknown> | undefined;
+  const camOk = !!c && fin(c.x) && fin(c.y) && fin(c.z);
+  const camera: Camera = camOk ? { x: c!.x as number, y: c!.y as number, z: Math.min(MAX_Z, Math.max(MIN_Z, c!.z as number)) } : { x: 0, y: 0, z: 1 };
+  if (!camOk || camera.z !== c!.z) repaired.push('camera');
+  const focusId = typeof d.focusId === 'string' && seen.has(d.focusId) ? d.focusId : null;
+  if (d.focusId != null && focusId === null) repaired.push('focus');
   const surfaces: Record<string, SurfacePlan> = {};
-  if (d.surfaces !== undefined) {
-    if (!d.surfaces || typeof d.surfaces !== 'object' || Array.isArray(d.surfaces)) return null;
+  if (d.surfaces !== undefined && d.surfaces !== null) {
+    if (typeof d.surfaces !== 'object' || Array.isArray(d.surfaces)) return no;
     for (const [id, plan] of Object.entries(d.surfaces as Record<string, unknown>)) {
-      if (!seen.has(id)) return null;
+      if (!seen.has(id)) { repaired.push(`plan for missing board ${id.slice(0, 40)}`); continue; } // its board is gone: nothing could show it
+      const tiles = (plan as { tiles?: unknown } | null)?.tiles;
+      if (Array.isArray(tiles) && !tiles.length) { repaired.push(`empty plan on ${id}`); continue; } // nothing to lose
       const p = coerceSurfacePlan(plan);
-      if (!p.ok) return null;
+      if (!p.ok) return no;
       surfaces[id] = p.value;
     }
   }
@@ -94,8 +121,22 @@ export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
   let pack: LanguagePack | undefined;
   if (d.pack !== undefined) {
     const p = coerceLanguagePack(d.pack);
-    if (p.ok) { pack = p.value; lang = p.value.lang; }
+    if (p.ok) { pack = p.value; lang = p.value.lang; } else repaired.push('language pack');
   }
   const drawings = coerceDrawings(d.drawings, seen);
-  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack, ...(Object.keys(drawings).length ? { drawings } : {}) };
+  const devicesBoard = typeof d.devicesBoard === 'string' && seen.has(d.devicesBoard) ? d.devicesBoard : undefined;
+  if (d.devicesBoard !== undefined && !devicesBoard) repaired.push('devices board');
+  return {
+    doc: {
+      version: CANVAS_DOC_VERSION, camera, focusId, frames, surfaces, lang, pack,
+      ...(Object.keys(drawings).length ? { drawings } : {}),
+      ...(devicesBoard ? { devicesBoard } : {}),
+    },
+    repaired,
+  };
+}
+
+/** parseCanvasDocReport without the list of repairs. */
+export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
+  return parseCanvasDocReport(raw).doc;
 }

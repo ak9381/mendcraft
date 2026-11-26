@@ -1,0 +1,582 @@
+{
+ "version": 1,
+ "camera": {
+  "x": 2020,
+  "y": -97,
+  "z": 1
+ },
+ "focusId": "f3",
+ "frames": [
+  {
+   "id": "f1",
+   "kind": "note",
+   "title": "Connected devices",
+   "rect": {
+    "x": 0,
+    "y": 0,
+    "w": 1000,
+    "h": 680
+   },
+   "pinned": false
+  },
+  {
+   "id": "f2",
+   "kind": "room",
+   "title": "Living room",
+   "rect": {
+    "x": 1160,
+    "y": 0,
+    "w": 1000,
+    "h": 680
+   },
+   "pinned": true
+  },
+  {
+   "id": "f3",
+   "kind": "plan",
+   "title": "Floor plan",
+   "rect": {
+    "x": 2320,
+    "y": 0,
+    "w": 1000,
+    "h": 680
+   },
+   "pinned": false
+  }
+ ],
+ "surfaces": {
+  "f1": {
+   "kind": "room",
+   "title": "Connected devices",
+   "tiles": [
+    {
+     "type": "table",
+     "title": "Devices",
+     "columns": [
+      "Device",
+      "Status"
+     ],
+     "rows": [
+      [
+       "✓ Laptop",
+       "This canvas"
+      ],
+      [
+       "iPhone",
+       "SIM · paired · Gimbal: docked"
+      ],
+      [
+       "Nothing phone",
+       "SIM · paired"
+      ],
+      [
+       "Desk lamp",
+       "SIM lamp"
+      ],
+      [
+       "Ceiling light",
+       "SIM lamp"
+      ],
+      [
+       "Speaker",
+       "SIM · built-in player"
+      ]
+     ],
+     "sortable": false
+    }
+   ]
+  },
+  "f2": {
+   "kind": "room",
+   "title": "Living room",
+   "tiles": [
+    {
+     "type": "lamp",
+     "deviceId": "wiz-ceiling",
+     "label": "Main light"
+    },
+    {
+     "type": "lamp",
+     "deviceId": "wiz-desk",
+     "label": "Reading lamp"
+    },
+    {
+     "type": "music",
+     "deviceId": "speaker-1",
+     "label": "Speaker"
+    },
+    {
+     "type": "gimbal",
+     "label": "Gimbal"
+    },
+    {
+     "type": "connect",
+     "label": "Connect a device"
+    }
+   ]
+  },
+  "f3": {
+   "kind": "plan",
+   "title": "Floor plan",
+   "tiles": [
+    {
+     "type": "plan",
+     "boardId": "f3-cad",
+     "template": "twoBedroom"
+    }
+   ]
+  }
+ },
+ "lang": "kn",
+ "pack": {
+  "lang": "kn",
+  "strings": {
+   "showEverything": "ಎಲ್ಲಾ ತೋರಿಸು",
+   "newBoard": "ಹೊಸ ಬೋರ್ಡ್",
+   "save": "ಉಳಿಸು",
+   "undo": "ರದ್ದುಮಾಡು",
+   "ai": "ಎಐ ಚಟುವಟಿಕೆ",
+   "sayPlaceholder": "ಹೇಳಿ: ಹೊಸ ಬೋರ್ಡ್ · ಎಲ್ಲಾ ತೋರಿಸು · ನೆಲ ನಕ್ಷೆ",
+   "emptyLead": "ಈ ಬೋರ್ಡ್‌ನಲ್ಲಿ ನೀವು ಏನನ್ನು ನಿರ್ಮಿಸಲು ಇಷ್ಟಪಡುತ್ತೀರಿ?",
+   "emptyConnect": "ಈ ಕೋಣೆ ಸೇರಿಸು",
+   "emptyFloorplan": "ನೆಲ ನಕ್ಷೆ",
+   "keep": "ಇಟ್ಟುಕೋ",
+   "drop": "ಬೇಡ",
+   "tools": "ಉಪಕರಣಗಳು",
+   "approve": "ಒಪ್ಪಿಕೊಳ್ಳಿ",
+   "reject": "ತಿರಸ್ಕರಿಸಿ",
+   "askElse": "ಬೇರೆ ಏನಾದರೂ ಕೇಳಿ",
+   "go": "ಹೋಗು",
+   "hands": "ಕೈ ಸನ್ನೆ",
+   "simulateOffline": "ಆಫ್‌ಲೈನ್ ಅನುಕರಿಸು",
+   "offlineOn": "ಆಫ್‌ಲೈನ್ (ಅನುಕರಣೆ)"
+  },
+  "phrases": {
+   "lampOn": [
+    "ದೀಪ ಆನ್ ಮಾಡು"
+   ],
+   "lampOff": [
+    "ದೀಪ ಆಫ್ ಮಾಡು",
+    "ದೀಪ ಆರಿಸು"
+   ],
+   "brighter": [
+    "ಬೆಳಕು ಹೆಚ್ಚಿಸು"
+   ],
+   "dimmer": [
+    "ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು"
+   ],
+   "showEverything": [
+    "ಎಲ್ಲಾ ತೋರಿಸು"
+   ],
+   "newBoard": [
+    "ಹೊಸ ಬೋರ್ಡ್"
+   ],
+   "save": [
+    "ಉಳಿಸು"
+   ],
+   "keep": [
+    "ಇಟ್ಟುಕೋ"
+   ],
+   "drop": [
+    "ಬೇಡ"
+   ],
+   "undo": [
+    "ರದ್ದುಮಾಡು"
+   ]
+  }
+ },
+ "drawings": {
+  "f3": {
+   "f3-cad": {
+    "walls": [
+     {
+      "id": "w2",
+      "a": {
+       "x": 0,
+       "y": 3000
+      },
+      "b": {
+       "x": 4000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w3",
+      "a": {
+       "x": 4000,
+       "y": 3000
+      },
+      "b": {
+       "x": 4000,
+       "y": 6000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w4",
+      "a": {
+       "x": 4000,
+       "y": 6000
+      },
+      "b": {
+       "x": 0,
+       "y": 6000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w5",
+      "a": {
+       "x": 0,
+       "y": 6000
+      },
+      "b": {
+       "x": 0,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w7",
+      "a": {
+       "x": 4000,
+       "y": 3000
+      },
+      "b": {
+       "x": 8000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w8",
+      "a": {
+       "x": 8000,
+       "y": 3000
+      },
+      "b": {
+       "x": 8000,
+       "y": 6000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w9",
+      "a": {
+       "x": 8000,
+       "y": 6000
+      },
+      "b": {
+       "x": 4000,
+       "y": 6000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w11",
+      "a": {
+       "x": 0,
+       "y": 0
+      },
+      "b": {
+       "x": 4000,
+       "y": 0
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w12",
+      "a": {
+       "x": 4000,
+       "y": 0
+      },
+      "b": {
+       "x": 4000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w13",
+      "a": {
+       "x": 0,
+       "y": 3000
+      },
+      "b": {
+       "x": 0,
+       "y": 0
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w15",
+      "a": {
+       "x": 4000,
+       "y": 0
+      },
+      "b": {
+       "x": 6000,
+       "y": 0
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w16",
+      "a": {
+       "x": 6000,
+       "y": 0
+      },
+      "b": {
+       "x": 6000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w17",
+      "a": {
+       "x": 6000,
+       "y": 3000
+      },
+      "b": {
+       "x": 4000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w19",
+      "a": {
+       "x": 6000,
+       "y": 0
+      },
+      "b": {
+       "x": 8000,
+       "y": 0
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w20",
+      "a": {
+       "x": 8000,
+       "y": 0
+      },
+      "b": {
+       "x": 8000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w21",
+      "a": {
+       "x": 8000,
+       "y": 3000
+      },
+      "b": {
+       "x": 6000,
+       "y": 3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w33",
+      "a": {
+       "x": 4000,
+       "y": -3000
+      },
+      "b": {
+       "x": 6000,
+       "y": -3000
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w34",
+      "a": {
+       "x": 6000,
+       "y": -3000
+      },
+      "b": {
+       "x": 6000,
+       "y": 0
+      },
+      "thickness": 100
+     },
+     {
+      "id": "w35",
+      "a": {
+       "x": 4000,
+       "y": 0
+      },
+      "b": {
+       "x": 4000,
+       "y": -3000
+      },
+      "thickness": 100
+     }
+    ],
+    "openings": [
+     {
+      "id": "o22",
+      "kind": "door",
+      "wallId": "w11",
+      "offset": 1550,
+      "width": 900,
+      "swing": "left"
+     },
+     {
+      "id": "o23",
+      "kind": "door",
+      "wallId": "w2",
+      "offset": 1600,
+      "width": 800,
+      "swing": "left"
+     },
+     {
+      "id": "o24",
+      "kind": "door",
+      "wallId": "w7",
+      "offset": 1600,
+      "width": 800,
+      "swing": "left"
+     },
+     {
+      "id": "o25",
+      "kind": "door",
+      "wallId": "w12",
+      "offset": 1100,
+      "width": 800,
+      "swing": "left"
+     },
+     {
+      "id": "o26",
+      "kind": "door",
+      "wallId": "w16",
+      "offset": 1150,
+      "width": 700,
+      "swing": "left"
+     },
+     {
+      "id": "o27",
+      "kind": "window",
+      "wallId": "w4",
+      "offset": 1400,
+      "width": 1200
+     },
+     {
+      "id": "o28",
+      "kind": "window",
+      "wallId": "w9",
+      "offset": 1400,
+      "width": 1200
+     },
+     {
+      "id": "o29",
+      "kind": "window",
+      "wallId": "w13",
+      "offset": 1000,
+      "width": 1000
+     },
+     {
+      "id": "o30",
+      "kind": "window",
+      "wallId": "w15",
+      "offset": 500,
+      "width": 1000
+     },
+     {
+      "id": "o31",
+      "kind": "window",
+      "wallId": "w20",
+      "offset": 1200,
+      "width": 600
+     },
+     {
+      "id": "o37",
+      "kind": "door",
+      "wallId": "w15",
+      "offset": 600,
+      "width": 800,
+      "swing": "left"
+     }
+    ],
+    "rooms": [
+     {
+      "id": "r1",
+      "name": "Bedroom 1",
+      "wallIds": [
+       "w2",
+       "w3",
+       "w4",
+       "w5"
+      ]
+     },
+     {
+      "id": "r6",
+      "name": "Bedroom 2",
+      "wallIds": [
+       "w7",
+       "w8",
+       "w9",
+       "w3"
+      ]
+     },
+     {
+      "id": "r10",
+      "name": "Living room",
+      "wallIds": [
+       "w11",
+       "w12",
+       "w2",
+       "w13"
+      ]
+     },
+     {
+      "id": "r14",
+      "name": "Kitchen",
+      "wallIds": [
+       "w15",
+       "w16",
+       "w17",
+       "w12"
+      ]
+     },
+     {
+      "id": "r18",
+      "name": "Bathroom",
+      "wallIds": [
+       "w19",
+       "w20",
+       "w21",
+       "w16"
+      ]
+     },
+     {
+      "id": "r36",
+      "name": "Study",
+      "wallIds": [
+       "w33",
+       "w34",
+       "w15",
+       "w35"
+      ]
+     }
+    ],
+    "dims": [
+     {
+      "id": "m32",
+      "wallId": "w3"
+     }
+    ],
+    "fixtures": [],
+    "texts": [],
+    "selectedId": null,
+    "selectedIds": []
+   }
+  }
+ },
+ "devicesBoard": "f1"
+}

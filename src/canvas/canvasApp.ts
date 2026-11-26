@@ -9,7 +9,7 @@ import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav
 import { mountZoomHud } from './zoomHud';
 import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
-import { CANVAS_DOC_VERSION, FRAME_SIZE, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
+import { CANVAS_DOC_VERSION, FRAME_SIZE, createFrameRegistry, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
 import { expandPlan, gimbalUpdate, tileComponentId, type GimbalTileState, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
@@ -50,6 +50,8 @@ import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileInte
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
+import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
+import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
@@ -145,10 +147,12 @@ import { isPhoneCanvasShell } from './iphoneShell';
 import { getGimbalPlugin, isIosShell } from '../devices/native';
 import { LOOK_TO_EDIT_HINT, nextPhoneEditLock, readLookToEdit } from './phoneEditLock';
 
-export const STORAGE_KEY = 'mc.canvas.v1';
+export const STORAGE_KEY = CANVAS_STORAGE_KEY;
 
 export interface CanvasOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  /** Running in the native phone app (Capacitor iOS/Android). Default: detected. */
+  nativePhone?: boolean;
   connector?: DeviceConnector;
   devices?: Record<string, DeviceState>;
   reducedMotion?: boolean;
@@ -312,14 +316,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   const storage = opts.storage ?? localStorage;
   const reduced = opts.reducedMotion ?? matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let stored: CanvasDoc | null = null;
-  try { stored = parseCanvasDoc(JSON.parse(storage.getItem(STORAGE_KEY) ?? 'null')); } catch { stored = null; }
-  // The Connected devices board is marked by its frame id (kept beside the
-  // saved doc), never by its title: a board she renames stays what it is,
-  // and one she names "Connected devices" never becomes it.
-  const DEVICES_BOARD_KEY = 'mendcraft.devicesBoard';
+  // A saved doc this build can't read is copied aside before anything can
+  // write (canvasStore.ts); if even that fails, nothing saves over it.
+  const loaded = loadCanvasDoc(storage, STORAGE_KEY);
+  const stored: CanvasDoc | null = loaded.doc;
+  const saveBlocked = !loaded.safe;
+  // The Connected devices board is marked by its frame id, never by its
+  // title: a board she renames stays what it is, and one she names
+  // "Connected devices" never becomes it. The id lives IN the doc; the old
+  // key kept beside it is only trusted when that frame really holds the
+  // devices list (a stale key once turned her dashboard into the list).
   let devicesFrame: string | null = null;
-  try { devicesFrame = stored && !opts.showcase ? storage.getItem(DEVICES_BOARD_KEY) : null; } catch { devicesFrame = null; }
+  if (stored && !opts.showcase) {
+    let legacy: string | null = null;
+    try { legacy = storage.getItem(LEGACY_DEVICES_BOARD_KEY); } catch { legacy = null; }
+    devicesFrame = resolveDevicesBoard(stored, legacy);
+  }
   // Showcase is a deliberate opt-in detour: it never consults storage/seed/
   // fresh, and nothing in the default boot paths (?fresh=1&sim=1 included)
   // can reach it.
@@ -347,6 +359,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
     viewportWidth: window.innerWidth,
   }));
+  // The phone app shows each board once: copies an older build saved (or
+  // the lift above just made) of a board it already shows go, before render.
+  // Only in the native app (never a narrow laptop window), and only boards
+  // received from the laptop or the same plan board — never her own boards.
+  const nativePhone = opts.nativePhone ?? (typeof window !== 'undefined' && isNativePhoneApp(
+    (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null));
+  if (nativePhone) {
+    for (const dup of duplicateBoards(reg.list(), surfaces, focusId)) {
+      console.info(`[mendcraft] phone: a second copy of “${reg.get(dup)?.title ?? dup}” was taken off`);
+      reg.remove(dup); delete surfaces[dup]; delete drawings[dup];
+      if (focusId === dup) focusId = null;
+      if (lastFocus === dup) lastFocus = focusId;
+    }
+  }
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -1888,12 +1914,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const livePlans: Record<string, string[]> = {};
     for (const f of reg.list()) if (surfaces[f.id]) livePlans[f.id] = planTilesOf(surfaces[f.id]).map((t) => t.boardId);
     const kept = storedDrawings(drawings, livePlans);
-    return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined, ...(Object.keys(kept).length ? { drawings: kept } : {}) };
+    // Only plans of boards that exist (the loader would leave the rest out).
+    const boardPlans: Record<string, SurfacePlan> = {};
+    for (const f of reg.list()) if (surfaces[f.id]) boardPlans[f.id] = surfaces[f.id];
+    const devices = isDevicesFrame(devicesFrame) ? devicesFrame : null;
+    return {
+      version: CANVAS_DOC_VERSION, camera, focusId: focusId && reg.get(focusId) ? focusId : null, frames: reg.list(), surfaces: boardPlans,
+      lang: pack?.lang, pack: pack ?? undefined,
+      ...(Object.keys(kept).length ? { drawings: kept } : {}),
+      ...(devices ? { devicesBoard: devices } : {}),
+    };
   }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
-      const ok = tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+      // Saved boards this build couldn't read AND couldn't copy aside: never
+      // write over them (this session's changes just aren't saved).
+      const ok = !saveBlocked && tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+      // The doc now carries the devices-board id itself: the old key goes.
+      if (ok) { try { storage.removeItem(LEGACY_DEVICES_BOARD_KEY); } catch { /* nothing to clear */ } }
       tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
       return ok;
     };
@@ -4464,8 +4503,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let id = devicesBoardId();
     if (!id) {
       id = reg.add('note', DEVICES_BOARD_TITLE).id; sync(); // its frame (and surface host) first
-      devicesFrame = id;
-      try { storage.setItem(DEVICES_BOARD_KEY, id); } catch { /* per-session only */ }
+      devicesFrame = id; // saved in the doc (snapshot), never beside it
     }
     surfaces[id] = connectedDevicesPlan(connectedDeviceRows(connectedInput()));
     renderSurface(id); sync(); persist();
@@ -5272,14 +5310,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyEditLock();
   }
   const PLAN_TOO_BIG = 'This plan is too big to show on the phone — it shows the starting layout.';
+  /** A phone: take a board off quietly (a duplicate of one it shows). */
+  function dropDuplicateBoard(id: string): void {
+    if (live.has(id)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: id } }] as never); } catch { /* already gone */ } }
+    live.delete(id); deviceSurfaces.untrack(id);
+    reg.remove(id);
+    delete surfaces[id];
+    delete drawings[id];
+    if (focusId === id) focusId = null;
+    if (lastFocus === id) lastFocus = null;
+  }
   function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number } = {}): void {
-    let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
+    // Each board once: a board that arrives again (replay on re-pair, a
+    // republish) goes to the frame already showing it; other copies go.
+    const preferred = [focusId, lastFocus].find((x): x is string => !!x && !!reg.get(x)) ?? reg.list()[0]?.id ?? null;
+    const target = remoteBoardTarget(reg.list(), surfaces, plan, preferred);
+    for (const dup of target.duplicates) dropDuplicateBoard(dup);
+    let id = target.id;
     if (!id) {
       const f = reg.add('note', plan.title || 'Board');
       id = f.id;
     } else if (plan.title) {
       reg.rename(id, plan.title);
     }
+    reg.markFromLaptop(id); // only received boards are ever seen as copies
     surfaces[id] = plan;
     // The drawing the laptop has now replaces whatever this phone had for
     // these plan tiles (re-checked here: never trust the snapshot). A board
@@ -5812,7 +5866,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return boardSends > before;
     },
   };
+  // Saved boards this build couldn't read: said once, plainly (they were
+  // copied aside — canvasStore.ts — and are never written over).
+  const openLine = loadLine(loaded);
+  if (openLine) setTimeout(() => say(openLine, { speak: true }), 0);
   return {
+    /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
+    loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),
     run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
