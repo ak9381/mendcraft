@@ -54,7 +54,7 @@ async function main() {
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`e2e-plan-hands: no dev server at ${BASE}.`); return 2; }
   if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
-  const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'] });
+  const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--mute-audio', '--no-first-run', '--no-default-browser-check'] });
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1440, height: 900 });

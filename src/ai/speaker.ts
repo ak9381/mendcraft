@@ -50,7 +50,10 @@ export interface Speaker {
 }
 
 function browserSynth(): SynthLike | null {
-  const w = globalThis as unknown as { speechSynthesis?: SynthLike; SpeechSynthesisUtterance?: unknown };
+  const w = globalThis as unknown as { speechSynthesis?: SynthLike; SpeechSynthesisUtterance?: unknown; navigator?: { webdriver?: boolean } };
+  // Automated browsers (tests, screenshots) never speak: on a Mac a headless
+  // Chrome still talks out loud through the system voice.
+  if (w.navigator?.webdriver) return null;
   return w.speechSynthesis && typeof w.SpeechSynthesisUtterance === 'function' ? w.speechSynthesis : null;
 }
 function browserUtterance(text: string): UtteranceLike {

@@ -64,7 +64,7 @@ async function main() {
   try { puppeteer = require('puppeteer-core'); } catch { console.error('e2e-gestures: puppeteer-core missing (npm ci).'); return 2; }
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`e2e-gestures: no dev server at ${BASE}.`); return 2; }
 
-  const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'] });
+  const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--mute-audio', '--no-first-run', '--no-default-browser-check'] });
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1440, height: 900 });

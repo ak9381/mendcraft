@@ -41,7 +41,7 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: chrome,
     headless: 'new',
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check'],
+    args: ['--no-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check'],
   });
   const t0 = Date.now();
   try {
