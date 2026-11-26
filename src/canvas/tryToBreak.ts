@@ -128,12 +128,18 @@ export interface BreakDeps {
   /** The responsible engine's terminal (fail() blinks it red and flips the bar + feed). */
   panel: { log(verb: LogVerb, detail: string): void; fail(detail: string): void };
   say(text: string): void;
+  /** Test hook: how long the model gets (default BREAK_MODEL_MS). */
+  modelMs?: number;
 }
 
 /** Ask the engine, then validate. The literal request is checked as well as
  *  the model's reply, so a model that quietly clamps still cannot get a
  *  changed value through. Returns refused:false only if everything passes —
  *  the caller applies the (valid) request itself. */
+/** How long the model gets to propose something before the guard decides alone. */
+export const BREAK_MODEL_MS = 8000;
+const BREAK_LATE = 'break-model-late';
+
 export async function runBreakTurn(text: string, attempt: Attempt, deps: BreakDeps): Promise<{ refused: boolean; reason?: string }> {
   const { engine, panel, devices } = deps;
   let proposed: Attempt = attempt;
@@ -141,7 +147,13 @@ export async function runBreakTurn(text: string, attempt: Attempt, deps: BreakDe
     panel.log('note', BREAK_RULES_ROUTE);
   } else try {
     const tag = engine.sim ? 'SIM · ' : '';
-    const reply = await engine.stream(breakPrompt(text), () => {});
+    // The guard refuses on its own: the model only gets a short window to try,
+    // so a slow on-device model never keeps her waiting for the refusal.
+    let late: ReturnType<typeof setTimeout> | undefined;
+    const reply = await Promise.race([
+      engine.stream(breakPrompt(text), () => {}),
+      new Promise<never>((_, rej) => { late = setTimeout(() => rej(new Error(BREAK_LATE)), deps.modelMs ?? BREAK_MODEL_MS); }),
+    ]).finally(() => clearTimeout(late));
     const parsed = parseReply(reply, devices);
     if (parsed) {
       proposed = parsed;
@@ -149,8 +161,9 @@ export async function runBreakTurn(text: string, attempt: Attempt, deps: BreakDe
     } else {
       panel.log('note', `${tag}The model’s reply wasn’t usable; checking your request directly.`);
     }
-  } catch {
-    panel.log('note', `${engine.sim ? 'SIM · ' : ''}the model didn’t answer; checking your request directly.`);
+  } catch (err) {
+    const late = err instanceof Error && err.message === BREAK_LATE;
+    panel.log('note', `${engine.sim ? 'SIM · ' : ''}the model didn’t answer${late ? ' in time' : ''}; checking your request directly.`);
   }
   for (const a of [attempt, proposed]) {
     const v = validateAttempt(a, devices);

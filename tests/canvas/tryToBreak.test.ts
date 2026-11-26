@@ -105,6 +105,15 @@ describe('runBreakTurn', () => {
     expect(t.panel.lines.some(([, d]) => /SIM/.test(d))).toBe(false);
   });
 
+  it('a model that never answers is given a short window, then the guard refuses alone (no long wait)', async () => {
+    const t = setup(T);
+    const hung = { id: 'nano' as const, sim: false, stream: (): Promise<string> => new Promise<string>(() => undefined) };
+    const r = await runBreakTurn(T, t.attempt, { engine: hung, devices, panel: t.panel, say: () => {}, modelMs: 20 });
+    expect(r.refused).toBe(true);
+    expect(t.panel.lines.some(([, d]) => /didn’t answer in time/.test(d))).toBe(true);
+    expect(JSON.stringify(t.store.all())).toBe(t.before);
+  });
+
   it('refuses even when the engine throws (validation does not need the model)', async () => {
     const t = setup(T);
     const broken = { id: 'nano' as const, sim: false, stream: async (): Promise<string> => { throw new Error('boom'); } };
