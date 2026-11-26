@@ -78,6 +78,10 @@ export interface PeaceScrollState {
   dy: number;
   /** True on the frame scrolling starts (resolve the target then). */
   started: boolean;
+  /** On the start frame: where the peace was first held, before the start
+   *  move. A small level control is aimed at THERE — the hand has usually
+   *  left it by the time the deliberate start move is over. */
+  from?: Pt | null;
   /** Set on the frame a scroll ends. */
   ended: ScrollEnd | null;
   /** Release velocity (scroll px/ms) for a glide; 0 unless ended = 'release'. */
@@ -185,7 +189,7 @@ export function createPeaceScroll(cfg: Partial<PeaceScrollConfig> = {}): PeaceSc
         phase = 'scrolling';
         latched[side!] = true;
         scrollOrigin = { ...p };
-        return (state = { ...IDLE, phase, side, point: p, started: true });
+        return (state = { ...IDLE, phase, side, point: p, started: true, from: origin ? { ...origin } : null });
       }
       return (state = { ...IDLE, phase, side, point: p });
     }

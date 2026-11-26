@@ -88,9 +88,11 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     }
   }
 
-  function resolve(p: Pt): Target {
+  function resolve(p: Pt, from?: Pt | null): Target {
     const hit = deepElementFromPoint(doc, p.x, p.y);
-    const level = levelControlAt(hit);
+    // A level control under the hand now, or where the peace was first held
+    // (a tile's volume control is smaller than the start move).
+    const level = levelControlAt(hit) ?? (from ? levelControlAt(deepElementFromPoint(doc, from.x, from.y)) : null);
     if (level) return { kind: 'level', el: level, stepper: createLevelStepper() };
     const sc = hit ? scrollableAncestor(hit) : null;
     if (sc && sc.el !== doc.documentElement && sc.el !== doc.body) return { kind: 'element', el: sc.el, x: sc.x, y: sc.y };
@@ -161,7 +163,7 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     if (blocked && glideRaf) stopGlide();
     if (s.started && s.point) {
       stopGlide();
-      target = resolve(s.point);
+      target = resolve(s.point, s.from);
       outline(target, true);
     }
     if (s.phase === 'scrolling' && target && s.point) {

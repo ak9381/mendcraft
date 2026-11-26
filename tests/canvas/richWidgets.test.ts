@@ -204,7 +204,7 @@ describe('fallback rendering: new widgets', () => {
     expect(call.context?.row).toBeTruthy();
   });
 
-  it('FormTile renders a real checkbox, slider and choice buttons, and submits current values', () => {
+  it('FormTile renders a real checkbox, a discrete level control (no slider) and choice buttons, and submits current values', () => {
     const onAction = vi.fn();
     const tree = expandOne({
       type: 'form',
@@ -222,14 +222,17 @@ describe('fallback rendering: new widgets', () => {
 
     const checkbox = findOne(el, (e) => e.attrs.type === 'checkbox');
     expect(checkbox).toBeTruthy();
-    const slider = findOne(el, (e) => e.attrs.type === 'range');
-    expect(slider?.attrs.min).toBe('60');
-    expect(slider?.attrs.max).toBe('80');
+    expect(findOne(el, (e) => e.attrs.type === 'range')).toBeFalsy();
+    const level = findOne(el, (e) => e.attrs['data-level'] === 'value');
+    expect(level?.attrs['aria-valuemin']).toBe('60');
+    expect(level?.attrs['aria-valuemax']).toBe('80');
+    const presets = findAll(level!, (e) => e.className === 'mc-fb-preset');
+    expect(presets.map((b) => b.textContent)).toEqual(['60', '65', '70', '75', '80']);
     const choiceBtns = findAll(el, (e) => e.className.includes('mc-fb-choice'));
     expect(choiceBtns).toHaveLength(2);
 
     checkbox!.fire('change', { target: { checked: true } });
-    slider!.fire('input', { target: { value: '75' } });
+    presets[3].fire('click');
     choiceBtns[1].fire('click');
 
     const submitBtn = findOne(el, (e) => e.className === 'primary');

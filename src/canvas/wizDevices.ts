@@ -1,11 +1,12 @@
-// Wires the canvas's stub lamp devices ('wiz-desk', 'wiz-ceiling') to the real
-// local WiZ bridge (scripts/wiz-bridge.mjs, via src/devices/wizClient) when it
-// answers; every other device, and every wiz- device while the bridge is
-// unreachable, falls through to `fallback` (the canvas's own simulated
-// connector) — tagged `sim: true` so the tile shows it's not the real bulb.
-import type { DeviceConnector, DeviceIntent } from './deviceActions';
+// Wires the canvas's lamp devices (ids starting 'wiz-') to the real local WiZ
+// bridge (scripts/wiz-bridge.mjs, via src/devices/wizClient) when it answers;
+// every other device, and every wiz- device while the bridge is unreachable,
+// falls through to `fallback` (the canvas's own simulated connector) — tagged
+// `sim: true` so the tile shows it's not the real bulb.
+import { lampLook, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
-import type { WizClient } from '../devices/wizClient';
+import { BridgeRefusedError, type WizClient } from '../devices/wizClient';
+import type { LampIntent, LampState } from '../devices/wiz';
 
 export function isWizDevice(deviceId: string): boolean {
   return deviceId.startsWith('wiz-');
@@ -25,18 +26,44 @@ export interface WizConnectorDeps {
   bulbIp?: (deviceId: string) => string;
 }
 
+/** The one WiZ command a device intent becomes. A scene, a colour and a white
+ *  are separate bulb modes, so the most specific one asked for wins; then
+ *  brightness; then plain power. */
+export function wizIntentFor(intent: DeviceIntent): LampIntent {
+  // Off is off: "lamp to 0 %" must never reach the bulb as a dim (WiZ's floor
+  // is 10 %, and a dim also turns the bulb ON).
+  if (intent.on === false || intent.brightness === 0) return { kind: 'power', on: false };
+  if (intent.sceneId !== undefined) return { kind: 'scene', sceneId: intent.sceneId };
+  if (intent.rgb !== undefined) return { kind: 'color', rgb: intent.rgb };
+  if (intent.temp !== undefined) return { kind: 'temp', temp: intent.temp };
+  if (intent.brightness !== undefined) return { kind: 'dim', dimming: intent.brightness };
+  return { kind: 'power', on: intent.on ?? true };
+}
+
+const hex = (c: { r: number; g: number; b: number }): string =>
+  `#${[c.r, c.g, c.b].map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+
+/** What the bulb reported, as the tile's look; what was asked fills the gaps. */
+function lookFrom(state: LampState | null, intent: DeviceIntent): Partial<DeviceState> {
+  if (!state) return lampLook(intent);
+  if (state.sceneId) return { sceneId: state.sceneId, color: '', temp: 0 };
+  if (state.rgb) return { color: hex(state.rgb), sceneId: 0, temp: 0 };
+  if (state.temp) return { temp: state.temp, color: '', sceneId: 0 };
+  return lampLook(intent);
+}
+
 export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector {
   const bulbIp = deps.bulbIp ?? (() => '');
   return {
     async run(intent: DeviceIntent): Promise<Partial<DeviceState>> {
       if (isWizDevice(intent.deviceId) && deps.status.up) {
         try {
-          const lampIntent = intent.brightness !== undefined
-            ? { kind: 'dim' as const, dimming: intent.brightness }
-            : { kind: 'power' as const, on: intent.on ?? true };
-          const state = await deps.client.setPilot(bulbIp(intent.deviceId), lampIntent);
-          return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, sim: false };
-        } catch {
+          const state = await deps.client.setPilot(bulbIp(intent.deviceId), wizIntentFor(intent));
+          return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false };
+        } catch (err) {
+          // The bridge is up and refused the value: the lamp did not change and
+          // nothing is simulated in its place — the store shows the refusal.
+          if (err instanceof BridgeRefusedError) throw err;
           deps.status.up = false; // bridge dropped mid-session — fall through below.
         }
       }

@@ -66,7 +66,9 @@ export function levelReadout(el: HTMLElement): string {
   }
   if (v === null) return name;
   if (kind === 'temp' && hi > 100) return `${name} ${Math.round(v)} K`;
-  const pct = hi > lo ? Math.round(((v - lo) / (hi - lo)) * 100) : Math.round(v);
+  // Brightness and volume are already percentages (a lamp's 10–100 % floor is
+  // not a new zero): say the value the tile itself shows.
+  const pct = kind === 'brightness' || kind === 'volume' ? Math.round(v) : hi > lo ? Math.round(((v - lo) / (hi - lo)) * 100) : Math.round(v);
   return `${name} ${pct} %`;
 }
 
