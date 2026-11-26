@@ -346,7 +346,9 @@ export interface HandPointerOptions {
    *  fist's screen-space delta (CSS px) each frame after, 'end' when the
    *  fist opens, the hand is lost, or a second fist takes over (zoom).
    *  `x`/`y` is the fist's current screen point (CSS px), for edge transfer. */
-  onBoardMove?: (ev: { phase: 'start' | 'move' | 'end'; frameId: string; dx: number; dy: number; x?: number; y?: number }) => void;
+  /** 'cancel': the move is abandoned (looked away mid-drag) — put the board
+   *  back where the drag began; nothing is handed off. */
+  onBoardMove?: (ev: { phase: 'start' | 'move' | 'end' | 'cancel'; frameId: string; dx: number; dy: number; x?: number; y?: number }) => void;
   /** One fist over empty canvas: "grab the world" — screen-px deltas, 1:1. */
   onWorldPan?: (ev: { phase: 'start' | 'move' | 'end'; dx: number; dy: number }) => void;
   /** Two fists: anchored zoom. `a`/`b` are the two fists' screen points
@@ -426,11 +428,10 @@ export function confirmLabelFor(el: HTMLElement): string {
 
 /** A dropped hand stays assigned this long so a 1-frame dropout does not reset it. */
 const SLOT_LOST_MS = 400;
-/** "Not facing" must hold this long before the hands lock (a glance
- *  doesn't flicker it)… */
-export const FACING_LOCK_MS = 300;
-/** …and this long before a running grab is ended. */
-export const FACING_GRAB_END_MS = 400;
+/** Facing must hold this long, continuously, before locked hands act again
+ *  (on top of the face gate's own pose debounce) — turning the head back to
+ *  the screen can't fire something mid-swing. */
+export const FACING_RESUME_MS = 300;
 /** Wrist + finger MCPs: the landmarks the camera-edge test watches. */
 const PALM_IDS = [0, 5, 9, 13, 17] as const;
 
@@ -504,8 +505,11 @@ export interface HandPointer {
   /** Click whatever the cursor currently targets, as a fist tap would (the
    *  hook for other click triggers, e.g. a face click). True if it clicked. */
   clickTarget(): boolean;
-  /** The facing signal: false = explicitly NOT facing this screen (locks
-   *  the hands after FACING_LOCK_MS), true / null (unknown) = allowed. */
+  /** The facing gate: false = NOT facing this screen — locks the hands at
+   *  once (any grab is cancelled, nothing acts or moves); true / null (no
+   *  face tracking at all, e.g. the sim) = allowed, but a lock only lifts
+   *  after FACING_RESUME_MS of continuous non-false. The laptop canvas feeds
+   *  it a strict boolean (handFacing.presenceHandFacing: no face = false). */
   setFacing?(facing: boolean | null, now: number): void;
   /** True while the hands are locked for "not facing". */
   handsLocked?(): boolean;
@@ -687,6 +691,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   // A dismiss scrim is a target but not a "thing": keep the plain cursor at
   // the fingertip instead of framing the whole screen.
   const isDismiss = (el: HTMLElement | null) => !!el && el.getAttribute?.('data-hand-dismiss') != null;
+  /** The cursor has been placed since the hand (re)appeared. */
+  let cursorShown = false;
   function paint() {
     if (target && !isDismiss(target) && !overridden) {
       const r = target.getBoundingClientRect();
@@ -698,6 +704,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       frame.hidden = true;
     }
     cursor.hidden = pt.x < 0;
+    if (pt.x < 0) cursorShown = false;
     cursor.classList.toggle('is-pinched', pinched);
     cursor.classList.toggle('is-fist', fisted);
     cursor.classList.toggle('is-away', !!opts.handsLocked?.());
@@ -710,7 +717,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // Visual cursor eases toward the focused target centre (the magnet).
     // Hit-testing and dwell still use the un-eased palm point `pt` + magnet.
     paintConfirm(target, !!(pinched || (dwellProgress > 0 && isConfirmAction(target))));
+    // Not facing the screen: the cursor stays frozen where the hands locked.
+    if (opts.handsLocked?.() && pt.x >= 0 && cursorShown) return;
     const shown = displayPoint(pt);
+    cursorShown = true;
     cursor.style.transform = fisted
       ? `translate(${shown.x}px, ${shown.y}px) translate(-50%, -50%)`
       : `translate(${shown.x}px, ${shown.y}px)`;
@@ -1357,22 +1367,36 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const handleEvent = opts.createDragEvent ?? ((type: string, p: P) =>
     new PointerEvent(type, { bubbles: true, composed: true, cancelable: true, clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'pen' }));
   const fireHandle = (el: HTMLElement, type: string, p: P): void => { if (!opts.dryRun) el.dispatchEvent(handleEvent(type, p)); };
-  // Facing gate: only an explicit "not facing" (held FACING_LOCK_MS) locks
-  // the hands; unknown (no face tracker / face not visible) never does.
-  let awaySince: number | null = null;
+  // Facing gate (the ONE gate every hand path reads, via handsLocked()):
+  // "not facing" locks at once — the upstream face gate already debounced
+  // it — and a running grab is cancelled, never committed. The lock lifts
+  // only after FACING_RESUME_MS of continuous facing (or no signal at all).
+  let away = false;
+  let okSince = -Infinity;
   let locked = false;
   let resumeAt = -Infinity;
   // "Look at the screen to use hands": created the first time it's needed.
   let hint: HTMLElement | null = null;
+  let hintAt: P | null = null;
   function evalFacing(t: number): void {
-    const next = awaySince !== null && t - awaySince >= FACING_LOCK_MS;
-    if (locked && !next) {
-      // Resume immediately, with the tap guards (open-before, target lock)
-      // restarted and any fist that is closed right now spent until it opens.
+    const next = away || (locked && t - okSince < FACING_RESUME_MS);
+    if (next && !locked) {
+      locked = true;
+      // Nothing in progress survives a look away: a grab is cancelled (a
+      // board goes back, a plan stroke is dropped, a panel drag is a
+      // pointercancel) and any closed fist is spent until it opens.
+      cancelGrab();
+      for (let i = 0; i < 2; i++) { if (fist[i].wasFisted) fist[i].spent = true; fist[i].tapArmed = false; }
+      const i = active[0] ? 0 : active[1] ? 1 : -1;
+      hintAt = i >= 0 ? slots[i].cursorPoint() : null;
+    } else if (!next && locked) {
+      // Resume with the tap guards (open-before, target lock) restarted and
+      // any fist that is closed right now spent until it opens.
+      locked = false;
       resumeAt = t;
+      hintAt = null;
       for (let i = 0; i < 2; i++) if (fist[i].wasFisted) fist[i].spent = true;
     }
-    locked = next;
   }
   function paintHint(): void {
     const i = active[0] ? 0 : active[1] ? 1 : -1;
@@ -1387,7 +1411,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (!hint) return;
     hint.hidden = !show;
     if (show) {
-      const p = slots[i].rawPoint();
+      // Frozen where the cursor was when the hands locked: nothing moves.
+      if (!hintAt || hintAt.x < 0) hintAt = slots[i].cursorPoint();
+      const p = hintAt;
       hint.style.transform = `translate(${p.x + 18}px, ${p.y + 22}px)`;
     }
   }
@@ -1450,6 +1476,17 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     else if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
     else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
     else if (g.kind === 'handle') fireHandle(g.el, 'pointerup', g.last);
+    else zoomEv('end', g.a, g.b, g.edit);
+  }
+  /** Abandon a running grab without committing it (looked away). */
+  function cancelGrab(): void {
+    const g = grab;
+    if (!g) return;
+    setGrab(null);
+    if (g.kind === 'surface') g.edit.fistCancel();
+    else if (g.kind === 'board') opts.onBoardMove?.({ phase: 'cancel', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
+    else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
+    else if (g.kind === 'handle') fireHandle(g.el, 'pointercancel', g.last);
     else zoomEv('end', g.a, g.b, g.edit);
   }
   function zoomEv(phase: 'start' | 'move' | 'end', a: P, b: P, edit?: HandSurfaceEdit): void {
@@ -1573,13 +1610,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   function updateGrabs(t: number): void {
     updateFists(t);
     if (locked) {
-      // Not facing the screen: nothing new starts; a running grab ends
-      // cleanly ('end', position kept) once facing has been lost long enough.
-      if (grab && awaySince !== null && t - awaySince >= FACING_GRAB_END_MS) {
-        endGrab();
-        for (let i = 0; i < 2; i++) if (fist[i].wasFisted) fist[i].spent = true;
-      }
-      if (!grab) return;
+      // Not facing the screen: nothing starts, nothing runs (the lock
+      // already cancelled any grab).
+      if (grab) cancelGrab();
+      return;
     }
     const fisted = [0, 1].map((i) => fist[i].wasFisted);
     const ready = [0, 1].map((i) => fisted[i] && fist[i].holding && !fist[i].spent);
@@ -1668,8 +1702,8 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     isBoardGrabbed: () => grab?.kind === 'board',
     isGrabActive: () => !!grab,
     setFacing(f: boolean | null, t: number) {
-      if (f === false) { if (awaySince === null) awaySince = t; }
-      else awaySince = null;
+      if (f === false) away = true;
+      else if (away) { away = false; okSince = t; }
       evalFacing(t);
       paintHint();
     },

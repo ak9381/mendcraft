@@ -31,7 +31,7 @@ describe('hand gate thresholds (looser than look-to-sync facing)', () => {
 });
 
 describe('createHandGate', () => {
-  it('no face → unknown (null), never "not facing"', () => {
+  it('no face → unknown (null); the laptop hands read that as NOT facing (handFacing)', () => {
     const g = createHandGate();
     expect(feed(g, null, 0, 2000)).toBeNull();
   });
@@ -45,14 +45,18 @@ describe('createHandGate', () => {
     expect(g.update({ yaw: 60, pitch: 0 }, 600)).toBe(false); // settled and actually turned
   });
 
-  it('a frontal face settles to facing; a glance (< 250 ms) does not flip it; a held turn does', () => {
+  it('a frontal face settles to facing; ONE turned frame does not flip it; two (≥150 ms) do', () => {
     const g = createHandGate();
+    expect(HAND_GATE.leaveDebounceMs).toBe(150);
     expect(feed(g, { yaw: 0, pitch: 10 }, 0, 600)).toBe(true);
-    expect(g.update({ yaw: 50, pitch: 0 }, 800)).toBe(true); // just turned
-    expect(g.update({ yaw: 0, pitch: 0 }, 1000)).toBe(true); // back within 250 ms
+    expect(g.update({ yaw: 50, pitch: 0 }, 800)).toBe(true); // just turned (one face frame)
+    expect(g.update({ yaw: 0, pitch: 0 }, 1000)).toBe(true); // back on the next frame
     expect(g.update({ yaw: 50, pitch: 0 }, 1200)).toBe(true);
-    expect(g.update({ yaw: 50, pitch: 0 }, 1400)).toBe(true); // 200 ms
-    expect(g.update({ yaw: 50, pitch: 0 }, 1600)).toBe(false); // 400 ms ≥ 250 ms
+    expect(g.update({ yaw: 50, pitch: 0 }, 1400)).toBe(false); // second turned frame: 200 ms ≥ 150 ms
+    // Turning back still needs the 250 ms debounce.
+    expect(g.update({ yaw: 0, pitch: 0 }, 1600)).toBe(false);
+    expect(g.update({ yaw: 0, pitch: 0 }, 1800)).toBe(false); // 200 ms
+    expect(g.update({ yaw: 0, pitch: 0 }, 2000)).toBe(true); // 400 ms ≥ 250 ms
   });
 
   it('looking down at your hands (pitch 40°) keeps the hands unlocked', () => {
@@ -61,10 +65,21 @@ describe('createHandGate', () => {
     expect(feed(g, { yaw: 5, pitch: 40 }, 800, 3000)).toBe(true);
   });
 
-  it('losing the face resets: the next appearance is unknown again', () => {
+  it('losing the face (past the 250 ms grace) resets: the next appearance is unknown again', () => {
     const g = createHandGate();
     feed(g, { yaw: 60, pitch: 0 }, 0, 1000);
-    expect(g.update(null, 1200)).toBeNull();
-    expect(g.update({ yaw: 60, pitch: 0 }, 1400)).toBeNull();
+    expect(g.update(null, 1200)).toBe(false); // one missed face frame: kept
+    expect(g.update(null, 1400)).toBeNull(); // two: gone
+    expect(g.update({ yaw: 60, pitch: 0 }, 1600)).toBeNull();
+  });
+
+  it('one missed face frame (a hand passing in front of it) keeps "facing"; a longer loss does not', () => {
+    const g = createHandGate();
+    expect(HAND_GATE.lostGraceMs).toBe(250);
+    feed(g, { yaw: 0, pitch: 0 }, 0, 1000);
+    expect(g.update(null, 1200)).toBe(true);
+    expect(g.update({ yaw: 0, pitch: 0 }, 1400)).toBe(true); // back: no 500 ms re-settle
+    expect(g.update(null, 1600)).toBe(true);
+    expect(g.update(null, 1800)).toBeNull();
   });
 });

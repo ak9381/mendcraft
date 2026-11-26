@@ -76,6 +76,10 @@ export interface PresenceFrame {
    *  Never drawn, stored or sent anywhere. */
   operatorFace?: { x: number; y: number; z?: number }[] | null;
   facing: boolean;
+  /** The canvas HAND GATE for the focus face (the operator, or the main face
+   *  before registration), with the gate's short lost-face grace: true /
+   *  false / null (no face, or not settled). Present whenever faces run. */
+  handGate?: boolean | null;
   registered: boolean;
   paused: boolean;
   /** Camera frame height ÷ width (landmark y is normalised to it). */
@@ -262,7 +266,7 @@ export function createPresenceTracker(
       lastHandGate = handGate.update(pose, now);
       emitFacing(facing);
     } else {
-      lastHandGate = handGate.update(null, now); // no face → unknown, never "not facing"
+      lastHandGate = handGate.update(null, now); // no face → null after the grace (the laptop hands: not facing)
       emitFacing(facingTracker.update({ yaw: 90, pitch: 90 }, now)); // no face → not facing
     }
   }
@@ -339,6 +343,7 @@ export function createPresenceTracker(
       faces: faceFrames(),
       operatorFace: focusFace,
       facing: lastFacing,
+      ...(wantFaces ? { handGate: lastHandGate } : {}),
       registered: operator.registered,
       paused,
       aspect: video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : undefined,

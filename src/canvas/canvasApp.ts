@@ -99,7 +99,7 @@ import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { loadSetup } from '../setup/setupState';
 
-import { cameraHandsFromSelfie } from './handSpace';
+import { createLaptopHandRouter } from './handFacing';
 import type { PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
 import { phoneSayText } from './phoneSay';
@@ -3373,6 +3373,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
       })
     : null;
+  /** Where the board under a running hand drag started (a cancel puts it back). */
+  let handBoardFrom: { frameId: string; x: number; y: number } | null = null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
         targetOverride: (now) => palmHighlight?.forced(now) ?? null,
@@ -3389,8 +3391,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Held at a paired phone's edge, the board is sent there (boardEdge).
         onBoardMove: (ev) => {
           const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
-          if (ev.phase === 'start') { boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return; }
-          if (ev.phase === 'end') { boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
+          if (ev.phase === 'start') {
+            const f0 = reg.get(ev.frameId);
+            handBoardFrom = f0 ? { frameId: ev.frameId, x: f0.rect.x, y: f0.rect.y } : null;
+            boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return;
+          }
+          if (ev.phase === 'end') { handBoardFrom = null; boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
+          if (ev.phase === 'cancel') {
+            // Looked away mid-drag: nothing is handed off and the board goes
+            // back to where the drag began.
+            boardEdge.handleBoardDrag({ ...at, phase: 'cancel' });
+            const from = handBoardFrom; handBoardFrom = null;
+            const f = reg.get(ev.frameId);
+            if (from && f && from.frameId === ev.frameId) { reg.setRect(ev.frameId, { ...f.rect, x: from.x, y: from.y }); sync(); }
+            return;
+          }
           if (ev.phase !== 'move') return;
           // The edge check runs even on a zero delta (a palm clamped at the edge);
           // a fist held perfectly still is covered by boardEdge's own hold timer.
@@ -3442,9 +3457,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Button gestures (gestureControl.ts): a fixed hand shape held still for
   // 2 s presses its bound button — a real click, the same path as the
   // mouse. Badges show only while Hands is on. Phones bind the short table.
-  // Facing gate: the operator's hand gate from presence frames.
-  let gestureFacing: boolean | null = null;
-  let gestureFaceX: number | null = null;
+  // Facing gate: handRouter (handFacing.ts) — one gate, read by every path.
   const gestures: GestureControl | null = typeof document !== 'undefined' && handPointer
     ? createGestureControl({
         root,
@@ -3536,7 +3549,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Gestures are paused while something else owns the hands: a fist grab,
    *  the not-facing lock, or the point-to-connect capture step. */
-  const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
+  const gesturesBlocked = (): boolean => handRouter.blocked();
   /** Finger counts (1/2/3) are off while a point capture is armed and for a
    *  second after it: a natural pointing hand must never press a chip. */
   const POINT_COUNT_QUIET_MS = 1000;
@@ -3546,25 +3559,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  cancels a hold and lets the overlays clear): the ONE shape read, then
    *  the pointer (which reuses it: a thumbs-up is never a fist), then the
    *  button gestures, then the taught-gesture matcher and point capture. */
+  // The pointer owns every live hand gesture (dwell-click, one-fist grab,
+  // two-fist zoom); the router feeds it, the plan peace, the button gestures
+  // and the taught gestures in that order, all behind the ONE facing gate.
+  const handRouter = createLaptopHandRouter({
+    pointer: handPointer,
+    gestures,
+    cameraAspect: () => handCameraAspect,
+    extraBlocked: () => !!pointWait,
+    suppressCounts: countsSuppressed,
+    planFrame: (hands, now, facing) => planHandFrame(hands as readonly (readonly CropPt[])[], now, facing),
+    teach: (hands, now) => teachPanel.matchFrame(hands as readonly (readonly CropPt[])[], now),
+    pointWait: (cam, now) => feedPointWait(cam as readonly (readonly CropPt[])[], now),
+  });
   function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
-    gestures?.read(hands, { faceX: gestureFaceX, cameraAspect: handCameraAspect });
-    // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
-    // The pointer owns every live hand gesture: dwell-click, one-fist
-    // grab (board move / pan) and two-fist zoom.
-    const cam = cameraHandsFromSelfie(hands);
-    handPointer?.update(cam, now);
-    const planPeaceCtx = planHandFrame(hands, now, gestureFacing);
-    gestures?.frame(hands, now, {
-      facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
-      suppressCounts: countsSuppressed(),
-      ...planPeaceCtx,
-    });
-    if (!hands.length) return;
-    // Taught gestures obey the same guards as built-ins: never while the
-    // hands are locked (not facing the screen) or a fist grab is running —
-    // and never over a fixed button gesture (held, or its shape showing).
-    if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive() && !gestures?.busy()) teachPanel.matchFrame(hands, now);
-    feedPointWait(cam, now);
+    handRouter.frame(hands, now);
   }
 
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —
@@ -3744,14 +3753,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Hands only act while the user faces this screen: the operator's HAND
     // GATE, the same signal as the "Facing this device / Not facing" pill.
-    // No face, an unsettled face, or a stranger's face (registered operator
-    // lost) = unknown, which never locks the hands (handPointer adds the
-    // 300 ms hysteresis). Point-to-connect is intentionally NOT gated on
-    // facing: you look at the device you point at, not at this screen.
-    const op = f.faces.find((x) => x.isOperator);
-    handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
-    gestureFacing = op ? (op.handGate ?? null) : null;
-    gestureFaceX = op ? op.box.cx : null;
+    // Strict: no face, an unsettled face, or a stranger's face (registered
+    // operator lost) all count as NOT facing (handFacing.presenceHandFacing).
+    // Point-to-connect is intentionally NOT gated on facing: you look at the
+    // device you point at, not at this screen.
+    handRouter.presence(f, now);
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (scanPanel?.isOpen()) {
@@ -4850,7 +4856,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
       },
       /** The operator hand gate as presence would set it (false = not facing). */
-      facing: (v: boolean | null) => { gestureFacing = v; handPointer?.setFacing?.(v, typeof performance !== 'undefined' ? performance.now() : Date.now()); },
+      facing: (v: boolean | null, now?: number) => { handRouter.setFacing(v, now); },
+      /** A presence frame's face part through the REAL facing gate (what the
+       *  camera sends, on the replay's clock): `faces: []` = no face seen =
+       *  not facing. */
+      presenceFaces: (faces: PresenceFrame['faces'], now: number) => { handRouter.presence({ faces }, now); },
+      /** The one gate's view: locked (not facing or still settling). */
+      handsLocked: () => handRouter.locked(),
       /** For assertions: camera, any grab running, debug state. */
       state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
       /** Selfie-space wrist position that puts the PALM at screen (x, y). */
