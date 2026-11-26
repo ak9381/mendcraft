@@ -3,7 +3,7 @@
 // routes for them, and room boards that never scroll inside themselves.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { createActQueue, createDeviceStore, LAMP_OFF_REFUSAL, lampLook, lampOffRefusal, simulatedAck, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
+import { createActQueue, createDeviceStore, LAMP_OFF_REFUSAL, lampLook, lampOffRefusal, simulatedAck, spokenStatus, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
 import { mountItemHandles } from '../../src/canvas/editBoard';
 import { COLOUR_RANGE_REFUSAL, LAMP_RANGE_REFUSAL, SCENE_REFUSAL, TEMP_RANGE_REFUSAL, levelRefusal } from '../../src/canvas/deviceGuard';
 import { parseDeviceCommands, type DeviceRef } from '../../src/canvas/deviceCommands';
@@ -683,5 +683,59 @@ describe('review round 1', () => {
     move.fns.pointermove[0]({ clientX: 80, clientY: 40 }); // 80 screen px at 0.8 = 100 board px
     expect(item.style.left).toBe('200px');
     expect(item.style.top).toBe('150px');
+  });
+});
+
+describe('a spoken device command says its status only once the lane has answered', () => {
+  const speak = async (text: string, state: Record<string, DeviceState>, refs: DeviceRef[]) => {
+    const run = vi.fn(async (i: DeviceIntent) => simulatedAck(state[i.deviceId], i));
+    const store = createDeviceStore(state, { run }, () => {}, () => null);
+    const q = createActQueue(store);
+    const dc = parseDeviceCommands(text, refs)!;
+    const line = spokenStatus(await Promise.allSettled(dc.intents.map((i) => q.act(i))), dc.say);
+    return { line, parserLine: dc.say, run };
+  };
+  const refs = (on: boolean): DeviceRef[] => [{ id: 'wiz-desk', label: 'Desk lamp', kind: 'lamp', on, brightness: 40 }];
+
+  it('"dim the desk lamp" on a lamp that is off says the refusal, not "Dimmed …"', async () => {
+    const r = await speak('dim the desk lamp', { 'wiz-desk': lamp({ on: false, brightness: 40 }) }, refs(false));
+    expect(r.parserLine).toMatch(/^Dimmed/);
+    expect(r.line).toBe('The lamp is off — turn it on first. Nothing changed.');
+    expect(r.run).not.toHaveBeenCalled();
+  });
+
+  it('the same words on a lamp that is on say the parser\'s line', async () => {
+    const r = await speak('dim the desk lamp', { 'wiz-desk': lamp({ on: true, brightness: 40 }) }, refs(true));
+    expect(r.line).toBe('Dimmed Desk lamp.');
+    expect(r.run).toHaveBeenCalledOnce();
+  });
+
+  it('an out-of-range level says the range refusal', async () => {
+    const r = await speak('set the desk lamp to 500%', { 'wiz-desk': lamp({ on: true }) }, refs(true));
+    expect(r.line).toBe(LAMP_RANGE_REFUSAL);
+  });
+
+  it('some applied, some refused: both are said; a device that never answered is said too', () => {
+    const ok = { status: 'fulfilled', value: lamp({ error: '' }) } as const;
+    const refused = { status: 'fulfilled', value: lamp({ on: false, error: LAMP_OFF_REFUSAL }) } as const;
+    expect(spokenStatus([ok, ok], 'Dimmed everything.')).toBe('Dimmed everything.');
+    expect(spokenStatus([ok, refused], 'Dimmed everything.')).toBe(`Dimmed everything. ${LAMP_OFF_REFUSAL}`);
+    expect(spokenStatus([refused, refused], 'Dimmed everything.')).toBe(LAMP_OFF_REFUSAL);
+    expect(spokenStatus([{ status: 'rejected', reason: new Error('unknown device x') }], 'Lights on.')).toBe('That device did not answer. Nothing changed.');
+  });
+
+  it('a connector failure is said as the store reports it', async () => {
+    const store = createDeviceStore({ 'wiz-desk': lamp({ on: true }) }, { run: async () => { throw new Error('no'); } }, () => {}, () => null);
+    const q = createActQueue(store);
+    const dc = parseDeviceCommands('turn off the desk lamp', refs(true))!;
+    expect(spokenStatus(await Promise.allSettled(dc.intents.map((i) => q.act(i))), dc.say)).toBe('Lamp refused the change');
+  });
+
+  it('canvasApp waits for the lane before it speaks, and never says the parser\'s line up front', () => {
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toMatch(/void Promise\.allSettled\(acts\)\.then\(\(results\) => \{\s*const line = spokenStatus\(results, okLine\);/);
+    const deviceCase = app.slice(app.indexOf("case 'device': {"), app.indexOf("case 'connectDevices': {"));
+    expect(deviceCase).not.toMatch(/\n\s*say\(pack\?\.lang === 'kn'/); // the old immediate status line is gone
+    expect(deviceCase).not.toMatch(/\n\s*say\(dc\.say\)/);
   });
 });

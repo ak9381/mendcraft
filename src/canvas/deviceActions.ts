@@ -295,3 +295,15 @@ export function createActQueue(
     pending: (id) => { const l = lanes.get(id); return !!l && (l.busy || !!l.next || l.ordered.length > 0); },
   };
 }
+
+/** What a spoken device command says once its commands have really been
+ *  answered: the parser's line when they applied, the store's own refusal
+ *  when they did not ("The lamp is off — turn it on first. Nothing changed."
+ *  instead of "Dimmed …"). Some applied and some refused: both are said.
+ *  `results` are the settled lane promises, one per intent. Pure. */
+export function spokenStatus(results: readonly PromiseSettledResult<DeviceState>[], okLine: string): string {
+  const errors = results.map((r) => (r.status === 'fulfilled' ? r.value.error ?? '' : 'That device did not answer. Nothing changed.')).filter((e) => !!e);
+  if (!errors.length) return okLine;
+  const first = errors[0];
+  return errors.length === results.length ? first : `${okLine} ${first}`;
+}
