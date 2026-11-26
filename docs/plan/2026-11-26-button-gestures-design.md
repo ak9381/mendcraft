@@ -62,3 +62,6 @@ Android (and the iPhone control layer) get the same shapes behind the Hands pill
 
 ## Scroll gesture (26 Nov, Akash: "we definitely need scroll")
 Ruling: a peace sign that MOVES scrolls what's under the hand (board body, review list, drawer log, menus), else pans the canvas vertically — like two-finger trackpad scroll. Starts only after ≥40 px travel within 500 ms; then the peace hold (chip 2 / Tools) is cancelled for that shape. A still peace still fires its button after 2 s. Voice: "scroll up/down", "page up/down". Same on phones behind the Hands pill.
+
+## Read aloud (26 Nov, Akash)
+Replies are read aloud by default (on-device voices only). A "Read aloud: On/Off" button sits below Talk in the hand cluster (and on the phone). Fixed gesture to toggle: right thumbs up + left thumbs down held 2 s (mirror of Hover to click), with the pair grace so Approve/Undo never fire while it forms.
