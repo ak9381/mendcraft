@@ -65,3 +65,20 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 | Layout at 1550×656 | ✗→fixing: paired strip covers the board; chip bar under the Nano/Gemini pill; Disconnect appears where Continue was; hand cluster jumps ~20 px |
 
 **Needs Akash:** Chrome site settings for the preview → "Apps on device" → Allow (lamp + pointing at the bulb); dock the iPhone on the gimbal (it reports no stand); after reloading the laptop, say "connect devices" once.
+
+## Live run — 27 Nov, ~01:45 IST (sim-main preview, real Nano + Gemini, both phones; Akash asleep — no light, music or gimbal motion)
+
+| Step | Result |
+|---|---|
+| Rejoin both phones after reload | ✓ silent ("connect devices"), devices board: ✓ iPhone (gimbal tracking), ✓ Nothing, ✓ Lamp (WiZ answering), Speaker (Spotify connected) |
+| Build the dashboard | ✓ Nano draft → Gemini improve: Gimbal + Lamp + Speaker + Connect tiles (rebuild fix works). ✗ page unresponsive >45 s during the Nano turn → builder on it |
+| Floor plan on its own board | ✓ Nano on device, studio |
+| Voice plan edit "add a bedroom next to the studio" | ✓ Nano, review "Add Bedroom (6 × 3 m) north of Studio", applied |
+| Chat "can you call my daughter" | ✗ Nano said "Yes, I can. I will call your daughter right away." → guard inverted (builder on it) |
+| Board → phone (both edges) | ✓ glow + send both edges; ✗ phones show the ORIGINAL studio, not the edited plan; phone plan view cramped → builder on it |
+| Try to break it (speaker 150 %) | ✓ refused in 9 s |
+| Kannada | ✓ applied + undo (review took ~45 s from Gemini) |
+| Offline plan edit | ✓ "You're offline — this is Nano's draft", Gemini card "Offline" |
+| Facing pill (dark room) | ✓ "Not facing" |
+
+**For Akash in the morning (needs you):** Follow my hands with the new native tracking (stand follows hand, holds still without one; watch "DockKit tracking: off · aiming at hands: yes"); look-away on laptop + each phone (pills, nothing acts when you look away, ~0.5 s resume); lamp tile press + colours; Spotify play to the Marshall.
