@@ -31,17 +31,21 @@ function findChrome() {
   ].filter(Boolean).find((p) => existsSync(p));
 }
 
-/** Every recorded reply: file name without .json → its `reply` text. */
+/** Every reply file: file name without .json → its `reply` text, and the
+ *  keys whose `source` is "recorded" (every other one is a written example). */
 function loadReplies() {
   const replies = {};
-  if (!existsSync(FIXTURES)) return replies;
+  const recorded = [];
+  if (!existsSync(FIXTURES)) return { replies, recorded };
   for (const f of readdirSync(FIXTURES)) {
     if (!f.endsWith('.json')) continue;
     const rec = JSON.parse(readFileSync(join(FIXTURES, f), 'utf8'));
     if (typeof rec.reply !== 'string') throw new Error(`${f}: no "reply" string`);
-    replies[f.slice(0, -'.json'.length)] = rec.reply;
+    const key = f.slice(0, -'.json'.length);
+    replies[key] = rec.reply;
+    if (rec.source === 'recorded') recorded.push(key);
   }
-  return replies;
+  return { replies, recorded };
 }
 
 const failures = [];
@@ -363,7 +367,7 @@ async function speaker(page) {
 
   await page.evaluate(() => { window.__mcCanvas.run('add the speaker to the dashboard'); });
   if (!(await waitFor(page, reviewOpen, 15_000, 'the speaker review opens'))) return;
-  check((await page.evaluate(reviewText)).includes('Replay'), 'the speaker review names "Replay"');
+  check((await page.evaluate(reviewText)).includes('Replay · written example'), 'the speaker review says its reply is a hand-written example: "Replay · written example"');
   const said = await page.evaluate(reviewNotes);
   check(said.includes(SPEAKER_NOTE), `the review says the brightness slider was dropped (got ${JSON.stringify(said)})`);
   check(!(await page.evaluate(hasMusicTile)) && (await boardArtifacts(page)).length === 0, '0 speaker tiles and 0 boards until Approve');
@@ -419,7 +423,7 @@ async function main() {
   let puppeteer;
   try { puppeteer = require('puppeteer-core'); } catch { console.error('e2e-actual: puppeteer-core missing (npm ci).'); return 2; }
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`e2e-actual: no dev server at ${BASE} (start one: npx vite).`); return 2; }
-  const replies = loadReplies();
+  const { replies, recorded } = loadReplies();
   const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check'] });
   try {
     for (const [name, run] of Object.entries(SECTIONS)) {
@@ -430,7 +434,7 @@ async function main() {
       await page.setViewport({ width: 1440, height: 900 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e?.message || e)));
-      await page.evaluateOnNewDocument((r) => { window.__mcFixtures = { replies: r }; }, replies);
+      await page.evaluateOnNewDocument((r, rec) => { window.__mcFixtures = { replies: r, recorded: rec }; }, replies, recorded);
       await run(page);
       check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
       await ctx.close();

@@ -471,7 +471,8 @@ export function expandPlan(
       deviceData[t.deviceId] = {
         on: false, brightness: 0,
         playing: s?.playing ?? false,
-        volume: typeof s?.volume === 'number' ? s.volume : 50,
+        // Unknown until the speaker reports it: left out, never a made-up 50.
+        ...(typeof s?.volume === 'number' ? { volume: s.volume } : {}),
         trackTitle: s?.trackTitle ?? '',
         playingOn: s?.playingOn ?? '',
         source: s?.source ?? '',

@@ -21,14 +21,15 @@ export const STANDARD_CONTROLS_NOTE = 'Standard controls';
 /** The tile's live state, as the data model hands it over. */
 export interface TileState {
   cls: string; on: boolean; brightness: number; temp: number; color: string; sceneId: number;
-  playing: boolean; volume: number; trackTitle: string; playingOn: string; source: string; status: string;
+  /** null = nothing has reported the volume yet. */
+  playing: boolean; volume: number | null; trackTitle: string; playingOn: string; source: string; status: string;
 }
 export function tileState(p: Record<string, unknown>): TileState {
   const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
   return {
     cls: str(p.cls), on: !!p.on, brightness: num(p.brightness), temp: num(p.temp), color: str(p.color), sceneId: num(p.sceneId),
-    playing: !!p.playing, volume: num(p.volume, 50), trackTitle: str(p.trackTitle), playingOn: str(p.playingOn), source: str(p.source), status: str(p.status),
+    playing: !!p.playing, volume: typeof p.volume === 'number' && Number.isFinite(p.volume) ? p.volume : null, trackTitle: str(p.trackTitle), playingOn: str(p.playingOn), source: str(p.source), status: str(p.status),
   };
 }
 
@@ -64,14 +65,16 @@ export function intentMatches(i: IntentSpec, s: TileState): boolean {
 }
 
 /** A slider control as a level: its step, range, value and readout. */
-export function sliderView(key: SliderKey, s: TileState): { step: number; min: number; max: number; now: number; readout: string; fine: number } {
+export function sliderView(key: SliderKey, s: TileState, o: { unreachable?: boolean } = {}): { step: number; min: number; max: number; now: number; readout: string; fine: number; known: boolean } {
   const [min, max] = RANGES[key];
-  if (key === 'brightness') return { step: LAMP_TILE_STEP, min, max, now: s.brightness, readout: s.on ? `${s.brightness} %` : 'Off', fine: 1 };
+  if (key === 'brightness') return { step: LAMP_TILE_STEP, min, max, now: s.brightness, readout: s.on ? `${s.brightness} %` : 'Off', fine: 1, known: true };
   if (key === 'temp') {
     const white = s.on && !s.color && !s.sceneId && s.temp > 0;
-    return { step: TEMP_STEP, min, max, now: s.temp || TEMP_DEFAULT, readout: white ? `${s.temp} K` : '—', fine: 100 };
+    return { step: TEMP_STEP, min, max, now: s.temp || TEMP_DEFAULT, readout: white ? `${s.temp} K` : '—', fine: 100, known: true };
   }
-  return { step: VOLUME_TILE_STEP, min, max, now: s.volume, readout: `${s.volume} %`, fine: 1 };
+  // The speaker's real volume, or "—" while nothing has reported it (and when it isn't here).
+  const known = s.volume !== null && !o.unreachable;
+  return { step: VOLUME_TILE_STEP, min, max, now: s.volume ?? min, readout: known ? `${s.volume} %` : '—', fine: 1, known };
 }
 
 type Act = ((arg?: never) => void) | undefined;
@@ -132,10 +135,10 @@ export class DeviceTileElement extends A2uiLitElement<typeof DeviceTileApi> {
         </div></div>`;
     }
     if (c.kind === 'slider') {
-      const v = sliderView(c.key, s);
-      return html`<div class="level" data-level=${c.key} data-level-step=${v.step} data-control=${i} aria-valuemin=${v.min} aria-valuemax=${v.max} aria-valuenow=${v.now}
+      const v = sliderView(c.key, s, { unreachable: !!this.controller?.props?.unreachable });
+      return html`<div class="level" data-level=${c.key} data-level-step=${v.step} data-control=${i} aria-valuemin=${v.min} aria-valuemax=${v.max} aria-valuenow=${v.known ? v.now : nothing}
         role="group" aria-label=${`${c.label} ${v.readout}. Arrow keys change it a little.`}
-        @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); press(act, { control: i, value: Math.max(v.min, Math.min(v.max, v.now + d * v.fine)) }); } }}>
+        @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); press(act, v.known ? { control: i, value: Math.max(v.min, Math.min(v.max, v.now + d * v.fine)) } : { control: i, option: d > 0 ? 1 : 0 }); } }}>
         <div class="steps">
           <button class="step dec" data-level-dec aria-label=${`${c.label} down`} @click=${() => press(act, { control: i, option: 0 })}>−</button>
           <div class="readout"><small>${c.label}</small><span data-level-readout>${v.readout}</span></div>

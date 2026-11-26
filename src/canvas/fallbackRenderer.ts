@@ -701,11 +701,11 @@ export function renderNodeToDom(
     b.addEventListener('click', onClick);
     return b;
   }
-  function levelEl(kind: string, step: number, label: string, now: number, min: number, max: number): HTMLElement {
+  function levelEl(kind: string, step: number, label: string, now: number | null, min: number, max: number): HTMLElement {
     const el = mk('div', 'level');
     el.setAttribute('data-level', kind);
     el.setAttribute('data-level-step', String(step));
-    el.setAttribute('aria-valuenow', String(now));
+    if (now !== null) el.setAttribute('aria-valuenow', String(now));
     el.setAttribute('aria-valuemin', String(min));
     el.setAttribute('aria-valuemax', String(max));
     el.setAttribute('role', 'group');
@@ -753,8 +753,8 @@ export function renderNodeToDom(
         c.options.forEach((o, j) => group.appendChild(btn(o.label, 'chip', () => triggerAction(p.onAct, { control: i, option: j }), { pressed: intentMatches(o.intent, s), value: j })));
         el.appendChild(group);
       } else if (c.kind === 'slider') {
-        const v = sliderView(c.key, s);
-        const level = levelEl(c.key, v.step, `${c.label} ${v.readout}`, v.now, v.min, v.max);
+        const v = sliderView(c.key, s, { unreachable: !!p.unreachable });
+        const level = levelEl(c.key, v.step, `${c.label} ${v.readout}`, v.known ? v.now : null, v.min, v.max);
         const steps = mk('div', 'steps');
         steps.appendChild(btn('−', 'dec', () => triggerAction(p.onAct, { control: i, option: 0 }), { cls: 'step', label: `${c.label} down`, attrs: ['data-level-dec'] }));
         const ro = mk('div', 'readout', `${c.label} `);

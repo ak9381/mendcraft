@@ -126,7 +126,7 @@ export function createMusicSession(opts: {
   async function refreshFromSpotify(): Promise<void> {
     try {
       const pb = await api.getPlayback(apiOpts());
-      if (pb) cached = { title: pb.title, artist: pb.artist, playing: pb.playing, volume: pb.volume };
+      if (pb) cached = { title: pb.title, artist: pb.artist, playing: pb.playing, volume: pb.volume ?? 1 };
       emit();
     } catch {
       emit();

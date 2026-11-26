@@ -7,7 +7,9 @@ import { reduceA2uiMessages, renderNodeToDom, type RenderNode } from '../../src/
 import { CATALOG_SCHEMAS } from '../../src/canvas/catalogApi';
 import { gateMessages } from '../../src/canvas/gate';
 import { expandPlan, type DeviceState, type SurfacePlan } from '../../src/canvas/surfacePlan';
-import { NOT_CONNECTED_REFUSAL, bindingIntent, pressIntent, standardControls } from '../../src/canvas/controlSpec';
+import { NOT_CONNECTED_REFUSAL, VOLUME_UNREAD_REFUSAL, bindingIntent, pressIntent, standardControls, volumeReadNeeded } from '../../src/canvas/controlSpec';
+import { getPlayback } from '../../src/music/spotifyApi';
+import { sliderView, tileState } from '../../src/canvas/deviceTile';
 import { VOLUME_RANGE_REFUSAL } from '../../src/canvas/deviceGuard';
 import { DeviceError, type DeviceIntent } from '../../src/canvas/deviceActions';
 import { SPOTIFY_CONNECT_LINE, createSpotifyAwareConnector } from '../../src/canvas/spotifyConnector';
@@ -123,5 +125,33 @@ describe('speaker tile through the binding', () => {
     }
     expect(inner).toEqual([]);
     expect(said).toEqual([SPOTIFY_CONNECT_LINE, SPOTIFY_CONNECT_LINE, SPOTIFY_CONNECT_LINE]);
+  });
+
+  it('the volume is unknown until the speaker reports it: never a made-up 50', async () => {
+    const unread: DeviceState = { cls: 'music', on: false, brightness: 0, playing: false, source: 'spotify' };
+    // The tile shows "—", not a level, and its data model holds no volume.
+    const msgs = expandPlan(PLAIN, 'f1', { [ID]: unread }, { heading: false });
+    expect(JSON.stringify(msgs)).not.toMatch(/"volume":\s*50/);
+    const el = renderNodeToDom(tileNode(PLAIN, { [ID]: unread }), fakeDoc()) as unknown as FakeEl;
+    expect(textOf(el)).toMatch(/Volume\s+—/);
+    expect(sliderView('volume', tileState({ cls: 'music' })).readout).toBe('—');
+    // Not here: "—" as well, whatever was last known.
+    expect(sliderView('volume', tileState({ cls: 'music', volume: 40 }), { unreachable: true }).readout).toBe('—');
+    expect(sliderView('volume', tileState({ cls: 'music', volume: 40 })).readout).toBe('40 %');
+    // A step press needs the real volume first; anything else does not.
+    const get = () => unread;
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 1, option: 1 }, get)).toBe(ID);
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 1, option: 0 }, get)).toBe(ID);
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 1, value: 30 }, get)).toBeNull();
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 0 }, get)).toBeNull();
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 1, option: 1 }, () => ({ ...unread, volume: 40 }))).toBeNull();
+    expect(volumeReadNeeded(PLAIN, { tile: TILE, control: 1, option: 1 }, () => undefined)).toBeNull();
+    // Unread, the step is refused, never stepped from a guess.
+    expect(pressIntent(PLAIN, { tile: TILE, control: 1, option: 1 }, get)).toMatchObject({ refusal: VOLUME_UNREAD_REFUSAL });
+    expect(VOLUME_UNREAD_REFUSAL).toBe("Couldn't read the speaker's volume. Nothing changed.");
+    // Spotify's playback state with no volume is unknown, not 100 %.
+    const answer = (body: unknown) => async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    expect((await getPlayback({ accessToken: 't', fetchImpl: answer({ is_playing: true, device: { id: 'd', name: 'iPhone' }, item: { name: 'x' } }) }))?.volume).toBeNull();
+    expect((await getPlayback({ accessToken: 't', fetchImpl: answer({ is_playing: true, device: { id: 'd', name: 'iPhone', volume_percent: 35 } }) }))?.volume).toBe(0.35);
   });
 });

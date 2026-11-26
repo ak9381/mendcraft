@@ -53,7 +53,7 @@ import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TI
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
-import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
+import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
@@ -66,7 +66,7 @@ import {
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
 import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
-import { LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, hasLampTile, pressIntent, type DevicePress } from './controlSpec';
+import { LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, hasLampTile, pressIntent, volumeReadNeeded, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
@@ -128,7 +128,7 @@ import { boardForJourney } from './journey';
 import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } from './nextSteps';
 import { nanoQueue } from '../ai/nanoQueue';
 import { routeLine, type RouteWorld } from './routeLine';
-import { NO_MODEL_LINE, REPLAY_ROUTE, type TurnKind } from './replayEngine';
+import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import type { ArtifactBy } from '../artifacts/artifact';
 import { identifyDevice, onNanoBusyHandoff, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
@@ -1204,7 +1204,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const f = receipts.facts(si, { youAsked, sim: opts.sim });
     // A recorded reply is never passed off as a live model: the engine chip
     // says "Replay" (and stays on a combined draft + improve review).
-    return si?.routeLine.includes(REPLAY_ROUTE) ? { ...f, engineLabel: `${engineName(si.engine)} · ${REPLAY_ROUTE}` } : f;
+    const replay = replayRouteIn(si?.routeLine);
+    return si && replay ? { ...f, engineLabel: `${engineName(si.engine)} · ${replay}` } : f;
   };
   /** The teach turn's own ledger token, when a model (not the rules) parsed it. */
   let teachSent: SentInfo | null = null;
@@ -1355,12 +1356,32 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const actQueue = createActQueue(store);
   // The speaker: only Spotify plays it, so it is a device here only while
   // Spotify is connected (a test run's SIM speaker comes from its fixture).
-  // Nothing about it is made up: no track until Spotify names one.
-  if (!opts.sim && !opts.devices && !opts.connector && loadTokens() && !store.get(SPOTIFY_SPEAKER_ID)) {
-    store.add(SPOTIFY_SPEAKER_ID, { cls: 'music', on: false, brightness: 0, playing: false, volume: 50, trackTitle: '', source: 'spotify', playingOn: '', sim: false });
-    DEVICE_LABELS[SPOTIFY_SPEAKER_ID] ??= SPOTIFY_SPEAKER_LABEL;
-  }
+  // Nothing about it is made up: no track until Spotify names one, and no
+  // volume until Spotify reports it (read now, and again before a step).
   const spotifyConnected = (): boolean => !opts.sim && !!loadTokens();
+  /** The speaker's real volume from Spotify into the store; false when
+   *  Spotify did not say (nothing playing anywhere, no answer). */
+  async function readSpeakerVolume(id: string): Promise<boolean> {
+    if (!spotifyConnected() || !isSpeakerDevice(id) || !store.get(id)) return false;
+    try {
+      const pb = await spotifyApi.getPlayback(spOpts());
+      if (pb && typeof pb.volume === 'number') { store.patch(id, { volume: Math.round(pb.volume * 100) }); return true; }
+    } catch { /* not read: the volume stays unknown */ }
+    return false;
+  }
+  if (!opts.sim && !opts.devices && !opts.connector && loadTokens() && !store.get(SPOTIFY_SPEAKER_ID)) {
+    store.add(SPOTIFY_SPEAKER_ID, { cls: 'music', on: false, brightness: 0, playing: false, trackTitle: '', source: 'spotify', playingOn: '', sim: false });
+    DEVICE_LABELS[SPOTIFY_SPEAKER_ID] ??= SPOTIFY_SPEAKER_LABEL;
+    void readSpeakerVolume(SPOTIFY_SPEAKER_ID);
+  }
+  /** Read the volume first, then run `then`; not read: say so, change nothing. */
+  function withVolumeRead(ids: string[], then: () => void): void {
+    void Promise.all(ids.map(readSpeakerVolume)).then((ok) => {
+      if (ok.every(Boolean)) { then(); return; }
+      say(VOLUME_UNREAD_REFUSAL);
+      for (const id of ids) if (store.get(id)) store.patch(id, { error: VOLUME_UNREAD_REFUSAL });
+    });
+  }
   /** The lamps a board may show right now (managed ids in the device list). */
   const lampSlots = (): LampSlot[] => Object.keys(store.all()).filter(isManagedLampId).map((id) => ({ id, label: DEVICE_LABELS[id] ?? id }));
   /** Any plan about to be shown or applied names only lamps that exist: a
@@ -1517,6 +1538,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** One press on a generated device tile → the device lane, or the refusal said. */
   function devicePress(frameId: string, press: DevicePress): void {
+    // A volume step on a speaker whose volume nothing has reported: read it
+    // from Spotify first, never step from a guess.
+    const unread = volumeReadNeeded(surfaces[frameId], press, (id) => store.get(id));
+    if (unread) { withVolumeRead([unread], () => devicePress(frameId, press)); return; }
     const r = pressIntent(surfaces[frameId], press, (id) => store.get(id), { spotifyConnected });
     if ('refusal' in r) {
       say(r.refusal);
@@ -2163,6 +2188,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let streamsOut = 0;
   const counted = (e: SurfaceEngine): SurfaceEngine => ({
     ...e,
+    // Read through, not copied: a replay's label follows the reply it really took.
+    get routeLine() { return e.routeLine; },
     stream: async (prompt, onText, so) => { streamsOut++; try { return await e.stream(prompt, onText, so); } finally { streamsOut--; } },
     handoff: e.handoff ? counted(e.handoff) : undefined,
     fallback: e.fallback ? counted(e.fallback) : undefined,
@@ -4895,6 +4922,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // An impossible level is refused by validation, never clamped.
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        // "louder" / "softer" step from the speaker's real volume: read it
+        // first when nothing has reported it, then parse again.
+        if (dc.statusKey === 'louder' || dc.statusKey === 'softer') {
+          const unknown = dc.intents.map((i) => i.deviceId).filter((id) => { const d = store.get(id); return !!d && typeof d.volume !== 'number'; });
+          if (unknown.length) { withVolumeRead(unknown, () => { run(text); }); return true; }
+        }
         const acts: Promise<DeviceState>[] = [];
         for (const i of dc.intents) {
           // Same per-device lane as a tile press: a spoken "off" drops a chip

@@ -35,7 +35,7 @@ const params = new URLSearchParams(location.search);
 const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
 const replayOn = testBuild && params.get('sim') === '1';
-type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; devices?: unknown } };
+type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; devices?: unknown } };
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
@@ -173,7 +173,7 @@ const liveEngines = createEngines({
   },
   sim: params.has('sim'),
 });
-const engines = replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}) : liveEngines;
+const engines = replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded }) : liveEngines;
 // Test build + ?sim=1 only: the devices a run registers (simulated, labelled SIM).
 const simDevices = replayOn ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
 

@@ -42,7 +42,8 @@ export interface SpotifyPlayback {
   playing: boolean;
   title: string;
   artist: string;
-  volume: number;
+  /** 0..1, or null when Spotify did not report one. */
+  volume: number | null;
   deviceId: string | null;
   deviceName: string;
 }
@@ -131,7 +132,8 @@ export async function getPlayback(opts: SpotifyApiOptions = {}): Promise<Spotify
     playing: Boolean(o.is_playing),
     title: o.item?.name ?? '',
     artist: artists,
-    volume: typeof vol === 'number' ? Math.min(1, Math.max(0, vol / 100)) : 1,
+    // null = Spotify did not say (never a made-up 100 %).
+    volume: typeof vol === 'number' ? Math.min(1, Math.max(0, vol / 100)) : null,
     deviceId: o.device?.id ?? null,
     deviceName: o.device?.name ?? '',
   };

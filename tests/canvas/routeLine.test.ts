@@ -146,6 +146,13 @@ describe('routeLine: voice / typed edits to the floor plan', () => {
     // …but a vague one stays chat there
     expect(routeLine('make it bigger', planElsewhere).name).toBe('openEnded');
   });
+  it('"add … to the dashboard" is a board turn, but a room added beside a plan room stays a plan edit', () => {
+    for (const w of [onPlan, planElsewhere]) {
+      expect(routeLine('add a study next to bedroom 2 on the dashboard', w).name).toBe('planEdit');
+      expect(routeLine('add the speaker to the dashboard', w).name).toBe('connectRoom');
+    }
+    expect(routeLine('add the speaker to the dashboard', base).name).toBe('connectRoom');
+  });
   it('with no plan board anywhere, nothing becomes a plan edit', () => {
     expect(routeLine('add a study next to bedroom 2', base).name).toBe('openEnded');
     expect(routeLine('make it bigger', base).name).toBe('openEnded');

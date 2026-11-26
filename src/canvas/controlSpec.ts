@@ -44,6 +44,8 @@ export const NOT_CONNECTED_REFUSAL = "That device isn't connected. Nothing chang
 export const NO_LEVEL_REFUSAL = 'That control sent no level. Nothing changed.';
 export const NOT_THIS_DEVICE_REFUSAL = "That control can't do that on this device. Nothing changed.";
 export const UNKNOWN_CONTROL_REFUSAL = 'That control is not on this board. Nothing changed.';
+/** A volume step needs the speaker's real volume; it is never guessed. */
+export const VOLUME_UNREAD_REFUSAL = "Couldn't read the speaker's volume. Nothing changed.";
 
 const SLIDER_KEYS: readonly SliderKey[] = ['brightness', 'volume', 'temp'];
 const STATE_KEYS: Record<DeviceClass, readonly StateKey[]> = {
@@ -224,7 +226,8 @@ function resolveLevel(key: SliderKey, v: number | '$value' | Step, cur: DeviceSt
   } else if (typeof v === 'number') n = v;
   else if (key === 'brightness') n = lampStep(cur.brightness + v.step * LAMP_TILE_STEP);
   else if (key === 'temp') n = tempStep(cur.temp, v.step);
-  else n = Math.max(0, Math.min(100, (cur.volume ?? 50) + v.step * VOLUME_TILE_STEP));
+  else if (typeof cur.volume !== 'number' || !Number.isFinite(cur.volume)) return { refusal: VOLUME_UNREAD_REFUSAL };
+  else n = Math.max(0, Math.min(100, cur.volume + v.step * VOLUME_TILE_STEP));
   const why = levelRefusal({ [key]: n });
   return why ? { refusal: why } : n;
 }
@@ -311,6 +314,19 @@ export function sliderIntent(key: SliderKey, option: unknown, value: unknown): I
 /** What a `device.act` press carries. Only `tile`, `control`, `option` and
  *  (for a slider) `value` are read; anything else in it is ignored. */
 export interface DevicePress { tile?: unknown; control?: unknown; option?: unknown; value?: unknown; [k: string]: unknown }
+
+/** The speaker whose real volume must be read before this press can be
+ *  resolved: a volume step (− / +) on a speaker that is here but whose
+ *  volume nothing has reported yet. Null for every other press. */
+export function volumeReadNeeded(plan: SurfacePlan | undefined, press: DevicePress, get: (id: string) => DeviceState | undefined): string | null {
+  if (!plan || typeof press.tile !== 'string' || typeof press.control !== 'number' || press.value !== undefined) return null;
+  const hit = controlAt(plan, press.tile, press.control);
+  if (!hit || hit.cls !== 'music' || !('slider' in hit.spec) || hit.spec.slider !== 'volume') return null;
+  if (press.option !== 0 && press.option !== 1) return null;
+  const cur = get(hit.deviceId);
+  if (!cur || cur.unreachable) return null;
+  return typeof cur.volume === 'number' && Number.isFinite(cur.volume) ? null : hit.deviceId;
+}
 
 /** One press on an approved board → what to do, or the refusal to say.
  *  `spotifyConnected`: a speaker that is not here because Spotify is not

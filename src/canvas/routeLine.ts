@@ -89,15 +89,18 @@ export function matchScrollVoice(text: string): { dir: 'up' | 'down'; page: bool
 const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
 
 /** "make a dashboard for my desk lamp", "build me a control panel", "I want a
- *  dashboard", "add the speaker to the dashboard": a request to BUILD (or
- *  rebuild) a board — a board turn with a review, never small talk. A
- *  question ("what is a dashboard?") has no build verb. */
-const BUILD_BOARD_RE = /\b(make|build|create|design|generate|add|set\s*up|give\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
+ *  dashboard": a request to BUILD a board — a board turn with a review, never
+ *  small talk. A question ("what is a dashboard?") has no build verb. */
+const BUILD_BOARD_RE = /\b(make|build|create|design|generate|set\s*up|give\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
+/** "… on the dashboard" / "… to my board": where she is, not what she asks for. */
+const ON_BOARD_TAIL = /\b(?:on|to|in|onto)\s+(?:the|my|this)\s+(?:dashboards?|control\s+panels?|boards?)\b/gi;
+/** "add the speaker to the dashboard": the board is rebuilt with it, through a review. */
+const ADD_TO_BOARD_RE = /\badd\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
 // "show me a dashboard" builds one; "show me the control panel" / "show me
 // board 2" are navigation (or chat) unless they say dashboard or a new board.
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;
 export function isBuildBoardAsk(text: string): boolean {
-  return BUILD_BOARD_RE.test(text);
+  return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);
 }
 
 export function routeLine(text: string, world: RouteWorld): Route {
@@ -152,7 +155,10 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) return { name: 'connectRoom' };
   // "add a study next to bedroom 2": an edit to the plan that is already
   // there (a review of the change), never chat and never a fresh draft.
-  if ((world.planBoardExists || world.planFocused) && isPlanEditAsk(text) && !isBuildBoardAsk(text)) return { name: 'planEdit' };
+  // Checked before "add … to the dashboard": "add a study next to bedroom 2
+  // on the dashboard" is still a plan edit (where she said it doesn't make
+  // it a device); only a real build verb makes it a new board.
+  if ((world.planBoardExists || world.planFocused) && isPlanEditAsk(text.replace(ON_BOARD_TAIL, ' ')) && !BUILD_BOARD_RE.test(text)) return { name: 'planEdit' };
   if (/\bfloor\s*plans?\b/i.test(text)) return { name: 'floorPlan' };
   if (isBuildBoardAsk(text)) return { name: 'connectRoom' };
   const ask = connectAsk(text);
