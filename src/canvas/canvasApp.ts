@@ -81,7 +81,7 @@ import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, deepElementFromPoint, handSurfaceAt, mapToScreen, REACH, type HandPointer } from './handPointer';
+import { armedSurfaceAt, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
 import { feedDrawings, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
@@ -3245,8 +3245,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The armed plan hand-edit surface under a screen point (null: none). */
   function planEditAt(p: { x: number; y: number }): PlanHandSurface | null {
     if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') return null;
-    const edit = handSurfaceAt(deepElementFromPoint(document, p.x, p.y))?.handEdit as PlanHandSurface | undefined;
-    return edit && edit.armed(p.x, p.y) ? edit : null;
+    return armedSurfaceAt(document, p.x, p.y) as PlanHandSurface | null;
   }
   const planPeace = createPlanPeace();
   let planRefreshAt = -Infinity;

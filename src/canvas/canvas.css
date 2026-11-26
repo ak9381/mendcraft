@@ -1526,7 +1526,17 @@
 .mc-plan-hand-note[hidden] { display: none; }
 .mc-plan-hand-toggle { display: none; }
 .mc-gestures-on .mc-plan-hand-toggle { display: inline-block; }
-.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer { display: none; }
+.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer, .mc-plan-3d-bar { display: none; }
+/* The 3D view by hand: the 2D drawing chrome steps aside (it does nothing in
+   3D and covered the model); a bar of 3D buttons the palm can highlight. */
+.mc-gestures-on .mc-plan-3d-on :is(.mc-palette, .mc-flyout, .mc-props, .mc-trash, .mc-status) { display: none !important; }
+.mc-gestures-on .mc-plan-3d-on .mc-plan-3d-bar:not([hidden]) {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  position: absolute; left: 12px; right: 140px; top: 12px; z-index: 31; pointer-events: none; justify-content: flex-start;
+}
+/* "3D view." says what the banner already says: the banner keeps the row. */
+.mc-gestures-on .mc-plan-extras:has(.mc-plan-hand-banner[data-kind="3d"]:not([hidden])) .mc-plan-extra-status { display: none; }
+.mc-plan-3d-bar .mc-plan-hand-btn { pointer-events: auto; min-width: 72px; }
 /* Big hit targets for a hand: every palette tool is at least 64 x 56. */
 .mc-gestures-on .mc-plan-board .mc-palette { grid-template-rows: repeat(auto-fill, 56px); gap: 6px; }
 .mc-gestures-on .mc-plan-board .mc-palette-btn { min-width: 64px; min-height: 56px; border-radius: 12px; }

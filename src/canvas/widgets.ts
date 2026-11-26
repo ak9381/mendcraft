@@ -148,6 +148,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     // Read-only seam for walks/tests: the board's plan document.
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
     (host as HTMLElement & { __mcPlanPick?: (x: number, y: number) => string | null }).__mcPlanPick = (x, y) => view.pick?.(x, y) ?? null;
+    // Read-only seam for walks/tests: the 3D camera (null in 2D).
+    (host as HTMLElement & { __mcPlan3d?: () => unknown }).__mcPlan3d = () => view.camera3D?.() ?? null;
     (host as HTMLElement & { __mcHandSurface?: HandSurface }).__mcHandSurface = {
       ...(handEdit ? { handEdit } : {}),
       hover: (x, y) => { additiveNext = false; if (!handEdit?.hand.busy()) view.hover?.(x, y); }, // hand open again: a stale hold never carries over

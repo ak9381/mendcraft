@@ -1045,7 +1045,10 @@ export function createPlanRenderer(
     toWorld: (clientX, clientY) => toWorld(clientX, clientY),
     screenScale: () => scale,
     orbit3D(dx, dy) { view3d?.orbit(dx, dy); },
+    turn3D(dYaw, dPitch) { view3d?.turn(dYaw, dPitch); },
+    orbitStop3D() { view3d?.stopTurn(); },
     dolly3D(factor) { view3d?.dolly(factor); },
+    camera3D: () => view3d?.cameraAngles() ?? null,
     setLayerHidden(layer, isHidden) {
       if (!isLayerId(layer)) return;
       if (isHidden) hidden.add(layer); else hidden.delete(layer);
