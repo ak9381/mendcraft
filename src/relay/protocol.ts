@@ -189,9 +189,15 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     (nod yes on Approve, shake no on a refusal, wakeup on pairing). text is
 //     exactly one of GIMBAL_CUES — never user content. Phones only honour it
 //     from the host; the host rate-limits it (GIMBAL_CUE_MIN_GAP_MS).
+//   • 'ping' — phone → host: "are you really there?". text: JSON {n, sid?} —
+//     n is the phone's one-time nonce, sid the host session it believes it is
+//     talking to. 'pong' — host → phone: JSON {n, sid} echoing the nonce with
+//     the host's current session id. This round trip is the phone's only
+//     proof that the laptop hears it ("Laptop ✓"); a hello or an old state
+//     message in the room is not. Handled inside the sessions.
 export type RelayCommandKind =
   | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
-  | 'sensePoint' | 'pointResult' | 'gimbalCue';
+  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'ping' | 'pong';
 
 /** The only DockKit animations the laptop may ask for (no user content). */
 export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
@@ -249,6 +255,21 @@ export const CMD_TEXT_MAX = 500;
 /** Max length of a 'transfer'/'announce' JSON blob carried in `cmd.text`. Well
  *  under the room-message document limit; a tile spec is far smaller. */
 export const CMD_JSON_MAX = 16_000;
+/** Max length of a 'ping'/'pong' JSON blob ({n, sid}). */
+export const PING_JSON_MAX = 160;
+/** A host session id / ping nonce: short, opaque, no user content. */
+export function isSessionId(x: unknown): x is string {
+  return typeof x === 'string' && /^[A-Za-z0-9_-]{4,40}$/.test(x);
+}
+/** Parse a ping/pong payload; null when malformed. */
+export function parsePing(text: unknown): { n: string; sid: string | null } | null {
+  if (typeof text !== 'string' || text.length > PING_JSON_MAX) return null;
+  try {
+    const o = JSON.parse(text) as { n?: unknown; sid?: unknown };
+    if (!o || typeof o !== 'object' || !isSessionId(o.n)) return null;
+    return { n: o.n, sid: isSessionId(o.sid) ? o.sid : null };
+  } catch { return null; }
+}
 /** Max length of an 'aiEvent' JSON blob — one short activity line. */
 export const AI_EVENT_JSON_MAX = 600;
 
@@ -323,9 +344,9 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'ping', 'pong'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
-const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult'];
+const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult', 'ping', 'pong'];
 
 function isUnit(n: unknown): boolean {
   return n === undefined || n === -1 || n === 0 || n === 1;
@@ -340,6 +361,9 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   // 'transfer'/'announce' require a non-empty, size-capped JSON blob in `text`.
   if (JSON_KINDS.includes(c.kind) && (typeof c.text !== 'string' || !c.text || c.text.length > CMD_JSON_MAX)) return null;
   if (c.kind === 'aiEvent' && (c.text as string).length > AI_EVENT_JSON_MAX) return null;
+  if ((c.kind === 'ping' || c.kind === 'pong') && (c.text as string).length > PING_JSON_MAX) return null;
+  // 'whoIsThere' may carry the host's session id, nothing else.
+  if (c.kind === 'whoIsThere' && c.text !== undefined && !isSessionId(c.text)) return null;
   // 'gimbalCue' carries one allow-listed word and nothing else.
   if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;

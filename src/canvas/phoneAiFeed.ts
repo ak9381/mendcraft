@@ -47,6 +47,10 @@ export const AI_EVENT_TEXT_MAX = 120;
 /** Phone send rate; the laptop allows double that per device. */
 export const AI_EVENT_RATE = { max: 5, windowMs: 1000 } as const;
 export const HOST_AI_EVENT_RATE = { max: 10, windowMs: 1000 } as const;
+/** Lines the laptop holds per phone while over its rate: a catch-up batch
+ *  (several seconds of a phone's lines arriving at once) is drained in order,
+ *  not dropped. Past this the oldest goes. */
+export const HOST_AI_EVENT_QUEUE_MAX = 300;
 /** Log lines held on the phone while over the rate (oldest dropped past it). */
 export const AI_EVENT_QUEUE_MAX = 10;
 /** A phone's cloud total is a running byte count; anything past this is junk. */
@@ -186,8 +190,12 @@ export function createRateLimiter(opts: { max?: number; windowMs?: number; now?:
 /** Host side: announced phones (by deviceId) → the laptop's AI feed. An event
  *  whose deviceId never announced is dropped; each phone is rate-limited on
  *  its own (10/s). Never touches a ledger. */
-export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; now?: () => number }) {
+export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; now?: () => number; setTimer?: (fn: () => void, ms: number) => unknown }) {
+  const setTimer = opts.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const phones = new Map<string, AnnouncedPhone>();
+  /** Per phone: events waiting for a slot (FIFO), and whether a drain is due. */
+  const queues = new Map<string, PhoneAiEvent[]>();
+  const draining = new Set<string>();
   /** Each phone's latest own cloud total (replayed to a monitor that opens late). */
   const lastBytes = new Map<string, number>();
   const limiter = createRateLimiter({ ...HOST_AI_EVENT_RATE, now: opts.now });
@@ -215,21 +223,44 @@ export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; 
      *  what each has sent so far. Phone lines are never in the laptop snapshot. */
     replay(): void { phones.forEach((phone, id) => present(id, phone)); },
     /** Forget every announced phone (a phone dropped / the relay closed). */
-    clear(): void { phones.clear(); limiter.clear(); },
-    /** Returns whether the event reached the feed. */
+    clear(): void { phones.clear(); limiter.clear(); queues.clear(); draining.clear(); },
+    /** Returns whether the event was accepted: it reached the feed, or waits
+     *  its turn (≤10/s per phone — over that it is queued, never dropped). */
     handle(text: string): boolean {
       const ev = coerceAiEvent(text);
       if (!ev) return false;
       const phone = phones.get(ev.id);
       if (!phone) return false;
-      // The byte total is one number: the latest is remembered even when a
-      // burst of lines is over the rate.
       if (ev.k === 'bytes') lastBytes.set(ev.id, ev.bytes);
-      if (!limiter.allow(ev.id)) return false;
-      opts.feed.publish(phoneAiEventToFeed(ev, phone));
+      const q = queues.get(ev.id);
+      if (!q?.length && limiter.allow(ev.id)) {
+        opts.feed.publish(phoneAiEventToFeed(ev, phone));
+        return true;
+      }
+      const queue = q ?? [];
+      queue.push(ev);
+      if (queue.length > HOST_AI_EVENT_QUEUE_MAX) queue.shift();
+      queues.set(ev.id, queue);
+      schedule(ev.id);
       return true;
     },
+    /** Events still waiting for a slot (all phones). */
+    queued(): number { let n = 0; queues.forEach((q) => { n += q.length; }); return n; },
   };
+
+  function schedule(id: string): void {
+    if (draining.has(id)) return;
+    draining.add(id);
+    setTimer(() => drain(id), Math.max(1, limiter.waitMs(id)));
+  }
+  function drain(id: string): void {
+    draining.delete(id);
+    const q = queues.get(id);
+    const phone = phones.get(id);
+    if (!q || !phone) { queues.delete(id); return; }
+    while (q.length && limiter.allow(id)) opts.feed.publish(phoneAiEventToFeed(q.shift()!, phone));
+    if (q.length) schedule(id); else queues.delete(id);
+  }
 }
 
 const ROUTE_NOTES: readonly string[] = [
@@ -410,5 +441,36 @@ export function teeFeed(...feeds: AiFeed[]): AiFeed {
   return {
     publish(m) { feeds.forEach((f) => { try { f.publish(m); } catch { /* best-effort */ } }); },
     onHello(f) { feeds.forEach((x) => x.onHello(f)); },
+  };
+}
+
+/** Host side: which announces are live. The room keeps every old message and
+ *  replays it when the laptop reloads, so an announce only counts when it
+ *  names the laptop's CURRENT session id (the phone learns it from the
+ *  laptop's whoIsThere / pong, which history cannot contain). Anything else
+ *  is 'stale': the laptop asks who is there (at most once per `askGapMs`) and
+ *  a phone that is really present answers with the right id. */
+export function createAnnounceGate(opts: { now?: () => number; askGapMs?: number } = {}) {
+  const now = opts.now ?? (() => Date.now());
+  const askGapMs = opts.askGapMs ?? 2000;
+  const seen = new Set<string>();
+  let lastAsk = -Infinity;
+  return {
+    /** 'stale' — not for this session; 'first' — this phone's first live
+     *  announce of the session (place it, show it); 'again' — a keep-alive. */
+    check(announceSid: unknown, hostSid: string | null | undefined, key: string): 'stale' | 'first' | 'again' {
+      if (!hostSid || announceSid !== hostSid) return 'stale';
+      if (seen.has(key)) return 'again';
+      seen.add(key);
+      return 'first';
+    },
+    /** True when a whoIsThere may be sent now (and counts it as sent). */
+    shouldAsk(): boolean {
+      if (now() - lastAsk < askGapMs) return false;
+      lastAsk = now();
+      return true;
+    },
+    /** A phone dropped: every phone must prove itself again. */
+    clear(): void { seen.clear(); },
   };
 }

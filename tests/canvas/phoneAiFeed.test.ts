@@ -167,10 +167,11 @@ describe('host republish', () => {
   it('replay() tells a late monitor who is here and each phone\'s latest total, even one sent over the rate', () => {
     const clock = { t: 0 };
     const sent: Array<Record<string, unknown>> = [];
-    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } }, now: () => clock.t });
+    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } }, now: () => clock.t, setTimer: () => 0 });
     rep.announce('android', NOTHING, true);
     for (let i = 0; i < 10; i++) rep.handle(JSON.stringify({ k: 'log', id: NOTHING, engine: 'gemini', verb: 'note', text: 'x' }));
-    expect(rep.handle(JSON.stringify({ k: 'bytes', id: NOTHING, bytes: 4600 }))).toBe(false); // over the rate
+    expect(rep.handle(JSON.stringify({ k: 'bytes', id: NOTHING, bytes: 4600 }))).toBe(true); // over the rate: waits its turn
+    expect(rep.queued()).toBe(1);
     sent.length = 0;
     rep.replay();
     expect(sent).toEqual([{ kind: 'bytes', total: 4600, device: 'android', deviceLabel: 'Nothing phone' }]);
@@ -212,10 +213,10 @@ describe('host republish', () => {
     expect(snap.engines.gemini.state).toBe('idle');
   });
 
-  it('rate-limits each phone to 10 per second', () => {
+  it('rate-limits each phone to 10 per second (the rest wait, see phoneLinkProof.test.ts)', () => {
     const clock = { t: 0 };
     const sent: unknown[] = [];
-    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m); } }, now: () => clock.t });
+    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m); } }, now: () => clock.t, setTimer: () => 0 });
     rep.announce('ios', IPHONE); rep.announce('android', NOTHING);
     sent.length = 0;
     const log = (id: string) => JSON.stringify({ k: 'log', id, engine: 'gemini', verb: 'note', text: 'x' });

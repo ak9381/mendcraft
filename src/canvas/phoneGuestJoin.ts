@@ -94,7 +94,7 @@ export async function joinPhoneAsGuest(deps: PhoneGuestJoinDeps): Promise<PhoneG
 /** Tell the laptop which phone this is, so it can place it (Nothing left,
  *  iPhone right by default) and send a board to THIS phone only. Best-effort. */
 export function announcePhone(
-  session: Pick<GuestSession, 'sendCommand'>,
+  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'hostSid'>>,
   platform: PhonePlatform,
   extra: { deviceId?: string; native?: boolean; refresh?: boolean; status?: () => object | null } = {},
 ): void {
@@ -106,6 +106,11 @@ export function announcePhone(
     if (extra.deviceId) body.deviceId = extra.deviceId;
     if (extra.native !== undefined) body.native = extra.native;
     if (extra.refresh) body.refresh = true;
+    // sid: the laptop session this phone last heard from. The laptop only
+    // takes an announce that names its CURRENT session as live (an announce
+    // replayed from the room's history names an old one, or none).
+    const sid = session.hostSid?.();
+    if (sid) body.sid = sid;
     // iPhone sensing: gimbal / sensor / hand-control state for the laptop's
     // connect-devices row (phonePoint.ts). Only what is really on.
     const st = extra.status?.();
@@ -126,7 +131,7 @@ function isShort(raw: string): boolean {
 export const RE_ANNOUNCE_MS = 20_000;
 
 export function keepAnnouncing(
-  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere'>>,
+  session: Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onWhoIsThere' | 'hostSid'>>,
   platform: PhonePlatform,
   extra: { deviceId?: string; native?: boolean; status?: () => object | null },
   timers: { setInterval(fn: () => void, ms: number): unknown; clearInterval(id: unknown): void } = {

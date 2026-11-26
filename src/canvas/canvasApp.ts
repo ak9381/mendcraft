@@ -103,7 +103,7 @@ import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
-import { createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
+import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney } from './journey';
 import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } from './nextSteps';
 import { nanoQueue } from '../ai/nanoQueue';
@@ -545,6 +545,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const phoneAi = createPhoneAiRepublisher({ feed: aiFeed });
   // A monitor that opens after the phone paired still shows it as connected.
   aiFeed.onHello(() => phoneAi.replay());
+  // Only announces that name THIS laptop session are live (the room replays
+  // its whole history on a reload — old announces must not show a phone).
+  const announceGate = createAnnounceGate();
+  /** The pairing card on screen (chime + code), while there is one. */
+  let livePairing: { stopChime(): void; setStatus(text: string): void } | null = null;
+  const askWhoIsThere = (): void => { if (hostSession && announceGate.shouldAsk()) void hostSession.askWhoIsThere().catch(() => undefined); };
   /** A phone 'announce' (which side it is on), 'transfer' (a tile sent back) or
    *  'aiEvent' (its AI activity line), intercepted before dispatchRelayCommand.
    *  All carry JSON in cmd.text. */
@@ -561,9 +567,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       let deviceId: unknown;
       let native: unknown;
       let refresh = false;
+      let sid: unknown;
       let sense: PhoneSenseStatus | null = null;
       try {
-        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown };
+        const o = JSON.parse(text) as { platform?: unknown; side?: unknown; deviceId?: unknown; native?: unknown; refresh?: unknown; sid?: unknown };
+        sid = o.sid;
         if (o.platform === 'android' || o.platform === 'ios') platform = o.platform;
         sense = coerceSenseStatus(o);
         if (o.side === 'left' || o.side === 'right') wantedSide = o.side;
@@ -574,6 +582,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       if (!platform) return;
+      // Replayed from the room's history, or sent before the phone knew this
+      // session: not shown. Ask who is really here; a live phone answers.
+      const live = announceGate.check(sid, hostSession?.sid, typeof deviceId === 'string' ? deviceId : platform);
+      if (live === 'stale') { askWhoIsThere(); return; }
+      // This phone's first live announce of the session is a full one, even
+      // when it is the answer to whoIsThere (which arrives marked refresh).
+      if (live === 'first') {
+        refresh = false;
+        livePairing?.stopChime(); livePairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+      }
       const prevSense = phoneSense.get(platform);
       if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
       if (JSON.stringify(prevSense) !== JSON.stringify(sense ?? undefined)) pairFirst.refresh();
@@ -1809,6 +1827,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // What the Nano→Deep handoff line promises, given to Deep in the prompt only.
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights and add a room plan tile.';
+  /** The same goal for a board Gemini makes in ONE call (no draft to improve). */
+  const ONE_CALL_ROOM_GOAL = 'Group the lights and add a room plan tile.';
   /** When the last AI turn (stream + its review) let go of the board. The
    *  next-step pick stays away from the model for a while after that: a
    *  timed-out Nano call can still be finishing inside Chrome. */
@@ -1898,7 +1918,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     turnBusy = true;
     try {
       if (!reg.get(frameId)) return null;
-      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', undefined, surfaces[frameId] ?? null,
+      // No on-device model: this "draft" runs on Gemini and is the only call,
+      // so it carries what the improve pass would have asked for.
+      const onlyCall = engineFor(engineId, '{}').id === 'gemini';
+      const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', onlyCall ? ONE_CALL_ROOM_GOAL : undefined, surfaces[frameId] ?? null,
         () => { void connectRoom(frameId, utterance); });
       await holdSwarmMinimum();
       settleSwarm();
@@ -2493,11 +2516,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
     phoneAi.clear();
+    announceGate.clear();
   }
   /** The relay is kept while the pair-first flow still has phones (live/asking). */
   const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
-    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); }
+    if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); announceGate.clear(); }
     if (!sheetOpen) return;
     sheetOpen.sheet.unmount();
     sheetOpen.host.hidden = true;
@@ -2536,7 +2560,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
         if (st === 'paired') {
-          pairFirst.addGeneric(); pairing?.stopChime(); pairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
+          // A hello proves little (the room replays old ones on a reload):
+          // the phone is shown once its announce names this session.
+          askWhoIsThere();
           // The docked iPhone wakes up. hostSession is set once startPhoneJoin
           // resolves; a phone already in the room can pair a tick before that.
           if (hostSession) bodyLanguage('wakeup'); else wakeOnSession = true;
@@ -2547,6 +2573,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // — no stale device labels — then ask the phones still here to
           // re-announce (they also re-announce every 20 s on their own).
           phoneAi.clear();
+          announceGate.clear();
           void hostSession?.askWhoIsThere().catch(() => undefined);
           // If the phone left a proposal waiting (pre-Approve, nothing applied
           // yet), drop it so the canvas doesn't keep a review the absent phone
@@ -2589,6 +2616,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
+    // Phones already in the room (remembered pairs) learn this session's id.
+    void res.session.askWhoIsThere().catch(() => undefined);
     if (wakeOnSession) { wakeOnSession = false; bodyLanguage('wakeup'); }
     showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
@@ -2597,7 +2626,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     republishCurrentBoard();
     if (opts.privacyGemini) attachPrivacyHub(res.session, () => activePeople(), opts.privacyGemini);
     sheetOpen = null; // the pairing card replaces the sheet in the same host
-    pairing = showPairing(open.host, {
+    pairing = livePairing = showPairing(open.host, {
       code: res.code,
       note: 'After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
       onClose: () => { disconnectPhones(); open.host.hidden = true; },

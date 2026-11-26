@@ -78,6 +78,7 @@ const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? 
  *  dashboard": a request to BUILD a board — a board turn with a review, never
  *  small talk. A question ("what is a dashboard?") has no build verb. */
 const BUILD_BOARD_RE = /\b(make|build|create|design|generate|set\s*up|give\s+me|show\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
+const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:control\s+)?panels?)\b/i;
 export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text);
 }
@@ -110,6 +111,9 @@ export function routeLine(text: string, world: RouteWorld): Route {
   // CAD extras only when there is a plan board to run them on.
   const extra = routePlanExtra(text, world.hasPlanBoard);
   if (extra) return { name: 'planExtra', extra };
+  // "show me a dashboard for my lights" asks for a board to be built — before
+  // the canvas "show …" commands, which would take it for navigation.
+  if (SHOW_ME_BOARD_RE.test(text)) return { name: 'connectRoom' };
   const cmd = parseCanvasCommand(text);
   if (cmd) return { name: 'canvas', cmd };
   // "play <something>" on a speaker: a search for the speaker connector.
