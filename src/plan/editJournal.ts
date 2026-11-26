@@ -22,6 +22,9 @@ export interface PlanJournal {
   note(summary: string): void;
   /** Mouse / keyboard edits: close the open edit, named by its last op. */
   flush(): void;
+  /** One engine step made outside applyOp (a reviewed whole-plan edit,
+   *  applied as a restore) is its own entry. Call right after that step. */
+  external(summary: string): void;
   /** Take back the newest `steps` engine steps (plus any loose selection
    *  steps after them). Returns how many engine steps were undone. */
   undo(steps: number): number;
@@ -64,6 +67,7 @@ export function createPlanJournal(ctl: JournalCtl, onEntry: (e: JournalEntry) =>
   return {
     note: (summary) => close(summary),
     flush: () => close(lastMessage.replace(/\.$/, '') || 'Edited the plan'),
+    external(summary) { stack.push(true); close(summary); },
     undo(steps) {
       muted = true;
       let n = 0;

@@ -104,3 +104,45 @@ describe('routeLine: Tools > More by voice', () => {
     expect(routeLine('turn on the desk lamp', base).name).toBe('device');
   });
 });
+
+describe('routeLine: voice / typed edits to the floor plan', () => {
+  const onPlan: RouteWorld = { ...base, hasPlanBoard: true, planFocused: true, planBoardExists: true };
+  const planElsewhere: RouteWorld = { ...base, planBoardExists: true };
+  it('on the floor-plan board, an edit is a plan edit, not chat', () => {
+    for (const t of ['add a study next to bedroom 2', 'Add a study next to bedroom 2.', 'remove the bathroom', 'make the kitchen bigger', 'widen bedroom 1', 'add a window to the kitchen', 'add stairs in the living room', 'make it bigger', 'move it a bit to the right'])
+      expect(routeLine(t, onPlan).name, t).toBe('planEdit');
+  });
+  it('from another board, a clear plan edit goes to the plan that exists', () => {
+    expect(routeLine('add a study next to bedroom 2', planElsewhere).name).toBe('planEdit');
+    expect(routeLine('add a bedroom to the floor plan', planElsewhere).name).toBe('planEdit');
+    // …but a vague one stays chat there
+    expect(routeLine('make it bigger', planElsewhere).name).toBe('openEnded');
+  });
+  it('with no plan board anywhere, nothing becomes a plan edit', () => {
+    expect(routeLine('add a study next to bedroom 2', base).name).toBe('openEnded');
+    expect(routeLine('make it bigger', base).name).toBe('openEnded');
+  });
+  it('commands that won before still win on the plan board', () => {
+    const table: [string, RouteName][] = [
+      ['draw the floor plan', 'floorPlan'],
+      ['make a floor plan', 'floorPlan'],
+      ['start a floor plan', 'floorPlan'],
+      ['turn on the desk lamp', 'device'],
+      ['play music', 'device'],
+      ['undo', 'canvas'],
+      ['keep it', 'canvas'],
+      ['new board', 'canvas'],
+      ['show 3d', 'planExtra'],
+      ['check accessibility', 'planExtra'],
+      ['connect this room', 'connectRoom'],
+      ['make a dashboard for my desk lamp', 'connectRoom'],
+      ['connect devices', 'connectDevices'],
+      ['connect a device', 'connectSheet'],
+      ['connect the speaker', 'connectByName'],
+      ['hi', 'openEnded'],
+      ['how are you', 'openEnded'],
+      ['what is a study', 'openEnded'],
+    ];
+    for (const [t, name] of table) expect(routeLine(t, onPlan).name, t).toBe(name);
+  });
+});

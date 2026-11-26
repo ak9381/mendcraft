@@ -137,6 +137,8 @@ async function main() {
     check(end.simLabels > 0, `SIM labels on screen (${end.simLabels})`);
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
     check(wall < LIMIT_MS, `completed in ${(wall / 1000).toFixed(1)} s (< 180 s); replay ${(result.ms / 1000).toFixed(1)} s`);
+
+    await planEditByVoice(browser, errors);
     if (failures.length) {
       const shot = join(tmpdir(), 'e2e-journey-failure.png');
       await page.screenshot({ path: shot }).catch(() => {});
@@ -147,6 +149,73 @@ async function main() {
   }
   console.log(failures.length ? `\ne2e-journey: ${failures.length} failure(s)` : `\ne2e-journey: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   return failures.length ? 1 : 0;
+}
+
+// ---- a typed edit to the kept floor plan: a review, Approve, Undo ----------
+// canvas.html?sim=1&hands=0: "draw the floor plan" → Approve, then "add a
+// study next to bedroom 2" on that board must open a REVIEW (never a chat
+// reply), whose plan shows the Study; Approve adds it to the drawing and
+// Undo takes it back. Offline, the same ask says it is Nano's draft, and
+// Reject changes nothing.
+async function planEditByVoice(browser, errors) {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1440, height: 900 });
+  page.on('pageerror', (e) => errors.push(`${String(e?.message || e)} (during plan edit)`));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const waitFor = async (fn, ms = 20_000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await page.evaluate(fn).catch(() => false)) return true; await wait(200); }
+    return false;
+  };
+  const sayIt = (text) => page.evaluate((t) => { const i = document.querySelector('#mc-say-in'); i.value = t; document.querySelector('.mc-say').requestSubmit(); }, text);
+  const reviewOpen = () => { const b = document.querySelector('.mc-review-approve'); return !!b && !b.closest('[hidden]') && b.getBoundingClientRect().width > 0; };
+  const rooms = () => page.evaluate(() => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).map((r) => r.name));
+  try {
+    await page.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    check(await waitFor(() => !!window.__canvas), 'plan edit: canvas is up');
+    await sayIt('draw the floor plan');
+    check(await waitFor(reviewOpen, 30_000), 'plan edit: the floor plan review is open');
+    await page.evaluate(() => document.querySelector('.mc-review-approve').click());
+    check(await waitFor(() => !!document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc && !document.querySelector('.mc-review-approve')?.getBoundingClientRect().width), 'plan edit: the two-bedroom plan is kept on its board');
+    await wait(600);
+    const start = await rooms();
+    check(start.includes('Bedroom 2') && !start.includes('Study'), `plan edit: starts with Bedroom 2 and no Study (${start.join(', ')})`);
+
+    await sayIt('add a study next to bedroom 2');
+    check(await waitFor(reviewOpen, 20_000), 'plan edit: "add a study next to bedroom 2" opens a review (not a chat reply)');
+    const review = await page.evaluate(() => ({
+      title: document.querySelector('.mc-review-title')?.textContent ?? '',
+      plan: document.querySelector('.mc-review-plan-list')?.textContent ?? '',
+      engine: document.querySelector('.mc-review-dialog')?.textContent ?? '',
+    }));
+    check(/Study/.test(review.title) && /Study/.test(review.plan), `plan edit: the review shows the Study in its plan ("${review.title}" · "${review.plan.replace(/\s+/g, ' ').slice(0, 90)}")`);
+    check(/SIM/.test(review.engine) && /Nano/.test(review.engine), 'plan edit: the review says SIM · Nano made it');
+    check(!(await rooms()).includes('Study'), 'plan edit: nothing changed before Approve');
+    await page.evaluate(() => document.querySelector('.mc-review-approve').click());
+    check(await waitFor(() => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Study')), 'plan edit: Approve adds a Study room to the drawing');
+    const after = await rooms();
+    check(after.length === start.length + 1 && start.every((n) => after.includes(n)), `plan edit: every other room is still there (${after.join(', ')})`);
+
+    await sayIt('undo');
+    check(await waitFor(() => !(document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Study')), 'plan edit: Undo takes the Study back out');
+
+    await sayIt('simulate offline');
+    await wait(400);
+    await sayIt('add a study next to bedroom 2');
+    check(await waitFor(reviewOpen, 20_000), 'plan edit offline: a review opens (Nano only)');
+    const offline = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
+    check(/You’re offline — this is Nano’s draft/.test(offline), `plan edit offline: says it is Nano's draft ("${offline.slice(0, 80)}")`);
+    await page.evaluate(() => document.querySelector('.mc-review-reject').click());
+    await wait(500);
+    check(!(await rooms()).includes('Study'), 'plan edit offline: Reject changes nothing');
+
+    await sayIt('add a garage next to the attic');
+    await wait(1500);
+    const said = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
+    check(/couldn’t change the plan/.test(said) && !(await page.evaluate(reviewOpen)), `plan edit: an edit that can't be made says so plainly ("${said.slice(0, 70)}")`);
+  } finally {
+    await page.close().catch(() => {});
+  }
 }
 
 main().then((c) => process.exit(c)).catch((e) => { console.error('e2e-journey — error:', e?.stack || e); process.exit(1); });

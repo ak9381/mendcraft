@@ -86,6 +86,14 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
   undoPlanEdit(steps: number, epoch: number): number {
     return this.handSurface?.undo(steps, epoch) ?? 0;
   }
+  /** A reviewed, approved plan edit (voice / typed): the drawing becomes
+   *  `doc` as ONE journaled edit (an `mc-plan-edit` event), so the canvas
+   *  Undo takes it back. False = nothing changed. */
+  applyPlanDoc(doc: unknown, summary: string): boolean {
+    const ok = this.handSurface?.applyDoc(doc, summary) ?? false;
+    if (ok) { this.view?.fit?.(); this.view?.render(); }
+    return ok;
+  }
   /** Accessibility check / 3D / DXF for this board. Returns the line shown (and
    *  spoken by the canvas). Local only: no model call. */
   runExtra(kind: PlanExtra): string {

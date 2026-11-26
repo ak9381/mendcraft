@@ -24,7 +24,9 @@ import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
-import { openEndedAsk } from './openEndedAsk';
+import { openEndedAsk, promiseGuard, promisesAction } from './openEndedAsk';
+import { PLAN_EDIT_FAIL, runPlanEditTurn, simPlanEdit, planRooms } from './planEdit';
+import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
 import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
@@ -108,7 +110,7 @@ import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanel
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
 import { combineFacts, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
-import { diffPlans, diffTile, languagePackChanges } from './planDiff';
+import { diffPlanDocs, diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
 import { createSpeaker } from '../ai/speaker';
@@ -2544,6 +2546,113 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     void aiTurn(frameId, 'nano', utterance, SCRIPTS.nanoPlan, floorPlanSummary, 'waiting', 'floorplan');
   }
 
+  // ---- voice / typed edits to the floor plan already on a board ----
+  type PlanBoardEl = HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null; applyPlanDoc?: (doc: unknown, summary: string) => boolean };
+  /** Who made the plan edit being applied right now (the history line). */
+  let planEditBy: EngineId | null = null;
+  /** The plan board an edit goes to: the focused one, else the Floor plan board. */
+  function planEditTarget(): { frameId: string; el: PlanBoardEl } | null {
+    const on = (id: string | null | undefined) => (id ? world.querySelector<PlanBoardEl>(`[data-frame="${id}"] mc-plan-board`) : null);
+    const focused = on(focusId);
+    if (focused && focusId) return { frameId: focusId, el: focused };
+    const frames = reg.list();
+    const f = frames.find((x) => x.kind === 'plan' && on(x.id)) ?? frames.find((x) => on(x.id));
+    return f ? { frameId: f.id, el: on(f.id)! } : null;
+  }
+  /** "add a study next to bedroom 2": Nano decides the edit on this device
+   *  (Gemini only if Nano can't and we are online), code makes it on a copy
+   *  of the drawing, and she reviews the change — nothing is applied before
+   *  Approve, and Undo takes it back. No valid edit: one plain line, no change. */
+  async function planEditTurn(text: string): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    const target = planEditTarget();
+    const before = target?.el.planState?.()?.doc as PlanDoc | undefined;
+    if (!target || !before || !target.el.applyPlanDoc) { say(PLAN_EDIT_FAIL, { speak: true }); return; }
+    const { frameId, el } = target;
+    if (focusId !== frameId) { sync(); void focus(frameId); }
+    const rooms = planRooms(before);
+    if (!rooms.length) { say(PLAN_EDIT_FAIL, { speak: true }); return; }
+    turnBusy = true;
+    let out: Awaited<ReturnType<typeof runPlanEditTurn>>;
+    try {
+      const engine = engineFor('nano', simPlanEdit(text, rooms));
+      out = await runPlanEditTurn(text, structuredClone(before), engine, {
+        onSent: (si) => aiSent(text, si, { task: 'generic', defer: true, swarm: false }),
+        onHandoff: (si, why) => {
+          panels.forEngine('nano').fail(`couldn’t make the edit: ${why}`);
+          panels.showHandoff('nano', 'Nano couldn’t make the edit, so Gemini makes it');
+          aiSent(text, si, { task: 'generic', defer: true, swarm: false });
+        },
+        onCloudSend: cloudSent,
+        onCloudRetract: cloudRetract,
+        onNanoLoading: nanoLoading,
+        onNote: (eng, note) => panels.forEngine(eng).log('note', note),
+      }, {
+        canHandoff: () => net.isOnline(),
+        // What leaves is redacted on this device, like every cloud turn.
+        cloudPrompt: (p) => protectTurn(text, p).promptText,
+      });
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
+    if (!out.ok) {
+      if (out.si) panels.forEngine(out.si.engine).fail(out.offline ? `couldn’t make the edit (${out.why}); offline, so Gemini can’t take over` : `couldn’t make the edit: ${out.why}`);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = PLAN_EDIT_FAIL;
+      say(PLAN_EDIT_FAIL, { speak: true });
+      bodyLanguage('no');
+      autoHideAi();
+      return;
+    }
+    const { si, value } = out;
+    const ranId: EngineId = si.engine;
+    panels.forEngine(ranId).log(ranId === 'gemini' ? 'replied' : 'done', value.summary);
+    const offlineDraft = ranId === 'nano' && !net.isOnline();
+    aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
+    const summary = value.summary;
+    const changes = diffPlanDocs(before, value.doc);
+    await new Promise<void>((done) => {
+      let decided = false;
+      const prop: SurfaceProposal = {
+        id: `pe-${Date.now()}`, by: ranId, summary,
+        status: () => (decided ? 'accepted' : 'pending'),
+        accept: () => { if (decided) return false; decided = true; return true; },
+        reject: () => { if (decided) return false; decided = true; return true; },
+      };
+      const finish = (kept: boolean, applied: boolean) => {
+        reviewDialog.close(); pending = null;
+        const line = !kept ? 'Dropped. Nothing changed.' : applied ? `Kept: ${summary}. Say “undo” to put it back.` : `${PLAN_EDIT_FAIL}`;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = kept && applied ? 'Kept. Say “undo” to put it back.' : line;
+        autoHideAi();
+        say(line, { speak: kept && applied ? `Kept: ${summary}.` : line });
+        done();
+      };
+      const keepIt = () => {
+        prop.accept();
+        // Applied only now, as one undoable plan edit on the board.
+        const live = world.querySelector<PlanBoardEl>(`[data-frame="${frameId}"] mc-plan-board`) ?? el;
+        planEditBy = ranId;
+        let ok = false;
+        try { ok = !!live.applyPlanDoc?.(value.doc, summary); } finally { planEditBy = null; }
+        if (!ok) panels.forEngine(ranId).fail('the plan board refused the edit after Approve');
+        finish(true, ok);
+        if (ok) { nextChips?.refresh(); bodyLanguage('yes'); }
+      };
+      const card = renderProposalCard(document, {
+        id: `p-${frameId}`, title: summary, youAsked: text, status: 'changed',
+        catalog: { helper: ranId === 'nano' ? 'Quick' : 'Deep', byLine: ranId === 'nano' ? 'Quick · on this device' : 'Deep · online',
+          routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
+      }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish(false, false); } });
+      tagCardI18n(card);
+      pending = { frameId, prop, card };
+      const facts = (): ReviewFacts => {
+        const f = reviewFacts(si, text);
+        return offlineDraft ? { ...f, chain: 'You’re offline — this is Nano’s draft' } : f;
+      };
+      showReview({ title: summary, card, extra: buildReviewExtra(), changes, facts: facts() }, { tokens: [si, out.ok ? out.nanoSi : undefined], facts });
+      say(offlineDraft
+        ? 'You’re offline — this is Nano’s draft. Approve or say “keep”; Reject or say “drop”.'
+        : `${summary}. Approve or say “keep”; Reject or say “drop”.`);
+    });
+  }
+
   // ---- connect a device: sheet (point / name / phone) + merge-on-keep turns ----
   const simEnv = () => engineFor('gemini', '{}').sim;
 
@@ -3529,7 +3638,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const frameEl = path.find((n) => (n as HTMLElement).dataset?.frame) as HTMLElement | undefined;
       const frameId = frameEl?.dataset.frame ?? (e.target as HTMLElement | null)?.closest?.<HTMLElement>('[data-frame]')?.dataset.frame;
       if (!d || !frameId) return;
-      history.push({ frameId, before: null, after: null, by: 'her', summary: d.summary, kind: 'plan', planSteps: d.steps, planEpoch: d.epoch });
+      history.push({ frameId, before: null, after: null, by: planEditBy ?? 'her', summary: d.summary, kind: 'plan', planSteps: d.steps, planEpoch: d.epoch });
       historyRender();
       savePlanDrawing(frameId, path.find((n) => (n as HTMLElement).tagName === 'MC-PLAN-BOARD') as HTMLElement | undefined);
     });
@@ -4141,8 +4250,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // The reply is shown and read aloud as it is written, not when it is done.
     replyTrace.asked();
     const live = liveSay();
+    // Chat can't act: the moment the reply promises an action ("I'll add a
+    // study…"), nothing more of it is shown or spoken — the honest line
+    // replaces it at the end (promiseGuard).
+    let promised = false;
     try {
       r = await openEndedAsk(text, nano, gemini, (full) => {
+        if (promised || (promised = promisesAction(full))) return;
         aiPanel.querySelector('.mc-ai-state')!.textContent = full;
         live.update(full);
       }, prepare);
@@ -4154,11 +4268,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     // A cloud reply may carry the redaction tokens back: real names return on this device.
-    const reply = r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply;
+    const guarded = promiseGuard(r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply);
+    const reply = guarded.reply;
     // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
+    if (guarded.replaced) panels.forEngine(r.engineId).log('note', 'the reply promised an action chat can’t take, so an honest line was shown instead');
     aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);
-    live.end(reply);
+    // A safe start of the reply may already be on screen / being said: the
+    // honest line then starts afresh and cuts it off.
+    if (guarded.replaced && live.started()) liveSay().end(reply);
+    else live.end(reply);
     settleEngines();
     autoHideAi();
   }
@@ -4210,7 +4329,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function routeWorld(planBoard: PB | null): RouteWorld {
     return {
-      hasPlanBoard: !!planBoard?.runExtra, devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
+      hasPlanBoard: !!planBoard?.runExtra,
+      planFocused: !!(focusId && world.querySelector(`[data-frame="${focusId}"] mc-plan-board`)),
+      planBoardExists: !!world.querySelector('mc-plan-board'),
+      devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
       pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
     };
   }
@@ -4402,6 +4524,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // route to the Nano floor-plan turn with the full utterance so any name
       // in it (e.g. Sharma) gets redacted by the stayed-local strip.
       case 'floorPlan': openFloorPlan(focusId, text); return true;
+      // "add a study next to bedroom 2": a reviewed edit to the plan on the board.
+      case 'planEdit': void planEditTurn(text); return true;
       // "connect a device" / "add device" opens the sheet; a named device
       // ("connect the speaker") becomes a Nano-only by-name turn.
       case 'connectSheet': openConnectSheet(); return true;
