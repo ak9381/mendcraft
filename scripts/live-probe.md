@@ -192,6 +192,55 @@ that needs the intent model. If that job goes to Gemini because the one
 on-device model is busy, both terminals show a handoff line
 `Nano busy → Gemini (…)`.
 
+## 4c. A greeting answers fast
+
+Open `…/canvas.html?fresh&nanoTrace=1`, wait for `warm-up: done — the model is
+loaded`, then type **hi how are you** (and, separately, say it with Talk).
+
+Expect on screen:
+
+- The first words of the reply appear in the status line while the rest is
+  still being written (it grows in steps; it does not pop in whole).
+- With "read aloud" on, the voice starts after the first clause or sentence,
+  not after the whole reply; typing or saying something new stops it.
+- The reply is one or two short sentences, no emoji.
+
+Expect in the trace (typed, warm model):
+
+```
+[nano-trace] on-device call: waited 0 ms for the model's queue
+[nano-trace] create #N: ~100–400 ms (initialPrompts 0 chars)
+[nano-trace] prompt #N (session #N): input ~105 chars, constraint 0 chars — started
+[nano-trace] on-device call: first chunk ~500–1200 ms after it got the model
+[nano-trace] reply: asked (typed) → first chunk  < 1500 ms
+[nano-trace] reply: first chunk → first spoken word ~600–900 ms
+[nano-trace] reply: asked → first spoken word  < 2500 ms; whole reply ~3000–4500 ms
+```
+
+and for a spoken one, before those:
+
+```
+[nano-trace] voice: mic stop → final ≤ 350 ms (final result | last interim, the final was slow)
+[nano-trace] reply: asked (voice) → first chunk …
+```
+
+What the numbers mean:
+
+- **Whole reply ≈ output length ÷ 20 characters a second.** 60–80 characters
+  is 3–4 s; what she waits for is the first chunk and the first spoken word.
+- **`create #N` over ~1 s, or a first chunk over ~2 s, means the model was not
+  warm.** Check that `warm-up: done` came first. If you asked during the
+  warm-up you will see `on-device call: waiting for the warm-up that is
+  loading the model` — the request waits for that one load (it is never
+  aborted, and no second create starts beside it).
+- **`mic stop → final` is capped at ~350 ms** for push-to-talk: if the
+  recognizer has not finalised by then the last interim words are used. With
+  always-on listening the line reads `final while listening`; how soon that
+  comes after she stops talking is the browser's own end-of-speech detection,
+  which the page cannot shorten.
+- **`not spoken`** in the last line means read-aloud is off, or the browser
+  has no on-device voice for the language.
+
 ## 5. Next-step chips don’t spend Nano on load
 
 1. Reload with `?nanoTrace=1` (or the prompt counter from step 1).
@@ -226,6 +275,9 @@ Enterprise key’s allowed domains.
 | Trace: queue wait for a board turn | 0 ms | |
 | Trace: after a stop | “generation stopped” | |
 | Nano prompts per turn | 1 | |
+| Typed greeting → first words on screen (warm) | < 1.5 s | |
+| End of speech → first spoken word (warm) | < 2.5 s | |
+| A request during the warm-up | waits for it; one create at a time | |
 | Pill during a Nano turn | `Nano · 1 call`, cursors ≤ tiles | |
 | Nano really stops after a 20 s handoff | yes | |
 | Bytes after a refused Gemini call | unchanged, “Nothing was sent.” | |

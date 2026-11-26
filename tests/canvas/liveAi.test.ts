@@ -1026,41 +1026,33 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
     expect(errors.join(' ') + handoffs.join(' ')).not.toMatch(/request is invalid|could not be processed|NotSupportedError/);
   });
 
-  it('a warm-up still creating its session steps aside; once its session exists it is left to finish', async () => {
-    // (a) past create: the SDK has its session, only a tiny reply is left
+  it('a request never aborts a warm-up: it waits for that load and then runs on the loaded model', async () => {
+    // The warm-up is still inside create() (no session yet) when she asks.
     let finishWarm!: () => void;
     let aborted = 0;
+    let creates = 0;
+    const order: string[] = [];
     setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      creates++;
       (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
-      const model = { chromeAdapter: { oldSession: {} as unknown }, generateContent: () => new Promise<{ response: { text: () => string } }>((r) => { finishWarm = () => { order.push('warm replied'); r({ response: { text: () => '{"ok":true}' } }); }; }) };
-      return model as unknown as TextGenModel;
+      if (creates === 1) {
+        return { chromeAdapter: {}, generateContent: () => new Promise<{ response: { text: () => string; inferenceSource: string } }>((r) => { finishWarm = () => { order.push('warm-up answered'); r({ response: { text: () => '{"ok":true}', inferenceSource: 'on_device' } }); }; }) } as unknown as TextGenModel;
+      }
+      return { generateContent: async () => { order.push('request ran'); return { response: { text: () => 'Hello there.', inferenceSource: 'on_device' } }; } } as unknown as TextGenModel;
     } });
     const q = createNanoQueue(1);
-    const order: string[] = [];
     const warm = warmBoardOnDevice(q);
     await tick(2);
-    const turn = q.run(async () => { order.push('turn starts'); return 'plan'; }, { priority: 10 });
-    await tick(5);
-    expect(order).toEqual([]); // the turn waits; the warm-up was not thrown away
-    expect(aborted).toBe(0);
+    const request = streamOnDevice({ prompt: 'hi how are you', queue: q });
+    await tick(10);
+    expect(aborted).toBe(0); // the load was not thrown away
+    expect(creates).toBe(1); // and no second create was started beside it
+    expect(order).toEqual([]);
     finishWarm();
     expect(await warm).toBe(true);
-    expect(await turn).toBe('plan');
-    expect(order).toEqual(['warm replied', 'turn starts']);
-
-    // (b) still in create(): no session yet, so it steps aside at once
-    setModelsForTest(null);
-    aborted = 0;
-    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
-      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
-      return { chromeAdapter: {}, generateContent: () => never() } as unknown as TextGenModel;
-    } });
-    const q2 = createNanoQueue(1);
-    const warm2 = warmBoardOnDevice(q2);
-    await tick(2);
-    expect(await q2.run(async () => 'plan', { priority: 10 })).toBe('plan');
-    expect(await warm2).toBe(false);
-    expect(aborted).toBe(1);
+    expect(await request).toBe('Hello there.');
+    expect(order).toEqual(['warm-up answered', 'request ran']);
+    expect(creates).toBe(2);
   });
 
   it('the warm-up starts soon after load, with a deadline rather than "whenever idle"', async () => {
@@ -1068,7 +1060,9 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
     const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
     expect(main).toContain('const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });');
     expect(main).toContain('if (nanoAvailable && !was) warmKeeper.kick();'); // every time the model becomes available
-    expect(main).toMatch(/setTimeout\(\(\) => \{\s*void refreshNanoAvailable\(\)[\s\S]*?\}, 600\);/);
+    expect(main).toMatch(/void refreshNanoAvailable\(\);\s*const poll = [\s\S]*?\}, 300\);/); // 300 ms after load, then kept up
+    expect(main).toContain('onOnDeviceUnloaded(() => { warmKeeper.reset(); warmKeeper.kick(); });'); // re-warm after an eviction
+    expect(main).toContain('if (!nanoAvailable && was) warmKeeper.reset();');
   });
 });
 
@@ -1472,7 +1466,7 @@ describe('re-review fixes', () => {
     expect(pick).toContain('{ maxWaitMs: 0 }');
   });
 
-  it('warm-up: create() is never timed; the tiny prompt gets 5 s once the session exists', async () => {
+  it('warm-up: create() gets a long ceiling of its own; the tiny prompt gets 5 s once the session exists', async () => {
     vi.useFakeTimers();
     let aborted = 0;
     let model!: { chromeAdapter: { oldSession?: unknown }; generateContent: () => Promise<never> };
@@ -1484,8 +1478,8 @@ describe('re-review fixes', () => {
     const q = createNanoQueue(1);
     let settled: boolean | null = null;
     void warmBoardOnDevice(q).then((ok) => { settled = ok; });
-    // a 60 s cold create(): no timeout, the warm-up is still going (and pre-emptible)
-    await vi.advanceTimersByTimeAsync(60_000);
+    // a 40 s cold create(): still going — the short prompt clock has not even started
+    await vi.advanceTimersByTimeAsync(40_000);
     expect(settled).toBeNull();
     expect(aborted).toBe(0);
     expect(q.active()).toBe(1);
@@ -1500,17 +1494,22 @@ describe('re-review fixes', () => {
     expect(WARM_PROMPT_TIMEOUT_MS).toBe(5000);
   });
 
-  it('minor: a warm-up pushed aside ends at once and leaves no timer behind', async () => {
+  it('warm-up: a create() Chrome never settles is given up after its ceiling, and leaves no timer behind', async () => {
     vi.useFakeTimers();
-    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => ({ chromeAdapter: {}, generateContent: () => never() }) as unknown as TextGenModel });
+    let aborted = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
+      return { chromeAdapter: {}, generateContent: () => never() } as unknown as TextGenModel;
+    } });
     const q = createNanoQueue(1);
     const warm = warmBoardOnDevice(q);
-    await vi.advanceTimersByTimeAsync(300); // it is polling for its session
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-    expect(await q.run(async () => 'plan', { priority: 10 })).toBe('plan');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(q.active()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_500);
     expect(await warm).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(vi.getTimerCount()).toBe(0); // the session poll stopped with it
+    expect(aborted).toBe(1);
+    expect(q.idle()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('warm-up: a real on-device call already loaded the model, so there is nothing to warm', async () => {

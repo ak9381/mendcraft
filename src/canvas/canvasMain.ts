@@ -13,11 +13,12 @@ import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type OnDeviceStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
-import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
+import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, onOnDeviceUnloaded, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 import { installNanoTrace } from '../ai/nanoTrace';
 import { createWarmKeeper } from '../ai/nanoWarm';
+import { replyTrace } from '../ai/replyTrace';
 import { nanoQueue } from '../ai/nanoQueue';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
@@ -85,6 +86,7 @@ const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !params.h
       signal: o?.signal,
       onChunk: onText,
       onStart: o?.onStart,
+      maxChars: o?.maxChars,
     })
   : null;
 
@@ -98,6 +100,9 @@ async function refreshNanoAvailable(): Promise<boolean> {
   // The model just became usable (a download finished): load it now, so the
   // cold start is not left for her first request.
   if (nanoAvailable && !was) warmKeeper.kick();
+  // It stopped being available (evicted, or the model is being updated):
+  // forget that it was warm, so it is loaded again when it comes back.
+  if (!nanoAvailable && was) warmKeeper.reset();
   return nanoAvailable;
 }
 // Keeps Nano loaded: warms when the model becomes available, and once more
@@ -106,11 +111,15 @@ const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () 
 if (nanoStream) {
   // Soon after load — not "whenever idle": hand tracking keeps the page busy.
   setTimeout(() => {
-    void refreshNanoAvailable().then((ok) => {
-      if (ok) return;
-      const again = setInterval(() => { void refreshNanoAvailable().then((now) => { if (now) clearInterval(again); }); }, 15_000);
-    });
-  }, 600);
+    // Asked right after first paint and then kept up: every 15 s until the
+    // model is usable, and once a minute after that to notice it going away.
+    void refreshNanoAvailable();
+    const poll = (): void => { setTimeout(() => { void refreshNanoAvailable().finally(poll); }, nanoAvailable ? 60_000 : 15_000); };
+    poll();
+  }, 300);
+  // An on-device call failed in a way that says the model was unloaded:
+  // load it again now, before she asks for something else.
+  onOnDeviceUnloaded(() => { warmKeeper.reset(); warmKeeper.kick(); });
 }
 
 const apple = {
@@ -155,6 +164,8 @@ const voice = createVoiceController(
   (t) => handle?.run(t),
   {
     onInterim: (text) => handle?.setTalkCaption(text),
+    // ?nanoTrace=1: how long the recognizer took to hand over her words.
+    onHeard: (info) => replyTrace.heard(info.sinceStopMs, info.from),
     onError: (_code, message) => handle?.setTalkError(message),
   },
 );

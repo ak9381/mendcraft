@@ -24,8 +24,10 @@ describe('canvasApp.run() open-ended fallback', () => {
     expect(body).toContain("engineFor('gemini'");
     expect(body).toContain('openEndedAsk(text, nano, gemini');
     expect(body).toContain('panels.forEngine(r.engineId).log(');
-    expect(body).toContain("aiPanel.querySelector('.mc-ai-state')!.textContent = reply");
-    expect(body).toContain('say(reply)');
+    // the reply is shown and spoken as it streams, then booked once at the end
+    expect(body).toContain('live.update(full);');
+    expect(body).toContain("aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);");
+    expect(body).toContain('live.end(reply);');
   });
 
   it('a cloud engine (incl. "Nano" on a device without Nano) gets the redacted prompt and is ledgered', () => {

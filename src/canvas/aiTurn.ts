@@ -45,6 +45,9 @@ export interface StreamOptions {
   /** What the reply is, so the cloud seam accepts it: a board plan (default),
    *  any JSON object (a language pack, one tile, a fix), or plain words. */
   shape?: ReplyShape;
+  /** A short reply is wanted: an on-device engine ends the call once the
+   *  text is this long instead of letting the model write on. */
+  maxChars?: number;
   /** On device: the model's queue gave this call its turn (a deadline should
    *  count from here, not from the time spent waiting in line). */
   onStart?: () => void;
