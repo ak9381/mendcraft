@@ -140,6 +140,7 @@ export const CONNECT_LABEL = 'Connect a device';
  *  object when nothing had to change. */
 export function dropUnbackedClaims(plan: SurfacePlan): { plan: SurfacePlan; notes: string[] } {
   const notes: string[] = [];
+  let renamed = false;
   const clean = (tiles: TileSpec[]): TileSpec[] => {
     const out: TileSpec[] = [];
     for (const t of tiles) {
@@ -149,6 +150,14 @@ export function dropUnbackedClaims(plan: SurfacePlan): { plan: SurfacePlan; note
       }
       if (t.type === 'connect' && t.label && CONNECT_AS_STATUS.test(t.label)) {
         notes.push(`Renamed a Connect button that read as a status (“${t.label}”).`);
+        out.push({ type: 'connect', label: CONNECT_LABEL });
+        continue;
+      }
+      // The Connect button does one thing and has one name. A model does not
+      // get to label it — the live run showed it titled with her own words
+      // ("connect everything in this room").
+      if (t.type === 'connect' && (t.label ?? CONNECT_LABEL) !== CONNECT_LABEL) {
+        renamed = true;
         out.push({ type: 'connect', label: CONNECT_LABEL });
         continue;
       }
@@ -173,6 +182,6 @@ export function dropUnbackedClaims(plan: SurfacePlan): { plan: SurfacePlan; note
     return out;
   };
   const tiles = clean(plan.tiles);
-  if (!notes.length) return { plan, notes };
+  if (!notes.length && !renamed) return { plan, notes };
   return { plan: { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] }, notes };
 }
