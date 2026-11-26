@@ -235,8 +235,15 @@ async function phones(page) {
 
   // "build the dashboard" is a normal generation turn with the devices present.
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
+  const buildMark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  const buildAt = Date.now();
   await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
-  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) return;
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) {
+    console.log(`     said since "build the dashboard": ${JSON.stringify(await page.evaluate((m) => window.__mcCanvas.statusSince(m), buildMark))}`);
+    console.log(`     frames: ${JSON.stringify(await frames(page))}`);
+    return;
+  }
+  if (process.env.E2E_TIMING) console.log(`     review opened ${Date.now() - buildAt} ms after "build the dashboard"`);
   check((await page.evaluate(reviewText)).includes('Replay'), 'the dashboard review names "Replay"');
   // Pairing still opens the fixed "Connected devices" table (Task 8 replaces
   // it with a generated board). It is on the canvas but never stored.
