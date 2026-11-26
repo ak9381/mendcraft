@@ -2276,6 +2276,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (state) state.textContent = view.note;
     } else if (state?.textContent === NANO_LOADING_LINE) state.textContent = '';
   }
+  /** The background warm-up (canvasMain → hybrid.warmBoardOnDevice) is
+   *  loading the model: the engine bar says "Nano is loading the model…"
+   *  until it has (or gave up). A turn that starts meanwhile owns the card. */
+  let warmShown = false;
+  function nanoWarming(state: 'loading' | 'loaded' | 'failed'): void {
+    if (!engineBar) return;
+    if (state === 'loading') {
+      if (turnBusy) return;
+      warmShown = true;
+      engineBar.set('nano', 'working', NANO_LOADING_LINE);
+      return;
+    }
+    if (!warmShown) return;
+    warmShown = false;
+    if (turnBusy) return;
+    engineBar.set('nano', 'idle', state === 'loaded' ? 'Nano has loaded the model.' : '');
+  }
   /** The last streamed turn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
@@ -5361,6 +5378,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
+    /** The background Nano warm-up started loading the model / finished. */
+    nanoWarming,
     /** iPhone: the laptop relayed a gimbal cue ('gimbalCue'). Local only — never re-relayed. */
     gimbalCue: (kind: GimbalCueKind): void => { if (getGimbalPlugin()) bodyLanguage(kind); },
     /** iPhone: the laptop's gimbal tile asked for a mode ('gimbalMode'). The

@@ -752,11 +752,38 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
   const asked = Date.now();
   // The model is being loaded by the warm-up right now: wait for that load
   // and use the loaded model, rather than abort it and start a second create.
+  // The wait is part of this call's load: it says "loading the model", and
+  // the load ceiling (ON_DEVICE_LOAD_MAX_MS) covers the wait and the call's
+  // own create together — never 45 s of waiting and then 45 s more.
+  let loadMaxMs = ON_DEVICE_LOAD_MAX_MS;
   const warm = boardWarm;
   if (warm) {
     nanoTrace('on-device call: waiting for the warm-up that is loading the model');
-    await Promise.race([warm, new Promise<void>((r) => setTimeout(r, WARM_WAIT_MAX_MS))]);
-    nanoTrace(`on-device call: warm-up finished after ${Date.now() - asked} ms of waiting`);
+    // The model has the call (it is loading for it): the caller's reply clock
+    // must not start while it waits.
+    try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
+    let said = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    timers.push(setTimeout(() => { said = true; try { req.onLoading?.('loading'); } catch { /* a label only */ } }, ON_DEVICE_LOADING_NOTE_MS));
+    let onAbort: (() => void) | null = null;
+    const outcome = await Promise.race<'loaded' | 'failed' | 'timeout' | 'stopped'>([
+      warm.then((ok) => (ok ? 'loaded' as const : 'failed' as const), () => 'failed' as const),
+      new Promise((r) => { timers.push(setTimeout(() => r('timeout'), Math.min(WARM_WAIT_MAX_MS, ON_DEVICE_LOAD_MAX_MS))); }),
+      new Promise((r) => { if (!req.signal) return; onAbort = () => r('stopped'); if (req.signal.aborted) onAbort(); else req.signal.addEventListener('abort', onAbort, { once: true }); }),
+    ]);
+    for (const t of timers) clearTimeout(t);
+    if (onAbort) req.signal?.removeEventListener('abort', onAbort);
+    const waited = Date.now() - asked;
+    nanoTrace(`on-device call: warm-up ${outcome} after ${waited} ms of waiting`);
+    if (outcome === 'stopped') throw new Error('stopped');
+    if (outcome === 'timeout') {
+      // Still loading at the ceiling: the honest handoff, and no second
+      // create next to the one that is still loading.
+      if (said) { try { req.onLoading?.('gave-up'); } catch { /* a label only */ } }
+      throw new Error(STILL_LOADING);
+    }
+    if (said && outcome === 'loaded') { try { req.onLoading?.('loaded'); } catch { /* a label only */ } }
+    loadMaxMs = Math.max(1000, ON_DEVICE_LOAD_MAX_MS - waited);
   }
   return queue.run(async () => {
     if (req.signal?.aborted) throw new Error('stopped');
@@ -829,7 +856,7 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
       try { req.onReady?.(); } catch { /* the caller's clock must not fail the call */ }
       runCap = setTimeout(() => outOfTime(new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`)), ON_DEVICE_MAX_RUN_MS);
     }
-    loadCap = setTimeout(() => { if (!ready) { gaveUp = true; outOfTime(new Error(STILL_LOADING)); } }, ON_DEVICE_LOAD_MAX_MS);
+    loadCap = setTimeout(() => { if (!ready) { gaveUp = true; outOfTime(new Error(STILL_LOADING)); } }, loadMaxMs);
     loadNote = setTimeout(() => { if (!ready) { said = true; nanoTrace('on-device call: the model is loading'); try { req.onLoading?.('loading'); } catch { /* a label only */ } } }, ON_DEVICE_LOADING_NOTE_MS);
     readyPoll = setInterval(() => { if (sdkSessionReady(model)) markReady(); }, WARM_SESSION_POLL_MS);
     const work = (async (): Promise<string> => {
@@ -913,6 +940,20 @@ let boardWarm: Promise<boolean> | null = null;
 export const WARM_CREATE_MAX_MS = 60_000;
 /** The longest a request waits for a warm-up already loading the model. */
 export const WARM_WAIT_MAX_MS = 45_000;
+/** The longest the warm-up waits in the model's queue behind real jobs (it is
+ *  the lowest job: a real request always goes first). */
+export const WARM_QUEUE_WAIT_MS = 30_000;
+/** Where the background warm-up stands, for the engine bar's loading line. */
+export type WarmState = 'loading' | 'loaded' | 'failed';
+const warmListeners = new Set<(s: WarmState) => void>();
+/** Hear the warm-up start loading the model and finish (loaded / failed). */
+export function onWarmState(cb: (s: WarmState) => void): () => void {
+  warmListeners.add(cb);
+  return () => { warmListeners.delete(cb); };
+}
+function warmSays(s: WarmState): void {
+  for (const cb of [...warmListeners]) { try { cb(s); } catch { /* a label only */ } }
+}
 /** When the on-device model last answered (0: never on this page). */
 let onDeviceUsedAt = 0;
 /** Once the warm-up's session exists, its ~10-character reply gets this long. */
@@ -949,6 +990,7 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
           promptOptions: { responseConstraint: WARM_CONSTRAINT },
         });
         nanoTrace('warm-up: started');
+        warmSays('loading');
         const t0 = Date.now();
         let poll: ReturnType<typeof setInterval> | null = null;
         let deadline: ReturnType<typeof setTimeout> | null = null;
@@ -987,12 +1029,16 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
         // Never pre-empted: a request that arrives while the model is loading
         // waits for THIS load (streamOnDevice awaits it) instead of aborting it
         // and starting a second create — one create in flight at a time.
-      }, { priority: -1, maxWaitMs: 0 });
+        // Lowest job: it waits in line behind real jobs (a busy model at page
+        // load — next-step picks, intent — no longer skips the warm-up).
+      }, { priority: -1, maxWaitMs: WARM_QUEUE_WAIT_MS });
       onDeviceLoaded = true;
       onDeviceUsedAt = Date.now();
       nanoTrace('warm-up: done — the model is loaded');
+      warmSays('loaded');
       return true;
     } catch {
+      warmSays('failed');
       return false;
     } finally {
       boardWarm = null; // a later attempt starts fresh (and returns at once when loaded)

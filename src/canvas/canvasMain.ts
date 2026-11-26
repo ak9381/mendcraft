@@ -13,7 +13,7 @@ import { App } from '@capacitor/app';
 import { createEngines, type CloudStream, type OnDeviceStream, type PromptApi } from './engines';
 import { checkDeviceNano, hasUsableNano, type NanoCheck } from '../ai/nanoStatus';
 import { getAppleAIPlugin, generateAppleText, type AppleAIPlugin } from '../ai/appleAI';
-import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, onOnDeviceUnloaded, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
+import { cloudAccessProblem, isEnabled, NANO_CREATE_OPTIONS, onOnDeviceUnloaded, onWarmState, prepareHybrid, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice } from '../ai/hybrid';
 import { bindDirectory, createDirectory, createIndexedDbDirectoryStore, createMemoryDirectoryStore, nextToken } from '../privacy/directory';
 import { createVoiceController } from '../input/voice';
 import { installNanoTrace } from '../ai/nanoTrace';
@@ -110,15 +110,27 @@ async function refreshNanoAvailable(): Promise<boolean> {
 // Keeps Nano loaded: warms when the model becomes available, and once more
 // (10 s later, when the model is idle) if a warm-up was pushed aside or failed.
 const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });
+/** Run `fn` when the page is idle (never later than `timeoutMs`): a gesture
+ *  or a frame always goes first. */
+function whenIdle(fn: () => void, timeoutMs = 1500): void {
+  const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  if (typeof ric === 'function') ric(fn, { timeout: timeoutMs });
+  else setTimeout(fn, 300);
+}
 if (nanoStream) {
-  // Soon after load — not "whenever idle": hand tracking keeps the page busy.
-  setTimeout(() => {
-    // Asked right after first paint and then kept up: every 15 s until the
-    // model is usable, and once a minute after that to notice it going away.
+  // As soon as the canvas is up: after its first paint, at the first idle
+  // moment (bounded — hand tracking keeps the page busy), so the cold load
+  // (up to ~45 s) is paid in the background, not by her first request.
+  // Asked then and kept up: every 15 s until the model is usable, and once a
+  // minute after that to notice it going away. Becoming usable warms it
+  // (refreshNanoAvailable → warmKeeper.kick). On-device only: never Gemini.
+  afterFirstPaint(() => whenIdle(() => {
     void refreshNanoAvailable();
     const poll = (): void => { setTimeout(() => { void refreshNanoAvailable().finally(poll); }, nanoAvailable ? 60_000 : 15_000); };
     poll();
-  }, 300);
+  }));
+  // While the warm-up loads the model, the engine bar says so.
+  onWarmState((state) => handle?.nanoWarming(state));
   // An on-device call failed in a way that says the model was unloaded:
   // load it again now, before she asks for something else.
   onOnDeviceUnloaded(() => { warmKeeper.reset(); warmKeeper.kick(); });
