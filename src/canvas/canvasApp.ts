@@ -40,7 +40,7 @@ import type { GimbalCueKind } from '../relay/protocol';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
-import { createActQueue, createDeviceStore, simulatedAck, tileIntent, type DeviceConnector } from './deviceActions';
+import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
@@ -3523,10 +3523,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // An impossible level is refused by validation, never clamped.
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        const acts: Promise<DeviceState>[] = [];
         for (const i of dc.intents) {
           // Same per-device lane as a tile press: a spoken "off" drops a chip
           // still waiting and runs in order behind what is already out.
           const acted = actQueue.act(i);
+          acts.push(acted);
           // "play music": once the player has really started, say what is
           // playing and where — not just "Playing."
           if (i.playing === true && pack?.lang !== 'kn') {
@@ -3534,8 +3536,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           }
         }
         revealDeviceTiles(dc.intents.map((i) => i.deviceId));
+        // The status line waits for the lane: it is said only once the
+        // commands were really answered, and a refusal is said in its place
+        // ("The lamp is off — turn it on first." — never "Dimmed …").
         // With a Kannada pack on, the device-command status line is Kannada too.
-        say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
+        const okLine = pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say;
+        const saysWhere = pack?.lang !== 'kn' && dc.intents.some((i) => i.playing === true);
+        void Promise.allSettled(acts).then((results) => {
+          const line = spokenStatus(results, okLine);
+          // "play music" that worked already said what plays and where (above).
+          if (line === okLine && saysWhere) return;
+          say(line);
+        });
         if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
         return true;
       }
