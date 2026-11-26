@@ -11,7 +11,12 @@
 //   - the palm highlight snaps to a plan element; thumbs-up selects it;
 //   - peace-and-move resizes it in 10 cm steps; left peace rotates furniture;
 //   - right thumbs-down 2 s removes it; left thumbs-down 2 s (Undo) restores it;
-//   - Hand edit off: the fist moves the board again.
+//   - Hand edit off: the fist moves the board again;
+//   - the 3D view: a held fist orbits it (the camera angle changes, the board
+//     and the canvas do not move), two fists and peace-and-move move the
+//     camera closer, the palm highlights the 3D buttons, a lost hand stops
+//     the turn, a mouse drag orbits too; and on a board that is not the
+//     focused one the fist still orbits instead of moving the board.
 //
 //   npx vite --port 5173 &
 //   E2E_URL=http://localhost:5173 node scripts/e2e-plan-hands.mjs
@@ -341,6 +346,104 @@ async function main() {
     check(z1.px < z0.px * 0.75, `two fists closing in zoom the plan out (${z0.px} → ${z1.px} px per metre; bar: ${z1.text})`);
     check(z1.cam === z0.cam, 'the canvas itself did not zoom');
 
+    // ---- the 3D view by hand
+    {
+      // A fresh highlight: the last one (a plan element handle) clears once
+      // the hand has been gone for 1.2 s.
+      await P(() => { window.__ph.gone(45); window.__ph.host().querySelector('.mc-plan-deselect')?.click(); });
+      await wait(200);
+      const btn3d = await P(() => window.__ph.center(document.querySelector('mc-plan-board [data-extra="3d"]')));
+      await P((c) => { window.__ph.open(c.x, c.y + 4, 24); }, btn3d);
+      check(await P(() => window.__mcGestures.highlighted()?.dataset?.extra === '3d'), 'an open palm highlights the 3D button');
+      await P((c) => { window.__ph.hold('thumbsUp', 'R', c.x, c.y + 4, 2200); window.__ph.gone(); }, btn3d);
+      check(await waitFor(page, () => !!window.__ph.host().__mcPlan3d?.()), 'right thumbs-up shows the 3D view');
+      await wait(900);
+      const angles = () => P(() => window.__ph.host().__mcPlan3d());
+      const ui = await P(() => {
+        const h = window.__ph.host();
+        const vis = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
+        const bar = [...h.querySelectorAll('.mc-plan-3d-bar button')].filter(vis).map((b) => ({ t: b.textContent, h: b.getBoundingClientRect().height }));
+        return { banner: window.__ph.banner(), bar, palette: vis(h.querySelector('.mc-palette')) };
+      });
+      check(/Hold a fist and move to turn the 3D view/.test(ui.banner ?? ''), `the 3D view shows the hint (${ui.banner})`);
+      check(ui.bar.length >= 6 && ui.bar.every((b) => b.h >= 56), `the 3D buttons are up at ≥ 56 px (${ui.bar.map((b) => b.t).join(', ')})`);
+      check(!ui.palette, 'the 2D drawing palette steps aside in 3D');
+      await shot('17-3d-view');
+      const turnBtn = await P(() => window.__ph.center(window.__ph.host().querySelector('.mc-plan-3d-bar [data-turn="right"]')));
+      await P((c) => { window.__ph.open(c.x + 4, c.y + 20, 24); }, turnBtn);
+      check(await P(() => window.__mcGestures.highlighted()?.dataset?.turn === 'right'), 'an open palm highlights a 3D control (Turn right)');
+      await P(() => window.__ph.gone());
+      // A clear patch of the 3D view (below the 3D buttons).
+      const v = await P(() => { const r = window.__ph.rect(); return { x: r.left + r.width * 0.45, y: r.top + r.height * 0.6 }; });
+      await P((c) => { window.__ph.open(c.x, c.y, 16); }, v);
+      const far = await P(() => { const h = window.__mcGestures.highlighted(); return h ? (h.closest('.mc-plan-3d-bar') ? 'bar' : h.textContent) : null; });
+      check(far === null, `an open palm on the model highlights nothing far away (${far})`);
+      const frames3 = await P(() => window.__ph.frames());
+      const camera3 = await P(() => window.__ph.camera());
+      const a0 = await angles();
+      const to = { x: v.x + 160, y: v.y + 30 };
+      await P((a, b) => { window.__ph.strokeStart(a, b); }, v, to);
+      const live3 = await P(() => ({ grab: window.__mcGestures.state().grab, banner: window.__ph.banner() }));
+      check(live3.grab && /Turning the 3D view/.test(live3.banner ?? ''), `a held fist on the 3D view turns it (${live3.banner})`);
+      await shot('18-3d-turning-with-a-fist');
+      await P((b) => { window.__ph.strokeEnd(b); window.__ph.gone(); }, to);
+      await wait(600);
+      const a1 = await angles();
+      check(Math.abs(a1.azimuth - a0.azimuth) > 0.4, `the camera angle changed (azimuth ${a0.azimuth.toFixed(2)} → ${a1.azimuth.toFixed(2)} rad)`);
+      check(a1.elevation !== a0.elevation && a1.elevation >= 0.07 && a1.elevation <= 1.46, `and it tilted, inside the limits (elevation ${a0.elevation.toFixed(2)} → ${a1.elevation.toFixed(2)} rad)`);
+      check((await P(() => window.__ph.frames())) === frames3, 'the board did not move while turning the 3D view');
+      check((await P(() => window.__ph.camera())) === camera3, 'the canvas did not pan or zoom while turning the 3D view');
+
+      // A lost hand stops the turn at once.
+      await P((a, b) => { const P = window.__ph; P.open(a.x, a.y, 12); P.fist(a.x, a.y, 14); P.fistTo(a, b, 4); P.gone(30); }, v, to);
+      await wait(150);
+      const s1 = await angles();
+      await wait(400);
+      const s2 = await angles();
+      check(!(await P(() => window.__mcGestures.state().grab)) && Math.abs(s2.azimuth - s1.azimuth) < 1e-6, 'a lost hand stops the turn (no grab, the view holds still)');
+
+      // Two fists spread apart: closer.
+      const d0 = (await angles()).distance;
+      await P((c) => {
+        const P = window.__ph;
+        const two = (d, shape) => [P.hand(shape, 'L', c.x - d, c.y), P.hand(shape, 'R', c.x + d, c.y)];
+        P.feed(two(80, 'open'), 12);
+        P.feed(two(80, 'fist'), 16);
+        for (let i = 1; i <= 12; i++) P.feed(two(80 + i * 8, 'fist'), 1);
+        P.feed(two(176, 'fist'), 6);
+        P.feed(two(176, 'open'), 10);
+        P.gone();
+      }, v);
+      const d1 = (await angles()).distance;
+      check(d1 < d0 * 0.8, `two fists spreading apart move the 3D camera closer (${Math.round(d0)} → ${Math.round(d1)} mm)`);
+      check((await P(() => window.__ph.camera())) === camera3 && (await P(() => window.__ph.frames())) === frames3, 'and the canvas and the board stayed put');
+
+      // Peace and move: up = closer.
+      await P((c) => {
+        const P = window.__ph;
+        P.feed([P.hand('peace', 'R', c.x, c.y + 60)], 2);
+        for (let i = 1; i <= 8; i++) P.feed([P.hand('peace', 'R', c.x, c.y + 60 - i * 15)], 1);
+        P.feed([P.hand('peace', 'R', c.x, c.y - 60)], 6);
+        P.open(c.x, c.y - 60, 10); P.gone();
+      }, v);
+      const d2 = (await angles()).distance;
+      check(d2 < d1 * 0.85, `peace moving up moves the 3D camera closer (${Math.round(d1)} → ${Math.round(d2)} mm)`);
+      check((await P(() => window.__ph.camera())) === camera3, 'and the canvas did not scroll');
+
+      // The mouse turns it too.
+      const m0 = await angles();
+      await page.mouse.move(v.x, v.y); await page.mouse.down();
+      for (let i = 1; i <= 10; i++) { await page.mouse.move(v.x - i * 12, v.y); await wait(16); }
+      await page.mouse.up(); await wait(500);
+      const m1 = await angles();
+      check(Math.abs(m1.azimuth - m0.azimuth) > 0.3, `a mouse drag turns the 3D view (azimuth ${m0.azimuth.toFixed(2)} → ${m1.azimuth.toFixed(2)} rad)`);
+      check((await P(() => window.__ph.frames())) === frames3, 'and the board did not move');
+
+      // Back to 2D.
+      await P(() => document.querySelector('mc-plan-board [data-extra="3d"]').click());
+      check(await waitFor(page, () => !window.__ph.host().__mcPlan3d?.() && /^Select|selected — /.test(window.__ph.banner() ?? ''), 3000), 'the 3D button goes back to the 2D plan and its hand edit');
+    }
+
     // ---- Hand edit off: the fist moves the board again
     await P(() => document.querySelector('.mc-plan-hand-toggle').click());
     check((await P(() => window.__ph.banner())) === null, 'Hand edit off: the banner is gone');
@@ -391,6 +494,44 @@ async function main() {
     if (again) {
       const d1 = await page.evaluate(() => { const d = document.querySelector('mc-plan-board .mc-plan-board').__mcPlanDoc(); return JSON.stringify([d.walls.length, d.openings.length, d.fixtures.length]); });
       check(d1 === drawing0, `and it still shows what was drawn (${d1})`);
+
+      // ---- 3D on a board that is NOT the focused one: the fist still turns
+      // the model (the board's body is inert then; this was the live bug).
+      await page.evaluate(() => {
+        const g = window.__mcGestures;
+        const P = (window.__ph = { t: 900_000 });
+        P.host = () => document.querySelector('mc-plan-board .mc-plan-board');
+        P.feed = (hands, frames) => { for (let i = 0; i < frames; i++) { P.t += 33; g.presence(hands, P.t); } };
+        P.hand = (shape, side, x, y) => g.hand(shape, side, { at: g.palmFor(x, y) });
+        P.frames = () => JSON.stringify(window.__canvas.snapshot().frames.map((f) => f.rect));
+        P.camera = () => JSON.stringify(g.state().camera);
+        g.show(true);
+      });
+      await wait(600);
+      const say = (text) => page.evaluate((t) => { const i = document.querySelector('#mc-say-in'); i.value = t; document.querySelector('.mc-say').requestSubmit(); }, text);
+      await say('show 3d');
+      const up3 = await waitFor(page, () => !!window.__ph.host().__mcPlan3d?.(), 5000);
+      await say('show everything');
+      await wait(1500);
+      const ov = await page.evaluate(() => { const h = window.__ph.host(); const r = h.getBoundingClientRect(); return { inert: !!h.closest('[inert]'), c: { x: r.left + r.width * 0.5, y: r.top + r.height * 0.55 } }; });
+      check(up3 && ov.inert, 'the 3D view is up on a board that is not the focused one');
+      const fr0 = await page.evaluate(() => window.__ph.frames());
+      const cm0 = await page.evaluate(() => window.__ph.camera());
+      const u0 = await page.evaluate(() => window.__ph.host().__mcPlan3d());
+      await page.evaluate((c) => {
+        const P = window.__ph, f = (x, y) => [P.hand('fist', 'R', x, y)];
+        P.feed([P.hand('open', 'R', c.x, c.y)], 12);
+        P.feed(f(c.x, c.y), 14);
+        for (let i = 1; i <= 24; i++) P.feed(f(c.x + i * 4, c.y), 1);
+        P.feed(f(c.x + 96, c.y), 10);
+        P.feed([P.hand('open', 'R', c.x + 96, c.y)], 8);
+        P.feed([], 16);
+      }, ov.c);
+      await wait(600);
+      const u1 = await page.evaluate(() => window.__ph.host().__mcPlan3d());
+      check(Math.abs(u1.azimuth - u0.azimuth) > 0.2, `a held fist turns it (azimuth ${u0.azimuth.toFixed(2)} → ${u1.azimuth.toFixed(2)} rad)`);
+      check((await page.evaluate(() => window.__ph.frames())) === fr0, 'and does not move the board');
+      check((await page.evaluate(() => window.__ph.camera())) === cm0, 'nor pan the canvas');
     }
 
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
