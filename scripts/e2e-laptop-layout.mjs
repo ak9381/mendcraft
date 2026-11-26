@@ -153,7 +153,7 @@ function checkCluster(m, label, { allowWrap }) {
   check(!overlapBoard, `${label}: cluster never covers the board`);
 }
 
-async function openBoard(browser, vp, doc) {
+async function openBoard(browser, vp, doc, query = '?sim=1') {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e?.message || e)));
@@ -161,7 +161,7 @@ async function openBoard(browser, vp, doc) {
   await page.evaluateOnNewDocument((d) => {
     try { localStorage.setItem('mc.canvas.v1', JSON.stringify(d)); } catch { /* checks fail on their own */ }
   }, doc);
-  await page.goto(`${BASE}/canvas.html?sim=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto(`${BASE}/canvas.html${query}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('.mc-frame mc-lamp-tile', { timeout: 20_000 });
   await page.waitForSelector('.mc-frame .mc-next .mc-next-chip', { timeout: 10_000 }).catch(() => undefined);
   await page.evaluate(() => document.fonts.ready);
@@ -185,6 +185,193 @@ async function settle(page) {
 /** Pair two SIM phones ("connect devices" under ?sim=1), camera on, Tools
  *  closed: the connected strip, the board, the chips, the cluster, the
  *  camera preview and the More button must all keep clear of each other. */
+const TALL_VIEWPORTS = [
+  { name: 'tall-1550x656', width: 1550, height: 656 },
+  { name: 'tall-1440x900', width: 1440, height: 900 },
+];
+
+/** In the page: the tall board's state — frame, bottom tile, chip row, bar,
+ *  inner scroll offsets, camera, the move-to-scroll badges. */
+function tallState() {
+  const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+  const frame = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame');
+  const tiles = [...frame.querySelectorAll('mc-lamp-tile, mc-music-tile, mc-gimbal-tile')];
+  const bottomTile = tiles.reduce((a, b) => (b.getBoundingClientRect().bottom > a.getBoundingClientRect().bottom ? b : a));
+  const row = frame.querySelector('.mc-next');
+  const bar = document.querySelector('.mc-engine-bar');
+  const inner = [...frame.querySelectorAll('*')].reduce((n, el) => n + el.scrollTop, 0) + (document.scrollingElement?.scrollTop ?? 0);
+  const badges = [...document.querySelectorAll('.mc-scroll-badge')].filter((b) => !b.hidden && b.getClientRects().length).map((b) => b.getBoundingClientRect()).map((r) => ({ x: r.left, y: r.top }));
+  const text = (el) => ((el?.shadowRoot ?? el)?.textContent ?? '').replace(/\s+/g, ' ');
+  return {
+    frame: box(frame), bottomTag: bottomTile.tagName.toLowerCase(), bottomTile: box(bottomTile), row: box(row), bar: box(bar),
+    inner, camY: window.__mcGestures?.state().camera.y ?? null, badges, vh: innerHeight,
+    tilesText: tiles.map(text).join('|'),
+  };
+}
+
+/** The bottom tile shows whole: below the top edge, above the chip row (when
+ *  the row is pinned over it) and the bottom chrome. */
+function tileReachable(st) {
+  const t = st.bottomTile;
+  const floor = Math.min(st.bar ? st.bar.top : st.vh, st.row && st.row.top > t.top ? st.row.top : st.vh);
+  return t.top >= 0 && t.bottom <= floor + 1;
+}
+
+/** In the page: every button of the bottom tile hit-tests to itself. */
+function bottomTileHits() {
+  const frame = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame');
+  const tiles = [...frame.querySelectorAll('mc-lamp-tile, mc-music-tile, mc-gimbal-tile')];
+  const tile = tiles.reduce((a, b) => (b.getBoundingClientRect().bottom > a.getBoundingClientRect().bottom ? b : a));
+  const deepHit = (x, y) => { let el = document.elementFromPoint(x, y); while (el?.shadowRoot) { const i = el.shadowRoot.elementFromPoint(x, y); if (!i || i === el) break; el = i; } return el; };
+  const within = (hit, host) => { for (let n = hit; n; n = n.parentNode || n.host) if (n === host) return true; return false; };
+  const btns = [...(tile.shadowRoot ?? tile).querySelectorAll('button')].filter((b) => b.getClientRects().length);
+  const bad = btns.filter((b) => { const r = b.getBoundingClientRect(); const h = deepHit(r.left + r.width / 2, r.top + r.height / 2); return !h || !within(h, b); }).map((b) => b.textContent.trim());
+  return { n: btns.length, bad };
+}
+
+/** A lamp + speaker + gimbal board, Hands on. At 1550x656 it is taller than
+ *  the screen at the 0.8 zoom floor: its chip row is pinned above the bottom
+ *  bar (clickable without scrolling), it shows the "move down to scroll"
+ *  hint, and the REAL hand path (synthetic landmark frames through the camera
+ *  adapter, as e2e:gestures does) scrolls it: peace + move down until the
+ *  bottom tile shows whole and a held palm highlights its buttons, peace +
+ *  move up returns — no click, no hold, nothing inside the board scrolled.
+ *  Voice "scroll down" / "page down" and back too. */
+async function tallRun(browser, vp) {
+  console.log(`-- ${vp.name}`);
+  const { page, errors } = await openBoard(browser, vp, roomDoc([LAMP, MUSIC, GIMBAL]), '?sim=1&hands=0');
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await page.waitForFunction(() => !!window.__mcGestures, { timeout: 10_000 });
+  await page.evaluate(() => window.__mcGestures.show(true));
+  await wait(1300); // the move-to-scroll badges place every second
+  const s0 = await page.evaluate(tallState);
+  const tall = !!(s0.bar && s0.frame.bottom > s0.bar.top);
+  console.log(`     board ${Math.round(s0.frame.top)}–${Math.round(s0.frame.bottom)}, bar top ${Math.round(s0.bar?.top ?? -1)}: ${tall ? 'taller than the screen' : 'fits'}`);
+  const hit0 = await page.evaluate(coveredChips);
+  check(hit0.n > 0 && hit0.covered.length === 0, `${vp.name}: chips clickable without scrolling (${hit0.n})${hit0.covered.length ? ` — ${hit0.covered.join('; ')}` : ''}`);
+  check(!!s0.row && s0.row.bottom <= (s0.bar?.top ?? s0.vh) + 1, `${vp.name}: chip row above the bottom bar (${Math.round(s0.row?.top ?? -1)}–${Math.round(s0.row?.bottom ?? -1)})`);
+  const chipH = await page.evaluate(() => Math.min(...[...document.querySelectorAll('.mc-frame.focused .mc-next .mc-next-chip')].map((c) => c.getBoundingClientRect().height)));
+  check(chipH >= 43.5, `${vp.name}: chips ≥ 44 px on screen (${chipH.toFixed(1)})`);
+  const z = Number(await page.evaluate(() => document.querySelector('.mc-world')?.style.transform.match(/scale\(([^)]+)\)/)?.[1] ?? '0'));
+  check(z >= 0.8 - 1e-3, `${vp.name}: never below the 0.8 zoom floor (${z})`);
+  const onBoard = s0.badges.some((b) => b.x >= s0.frame.left && b.x <= s0.frame.right + 8);
+  check(tall ? onBoard : !onBoard, `${vp.name}: "move down to scroll" hint ${tall ? 'shown on the tall board' : 'not shown (board fits)'}`);
+  const clash = await page.evaluate(() => {
+    const ov = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+    const frame = document.querySelector('.mc-frame.focused');
+    const ctrls = [...frame.querySelectorAll('button, .mc-next-chip')].filter((b) => b.getClientRects().length).map((b) => ({ t: b.textContent.trim().slice(0, 20), r: b.getBoundingClientRect() }));
+    const badges = [...document.querySelectorAll('.mc-scroll-badge')].filter((b) => !b.hidden && b.getClientRects().length).map((b) => b.getBoundingClientRect());
+    const row = frame.querySelector('.mc-next')?.getBoundingClientRect();
+    const hud = document.querySelector('.mc-zoom-hud')?.getBoundingClientRect();
+    return { badge: ctrls.filter((c) => badges.some((b) => ov(b, c.r))).map((c) => c.t), hud: !!(row && hud && hud.width && ov(row, hud)) };
+  });
+  check(clash.badge.length === 0, `${vp.name}: the scroll hint covers no button${clash.badge.length ? ` — ${clash.badge.join(', ')}` : ''}`);
+  check(!clash.hud, `${vp.name}: the zoom box never sits on the chip row`);
+  if (!tall) {
+    check(tileReachable(s0), `${vp.name}: every tile shows whole`);
+    check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
+    await page.close();
+    return;
+  }
+  check(!tileReachable(s0), `${vp.name}: the bottom tile (${s0.bottomTag}) starts below the fold`);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-start.png`) });
+
+  // Count every click while the hand works: a scroll must never press anything.
+  await page.evaluate(() => { window.__clicks = []; document.addEventListener('click', (e) => window.__clicks.push(e.composedPath()[0]?.textContent?.trim()?.slice(0, 30) ?? '?'), true); });
+  const log = () => page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
+  const log0 = await log();
+  // A spot over the board that is no button and no level control (a peace
+  // there steps the level instead), with room to move 200 px down.
+  const spot = await page.evaluate(() => {
+    const f = (document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame')).getBoundingClientRect();
+    const deepHit = (x, y) => { let el = document.elementFromPoint(x, y); while (el?.shadowRoot) { const i = el.shadowRoot.elementFromPoint(x, y); if (!i || i === el) break; el = i; } return el; };
+    const host = (el) => { for (let n = el; n; n = n.parentNode || n.host) if (n.nodeType === 1 && n.matches('.mc-frame')) return true; return false; };
+    const ok = (el) => !!el && host(el) && !(el.closest?.('button, [data-level], input, .mc-next')) && !(el.getRootNode?.().host?.closest?.('[data-level]'));
+    for (let y = f.top + 120; y < Math.min(innerHeight - 260, f.bottom); y += 16) for (let x = f.right - 60; x > f.left + 40; x -= 24) if (ok(deepHit(x, y)) && ok(deepHit(x, y + 200))) return { x, y };
+    return null;
+  });
+  check(!!spot, `${vp.name}: found a spot over the board for the hand`);
+  if (!spot) { await page.close(); return; }
+  let t = 20_000;
+  // Peace at (x, y0) settles, then moves to y1 in 12 px steps (≈ 360 px/s),
+  // sampling the chip row each step; then the hand is lost (no glide).
+  const peaceMove = async (y0, y1) => {
+    const r = await page.evaluate((x, y0, y1, from) => {
+      const g = window.__mcGestures;
+      const row = () => { const e = document.querySelector('.mc-frame.focused .mc-next'); const b = e?.getBoundingClientRect(); return b ? Math.round(b.top) : null; };
+      const rows = [];
+      let tt = from;
+      for (let k = 0; k < 8; k++) g.presence([g.hand('peace', 'R', { at: g.palmFor(x, y0) })], (tt += 33));
+      const n = Math.max(1, Math.round(Math.abs(y1 - y0) / 12));
+      for (let k = 1; k <= n; k++) { g.presence([g.hand('peace', 'R', { at: g.palmFor(x, y0 + ((y1 - y0) * k) / n) })], (tt += 33)); rows.push(row()); }
+      for (let k = 0; k < 4; k++) g.presence([g.hand('peace', 'R', { at: g.palmFor(x, y1) })], (tt += 33));
+      for (let k = 0; k < 14; k++) g.presence([], (tt += 33));
+      return { rows, end: tt };
+    }, spot.x, y0, y1, t);
+    t = r.end + 400;
+    await wait(250);
+    return r.rows;
+  };
+  let st = s0, strokes = 0, rows = [];
+  while (!tileReachable(st) && strokes < 4) { rows = rows.concat(await peaceMove(spot.y, spot.y + 200)); st = await page.evaluate(tallState); strokes++; }
+  console.log(`     hand: peace + move down, ${strokes} stroke(s): camera y ${Math.round(s0.camY)} → ${Math.round(st.camY)}, board top ${Math.round(s0.frame.top)} → ${Math.round(st.frame.top)}, ${st.bottomTag} ${Math.round(st.bottomTile.top)}–${Math.round(st.bottomTile.bottom)}`);
+  check(st.camY > s0.camY + 10 && st.frame.top < s0.frame.top - 10, `${vp.name}: hand — peace + move down scrolls the board up (board top ${Math.round(s0.frame.top)} → ${Math.round(st.frame.top)})`);
+  check(tileReachable(st), `${vp.name}: hand — the bottom tile (${st.bottomTag}) shows whole after the scroll (${Math.round(st.bottomTile.top)}–${Math.round(st.bottomTile.bottom)}, chips at ${Math.round(st.row.top)})`);
+  const hits = await page.evaluate(bottomTileHits);
+  check(hits.n > 0 && hits.bad.length === 0, `${vp.name}: hand — every ${st.bottomTag} button hit-tests to itself (${hits.n})${hits.bad.length ? ` — ${hits.bad.join(', ')}` : ''}`);
+  check(st.inner === s0.inner, `${vp.name}: hand — scrolled the canvas, nothing inside the board or the page (inner scroll ${s0.inner} → ${st.inner})`);
+  const pinnedRows = rows.filter((v) => v !== null);
+  check(pinnedRows.length > 0 && Math.max(...pinnedRows) - Math.min(...pinnedRows) <= 1, `${vp.name}: hand — the pinned chip row holds still during the scroll (top ${Math.min(...pinnedRows)}–${Math.max(...pinnedRows)} over ${pinnedRows.length} frames)`);
+  // A held open palm over the bottom tile's last button highlights it.
+  const hl = await page.evaluate((from) => {
+    const g = window.__mcGestures;
+    const frame = document.querySelector('.mc-frame.focused');
+    const tiles = [...frame.querySelectorAll('mc-lamp-tile, mc-music-tile, mc-gimbal-tile')];
+    const tile = tiles.reduce((a, b) => (b.getBoundingClientRect().bottom > a.getBoundingClientRect().bottom ? b : a));
+    const btns = [...(tile.shadowRoot ?? tile).querySelectorAll('button')].filter((b) => b.getClientRects().length);
+    const b = btns[btns.length - 1];
+    const r = b.getBoundingClientRect();
+    const at = g.palmFor(r.left + r.width / 2, r.top + r.height / 2);
+    for (let k = 0; k <= 30; k++) g.presence([g.hand('open', 'R', { at })], from + k * 33);
+    const h = g.highlighted();
+    const ok = !!h && (h === b || b.contains(h) || !!h.contains?.(b));
+    for (let k = 1; k <= 14; k++) g.presence([], from + 1000 + k * 33);
+    return { ok, want: b.textContent.trim(), got: h?.textContent?.trim()?.slice(0, 30) ?? null };
+  }, t);
+  t += 1600;
+  check(hl.ok, `${vp.name}: hand — a held palm highlights the ${st.bottomTag}'s last button "${hl.want}" (got ${JSON.stringify(hl.got)})`);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-hand-down.png`) });
+  let up = st; strokes = 0;
+  while (up.frame.top < s0.frame.top - 2 && strokes < 4) { await peaceMove(spot.y + 200, spot.y); up = await page.evaluate(tallState); strokes++; }
+  console.log(`     hand: peace + move up, ${strokes} stroke(s): board top ${Math.round(st.frame.top)} → ${Math.round(up.frame.top)}`);
+  check(Math.abs(up.frame.top - s0.frame.top) <= 2, `${vp.name}: hand — peace + move up returns the board to its framed top (${Math.round(up.frame.top)} vs ${Math.round(s0.frame.top)})`);
+  const clicks = await page.evaluate(() => window.__clicks);
+  const newLog = (await log()).replace(log0, '');
+  check(clicks.length === 0 && !/peace →/i.test(newLog), `${vp.name}: hand — never clicked or fired a hold (${clicks.length} click(s)${clicks.length ? `: ${clicks.join(', ')}` : ''}${/peace →/i.test(newLog) ? `; log: ${newLog.slice(0, 80)}` : ''})`);
+  check(up.tilesText === s0.tilesText, `${vp.name}: hand — no tile changed state`);
+
+  // Voice / typed: "scroll down" and "page down", then back up.
+  const say = async (text) => {
+    await page.evaluate((text) => { const i = document.querySelector('#mc-say-in'); const f = document.querySelector('.mc-say'); i.value = text; f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }, text);
+    await wait(700);
+    return page.evaluate(tallState);
+  };
+  for (const [down, back] of [['scroll down', 'scroll up'], ['page down', 'page up']]) {
+    let v = await say(down), n = 1;
+    for (; n < 4 && !tileReachable(v); n++) v = await say(down);
+    check(tileReachable(v) && v.inner === s0.inner, `${vp.name}: voice — "${down}" ×${n} shows the ${v.bottomTag} whole (${Math.round(v.bottomTile.top)}–${Math.round(v.bottomTile.bottom)})`);
+    const vh = await page.evaluate(bottomTileHits);
+    check(vh.bad.length === 0, `${vp.name}: voice — after "${down}" every ${v.bottomTag} button hit-tests${vh.bad.length ? ` — ${vh.bad.join(', ')}` : ''}`);
+    const vc = await page.evaluate(coveredChips);
+    check(vc.covered.length === 0, `${vp.name}: voice — after "${down}" the chips are still clickable${vc.covered.length ? ` — ${vc.covered.join('; ')}` : ''}`);
+    let b = await say(back);
+    for (let k = 0; k < 3 && b.frame.top < s0.frame.top - 2; k++) b = await say(back);
+    check(Math.abs(b.frame.top - s0.frame.top) <= 2, `${vp.name}: voice — "${back}" returns (${Math.round(b.frame.top)} vs ${Math.round(s0.frame.top)})`);
+  }
+  check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
+  await page.close();
+}
+
 /** Undo's rect (and every cluster button's) stays put while the top bar
  *  changes: Tools open, Tools closed, a status toast showing. A palm aimed
  *  at a button must never find it moved. */
@@ -286,7 +473,7 @@ async function pairedRun(browser, vp, tiles) {
   // until scrolled to. Everything else must show whole, clear of all chrome.
   const tall = !!(m.frame && extra.bar && m.frame.bottom > extra.bar.top);
   if (tall) {
-    console.log(`     (board taller than the screen at z ${m.z}: pinned to the top, the canvas scrolls)`);
+    console.log(`     (board taller than the screen at z ${m.z}: pinned to the top, chips pinned above the bar)`);
     check(m.frame.top >= 0 && m.frame.top <= 80, `${vp.name}: a too-tall board is pinned to the top (${Math.round(m.frame.top)})`);
   }
   if (extra.row && !tall) { const under = m.tiles.filter((t) => overlap(t.box, extra.row)).map((t) => t.tag); check(under.length === 0, `${vp.name}: connected strip covers no tile${under.length ? ` — ${under.join(', ')}` : ''}`); }
@@ -297,16 +484,12 @@ async function pairedRun(browser, vp, tiles) {
   if (extra.row && extra.bar && !docked) check(!overlap(extra.row, extra.bar), `${vp.name}: connected strip clear of the engine bar`);
   check(!!extra.dis && extra.disHit && extra.dis.bottom <= m.vh && extra.dis.top >= 0, `${vp.name}: Disconnect on screen and clickable`);
   const hits = m.chips.flatMap((c) => m.tiles.filter((t) => overlap(c, t.box)).map((t) => t.tag));
-  check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
+  if (!tall) check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
+  else check(m.chips.every((c) => c.bottom <= extra.bar.top + 1), `${vp.name}: tall board — chip row pinned above the bottom bar`);
   if (extra.row && !tall) check(!m.chips.some((c) => overlap(c, extra.row)), `${vp.name}: chips clear of the connected strip`);
-  if (tall) {
-    // Scroll the canvas down by the overhang (wheel over the board): the chips come clear.
-    await page.mouse.move(m.frame.left + 40, m.frame.top + 200);
-    await page.mouse.wheel({ deltaY: Math.ceil(m.frame.bottom - extra.bar.top + 16) });
-    await new Promise((r) => setTimeout(r, 400));
-  }
+  // No scroll needed, tall board or not: the chips are pinned above the bar.
   const hitT = await page.evaluate(coveredChips);
-  check(hitT.n > 0 && hitT.covered.length === 0, `${vp.name}: every chip's centre clicks the chip${tall ? ' after scrolling' : ''} (${hitT.n})${hitT.covered.length ? ` — ${hitT.covered.join('; ')}` : ''}`);
+  check(hitT.n > 0 && hitT.covered.length === 0, `${vp.name}: every chip's centre clicks the chip, no scrolling (${hitT.n})${hitT.covered.length ? ` — ${hitT.covered.join('; ')}` : ''}`);
   checkCluster(m, `${vp.name} camera on`, { allowWrap: false });
   check(!extra.cam || !m.items.some((i) => overlap(i.box, extra.cam)), `${vp.name}: cluster clear of the camera preview`);
   check(!extra.more || !m.items.some((i) => overlap(i.box, extra.more)), `${vp.name}: cluster clear of the More button`);
@@ -385,11 +568,17 @@ async function main() {
       const m = await page.evaluate(measure);
       check(m.tiles.length === board.doc.surfaces.f1.tiles.length, `${vp.name}: tiles rendered (${m.tiles.length})`);
       check(m.chips.length === 1, `${vp.name}: one next-step chip row`);
-      const hits = m.chips.flatMap((c) => m.tiles.filter((t) => overlap(c, t.box)).map((t) => t.tag));
-      check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
-      const lastTile = Math.max(...m.tiles.map((t) => t.box.bottom));
-      check(m.chips.every((c) => c.top >= lastTile - 1), `${vp.name}: chip row is below the board's content`);
-      if (board.whole) {
+      // A board that fits keeps its chip row under its tiles; one that runs
+      // under the bottom bar (too tall even at the 0.8 zoom floor) pins the
+      // row just above the bar, over the tiles, which scroll under it.
+      const tallB = !!(m.frame && m.bar && m.frame.bottom > m.bar.top);
+      if (!tallB) {
+        const hits = m.chips.flatMap((c) => m.tiles.filter((t) => overlap(c, t.box)).map((t) => t.tag));
+        check(hits.length === 0, `${vp.name}: chips never sit on a tile${hits.length ? ` — ${hits.join(', ')}` : ''}`);
+        const lastTile = Math.max(...m.tiles.map((t) => t.box.bottom));
+        check(m.chips.every((c) => c.top >= lastTile - 1), `${vp.name}: chip row is below the board's content`);
+      } else check(m.chips.every((c) => c.bottom <= m.bar.top + 1), `${vp.name}: tall board — chip row pinned above the bottom bar`);
+      if (board.whole || tallB) {
         const hitT = await page.evaluate(coveredChips);
         check(hitT.n > 0 && hitT.covered.length === 0, `${vp.name}: every chip's centre clicks the chip (${hitT.n})${hitT.covered.length ? ` — ${hitT.covered.join('; ')}` : ''}`);
       }
@@ -445,6 +634,7 @@ async function main() {
       check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
       await page.close();
     }
+    for (const vp of TALL_VIEWPORTS) if (!ONLY || vp.name.includes(ONLY)) await tallRun(browser, vp);
     for (const vp of PAIRED_VIEWPORTS) for (const board of PAIRED_BOARDS) if (!ONLY || `${vp.name}-${board.name}`.includes(ONLY)) await pairedRun(browser, { ...vp, name: `${vp.name}-${board.name}` }, board.tiles);
   } finally {
     await browser.close();
