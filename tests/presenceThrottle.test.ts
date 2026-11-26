@@ -3,10 +3,10 @@
 // emits frames, so onFrame subscribers see the facing signal.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ handCalls: 0, faceCalls: 0 }));
+const h = vi.hoisted(() => ({ handCalls: 0, faceCalls: 0, handCostMs: 0, advance: (_ms: number) => undefined as void }));
 
 vi.mock('@mediapipe/tasks-vision', () => {
-  const hand = { close: vi.fn(), detectForVideo: () => { h.handCalls++; return { landmarks: [], handedness: [] }; } };
+  const hand = { close: vi.fn(), detectForVideo: () => { h.handCalls++; h.advance(h.handCostMs); return { landmarks: [], handedness: [] }; } };
   const face = { close: vi.fn(), detectForVideo: () => { h.faceCalls++; return { faceLandmarks: [], facialTransformationMatrixes: [] }; } };
   return {
     FilesetResolver: { forVisionTasks: vi.fn(async () => ({})) },
@@ -30,7 +30,7 @@ function pump(ms: number, step = 8): void {
 }
 
 beforeEach(() => {
-  h.handCalls = 0; h.faceCalls = 0; rafs = []; clock = 0;
+  h.handCalls = 0; h.faceCalls = 0; h.handCostMs = 0; h.advance = (ms) => { clock += ms; }; rafs = []; clock = 0;
   (globalThis as Record<string, unknown>).document = {
     createElement: () => ({
       style: {}, remove: vi.fn(), play: vi.fn(async () => undefined), readyState: 4,
@@ -78,6 +78,23 @@ describe('presence frameIntervalMs + face-only frames', () => {
     expect(h.handCalls).toBe(0);
     expect(h.faceCalls).toBeGreaterThanOrEqual(4);
     expect(frames.length).toBe(h.faceCalls);
+    t.stop();
+  });
+
+  it('a slow tracking run (GPU busy, e.g. with Nano) is followed by as much idle time: the page stays at least half free', async () => {
+    const { createPresenceTracker, trackingBackoffMs } = await import('../src/input/presence');
+    expect(trackingBackoffMs(4)).toBe(0); // a normal run waits for nothing
+    expect(trackingBackoffMs(300)).toBe(300);
+    expect(trackingBackoffMs(5000)).toBe(1000);
+    h.handCostMs = 200; // each detectForVideo blocks the main thread 200 ms
+    const t = createPresenceTracker(() => undefined, undefined, { detectFaces: false });
+    await t.start(stream());
+    const before = clock;
+    pump(4000, 16);
+    const elapsed = clock - before;
+    const busy = h.handCalls * 200;
+    expect(h.handCalls).toBeGreaterThan(3); // the hands keep ticking…
+    expect(busy / elapsed).toBeLessThanOrEqual(0.55); // …but never take the whole thread
     t.stop();
   });
 });
