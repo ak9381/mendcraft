@@ -24,7 +24,7 @@ import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
-import { openEndedAsk, promiseGuard, promisesAction } from './openEndedAsk';
+import { guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
 import { PLAN_EDIT_FAIL, runPlanEditTurn, simPlanEdit, planRooms } from './planEdit';
 import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
@@ -2591,12 +2591,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         canHandoff: () => net.isOnline(),
         // What leaves is redacted on this device, like every cloud turn.
         cloudPrompt: (p) => protectTurn(text, p).promptText,
+        // …and a cloud reply's redaction tokens become the real names again
+        // on this device before the edit is read.
+        restoreReply: (r) => fillVisible(r).text,
       });
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
     if (!out.ok) {
       if (out.si) panels.forEngine(out.si.engine).fail(out.offline ? `couldn’t make the edit (${out.why}); offline, so Gemini can’t take over` : `couldn’t make the edit: ${out.why}`);
-      aiPanel.querySelector('.mc-ai-state')!.textContent = PLAN_EDIT_FAIL;
-      say(PLAN_EDIT_FAIL, { speak: true });
+      const line = out.ask ?? PLAN_EDIT_FAIL;
+      aiPanel.querySelector('.mc-ai-state')!.textContent = line;
+      say(line, { speak: true });
       bodyLanguage('no');
       autoHideAi();
       return;
@@ -4256,9 +4260,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let promised = false;
     try {
       r = await openEndedAsk(text, nano, gemini, (full) => {
-        if (promised || (promised = promisesAction(full))) return;
-        aiPanel.querySelector('.mc-ai-state')!.textContent = full;
-        live.update(full);
+        if (promised) return;
+        // Only whole clauses the guard has cleared are shown and spoken; a
+        // clause that could still become a promise waits for its sentence.
+        const safe = guardSafePrefix(full);
+        if (safe === null) { promised = true; return; }
+        if (!safe) return;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = safe;
+        live.update(safe);
       }, prepare);
     } catch (e) {
       const why = `No answer. ${geminiFailLine(e)}`;
@@ -4268,7 +4277,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     // A cloud reply may carry the redaction tokens back: real names return on this device.
-    const guarded = promiseGuard(r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply);
+    const guarded = promiseGuard(r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply, text);
     const reply = guarded.reply;
     // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
@@ -4328,9 +4337,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return (planId ? world.querySelector<PB>(`[data-frame="${planId}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
   }
   function routeWorld(planBoard: PB | null): RouteWorld {
+    const focusedPlanEl = focusId ? world.querySelector<HTMLElement & { planState?: () => { doc: unknown } | null }>(`[data-frame="${focusId}"] mc-plan-board`) : null;
     return {
       hasPlanBoard: !!planBoard?.runExtra,
-      planFocused: !!(focusId && world.querySelector(`[data-frame="${focusId}"] mc-plan-board`)),
+      planFocused: !!focusedPlanEl,
+      planRooms: focusedPlanEl ? planRooms((focusedPlanEl.planState?.()?.doc ?? { rooms: [], walls: [] }) as PlanDoc).map((r) => r.name) : [],
       planBoardExists: !!world.querySelector('mc-plan-board'),
       devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
       pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),

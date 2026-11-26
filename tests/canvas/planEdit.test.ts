@@ -5,8 +5,9 @@ import { buildPlanTemplate } from '../../src/plan/templates';
 import type { PlanDoc } from '../../src/plan/doc';
 import { scriptedEngine, type SentInfo, type SurfaceEngine } from '../../src/canvas/aiTurn';
 import {
-  applyPlanEdit, buildPlanEditRequest, findRoom, isPlanEditAsk, parsePlanEdit, planRooms, runPlanEditTurn, simPlanEdit, PLAN_EDIT_FAIL,
+  applyPlanEdit, buildPlanEditRequest, findRoom, isPlanEditAsk, isPlanEditOnPlanBoard, parsePlanEdit, planRooms, runPlanEditTurn, simPlanEdit, stackedWallPairs, PLAN_EDIT_FAIL,
 } from '../../src/canvas/planEdit';
+import { roomArea } from '../../src/plan/doc';
 import { unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { diffPlanDocs } from '../../src/canvas/planDiff';
 import { opWord } from '../../src/canvas/reviewDialog';
@@ -54,6 +55,13 @@ describe('plan edit: rooms, prompt, parse', () => {
     expect(parsePlanEdit('{"a":"none"}', rooms).ok).toBe(false);
     expect(parsePlanEdit('Okay, I can do that!', rooms).ok).toBe(false);
     expect(parsePlanEdit('{"a":"add","r":"Bedroom 2"}', rooms).ok).toBe(false); // no name
+  });
+  it('a bare edit on the plan board needs a room of this plan, or "it" + a size or side', () => {
+    const names = rooms.map((r) => r.name);
+    expect(isPlanEditOnPlanBoard('widen bedroom two', names)).toBe(true);
+    expect(isPlanEditOnPlanBoard('make it 1 m wider', names)).toBe(true);
+    expect(isPlanEditOnPlanBoard('make me laugh', names)).toBe(false);
+    expect(isPlanEditOnPlanBoard('call my daughter', names)).toBe(false);
   });
   it('tells plan edits from other asks', () => {
     for (const t of ['add a study next to bedroom 2', 'remove the bathroom', 'make the kitchen bigger', 'add a window to bedroom 1', 'add stairs in the living room']) expect(isPlanEditAsk(t), t).toBe(true);
@@ -139,7 +147,7 @@ describe('plan edit turn (fake models)', () => {
   });
   it('offline → Nano only: no Gemini call even when Nano fails', async () => {
     const gem = fakeGemini('{"a":"add","r":"Bedroom 2","n":"Study"}');
-    const nano = fakeNano(['{"a":"none"}'], gem);
+    const nano = fakeNano(['not json', '{"a":"add","r":"Attic","n":"Study"}'], gem);
     const out = await runPlanEditTurn(said, doc, nano, {}, { canHandoff: () => false });
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.offline).toBe(true);
@@ -147,7 +155,7 @@ describe('plan edit turn (fake models)', () => {
   });
   it('online and Nano can’t → Gemini makes it, with its own receipt and booked send', async () => {
     const gem = fakeGemini('{"a":"add","r":"Bedroom 2","n":"Study"}');
-    const nano = fakeNano(['{"a":"none"}'], gem);
+    const nano = fakeNano(['not json', 'still not json'], gem);
     const handed: SentInfo[] = [];
     let booked = 0;
     const out = await runPlanEditTurn(said, doc, nano, { onHandoff: (s) => handed.push(s), onCloudSend: () => booked++ }, { canHandoff: () => true });
@@ -162,5 +170,95 @@ describe('plan edit turn (fake models)', () => {
     const out = await runPlanEditTurn(said, doc, scriptedEngine('nano', simPlanEdit(said, planRooms(doc)), { delayMs: 0 }));
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.si.routeLine).toMatch(/^SIM · Nano/);
+  });
+  it('Nano saying "none" ends the turn: no repair, no Gemini, even online', async () => {
+    const gem = fakeGemini('{"a":"add","r":"Bedroom 2","n":"Study"}');
+    const nano = fakeNano(['{"a":"none"}'], gem);
+    const out = await runPlanEditTurn(said, doc, nano, {}, { canHandoff: () => true });
+    expect(out.ok).toBe(false);
+    expect(nano.prompts.length).toBe(1);
+    expect(gem.calls).toBe(0);
+  });
+  it('no Nano on this device and offline: Gemini is never called', async () => {
+    const gem = fakeGemini('{"a":"add","r":"Bedroom 2","n":"Study"}');
+    const sent: SentInfo[] = [];
+    const out = await runPlanEditTurn(said, doc, gem, { onSent: (s) => sent.push(s) }, { canHandoff: () => false });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.offline).toBe(true);
+    expect(gem.calls).toBe(0);
+    expect(sent).toEqual([]);
+  });
+  it('redacted names: the receipt is what left, and the reply gets the real name back before parsing', async () => {
+    const ren = applyPlanEdit(doc, { a: 'rename', r: 'Bedroom 2', n: 'Asha’s room' });
+    expect(ren.ok).toBe(true);
+    if (!ren.ok) return;
+    const prompts: string[] = [];
+    const gem = { id: 'gemini' as const, sim: false, async stream(p: string, onText: (f: string) => void) { prompts.push(p); const r = '{"a":"add","r":"PERSON_1’s room","n":"Study"}'; onText(r); return r; } } as SurfaceEngine;
+    const sent: SentInfo[] = [];
+    const out = await runPlanEditTurn('add a study next to Asha’s room', ren.value.doc, gem, { onSent: (s) => sent.push(s) }, {
+      canHandoff: () => true,
+      cloudPrompt: (p) => p.replace(/Asha/g, 'PERSON_1'),
+      restoreReply: (r) => r.replace(/PERSON_1/g, 'Asha'),
+    });
+    expect(prompts[0]).not.toContain('Asha');
+    expect(sent[0].prompt).toBe(prompts[0]); // the receipt is the prompt that really left
+    expect(sent[0].sent).not.toMatch(/addresses/);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.value.summary).toBe('Add Study (3 × 3 m) east of Asha’s room');
+  });
+  it('two rooms with the same name: asks which, changes nothing, no repair', async () => {
+    const twin = applyPlanEdit(doc, { a: 'add', r: 'Bedroom 2', n: 'Study' });
+    expect(twin.ok).toBe(true);
+    if (!twin.ok) return;
+    const d = structuredClone(twin.value.doc);
+    d.rooms.find((r) => r.name === 'Study')!.name = 'Bedroom 2';
+    const nano = fakeNano(['{"a":"remove","r":"Bedroom 2"}']);
+    const out = await runPlanEditTurn('remove bedroom 2', d, nano, {}, { canHandoff: () => true });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.ask).toMatch(/There are 2 rooms called Bedroom 2/);
+    expect(nano.prompts.length).toBe(1);
+  });
+  it('room names and her words reach the prompt without quotes or newlines', () => {
+    const d = structuredClone(doc);
+    d.rooms[0].name = 'Bed"room\nOne; x';
+    const r = buildPlanEditRequest('add a "study"\nnow', planRooms(d));
+    expect(r.user.split('\n').length).toBe(2);
+    expect(r.user).toContain('Bed room One x');
+    expect(r.user).toContain('She said: "add a study now"');
+  });
+});
+
+describe('plan edit: walls are shared, never stacked', () => {
+  it('add and resize never draw a wall on top of another', () => {
+    const doc = twoBedroom();
+    const base = stackedWallPairs(doc);
+    for (const e of [
+      { a: 'add', r: 'Bedroom 2', n: 'Study' }, { a: 'add', r: 'Bedroom 1', n: 'Hall', s: 'w' },
+      { a: 'resize', r: 'Bedroom 2', s: 'n', m: 1 }, { a: 'resize', r: 'Bathroom', s: 'e', m: 1 },
+    ] as const) {
+      const r = applyPlanEdit(doc, e);
+      if (r.ok) expect(stackedWallPairs(r.value.doc), JSON.stringify(e)).toBeLessThanOrEqual(base);
+    }
+  });
+  it('a neighbour wall running past the new room’s corner is split and shared', () => {
+    const e = new PlanEngine();
+    e.apply({ op: 'add_room', x: 0, y: 0, w: 4000, h: 3000, name: 'Kitchen' });
+    e.apply({ op: 'add_room', x: 4000, y: 0, w: 4000, h: 6000, name: 'Lounge' });
+    const doc = structuredClone(e.getState());
+    const r = applyPlanEdit(doc, { a: 'add', r: 'Kitchen', n: 'Study', s: 'n' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // (the engine's own add_room already stacked the kitchen's east wall on the lounge's; no new pair)
+    expect(stackedWallPairs(r.value.doc)).toBe(stackedWallPairs(doc));
+    const lounge = r.value.doc.rooms.find((x) => x.name === 'Lounge')!;
+    expect(lounge.wallIds.length).toBe(5);
+    expect(roomArea(lounge, r.value.doc)).toBeCloseTo(24_000_000);
+    expect(roomArea(r.value.doc.rooms.find((x) => x.name === 'Study')!, r.value.doc)).toBeCloseTo(12_000_000);
+    expect(planRooms(r.value.doc).find((x) => x.name === 'Lounge')).toMatchObject({ x: 4000, y: 0, w: 4000, h: 6000 });
+  });
+  it('keeps a room at least 1.5 m', () => {
+    const doc = twoBedroom();
+    expect(applyPlanEdit(doc, { a: 'add', r: 'Bedroom 2', n: 'Closet', m: 1 }).ok).toBe(false);
+    expect(applyPlanEdit(doc, { a: 'resize', r: 'Bathroom', s: 'e', m: -1 }).ok).toBe(false);
   });
 });

@@ -171,7 +171,7 @@ describe('2. the reply is shown and spoken as it arrives', () => {
     expect(live).toContain('const ok = readAloudLines.sentence(sentence, !spokeAny, { onStart: () => replyTrace.spoken() });');
     expect(live).toContain('statusLog.push(t);'); // the final line is booked once, like say()
     const turn = src.slice(src.indexOf('async function openEndedTurn('), src.indexOf('// ---- commands ----'));
-    expect(turn).toContain('live.update(full);');
+    expect(turn).toContain('live.update(safe);'); // only guard-cleared clauses (openEndedAsk.guardSafePrefix)
     expect(turn).toContain('live.end(reply);');
     expect(turn).not.toContain('say(reply)'); // never spoken a second time, whole
     expect(src).toMatch(/function run\(text: string\): boolean \{\s*\/\/ New input: whatever was still being read aloud stops now\.\s*speaker\.stop\(\);/);

@@ -106,7 +106,32 @@ describe('routeLine: Tools > More by voice', () => {
 });
 
 describe('routeLine: voice / typed edits to the floor plan', () => {
-  const onPlan: RouteWorld = { ...base, hasPlanBoard: true, planFocused: true, planBoardExists: true };
+  const onPlan: RouteWorld = { ...base, hasPlanBoard: true, planFocused: true, planBoardExists: true, planRooms: ['Bedroom 1', 'Bedroom 2', 'Living room', 'Kitchen', 'Bathroom'] };
+  it('on the plan board, small talk with a bare verb stays chat', () => {
+    for (const t of ['call my daughter', 'make me laugh', 'make a joke', 'change the subject', 'put on the news', 'turn the tv on', 'move this board', 'move to board 2', 'make it snappy', 'call it a day'])
+      expect(routeLine(t, onPlan).name, t).not.toBe('planEdit');
+  });
+  it('a bare edit on the plan board must name a room of this plan, or "it" with a size or side', () => {
+    expect(routeLine('make bedroom two wider', onPlan).name).toBe('planEdit');
+    expect(routeLine('move it 1 m north', onPlan).name).toBe('planEdit');
+    expect(routeLine('make it nice', onPlan).name).toBe('openEnded');
+  });
+  it('a new floor plan, devices, questions and wishes are not plan edits', () => {
+    for (const w of [onPlan, { ...base, planBoardExists: true }]) {
+      expect(routeLine('make a floor plan with two bedrooms and a kitchen', w).name).toBe('floorPlan');
+      expect(routeLine('build a floor plan with a kitchen', w).name).toBe('floorPlan');
+      expect(routeLine('create a new floor plan with a bathroom', w).name).toBe('floorPlan');
+      for (const t of ['turn on the kitchen fan', 'add the kitchen thermostat', 'tell me how to make my bathroom safer', 'what if I move the bedroom', 'I want to build a nursery someday', 'how do I add a window to the kitchen?', 'should I remove the bathroom'])
+        expect(routeLine(t, w).name, t).not.toBe('planEdit');
+      // back where it went before plan edits existed (the strict add-device
+      // phrase doesn't take "kitchen thermostat", so it was never connectByName)
+      expect(routeLine('add the kitchen thermostat', w).name).toBe(routeLine('add the kitchen thermostat', base).name);
+      expect(routeLine('connect the speaker', w).name).toBe('connectByName');
+      // a polite ask IS an edit request
+      expect(routeLine('can you make the kitchen bigger?', w).name).toBe('planEdit');
+      expect(routeLine('could you please add a study next to bedroom 2', w).name).toBe('planEdit');
+    }
+  });
   const planElsewhere: RouteWorld = { ...base, planBoardExists: true };
   it('on the floor-plan board, an edit is a plan edit, not chat', () => {
     for (const t of ['add a study next to bedroom 2', 'Add a study next to bedroom 2.', 'remove the bathroom', 'make the kitchen bigger', 'widen bedroom 1', 'add a window to the kitchen', 'add stairs in the living room', 'make it bigger', 'move it a bit to the right'])

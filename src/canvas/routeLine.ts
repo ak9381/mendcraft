@@ -24,6 +24,8 @@ export interface RouteWorld {
   planFocused?: boolean;
   /** A floor-plan board exists anywhere on the canvas. */
   planBoardExists?: boolean;
+  /** The room names on the focused plan ("Bedroom 2"): a bare edit there must name one. */
+  planRooms?: readonly string[];
   devices: readonly DeviceRef[];
   /** The device the hand is pointing at, if any. */
   pointed?: DeviceRef | null;
@@ -152,7 +154,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   const ask = connectAsk(text);
   if (ask === 'sheet') return { name: 'connectSheet' };
   if (ask === 'byName') return { name: 'connectByName' };
-  // On the floor-plan board an edit verb is enough ("make it bigger").
-  if (world.planFocused && isPlanEditOnPlanBoard(text)) return { name: 'planEdit' };
+  // On the floor-plan board, an edit verb with a room of THIS plan, or with
+  // "it" and a size or side ("make it bigger"), is a plan edit.
+  if (world.planFocused && isPlanEditOnPlanBoard(text, world.planRooms ?? [])) return { name: 'planEdit' };
   return { name: 'openEnded' };
 }

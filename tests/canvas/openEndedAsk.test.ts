@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
-import { buildOpenEndedPrompt, CHAT_CANT_ACT, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
+import { buildOpenEndedPrompt, CHAT_CANT_ACT, CHAT_CANT_ACT_GENERIC, guardSafePrefix, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
 
 describe('openEndedAsk', () => {
   it('answers from Nano when Nano is here and well', async () => {
@@ -61,11 +61,17 @@ describe('promise guard: chat never claims an action', () => {
     'I’m going to move the kitchen.',
     'Consider it done.',
     'Adding a study now.',
+    'Sure! The study is now next to bedroom 2.',
+    'Your study has been added.',
+    'No problem, I’ve got it.',
+    'I’d be glad to make it bigger.',
+    'One moment while I add it.',
+    'I’ll get that sorted.',
   ];
   for (const p of promises) {
     it(`replaces: ${p}`, () => {
       expect(promisesAction(p)).toBe(true);
-      expect(promiseGuard(p)).toEqual({ reply: CHAT_CANT_ACT, replaced: true });
+      expect(promiseGuard(p).replaced).toBe(true);
     });
   }
   const chat = [
@@ -78,6 +84,11 @@ describe('promise guard: chat never claims an action', () => {
     'You can say “draw the floor plan” to start one.',
     "I'm not sure what you mean.",
     "That's done by the board's buttons.",
+    'I’m turning 80 next year!',
+    'I have turned the page on that.',
+    'Let me make a suggestion: rest.',
+    'I’ll put the kettle on and we can talk.',
+    'I can turn this around for you.',
   ];
   for (const c of chat) {
     it(`passes: ${c}`, () => {
@@ -85,7 +96,33 @@ describe('promise guard: chat never claims an action', () => {
       expect(promiseGuard(c)).toEqual({ reply: c, replaced: false });
     });
   }
-  it('the honest line names what does work', () => {
+  it('the honest line names what does work, and only suggests the floor plan for a plan ask', () => {
     expect(CHAT_CANT_ACT).toBe('I can’t do that from chat — try “draw the floor plan” or use the board’s buttons.');
+    expect(promiseGuard('I’ll add a study.', 'add a study next to bedroom 2').reply).toBe(CHAT_CANT_ACT);
+    expect(promiseGuard('I’ll turn on the lamp.', 'turn the lamp on please').reply).toBe(CHAT_CANT_ACT_GENERIC);
+    expect(CHAT_CANT_ACT_GENERIC).not.toMatch(/floor plan/);
+  });
+});
+
+describe('guardSafePrefix: a promise is never partly shown or spoken', () => {
+  it('releases whole safe clauses as they complete', () => {
+    expect(guardSafePrefix('Hi there, nice to')).toBe('Hi there,');
+    expect(guardSafePrefix('Hi there, nice to see you. How')).toBe('Hi there, nice to see you.');
+  });
+  it('holds a clause that could turn into a promise until its sentence ends', () => {
+    expect(guardSafePrefix('Okay, I’ll add, ')).toBe('Okay,');
+    expect(guardSafePrefix('Okay, I’ll add, um, the study, ')).toBe('Okay,'); // still held: its sentence hasn't ended
+    expect(guardSafePrefix('Sure, I’ll be happy to chat. What')).toBe('Sure, I’ll be happy to chat.');
+  });
+  it('stops at the first sign of a promise, streamed chunk by chunk', () => {
+    const reply = 'Okay, I can do that! I’ll add a study next to bedroom two for you.';
+    const shown: string[] = [];
+    for (let n = 1; n <= reply.length; n++) {
+      const safe = guardSafePrefix(reply.slice(0, n));
+      if (safe === null) break;
+      if (safe) shown.push(safe);
+    }
+    expect(shown.every((t) => !/can do|add/i.test(t))).toBe(true);
+    expect(guardSafePrefix(reply)).toBe(null);
   });
 });
