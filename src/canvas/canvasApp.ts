@@ -164,6 +164,9 @@ export interface CanvasOptions {
   onPersist?: (doc: CanvasDoc) => void;
   /** Who made the stored board on a frame (its artifact's `by`), if known. */
   artifactBy?: (frameId: string) => ArtifactBy | undefined;
+  /** Frame ids of stored boards not on the canvas (kept as they are): new
+   *  boards never reuse them, so their saves can't collide. */
+  reservedFrameIds?: readonly string[];
   /** Stored artifacts that failed their check at boot and were not loaded. */
   dropped?: readonly { id: string; why: string }[];
   /** One line to say once at boot about storage (e.g. the memory fallback). */
@@ -307,7 +310,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let devicesFrame: string | null = null;
   try { devicesFrame = stored ? storage.getItem(DEVICES_BOARD_KEY) : null; } catch { devicesFrame = null; }
   const doc = initialDoc(stored);
-  const reg: FrameRegistry = createFrameRegistry(doc.frames);
+  const reg: FrameRegistry = createFrameRegistry(doc.frames, opts.reservedFrameIds ?? []);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
   // What was drawn on floor-plan boards (frame id → plan board id → plan doc).
   const drawings: Drawings = JSON.parse(JSON.stringify(doc.drawings ?? {})) as Drawings;

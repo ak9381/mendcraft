@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { coerceLayout, joinCanvasDoc, splitCanvasDoc, tooManyBoardsWhy, unjoinedIds, type CanvasLayout } from '../../src/canvas/canvasPersistence';
 import { emptyDoc } from '../../src/canvas/firstOpen';
+import { createFrameRegistry } from '../../src/canvas/frames';
+import { frameIdOfArtifactId } from '../../src/artifacts/artifact';
 import { CANVAS_DOC_VERSION, type CanvasDoc } from '../../src/canvas/frames';
 import { LANG_STRING_KEYS } from '../../src/canvas/languagePack';
 import type { Artifact } from '../../src/artifacts/artifact';
@@ -76,18 +78,21 @@ describe('canvasPersistence', () => {
     expect(joinCanvasDoc(bad, [board('f1')])).toBeNull();
   });
 
-  it('41 stored boards: 40 open, 1 is reported, and a save removes nothing', () => {
+  it('41 stored boards: the 40 newest open (laid out oldest first), the oldest is reported, and a save removes nothing', () => {
     const stored: Artifact[] = Array.from({ length: 41 }, (_, i) => board(`f${i + 1}`, { at: 1000 + i }));
     const dropped: { id: string; why: string }[] = [];
     const doc = joinCanvasDoc(null, stored, (d) => dropped.push(d));
     expect(doc?.frames).toHaveLength(40);
-    expect(dropped).toEqual([{ id: 'board-f41', why: tooManyBoardsWhy }]);
+    expect(dropped).toEqual([{ id: 'board-f1', why: tooManyBoardsWhy }]);
+    expect(doc!.frames[0].id).toBe('f2');
+    expect(doc!.frames.at(-1)!.id).toBe('f41');
+    expect(doc!.frames[1].rect.x).toBeGreaterThan(doc!.frames[0].rect.x);
     const keep = unjoinedIds(doc, stored);
-    expect([...keep]).toEqual(['board-f41']);
+    expect([...keep]).toEqual(['board-f1']);
     const out = splitCanvasDoc(doc!, stored.filter((a) => !keep.has(a.id)), by, 9000, keep);
     expect(out.remove).toEqual([]);
     // Opened boards may get their new position stored; the closed one is untouched.
-    expect(out.put.map((x) => x.id)).not.toContain('board-f41');
+    expect(out.put.map((x) => x.id)).not.toContain('board-f1');
   });
 
   it('a refused document removes and overwrites nothing on the first save', () => {
@@ -108,5 +113,26 @@ describe('canvasPersistence', () => {
     expect(coerceLayout('nope')).toBeNull();
     const l = coerceLayout({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [], surfaces: { x: 1 }, lang: 'kn' });
     expect(l).toEqual({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [], lang: 'kn' });
+  });
+
+  it('a refused document, then a new board: it gets a fresh id and its artifact is put', () => {
+    const stored: Artifact[] = [board('f1'), board('f3')];
+    const keep = unjoinedIds(null, stored);
+    const reserved = [...keep].map(frameIdOfArtifactId).filter((x): x is string => !!x);
+    const reg = createFrameRegistry([], reserved);
+    const f = reg.add('room', 'New');
+    expect(f.id).toBe('f4'); // past every kept id, never f1
+    const d = emptyDoc();
+    d.frames = reg.list();
+    d.surfaces = { [f.id]: { kind: 'room', title: 'New', tiles: [{ type: 'stat', label: 'A', value: '1' }] } };
+    const out = splitCanvasDoc(d, [], by, 9000, keep);
+    expect(out.put.map((a) => a.id)).toEqual(['board-f4']);
+    expect(out.remove).toEqual([]);
+  });
+
+  it('the frame registry never hands out a reserved id', () => {
+    const reg = createFrameRegistry([{ id: 'f2', kind: 'note', title: 'b', rect: { x: 0, y: 0, w: 1, h: 1 }, pinned: false }], ['f3', 'my-board']);
+    expect(reg.add('note', 'x').id).toBe('f4');
+    expect(reg.add('note', 'y').id).toBe('f5');
   });
 });

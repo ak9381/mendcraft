@@ -29,9 +29,14 @@ export function cleanTitle(t: unknown): string {
 
 const copy = (f: Frame): Frame => ({ ...f, rect: { ...f.rect } });
 
-export function createFrameRegistry(initial: readonly Frame[] = []) {
+/** `reserved`: frame ids already used by stored boards that are not on the
+ *  canvas (kept as they are). New boards never take one of them, and are
+ *  numbered past the highest — so a new board can't collide with one. */
+export function createFrameRegistry(initial: readonly Frame[] = [], reserved: Iterable<string> = []) {
   const frames: Frame[] = initial.map(copy);
-  let seq = frames.reduce((m, f) => Math.max(m, Number(/^f(\d+)$/.exec(f.id)?.[1] ?? 0)), 0);
+  const taken = new Set(reserved);
+  const num = (id: string): number => Number(/^f(\d+)$/.exec(id)?.[1] ?? 0);
+  let seq = Math.max(frames.reduce((m, f) => Math.max(m, num(f.id)), 0), ...[...taken].map(num), 0);
   const find = (id: string) => frames.find((f) => f.id === id);
   return {
     list: () => frames.map(copy),
@@ -39,7 +44,9 @@ export function createFrameRegistry(initial: readonly Frame[] = []) {
     add(kind: FrameKind, title: string): Frame {
       if (frames.length >= MAX_FRAMES) throw new Error('Canvas is full');
       const right = frames.length ? Math.max(...frames.map((f) => f.rect.x + f.rect.w)) + FRAME_GAP : 0;
-      const f: Frame = { id: `f${++seq}`, kind, title: cleanTitle(title), rect: { x: right, y: 0, ...FRAME_SIZE }, pinned: false };
+      let id = `f${++seq}`;
+      while (taken.has(id) || find(id)) id = `f${++seq}`;
+      const f: Frame = { id, kind, title: cleanTitle(title), rect: { x: right, y: 0, ...FRAME_SIZE }, pinned: false };
       frames.push(f);
       return copy(f);
     },

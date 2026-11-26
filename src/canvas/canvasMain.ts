@@ -211,6 +211,14 @@ const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
 // The iPhone's live guest session (null while not joined): it answers the
 // laptop's point request and re-announces its sensing status.
 let guestSession: PhoneGuestSessionLike | null = null;
+/** Frame ids of every stored board or drawing the canvas does not show
+ *  (kept, over the cap, or past the store limit): new boards never take them. */
+function reservedFrameIds(): string[] {
+  const ids = new Set<string>();
+  for (const id of keepIds) { const f = frameIdOfArtifactId(id); if (f) ids.add(f); }
+  for (const a of loaded.ok) if (keepIds.has(a.id) && a.kind === 'plan') { const f = (a.data as { frameId?: unknown }).frameId; if (typeof f === 'string') ids.add(f); }
+  return [...ids];
+}
 /** Who made a change: her own (hand edits, renames) unless the last kept
  *  history entry for that board says an engine; a replayed reply is 'replay'. */
 function artifactMaker(id: string): ArtifactBy {
@@ -237,6 +245,7 @@ handle = mountCanvas(root, {
   onPersist: persistDoc,
   artifactBy: (frameId) => artifacts.find((a) => a.id === `board-${frameId}`)?.by,
   dropped: loaded.dropped,
+  reservedFrameIds: reservedFrameIds(),
   storeNote: storeNotes.length ? storeNotes.join(' ') : undefined,
   phoneCamera,
   phoneSensing: phoneSensingAllowed(phoneShell, phonePlatform),

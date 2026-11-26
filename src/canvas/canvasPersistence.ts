@@ -40,20 +40,28 @@ export const tooManyBoardsLine = (n: number): string => `${n} stored board${n ==
 /** Layout + (already checked) artifacts → a canvas document, or null when
  *  there is nothing to open or the joined document fails parseCanvasDoc.
  *  Boards past MAX_FRAMES are not opened; each is reported to `onDrop`
- *  (newest boards are the ones left out). They stay in the store. */
+ *  (the oldest are the ones left closed). They stay in the store. */
 export function joinCanvasDoc(layout: CanvasLayout | null, artifacts: Artifact[], onDrop?: (d: { id: string; why: string }) => void): CanvasDoc | null {
   const boards = artifacts.filter((a) => a.kind === 'board');
   if (!layout && !boards.length) return null;
   const frames: Frame[] = (layout?.frames ?? []).map((f) => ({ ...f, rect: { ...f.rect } }));
   const surfaces: Record<string, SurfacePlan> = {};
-  // Oldest first, so boards appended to the right keep the order they were made in.
+  // Over the cap, the NEWEST boards are the ones opened; those that open are
+  // then laid out oldest first, so appended boards keep the order they were made in.
+  const known = new Set(frames.map((f) => f.id));
+  let room = MAX_FRAMES - frames.length;
+  const opened = new Set<string>();
+  for (const a of [...boards].sort((x, y) => y.at - x.at)) {
+    if (known.has(boardFrameId(a))) { opened.add(a.id); continue; }
+    if (room > 0) { room--; opened.add(a.id); } else onDrop?.({ id: a.id, why: tooManyBoardsWhy });
+  }
   for (const a of [...boards].sort((x, y) => x.at - y.at)) {
+    if (!opened.has(a.id)) continue;
     const id = boardFrameId(a);
     const data = a.data as unknown as BoardData;
-    const known = frames.find((f) => f.id === id);
-    if (known) { known.kind = data.frame.kind; known.title = data.frame.title; }
+    const inLayout = frames.find((f) => f.id === id);
+    if (inLayout) { inLayout.kind = data.frame.kind; inLayout.title = data.frame.title; }
     else {
-      if (frames.length >= MAX_FRAMES) { onDrop?.({ id: a.id, why: tooManyBoardsWhy }); continue; }
       const right = frames.length ? Math.max(...frames.map((f) => f.rect.x + f.rect.w)) + FRAME_GAP : 0;
       frames.push({ id, kind: data.frame.kind, title: data.frame.title, rect: { ...data.frame.rect, x: right, y: 0 }, pinned: data.frame.pinned });
     }

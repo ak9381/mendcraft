@@ -62,4 +62,13 @@ describe('empty boot', () => {
     expect(root.textContent).toContain("This browser can't keep boards.");
     expect(root.textContent).toContain('not loaded: board-bad');
   });
+
+  it('with stored boards kept closed, a new board takes a fresh id and is saved', async () => {
+    const saved: CanvasDoc[] = [];
+    const { h } = mount({ onPersist: (d) => saved.push(d), reservedFrameIds: ['f1', 'f2'] });
+    h.run('new board');
+    expect(h.frames().map((f) => f.id)).toEqual(['f3']);
+    h.save();
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f3']));
+  });
 });
