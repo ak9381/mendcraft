@@ -673,6 +673,9 @@ export interface OnDeviceStreamRequest {
   onChunk?: (full: string) => void;
   /** The queue gave this call the model: the caller's deadline starts now. */
   onStart?: () => void;
+  /** A short reply is wanted: once the text is this long the call ends (and
+   *  the model is freed) instead of letting it write on. */
+  maxChars?: number;
   /** Injectable for tests. */
   queue?: typeof nanoQueue;
   yieldToPage?: () => Promise<void>;
@@ -730,12 +733,25 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
   const yieldToPage = req.yieldToPage ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
   await ensureModels();
   const asked = Date.now();
+  // The model is being loaded by the warm-up right now: wait for that load
+  // and use the loaded model, rather than abort it and start a second create.
+  const warm = boardWarm;
+  if (warm) {
+    nanoTrace('on-device call: waiting for the warm-up that is loading the model');
+    await Promise.race([warm, new Promise<void>((r) => setTimeout(r, WARM_WAIT_MAX_MS))]);
+    nanoTrace(`on-device call: warm-up finished after ${Date.now() - asked} ms of waiting`);
+  }
   return queue.run(async () => {
     if (req.signal?.aborted) throw new Error('stopped');
     const t0 = Date.now();
     nanoTrace(`on-device call: waited ${t0 - asked} ms for the model's queue`);
     try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
-    lastOnDeviceStop?.();
+    // The previous call's session is kept until THIS one is answering, so the
+    // model always has a live session and is never unloaded in between.
+    const stopPrevious = lastOnDeviceStop;
+    lastOnDeviceStop = null;
+    let previousStopped = false;
+    const releasePrevious = (): void => { if (!previousStopped) { previousStopped = true; stopPrevious?.(); } };
     const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
     let iterator: AsyncIterator<{ text: () => string; inferenceSource?: string }> | null = null;
     let model: TextGenModel | null = null;
@@ -758,6 +774,9 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
       req.signal?.addEventListener('abort', onAbort, { once: true });
     });
     aborted.catch(() => undefined);
+    let sawChunk = false;
+    let enough = false;
+    let cutShort = false;
     const work = (async (): Promise<string> => {
       let full = '';
       const take = (chunk: { text: () => string; inferenceSource?: string }): void => {
@@ -768,6 +787,8 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
         // Deltas (current Chrome) or the text so far (older builds). A delta
         // that repeats the tail ("ro" + "o") is still new text.
         full = full && piece.length > full.length && piece.startsWith(full) ? piece : full + piece;
+        if (!sawChunk) { sawChunk = true; releasePrevious(); nanoTrace(`on-device call: first chunk ${Date.now() - t0} ms after it got the model`); }
+        if (req.maxChars && full.length >= req.maxChars) enough = true;
         try { req.onChunk?.(full); } catch (e) { if (e instanceof Error && e.name === 'MidStreamOffline') throw e; }
       };
       if (typeof model.generateContentStream === 'function') {
@@ -780,6 +801,9 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
           if (step.done) break;
           if (req.signal?.aborted) throw new Error('stopped');
           take(step.value);
+          // A short reply was asked for and it is long enough: stop here, so
+          // the model is free again instead of writing on.
+          if (enough) { cutShort = true; break; }
           // Buffered chunks resolve back to back as microtasks: hand the page
           // a frame so a long reply can never freeze it.
           if (now() - lastYield >= ON_DEVICE_YIELD_EVERY_MS) { await yieldToPage(); lastYield = now(); }
@@ -796,10 +820,18 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
     try {
       // maxRun: a call Chrome never settles still gives the slot back.
       const text = await withTimeout(Promise.race([work, aborted]), ON_DEVICE_MAX_RUN_MS, 'on-device call')
-        .catch((e) => { throw /timed out after/.test(e instanceof Error ? e.message : '') ? new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`) : e; });
-      finished = true;
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : '';
+          if (/timed out after/.test(msg)) throw new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`);
+          // Not stopped by us and not a refused request: Chrome dropped the
+          // session — the model was probably unloaded. Warm it again.
+          if (msg !== 'stopped' && !/NotSupportedError|request is invalid|did not come from the on-device/i.test(`${e instanceof Error ? e.name : ''} ${msg}`)) markOnDeviceUnloaded(msg.slice(0, 60) || 'the call failed');
+          throw e;
+        });
+      finished = !cutShort; // a reply cut short still has a session writing: stop it below
       recordInference('on-device', 'board', Date.now() - t0);
       onDeviceLoaded = true;
+      onDeviceUsedAt = Date.now();
       nanoTrace(`on-device call: done in ${Date.now() - t0} ms, output ${text.length} chars`);
       // Keep this finished session (it keeps Nano loaded) until the next call.
       const kept = model;
@@ -807,7 +839,8 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
       return text;
     } finally {
       if (onAbort) req.signal?.removeEventListener('abort', onAbort);
-      if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms`); stop(); }
+      releasePrevious();
+      if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms${cutShort ? ' (reply long enough)' : ''}`); stop(); }
     }
   }, { priority: 10, signal: req.signal, maxWaitMs: ON_DEVICE_BOARD_MAX_WAIT_MS });
 }
@@ -815,8 +848,12 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
 /** The warm-up's reply schema (kept to keywords Chrome accepts). */
 export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 let boardWarm: Promise<boolean> | null = null;
-/** The warm-up's model while it runs (to see whether its session exists yet). */
-let warming: TextGenModel | null = null;
+/** The longest a warm-up's create() (the cold model load) may take. */
+export const WARM_CREATE_MAX_MS = 60_000;
+/** The longest a request waits for a warm-up already loading the model. */
+export const WARM_WAIT_MAX_MS = 45_000;
+/** When the on-device model last answered (0: never on this page). */
+let onDeviceUsedAt = 0;
 /** Once the warm-up's session exists, its ~10-character reply gets this long. */
 export const WARM_PROMPT_TIMEOUT_MS = 5000;
 /** How often the warm-up looks whether its session has been created. */
@@ -839,62 +876,59 @@ export const onDeviceModelLoaded = (): boolean => onDeviceLoaded;
  * Resolves true when the model is loaded (also when a real call already
  * loaded it). A false result may be retried — see ai/nanoWarm.
  */
-export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: number } = {}): Promise<boolean> {
+export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: number; createMaxMs?: number } = {}): Promise<boolean> {
   if (onDeviceLoaded) return Promise.resolve(true);
   boardWarm ??= (async () => {
     await ensureModels();
     try {
-      await queue.run(async (ctx) => {
+      await queue.run(async () => {
         const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        let model: TextGenModel | null = null;
-        // Pushed aside: stop the session, and end this job (and its session
-        // poll) now rather than leave it waiting on a prompt that will never
-        // be answered.
-        const steppedAside = new Promise<never>((_, reject) => {
-          ctx.signal?.addEventListener('abort', () => {
-            session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request');
-            reject(new NanoQueueSkipped('stepped aside for a request'));
-          }, { once: true });
-        });
-        steppedAside.catch(() => undefined);
-        model = onDeviceModelFor({
+        const model = onDeviceModelFor({
           createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
           promptOptions: { responseConstraint: WARM_CONSTRAINT },
         });
-        warming = model;
         nanoTrace('warm-up: started');
-        const kept = model;
         const t0 = Date.now();
         let poll: ReturnType<typeof setInterval> | null = null;
         let deadline: ReturnType<typeof setTimeout> | null = null;
-        // The prompt's clock starts when the session exists, never before.
-        const promptTimedOut = new Promise<never>((_, reject) => {
+        // create() is the cold load: it gets a generous ceiling (so a create
+        // Chrome never settles cannot hold the model for ever). The tiny
+        // prompt's own short clock starts only once the session exists.
+        const timedOut = new Promise<never>((_, reject) => {
+          const createCap = setTimeout(() => { if (!deadline) reject(new Error('on-device warm-up create timed out')); }, opts.createMaxMs ?? WARM_CREATE_MAX_MS);
           const arm = (): void => {
-            if (deadline || !sdkSessionReady(kept)) return;
+            if (deadline || !sdkSessionReady(model)) return;
             if (poll) { clearInterval(poll); poll = null; }
+            clearTimeout(createCap);
             nanoTrace(`warm-up: session created after ${Date.now() - t0} ms`);
             deadline = setTimeout(() => reject(new Error('on-device warm-up prompt timed out')), opts.promptTimeoutMs ?? WARM_PROMPT_TIMEOUT_MS);
           };
           poll = setInterval(arm, WARM_SESSION_POLL_MS);
           arm();
+          timedOut_cleanup = () => { clearTimeout(createCap); if (poll) clearInterval(poll); if (deadline) clearTimeout(deadline); };
         });
-        promptTimedOut.catch(() => undefined);
+        timedOut.catch(() => undefined);
         try {
           const reply = model.generateContent('Reply with JSON only: {"ok":true}');
           reply.catch(() => undefined);
-          await Promise.race([reply, promptTimedOut, steppedAside]);
+          await Promise.race([reply, timedOut]);
         } catch (e) {
           // Timed out (or failed): its session must not keep generating.
-          session?.abort(); destroySdkSession(kept);
+          session?.abort(); destroySdkSession(model);
           nanoTrace('warm-up: stopped (timed out or failed)');
           throw e;
         } finally {
-          if (poll) clearInterval(poll);
-          if (deadline) clearTimeout(deadline);
+          timedOut_cleanup?.();
+          timedOut_cleanup = null;
         }
-        lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(kept); };
-      }, { priority: -1, preemptible: () => !sdkSessionReady(warming), maxWaitMs: 0 });
+        nanoTrace(`warm-up: prompt answered ${Date.now() - t0} ms after it started`);
+        lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(model); };
+        // Never pre-empted: a request that arrives while the model is loading
+        // waits for THIS load (streamOnDevice awaits it) instead of aborting it
+        // and starting a second create — one create in flight at a time.
+      }, { priority: -1, maxWaitMs: 0 });
       onDeviceLoaded = true;
+      onDeviceUsedAt = Date.now();
       nanoTrace('warm-up: done — the model is loaded');
       return true;
     } catch {
@@ -904,6 +938,26 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
     }
   })();
   return boardWarm;
+}
+let timedOut_cleanup: (() => void) | null = null;
+/** When the on-device model last answered on this page (0: never). */
+export const onDeviceLastUsedAt = (): number => onDeviceUsedAt;
+
+/** The warm-up now running (null when none): a request waits for it. */
+export const warmUpInFlight = (): Promise<boolean> | null => boardWarm;
+
+const unloadedListeners = new Set<() => void>();
+/** Hear when the on-device model seems to have been unloaded (a call failed
+ *  that was not stopped by us): the page should warm it again. */
+export function onOnDeviceUnloaded(cb: () => void): () => void {
+  unloadedListeners.add(cb);
+  return () => { unloadedListeners.delete(cb); };
+}
+function markOnDeviceUnloaded(why: string): void {
+  if (!onDeviceLoaded) return;
+  onDeviceLoaded = false;
+  nanoTrace(`model may be unloaded (${why}): it will be warmed again`);
+  for (const cb of unloadedListeners) { try { cb(); } catch { /* a listener must not fail the call */ } }
 }
 
 /** Is this address unable to pass App Check right now? Null when a token was
@@ -923,6 +977,7 @@ export function setModelsForTest(overrides: ModelOverrides | null): void {
   lastOnDeviceStop = null;
   boardWarm = null;
   onDeviceLoaded = false;
+  onDeviceUsedAt = 0;
   cached = null;
   initPromise = null;
   resetStatus();
