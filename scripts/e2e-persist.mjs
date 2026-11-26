@@ -118,6 +118,26 @@ async function main() {
     check(dash && dash.title !== 'Connected devices' && JSON.stringify(dash).includes('"lamp"'), `the dashboard keeps its tiles (${dash?.title})`);
     check(s3?.frames?.some((f) => f.id === s3.devicesBoard && f.id !== dashId), 'connect devices makes its own devices board');
 
+    // 4. A narrow laptop window (phone-sized layout, not the phone app) never
+    //    takes boards for copies: two Floor plans of the same plan and two
+    //    Dashboards all stay, and stay saved.
+    const r = (x) => ({ x, y: 0, w: 1000, h: 680 });
+    const dashP = { kind: 'room', title: 'Dashboard', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] };
+    const fp = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'same-cad', template: 'studio' }] };
+    const four = {
+      version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+      frames: [['f1', 'room', 'Dashboard'], ['f2', 'room', 'Dashboard'], ['f3', 'plan', 'Floor plan'], ['f4', 'plan', 'Floor plan']].map(([id, kind, title], i) => ({ id, kind, title, rect: r(i * 1200), pinned: false })),
+      surfaces: { f1: dashP, f2: dashP, f3: fp, f4: fp },
+    };
+    await page.setViewport({ width: 480, height: 900 });
+    await page.evaluate((d) => localStorage.setItem('mc.canvas.v1', JSON.stringify(d)), four);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await ready(); await sleep(1500);
+    await run('overview'); await sleep(1200);
+    const narrow = await boards();
+    const narrowSaved = (await stored())?.frames?.length;
+    check(narrow.length === 4 && narrowSaved === 4, `a narrow laptop window keeps all four boards (${narrow.join(', ')}; saved ${narrowSaved})`);
+
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   } finally {
     await browser.close().catch(() => {});

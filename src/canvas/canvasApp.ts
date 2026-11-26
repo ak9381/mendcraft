@@ -49,9 +49,9 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
-import { connectedDeviceRows, connectedDevicesPlan, isDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
-import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, loadCanvasDoc, UNREADABLE_LINE } from './canvasStore';
-import { duplicateBoards, remoteBoardTarget } from './remoteBoards';
+import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
+import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
+import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
@@ -151,6 +151,8 @@ export const STORAGE_KEY = CANVAS_STORAGE_KEY;
 
 export interface CanvasOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  /** Running in the native phone app (Capacitor iOS/Android). Default: detected. */
+  nativePhone?: boolean;
   connector?: DeviceConnector;
   devices?: Record<string, DeviceState>;
   reducedMotion?: boolean;
@@ -328,7 +330,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   if (stored && !opts.showcase) {
     let legacy: string | null = null;
     try { legacy = storage.getItem(LEGACY_DEVICES_BOARD_KEY); } catch { legacy = null; }
-    devicesFrame = stored.devicesBoard ?? (legacy && isDevicesPlan(stored.surfaces[legacy]) ? legacy : null);
+    devicesFrame = resolveDevicesBoard(stored, legacy);
   }
   // Showcase is a deliberate opt-in detour: it never consults storage/seed/
   // fresh, and nothing in the default boot paths (?fresh=1&sim=1 included)
@@ -357,10 +359,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
     viewportWidth: window.innerWidth,
   }));
-  // A phone shows each board once: copies an older build saved (or the
-  // lift above just made) beside the one it already shows go, before render.
-  if (phoneShell) {
+  // The phone app shows each board once: copies an older build saved (or
+  // the lift above just made) of a board it already shows go, before render.
+  // Only in the native app (never a narrow laptop window), and only boards
+  // received from the laptop or the same plan board — never her own boards.
+  const nativePhone = opts.nativePhone ?? (typeof window !== 'undefined' && isNativePhoneApp(
+    (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null));
+  if (nativePhone) {
     for (const dup of duplicateBoards(reg.list(), surfaces, focusId)) {
+      console.info(`[mendcraft] phone: a second copy of “${reg.get(dup)?.title ?? dup}” was taken off`);
       reg.remove(dup); delete surfaces[dup]; delete drawings[dup];
       if (focusId === dup) focusId = null;
       if (lastFocus === dup) lastFocus = focusId;
@@ -5326,6 +5333,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     } else if (plan.title) {
       reg.rename(id, plan.title);
     }
+    reg.markFromLaptop(id); // only received boards are ever seen as copies
     surfaces[id] = plan;
     // The drawing the laptop has now replaces whatever this phone had for
     // these plan tiles (re-checked here: never trust the snapshot). A board
@@ -5860,7 +5868,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   };
   // Saved boards this build couldn't read: said once, plainly (they were
   // copied aside — canvasStore.ts — and are never written over).
-  if (loaded.unreadable) setTimeout(() => say(UNREADABLE_LINE, { speak: true }), 0);
+  const openLine = loadLine(loaded);
+  if (openLine) setTimeout(() => say(openLine, { speak: true }), 0);
   return {
     /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
     loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),

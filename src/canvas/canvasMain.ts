@@ -26,7 +26,7 @@ import { ensureDeviceId } from '../relay/pairingStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
 import { mountReplayBanner } from './replayBanner';
-import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, startFresh, withoutFresh } from './canvasStore';
+import { openFresh } from './canvasStore';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   const m = new Map<string, string>();
@@ -47,13 +47,9 @@ const params = new URLSearchParams(location.search);
 // ?fresh=1 starts blank — but the saved boards are copied aside first (never
 // just deleted), and `fresh` leaves the address bar so a later reload of this
 // tab (a redeploy, F5) opens what she built here instead of wiping it again.
-if (params.has('fresh')) {
-  try {
-    startFresh(localStorage, CANVAS_STORAGE_KEY, [LEGACY_DEVICES_BOARD_KEY]);
-    const next = withoutFresh(location.href);
-    if (next) history.replaceState(history.state, '', next);
-  } catch { /* storage blocked: nothing saved to lose */ }
-}
+// A failed copy means this open is NOT fresh (nothing is reset).
+const freshOpen = openFresh((() => { try { return localStorage; } catch { return null; } })(), location.href);
+if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
 
 // People directory: tokens in cloud prompts, real names filled back on device.
 // ?sim=1: seed one example person (Sharma / client / [Client A]) in a fresh,
@@ -209,7 +205,7 @@ const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
 // laptop's point request and re-announces its sensing status.
 let guestSession: PhoneGuestSessionLike | null = null;
 handle = mountCanvas(root, {
-  voice, engines, seed: params.has('seed'), fresh: params.has('fresh') || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
+  voice, engines, seed: params.has('seed'), fresh: freshOpen.fresh || replayDemo, sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   phoneCamera,
   phoneSensing: phoneSensingAllowed(phoneShell, phonePlatform),
   sendPointResult: (text) => { void guestSession?.sendCommand({ kind: 'pointResult', text }).catch(() => undefined); },

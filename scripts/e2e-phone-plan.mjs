@@ -209,6 +209,25 @@ async function main() {
     console.log('     android legacy reload + replay', JSON.stringify(once3));
     if (process.env.DEBUG_TEXT) console.log(await android.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 600)));
     check(once3.plans === 1 && once3.titles === 1, `a phone with an older saved board shows the Floor plan once (${JSON.stringify(once3)})`);
+    // Her own boards are never taken for copies: two Dashboards of her own and
+    // a different floor plan all stay when the laptop's Floor plan arrives.
+    await android.evaluate(() => {
+      const r = (x) => ({ x, y: 0, w: 1000, h: 680 });
+      const dash = { kind: 'room', title: 'Dashboard', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] };
+      localStorage.setItem('mc.canvas.v1', JSON.stringify({
+        version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+        frames: [{ id: 'f1', kind: 'note', title: 'Board 1', rect: r(0), pinned: false }, { id: 'f2', kind: 'room', title: 'Dashboard', rect: r(1200), pinned: false },
+          { id: 'f3', kind: 'room', title: 'Dashboard', rect: r(2400), pinned: false }, { id: 'f4', kind: 'plan', title: 'Floor plan', rect: r(3600), pinned: false }],
+        surfaces: { f2: dash, f3: dash, f4: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'mine-cad', template: 'studio' }] } },
+      }));
+    });
+    await android.reload({ waitUntil: 'domcontentloaded' });
+    await android.waitForFunction(() => !!window.__mcGuestSnapshot, { timeout: 20_000 });
+    await sleep(1000);
+    await android.evaluate((s) => window.__mcGuestSnapshot(s), { ...replayed, rev: replayed.rev + 2 });
+    await sleep(1200);
+    const mine = await android.evaluate(() => window.__canvas.frames().map((f) => f.title));
+    check(mine.length === 4 && mine.filter((t) => t === 'Dashboard').length === 2 && mine.filter((t) => t === 'Floor plan').length === 2, `her own boards all stay (${mine.join(', ')})`);
     check(errors.length === 0, `no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
   } finally {
     await browser.close();
