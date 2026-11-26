@@ -545,19 +545,31 @@ actor DockWatcher {
         }
     }
 
+    /// Set once the stand refuses a move with pitch in it (see aim()).
+    private var pitchRefused = false
+
     func aim(yaw: Double, pitch: Double, seconds: Double) async throws -> Bool {
         guard let acc = accessory else { return false }
         // Off for this move only; endMove() puts the web layer's choice (or
         // the pre-pause state) back once the last overlapping move finished.
         beginMove()
-        let target = Vector3D(x: pitch, y: yaw, z: 0)
         let ms = Int64(max(0.3, min(4.0, seconds)) * 1000)
         do {
             try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
             // setOrientation returns a Progress when the move STARTS: wait for
             // it to finish (or its duration + a margin) before tracking is
             // restored and the web layer may send the next move.
-            let progress = try await acc.setOrientation(target, duration: .milliseconds(ms), relative: true)
+            // Some stands refuse any pitch in a relative move (DockKit error
+            // 16, seen live on the Flow): retry yaw-only, and stop asking for
+            // pitch for the rest of the session. Yaw-only moves (the shake) work.
+            let usePitch = pitch != 0 && !pitchRefused
+            let progress: Progress
+            do {
+                progress = try await acc.setOrientation(Vector3D(x: usePitch ? pitch : 0, y: yaw, z: 0), duration: .milliseconds(ms), relative: true)
+            } catch where usePitch {
+                pitchRefused = true
+                progress = try await acc.setOrientation(Vector3D(x: 0, y: yaw, z: 0), duration: .milliseconds(ms), relative: true)
+            }
             await DockWatcher.waitForMove(progress, maxMs: ms + 400)
         } catch {
             await endMove()
