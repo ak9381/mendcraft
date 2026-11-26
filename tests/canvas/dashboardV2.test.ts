@@ -599,6 +599,45 @@ describe('review round 1', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('voice goes through the same lane: a chip is queued, then "turn off the lamp" → the lamp ends off and the chip is never sent', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent: DeviceIntent[] = [];
+      const connector: DeviceConnector = { run: (i) => new Promise((res) => setTimeout(() => { sent.push(i); res(simulatedAck(lamp(), i)); }, 300)) };
+      const store = createDeviceStore({ 'wiz-desk': lamp({ on: true, brightness: 50 }) }, connector, () => {}, () => null);
+      const q = createActQueue(store);
+      void q.act(tileIntent('lamp.level', 'wiz-desk', store.get('wiz-desk'), 25)!); // in flight
+      await vi.advanceTimersByTimeAsync(20);
+      const chip = q.act(tileIntent('lamp.level', 'wiz-desk', store.get('wiz-desk'), 100)!); // queued behind it
+      // Spoken: the parser's own intent, sent the way canvasApp sends it.
+      const spoken = parseDeviceCommands('turn off the desk lamp', devices)!.intents;
+      expect(spoken).toEqual([{ deviceId: 'wiz-desk', on: false }]);
+      const off = q.act(spoken[0]);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(sent.map((i) => (i.on === false ? 'off' : i.brightness))).toEqual([25, 'off']); // 100 never reached the bulb
+      expect(store.get('wiz-desk').on).toBe(false);
+      // The voice status line still gets its answer; the dropped chip resolves with what replaced it.
+      expect((await off).on).toBe(false);
+      expect((await chip).on).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the lane hands each caller the state once ITS command applied; an unknown device rejects only for a caller that listens', async () => {
+    const store = createDeviceStore({ d: lamp({ brightness: 50 }) }, { run: async (i) => simulatedAck(lamp(), i) }, () => {}, () => null);
+    const q = createActQueue(store);
+    expect(await q.act({ deviceId: 'd', on: true, brightness: 70 })).toMatchObject({ brightness: 70, error: '' });
+    expect(await q.act({ deviceId: 'd', on: false })).toMatchObject({ on: false });
+    await expect(q.act({ deviceId: 'nope', on: true })).rejects.toThrow(/unknown device/);
+    void q.act({ deviceId: 'nope', on: true }); // not listened to: no unhandled rejection, and the lane keeps running
+    expect(await q.act({ deviceId: 'd', on: true })).toMatchObject({ on: true });
+  });
+
+  it('canvasApp sends voice device commands through the lane, not straight to the store', () => {
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toContain('const acted = actQueue.act(i);');
+    expect(app).not.toMatch(/store\.act\(/);
+  });
+
   it('a lamp that is off stays off: Dimmer, a step down by gesture, or "dim" by voice never turn it on', async () => {
     const run = vi.fn(async (i: DeviceIntent) => simulatedAck(lamp(), i));
     const off = lamp({ on: false, brightness: 40 });

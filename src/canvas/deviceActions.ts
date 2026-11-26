@@ -233,19 +233,30 @@ export function createActQueue(
   store: Pick<DeviceStore, 'act'>,
   gapMs = ACT_GAP_MS,
   clock: { now(): number; later(f: () => void, ms: number): unknown } = { now: () => Date.now(), later: (f, ms) => setTimeout(f, ms) },
-): { act(intent: DeviceIntent): void; pending(deviceId: string): boolean } {
-  interface Lane { busy: boolean; lastAt: number; next: DeviceIntent | null; ordered: DeviceIntent[]; timer: boolean }
+): {
+  /** Resolves with the device's state once THIS command has been applied. A
+   *  level set that was replaced or dropped resolves with the result of the
+   *  command that took its place. Never needs a catch for the lane to run. */
+  act(intent: DeviceIntent): Promise<DeviceState>;
+  pending(deviceId: string): boolean;
+} {
+  type Waiter = { resolve(s: DeviceState): void; reject(e: unknown): void };
+  interface Job { intent: DeviceIntent; waiters: Waiter[] }
+  interface Lane { busy: boolean; lastAt: number; next: Job | null; ordered: Job[]; timer: boolean }
   const lanes = new Map<string, Lane>();
   const lane = (id: string): Lane => {
     let l = lanes.get(id);
     if (!l) { l = { busy: false, lastAt: -Infinity, next: null, ordered: [], timer: false }; lanes.set(id, l); }
     return l;
   };
-  function send(id: string, l: Lane, intent: DeviceIntent): void {
+  function send(id: string, l: Lane, job: Job): void {
     l.busy = true;
-    let p: Promise<unknown>;
-    try { p = store.act(intent); } catch { p = Promise.resolve(); }
-    void p.catch(() => undefined).then(() => { l.busy = false; pump(id); });
+    let p: Promise<DeviceState>;
+    try { p = store.act(job.intent); } catch (e) { p = Promise.reject(e); }
+    void p.then(
+      (s) => { job.waiters.forEach((w) => w.resolve(s)); },
+      (e) => { job.waiters.forEach((w) => w.reject(e)); },
+    ).then(() => { l.busy = false; pump(id); });
   }
   function pump(id: string): void {
     const l = lane(id);
@@ -259,19 +270,27 @@ export function createActQueue(
       if (!l.timer) { l.timer = true; clock.later(() => { l.timer = false; pump(id); }, wait); }
       return;
     }
-    const intent = l.next;
+    const job = l.next;
     l.next = null; l.lastAt = clock.now();
-    send(id, l, intent);
+    send(id, l, job);
   }
   return {
     act(intent) {
       const l = lane(intent.deviceId);
-      if (isLevelSet(intent) && intent.on !== false) l.next = intent; // latest wins
-      else {
-        if (supersedesLevels(intent)) l.next = null;
-        l.ordered.push(intent);
-      }
+      const done = new Promise<DeviceState>((resolve, reject) => {
+        const job: Job = { intent, waiters: [{ resolve, reject }] };
+        if (isLevelSet(intent) && intent.on !== false) {
+          // Latest wins; whoever waited on the replaced value waits on this one.
+          if (l.next) job.waiters.push(...l.next.waiters);
+          l.next = job;
+        } else {
+          if (supersedesLevels(intent) && l.next) { job.waiters.push(...l.next.waiters); l.next = null; }
+          l.ordered.push(job);
+        }
+      });
+      done.catch(() => undefined); // a caller that does not listen never leaves a rejection unhandled
       pump(intent.deviceId);
+      return done;
     },
     pending: (id) => { const l = lanes.get(id); return !!l && (l.busy || !!l.next || l.ordered.length > 0); },
   };

@@ -1032,6 +1032,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const sids = targets && targets.size ? targets : live;
     for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
   }, () => 'fanout');
+  // Every device command — tile press, gesture or voice — goes through this
+  // one per-device lane, so they can never overtake each other.
   const actQueue = createActQueue(store);
   // Speaker tiles say which player is behind them from the first paint:
   // Spotify when she is connected, else the built-in player (labelled).
@@ -2778,10 +2780,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (!refs.length) { say('No devices here yet.'); return true; }
         for (const d of refs) {
           const cur = d.brightness ?? 50;
-          if (intent === 'lampOn') void store.act({ deviceId: d.id, on: true });
-          else if (intent === 'lampOff') void store.act({ deviceId: d.id, on: false });
-          else if (intent === 'brighter') void store.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
-          else void store.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
+          if (intent === 'lampOn') void actQueue.act({ deviceId: d.id, on: true });
+          else if (intent === 'lampOff') void actQueue.act({ deviceId: d.id, on: false });
+          else if (intent === 'brighter') void actQueue.act({ deviceId: d.id, on: true, brightness: lampStep(cur + 20) });
+          else void actQueue.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
         say(statusText(sk, pack));
@@ -3512,7 +3514,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // "play <something>" on a speaker: a search, handled by the speaker connector
       // (Spotify when connected, honest built-in fallback otherwise).
       case 'musicSearch':
-        void store.act({ deviceId: r.deviceId, playing: true, query: r.query });
+        void actQueue.act({ deviceId: r.deviceId, playing: true, query: r.query });
         say(`Looking for ${r.query}…`);
         if (ranOn) nextChips?.markDone(ranOn, 'play-music');
         return true;
@@ -3522,7 +3524,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
         for (const i of dc.intents) {
-          const acted = store.act(i);
+          // Same per-device lane as a tile press: a spoken "off" drops a chip
+          // still waiting and runs in order behind what is already out.
+          const acted = actQueue.act(i);
           // "play music": once the player has really started, say what is
           // playing and where — not just "Playing."
           if (i.playing === true && pack?.lang !== 'kn') {
