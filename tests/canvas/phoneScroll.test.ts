@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountPhoneHands } from '../../src/canvas/phoneHands';
 import { createPhoneCamera } from '../../src/canvas/phoneCamera';
 import { createGestureControl } from '../../src/canvas/gestureControl';
-import { PHONE_GESTURES } from '../../src/canvas/gestureBindings';
+import { LAPTOP_GESTURES, PHONE_GESTURES } from '../../src/canvas/gestureBindings';
+import { REACH } from '../../src/canvas/handPointer';
 import { phoneReach } from '../../src/canvas/handFeel';
 import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 import type { PresenceFrame } from '../../src/input/presence';
@@ -131,5 +132,57 @@ describe('phone: peace-and-move scrolls the element under the hand (through phon
     s.move(0.6, 0.6, 2500);
     expect(s.list.scrollTop).toBe(900);
     s.cleanup();
+  });
+});
+
+describe('laptop: a one-frame second peace never unlatches a scroll (real gestureControl)', () => {
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).innerWidth = 1440;
+    (globalThis as Record<string, unknown>).innerHeight = 900;
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).innerWidth;
+    delete (globalThis as Record<string, unknown>).innerHeight;
+  });
+
+  function run(secondPeaceFrames: number) {
+    const doc = new FakeDoc();
+    const root = new FakeEl(doc);
+    const list = new FakeEl(doc);
+    list.scrollHeight = 3000; list.clientHeight = 400; list.scrollTop = 900;
+    doc.under = list;
+    const g = createGestureControl({ root: root as unknown as HTMLElement, bindings: LAPTOP_GESTURES, reach: () => REACH });
+    g.setActive(true);
+    const fired: string[] = [];
+    let t = 0;
+    const R = (y: number) => syntheticHand('peace', 'R', { at: { x: 0.62, y } });
+    const L = () => syntheticHand('peace', 'L', { at: { x: 0.3, y: 0.75 } });
+    const frame = (hands: ReturnType<typeof syntheticHand>[]) => {
+      t += 33;
+      const s = g.frame(hands, t, { facing: true, faceX: 0.5 });
+      if (s.fired) fired.push(s.fired);
+    };
+    // R scrolls: a deliberate move down.
+    for (let k = 0; k <= 24; k++) frame([R(0.55 + k * 0.012)]);
+    const scrolled = list.scrollTop > 900;
+    // The resting left hand misreads as a peace for `secondPeaceFrames` frame(s).
+    for (let k = 0; k < secondPeaceFrames; k++) frame([R(0.838), L()]);
+    // R holds its V still for 2.5 s.
+    for (let k = 0; k < 76; k++) frame([R(0.838)]);
+    g.setActive(false);
+    return { scrolled, fired };
+  }
+
+  it('R scrolls, a ONE-frame second peace, R holds still 2 s → no chip-2 (R peace) fire', () => {
+    const r = run(1);
+    expect(r.scrolled).toBe(true);
+    expect(r.fired).not.toContain('R:peace');
+    expect(r.fired).not.toContain('L:peace');
+  });
+
+  it('two peaces held together still unlatch (Register takes over) — after the grace', () => {
+    const r = run(80); // both held 2.6 s
+    expect(r.fired).toContain('2:peace');
+    expect(r.fired).not.toContain('L:peace');
   });
 });

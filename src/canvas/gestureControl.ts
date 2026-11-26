@@ -97,6 +97,9 @@ export const GESTURE_STALE_MS = 500;
 /** While a review is open (it is modal) only these act. */
 const REVIEW_KEYS: readonly GestureKey[] = ['R:thumbsUp', 'R:thumbsDown', 'L:thumbsDown'];
 const COUNT_SHAPES: readonly HandShape[] = ['one', 'peace', 'three'];
+/** Two peaces must persist this long (the hold grace) before they clear a
+ *  scroll latch and the two-hand Register hold takes over. */
+const TWO_PEACE_CLEAR_MS = 150;
 const BADGE_REFRESH_MS = 300;
 
 function isVisible(el: HTMLElement): boolean {
@@ -129,6 +132,8 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   const engine = createHoldEngine();
   // Peace-and-move: scroll what is under the hand, or step a level control.
   const scroll = createPeaceScroll();
+  /** Two peace hands seen continuously since (for clearing the scroll latches). */
+  let twoPeaceSince: number | null = null;
   const scroller = createScrollDriver({
     root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd,
     onLevel: opts.onLevel, tickSound: opts.levelTick,
@@ -327,7 +332,12 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     scroller.frame(sc, now, scrollBlocked);
     // Two peace hands: the two-hand hold (Register) decides — never one
     // hand's peace hold with the other relabelled.
-    if (handsRead.filter((h) => h.shape === 'peace').length >= 2) scroll.clearLatches();
+    // Only once two peaces have been seen CONTINUOUSLY for the hold grace — a
+    // one-frame misread of the resting hand must not unlatch the scroller.
+    const twoPeace = handsRead.filter((h) => h.shape === 'peace').length >= 2;
+    if (!twoPeace) twoPeaceSince = null;
+    else if (twoPeaceSince === null) twoPeaceSince = now;
+    if (twoPeace && now - twoPeaceSince! >= TWO_PEACE_CLEAR_MS) scroll.clearLatches();
     else {
       for (const h of handsRead) if (h.shape === 'peace' && scroll.suppressed(h.hand)) h.shape = 'other';
       for (const x of shapes) if (x.shape === 'peace' && scroll.suppressed(x.hand)) x.shape = 'other';
