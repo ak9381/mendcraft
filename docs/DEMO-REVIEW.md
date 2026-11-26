@@ -34,6 +34,7 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 11. Lamps: app lists 2 lamps, the room has 1 WiZ bulb → fix ready on branch live-ai-2 (real bulbs replace the seeded lamps), merging after review.
 
 ## For Akash (needs you)
+- FIRST: register the App Check debug token (real Gemini on 127.0.0.1, where Spotify is logged in): in Terminal `pbcopy < ~/.secrets/mendcraft-appcheck-debug`, then Firebase console → App Check → Apps → mendcraft-web ⋮ → Manage debug tokens → Add → name `mac-local`, paste, Save. Then restart the dev server (`npx vite --host 127.0.0.1 --port 5173`).
 - Chime pairing with the phone held next to the laptop speaker (my test: phone on the cable, chime not heard; typed code works).
 - iPhone: its screen had gone to sleep, so I couldn't drive it overnight — latest build IS installed. Wake it and run P1–P6 and G.
 - Spotify on the preview: log in once there (redirect URI https://mendcraft--sim-main-o8jrlskh.web.app/spotify must be in the Spotify app).

@@ -12,7 +12,15 @@
 //     no pan / zoom / board move, both thumbs up open the AI monitor with no
 //     zoom, and a hand that leaves mid-hold cancels it (no fire on return)
 //     and clears the light-up, HUD and highlight;
-//   - while a review is open, Save (left thumbs-up) waits behind it.
+//   - while a review is open, Save (left thumbs-up) waits behind it;
+//   - peace-and-move (camera path, real hand scale): scrolls the element under
+//     the hand scroll-wheel style (hand down = scroll down) and never fires
+//     the peace hold; a still — or slowly drifting — peace still fires its
+//     button after 2 s; a scroll stops dead when the hand is lost; nothing
+//     scrolls while not facing; over a level control it steps the level
+//     (90 px up after the start = 3 steps) instead; over nothing scrollable
+//     it pans the canvas; a second peace after a scroll is Register, never
+//     one hand's Tools.
 //
 //   npx vite --port 5173 &
 //   E2E_URL=http://localhost:5173 node scripts/e2e-gestures.mjs
@@ -218,6 +226,169 @@ async function main() {
     const toolsOpen = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
     check(pressed === 'R:thumbsUp' && toolsOpen === 'true', `right thumbs-up pressed the highlighted Tools (open: ${toolsOpen})`);
 
+    // 5) Peace-and-move: scroll, levels, canvas pan — all through the camera path.
+    t += 5000;
+    await presenceEmpty(t, 600);
+    t += 700;
+    await page.evaluate(() => {
+      const root = document.querySelector('.mc-canvas');
+      document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded') === 'true' && document.querySelector('.mc-tools-chip').click();
+      const sc = document.createElement('div');
+      sc.id = 'e2e-scroller';
+      sc.style.cssText = 'position:fixed;left:300px;top:200px;width:400px;height:300px;overflow:auto;z-index:45;background:#fff';
+      sc.innerHTML = '<div style="height:2400px;background:linear-gradient(#fff,#ccc)">long list</div>';
+      root.append(sc);
+      sc.scrollTop = 900;
+      const lv = document.createElement('div');
+      lv.id = 'e2e-level';
+      lv.setAttribute('data-level', 'volume');
+      lv.setAttribute('aria-valuenow', '50'); lv.setAttribute('aria-valuemin', '0'); lv.setAttribute('aria-valuemax', '100');
+      lv.style.cssText = 'position:fixed;left:760px;top:380px;width:300px;height:360px;z-index:45;background:#eee;display:flex;gap:20px;align-items:center;justify-content:center';
+      lv.innerHTML = '<button data-level-dec>−</button><span>Volume</span><button data-level-inc>+</button>';
+      const set = (d) => lv.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, Number(lv.getAttribute('aria-valuenow')) + d))));
+      lv.querySelector('[data-level-inc]').addEventListener('click', () => set(10));
+      lv.querySelector('[data-level-dec]').addEventListener('click', () => set(-10));
+      root.append(lv);
+    });
+    // Move a peace from screen (x, y0) to (x, y1) over `ms`, then hold it at y1 for `holdMs`.
+    const peaceMove = (side, x, y0, y1, from, ms, holdMs = 0) => page.evaluate((side, x, y0, y1, from, ms, holdMs) => {
+      const g = window.__mcGestures;
+      const n = Math.max(1, Math.round(ms / 33));
+      for (let k = 0; k <= n; k++) g.presence([g.hand('peace', side, { at: g.palmFor(x, y0 + ((y1 - y0) * k) / n) })], from + k * 33);
+      for (let tt = 33; tt <= holdMs; tt += 33) g.presence([g.hand('peace', side, { at: g.palmFor(x, y1) })], from + n * 33 + tt);
+      return { scrollTop: document.querySelector('#e2e-scroller').scrollTop, hint: !document.querySelector('.mc-scroll-hint')?.hidden };
+    }, side, x, y0, y1, from, ms, holdMs);
+    const openHand = (from, ms) => page.evaluate((from, ms) => {
+      const g = window.__mcGestures;
+      // Long enough for the hold engine's release (300 ms with no fixed shape).
+      for (let tt = 0; tt <= Math.max(ms, 450); tt += 33) g.presence([g.hand('open', 'R', { at: { x: 0.68, y: 0.95 } })], from + tt);
+    }, from, ms);
+    const log = () => page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
+    const log0 = await log();
+
+    // A. Peace over the scroller moving DOWN: scroll-wheel style, the list scrolls DOWN (scrollTop grows).
+    const scrolled = await peaceMove('R', 500, 215, 485, t, 600);
+    check(scrolled.scrollTop > 900 + 60 && scrolled.hint, `peace + downward motion scrolls the list under the hand down (scrollTop 900 → ${Math.round(scrolled.scrollTop)}, hint ${scrolled.hint})`);
+    // …then held still for 2.3 s: the peace hold (R = next step 2) must NOT fire.
+    const held = await peaceMove('R', 500, 485, 485, t + 700, 0, 2300);
+    const log1 = await log();
+    check(!/Right peace/.test(log1.replace(log0, '')) && Math.abs(held.scrollTop - scrolled.scrollTop) < 30, 'after scrolling, the still peace never fires its hold (no "Next step 2")');
+    // B. Hand lost mid-scroll: stops dead, no glide.
+    await openHand(t + 3100, 400);
+    t += 4000;
+    await peaceMove('R', 500, 215, 485, t, 500);
+    await presenceEmpty(t + 550, 100);
+    const atLoss = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    await wait(400);
+    const after = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    check(Math.abs(after - atLoss) < 1, `scroll stops on hand loss (${Math.round(atLoss)} → ${Math.round(after)})`);
+    await presenceEmpty(t + 600, 400);
+    await openHand(t + 1100, 300);
+    t += 2000;
+    // C. Not facing: nothing scrolls.
+    await page.evaluate(() => window.__mcGestures.facing(false));
+    await wait(350);
+    const before = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const turned = await peaceMove('R', 500, 215, 485, t, 600);
+    check(Math.abs(turned.scrollTop - before) < 1, 'no scroll while not facing');
+    await page.evaluate(() => window.__mcGestures.facing(null));
+    await openHand(t + 700, 300);
+    t += 1500;
+    // D. A still LEFT peace for 2.2 s still fires its button (Tools).
+    const toolsBefore = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const h = g.hand('peace', 'L', { at: { x: 0.3, y: 0.75 } });
+      for (let tt = 0; tt <= 2300; tt += 33) g.presence([h], from + tt);
+    }, t);
+    const toolsAfter = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    check(toolsBefore !== toolsAfter && /Left peace → Tools/.test(await log()), `a still peace still fires its button after 2 s (Tools ${toolsBefore} → ${toolsAfter})`);
+    if (toolsAfter === 'true') await page.evaluate(() => document.querySelector('.mc-tools-chip').click());
+    await openHand(t + 2400, 300);
+    t += 3000;
+    // D2. A peace DRIFTING slowly (≈ 0.35 hand scales over 2.3 s) is still a hold: Tools fires, nothing pans.
+    await wait(600); // the Tools chip ignores a second toggle within 450 ms (wall clock); synthetic frames run faster
+    const camD = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+    const logD = await log();
+    const toolsD0 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      for (let tt = 0; tt <= 2300; tt += 33) g.presence([g.hand('peace', 'L', { at: { x: 0.3, y: 0.72 + (tt / 2300) * 0.035 } })], from + tt);
+    }, t);
+    const toolsD1 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    const camD1 = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+    check(toolsD0 !== toolsD1 && /Left peace → Tools/.test((await log()).replace(logD, '')) && camD === camD1, `a slowly drifting peace is a hold, not a scroll (Tools ${toolsD0} → ${toolsD1}; canvas unmoved)`);
+    if (toolsD1 === 'true') await page.evaluate(() => document.querySelector('.mc-tools-chip').click());
+    await openHand(t + 2400, 300);
+    t += 3000;
+    // E. Over a level control: a quick start upward, then 90 px more up = 3 steps up, no scroll, no hold.
+    const log2 = await log();
+    const sc0 = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const tools0 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    const lvStart = await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const at = (y) => ({ at: g.palmFor(910, y) });
+      let tt = from;
+      // The start: a deliberate move up (> 0.8 hand scales) beginning over the control…
+      for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(730 - k * 12))], (tt += 33));
+      for (let k = 0; k <= 10; k++) g.presence([g.hand('peace', 'R', at(490))], (tt += 33)); // settle
+      window.__lvT = tt;
+      return Number(document.querySelector('#e2e-level').getAttribute('aria-valuenow'));
+    }, t);
+    await page.evaluate(() => {
+      const g = window.__mcGestures;
+      const at = (y) => ({ at: g.palmFor(910, y) });
+      let tt = window.__lvT;
+      for (let k = 1; k <= 18; k++) g.presence([g.hand('peace', 'R', at(490 - k * 5))], (tt += 33)); // …then 90 px more up
+      for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(400))], (tt += 33)); // hold there
+    });
+    const lv = await page.evaluate(() => ({
+      value: Number(document.querySelector('#e2e-level').getAttribute('aria-valuenow')),
+      readout: document.querySelector('.mc-level-readout')?.textContent ?? '',
+    }));
+    const tools1 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    const sc1 = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const newLog = (await log()).replace(log2, '');
+    check(lvStart > 50 && lv.value - lvStart === 30, `peace over a level control: 90 px up after the start → exactly 3 steps (50 → ${lvStart} → ${lv.value})`);
+    check(new RegExp(`Volume ${lv.value} %`).test(lv.readout), `big level readout by the hand ("${lv.readout}")`);
+    check(sc1 === sc0 && tools1 === tools0 && !/Right peace/.test(newLog), 'stepping a level never scrolls and never fires the peace hold');
+    await openHand(t + 2700, 300);
+    t += 3200;
+    // F. Over nothing scrollable: the canvas pans — hand down = see what is below (content moves up).
+    const spot = await page.evaluate(() => {
+      for (let y = 600; y > 100; y -= 40) for (let x = 1400; x > 80; x -= 40) {
+        const el = document.elementFromPoint(x, y);
+        if (el && el.matches('.mc-viewport, .mc-world, .mc-canvas') && document.elementFromPoint(x, y + 240)?.matches('.mc-viewport, .mc-world, .mc-canvas')) return { x, y };
+      }
+      return null;
+    });
+    if (spot) {
+      const cam0 = await page.evaluate(() => window.__mcGestures.state().camera);
+      await page.evaluate((spot, from) => {
+        const g = window.__mcGestures;
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', { at: g.palmFor(spot.x, spot.y + k * 12) })], from + k * 33);
+      }, spot, t);
+      const cam1 = await page.evaluate(() => window.__mcGestures.state().camera);
+      check(cam1.y > cam0.y + 50, `peace over bare canvas scrolls it down (camera y ${Math.round(cam0.y)} → ${Math.round(cam1.y)})`);
+    } else check(false, 'found a bare-canvas spot for the pan check');
+    await openHand(t + 800, 300);
+    t += 1500;
+    // G. Register after a scroll: R scrolls, then L joins with a peace and both hold still → Register, never Tools.
+    const logG = await log();
+    const toolsG0 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    await peaceMove('R', 500, 215, 485, t, 500);
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const R = g.hand('peace', 'R', { at: g.palmFor(500, 485) });
+      const L = g.hand('peace', 'L', { at: { x: 0.3, y: 0.75 } });
+      for (let tt = 0; tt <= 2400; tt += 33) g.presence([L, R], from + tt);
+    }, t + 600);
+    const logG1 = (await log()).replace(logG, '');
+    const toolsG1 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    check(/Both hands peace → Register/.test(logG1) && !/Left peace/.test(logG1) && toolsG0 === toolsG1, `after a scroll, a second peace is Register, not Tools (${JSON.stringify(logG1.slice(0, 120))})`);
+    await openHand(t + 3200, 300);
+    await page.evaluate(() => { document.querySelector('#e2e-scroller')?.remove(); document.querySelector('#e2e-level')?.remove(); document.querySelector('.mc-scan-cancel')?.click(); });
+
     // 4) Badges go away with Hands.
     await page.evaluate(() => window.__mcGestures.show(false));
     await wait(200);
@@ -229,7 +400,21 @@ async function main() {
     const dash = await browser.newPage();
     await dash.setViewport({ width: 1440, height: 900 });
     dash.on('pageerror', (e) => errors.push(String(e?.message || e)));
-    await dash.goto(`${BASE}/canvas.html?sim=1&hands=0&seed=1&fresh=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // A saved room board with two lamps and the speaker (the demo dashboard).
+    await dash.evaluateOnNewDocument(() => {
+      try {
+        localStorage.setItem('mc.canvas.v1', JSON.stringify({
+          version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null,
+          frames: [{ id: 'f1', kind: 'room', title: 'Living room', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }],
+          surfaces: { f1: { kind: 'room', title: 'Living room', tiles: [
+            { type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' },
+            { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' },
+            { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+          ] } },
+        }));
+      } catch { /* storage blocked: the checks below fail loudly */ }
+    });
+    await dash.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     check(await waitFor(dash, () => !!window.__mcGestures && !!document.querySelector('.mc-frame [data-focus]')), 'dashboard page is up');
     await dash.evaluate(() => document.querySelector('.mc-frame [data-focus]').click());
     check(await waitFor(dash, () => !!document.querySelector('.mc-frame.focused mc-lamp-tile')?.shadowRoot?.querySelector('[data-act=color]')), 'the lamp tile shows its colour swatches');
@@ -273,6 +458,51 @@ async function main() {
     const step = await aimAndPress('[data-level=brightness] [data-level-inc]');
     const afterStep = await lampState();
     check(step.same && /85%/.test(afterStep), `palm + thumbs-up on + is one step ("${afterStep}")`);
+
+    // 6) Peace-and-move over the speaker's volume control steps it through the
+    //    tile's own − / + buttons (levelControl.ts adjustLevel), and over the
+    //    lamp's brightness control too — never a scroll, never a canvas pan.
+    const levelProbe = (tag, kind) => dash.evaluate((tag, kind) => {
+      const el = document.querySelector(`.mc-frame.focused ${tag}`).shadowRoot.querySelector(`[data-level=${kind}]`);
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, now: Number(el.getAttribute('aria-valuenow')), readout: el.querySelector('[data-level-readout]').textContent.trim() };
+    }, tag, kind);
+    const peaceUp = async (tag, kind) => {
+      const before = await levelProbe(tag, kind);
+      const cam0 = await dash.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+      dt += 4000;
+      // One unbroken hold (frames 33 ms apart on the synthetic clock): a
+      // deliberate start upward beginning on the control, a settle, then
+      // 60 px more up = 2 steps, then hold.
+      const big = await dash.evaluate((x, y, from) => {
+        const g = window.__mcGestures;
+        const at = (yy) => ({ at: g.palmFor(x, yy) });
+        let tt = from;
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(y + 40 - k * 12))], (tt += 33));
+        for (let k = 0; k <= 10; k++) g.presence([g.hand('peace', 'R', at(y - 200))], (tt += 33));
+        const clicks = { inc: 0 };
+        const el = [...document.querySelectorAll('.mc-frame.focused mc-lamp-tile, .mc-frame.focused mc-music-tile')].map((t) => t.shadowRoot.querySelector('.mc-level-target')).find(Boolean);
+        el?.querySelector('[data-level-inc]')?.addEventListener('click', () => { clicks.inc++; });
+        for (let k = 1; k <= 12; k++) g.presence([g.hand('peace', 'R', at(y - 200 - k * 5))], (tt += 33));
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(y - 260))], (tt += 33));
+        const text = document.querySelector('.mc-level-readout')?.textContent ?? '';
+        const outlined = el?.getAttribute('data-level') ?? null;
+        for (let k = 0; k <= 20; k++) g.presence([], (tt += 33));
+        return { text, outlined, clicks: clicks.inc };
+      }, before.x, before.y, dt);
+      await wait(1200);
+      const after = await levelProbe(tag, kind);
+      const cam1 = await dash.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+      return { before, after, big, still: cam0 === cam1 };
+    };
+    const vol = await peaceUp('mc-music-tile', 'volume');
+    check(vol.big.outlined === 'volume' && vol.big.clicks === 2, `peace moving up over the volume control takes hold of it; 60 px more up = 2 presses of its own + button (${vol.big.clicks})`);
+    check(vol.after.now > vol.before.now && (vol.after.now - vol.before.now) % 10 === 0 && vol.after.readout === `${vol.after.now} %`, `the volume stepped through the normal device path (${vol.before.now} → ${vol.after.now}; tile reads "${vol.after.readout}")`);
+    check(/^Volume \d+ %$/.test(vol.big.text), `big level readout by the hand ("${vol.big.text}")`);
+    check(vol.still, 'stepping the volume never moves the canvas');
+    const bri = await peaceUp('mc-lamp-tile', 'brightness');
+    check(bri.big.outlined === "brightness" && bri.after.now > bri.before.now && bri.after.now <= 100 && /^Brightness \d+ %$/.test(bri.big.text) && bri.still,
+      `peace moving up over the lamp's brightness steps it by tens (${bri.before.now} → ${bri.after.now}; "${bri.big.text}")`);
     await dash.close();
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   } finally {

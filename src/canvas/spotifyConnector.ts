@@ -35,6 +35,24 @@ export interface SpotifyConnectorDeps {
    *  device with that name is preferred. */
   speakerName?(deviceId: string): string;
   say(text: string): void;
+  /** Where the music is really playing — kept current here so the canvas can
+   *  say it ("on iPhone via Spotify" / "on the built-in player"). */
+  status?: MusicWhere;
+}
+
+export interface MusicWhere {
+  /** Spotify is carrying the speaker right now. */
+  spotify: boolean;
+  /** The Spotify device's own name ('this browser', 'iPhone', a speaker). */
+  target: string;
+}
+
+/** "Playing Morning light on the built-in player." / "Playing on iPhone via
+ *  Spotify." — what plays (when known) and where, never a made-up title. */
+export function playingLine(where: MusicWhere | null | undefined, title?: string): string {
+  const what = title?.trim() ? `Playing ${title.trim()}` : 'Playing';
+  if (where?.spotify) return `${what} on ${where.target || 'Spotify'} via Spotify.`;
+  return `${what} on the built-in player.`;
 }
 
 export function isSpeakerDevice(deviceId: string): boolean {
@@ -80,7 +98,7 @@ export function pickSpotifyDevice(devices: readonly SpotifyDevice[], speakerName
 }
 
 /** "Playing Blue in Green by Miles Davis on iPhone via Spotify." */
-export function playingLine(title: string, artist: string | undefined, deviceName: string): string {
+export function spotifyPlayingLine(title: string, artist: string | undefined, deviceName: string): string {
   const what = title ? `${title}${artist ? ` by ${artist}` : ''}` : 'Spotify';
   return `Playing ${what} on ${deviceName} via Spotify.`;
 }
@@ -98,12 +116,14 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     return browserId ? { id: browserId, name: 'this browser' } : null;
   }
 
+  const mark = (spotify: boolean, where = ''): void => { if (deps.status) { deps.status.spotify = spotify; deps.status.target = where; } };
   const spotify = (extra: Partial<DeviceState>): Partial<DeviceState> => ({ ...extra, source: 'spotify', playingOn: target?.name ?? '', sim: false });
 
   /** Connected, but Spotify has nowhere to play: say how to fix it. Nothing
    *  plays — the built-in player is never started silently in its place. */
   function noDevice(): Partial<DeviceState> {
     target = null;
+    mark(false);
     deps.say(NO_DEVICE_NOTICE);
     return { playing: false, source: 'spotify', playingOn: '' };
   }
@@ -111,6 +131,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
   async function builtin(intent: DeviceIntent, notice?: string): Promise<Partial<DeviceState>> {
     if (notice) deps.say(notice);
     target = null;
+    mark(false);
     const { query: _q, ...rest } = intent;
     return { ...(await deps.inner.run(rest)), source: 'builtin', playingOn: '' };
   }
@@ -122,6 +143,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     if (!t) return false;
     await deps.transferPlayback(t.id, play);
     target = t;
+    mark(true, t.name);
     return true;
   }
 
@@ -136,8 +158,9 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           if (!t) return noDevice();
           await deps.transferPlayback(t.id, false);
           target = t;
+          mark(true, t.name);
           const { hit } = await deps.searchAndPlay(intent.query, t.id);
-          deps.say(playingLine(hit.name, hit.artist, t.name));
+          deps.say(spotifyPlayingLine(hit.name, hit.artist, t.name));
           return spotify({ playing: true, trackTitle: hit.name });
         } catch (err) {
           const msg = err instanceof Error ? err.message : '';
@@ -165,7 +188,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           if (!(await ensureTarget(intent.deviceId, true))) return noDevice();
           if (!fresh && deps.resume) await deps.resume();
           const np = await deps.nowPlaying?.().catch(() => null);
-          deps.say(playingLine(np?.title ?? '', np?.artist, target!.name));
+          deps.say(spotifyPlayingLine(np?.title ?? '', np?.artist, target!.name));
           return spotify({ playing: true, ...(np?.title ? { trackTitle: np.title } : {}) });
         }
         if (intent.volume !== undefined) {

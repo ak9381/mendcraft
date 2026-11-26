@@ -74,9 +74,18 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     .dot { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgb(0 0 0 / 0.22); }
     @container (min-width: 560px) { .colours { grid-template-columns: repeat(8, minmax(0, 1fr)); } .scenes { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
     @container (max-width: 340px) {
-      .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .tile:not(.compact) .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
   `];
+  /** Edit mode (editBoard.ts) holds the tile in a fixed-size box: there the
+   *  tile keeps its rows as they are (compact) instead of wrapping taller
+   *  than the box when it is squeezed. */
+  private inEditBox = false;
+  override connectedCallback() {
+    super.connectedCallback();
+    const boxed = !!this.closest('.mc-edit-item');
+    if (boxed !== this.inEditBox) { this.inEditBox = boxed; this.requestUpdate(); }
+  }
   override render() {
     const p = this.controller?.props;
     if (!p) return nothing;
@@ -88,14 +97,14 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
     const look = { color, temp, sceneId };
     const colourKey = on ? activeColourKey(look) : '';
     const whiteOn = on && !color && !sceneId;
-    return html`<div class="tile ${on ? 'active' : ''}" role="group" aria-label=${String(p.label)}>
+    return html`<div class="tile ${on ? 'active' : ''} ${this.inEditBox ? 'compact' : ''}" role="group" aria-label=${String(p.label)}>
       <div class="head">
         <div class="titles"><span class="label">${p.label}</span>
-          <span class="state" aria-live="polite">${lampStateLine({ on, brightness: b, ...look })}</span></div>
+          <span class="state" aria-live="polite">${lampStateLine({ on, brightness: b, ...look })}${p.pending ? ' · checking…' : ''}</span></div>
         ${p.sim ? html`<span class="badge sim-badge" title="Simulated — the WiZ bridge isn't reachable">SIM</span>` : nothing}
         <button class="primary power" data-act="toggle" @click=${() => p.onToggle?.()}>${on ? 'Turn off' : 'Turn on'}</button>
       </div>
-      ${p.error || p.pending ? html`<p class="note ${p.error ? 'error' : ''}" role="status">${p.error ? p.error : 'Checking…'}</p>` : nothing}
+      ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
       <div class="level" data-level="brightness" data-level-step=${LAMP_TILE_STEP} aria-valuemin="10" aria-valuemax="100" aria-valuenow=${b} role="group" aria-label="Brightness. Arrow keys change it by 1 %."
         @keydown=${(e: KeyboardEvent) => { const d = fineKey(e); if (d) { e.preventDefault(); fire(p.onLevel, Math.max(10, Math.min(100, (on ? b : 10) + d))); } }}>
         <div class="steps">
@@ -153,10 +162,10 @@ export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
           <span class="state source" data-source=${spotify ? 'spotify' : 'builtin'}>${spotify ? `Spotify${where ? ` · ${where}` : ''}` : BUILTIN_LABEL}</span></div>
       </div>
       <div class="track" aria-live="polite">
-        <span class="state">${playing ? 'Now playing' : 'Paused'}</span>
+        <span class="state">${playing ? 'Now playing' : 'Paused'}${p.pending ? ' · checking…' : ''}</span>
         <span class="title" data-track>${track || 'Nothing playing yet'}</span>
       </div>
-      ${p.error || p.pending ? html`<p class="note ${p.error ? 'error' : ''}" role="status">${p.error ? p.error : 'Checking…'}</p>` : nothing}
+      ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
       <div class="transport" role="group" aria-label="Playback">
         <button data-act="previous" @click=${() => p.onPrevious?.()}>Previous</button>
         <button class="primary" data-act="playpause" @click=${() => p.onPlayPause?.()}>${playing ? 'Pause' : 'Play'}</button>

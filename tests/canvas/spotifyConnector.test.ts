@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { listDevices } from '../../src/music/spotifyApi';
-import { BUILTIN_LABEL, createSpotifyAwareConnector, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, pickSpotifyDevice, playingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
+import { BUILTIN_LABEL, createSpotifyAwareConnector, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -198,9 +198,9 @@ describe('which Spotify device plays (a fake Spotify device list)', () => {
     expect(ack.playingOn).toBe('this browser');
   });
 
-  it('playingLine names the track, the artist and the device', () => {
-    expect(playingLine('Song', undefined, 'iPhone')).toBe('Playing Song on iPhone via Spotify.');
-    expect(playingLine('', undefined, 'iPhone')).toBe('Playing Spotify on iPhone via Spotify.');
+  it('spotifyPlayingLine names the track, the artist and the device', () => {
+    expect(spotifyPlayingLine('Song', undefined, 'iPhone')).toBe('Playing Song on iPhone via Spotify.');
+    expect(spotifyPlayingLine('', undefined, 'iPhone')).toBe('Playing Spotify on iPhone via Spotify.');
   });
 });
 

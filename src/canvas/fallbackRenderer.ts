@@ -718,7 +718,7 @@ export function renderNodeToDom(
     return r;
   }
   function noteEl(): HTMLElement {
-    const n = mk('p', `note${p.error ? ' error' : ''}`, p.error ? String(p.error) : p.pending ? 'Checking…' : '');
+    const n = mk('p', 'note error', String(p.error ?? ''));
     n.setAttribute('role', 'status');
     return n;
   }
@@ -738,13 +738,13 @@ export function renderNodeToDom(
 
     const head = mk('div', 'row head');
     head.appendChild(mk('span', 'label', String(p.label || 'Lamp')));
-    const stateSpan = mk('span', 'state', lampStateLine({ on, brightness, ...look }));
+    const stateSpan = mk('span', 'state', `${lampStateLine({ on, brightness, ...look })}${p.pending ? ' · checking…' : ''}`);
     stateSpan.setAttribute('aria-live', 'polite');
     head.appendChild(stateSpan);
     if (p.sim) head.appendChild(mk('span', 'sim-badge', 'SIM'));
     head.appendChild(btn(on ? 'Turn off' : 'Turn on', 'toggle', () => triggerAction(p.onToggle), { cls: 'primary' }));
     el.appendChild(head);
-    if (p.error || p.pending) el.appendChild(noteEl());
+    if (p.error) el.appendChild(noteEl());
 
     const bright = levelEl('brightness', LAMP_TILE_STEP, 'Brightness', brightness, 10, 100);
     const steps = mk('div', 'steps');
@@ -815,12 +815,12 @@ export function renderNodeToDom(
 
     const trackEl = mk('div', 'track');
     trackEl.setAttribute('aria-live', 'polite');
-    trackEl.appendChild(mk('span', 'state', playing ? 'Now playing' : 'Paused'));
+    trackEl.appendChild(mk('span', 'state', `${playing ? 'Now playing' : 'Paused'}${p.pending ? ' · checking…' : ''}`));
     const title = mk('span', 'title', track || 'Nothing playing yet');
     title.setAttribute('data-track', '');
     trackEl.appendChild(title);
     el.appendChild(trackEl);
-    if (p.error || p.pending) el.appendChild(noteEl());
+    if (p.error) el.appendChild(noteEl());
 
     const transport = mk('div', 'transport');
     transport.setAttribute('role', 'group');

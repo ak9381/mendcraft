@@ -43,7 +43,8 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createDeviceStore, simulatedAck, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { createSpotifyAwareConnector } from './spotifyConnector';
+import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
@@ -877,9 +878,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every review opens through here so the phone menu sheet (z-index 61, above
   // the review's 50) can never cover Approve/Reject/Ask-else. No-op on desktop
   // (phoneMenu is null there). Keeps the human-in-the-loop gate reachable.
-  function showReview(model: Parameters<typeof reviewDialog.open>[0]): void {
+  /** The turn(s) whose receipt the open review shows, and how to rebuild its
+   *  facts: when one of them sends again while the review is open (the
+   *  hedge's second leg, a retry), the footer is redrawn from the ledger. */
+  let reviewLive: { tokens: SentInfo[]; facts: () => ReviewFacts } | null = null;
+  function showReview(model: Parameters<typeof reviewDialog.open>[0], live?: { tokens: Array<SentInfo | null | undefined>; facts: () => ReviewFacts }): void {
     phoneMenu?.close();
+    reviewLive = live ? { tokens: live.tokens.filter((t): t is SentInfo => !!t), facts: live.facts } : null;
     reviewDialog.open(model);
+  }
+  /** A turn's booked bytes changed: if its review is the one open, match it. */
+  function refreshReviewFor(s: SentInfo): void {
+    if (reviewLive && reviewDialog.isOpen() && reviewLive.tokens.includes(s)) reviewDialog.setFacts(reviewLive.facts());
   }
   /** Per-turn ledger receipts: each SentInfo a turn hands to the ledger
    *  (aiSent / recordSent) is the token that turn later passes to its own
@@ -974,8 +984,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // probe localhost at all: no console noise for visitors without a lamp.
   const wizClient = opts.sim ? null : (opts.wizClient ?? (resolveWizToken() ? createWizClient() : null));
   const bridgeStatus: BridgeStatus = { up: false };
+  // Which bulb each real lamp id is (filled when the bridge answers).
+  const lampIps = new Map<string, string>();
+  const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light', 'speaker-1': 'Speaker' };
   const lampConnector = wizClient
-    ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus })
+    ? createWizAwareConnector({ client: wizClient, fallback: simulatedConnector, status: bridgeStatus, bulbIp: (id) => lampIps.get(id) ?? '' })
     : simulatedConnector;
   // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
   const spOpts = (): spotifyApi.SpotifyApiOptions => ({
@@ -988,6 +1001,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     },
   });
   let webPlayer: SdkPlayer | null = null;
+  // Where the speaker's music is really coming from (the connector keeps it).
+  const musicWhere: MusicWhere = { spotify: false, target: '' };
   const defaultConnector = opts.sim ? lampConnector : createSpotifyAwareConnector({
     inner: lampConnector,
     isConnected: () => !!loadTokens(),
@@ -1007,6 +1022,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     speakerName: (id) => deviceRefs().find((d) => d.id === id)?.label ?? '',
     setVolume: (pct) => spotifyApi.setVolumePercent(pct, spOpts()),
     say,
+    status: musicWhere,
   });
   const store = createDeviceStore(opts.devices ?? STUB_DEVICES, opts.connector ?? defaultConnector, (m) => {
     const u = (m as unknown as { updateDataModel: Record<string, unknown> }).updateDataModel;
@@ -1022,11 +1038,36 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const source = !opts.sim && loadTokens() ? 'spotify' as const : 'builtin' as const;
     for (const [id, d] of Object.entries(store.all())) if (d.playing !== undefined) store.patch(id, { source });
   }
+  /** The lamps a board may show right now (managed ids in the device list). */
+  const lampSlots = (): LampSlot[] => Object.keys(store.all()).filter(isManagedLampId).map((id) => ({ id, label: DEVICE_LABELS[id] ?? id }));
+  /** Any plan about to be shown or applied names only lamps that exist: a
+   *  seeded lamp after the swap, a bulb that has gone, or a plan written from
+   *  a prompt built before discovery is fitted to the current lamps. */
+  const fitPlan = (plan: SurfacePlan): SurfacePlan => fitLampTiles(plan, lampSlots());
+  // Before the bridge has answered (or when it never does): a machine that
+  // has seen real bulbs starts with THOSE lamps, marked SIM, so boards saved
+  // with them open with working tiles. The seeded lamps are for a machine
+  // that never found one.
+  const lampSwap = { store, surfaces, labels: DEVICE_LABELS, ips: lampIps };
+  if (!opts.sim && !opts.devices && !opts.connector) {
+    const remembered = rememberedLamps(storage);
+    if (remembered) applyRealLamps(lampSwap, remembered);
+  }
   if (wizClient && !opts.connector) {
-    void wizClient.health().then((up) => {
-      bridgeStatus.up = up;
-      for (const id of Object.keys(store.all())) if (isWizDevice(id)) store.setSim(id, !up);
-    });
+    // Bridge up: the lamps are the bulbs it really finds (one per bulb, with
+    // their real on/brightness). Bridge down: the lamps already here stay,
+    // labelled SIM.
+    void discoverRealLamps(wizClient, storage).then((lamps) => {
+      bridgeStatus.up = lamps !== null;
+      if (lamps === null || opts.devices) {
+        for (const id of Object.keys(store.all())) if (isWizDevice(id)) store.setSim(id, lamps === null);
+        return;
+      }
+      const changed = applyRealLamps(lampSwap, lamps);
+      for (const fid of changed) renderSurface(fid);
+      if (changed.length) { sync(); updateDock(); persist(); }
+      say(lamps.length ? `Found ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.');
+    }).catch(() => { /* a broken bridge reply leaves the SIM lamps as they are */ });
   }
 
   processor.onSurfaceCreated((s: unknown) => {
@@ -1076,8 +1117,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
 
   function renderSurface(id: string): boolean {
-    const plan = surfaces[id];
-    if (!plan) return false;
+    if (!surfaces[id]) return false;
+    // Backstop: whatever reached this board (a saved board from another
+    // session, a script, a shared board) shows only lamps that exist.
+    const plan = surfaces[id] = fitPlan(surfaces[id]);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.
@@ -1247,6 +1290,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const labelFor = (f: Frame) => (surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
 
   let zoomHud: ReturnType<typeof mountZoomHud> | null = null;
+  /** The focused board's next-step chips stay visible: when the board runs
+   *  under the engine bar, its chip row is lifted to sit just above the bar
+   *  (never above the board's own head). */
+  function keepChipsVisible(): void {
+    if (phoneShell) return;
+    for (const row of world.querySelectorAll<HTMLElement>('.mc-next')) {
+      row.style.transform = '';
+      row.classList.remove('is-lifted');
+      const frameEl = row.parentElement;
+      if (!frameEl) continue;
+      const z = camera.z || 1;
+      const view = viewport.getBoundingClientRect();
+      const limit = (view.bottom || vp().h) - bottomInset();
+      const box = row.getBoundingClientRect();
+      const over = box.bottom - limit;
+      if (over <= 0) continue;
+      // No higher than just under the board's title bar.
+      const room = box.top - (frameEl.getBoundingClientRect().top + 64 * z);
+      const lift = Math.min(over, Math.max(0, room));
+      if (lift <= 0) continue;
+      row.style.transform = `translateY(${-(lift / z).toFixed(1)}px)`;
+      row.classList.add('is-lifted');
+    }
+  }
   function applyCamera(): void {
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
@@ -1255,6 +1322,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewport.style.backgroundPosition = `${-camera.x * camera.z}px ${-camera.y * camera.z}px`;
     root.dataset.zoom = camera.z.toFixed(2);
     zoomHud?.setZoom(camera.z);
+    keepChipsVisible();
   }
 
   let aiAuto = false; // the AI panel is open because a turn opened it (overlay)
@@ -1373,8 +1441,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       lastH = h;
       if (focusId === id) {
         // Re-frame only for a real change in size (a tile added or reflowed),
-        // not for a status line appearing.
-        if (delta < 24 || phoneShell) return;
+        // not for a tile's error line appearing.
+        if (delta < 48 || phoneShell) return;
         clearTimeout(roomRefly);
         roomRefly = window.setTimeout(() => { const cur = focusId === id ? reg.get(id) : undefined; if (cur) void flyTo(focusCam(fitBoardWidth(cur))); }, 140);
       } else if (!focusFit.has(id) && Math.abs(h - f.rect.h) > 1) {
@@ -1466,7 +1534,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     fallback: e.fallback ? counted(e.fallback) : undefined,
   });
   const engineFor = (id: EngineId, json: string): SurfaceEngine => counted(opts.engines?.[id]?.(json) ?? scriptedEngine(id, json));
-  const DEVICE_LABELS: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light', 'speaker-1': 'Speaker' };
   const DEVICE_KINDS: Record<string, DeviceKind> = { 'speaker-1': 'music' };
   const isDeviceTile = (t: SurfacePlan['tiles'][number]): t is Extract<SurfacePlan['tiles'][number], { deviceId: string }> =>
     t.type === 'lamp' || t.type === 'music' || t.type === 'switch';
@@ -1587,6 +1654,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ledger.addBytes(p.entry, p.perSend);
     receipts.record(s, p.perSend, 0);
     renderBytes();
+    refreshReviewFor(s);
     const total = p.perSend * p.sends;
     panels.forEngine('gemini').log('note', p.sends === 1 ? `sent ${formatBytesShort(p.perSend)}` : `sent again: ${p.sends} calls, ${formatBytesShort(total)} in all`);
     // A handoff says so where she decides: who made it, why, and what left.
@@ -1601,6 +1669,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ledger.addBytes(p.entry, -p.perSend);
     receipts.record(s, -p.perSend, 0);
     renderBytes();
+    refreshReviewFor(s);
     panels.forEngine('gemini').log('note', 'that call never left: nothing was sent');
     if (s.handoffWhy) s.routeLine = s.routeLine.replace(/ · [\d.]+ (?:B|KB|MB) sent$/, '') + (p.sends ? ` · ${formatBytesShort(p.perSend * p.sends)} sent` : '');
   }
@@ -1892,7 +1961,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
+    // What she reviews is what will be applied: fitted to the lamps that
+    // exist now (the swap may have happened while the model was writing).
+    const plan = fitPlan(proposed);
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -1944,6 +2016,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pending = { frameId, prop, card };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
+      const planFacts = (): ReviewFacts => (link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance));
       showReview({
         title: summary, card, extra: buildReviewExtra(),
         // A blank board still has a name ("Board 3"): diff against it, so the
@@ -1951,8 +2024,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
         // A two-step change (draft + improvement, or a draft after a failed
         // improvement) names both steps and counts both steps' bytes.
-        facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance),
-      });
+        facts: planFacts(),
+      }, { tokens: [si, link?.si], facts: planFacts });
       if (link?.kind === 'fallback') {
         say(`${typeof navigator !== 'undefined' && navigator.onLine === false ? 'You’re offline' : `${engineName(link.si.engine)} didn’t answer`} — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
         if (link.retry) offerRetry(link.retry);
@@ -2561,7 +2634,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     sheetOpen = null; // the pairing card replaces the sheet in the same host
     pairing = showPairing(open.host, {
       code: res.code,
-      note: 'Playing a chime — hold your phone near this laptop. No typing, no scanning. After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
+      note: 'After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
       onClose: () => { disconnectPhones(); open.host.hidden = true; },
     });
     pairingHost = open.host;
@@ -2687,7 +2760,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       title: 'Add Kannada', card, extra: buildReviewExtra(),
       changes: languagePackChanges('Kannada', swapCount),
       facts: reviewFacts(knSent, utterance),
-    });
+    }, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });
   }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
@@ -2839,6 +2912,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
         highlight: palmHighlight,
+        ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
+        // Peace-and-move over nothing scrollable pans the canvas (dx/dy are
+        // content motion; scroll-wheel style: hand down = see what is below);
+        // persisted when it ends.
+        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = panBy(camera, dx, dy); applyCamera(); },
+        onCanvasScrollEnd: () => persist(),
+        onLevel: (_el, _dir, readout) => activityLog.push({ kind: 'gesture', text: `Peace and move → ${readout}`, target: null }),
+        levelTick: () => { try { return storage.getItem('mc.levelTick') === '1'; } catch { return false; } },
       })
     : null;
   /** Gestures are paused while something else owns the hands: a fist grab,
@@ -3275,7 +3356,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
       if (r.refused) bodyLanguage('no');
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
-    } finally { settleSwarm(); settleEngines(); autoHideAi(); }
+    } finally {
+      settleSwarm(); settleEngines(); autoHideAi();
+      // A refusal is the check doing its job, not Nano being broken: the card
+      // shows it for a few seconds and goes back to Ready (the terminal in
+      // the drawer keeps the refusal line).
+      engineBar?.calm('nano');
+    }
   }
 
   // ---- commands ----
@@ -3296,6 +3383,40 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       hasPlanBoard: !!planBoard?.runExtra, devices: deviceRefs(), pointed: resolvePointedDevice(handPointer?.target ?? null, deviceRefs()),
       pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
     };
+  }
+  /** "scroll / page up / down": the open review's plan, else an open sheet or
+   *  drawer, else the focused board's own scroller, else the canvas. */
+  function scrollByVoice(dir: 'up' | 'down', page: boolean): void {
+    const sign = dir === 'down' ? 1 : -1;
+    const overflows = (el: Element | null): el is HTMLElement => {
+      if (!el || (el as HTMLElement).closest('[hidden]')) return false;
+      const h = el as HTMLElement;
+      const cs = getComputedStyle(h);
+      return h.scrollHeight - h.clientHeight > 4 && /auto|scroll|overlay/.test(cs.overflowY) && h.getBoundingClientRect().height > 0;
+    };
+    const firstScroller = (scope: Element | null): HTMLElement | null => {
+      if (!scope || (scope as HTMLElement).closest('[hidden]')) return null;
+      if (overflows(scope)) return scope as HTMLElement;
+      return Array.from(scope.querySelectorAll('*')).find(overflows) as HTMLElement | undefined ?? null;
+    };
+    const scopes = [
+      root.querySelector('.mc-review-dialog:not([hidden])'),
+      root.querySelector('.mc-menu-sheet:not([hidden])'),
+      root.querySelector('.mc-ai:not([hidden])'),
+      focusId ? world.querySelector(`[data-frame="${focusId}"]`) : null,
+    ];
+    for (const scope of scopes) {
+      const el = firstScroller(scope);
+      if (!el) continue;
+      const amount = page ? el.clientHeight * 0.85 : 120;
+      if (typeof el.scrollBy === 'function') el.scrollBy({ top: sign * amount, behavior: reduced ? 'auto' : 'smooth' });
+      else el.scrollTop += sign * amount;
+      return;
+    }
+    // Nothing scrolls: move the canvas (scroll down = see what is below).
+    const amount = page ? vp().h * 0.85 : 120;
+    camera = panBy(camera, 0, -sign * amount);
+    applyCamera(); persist();
   }
   function run(text: string): boolean {
     captionHeard(text);
@@ -3336,6 +3457,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       }
       case 'packIntent': return runIntent(r.intent);
+      case 'scroll': scrollByVoice(r.dir, r.page); return true;
       // On the web there is no gimbal — handleSpeech answers with the honest why.
       case 'pointConnect': {
         const id = focusId ?? lastFocus;
@@ -3397,7 +3519,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // An impossible level is refused by validation, never clamped.
         const attempt = impossibleAttempt(text, deviceRefs());
         if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
-        for (const i of dc.intents) void store.act(i);
+        for (const i of dc.intents) {
+          const acted = store.act(i);
+          // "play music": once the player has really started, say what is
+          // playing and where — not just "Playing."
+          if (i.playing === true && pack?.lang !== 'kn') {
+            void acted.then((s) => { if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`); }).catch(() => undefined);
+          }
+        }
         revealDeviceTiles(dc.intents.map((i) => i.deviceId));
         // With a Kannada pack on, the device-command status line is Kannada too.
         say(pack?.lang === 'kn' && dc.statusKey ? statusText(dc.statusKey, pack) : dc.say);
@@ -3859,6 +3988,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       presence: (hands: readonly (readonly { x: number; y: number }[])[], now: number) => {
         simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
       },
+      /** The operator hand gate as presence would set it (false = not facing). */
+      facing: (v: boolean | null) => { gestureFacing = v; handPointer?.setFacing?.(v, typeof performance !== 'undefined' ? performance.now() : Date.now()); },
       /** For assertions: camera, any grab running, debug state. */
       state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
       /** Selfie-space wrist position that puts the PALM at screen (x, y). */
@@ -4234,6 +4365,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
     }),
     nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
+    onRender: keepChipsVisible,
     // Rules first: Nano reorders the chips only when she has been idle and no
     // turn (or any other on-device prompt) is using the model.
     // Never during a turn or its review, never while any model stream is

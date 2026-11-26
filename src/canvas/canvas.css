@@ -404,6 +404,17 @@
   gap: 12px;
   margin-bottom: 12px;
 }
+/* The card scrolls inside the board when it is taller than it; its title and
+   Close stay pinned at the top (drawn over the card's own padding). */
+.mc-connect-head, .mc-pairing-head {
+  position: sticky;
+  top: -24px;
+  z-index: 1;
+  margin: -24px -24px 12px;
+  padding: 24px 24px 8px;
+  background: var(--panel);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
 .mc-connect-close, .mc-pairing-close {
   min-width: 44px;
   min-height: 44px;
@@ -766,9 +777,12 @@
 .mc-review-honesty p[hidden] { display: none; }
 .mc-review-why { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 /* The byte count never shrinks or ellipsizes; only the "what" text does. */
-.mc-review-left { display: flex; min-width: 0; font-weight: 600; color: #2B2B2B; white-space: nowrap; }
-.mc-review-left-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.mc-review-left-bytes { flex: 0 0 auto; white-space: pre; }
+/* One line, read as one line: what left and its size sit inline (not as flex
+   items, which lay out — and copy — as separate lines). A long description is
+   cut with an ellipsis; the size always stays, right after it. */
+.mc-review-left { display: block; min-width: 0; font-weight: 600; color: #2B2B2B; white-space: nowrap; overflow: hidden; }
+.mc-review-left-what { display: inline-block; max-width: calc(100% - 9ch); overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.mc-review-left-bytes { display: inline; white-space: pre; }
 .mc-review-actions { position: relative; bottom: auto; flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 48px;
   margin-top: 14px; padding: 0; background: transparent; }
 .mc-review-approve, .mc-review-reject, .mc-review-ask-else {
@@ -1392,6 +1406,28 @@
   font-size: 15px; font-weight: 600; line-height: 1.2;
 }
 .mc-canvas .mc-facing-banner-hide { font-size: 15px; min-height: 44px; min-width: 44px; padding: 4px 8px; }
+.mc-canvas .mc-face-preview[hidden] { display: none; }
+/* The camera preview owns the bottom-right corner while it shows: the hand
+   cluster then lives in the space ABOVE it (and its Facing pill) instead of
+   being centred on the whole screen, so its last button is never behind the
+   preview. If the buttons do not fit that space in one column they wrap into
+   a second one to the left — they never overlap and never shrink. */
+.mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
+  top: calc(var(--mc-bar-h, 64px) + 12px);
+  bottom: calc(16px + 216px + 8px + 54px + 12px + env(safe-area-inset-bottom, 0px));
+  transform: none;
+  justify-content: center;
+  flex-wrap: wrap-reverse;
+  align-content: flex-start;
+  column-gap: 16px;
+  max-width: none;
+}
+.mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster > * { width: 168px; }
+@media (max-width: 1240px) {
+  .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
+    bottom: calc(96px + 216px + 8px + 54px + 12px + env(safe-area-inset-bottom, 0px));
+  }
+}
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
   .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
@@ -1440,6 +1476,11 @@
 .mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
   border-radius: 0 0 18px 18px; }
+/* A board taller than the space above the engine bar would hide its own chip
+   row under the bar: the row is lifted (canvasApp keepChipsVisible) to sit
+   just above the bar, over the board's lower edge, still inside the board. */
+.mc-next.is-lifted { position: relative; z-index: 3; border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: 0 8px 22px rgb(43 43 43 / 0.14); }
 .mc-next-src { font-size: 15px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
 .mc-next[data-source=nano] .mc-next-src { color: var(--accent-ink); }
 .mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
@@ -1602,3 +1643,21 @@
 /* AI drawer terminals: newest line on top, so the working cursor sits there too. */
 .mc-term-body { display: flex; flex-direction: column; }
 .mc-term-cursor { order: -1; }
+/* Peace-and-move (gestureScroll.ts): a small "Scrolling" hint by the hand,
+   an outline on what scrolls, a big level readout ("Volume 60 %") over a
+   level control, and "move to scroll" hints on areas that overflow — only
+   while Hands is on. Never takes pointer input. */
+.mc-scroll-layer { position: fixed; inset: 0; pointer-events: none; z-index: 81; }
+.mc-scroll-layer[hidden], .mc-scroll-hint[hidden], .mc-level-readout[hidden], .mc-scroll-badge[hidden] { display: none; }
+.mc-scroll-hint { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 6px; padding: 5px 12px 5px 8px;
+  border-radius: 999px; background: #2B2B2B; color: #FFFFFF; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 3px 10px rgb(0 0 0 / 0.25); }
+.mc-scroll-hint .mc-gi, .mc-scroll-badge .mc-gi { width: 18px; height: 18px; }
+.mc-scroll-target { outline: 3px dashed #E0A800; outline-offset: -3px; }
+.mc-level-target { outline: 4px solid #E0A800; outline-offset: 3px; }
+.mc-level-readout { position: absolute; left: 0; top: 0; padding: 10px 18px; border-radius: 16px; background: #2B2B2B; color: #FFC83D;
+  font: 700 30px/1.1 system-ui, sans-serif; box-shadow: 0 6px 18px rgb(0 0 0 / 0.3); white-space: nowrap; }
+.mc-level-readout.is-pulse { animation: mc-level-pulse 180ms ease-out; }
+@keyframes mc-level-pulse { 0% { scale: 1.08; } 100% { scale: 1; } }
+.mc-scroll-badge { position: absolute; left: 0; top: 0; translate: -100% 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px;
+  border-radius: 999px; background: #FFC83D; color: #2B2B2B; font: 700 12px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .mc-level-readout.is-pulse { animation: none; } }

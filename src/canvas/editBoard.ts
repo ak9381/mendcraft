@@ -21,7 +21,8 @@ export interface Rect { left: number; top: number; width: number; height: number
 export interface ItemLayout { left: number; top: number; width: number; height: number }
 
 export const MIN_ITEM_SIZE: Size = { width: 220, height: 200 };
-export const MAX_ITEM_SIZE: Size = { width: 640, height: 520 };
+// Tall enough for the lamp tile (brightness, colours, scenes and whites are ~600 px in a narrow column).
+export const MAX_ITEM_SIZE: Size = { width: 640, height: 760 };
 const PAD = 12;
 /** No real vertical ceiling: the frame body scrolls (`overflow: auto`). */
 const TALL = 100000;
@@ -626,7 +627,13 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
 
     const column = items[0].el.parentElement;
     if (!column) return;
-    const rects = items.map((it) => it.el.getBoundingClientRect());
+    // Measured on screen, stored in the board's own px: a room dashboard may be
+    // shown zoomed out (the whole board in view), and a tile captured at that
+    // scale would come back too small for its own controls.
+    const first = items[0]?.el as unknown as { offsetWidth?: number; getBoundingClientRect(): Rect } | undefined;
+    const shown = first?.getBoundingClientRect().width ?? 0;
+    const k = first?.offsetWidth && shown > 0 ? shown / first.offsetWidth : 1;
+    const rects = items.map((it) => { const r = it.el.getBoundingClientRect(); return { left: r.left / k, top: r.top / k, width: r.width / k, height: r.height / k }; });
     const originLeft = Math.min(...rects.map((r) => r.left));
     const originTop = Math.min(...rects.map((r) => r.top));
 
