@@ -756,7 +756,10 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
   // the load ceiling (ON_DEVICE_LOAD_MAX_MS) covers the wait and the call's
   // own create together — never 45 s of waiting and then 45 s more.
   let loadMaxMs = ON_DEVICE_LOAD_MAX_MS;
-  const warm = boardWarm;
+  // Only a warm-up that is really loading the model is waited for. One still
+  // waiting in the queue is not loading anything: this request goes through
+  // the queue as usual (ahead of it — the warm-up is the lowest job).
+  const warm = warmLoading ? boardWarm : null;
   if (warm) {
     nanoTrace('on-device call: waiting for the warm-up that is loading the model');
     // The model has the call (it is loading for it): the caller's reply clock
@@ -936,6 +939,8 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
 /** The warm-up's reply schema (kept to keywords Chrome accepts). */
 export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
 let boardWarm: Promise<boolean> | null = null;
+/** The warm-up holds the model and is loading it (not just queued). */
+let warmLoading = false;
 /** The longest a warm-up's create() (the cold model load) may take. */
 export const WARM_CREATE_MAX_MS = 60_000;
 /** The longest a request waits for a warm-up already loading the model. */
@@ -990,6 +995,7 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
           promptOptions: { responseConstraint: WARM_CONSTRAINT },
         });
         nanoTrace('warm-up: started');
+        warmLoading = true;
         warmSays('loading');
         const t0 = Date.now();
         let poll: ReturnType<typeof setInterval> | null = null;
@@ -1041,6 +1047,7 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
       warmSays('failed');
       return false;
     } finally {
+      warmLoading = false;
       boardWarm = null; // a later attempt starts fresh (and returns at once when loaded)
     }
   })();
@@ -1083,6 +1090,7 @@ export function setModelsForTest(overrides: ModelOverrides | null): void {
   onDeviceFactory = null;
   lastOnDeviceStop = null;
   boardWarm = null;
+  warmLoading = false;
   onDeviceLoaded = false;
   onDeviceUsedAt = 0;
   cached = null;

@@ -1065,8 +1065,7 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
     expect(main).toContain('const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });');
     expect(main).toContain('if (nanoAvailable && !was) warmKeeper.kick();'); // every time the model becomes available
     // after first paint, at the first idle moment but never later than its deadline, then kept up
-    expect(main).toMatch(/afterFirstPaint\(\(\) => whenIdle\(\(\) => \{\s*void refreshNanoAvailable\(\);\s*const poll = /);
-    expect(main).toMatch(/ric\(fn, \{ timeout: timeoutMs \}\)/);
+    expect(main).toContain('refresh: refreshNanoAvailable,'); // startWarmSchedule (fastReply.test) runs it after first paint, idle-bounded
     expect(main).toContain('onOnDeviceUnloaded(() => { warmKeeper.reset(); warmKeeper.kick(); });'); // re-warm after an eviction
     expect(main).toContain('if (!nanoAvailable && was) warmKeeper.reset();');
   });
