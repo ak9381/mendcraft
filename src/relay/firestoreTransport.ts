@@ -10,6 +10,7 @@
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { validateMessage, type RelayMessage } from './protocol';
 import type { RelayTransport } from './transport';
+import { createRoomFeed, type RoomDoc } from './roomFeed';
 
 export type FirestoreProbe =
   | { ok: true; transport: RelayTransport }
@@ -48,23 +49,43 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
         });
       },
       subscribe(roomId, onMsg, onError) {
-        return fs.onSnapshot(
-          fs.query(fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at')),
-          (snap) => {
-            for (const change of snap.docChanges()) {
-              if (change.type !== 'added') continue;
-              const msg: RelayMessage | null = validateMessage(change.doc.data());
-              if (msg) onMsg(msg);
-            }
+        // The live listener, backed by a slow catch-up read: onSnapshot can go
+        // quiet without an error (see roomFeed.ts), which left a paired laptop
+        // deaf to its phone.
+        const messages = fs.collection(db, 'rooms', roomId, 'messages');
+        const toDoc = (d: { id: string; data(): Record<string, unknown> }): RoomDoc => {
+          const data = d.data();
+          const at = data.at as { toMillis?: () => number } | null | undefined;
+          return { id: d.id, at: typeof at?.toMillis === 'function' ? at.toMillis() : null, data };
+        };
+        const feed = createRoomFeed({
+          listen: (onDocs, onListenError) => fs.onSnapshot(
+            fs.query(messages, fs.orderBy('at')),
+            (snap) => {
+              onDocs(snap.docChanges().filter((c) => c.type === 'added').map((c) => toDoc(c.doc)));
+            },
+            () => {
+              // Listen failed (rules denial, offline, room deleted). Tell the
+              // caller so the pairing state machine can move to an explicit
+              // 'disconnected' state instead of freezing silently on the last
+              // one — "paired" would otherwise look connected when it isn't.
+              onListenError();
+            },
+          ),
+          fetchSince: async (at) => {
+            const q = at === null
+              ? fs.query(messages, fs.orderBy('at'))
+              : fs.query(messages, fs.orderBy('at'), fs.startAt(fs.Timestamp.fromMillis(at)));
+            return (await fs.getDocsFromServer(q)).docs.map(toDoc);
           },
-          () => {
-            // Listen failed (rules denial, offline, room deleted). Tell the
-            // caller so the pairing state machine can move to an explicit
-            // 'disconnected' state instead of freezing silently on the last
-            // one — "paired" would otherwise look connected when it isn't.
-            onError?.();
+          restart: async () => { await fs.disableNetwork(db); await fs.enableNetwork(db); },
+          onDoc: (data) => {
+            const msg: RelayMessage | null = validateMessage(data);
+            if (msg) onMsg(msg);
           },
-        );
+          onError,
+        });
+        return () => feed.stop();
       },
       async setAlias(code, roomId) {
         await fs.setDoc(fs.doc(db, 'rooms', code), { room: roomId });

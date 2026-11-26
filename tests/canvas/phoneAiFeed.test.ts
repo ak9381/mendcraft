@@ -134,6 +134,14 @@ describe('host republish', () => {
     rep.announce('android', NOTHING, true);
     rep.announce('ios', IPHONE, true);
     rep.announce('ios', undefined, true); // legacy announce: placed, but no events accepted
+    // Each newly announced phone is shown as present (its own total so far: 0 B).
+    expect(c.sent).toEqual([
+      expect.objectContaining({ kind: 'bytes', total: 0, device: 'android', deviceLabel: 'Nothing phone' }),
+      expect.objectContaining({ kind: 'bytes', total: 0, device: 'iphone', deviceLabel: 'iPhone' }),
+    ]);
+    rep.announce('android', NOTHING, true); // a keep-alive re-announce says nothing new
+    expect(c.sent).toHaveLength(2);
+    c.sent.length = 0;
     expect(rep.handle(bytes)).toBe(true);
     expect(rep.handle(JSON.stringify({ k: 'log', id: IPHONE, engine: 'apple', verb: 'done', text: '3 tiles filled' }))).toBe(true);
     expect(rep.handle(JSON.stringify({ k: 'nope', id: IPHONE }))).toBe(false);
@@ -147,12 +155,29 @@ describe('host republish', () => {
     const sent: Array<Record<string, unknown>> = [];
     const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } } });
     rep.announce('android', NOTHING, true);
+    sent.length = 0;
     // Claims iPhone in the payload, with its own id: labelled by its announce.
     expect(rep.handle(JSON.stringify({ k: 'log', id: NOTHING, platform: 'ios', engine: 'apple', verb: 'done', text: 'x' }))).toBe(true);
     expect(sent[0]).toMatchObject({ device: 'android', deviceLabel: 'Nothing phone' });
     // Makes up an id that never announced: dropped.
     expect(rep.handle(JSON.stringify({ k: 'log', id: 'dev-ffffffff', platform: 'ios', engine: 'apple', verb: 'done', text: 'x' }))).toBe(false);
     expect(sent).toHaveLength(1);
+  });
+
+  it('replay() tells a late monitor who is here and each phone\'s latest total, even one sent over the rate', () => {
+    const clock = { t: 0 };
+    const sent: Array<Record<string, unknown>> = [];
+    const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m as Record<string, unknown>); } }, now: () => clock.t });
+    rep.announce('android', NOTHING, true);
+    for (let i = 0; i < 10; i++) rep.handle(JSON.stringify({ k: 'log', id: NOTHING, engine: 'gemini', verb: 'note', text: 'x' }));
+    expect(rep.handle(JSON.stringify({ k: 'bytes', id: NOTHING, bytes: 4600 }))).toBe(false); // over the rate
+    sent.length = 0;
+    rep.replay();
+    expect(sent).toEqual([{ kind: 'bytes', total: 4600, device: 'android', deviceLabel: 'Nothing phone' }]);
+    rep.clear();
+    sent.length = 0;
+    rep.replay();
+    expect(sent).toEqual([]);
   });
 
   it('clear() forgets announced phones (drop / disconnect)', () => {
@@ -192,6 +217,7 @@ describe('host republish', () => {
     const sent: unknown[] = [];
     const rep = createPhoneAiRepublisher({ feed: { publish: (m) => { sent.push(m); } }, now: () => clock.t });
     rep.announce('ios', IPHONE); rep.announce('android', NOTHING);
+    sent.length = 0;
     const log = (id: string) => JSON.stringify({ k: 'log', id, engine: 'gemini', verb: 'note', text: 'x' });
     for (let i = 0; i < 15; i++) rep.handle(log(IPHONE));
     for (let i = 0; i < 3; i++) rep.handle(log(NOTHING));
@@ -370,6 +396,7 @@ describe('re-announce after a drop', () => {
     announcePhone(iphone, 'ios', { deviceId: IPHONE, native: true });
     announcePhone(nothing, 'android', { deviceId: NOTHING, native: true });
     await flush();
+    sent.length = 0; // each phone's "present" line
     const ev = JSON.stringify({ k: 'bytes', id: NOTHING, bytes: 7 });
     await nothing.sendCommand({ kind: 'aiEvent', text: ev });
     await flush();
@@ -380,8 +407,9 @@ describe('re-announce after a drop', () => {
     // The Nothing phone answered whoIsThere (hello + refresh announce): accepted again.
     await nothing.sendCommand({ kind: 'aiEvent', text: ev });
     await flush();
-    expect(sent).toHaveLength(2);
-    expect(sent[1]).toMatchObject({ kind: 'bytes', total: 7, device: 'android', deviceLabel: 'Nothing phone' });
+    // Re-learned after the clear: present again (with its total), then the event.
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toMatchObject({ kind: 'bytes', total: 7, device: 'android', deviceLabel: 'Nothing phone' });
     // The phone that left is not re-learned.
     expect(rep.handle(JSON.stringify({ k: 'bytes', id: IPHONE, bytes: 0 }))).toBe(false);
     stopNothing();

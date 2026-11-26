@@ -128,6 +128,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       native: deps.native,
       hubName: 'the laptop',
       aiForwarder: deps.aiForwarder,
+      isCurrent: () => mine === attempt,
       onState,
       ...deps.joinExtras,
     });

@@ -148,6 +148,9 @@ export interface PhoneSessionDeps extends PhoneGuestJoinDeps {
   keepAliveTimers?: Parameters<typeof keepAnnouncing>[3];
   /** Extra announce fields (iPhone sensing status), read at each announce. */
   announceStatus?: () => object | null;
+  /** False once a newer join has superseded this one: a join that finishes
+   *  late must not take the AI-feed forwarder from the one that replaced it. */
+  isCurrent?: () => boolean;
 }
 
 /** The ONE way a phone joins the laptop's room — chime first-join, typed code
@@ -158,7 +161,7 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
   const res = await joinPhoneAsGuest(deps);
   if ('error' in res) return res;
   const { session } = res;
-  deps.aiForwarder?.bind(session);
+  if (deps.isCurrent?.() !== false) deps.aiForwarder?.bind(session);
   const deviceId = deps.storage ? ensureDeviceId(deps.storage) : undefined;
   const stopAnnouncing = deps.platform
     ? keepAnnouncing(session, deps.platform, { deviceId, native: deps.native, status: deps.announceStatus }, deps.keepAliveTimers)
@@ -170,7 +173,9 @@ export async function joinPhoneSession(deps: PhoneSessionDeps): Promise<PhoneGue
       if (stopped) return;
       stopped = true;
       stopAnnouncing();
-      deps.aiForwarder?.bind(null);
+      // Only if this session is still the bound one (a stale join torn down
+      // late must not unbind the join that replaced it).
+      deps.aiForwarder?.bind(null, session);
       await session.close();
     },
   };

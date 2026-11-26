@@ -188,15 +188,32 @@ export function createRateLimiter(opts: { max?: number; windowMs?: number; now?:
  *  its own (10/s). Never touches a ledger. */
 export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; now?: () => number }) {
   const phones = new Map<string, AnnouncedPhone>();
+  /** Each phone's latest own cloud total (replayed to a monitor that opens late). */
+  const lastBytes = new Map<string, number>();
   const limiter = createRateLimiter({ ...HOST_AI_EVENT_RATE, now: opts.now });
+  // "This phone is here": the monitor's tab for it stops saying Not connected
+  // as soon as it pairs, before (and whether or not) it ever runs an AI turn.
+  // Sent as the phone's own byte total, which changes nothing else there.
+  const present = (id: string, phone: AnnouncedPhone): void => {
+    const tag = { device: phone.platform === 'ios' ? 'iphone' as const : 'android' as const, deviceLabel: capText(phone.label).slice(0, 40) };
+    opts.feed.publish({ kind: 'bytes', total: lastBytes.get(id) ?? 0, ...tag });
+  };
   return {
     /** Record a phone's announce; returns its label. Without a deviceId the
      *  phone is placed as before but its aiEvents are not accepted. */
     announce(platform: PhonePlatform, deviceId?: unknown, native?: unknown): string {
       const label = phoneDeviceLabel(platform, native !== false);
-      if (isDeviceId(deviceId)) phones.set(deviceId, { platform, label });
+      if (isDeviceId(deviceId)) {
+        const known = phones.get(deviceId);
+        const phone = { platform, label };
+        phones.set(deviceId, phone);
+        if (!known || known.platform !== platform || known.label !== label) present(deviceId, phone);
+      }
       return label;
     },
+    /** A monitor just opened (said hello): tell it which phones are here and
+     *  what each has sent so far. Phone lines are never in the laptop snapshot. */
+    replay(): void { phones.forEach((phone, id) => present(id, phone)); },
     /** Forget every announced phone (a phone dropped / the relay closed). */
     clear(): void { phones.clear(); limiter.clear(); },
     /** Returns whether the event reached the feed. */
@@ -204,7 +221,11 @@ export function createPhoneAiRepublisher(opts: { feed: Pick<AiFeed, 'publish'>; 
       const ev = coerceAiEvent(text);
       if (!ev) return false;
       const phone = phones.get(ev.id);
-      if (!phone || !limiter.allow(ev.id)) return false;
+      if (!phone) return false;
+      // The byte total is one number: the latest is remembered even when a
+      // burst of lines is over the rate.
+      if (ev.k === 'bytes') lastBytes.set(ev.id, ev.bytes);
+      if (!limiter.allow(ev.id)) return false;
       opts.feed.publish(phoneAiEventToFeed(ev, phone));
       return true;
     },
@@ -282,8 +303,10 @@ export interface PhoneAiForwarderOptions {
 }
 
 export interface PhoneAiForwarder extends AiFeed {
-  /** Bind (or clear) the relay session; without one, events are dropped. */
-  bind(session: { sendCommand(cmd: RelayCommand): Promise<void> } | null): void;
+  /** Bind (or clear) the relay session; without one, events are dropped.
+   *  `onlyIf`: clear only while that session is still the bound one — a stale
+   *  join that is torn down late must not unbind the session that replaced it. */
+  bind(session: { sendCommand(cmd: RelayCommand): Promise<void> } | null, onlyIf?: object): void;
 }
 
 type Build = () => PhoneAiEvent | null;
@@ -336,7 +359,11 @@ export function createPhoneAiForwarder(opts: PhoneAiForwarderOptions): PhoneAiFo
   const mapEngine = (e: FeedEngine): PhoneAiEngine => (e === 'gemini' ? 'gemini' : e === 'nano' ? opts.localEngine() : e);
 
   return {
-    bind(s) { session = s; if (!s) queue.length = 0; },
+    bind(s, onlyIf) {
+      if (!s && onlyIf && session !== onlyIf) return;
+      session = s;
+      if (!s) queue.length = 0;
+    },
     onHello() { /* the phone has no monitor of its own */ },
     publish(m) {
       if (!session) return;
