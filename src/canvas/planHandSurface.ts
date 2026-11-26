@@ -13,12 +13,15 @@
 //  - the `handEdit` half of the board's HandSurface, which the hand pointer
 //    calls for fist strokes and fist taps;
 //  - the edit journal: every plan edit (hand or mouse) is announced as an
-//    `mc-plan-edit` event so the canvas history / Undo can take it back.
+//    `mc-plan-edit` event so the canvas history / Undo can take it back;
+//  - the 3D view by hand (plan/orbitHands.ts): fist = orbit, two fists or
+//    peace-and-move = closer / farther, and a bar of 3D buttons for the palm.
 
 import type { ModeController, ViewportHandle } from '../core/controller';
 import { createPlanHandEdit, type HandSelection, type HandTarget, type PlanHandEdit } from '../plan/handEdit';
 import { createPlanJournal, type PlanJournal } from '../plan/editJournal';
 import { mmToMetresLabel } from '../plan/doc';
+import { createPlan3dHands } from '../plan/orbitHands';
 import { HAND_HOT, type HandSurfaceEdit } from './handPointer';
 
 /** Fired (bubbling, composed) on the plan board for each finished edit. */
@@ -27,6 +30,8 @@ export interface PlanEditDetail { steps: number; summary: string; epoch: number 
 
 /** The plan's own chrome inside the drawing host: a fist there is not a stroke. */
 const CHROME = '.mc-palette, .mc-flyout, .mc-props, .mc-trash, .mc-fsctl, .mc-plan-hand-bar, .mc-plan-hand-banner, button, input, select, textarea';
+/** The one-line hint the 3D view shows while Hands is on. */
+export const PLAN_3D_HINT = 'Hold a fist and move to turn the 3D view';
 const HOT_MIN = 32;
 const HOT_MAX = 60;
 
@@ -180,7 +185,15 @@ export function mountPlanHandSurface(o: {
 
   const hot = doc.createElement('div');
   hot.className = 'mc-plan-hot-layer';
-  host.append(hot, bar, scaleEl);
+
+  // ---- 3D view by hand: fist = orbit, two fists / peace = closer, farther.
+  const hands3d = createPlan3dHands(view);
+  const bar3d = doc.createElement('div');
+  bar3d.className = 'mc-plan-3d-bar';
+  bar3d.setAttribute('role', 'toolbar');
+  bar3d.setAttribute('aria-label', '3D view');
+  bar3d.hidden = true;
+  host.append(hot, bar, scaleEl, bar3d);
   // The banner sits in the plan's toolbar row (beside Check / 3D / DXF), so
   // it never covers the drawing; without a toolbar it floats over the plan.
   const toolbar = board.querySelector<HTMLElement>('.mc-plan-extras');
@@ -196,6 +209,19 @@ export function mountPlanHandSurface(o: {
     b.addEventListener('click', (e) => { e.stopPropagation(); act(); refresh(true); });
     return b;
   };
+
+  for (const [what, text, label] of [
+    ['left', '⟲ Turn left', 'Turn the 3D view left'],
+    ['right', 'Turn right ⟳', 'Turn the 3D view right'],
+    ['up', 'From above', 'Look from higher up'],
+    ['down', 'From the side', 'Look from lower down'],
+    ['closer', 'Closer', 'Move the 3D camera closer'],
+    ['farther', 'Farther', 'Move the 3D camera farther away'],
+  ] as const) {
+    const b = button(`mc-plan-3d-btn mc-plan-3d-${what}`, text, label, () => hands3d.step(what));
+    b.dataset.turn = what;
+    bar3d.append(b);
+  }
 
   let barKey = '';
   function buildBar(sel: HandSelection): void {
@@ -272,9 +298,11 @@ export function mountPlanHandSurface(o: {
   // An unfocused board is view-only (its body is inert): a fist there moves the board.
   const usable = (): boolean => on && handsOn() && !layoutEditing() && host.isConnected && !host.closest('[inert]');
   const active = (): boolean => usable() && !view.is3D?.();
-  /** The 3D view is showing: a held fist turns the model (nothing to edit). */
-  const in3d = (): boolean => usable() && !!view.is3D?.();
-  let orbit: { x: number; y: number } | null = null;
+  /** The 3D view is showing with Hands on: a held fist turns the model.
+   *  Nothing is edited there, so — unlike hand edit — it does not need the
+   *  Hand edit switch, and it works on a board that is not the focused one
+   *  (its body is inert then; on3d() finds the view by its rect). */
+  const in3d = (): boolean => handsOn() && !layoutEditing() && host.isConnected && !!view.is3D?.();
   let two: { mid: { x: number; y: number }; span: number } | null = null;
 
   let sig = '';
@@ -288,19 +316,23 @@ export function mountPlanHandSurface(o: {
     const targets = act && !hand.busy() ? hand.targets() : [];
     const r = host.getBoundingClientRect();
     const turning = !act && in3d();
+    const orbiting = hands3d.orbiting();
     const pxPerM = (view.screenScale?.() ?? 0) * 1000;
-    const next = JSON.stringify([act, turning, !!orbit, Math.round(pxPerM), mode, sel, targets.map((t) => [t.id, Math.round(t.x - r.left), Math.round(t.y - r.top), t.label])]);
+    const next = JSON.stringify([act, turning, orbiting, Math.round(pxPerM), mode, sel, targets.map((t) => [t.id, Math.round(t.x - r.left), Math.round(t.y - r.top), t.label])]);
     if (!force && next === sig) return;
     if (!act && !turning && sig === '' && !force) { sig = next; return; } // never been on: nothing to draw
     sig = next;
     host.classList.toggle('mc-plan-hand-on', act || turning);
+    host.classList.toggle('mc-plan-3d-on', turning);
     board.classList.toggle('mc-plan-hands', act || turning);
     host.dataset.handTool = mode?.tool ?? '';
     banner.hidden = !mode && !turning;
+    bar3d.hidden = !turning;
     if (turning) {
-      bannerText.textContent = orbit ? 'Turning the 3D view — open your hand to stop' : '3D view — hold a fist and move to turn the model';
+      bannerText.textContent = orbiting ? 'Turning the 3D view — open your hand to stop' : `${PLAN_3D_HINT} · two fists or peace up / down: closer, farther`;
       bannerReadout.hidden = true;
-      banner.classList.toggle('is-live', !!orbit);
+      banner.classList.remove('is-note');
+      banner.classList.toggle('is-live', orbiting);
       banner.dataset.kind = '3d';
     }
     scaleEl.hidden = !act || pxPerM <= 0;
@@ -311,7 +343,7 @@ export function mountPlanHandSurface(o: {
       scaleEl.dataset.pxPerM = String(Math.round(pxPerM));
     }
     // A message for the hand takes the banner line for a few seconds.
-    banner.classList.toggle('is-note', !!mode?.note);
+    if (!turning) banner.classList.toggle('is-note', !!mode?.note);
     if (mode) {
       bannerText.textContent = mode.note ?? mode.text;
       bannerReadout.textContent = mode.readout ?? '';
@@ -330,25 +362,47 @@ export function mountPlanHandSurface(o: {
     const el = doc.elementFromPoint(x, y);
     return !!el && host.contains(el) && !el.closest(CHROME);
   }
+  /** On the 3D view. A board that is not the focused one has an inert body,
+   *  which hit-testing skips (the hit is its frame): then the view is found
+   *  by its rect, minus the chrome still shown over it. */
+  function on3d(x: number, y: number): boolean {
+    const r = host.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) return false;
+    const el = doc.elementFromPoint(x, y);
+    if (!el) return false;
+    if (host.contains(el)) return !el.closest(CHROME);
+    const frame = host.closest('.mc-frame');
+    if (!frame || !host.closest('[inert]') || el.closest('.mc-frame') !== frame || el.closest('button, .mc-frame-head, header')) return false;
+    for (const c of host.querySelectorAll<HTMLElement>(CHROME)) {
+      if (c.hidden || c.closest('[hidden]')) continue;
+      const q = c.getBoundingClientRect();
+      if (q.width > 0 && q.height > 0 && x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) return false;
+    }
+    return true;
+  }
 
   const api: PlanHandSurface = {
     hand,
     journal,
-    armed: (x, y) => (active() || in3d()) && onFloor(x, y),
-    drawing: () => active() && hand.mode().kind !== 'select',
+    armed: (x, y) => (in3d() ? on3d(x, y) : active() && onFloor(x, y)),
+    // Over the 3D view a fist belongs to the model too: only a 3D button right
+    // next to the palm may take the highlight (never a far chip a quick fist
+    // would then click).
+    drawing: () => in3d() || (active() && hand.mode().kind !== 'select'),
     tap(x, y) { if (in3d()) return; host.focus({ preventScroll: true }); hand.tap(x, y); refresh(); },
     fistStart(x, y) {
-      if (in3d()) { orbit = { x, y }; refresh(); return true; }
+      if (in3d()) { const ok = hands3d.fistStart(x, y); refresh(); return ok; }
       host.focus({ preventScroll: true });
       const ok = hand.fistStart(x, y);
       refresh();
       return ok;
     },
     fistMove(x, y) {
-      if (orbit) { view.orbit3D?.(x - orbit.x, y - orbit.y); orbit = { x, y }; return; }
+      if (hands3d.orbiting()) { hands3d.fistMove(x, y); return; }
       hand.fistMove(x, y);
     },
     zoom2(phase, a, b) {
+      if (in3d() || hands3d.busy()) { hands3d.zoom2(phase, a, b); if (phase !== 'move') refresh(true); return; }
       if (phase === 'end') { two = null; view.setLiveGesture?.(false); refresh(true); return; }
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const span = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
@@ -358,8 +412,6 @@ export function mountPlanHandSurface(o: {
         view.setLiveGesture?.(true);
         return;
       }
-      // 3D: the fists' spread moves the camera in and out.
-      if (view.is3D?.()) { view.dolly3D?.(span / two.span); two = { mid, span }; return; }
       // Zoom about the previous midpoint, then carry it to the new one, so
       // the plan under each fist follows that fist.
       view.zoomAt?.(span / two.span, two.mid.x, two.mid.y);
@@ -367,13 +419,14 @@ export function mountPlanHandSurface(o: {
       two = { mid, span };
       refresh();
     },
-    fistEnd() { if (orbit) orbit = null; else hand.fistEnd(); refresh(); },
-    fistCancel() { if (orbit) orbit = null; else hand.fistCancel(); refresh(); },
-    resizable: () => active() && !!hand.selection()?.axes.length,
-    resizeBegin: () => hand.resizeBegin(),
-    resizeTravel: (dx, dy) => hand.resizeTravel(dx, dy),
-    resizeEnd() { hand.resizeEnd(); refresh(); },
-    resizeCancel() { hand.resizeCancel(); refresh(); },
+    fistEnd() { if (hands3d.orbiting()) hands3d.fistEnd(); else hand.fistEnd(); refresh(); },
+    fistCancel() { if (hands3d.orbiting()) hands3d.fistCancel(); else hand.fistCancel(); refresh(); },
+    // Peace-and-move: resize in 2D; in 3D it zooms (up = closer).
+    resizable: () => in3d() || (active() && !!hand.selection()?.axes.length),
+    resizeBegin: () => (in3d() ? hands3d.peaceBegin() : hand.resizeBegin()),
+    resizeTravel: (dx, dy) => (in3d() ? hands3d.peaceTravel(dx, dy) : hand.resizeTravel(dx, dy)),
+    resizeEnd() { hands3d.peaceEnd(); hand.resizeEnd(); refresh(); },
+    resizeCancel() { hands3d.peaceCancel(); hand.resizeCancel(); refresh(); },
     enabled: () => on,
     setEnabled(v) { on = v; if (!v && hand.busy()) { hand.fistCancel(); hand.resizeCancel(); } refresh(true); },
     active,
@@ -394,7 +447,7 @@ export function mountPlanHandSurface(o: {
       doc.defaultView?.removeEventListener('mouseup', onUp);
       journal.dispose();
       view.setHandFit?.(false);
-      banner.remove(); bar.remove(); hot.remove(); scaleEl.remove();
+      banner.remove(); bar.remove(); hot.remove(); scaleEl.remove(); bar3d.remove();
     },
   };
   mounted.add(api);

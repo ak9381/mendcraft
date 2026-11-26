@@ -128,6 +128,24 @@ export function handSurfaceAt(el: Element | null): HandSurface | null {
   return host?.__mcHandSurface ?? null;
 }
 
+/** The ARMED hand-edit surface at a screen point. First the surface under the
+ *  hit-test; failing that, any surface whose rect holds the point and that
+ *  says it is armed there — a board that is not the focused one has an inert
+ *  body that hit-testing skips, and the plan's 3D view still takes a fist
+ *  there (its armed() checks the point itself). */
+export function armedSurfaceAt(doc: Document, x: number, y: number): HandSurfaceEdit | null {
+  const edit = handSurfaceAt(deepElementFromPoint(doc, x, y))?.handEdit;
+  if (edit) return edit.armed(x, y) ? edit : null;
+  const hosts = (doc.querySelectorAll?.('[data-hand-surface]') ?? []) as ArrayLike<HTMLElement & { __mcHandSurface?: HandSurface }>;
+  for (let i = hosts.length - 1; i >= 0; i--) {
+    const e = hosts[i].__mcHandSurface?.handEdit;
+    if (!e) continue;
+    const r = hosts[i].getBoundingClientRect();
+    if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height && e.armed(x, y)) return e;
+  }
+  return null;
+}
+
 export const DRAG_HANDLE = '[data-mc-drag-handle], [data-mc-resize-handle]';
 const DRAG_MOVE_THRESHOLD_PX = 6;
 /** Sideways travel that turns a pinch on a text field into a drag-select (bigger than pinch wobble). */
@@ -654,8 +672,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
 
   function editSurfaceAt(p: P): HandSurfaceEdit | null {
     if (p.x < 0 || dryRun) return null;
-    const edit = handSurfaceAt(deepElementFromPoint(doc, p.x, p.y))?.handEdit;
-    return edit && edit.armed(p.x, p.y) ? edit : null;
+    return armedSurfaceAt(doc, p.x, p.y);
   }
 
   function paintConfirm(el: HTMLElement | null, on: boolean): void {

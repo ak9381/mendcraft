@@ -65,5 +65,21 @@ Plan edits (hand or mouse) now land in the canvas history as `kind: 'plan'` entr
 - With more than one element selected a fist pans the plan and the banner says "Select one item to move it."
 - Merged the pair-grace work: Remove (R thumbs-down) and Rotate (L peace) wait under the pair grace like any one-hand hold.
 
+## 3D view by hand (26 Nov, "I am unable to rotate the 3D plan with my hand")
+**Root cause.** The 3D orbit hung off hand edit's own gate: the board had to be the focused one (an unfocused board's body is `inert`) and the Hand edit switch had to be on, and the hand pointer found the surface only through `elementFromPoint`, which skips an inert body (the hit is the board frame). So after "show 3D" from the overview, any zoom (a zoom drops focus, two fists included), or with Hand edit off, a held fist on the 3D view was decided as a **board move** — while the banner still said "hold a fist and move to turn the model". Over the model the palm highlight also snapped to far buttons (the DXF chip), so a quick fist clicked them.
+
+**Now**, whenever Hands is on and a plan board shows 3D (not in tile-layout Edit; focused or not; Hand edit on or off — nothing is edited in 3D):
+| Hand | What happens |
+|---|---|
+| Held fist + move | Orbit. Sideways = yaw, up / down = pitch. Pitch is clamped to 0.08–1.45 rad above the floor (never under it, never over the top); the mouse (OrbitControls) uses the same limits. The view eases towards the hand (`easeTurn`, 35 % per frame), so a jittery camera hand turns smoothly. |
+| Two fists | Spread = closer, together = farther (both fists must close on the 3D view; otherwise the canvas zooms, as in 2D). |
+| Peace and move | **Zoom** (picked over tilt, which the fist already does): up = closer, down = farther, one doubling per 240 px. Same arm / start / claim contract as the 2D resize, so it never scrolls. |
+| Open palm | Highlights the 3D buttons (Turn left / right, From above / From the side, Closer, Farther — real ≥ 56 px buttons in the view's top row). Over the model only a button right next to the palm can take the highlight, so a fist there never clicks a far chip. |
+| Opening the hand | Stops (the last bit of easing finishes). A lost hand or looking away stops **at once** (the pending easing is dropped). |
+
+A fist on the 3D view never moves the board or pans the canvas; a fist on the board title still moves the board. The banner reads "Hold a fist and move to turn the 3D view · two fists or peace up / down: closer, farther" ("Turning the 3D view — open your hand to stop" while turning); the 2D palette, properties panel and hint pill step aside while 3D shows with Hands on. A mouse drag on the focused board's 3D view orbits it (on an overview board a mouse drag still pans the canvas, like any board there).
+
+Built: `src/plan/orbitHands.ts` (the gesture → camera logic, no DOM), `orbit3d.ts` (`easeTurn`, `ELEVATION`), `extrude3d.ts` (eased `turn`, `stopTurn`, `cameraAngles`), `handPointer.armedSurfaceAt` (the hit-test, then the surfaces' rects — an inert board's 3D view is found by its rect and its own `armed(x, y)`), `planHandSurface.ts` (`on3d`, the 3D bar, the hint). Tests: `tests/plan/plan3dHands.test.ts` (real pointer, synthetic frames, focused and unfocused boards), `scripts/e2e-plan-hands.mjs` (3D section; `host.__mcPlan3d()` reads the camera).
+
 ## Not in this pass
-In the 3D view a held fist turns the model and two fists move the camera; there is no walk-through by hand. Typing a label's text needs voice or a keyboard. A plan Undo entry from before a board was re-rendered cannot be undone (the canvas says so). See `2026-11-26-hands-coverage.md`.
+There is no walk-through by hand in 3D. Typing a label's text needs voice or a keyboard. A plan Undo entry from before a board was re-rendered cannot be undone (the canvas says so). See `2026-11-26-hands-coverage.md`.
