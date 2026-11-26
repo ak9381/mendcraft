@@ -13,6 +13,9 @@ export interface CanvasDoc {
   /** What was drawn on floor-plan boards: frame id → plan board id → plan
    *  document. Beside `surfaces`, never inside them (see planDocs.ts). */
   drawings?: Drawings;
+  /** The frame that is the Connected devices board (by id, never by title).
+   *  Kept IN the doc, so it can never point at a board of another doc. */
+  devicesBoard?: string;
 }
 
 export const CANVAS_DOC_VERSION = 1;
@@ -57,32 +60,40 @@ export type FrameRegistry = ReturnType<typeof createFrameRegistry>;
 
 const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Validate a stored document; anything off returns null (start fresh, never half-load). */
+/** Validate a stored document. Anything that would lose or misplace her
+ *  boards (a bad frame, a board whose plan can't be read, another version)
+ *  returns null — the caller then keeps the raw text safe (canvasStore.ts) and
+ *  never half-loads it. Harmless slips are repaired instead of refusing the
+ *  whole doc: a camera out of range is reset, a focus or devices-board id
+ *  with no frame is cleared, a plan for a board that is gone (or an empty
+ *  one) is left out. */
 export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
   if (!raw || typeof raw !== 'object') return null;
   const d = raw as Record<string, unknown>;
   if (d.version !== CANVAS_DOC_VERSION) return null;
-  const c = d.camera as Record<string, unknown> | undefined;
-  if (!c || !fin(c.x) || !fin(c.y) || !fin(c.z) || c.z < MIN_Z || c.z > MAX_Z) return null;
   if (!Array.isArray(d.frames) || d.frames.length > MAX_FRAMES) return null;
   const frames: Frame[] = [];
   const seen = new Set<string>();
   for (const f of d.frames as Record<string, unknown>[]) {
     const r = f?.rect as Record<string, unknown> | undefined;
     if (typeof f?.id !== 'string' || !ID_RE.test(f.id) || seen.has(f.id)) return null;
-    if (!KINDS.includes(f.kind as FrameKind) || typeof f.title !== 'string') return null;
+    if (!KINDS.includes(f.kind as FrameKind)) return null;
     if (!r || !fin(r.x) || !fin(r.y) || !fin(r.w) || !fin(r.h) || r.w <= 0 || r.h <= 0) return null;
-    if (f.pinned !== undefined && typeof f.pinned !== 'boolean') return null;
     seen.add(f.id);
     frames.push({ id: f.id, kind: f.kind as FrameKind, title: cleanTitle(f.title), rect: { x: r.x, y: r.y, w: r.w, h: r.h }, pinned: f.pinned === true });
   }
-  const focusId = d.focusId ?? null;
-  if (focusId !== null && (typeof focusId !== 'string' || !seen.has(focusId))) return null;
+  const c = d.camera as Record<string, unknown> | undefined;
+  const camera: Camera = c && fin(c.x) && fin(c.y) && fin(c.z)
+    ? { x: c.x, y: c.y, z: Math.min(MAX_Z, Math.max(MIN_Z, c.z)) }
+    : { x: 0, y: 0, z: 1 };
+  const focusId = typeof d.focusId === 'string' && seen.has(d.focusId) ? d.focusId : null;
   const surfaces: Record<string, SurfacePlan> = {};
-  if (d.surfaces !== undefined) {
-    if (!d.surfaces || typeof d.surfaces !== 'object' || Array.isArray(d.surfaces)) return null;
+  if (d.surfaces !== undefined && d.surfaces !== null) {
+    if (typeof d.surfaces !== 'object' || Array.isArray(d.surfaces)) return null;
     for (const [id, plan] of Object.entries(d.surfaces as Record<string, unknown>)) {
-      if (!seen.has(id)) return null;
+      if (!seen.has(id)) continue; // its board is gone: nothing could show it
+      const tiles = (plan as { tiles?: unknown } | null)?.tiles;
+      if (Array.isArray(tiles) && !tiles.length) continue; // an empty board: nothing to lose
       const p = coerceSurfacePlan(plan);
       if (!p.ok) return null;
       surfaces[id] = p.value;
@@ -97,5 +108,10 @@ export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
     if (p.ok) { pack = p.value; lang = p.value.lang; }
   }
   const drawings = coerceDrawings(d.drawings, seen);
-  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack, ...(Object.keys(drawings).length ? { drawings } : {}) };
+  const devicesBoard = typeof d.devicesBoard === 'string' && seen.has(d.devicesBoard) ? d.devicesBoard : undefined;
+  return {
+    version: CANVAS_DOC_VERSION, camera, focusId, frames, surfaces, lang, pack,
+    ...(Object.keys(drawings).length ? { drawings } : {}),
+    ...(devicesBoard ? { devicesBoard } : {}),
+  };
 }

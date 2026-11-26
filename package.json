@@ -20,7 +20,8 @@
     "e2e:phone-layout": "node scripts/e2e-phone-layout.mjs",
     "e2e:phone-plan": "node scripts/e2e-phone-plan.mjs",
     "e2e:laptop-layout": "node scripts/e2e-laptop-layout.mjs",
-    "e2e:room-rebuild": "node scripts/e2e-room-rebuild.mjs"
+    "e2e:room-rebuild": "node scripts/e2e-room-rebuild.mjs",
+    "e2e:persist": "node scripts/e2e-persist.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",
