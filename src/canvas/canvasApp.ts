@@ -92,11 +92,12 @@ import { loadSetup } from '../setup/setupState';
 import { cameraHandsFromSelfie } from './handSpace';
 import type { PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
+import { phoneSayText } from './phoneSay';
 import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { combineFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { mountEngineBar, type EngineBar } from './engineBar';
@@ -425,6 +426,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   const blankEl = root.querySelector<HTMLElement>('.mc-blank')!;
   const statusEl = root.querySelector<HTMLElement>('.mc-canvas-status')!;
+  // The phone shell hides the whole tools bar, and the status line with it:
+  // every say() line (a confirmation, a chat reply, a failure) also shows in
+  // a readable toast there, for as long as the status line holds it.
+  const phoneSayEl = phoneShell && typeof document !== 'undefined' ? document.createElement('p') : null;
+  if (phoneSayEl) {
+    phoneSayEl.className = 'mc-phone-say';
+    phoneSayEl.setAttribute('role', 'status');
+    phoneSayEl.setAttribute('aria-live', 'polite');
+    phoneSayEl.hidden = true;
+    root.append(phoneSayEl);
+  }
+  const showPhoneSay = (t: string): void => {
+    if (!phoneSayEl) return;
+    const text = phoneSayText(t);
+    phoneSayEl.textContent = text;
+    phoneSayEl.hidden = !text;
+  };
   const aiPanel = root.querySelector<HTMLElement>('.mc-ai')!;
   const activityLog = createActivityLog(aiPanel.querySelector<HTMLElement>('.mc-ai-live-log'));
   // Engine bar: Nano + Gemini always visible (desktop only; CSS also hides it
@@ -524,6 +542,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // Phones that announced themselves → their AI activity on the laptop's monitor.
   const phoneAi = createPhoneAiRepublisher({ feed: aiFeed });
+  // A monitor that opens after the phone paired still shows it as connected.
+  aiFeed.onHello(() => phoneAi.replay());
   /** A phone 'announce' (which side it is on), 'transfer' (a tile sent back) or
    *  'aiEvent' (its AI activity line), intercepted before dispatchRelayCommand.
    *  All carry JSON in cmd.text. */
@@ -819,12 +839,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     statusTimer = setTimeout(() => {
       statusTimer = null;
       if (statusEl.textContent !== t) return;
+      // The phone toast never waits on a review (the sheet covers it anyway).
+      if (reviewBusy()) showPhoneSay('');
       if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
       statusEl.textContent = '';
+      showPhoneSay('');
     }, statusFadeMs(t));
   };
   const say = (t: string) => {
     statusEl.textContent = t; hideRetry();
+    showPhoneSay(t === LISTENING_STATUS ? '' : t);
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
@@ -1813,21 +1837,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
       const handedOff = lastTurnHandedOff;
-      if (!handedOff) panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
+      if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
       return { ...out, summary: summaryOf(summary, out.plan), status, handedOff };
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
   }
   /** Review a draft as it is (Gemini already made it after a Nano handoff). */
-  async function proposeDraft(frameId: string, utterance: string, d: TurnDraft): Promise<boolean> {
+  async function proposeDraft(frameId: string, utterance: string, d: TurnDraft, madeBy = false): Promise<boolean> {
     if (turnBusy) return false;
     turnBusy = true;
-    try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status); }
+    try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status, undefined, madeBy); }
     finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, plan: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink, madeBy = false): Promise<boolean> {
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -1886,7 +1910,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
         // A two-step change (draft + improvement, or a draft after a failed
         // improvement) names both steps and counts both steps' bytes.
-        facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind) : reviewFacts(si, utterance),
+        // One cloud call made it all (no on-device model): "Made by Gemini · N KB".
+        facts: link ? combineFacts(reviewFacts(si, utterance), reviewFacts(link.si), link.kind)
+          : madeBy ? madeByFacts(reviewFacts(si, utterance)) : reviewFacts(si, utterance),
       });
       if (link?.kind === 'fallback') {
         say(`${typeof navigator !== 'undefined' && navigator.onLine === false ? 'You’re offline' : `${engineName(link.si.engine)} didn’t answer`} — this is ${engineName(si.engine)}’s draft. Approve or say “keep”; Reject or say “drop”.`);
@@ -1918,13 +1944,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // itself run in the cloud).
       const draft = await draftTurn(frameId, 'nano', utterance, SCRIPTS.nanoRoom, draftSummary, 'guess');
       if (!draft) return;
-      if (draft.handedOff) {
-        // Gemini already made this draft (Nano couldn't finish): asking it to
-        // improve its own board would be a second cloud send for nothing.
+      // No on-device model here (the Nothing phone): the "draft" step itself
+      // ran on Gemini in the cloud. One call made the board.
+      const cloudDraft = !draft.handedOff && draft.si.engine === 'gemini';
+      if (draft.handedOff || cloudDraft) {
+        // Gemini already made this draft (Nano couldn't finish, or there is no
+        // Nano here): asking it to improve its own board would be a second
+        // cloud send for nothing.
         const line = 'Gemini made this draft, so there is no second pass.';
         panels.forEngine('gemini').log('note', line);
         aiPanel.querySelector('.mc-ai-state')!.textContent = line;
-        await proposeDraft(frameId, utterance, draft);
+        await proposeDraft(frameId, utterance, draft, cloudDraft);
         return;
       }
       panels.showHandoff('nano', 'group the lights and add a room plan');

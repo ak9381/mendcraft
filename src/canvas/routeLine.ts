@@ -65,6 +65,14 @@ export function matchToolVoice(text: string): ToolVoice | null {
 // (not "connect this room", which is connectRoom).
 const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
 
+/** "make a dashboard for my desk lamp", "build me a control panel", "I want a
+ *  dashboard": a request to BUILD a board — a board turn with a review, never
+ *  small talk. A question ("what is a dashboard?") has no build verb. */
+const BUILD_BOARD_RE = /\b(make|build|create|design|generate|set\s*up|give\s+me|show\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
+export function isBuildBoardAsk(text: string): boolean {
+  return BUILD_BOARD_RE.test(text);
+}
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -104,6 +112,7 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (cd) return { name: 'connectDevices', dashboard: cd.dashboard };
   if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) return { name: 'connectRoom' };
   if (/\bfloor\s*plans?\b/i.test(text)) return { name: 'floorPlan' };
+  if (isBuildBoardAsk(text)) return { name: 'connectRoom' };
   const ask = connectAsk(text);
   if (ask === 'sheet') return { name: 'connectSheet' };
   if (ask === 'byName') return { name: 'connectByName' };

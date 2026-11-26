@@ -490,7 +490,7 @@
   /* Flush to the bottom edge and full width so no board tile peeks through a
      gap below or beside the floating pill (the stray glyph under the bar). The
      pill keeps its rounded top; the bottom padding fills the safe-area strip. */
-  .mc-bar { left: 0; right: 0; top: auto; bottom: 0; padding: 8px calc(8px + env(safe-area-inset-left, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) calc(8px + env(safe-area-inset-right, 0px));
+  .mc-bar { left: 0; right: 0; top: auto; bottom: 0; padding: 8px calc(8px + var(--safe-area-inset-left, env(safe-area-inset-left, 0px))) calc(8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))) calc(8px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
     border-radius: 18px 18px 0 0; border-bottom: none; }
   .mc-bar-tools { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
   .mc-phone .mc-bar-btns { display: none; }
@@ -499,18 +499,18 @@
   .mc-btn { min-height: 44px; font-size: 16px; }
   .mc-say { flex: 0 0 auto; min-width: 0; }
   .mc-say .mc-btn { flex: 0 0 auto; white-space: nowrap; }
-  .mc-dock { top: calc(8px + env(safe-area-inset-top, 0px)); max-height: calc(100% - var(--mc-bar-h, 132px) - 16px); }
+  .mc-dock { top: calc(8px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); max-height: calc(100% - var(--mc-bar-h, 132px) - 16px); }
   .mc-say input { min-height: 44px; font-size: 16px; }
   .mc-canvas-status { font-size: 15px; }
   /* Start below the top-right mic FAB (top 12px + 64px tall) so its nano
      terminal header never hides under the mic — the FAB floats in the clear
      strip above. */
-  .mc-ai { left: auto; right: 8px; width: min(var(--mc-ai-w, 320px), calc(100vw - 160px)); min-width: 0; top: calc(84px + env(safe-area-inset-top, 0px)); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
+  .mc-ai { left: auto; right: 8px; width: min(var(--mc-ai-w, 320px), calc(100vw - 160px)); min-width: 0; top: calc(84px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
   .mc-ai pre { max-height: 120px; }
-  .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + env(safe-area-inset-bottom, 0px) + 80px); max-height: 50vh; }
+  .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) + 80px); max-height: 50vh; }
   /* Keep the floating review clear of the bottom thumb bar: a full-width
      sheet, no resize grip (a saved size isn't applied on a phone). */
-  .mc-review-dialog { top: calc(24px + env(safe-area-inset-top, 0px)); right: 24px;
+  .mc-review-dialog { top: calc(24px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); right: 24px;
     width: min(360px, calc(100vw - 48px)); min-width: 0;
     max-height: calc(100dvh - var(--mc-bar-h, 132px) - 48px);
     padding-top: 0; padding-bottom: 0; }
@@ -586,7 +586,7 @@
 .mc-menu-icon::after { top: 6px; }
 .mc-menu-scrim { position: fixed; inset: 0; z-index: 60; background: rgb(43 43 43 / 0.35); }
 .mc-menu-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 61; max-height: 80vh; overflow: auto;
-  padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--panel); color: var(--text);
+  padding: 8px 16px calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); background: var(--panel); color: var(--text);
   border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -8px 28px rgb(0 0 0 / 0.12);
   animation: mc-sheet-in 200ms ease-out; touch-action: pan-y; }
 .mc-menu-android { border-top-left-radius: 28px; border-top-right-radius: 28px; font-family: Roboto, system-ui, sans-serif; }
@@ -626,7 +626,7 @@
 /* Cluster owns Talk placement when the AI drawer is open. */
 @media (max-width: 600px) {
   /* Phones: top-right, clear of the thumb bar and the Proposal sheet (thumbs also have a talk toggle in the bar). */
-  .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); min-width: 64px; min-height: 64px; padding: 0 18px; }
+  .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); min-width: 64px; min-height: 64px; padding: 0 18px; }
   .mc-fab-mic .mc-fab-mic-label { display: none; }
   .mc-fab-mic.is-listening .mc-fab-mic-label { display: inline; }
   .mc-canvas.is-ai-pinned .mc-fab-mic { right: 12px; }
@@ -1068,7 +1068,7 @@
 /* Small, non-blocking facing pill. Never a full-screen square. */
 .mc-facing-banner {
   position: fixed;
-  top: calc(10px + 108px + 8px + env(safe-area-inset-top, 0px));
+  top: calc(10px + 108px + 8px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   left: 50%;
   transform: translateX(-50%);
   z-index: 71;
@@ -1128,7 +1128,7 @@
 /* Small top-centre camera preview with the original green face box. */
 .mc-face-preview {
   position: fixed;
-  top: calc(10px + env(safe-area-inset-top, 0px));
+  top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   left: 50%;
   transform: translateX(-50%);
   width: 144px;
@@ -1238,11 +1238,11 @@
 .mc-phone-simple .mc-arrange,
 .mc-phone-simple .mc-engine-bar,
 .mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
-.mc-phone-simple .mc-viewport { inset: 0; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+.mc-phone-simple .mc-viewport { inset: 0; padding: var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) var(--safe-area-inset-right, env(safe-area-inset-right, 0px)) var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) var(--safe-area-inset-left, env(safe-area-inset-left, 0px)); }
 .mc-phone-simple .mc-frame.dim { opacity: 1; }
 .mc-phone-simple .mc-talk-control {
   position: fixed; left: 50%; right: auto; top: auto; transform: translateX(-50%);
-  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(20px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; z-index: 60; width: auto;
 }
 .mc-phone-simple .mc-fab-mic {
@@ -1256,7 +1256,7 @@
 .mc-phone-simple.is-edit-locked .mc-fab-mic { opacity: 0.45; pointer-events: none; }
 .mc-route-badge {
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
-  top: calc(10px + env(safe-area-inset-top, 0px));
+  top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   padding: 5px 12px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
   font-size: 15px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
 }
@@ -1264,7 +1264,7 @@
 .mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-route-badge { display: none; }
 .mc-look-hint {
   position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); margin: 0;
-  bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(124px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   padding: 10px 18px; border-radius: 999px; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
   font-size: 16px; font-weight: 650; white-space: nowrap; pointer-events: none;
@@ -1381,31 +1381,31 @@
 /* Face preview (large, so you can see your hands) + a SMALL quiet "Facing" pill above it. */
 .mc-canvas .mc-face-preview {
   top: auto; left: auto; transform: none;
-  right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  right: 16px; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   width: 288px; height: 216px; border-radius: 12px; opacity: 1; z-index: 70;
   border: 1px solid rgb(0 0 0 / 0.12); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
 }
 .mc-canvas .mc-facing-banner {
   top: auto; left: auto; transform: none;
-  right: 16px; bottom: calc(16px + 216px + 8px + env(safe-area-inset-bottom, 0px));
+  right: 16px; bottom: calc(16px + 216px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   max-width: 220px; padding: 5px 6px 5px 12px; gap: 4px; z-index: 71;
   font-size: 15px; font-weight: 600; line-height: 1.2;
 }
 .mc-canvas .mc-facing-banner-hide { font-size: 15px; min-height: 44px; min-width: 44px; padding: 4px 8px; }
 /* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
 @media (max-width: 1240px) {
-  .mc-canvas .mc-face-preview { bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas .mc-facing-banner { bottom: calc(96px + 216px + 8px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas .mc-face-preview { bottom: calc(96px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas .mc-facing-banner { bottom: calc(96px + 216px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 }
 /* The chip + pill own the bottom-right corner: the AI panel's foot stops above them.
    chip = 16 + 216; pill = chip + 8 + ~38. */
 @media (min-width: 601px) {
-  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(242px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(290px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(242px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(290px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 }
 @media (min-width: 601px) and (max-width: 1240px) {
-  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(322px + env(safe-area-inset-bottom, 0px)); }
-  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(370px + env(safe-area-inset-bottom, 0px)); }
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(322px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(370px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 }
 /* Hands locked while not facing the screen: dimmed cursor + a small hint. */
 .mc-hand-cursor.is-away { opacity: 0.35; filter: grayscale(1); }
@@ -1452,20 +1452,20 @@
 .mc-join-prompt, .mc-join-pill, .mc-join-panel { display: none; }
 .mc-phone-simple .mc-join-prompt:not([hidden]) {
   display: flex; align-items: center; gap: 12px; position: fixed; z-index: 61;
-  left: 16px; right: 16px; top: calc(48px + env(safe-area-inset-top, 0px));
+  left: 16px; right: 16px; top: calc(48px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   padding: 12px 14px; border-radius: 16px; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
 }
 .mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
 .mc-phone-simple .mc-join-pill:not([hidden]) {
   display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
-  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
   max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-join-panel:not([hidden]) {
   display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
-  left: 16px; right: 16px; bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  left: 16px; right: 16px; bottom: calc(124px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   padding: 16px; border-radius: 18px; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
 }
@@ -1491,7 +1491,7 @@
 .mc-phone-hands-pill, .mc-cam-on { display: none; }
 .mc-phone-simple .mc-phone-hands-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
-  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
   /* Never reaches the centre mic (≈ 2 × 58px wide around the middle). */
   max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1502,7 +1502,7 @@
 .mc-phone-track-pill { display: none; }
 .mc-phone-simple .mc-phone-track-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 112px;
-  bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650;
 }
 .mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
@@ -1513,7 +1513,7 @@
   /* Just above the Hands pill: the route badge owns the top centre and is
      wide enough on a phone to collide with a top-right chip. */
   display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
-  bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(92px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
   font-size: 15px; font-weight: 650; pointer-events: none;
 }
@@ -1551,7 +1551,7 @@
 .mc-gesture-hud-bar { width: 64px; height: 6px; border-radius: 3px; background: rgb(255 255 255 / 0.2); overflow: hidden; flex: none; }
 .mc-gesture-hud-bar > span { display: block; height: 100%; width: 0; background: #FFC83D; }
 .mc-gesture-hud.is-none .mc-gesture-hud-bar { display: none; }
-@media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 15px; } }
+@media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); font-size: 15px; } }
 @media (prefers-reduced-motion: reduce) {
   .mc-gesture-badge { animation: mc-badge-fade 400ms ease-out both; }
   .mc-gesture-pressed { scale: none; transition: none; }
@@ -1586,3 +1586,37 @@
 .mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
   border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
 .mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Phone shell: status toast + review sheet ------------------------------
+   Insets: Capacitor's Android SystemBars plugin sets --safe-area-inset-* on
+   <html> (Android WebViews can report the env() top inset as 0 under the
+   status bar); iOS and browsers fall back to env(). */
+.mc-phone-say { display: none; }
+.mc-phone-simple .mc-phone-say:not([hidden]) {
+  display: block; position: fixed; z-index: 62; margin: 0; box-sizing: border-box;
+  left: 16px; right: 16px; top: calc(52px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  padding: 12px 16px; border-radius: 16px; background: rgb(43 43 43 / 0.94); color: #FFFFFF;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.2); font-size: 17px; font-weight: 600; line-height: 1.4;
+  text-align: center; overflow-wrap: anywhere; pointer-events: none;
+  max-height: 46dvh; overflow: hidden;
+}
+/* The open review says its own lines; the toast would sit on its title. */
+.mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-phone-say { display: none !important; }
+/* The review sheet on a phone: below the status bar, and its last button
+   ("Something else") clear of the mic and the pills under it. */
+.mc-phone-simple .mc-review-dialog,
+.mc-phone-simple .mc-review-dialog:not(.is-floating) {
+  top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  left: 12px; right: 12px; width: auto; max-width: none;
+  max-height: calc(100dvh - 12px - var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
+    - 116px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+/* Approve and Reject share a row, so the plan keeps its room above them. */
+.mc-phone-simple .mc-review-actions { gap: 10px; }
+.mc-phone-simple .mc-review-approve, .mc-phone-simple .mc-review-reject { min-width: 0; padding: 0 12px; }
+.mc-phone-simple .mc-review-ask-else { min-height: 52px; }
+/* The receipt lines wrap in full — never an ellipsis over what left the phone. */
+.mc-phone-simple .mc-review-why { display: block; overflow: visible; -webkit-line-clamp: none; }
+.mc-phone-simple .mc-review-left { display: block; white-space: normal; overflow-wrap: anywhere; }
+.mc-phone-simple .mc-review-left-what { overflow: visible; text-overflow: clip; }
+.mc-phone-simple .mc-review-left-bytes { white-space: nowrap; }
