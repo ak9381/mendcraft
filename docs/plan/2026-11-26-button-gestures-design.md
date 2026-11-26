@@ -48,6 +48,7 @@ Shapes: thumbs up (TU), thumbs down (TD), 1 finger (index up), peace (index+midd
 | L 3 fingers | Talk (mic) | |
 | Both thumbs up | More menu (AI monitor lives there; also voice "open AI monitor" and the palm highlight) | the hybrid story |
 | L thumbs up + R thumbs down (together, 2 s) | Hover to click on/off | accessibility |
+| R thumbs up + L thumbs down (together, 2 s) | Read aloud on/off (button below Talk; phones too) | spoken replies |
 | Both thumbs down | Simulate offline on/off | offline beat |
 | Both 1 finger | Point at a device | point-to-connect |
 | Both peace | Register / Re-register | opening |

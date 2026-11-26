@@ -107,7 +107,7 @@ import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
 import { createSpeaker } from '../ai/speaker';
-import { clearSavedVoice, isCloudVoice, loadAllowCloud, loadReadAloud, loadSavedVoice, resolveChangeVoice, saveVoice, speechPlatform, type ChangeVoiceIntent } from '../ai/speechVoices';
+import { clearSavedVoice, isCloudVoice, loadAllowCloud, loadReadAloud, loadSavedVoice, resolveChangeVoice, saveReadAloud, saveVoice, speechPlatform, type ChangeVoiceIntent } from '../ai/speechVoices';
 import { mountVoiceSheet } from './voiceSheet';
 import { mountEngineBar, type EngineBar } from './engineBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
@@ -3333,8 +3333,32 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const voiceSheet = mountVoiceSheet(root, {
     speaker, lang: voiceLang, storage: voiceStore, say,
     platform: speechPlatform(typeof navigator !== 'undefined' ? navigator.userAgent : '', typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0),
-    onReadAloud: (on) => { readAloud = on; if (!on) speaker.stop(); },
+    onReadAloud: (on) => { readAloud = on; if (!on) speaker.stop(); paintReadAloud(); },
   });
+  // "Read aloud: On / Off": a big button below Talk (laptop cluster; on the
+  // phone, above the Join pill) — the same setting as the Voice sheet's
+  // switch (one stored value). Off stops speech mid-sentence.
+  const readAloudBtn = typeof document !== 'undefined' ? document.createElement('button') : null;
+  if (readAloudBtn) {
+    readAloudBtn.type = 'button';
+    readAloudBtn.className = 'mc-btn mc-read-aloud';
+    readAloudBtn.dataset.cmd = 'readAloud';
+    root.append(readAloudBtn);
+  }
+  function paintReadAloud(): void {
+    if (!readAloudBtn) return;
+    readAloudBtn.textContent = readAloud ? 'Read aloud: On' : 'Read aloud: Off';
+    readAloudBtn.setAttribute('aria-pressed', String(readAloud));
+  }
+  function setReadAloud(on: boolean): void {
+    readAloud = on;
+    saveReadAloud(on, voiceStore);
+    if (!on) speaker.stop(); // stop mid-sentence, at once
+    paintReadAloud();
+    voiceSheet.refresh();
+    say(on ? 'Read aloud on: replies are read aloud.' : 'Read aloud off: replies stay as text.');
+  }
+  paintReadAloud();
   // Browsers fill their voice list late: repaint an open sheet when it lands.
   try { (globalThis as { speechSynthesis?: { addEventListener?(t: string, f: () => void): void } }).speechSynthesis?.addEventListener?.('voiceschanged', () => voiceSheet.refresh()); } catch { /* no speech here */ }
   /** "change voice" / "use the Ava voice" / "preview voice" / "default voice". */
@@ -3900,7 +3924,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
@@ -4230,7 +4254,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     undoBtn.dataset.cmd = 'undo';
     undoBtn.textContent = 'Undo';
     undoBtn.dataset.i18n = 'undo';
-    for (const node of [registerBtn, editBtn, toolsChip, talk, undoBtn, resetBtn]) {
+    const readBtn = root.querySelector('.mc-read-aloud');
+    for (const node of [registerBtn, editBtn, toolsChip, talk, readBtn, undoBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
   }

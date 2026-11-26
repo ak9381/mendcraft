@@ -127,13 +127,15 @@ describe('the picker', () => {
 });
 
 describe('opt-in and the Mac hint', () => {
-  it('online voices and reading aloud are off until she turns them on; both are remembered', () => {
+  it('online voices are off until she turns them on; reading aloud is ON by default; both are remembered', () => {
     const store = memStore();
     expect(loadAllowCloud(store)).toBe(false);
-    expect(loadReadAloud(store)).toBe(false);
-    saveAllowCloud(true, store); saveReadAloud(true, store);
+    expect(loadReadAloud(store)).toBe(true);
+    saveAllowCloud(true, store); saveReadAloud(false, store);
     expect(loadAllowCloud(store)).toBe(true);
     expect(store.getItem(CLOUD_VOICE_KEY)).toBe('1');
+    expect(loadReadAloud(store)).toBe(false); // her "off" is kept
+    saveReadAloud(true, store);
     expect(loadReadAloud(store)).toBe(true);
     saveAllowCloud(false, store);
     expect(loadAllowCloud(store)).toBe(false);
@@ -384,13 +386,13 @@ describe('the Voice sheet (More → Voice)', () => {
     expect(PHONE_GROUPS.flatMap((g) => g.cmds)).toContain('voice');
   });
 
-  it('"Read replies aloud" is off until she turns it on', () => {
+  it('"Read replies aloud" is on by default; turning it off is remembered', () => {
     const s = open(MAC_NICE, 'mac');
     const read = () => find(s.root, 'mc-voice-toggle').find((b) => /Read replies aloud/.test(b.textContent))!;
-    expect(read().attrs['aria-pressed']).toBe('false');
-    read().click();
     expect(read().attrs['aria-pressed']).toBe('true');
-    expect(loadReadAloud(s.store)).toBe(true);
+    read().click();
+    expect(read().attrs['aria-pressed']).toBe('false');
+    expect(loadReadAloud(s.store)).toBe(false);
   });
 });
 

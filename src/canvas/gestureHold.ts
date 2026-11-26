@@ -16,13 +16,23 @@ import { FIXED_SHAPES, type HandShape, type HandSide } from './handShape';
 
 export type FixedShape = 'thumbsUp' | 'thumbsDown' | 'one' | 'peace' | 'three';
 /** 'R:thumbsUp', 'L:peace', '2:three' (both hands). */
-/** The one MIXED two-hand gesture: left thumbs UP + right thumbs DOWN. */
+/** MIXED two-hand gestures: left thumbs UP + right thumbs DOWN, and its
+ *  mirror, right thumbs UP + left thumbs DOWN. */
 export const MIXED_KEY = '2:lUpRDown' as const;
-export type GestureKey = `${HandSide | '2'}:${FixedShape}` | typeof MIXED_KEY;
+export const MIXED_KEY_MIRROR = '2:rUpLDown' as const;
+export type MixedKey = typeof MIXED_KEY | typeof MIXED_KEY_MIRROR;
+export type GestureKey = `${HandSide | '2'}:${FixedShape}` | MixedKey;
 
-/** The hand shapes a key shows (for icons and names): the mixed key is two. */
+/** Each mixed key's shapes, LEFT hand first. */
+const MIXED_SHAPES: Record<MixedKey, { L: FixedShape; R: FixedShape }> = {
+  [MIXED_KEY]: { L: 'thumbsUp', R: 'thumbsDown' },
+  [MIXED_KEY_MIRROR]: { L: 'thumbsDown', R: 'thumbsUp' },
+};
+export const isMixedKey = (key: GestureKey): key is MixedKey => key in MIXED_SHAPES;
+
+/** The hand shapes a key shows (for icons and names), left hand first; a mixed key is two. */
 export function keyShapes(key: GestureKey): FixedShape[] {
-  if (key === MIXED_KEY) return ['thumbsUp', 'thumbsDown'];
+  if (isMixedKey(key)) return [MIXED_SHAPES[key].L, MIXED_SHAPES[key].R];
   return [key.split(':')[1] as FixedShape];
 }
 export function keySide(key: GestureKey): HandSide | '2' {
@@ -90,10 +100,12 @@ export function gestureKeyOf(hands: readonly Pick<GestureHand, 'shape' | 'hand'>
   if (fixed.length === 1) return `${fixed[0].hand}:${fixed[0].shape as FixedShape}`;
   const [a, b] = fixed;
   if (fixed.length === 2 && a.shape === b.shape && a.hand !== b.hand) return `2:${a.shape as FixedShape}`;
-  // The mixed pair: left thumbs UP + right thumbs DOWN (Hover to click).
+  // The mixed pairs: L up + R down (Hover to click), R up + L down (Read aloud).
   if (fixed.length === 2 && a.hand !== b.hand) {
     const l = a.hand === 'L' ? a : b, r = a.hand === 'L' ? b : a;
-    if (l.shape === 'thumbsUp' && r.shape === 'thumbsDown') return MIXED_KEY;
+    for (const k of Object.keys(MIXED_SHAPES) as MixedKey[]) {
+      if (MIXED_SHAPES[k].L === l.shape && MIXED_SHAPES[k].R === r.shape) return k;
+    }
   }
   return null; // two different shapes (or two "right" hands): never guess
 }
@@ -222,12 +234,12 @@ export function createPairGrace(bound: readonly GestureKey[], graceMs = PAIR_GRA
       }
     },
     defer(key, now) {
-      if (key === MIXED_KEY) return false;
+      if (isMixedKey(key)) return false;
       const side = keySide(key);
       if (side === '2') return false;
       const shape = keyShapes(key)[0];
       const pairs = has.has(`2:${shape}` as GestureKey)
-        || (has.has(MIXED_KEY) && ((side === 'L' && shape === 'thumbsUp') || (side === 'R' && shape === 'thumbsDown')));
+        || (Object.keys(MIXED_SHAPES) as MixedKey[]).some((k) => has.has(k) && MIXED_SHAPES[k][side] === shape);
       if (!pairs) return false;
       const other: HandSide = side === 'L' ? 'R' : 'L';
       return now - last[other].at < graceMs;
