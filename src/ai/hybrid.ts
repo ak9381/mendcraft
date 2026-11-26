@@ -599,6 +599,9 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
   // Gemini endpoint that carry this prompt are counted as they are issued.
   const watch = watchCloudFetch(sent.text, { onIssued: hooks.onSend, onUndelivered: hooks.onRetract });
   const nothingSent = (): boolean | undefined => (watch.active ? watch.delivered() === 0 : undefined);
+  // The watch outlives this function when the hedge's losing leg is still
+  // retrying: its requests are sends too. It stops when every leg is done.
+  let handedOver = false;
   let failKind: CloudFailKind | null = null;
   let failWhy = '';
   try {
@@ -612,6 +615,7 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
       shape === 'text' ? undefined : onChunk,
       // The primary's reason wins; a backup failure only fills a gap.
       (kind, detail) => { if (!failWhy) { failKind = kind; failWhy = `canvas plan: ${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`; } },
+      (handedOver = true, () => watch.stop()),
     );
     if (!got) return { ok: false, why: failWhy || 'no cloud model answered', kind: failKind, nothingSent: nothingSent() };
     const visible = fillVisible(typeof got.value === 'string' ? got.value : JSON.stringify(got.value));
@@ -621,7 +625,7 @@ async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) 
     noteError('canvas plan', err);
     return { ok: false, why: err instanceof Error ? err.message : String(err), kind: null, nothingSent: nothingSent() };
   } finally {
-    watch.stop();
+    if (!handedOver) watch.stop();
   }
 }
 
@@ -843,7 +847,16 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
       await queue.run(async (ctx) => {
         const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
         let model: TextGenModel | null = null;
-        ctx.signal?.addEventListener('abort', () => { session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request'); }, { once: true });
+        // Pushed aside: stop the session, and end this job (and its session
+        // poll) now rather than leave it waiting on a prompt that will never
+        // be answered.
+        const steppedAside = new Promise<never>((_, reject) => {
+          ctx.signal?.addEventListener('abort', () => {
+            session?.abort(); destroySdkSession(model); nanoTrace('warm-up: stepped aside for a request');
+            reject(new NanoQueueSkipped('stepped aside for a request'));
+          }, { once: true });
+        });
+        steppedAside.catch(() => undefined);
         model = onDeviceModelFor({
           createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
           promptOptions: { responseConstraint: WARM_CONSTRAINT },
@@ -867,7 +880,9 @@ export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: n
         });
         promptTimedOut.catch(() => undefined);
         try {
-          await Promise.race([model.generateContent('Reply with JSON only: {"ok":true}'), promptTimedOut]);
+          const reply = model.generateContent('Reply with JSON only: {"ok":true}');
+          reply.catch(() => undefined);
+          await Promise.race([reply, promptTimedOut, steppedAside]);
         } catch (e) {
           // Timed out (or failed): its session must not keep generating.
           session?.abort(); destroySdkSession(kept);
@@ -2169,20 +2184,33 @@ async function requestHedgedJson<T>(
   coerce: (raw: unknown) => T | null,
   onChunk?: (text: string) => void,
   onFail?: (kind: CloudFailKind, detail: string) => void,
+  /** Every leg that was started has finished — including the one that lost
+   *  the race and went on retrying. Called exactly once. */
+  onAllSettled?: () => void,
 ): Promise<{ value: T; source: Source; model: string; ms: number } | null> {
-  if (!primary) return null;
+  if (!primary) { onAllSettled?.(); return null; }
   const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
-  const raced = await raceHedged({
-    primary: () => requestJson(primary, prompt, budgetMs, label, coerce, onChunk, onFail)
-      .then((got) => got ?? null),
-    backup: backup
-      ? () => requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce, undefined, onFail)
-        .then((got) => got ?? null)
-      : undefined,
-    hedgeAfterMs: HEDGE_AFTER_MS,
-    primaryModel,
-    backupModel: HEDGE_CLOUD_MODEL,
-  });
+  // The race resolves on the first good answer, but the losing leg keeps
+  // going (its own retries and backoffs still send requests).
+  const legs: Promise<unknown>[] = [];
+  const leg = <R,>(p: Promise<R>): Promise<R> => { legs.push(p.then(() => undefined, () => undefined)); return p; };
+  let raced: Awaited<ReturnType<typeof raceHedged<{ value: T; source: Source }>>>;
+  try {
+    raced = await raceHedged({
+      primary: () => leg(requestJson(primary, prompt, budgetMs, label, coerce, onChunk, onFail))
+        .then((got) => got ?? null),
+      backup: backup
+        ? () => leg(requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce, undefined, onFail))
+          .then((got) => got ?? null)
+        : undefined,
+      hedgeAfterMs: HEDGE_AFTER_MS,
+      primaryModel,
+      backupModel: HEDGE_CLOUD_MODEL,
+    });
+  } finally {
+    // Once the race is over no new leg starts; wait for the ones that did.
+    if (onAllSettled) void Promise.all(legs).then(onAllSettled, onAllSettled);
+  }
   if (!raced) return null;
   console.info(`[mendcraft] ${label} hedge: ${raced.model} won in ${raced.ms} ms`);
   return { value: raced.value.value, source: raced.value.source, model: raced.model, ms: raced.ms };

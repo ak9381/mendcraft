@@ -19,7 +19,7 @@ export function isGeminiRequestUrl(url: string): boolean {
 }
 
 interface Watcher {
-  /** The start of the JSON-escaped prompt; '' matches any Gemini request. */
+  /** The whole JSON-escaped prompt this call sends. */
   key: string;
   onIssued: () => void;
   onUndelivered: () => void;
@@ -51,7 +51,11 @@ function install(): boolean {
     try {
       if (isGeminiRequestUrl(urlOf(input))) {
         const body = typeof init?.body === 'string' ? init.body : null;
-        mine = [...watchers].filter((w) => !w.key || body == null || body.includes(w.key));
+        // A body we can read is matched on the WHOLE prompt (board prompts
+        // share a long opening, so a prefix would book one turn's request to
+        // every turn in flight). One we cannot read can only be attributed
+        // when a single call is running; otherwise it is nobody's.
+        mine = body != null ? [...watchers].filter((w) => body.includes(w.key)) : watchers.size === 1 ? [...watchers] : [];
         for (const w of mine) { try { w.onIssued(); } catch { /* bookkeeping only */ } }
       }
     } catch { mine = []; }
@@ -79,10 +83,10 @@ function uninstall(): void {
   original = null;
 }
 
-/** The part of a prompt that identifies its request body (JSON-escaped, as
- *  the SDK serialises it). */
+/** What identifies a call's request body: its whole prompt, JSON-escaped as
+ *  the SDK serialises it. */
 export function promptKey(prompt: string): string {
-  return JSON.stringify(prompt.slice(0, 160)).slice(1, -1);
+  return JSON.stringify(prompt).slice(1, -1);
 }
 
 export interface CloudFetchWatch {
