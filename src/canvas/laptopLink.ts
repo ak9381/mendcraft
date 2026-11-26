@@ -19,7 +19,7 @@ import type { PairState } from '../relay/protocol';
 import type { GuestSession } from '../relay/session';
 
 /** The bit of the guest session iPhone sensing needs. */
-export type PhoneGuestSessionLike = Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onSensePoint' | 'onGimbalCue' | 'onGimbalMode' | 'hostSid'>>;
+export type PhoneGuestSessionLike = Pick<GuestSession, 'sendCommand'> & Partial<Pick<GuestSession, 'onSensePoint' | 'onGimbalCue' | 'onGimbalMode' | 'hostSid' | 'ping' | 'attention'>>;
 
 /** reconnecting: joined the room, but the laptop has not answered a ping. */
 export type LinkState = 'idle' | 'listening' | 'joining' | 'connected' | 'reconnecting' | 'error' | 'sim';

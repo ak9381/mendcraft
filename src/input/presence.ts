@@ -217,6 +217,8 @@ export function createPresenceTracker(
   const facingTracker = createFacingTracker(opts?.facing);
   const handGate = createHandGate(opts?.handGate);
   let lastHandGate: boolean | null = null;
+  /** The last hand frame saw a hand (the face's lost grace is longer then). */
+  let handsInView = false;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
   const binder = createHandBinder();
@@ -266,7 +268,9 @@ export function createPresenceTracker(
       lastHandGate = handGate.update(pose, now);
       emitFacing(facing);
     } else {
-      lastHandGate = handGate.update(null, now); // no face → null after the grace (the laptop hands: not facing)
+      // No face → its last state for the lost grace (longer while a hand is
+      // in view: her hand over her face), then null = not facing.
+      lastHandGate = handGate.update(null, now, handsInView ? LOST_TIMEOUT_MS : undefined);
       emitFacing(facingTracker.update({ yaw: 90, pitch: 90 }, now)); // no face → not facing
     }
   }
@@ -297,6 +301,7 @@ export function createPresenceTracker(
 
   function handleHands(result: HandLandmarkerResult): void {
     const now = ts;
+    handsInView = result.landmarks.length > 0;
     const rawHands = result.landmarks.map((landmarks, i) => ({
       landmarks,
       label: result.handedness?.[i]?.[0]?.categoryName,

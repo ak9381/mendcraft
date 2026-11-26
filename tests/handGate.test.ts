@@ -65,21 +65,38 @@ describe('createHandGate', () => {
     expect(feed(g, { yaw: 5, pitch: 40 }, 800, 3000)).toBe(true);
   });
 
-  it('losing the face (past the 250 ms grace) resets: the next appearance is unknown again', () => {
+  it('losing the face (past the 1.2 s lost grace) resets: the next appearance is unknown again', () => {
     const g = createHandGate();
     feed(g, { yaw: 60, pitch: 0 }, 0, 1000);
-    expect(g.update(null, 1200)).toBe(false); // one missed face frame: kept
-    expect(g.update(null, 1400)).toBeNull(); // two: gone
-    expect(g.update({ yaw: 60, pitch: 0 }, 1600)).toBeNull();
+    expect(g.update(null, 1200)).toBe(false); // lost, inside the grace: kept
+    expect(g.update(null, 2000)).toBe(false);
+    expect(g.update(null, 2400)).toBeNull(); // 1.4 s: gone
+    expect(g.update({ yaw: 60, pitch: 0 }, 2600)).toBeNull();
   });
 
-  it('one missed face frame (a hand passing in front of it) keeps "facing"; a longer loss does not', () => {
+  it('a hand in front of the face (≈400 ms, two face frames) keeps "facing"; only a long loss does not', () => {
     const g = createHandGate();
-    expect(HAND_GATE.lostGraceMs).toBe(250);
+    expect(HAND_GATE.lostGraceMs).toBe(1200);
     feed(g, { yaw: 0, pitch: 0 }, 0, 1000);
     expect(g.update(null, 1200)).toBe(true);
-    expect(g.update({ yaw: 0, pitch: 0 }, 1400)).toBe(true); // back: no 500 ms re-settle
-    expect(g.update(null, 1600)).toBe(true);
-    expect(g.update(null, 1800)).toBeNull();
+    expect(g.update(null, 1400)).toBe(true);
+    expect(g.update({ yaw: 0, pitch: 0 }, 1600)).toBe(true); // back: no 500 ms re-settle
+    expect(g.update(null, 1800)).toBe(true);
+    expect(g.update(null, 2600)).toBe(true);
+    expect(g.update(null, 2800)).toBeNull(); // 1.2 s with no face
+  });
+
+  it('while a hand is in view presence passes the longer grace (2.5 s)', () => {
+    const g = createHandGate();
+    feed(g, { yaw: 0, pitch: 0 }, 0, 1000);
+    expect(g.update(null, 3000, 2500)).toBe(true);
+    expect(g.update(null, 3600, 2500)).toBeNull();
+  });
+
+  it('a TURNED head still locks fast (150 ms) — the lost grace is only for a face that went missing', () => {
+    const g = createHandGate();
+    feed(g, { yaw: 0, pitch: 0 }, 0, 1000);
+    expect(g.update({ yaw: 50, pitch: 0 }, 1200)).toBe(true);
+    expect(g.update({ yaw: 50, pitch: 0 }, 1400)).toBe(false);
   });
 });

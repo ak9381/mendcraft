@@ -5,8 +5,9 @@
 // or pinch, so it never steals Talk / Tools / canvas pinches.
 
 export interface FacingBanner {
-  /** `null` hides the pill (no face / FaceLandmarker off). */
-  set(facing: boolean | null): void;
+  /** `null` hides the pill (no face / FaceLandmarker off). `text` replaces
+   *  the label ("Hands: always on", "Can't see your face"). */
+  set(facing: boolean | null, text?: string): void;
   destroy(): void;
   readonly element: HTMLElement;
 }
@@ -32,7 +33,7 @@ export function createFacingBanner(container: HTMLElement): FacingBanner {
 
   return {
     element: el,
-    set(facing) {
+    set(facing, text) {
       if (dismissed || facing === null) {
         el.hidden = true;
         return;
@@ -40,7 +41,7 @@ export function createFacingBanner(container: HTMLElement): FacingBanner {
       el.hidden = false;
       el.classList.toggle('is-facing', facing);
       el.classList.toggle('is-away', !facing);
-      label.textContent = facing ? 'Facing this device' : 'Not facing';
+      label.textContent = text ?? (facing ? 'Facing this device' : 'Not facing');
     },
     destroy() { el.remove(); },
   };

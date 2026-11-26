@@ -6,16 +6,20 @@
 // moves, a running drag is cancelled (not committed), and facing again only
 // unlocks after FACING_RESUME_MS.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHandPointer, FACING_RESUME_MS, REACH, type HandPointer } from '../../src/canvas/handPointer';
+import { createHandPointer, FACING_RESUME_MS, LOOK_HINT, REACH, type HandPointer } from '../../src/canvas/handPointer';
 import { createGestureControl, type GestureControl, type HighlightHook } from '../../src/canvas/gestureControl';
 import { LAPTOP_GESTURES } from '../../src/canvas/gestureBindings';
-import { createLaptopHandRouter, presenceHandFacing, type LaptopHandRouter } from '../../src/canvas/handFacing';
+import { CANT_SEE_FACE_LINE, CANT_SEE_PILL, createLaptopHandRouter, HANDS_ALWAYS_LINE, presenceHandFacing, type LaptopHandRouter } from '../../src/canvas/handFacing';
+import { createHandGate } from '../../src/input/faceLogic';
+import { readHandsAlways, writeHandsAlways } from '../../src/canvas/handFacing';
+import { matchToolVoice } from '../../src/canvas/routeLine';
+import { parsePing } from '../../src/relay/protocol';
 import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 import type { HoldState } from '../../src/canvas/gestureHold';
 import type { FaceFrame } from '../../src/input/presence';
 import { synthFist, synthHand } from '../helpers/synthHands';
 import { cursorsOf, fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
-import { mountPhoneHands, PHONE_AWAY_LINE, PHONE_FACING_LINE } from '../../src/canvas/phoneHands';
+import { mountPhoneHands, PHONE_AWAY_LINE, PHONE_BLIND_LINE, PHONE_FACING_LINE } from '../../src/canvas/phoneHands';
 import { createPhoneCamera } from '../../src/canvas/phoneCamera';
 import { phoneReach } from '../../src/canvas/handFeel';
 import type { PresenceFrame } from '../../src/input/presence';
@@ -300,6 +304,74 @@ describe('the one facing gate, through the real laptop hand path', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
+  it('a hand in front of her face (~400 ms, no face seen) never cancels a running drag — through the real createHandGate', () => {
+    const gate = createHandGate();
+    let seen = true;
+    const send = (hand: { x: number; y: number }[]) => {
+      t += FRAME;
+      const hg = gate.update(seen ? { yaw: 0, pitch: 0 } : null, t);
+      router.presence({ faces: seen ? [face(hg)] : [], handGate: hg }, t);
+      router.frame([selfie(hand)], t);
+    };
+    for (let i = 0; i < 40; i++) send(synthHand(250, 600, false, W, H)); // the face settles (500 ms) + the resume settle
+    for (let i = 0; i < 14; i++) send(synthFist(250, 600, W, H));
+    for (let k = 1; k <= 6; k++) send(synthFist(250 + k * 10, 600, W, H));
+    expect(board[0]?.phase).toBe('start');
+    const moves = board.filter((e) => e.phase === 'move').length;
+    seen = false; // her fist passes in front of her face
+    for (let k = 1; k <= 12; k++) send(synthFist(310 + k * 10, 600, W, H));
+    expect(hp.handsLocked!()).toBe(false);
+    expect(hp.isGrabActive()).toBe(true);
+    expect(board.some((e) => e.phase === 'cancel')).toBe(false);
+    expect(board.filter((e) => e.phase === 'move').length).toBeGreaterThan(moves);
+    seen = true;
+    for (let k = 1; k <= 4; k++) send(synthFist(430, 600, W, H));
+    expect(hp.isGrabActive()).toBe(true);
+  });
+
+  it('…but a TURNED head (face seen, past the limit) cancels it fast — through the real createHandGate', () => {
+    const gate = createHandGate();
+    let yaw = 0;
+    const send = (hand: { x: number; y: number }[]) => {
+      t += FRAME;
+      const hg = gate.update({ yaw, pitch: 0 }, t);
+      router.presence({ faces: [face(hg)], handGate: hg }, t);
+      router.frame([selfie(hand)], t);
+    };
+    for (let i = 0; i < 40; i++) send(synthHand(250, 600, false, W, H));
+    for (let i = 0; i < 14; i++) send(synthFist(250, 600, W, H));
+    for (let k = 1; k <= 6; k++) send(synthFist(250 + k * 10, 600, W, H));
+    expect(hp.isGrabActive()).toBe(true);
+    yaw = 60;
+    for (let k = 0; k < 6; k++) send(synthFist(310, 600, W, H)); // 200 ms
+    expect(board.at(-1)?.phase).toBe('cancel');
+    expect(hp.handsLocked!()).toBe(true);
+  });
+
+  it('no face for 2 s while her hands are in view: "I can\u2019t see your face" (said once, on the hint and the pill)', () => {
+    const say = vi.fn();
+    const r = createLaptopHandRouter({ pointer: hp, gestures, say });
+    for (let i = 0; i < 70; i++) { t += FRAME; r.presence({ faces: [], handGate: null }, t); r.frame([selfie(synthHand(500, 400, false, W, H))], t); }
+    expect(say).toHaveBeenCalledTimes(1);
+    expect(say).toHaveBeenCalledWith(CANT_SEE_FACE_LINE);
+    expect(r.view()).toEqual({ facing: false, text: CANT_SEE_PILL });
+    const hint = (doc as unknown as { __created: { className: string; textContent?: string; hidden: boolean }[] }).__created.find((e) => e.className === 'mc-hand-away-hint');
+    expect(hint?.textContent).toBe(CANT_SEE_FACE_LINE);
+    // Her face back: the plain hint again, and a later episode is said again.
+    for (let i = 0; i < 4; i++) { t += FRAME; r.presence({ faces: [face(true)], handGate: true }, t); r.frame([selfie(synthHand(500, 400, false, W, H))], t); }
+    expect(hint?.textContent).toBe(LOOK_HINT);
+  });
+
+  it('"hands always on": no face, the hands still act, and the pill says so', () => {
+    const r = createLaptopHandRouter({ pointer: hp, gestures, alwaysOn: () => true });
+    const send = (h: { x: number; y: number }[]) => { t += FRAME; r.presence({ faces: [] }, t); r.frame([selfie(h)], t); };
+    for (let i = 0; i < 8; i++) send(synthHand(500, 400, false, W, H));
+    for (let i = 0; i < 4; i++) send(synthFist(500, 400, W, H));
+    for (let i = 0; i < 4; i++) send(synthHand(500, 400, false, W, H));
+    expect(btn.click).toHaveBeenCalledTimes(1);
+    expect(r.view()).toEqual({ facing: true, text: HANDS_ALWAYS_LINE });
+  });
+
   it('taught gestures are not matched while not facing', () => {
     const teach = vi.fn();
     const r3 = createLaptopHandRouter({ pointer: hp, gestures, teach });
@@ -323,7 +395,7 @@ describe('the one facing gate on a phone (phoneHands + real pointer)', () => {
     delete (globalThis as Record<string, unknown>).innerHeight;
   });
 
-  async function rig() {
+  async function rig(o: { othersFacing?: () => boolean } = {}) {
     let clock = 0;
     const btn = fakeButton({ left: 150, top: 380, width: 90, height: 80 });
     const pdoc = fakeHandDoc([btn], []);
@@ -340,7 +412,9 @@ describe('the one facing gate on a phone (phoneHands + real pointer)', () => {
     const facings: (boolean | null)[] = [];
     const hands = mountPhoneHands(root as unknown as HTMLElement, {
       camera, pointer: hp, reach, storage: null, overlay: false, now: () => clock, onFacing: (v) => facings.push(v),
+      othersFacing: o.othersFacing, probeOthers: () => { probes++; },
     });
+    let probes = 0;
     await hands.setOn(true);
     // A camera-space hand whose palm lands on (x, y) through the phone reach box.
     const r = reach();
@@ -358,7 +432,7 @@ describe('the one facing gate on a phone (phoneHands + real pointer)', () => {
     const open = (faces: FaceFrame[], n: number) => { for (let i = 0; i < n; i++) sendFrame(shift(synthHand(500, 400, false, W, H), 195, 420), faces); };
     const fistF = (faces: FaceFrame[], n: number) => { for (let i = 0; i < n; i++) sendFrame(shift(synthFist(500, 400, W, H), 195, 420), faces); };
     const tap = (faces: FaceFrame[]) => { open(faces, 8); fistF(faces, 4); open(faces, 4); };
-    return { hp, btn, hands, tap, open, facings, cleanup: () => { hands.destroy(); hp.destroy(); } };
+    return { hp, btn, hands, tap, open, facings, probes: () => probes, cleanup: () => { hands.destroy(); hp.destroy(); } };
   }
 
   it('facing this phone: a fist tap clicks; no face seen: nothing, and its pill says "Not facing"', async () => {
@@ -386,5 +460,49 @@ describe('the one facing gate on a phone (phoneHands + real pointer)', () => {
     s.tap([face(true)]);
     expect(s.btn.click).toHaveBeenCalledTimes(1);
     s.cleanup();
+  });
+
+  it('a phone that can\u2019t see her (lying flat) falls back to allowed after 2 s — unless another device has her attention', async () => {
+    let others = false;
+    const s = await rig({ othersFacing: () => others });
+    s.open([], 80); // 2.6 s, no face: 2 s, then the resume settle
+    expect(s.probes()).toBeGreaterThan(0); // asked the laptop who she faces
+    expect(s.hp.handsLocked!()).toBe(false);
+    expect((s.hands.facingPill as unknown as GEl).textContent).toBe(PHONE_BLIND_LINE);
+    expect(s.hands.facing()).toBe(false); // never reported as facing
+    s.tap([]);
+    expect(s.btn.click).toHaveBeenCalledTimes(1);
+    others = true; // she looks at the laptop: this phone gates again at once
+    s.open([], 1);
+    expect(s.hp.handsLocked!()).toBe(true);
+    s.tap([]);
+    expect(s.btn.click).toHaveBeenCalledTimes(1);
+    s.cleanup();
+  });
+});
+
+describe('the override and the shared attention', () => {
+  it('voice: "hands always on" / "hands follow my face" (never the Hands on/off toggle)', () => {
+    expect(matchToolVoice('hands always on')).toBe('handsAlways');
+    expect(matchToolVoice('Keep my hands always on.')).toBe('handsAlways');
+    expect(matchToolVoice('hands follow my face')).toBe('handsFollowFace');
+    expect(matchToolVoice('hands on')).toBe('handsOn');
+  });
+
+  it('the override is stored per device', () => {
+    const m = new Map<string, string>();
+    const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); }, removeItem: (k: string) => { m.delete(k); } };
+    expect(readHandsAlways(st)).toBe(false);
+    writeHandsAlways(true, st);
+    expect(readHandsAlways(st)).toBe(true);
+    writeHandsAlways(false, st);
+    expect(readHandsAlways(st)).toBe(false);
+  });
+
+  it('the host pong carries who she faces (an allow-listed word, nothing else)', () => {
+    expect(parsePing(JSON.stringify({ n: 'abcd1', sid: 'sid12', f: 'laptop' }))?.f).toBe('laptop');
+    expect(parsePing(JSON.stringify({ n: 'abcd1', f: 'android' }))?.f).toBe('android');
+    expect(parsePing(JSON.stringify({ n: 'abcd1', f: 'someone' }))?.f).toBeUndefined();
+    expect(parsePing(JSON.stringify({ n: 'abcd1' }))).toEqual({ n: 'abcd1', sid: null });
   });
 });

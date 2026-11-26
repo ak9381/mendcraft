@@ -52,12 +52,14 @@ export type Route =
 export type RouteName = Route['name'];
 
 /** Tools > More buttons by voice (the menu hides them; speech never needs to open it). */
-export type ToolVoice = 'handsOn' | 'handsOff' | 'dwell' | 'register' | 'offline' | 'online' | 'swap';
+export type ToolVoice = 'handsOn' | 'handsOff' | 'dwell' | 'handsAlways' | 'handsFollowFace' | 'register' | 'offline' | 'online' | 'swap';
 export function matchToolVoice(text: string): ToolVoice | null {
   const t = text.trim().replace(/[.!?]+$/, '').toLowerCase();
   if (/^(turn )?hands on$|^turn on (the )?hands$|^start hands$/.test(t)) return 'handsOn';
   if (/^(turn )?hands off$|^turn off (the )?hands$|^stop hands$/.test(t)) return 'handsOff';
   if (/^(turn )?(on |off )?hover to click( on| off)?$/.test(t)) return 'dwell';
+  if (/^(keep )?(my )?hands always on$|^always on hands$|^hands on always$/.test(t)) return 'handsAlways';
+  if (/^(let )?(my )?hands follow my face$|^hands only when i look$/.test(t)) return 'handsFollowFace';
   if (/^(register|register again|re-?register)( me)?$/.test(t)) return 'register';
   if (/^(simulate offline|go offline)$/.test(t)) return 'offline';
   if (/^(go online|go back online|back online)$/.test(t)) return 'online';

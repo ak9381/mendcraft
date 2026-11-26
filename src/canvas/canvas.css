@@ -1734,7 +1734,9 @@
 .mc-phone-simple .mc-phone-facing:not([hidden]) {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; left: 16px;
   bottom: calc(var(--mc-phone-row2) + var(--mc-phone-pill-h) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  max-width: var(--mc-phone-side-w); box-sizing: border-box; padding: 4px 10px; border-radius: 999px;
+  /* Up to the Camera dot on the right (≈ 110 px + gaps): the longest
+     label, "Can't see you — hands on", fits on a 390 px phone. */
+  max-width: calc(100vw - 32px - 128px); box-sizing: border-box; padding: 4px 10px; border-radius: 999px;
   background: rgba(11, 15, 20, 0.82); color: #fff; font-size: 15px; font-weight: 650;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
 }

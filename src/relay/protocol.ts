@@ -298,13 +298,19 @@ export const PING_JSON_MAX = 160;
 export function isSessionId(x: unknown): x is string {
   return typeof x === 'string' && /^[A-Za-z0-9_-]{4,40}$/.test(x);
 }
-/** Parse a ping/pong payload; null when malformed. */
-export function parsePing(text: unknown): { n: string; sid: string | null } | null {
+/** Which device she is facing (rides the host's pong; no user content). */
+export type AttentionWho = 'laptop' | 'ios' | 'android' | 'none';
+const ATTENTION: readonly string[] = ['laptop', 'ios', 'android', 'none'];
+/** Parse a ping/pong payload; null when malformed. A pong may carry `f`:
+ *  the device she is facing, as the host knows it. */
+export function parsePing(text: unknown): { n: string; sid: string | null; f?: AttentionWho } | null {
   if (typeof text !== 'string' || text.length > PING_JSON_MAX) return null;
   try {
-    const o = JSON.parse(text) as { n?: unknown; sid?: unknown };
+    const o = JSON.parse(text) as { n?: unknown; sid?: unknown; f?: unknown };
     if (!o || typeof o !== 'object' || !isSessionId(o.n)) return null;
-    return { n: o.n, sid: isSessionId(o.sid) ? o.sid : null };
+    const out: { n: string; sid: string | null; f?: AttentionWho } = { n: o.n, sid: isSessionId(o.sid) ? o.sid : null };
+    if (typeof o.f === 'string' && ATTENTION.includes(o.f)) out.f = o.f as AttentionWho;
+    return out;
   } catch { return null; }
 }
 /** Max length of an 'aiEvent' JSON blob — one short activity line. */

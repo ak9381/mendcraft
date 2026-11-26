@@ -196,7 +196,7 @@ async function main() {
         const pill = document.querySelector('.mc-phone-facing');
         const cam = document.querySelector('.mc-cam-on');
         if (!pill) return null;
-        pill.hidden = false; pill.textContent = 'Not facing'; pill.classList.add('is-away');
+        pill.hidden = false; pill.textContent = 'Can’t see you — hands on'; pill.classList.add('is-away'); // the longest label
         if (cam) { cam.hidden = false; cam.dataset.state = 'live'; }
         return true;
       });

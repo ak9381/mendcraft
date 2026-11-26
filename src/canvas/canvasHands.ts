@@ -143,6 +143,8 @@ export interface MountCanvasHandsOptions {
   /** The glass-hand overlay's anchors: each present hand's cursor (client
    *  px), so the drawn palm sits on it (see HandOverlayOptions.anchors). */
   handAnchors?: (hands: readonly (readonly Pt[])[]) => ({ x: number; y: number } | null)[];
+  /** The Facing pill's state + text (handFacing router view). */
+  facingView?: () => { facing: boolean | null; text?: string };
   /** Override FaceLandmarker. Laptop canvas defaults to on (LAPTOP_DETECT_FACES). */
   detectFaces?: boolean;
 }
@@ -215,11 +217,13 @@ export async function mountCanvasHands(
       () => {},
       (presenceFrame) => {
         faces?.draw(presenceFrame.faces, presenceFrame.hands.map((h) => h.points));
+        opts.onPresence?.(presenceFrame);
         // The pill shows the canvas HAND GATE — the same strict signal the
         // hands obey (handFacing.presenceHandFacing): no face, a stranger or
         // an unsettled face reads "Not facing", and the hands are locked.
-        facing?.set(presenceHandFacing(presenceFrame));
-        opts.onPresence?.(presenceFrame);
+        // The app's view (after onPresence) adds the honest overrides.
+        const view = opts.facingView?.() ?? { facing: presenceHandFacing(presenceFrame) };
+        facing?.set(view.facing, view.text);
         adapter.update({
           hands: presenceFrame.hands.map((h) => {
             const pts = h.points.slice();

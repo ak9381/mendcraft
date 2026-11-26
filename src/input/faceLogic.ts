@@ -238,10 +238,13 @@ export const HAND_GATE = {
   leaveDebounceMs: 150,
   /** A (re)appearing face reports unknown (null) until seen this long. */
   settleMs: 500,
-  /** The face may go missing this long (one face frame: a hand passing in
-   *  front of it) and keep its last state; past it the gate reports null
-   *  — which the laptop hands treat as NOT facing. */
-  lostGraceMs: 250,
+  /** A face that goes MISSING (not turned: lost — a hand passing in front
+   *  of it, a fist raised to the chin) keeps its last state this long; past
+   *  it the gate reports null, which the hands treat as NOT facing. While a
+   *  hand is in view presence passes a longer grace (its LOST_TIMEOUT_MS):
+   *  her own hand over her face must never cancel a drag. A TURNED head
+   *  (face seen, past the limits) still locks after leaveDebounceMs. */
+  lostGraceMs: 1200,
 } as const;
 
 export interface HandGateConfig {
@@ -278,8 +281,9 @@ export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g: HandGateConfig
 export interface HandGate {
   /** Feed the focus face's pose (null = no face). Returns true (facing),
    *  false (an actually turned head, debounced) or null (unknown: no face
-   *  for longer than lostGraceMs, or a face seen for less than settleMs). */
-  update(pose: HeadPose | null, now: number): boolean | null;
+   *  for longer than the lost grace, or a face seen for less than settleMs).
+   *  `lostGraceMs` overrides the config's grace for this call. */
+  update(pose: HeadPose | null, now: number, lostGraceMs?: number): boolean | null;
   reset(): void;
 }
 
@@ -293,10 +297,10 @@ export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
   const grace = g.lostGraceMs ?? 0;
   const leaveMs = g.leaveDebounceMs ?? g.debounceMs;
   return {
-    update(pose, now) {
+    update(pose, now, graceOverride) {
       if (!pose) {
-        // A face missing for one frame (a hand in front of it) keeps its state.
-        if (seenSince !== null && now - lastSeen < grace) return last;
+        // A face that went missing (a hand in front of it) keeps its state.
+        if (seenSince !== null && now - lastSeen < (graceOverride ?? grace)) return last;
         seenSince = null; pending = null; ok = true; last = null; return null;
       }
       lastSeen = now;

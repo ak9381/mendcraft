@@ -432,6 +432,8 @@ const SLOT_LOST_MS = 400;
  *  (on top of the face gate's own pose debounce) — turning the head back to
  *  the screen can't fire something mid-swing. */
 export const FACING_RESUME_MS = 300;
+/** The locked-hands hint by the cursor. */
+export const LOOK_HINT = 'Look at the screen to use hands';
 /** Wrist + finger MCPs: the landmarks the camera-edge test watches. */
 const PALM_IDS = [0, 5, 9, 13, 17] as const;
 
@@ -513,6 +515,9 @@ export interface HandPointer {
   setFacing?(facing: boolean | null, now: number): void;
   /** True while the hands are locked for "not facing". */
   handsLocked?(): boolean;
+  /** The locked-hands hint text (null = the default "Look at the screen to
+   *  use hands"; the router swaps in "I can't see your face…"). */
+  setLockHint?(text: string | null): void;
   /** Each tracked hand's palm mapped to the screen (unsmoothed) and its
    *  drawn cursor point (client px) — the glass-hand overlay anchors to it. */
   cursors?(): { palm: P; cursor: P }[];
@@ -1378,6 +1383,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   // "Look at the screen to use hands": created the first time it's needed.
   let hint: HTMLElement | null = null;
   let hintAt: P | null = null;
+  let lockHint: string | null = null;
   function evalFacing(t: number): void {
     const next = away || (locked && t - okSince < FACING_RESUME_MS);
     if (next && !locked) {
@@ -1405,10 +1411,11 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       hint = doc.createElement('div');
       hint.className = 'mc-hand-away-hint';
       hint.setAttribute('aria-hidden', 'true');
-      hint.textContent = 'Look at the screen to use hands';
       doc.body?.append?.(hint);
     }
     if (!hint) return;
+    const want = lockHint ?? LOOK_HINT;
+    if (hint.textContent !== want) hint.textContent = want;
     hint.hidden = !show;
     if (show) {
       // Frozen where the cursor was when the hands locked: nothing moves.
@@ -1708,6 +1715,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       paintHint();
     },
     handsLocked: () => locked,
+    setLockHint(text: string | null) { lockHint = text; paintHint(); },
     cursors: () => [0, 1].filter((i) => active[i]).map((i) => ({ palm: slots[i].mappedPalm(), cursor: slots[i].cursorPoint() })),
     directHit: (near?: P) => {
       const live = [0, 1].filter((i) => active[i]);
