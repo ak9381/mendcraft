@@ -199,7 +199,7 @@ export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPh
     const subs = phones.map((p) => { const t = sub(p); return t ? ` <span class="mc-paired-phone">${esc(p.label)}:${t}</span>` : ''; }).join('');
     // Disconnect leads the row: Continue (the last thing pressed) sat at its
     // END, so a second press or a repeated fist must not land on Disconnect.
-    return `<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button><span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'} connected</span>${sim}${subs}`;
+    return `<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button><span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'}<span class="mc-paired-connected"> connected</span></span>${sim}${subs}`;
   }
   const chips = phones.length
     ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}${sub(p)}</span>`).join('')

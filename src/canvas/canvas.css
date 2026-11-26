@@ -319,6 +319,9 @@
   /* Above the full-screen review dialog (z-index 50, see .mc-review-dialog) so Save/Tools/etc.
      stay reachable while a review (including the Gemini follow-up one) is open. */
   z-index: 51; }
+/* Laptop: the bar (open Tools, a wrapped status line) ends short of the
+   right-hand hand cluster (canvasApp syncClusterInset), never over it. */
+@media (min-width: 601px) { .mc-canvas:not(.mc-phone-simple):has(.mc-hand-cluster) .mc-bar { right: max(16px, var(--mc-cluster-in, 16px)); } }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
 /* Open Tools = the say box first, then Show everything, New board, Save, a
@@ -1653,14 +1656,16 @@
 .mc-engine-bar .mc-paired-row.is-docked {
   position: static; transform: none; left: auto; bottom: auto; z-index: auto;
   flex: 0 1 auto; min-width: 0; max-width: 340px;
-  display: grid; grid-template-columns: auto auto auto auto; grid-auto-flow: row;
+  display: grid; grid-template-columns: auto minmax(0, max-content) auto max-content; grid-auto-flow: row;
   align-items: center; column-gap: 6px; row-gap: 0;
   padding: 0 0 0 12px; border: 0; border-left: 1px solid var(--border); border-radius: 0;
   background: transparent; box-shadow: none; font-size: 14px; line-height: 1.25;
 }
 .mc-engine-bar .mc-paired-row.is-docked[hidden] { display: none; }
-.mc-paired-row.is-docked .mc-paired-count { white-space: nowrap; font-weight: 600; }
+.mc-paired-row.is-docked .mc-paired-count { white-space: nowrap; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mc-paired-row.is-docked .mc-chip { justify-self: start; }
+/* In the bar "✓ 2 phones" is enough: the cards beside it keep their room. */
+.mc-paired-row.is-docked .mc-paired-connected { display: none; }
 .mc-paired-row.is-docked .mc-paired-phone {
   grid-row: 2; grid-column: 1 / 4; width: 0; min-width: 100%; /* never widens the row */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-dim);
@@ -1670,10 +1675,19 @@
 /* Room for it: the bar may grow up to the corners (zoom HUD left, camera
    preview right), and the "· on this device / cloud" captions give way. */
 @media (min-width: 1241px) {
-  .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) { max-width: max(760px, calc(100vw - 640px)); }
+  /* Centred by margins, not left 50 % + translate: a left: 50 % box can only
+     shrink-to-fit into half the screen, which clipped the phones section. */
+  .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) {
+    left: 0; right: 0; margin-inline: auto; width: fit-content; transform: none;
+    max-width: max(760px, calc(100vw - 640px));
+  }
 }
 .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-where { display: none; }
-.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-card { width: 168px; flex-basis: 150px; }
+/* The cards never squeeze their state ("Nano  Working", "Gemini  Unavailable"):
+   they keep their own width and the phones section gives way (ellipsis). */
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-card { flex: 0 0 auto; width: auto; min-width: max-content; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-state { white-space: nowrap; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-link { width: 24px; }
 
 /* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
    It is its own flex row under .mc-frame-body (which shrinks to make room),

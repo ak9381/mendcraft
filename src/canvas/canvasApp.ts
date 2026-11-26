@@ -1633,12 +1633,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const box = row.getBoundingClientRect();
       const over = box.bottom - limit;
       if (over <= 0) continue;
-      // No higher than just under the board's title bar. A board that runs
-      // under the bottom chrome (taller than the screen even at its lowest
-      // zoom) keeps its chip row PINNED just above that chrome: sticky, the
-      // tiles scroll under it, so the next steps never need a scroll.
+      // No higher than just under the board's title bar. The focused room
+      // board that runs under the bottom chrome (taller than the screen even
+      // at its lowest zoom) keeps its chip row PINNED just above that chrome:
+      // sticky, the tiles scroll under it, so the next steps never need a
+      // scroll. Any other board only uses the empty space under its content
+      // (never onto a tile).
       const room = box.top - (frameEl.getBoundingClientRect().top + 64 * z);
-      const lift = Math.min(over, Math.max(0, room));
+      const content = frameEl.querySelector<HTMLElement>('.mc-surface')?.getBoundingClientRect();
+      const free = tallRoomEl() === frameEl ? room : content && content.height > 0 ? box.top - content.bottom - 4 : room;
+      const lift = Math.min(over, Math.max(0, room), Math.max(0, free));
       if (lift <= 0) continue;
       row.style.transform = `translateY(${-(lift / z).toFixed(1)}px)`;
       row.classList.add('is-lifted');
@@ -1674,7 +1678,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const want = Math.min(Math.max(top, Math.min(lo, top0)), Math.max(hi, top0));
     return want === top ? next : { ...next, y: camera.y + (top0 - want) / camera.z };
   }
+  /** The top bar stops short of the hand cluster (--mc-cluster-in), so an
+   *  open Tools bar or a wrapped status line never covers Register / Tools. */
+  let clusterIn = -1;
+  function syncClusterInset(): void {
+    if (phoneShell) return;
+    const v = Math.round(clusterInset());
+    if (v === clusterIn) return;
+    clusterIn = v;
+    root.style.setProperty('--mc-cluster-in', `${v}px`);
+  }
   function applyCamera(): void {
+    syncClusterInset();
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
     root.style.setProperty('--mc-z', camera.z.toFixed(3)); // hand targets keep their on-screen size in overview
@@ -4317,7 +4332,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     // Nothing scrolls: move the canvas (scroll down = see what is below).
     const amount = page ? vp().h * 0.85 : 120;
+    const was = camera.y;
     camera = clampRoomPan(panBy(camera, 0, -sign * amount));
+    // A tall room board already at that end: say so (nothing moved).
+    if (Math.abs(camera.y - was) < 0.5 && tallRoomEl()) { say(dir === 'down' ? "That's the end of the board." : "That's the top of the board."); return; }
     applyCamera(); persist();
   }
   function run(text: string): boolean {
@@ -4666,7 +4684,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
   // A focused board is re-fitted at its SHOWN size (a room board is widened
   // or narrowed for the window), not its stored one.
-  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (!pairedRow.hidden) dockPairedRow(); if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } syncClusterInset(); if (!pairedRow.hidden) dockPairedRow(); if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
@@ -4848,6 +4866,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     for (const node of [registerBtn, toolsChip, talk, readBtn, undoBtn, editBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => syncClusterInset()).observe(cluster);
   }
 
   function applyEditLock(): void {

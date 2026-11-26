@@ -128,7 +128,7 @@ describe('flow lifecycle', () => {
     pf.abandon();
     expect(pf.phase()).toBe('live');
     expect(pf.phones()).toHaveLength(1);
-    expect(pairedRowHtml(pf.phones(), pf.phase())).toContain('1 phone connected');
+    expect(pairedRowHtml(pf.phones(), pf.phase()).replace(/<[^>]+>/g, '')).toContain('1 phone connected');
     pf.cancel();
     expect(pf.phase()).toBe('idle');
   });
@@ -173,7 +173,7 @@ describe('live phones survive reopening', () => {
     pf.abandon();
     pf.addPhone({ id: 'android', label: 'Nothing phone' });
     expect(pf.phase()).toBe('live');
-    expect(pairedRowHtml(pf.phones(), pf.phase())).toContain('2 phones connected');
+    expect(pairedRowHtml(pf.phones(), pf.phase()).replace(/<[^>]+>/g, '')).toContain('2 phones connected');
   });
 
   it('losing every real phone while live resets the flow', async () => {
