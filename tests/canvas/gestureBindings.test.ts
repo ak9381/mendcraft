@@ -25,7 +25,7 @@ describe('the fixed gesture table (design 26 Nov)', () => {
       'R:thumbsUp': 'Approve', 'R:thumbsDown': 'Reject',
       'R:one': 'Next step 1', 'R:peace': 'Next step 2', 'R:three': 'Next step 3',
       'L:thumbsUp': 'Save', 'L:thumbsDown': 'Undo', 'L:one': 'New board', 'L:peace': 'Tools', 'L:three': 'Talk',
-      '2:thumbsUp': 'AI monitor', '2:thumbsDown': 'Simulate offline', '2:one': 'Point at a device',
+      '2:thumbsUp': 'More', '2:lUpRDown': 'Hover to click', '2:thumbsDown': 'Simulate offline', '2:one': 'Point at a device',
       '2:peace': 'Register', '2:three': 'Edit',
     });
   });

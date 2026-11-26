@@ -1560,8 +1560,9 @@
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
 
-/* ---- Button gestures (gestureControl.ts): amber 24px hand badges on the
-   bound buttons (top-right, -8px), only while Hands is on; the bound button fills while a
+/* ---- Button gestures (gestureControl.ts): amber 24px hand badges centred
+   on the bound button's TOP-LEFT corner (the side tag above-left of it, so
+   neither covers the label), only while Hands is on; the bound button fills while a
    2 s hold runs; a small HUD names what the held shape will press. */
 .mc-gesture-layer { position: fixed; inset: 0; pointer-events: none; z-index: 80; }
 .mc-gesture-layer[hidden], .mc-gesture-badge[hidden], .mc-gesture-hud[hidden] { display: none; }
@@ -1569,10 +1570,14 @@
   display: grid; place-items: center; background: #F2C14E; border: 1.5px solid #9A5F1C; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
   animation: mc-badge-in 400ms ease-out both; }
 .mc-gesture-badge .mc-gi { display: block; width: 18px; height: 18px; }
-/* Which hand (L, R, L+R): a small dark tab on the circle's lower-left edge. */
-.mc-gesture-side { position: absolute; left: -8px; bottom: -7px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 3px;
+/* Which hand (L, R, L+R): a small dark tab on the circle's UPPER-left edge,
+   above the button's top edge — never over the label or the next button. */
+.mc-gesture-side { position: absolute; left: -10px; top: -9px; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 3px;
   border-radius: 8px; background: #2B2B2B; color: #F2C14E; font: 700 11px/16px system-ui, sans-serif; text-align: center; white-space: nowrap; }
 .mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
+/* The mixed two-hand gesture (L thumbs up + R thumbs down): both hands in a pill. */
+.mc-gesture-badge.is-pair { width: 40px; border-radius: 12px; display: flex; justify-content: center; gap: 0; }
+.mc-gesture-badge.is-pair .mc-gi { width: 17px; height: 17px; }
 /* Holding its gesture: the badge darkens (the bound button fills, below). */
 .mc-gesture-badge.is-holding { background: #9A5F1C; box-shadow: 0 0 0 3px #F2C14E; }
 /* Appears once (scale 0.9 → 1 + fade, ≤ 600 ms), then stays still. The
@@ -1661,3 +1666,12 @@
 .mc-scroll-badge { position: absolute; left: 0; top: 0; translate: -100% 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px;
   border-radius: 999px; background: #FFC83D; color: #2B2B2B; font: 700 12px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .mc-level-readout.is-pulse { animation: none; } }
+
+/* An open menu (More, the phone menu sheet) is never covered by the camera
+   preview or the Facing pill: the bar lifts above them, and they step aside
+   (hidden) while the menu is open. */
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-bar { z-index: 72; }
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-face-preview,
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-facing-banner,
+.mc-canvas:has(.mc-menu-sheet:not([hidden])) .mc-face-preview,
+.mc-canvas:has(.mc-menu-sheet:not([hidden])) .mc-facing-banner { visibility: hidden; }

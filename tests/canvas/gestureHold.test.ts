@@ -1,6 +1,6 @@
 // The 2-second hold engine for the fixed button gestures (fake clock).
 import { describe, expect, it } from 'vitest';
-import { createHoldEngine, gestureKeyOf, GESTURE_HOLD, type GestureHand } from '../../src/canvas/gestureHold';
+import { createHoldEngine, gestureKeyOf, GESTURE_HOLD, MIXED_KEY, type GestureHand } from '../../src/canvas/gestureHold';
 import type { HandShape, HandSide } from '../../src/canvas/handShape';
 
 const hand = (shape: HandShape, side: HandSide, x = side === 'R' ? 0.7 : 0.3, y = 0.6): GestureHand => ({
@@ -172,5 +172,26 @@ describe('createHoldEngine', () => {
     // The array order flips every frame; the hands themselves never move.
     const { fired } = hold(e, (t) => (Math.round(t / 33) % 2 ? [L, R] : [R, L]), 0, 2100);
     expect(fired).toEqual(['2:thumbsUp']);
+  });
+
+  it('mixed L thumbs up + R thumbs down is its own key; other mixes stay ambiguous', () => {
+    expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('thumbsDown', 'R')])).toBe(MIXED_KEY);
+    expect(gestureKeyOf([hand('thumbsDown', 'L'), hand('thumbsUp', 'R')])).toBeNull();
+    expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('peace', 'R')])).toBeNull();
+    expect(hold(createHoldEngine(), () => [hand('thumbsUp', 'L'), hand('thumbsDown', 'R')], 0, 2100).fired).toEqual([MIXED_KEY]);
+  });
+
+  it('a deferred hold waits full (no fire) until the defer lifts', () => {
+    const e = createHoldEngine();
+    let deferring = true;
+    const fired: string[] = [];
+    for (let t = 0; t <= 3000; t += 33) {
+      if (t > 2500) deferring = false;
+      const s = e.update({ hands: [hand('thumbsUp', 'L')], facing: true, now: t, defer: () => deferring });
+      if (s.fired) fired.push(`${s.fired}@${t}`);
+      if (t > 2100 && t < 2500) expect(s.progress).toBe(1);
+    }
+    expect(fired).toHaveLength(1);
+    expect(Number(fired[0].split('@')[1])).toBeGreaterThan(2500);
   });
 });
