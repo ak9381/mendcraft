@@ -13,6 +13,12 @@ class MendcraftViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(MendcraftLanPlugin())
         bridge?.registerPluginInstance(MendcraftGimbalPlugin())
         bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
+        // Canvas colour (#F7F5F0) behind the web view: the status-bar band and
+        // the home-indicator strip are never the black Dark Mode default.
+        let canvas = UIColor(red: 0xF7 / 255.0, green: 0xF5 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
+        view.backgroundColor = canvas
+        webView?.backgroundColor = canvas
+        webView?.scrollView.backgroundColor = canvas
     }
 
     // The canvas is light whatever the system appearance: dark clock and
