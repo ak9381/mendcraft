@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { scriptedEngine, type SurfaceEngine } from '../../src/canvas/aiTurn';
-import { buildOpenEndedPrompt, CHAT_CANT_ACT, CHAT_CANT_ACT_GENERIC, guardSafePrefix, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
+import { buildOpenEndedPrompt, CHAT_CANT_ACT, CHAT_CANT_ACT_GENERIC, CHAT_CANT_ACT_OUTSIDE, guardSafePrefix, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
 
 describe('openEndedAsk', () => {
   it('answers from Nano when Nano is here and well', async () => {
@@ -43,6 +43,12 @@ describe('openEndedAsk', () => {
   it('tells the model it can only chat', () => {
     expect(buildOpenEndedPrompt('add a study')).toMatch(/only chat.*never change boards, devices or plans/);
   });
+
+  it('tells the model it never calls, messages, orders, books or reminds', () => {
+    const p = buildOpenEndedPrompt('call my daughter');
+    for (const w of ['call', 'message', 'order', 'book', 'remind']) expect(p).toContain(w);
+    expect(p).toMatch(/never say you will/);
+  });
 });
 
 describe('promise guard: chat never claims an action', () => {
@@ -67,6 +73,9 @@ describe('promise guard: chat never claims an action', () => {
     'I’d be glad to make it bigger.',
     'One moment while I add it.',
     'I’ll get that sorted.',
+    // Was a pass as a figure of speech, but chat has no kettle: it is still a
+    // claim of an action the app can't take, so it is replaced (honesty wins).
+    'I’ll put the kettle on and we can talk.',
   ];
   for (const p of promises) {
     it(`replaces: ${p}`, () => {
@@ -87,7 +96,6 @@ describe('promise guard: chat never claims an action', () => {
     'I’m turning 80 next year!',
     'I have turned the page on that.',
     'Let me make a suggestion: rest.',
-    'I’ll put the kettle on and we can talk.',
     'I can turn this around for you.',
   ];
   for (const c of chat) {
@@ -110,8 +118,11 @@ describe('guardSafePrefix: a promise is never partly shown or spoken', () => {
     expect(guardSafePrefix('Hi there, nice to see you. How')).toBe('Hi there, nice to see you.');
   });
   it('holds a clause that could turn into a promise until its sentence ends', () => {
-    expect(guardSafePrefix('Okay, I’ll add, ')).toBe('Okay,');
-    expect(guardSafePrefix('Okay, I’ll add, um, the study, ')).toBe('Okay,'); // still held: its sentence hasn't ended
+    // "Okay," opens a reply that may agree to act: held with its sentence;
+    // "I’ll add" is a promise on its own now (any action verb after "I’ll").
+    expect(guardSafePrefix('Okay, I’ll ex')).toBe('');
+    expect(guardSafePrefix('Okay, I’ll add, ')).toBe(null);
+    expect(guardSafePrefix('Okay, I’ll explain, um, the study, ')).toBe(''); // still held: its sentence hasn't ended
     expect(guardSafePrefix('Sure, I’ll be happy to chat. What')).toBe('Sure, I’ll be happy to chat.');
   });
   it('stops at the first sign of a promise, streamed chunk by chunk', () => {
@@ -124,5 +135,98 @@ describe('guardSafePrefix: a promise is never partly shown or spoken', () => {
     }
     expect(shown.every((t) => !/can do|add/i.test(t))).toBe(true);
     expect(guardSafePrefix(reply)).toBe(null);
+  });
+});
+
+describe('inverted guard: any first-person action claim is a promise unless it is conversation', () => {
+  const caught = [
+    'Yes, I can. I will call your daughter right away.', // the live Nano reply
+    'I will call your daughter.',
+    "I'll call her now.",
+    'I’ll text your son for you.',
+    'I will send her a message.',
+    "I'll email the doctor.",
+    "I'll order some groceries for you.",
+    'I’ll book a table for two.',
+    "I'll remind you at five.",
+    'I will set an alarm for seven.',
+    "I'll schedule the appointment.",
+    "I'll buy more milk.",
+    "I'll play some jazz.",
+    "I'm going to ring her.",
+    'Let me call her for you.',
+    'Let me check on that for you.',
+    "I'd be happy to!",
+    "I'd be happy to call her.",
+    "I'm calling your daughter now.",
+    "I'm sending it right away.",
+    'Calling your daughter right away.',
+    'Sure — ordering it now.',
+    'Right away!',
+    'Yes, I can.',
+    'Sure, I can do that for you.',
+    'Sure, I can call her.',
+    'Of course, I will.',
+    'On it!',
+    'Consider it done.',
+    'I can call your daughter.',
+    "I'll remember that.",
+    "I'll keep that in mind.",
+    "I'll be sure to remind her.",
+    "I'll go ahead and dial her number.",
+    'I’ll just open the door.',
+    "I'll see what I can do.",
+    "I'll help you call her.",
+  ];
+  for (const c of caught) {
+    it(`replaces: ${c}`, () => expect(promisesAction(c)).toBe(true));
+  }
+  const passes = [
+    "I'll be happy to explain.",
+    "I'll explain how the plan works.",
+    'Let me think about that.',
+    'Let me explain.',
+    'Let me know what you need.',
+    'Let me see… a study is a quiet room.',
+    "I'd suggest resting a bit.",
+    "I'll tell you a story.",
+    "I'd recommend a warm drink.",
+    "I'll say it again: rest.",
+    'I can help with that question.',
+    "I'm happy to chat.",
+    "I'm thinking of you right now.",
+    'You should rest right away if you feel dizzy.',
+    'Nothing new for you today.',
+    'Good morning! How are you now?',
+    "I won't call anyone — I can only chat.",
+    'I will not call her; I can only chat.',
+    "I'd love to hear more.",
+    "I'll keep it short: rest.",
+    "I'll give you a tip: drink water.",
+    'Sure, I can explain that.',
+    'Yes, I can tell you about the board.',
+    "I'm doing well right now, thanks.",
+    'Let me start with the basics.',
+  ];
+  for (const c of passes) {
+    it(`passes: ${c}`, () => expect(promisesAction(c)).toBe(false));
+  }
+  it('a non-app action gets the honest "boards and devices" line', () => {
+    expect(CHAT_CANT_ACT_OUTSIDE).toBe('I can’t do that — I can only change things here on your boards and devices.');
+    expect(promiseGuard('Yes, I can. I will call your daughter right away.', 'can you call my daughter').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
+    expect(promiseGuard('I’ll order milk.', 'order some milk').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
+  });
+  it('streaming: the live Nano reply never shows a word of its promise', () => {
+    const reply = 'Yes, I can. I will call your daughter right away.';
+    for (let n = 1; n <= reply.length; n++) {
+      const safe = guardSafePrefix(reply.slice(0, n));
+      if (safe === null) { expect(n).toBeLessThanOrEqual(reply.indexOf('.') + 1); return; }
+      expect(safe).toBe('');
+    }
+    throw new Error('never caught');
+  });
+  it('streaming: a half-written word is not judged ("I will b…" → "be happy")', () => {
+    expect(guardSafePrefix('Hi. I will b')).toBe('Hi.');
+    expect(guardSafePrefix('Hi. I will be happy to explain. And')).toBe('Hi. I will be happy to explain.');
   });
 });
