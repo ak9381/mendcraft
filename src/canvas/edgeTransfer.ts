@@ -257,15 +257,22 @@ function phonePlatform(p: KnownPhone): PhonePlatform | null {
  * phones that are actually paired. Live (host session): a named phone restricts
  * to its side; an unnamed one (paired by chime, platform not yet announced)
  * trusts the strip. Not live: only SIM phones from the scripted pairing count.
+ *
+ * `announced` (live only): platforms that sent a live announce this session.
+ * They count even when the pair-first row does not list them — the row drops
+ * a phone that announced while it was idle, and keep-alive re-announces never
+ * re-add it, so the row alone left a really-paired phone's edge dark.
  */
 export function pairedEdgeLayout(
   layout: ScreenLayout,
   phones: readonly KnownPhone[],
-  o: { live: boolean },
+  o: { live: boolean; announced?: Iterable<PhonePlatform> },
 ): ScreenLayout {
   const pool = phones.filter((p) => p.sim !== o.live);
-  if (o.live && (pool.length === 0 || pool.some((p) => !phonePlatform(p)))) return { left: layout.left, right: layout.right };
+  const announced = o.live ? [...(o.announced ?? [])].filter((p) => p === 'android' || p === 'ios') : [];
+  if (o.live && ((pool.length === 0 && announced.length === 0) || pool.some((p) => !phonePlatform(p)))) return { left: layout.left, right: layout.right };
   const have = new Set(pool.map(phonePlatform).filter((x): x is PhonePlatform => !!x));
+  for (const p of announced) have.add(p);
   return {
     left: layout.left && have.has(layout.left) ? layout.left : null,
     right: layout.right && have.has(layout.right) ? layout.right : null,

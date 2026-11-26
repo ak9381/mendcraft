@@ -4,6 +4,7 @@ import {
   type BoardSend, type EdgeGlow,
 } from '../../src/canvas/edgeTransfer';
 import { attachBoardDrag } from '../../src/canvas/boardDrag';
+import { createPairFirst } from '../../src/canvas/pairedRow';
 import type { ScreenLayout } from '../../src/canvas/screenLayout';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
 
@@ -231,6 +232,13 @@ describe('pairedEdgeLayout', () => {
     expect(pairedEdgeLayout(layout, [{ id: 'phone-generic', label: 'Phone', sim: false }], { live: true })).toEqual(layout);
     expect(pairedEdgeLayout(layout, [], { live: true })).toEqual(layout);
   });
+  it('a live phone that announced counts even when the row does not list it', () => {
+    const row = [{ id: 'android', label: 'Nothing phone', sim: false }];
+    expect(pairedEdgeLayout(layout, row, { live: true, announced: ['ios', 'android'] })).toEqual(layout);
+    expect(pairedEdgeLayout(layout, [], { live: true, announced: ['ios'] })).toEqual({ left: null, right: 'ios' });
+    // Not live: announces never light a SIM edge.
+    expect(pairedEdgeLayout(layout, [], { live: false, announced: ['ios'] })).toEqual({ left: null, right: null });
+  });
   it('a live phone is placed by its announce id, never guessed from its label', () => {
     // Not announced (generic id) even though the label says iPhone → strip, not a guess.
     expect(pairedEdgeLayout(layout, [{ id: 'x', label: 'iPhone', sim: false }], { live: true })).toEqual(layout);
@@ -262,5 +270,104 @@ describe('boardSendLine', () => {
   it('labels the SIM send and names the phone', () => {
     expect(boardSendLine('ios', 'Living room', false)).toBe('Sent to iPhone (SIM).');
     expect(boardSendLine('android', 'Living room', true)).toBe('Sent Living room to the Nothing phone.');
+  });
+});
+
+// Live bug (two real phones, 1550-px laptop): the strip read "◀ iPhone · left
+// · Nothing · right ▶", the right edge sent to the Nothing phone, the left edge
+// never glowed. The pair-first row listed only the Nothing phone (the iPhone's
+// live announce arrived while the row was idle; later ones were keep-alives),
+// and the edges were limited to that row. Real controllers end to end:
+// createPairFirst + pairedEdgeLayout + the board controller + the title drag.
+describe('live phones: both edges, before and after a swap', () => {
+  const VW = 1550;
+  function live(layout0: ScreenLayout) {
+    let layout = layout0;
+    let t = 0;
+    const timers = new Set<() => void>();
+    const pf = createPairFirst({
+      say: () => undefined, sim: () => false, openPairing: () => new Promise<boolean>(() => undefined),
+      buildDashboard: () => undefined, schedule: () => 0, clear: () => undefined,
+    });
+    // The iPhone rejoins (remembered pair) before pair-first runs: its announce
+    // is live but the row is idle, so it is not listed. The Nothing phone joins
+    // during pairing and is listed. Both have announced live this session.
+    const announced = new Set<'ios' | 'android'>();
+    pf.addPhone({ id: 'ios', label: 'iPhone' }); announced.add('ios');
+    void pf.begin();
+    pf.addPhone({ id: 'android', label: 'Nothing phone' }); announced.add('android');
+    const rect = { x: 0, y: 0, w: 620, h: 520 };
+    const sends: BoardSend[] = [];
+    const glowSides = new Set<string>();
+    const c = createBoardEdgeTransferController({
+      every: (fn) => { timers.add(fn); return fn; },
+      stopEvery: (h) => { timers.delete(h as () => void); },
+      getViewportWidth: () => VW,
+      getLayout: () => pairedEdgeLayout(layout, pf.phones(), { live: true, announced }),
+      getRect: () => ({ ...rect }),
+      restoreRect: (_id, r) => { Object.assign(rect, r); },
+      getBoard: () => BOARD,
+      onGlow: (g) => { if (g.side && g.glow > 0.05) glowSides.add(g.side); },
+      onCommit: (s) => sends.push(s),
+      now: () => t,
+    });
+    type Fn = (e: Record<string, unknown>) => void;
+    const l: Record<string, Fn[]> = {};
+    const title = {
+      dataset: {} as Record<string, string>,
+      addEventListener(k: string, fn: Fn) { (l[k] ??= []).push(fn); },
+      removeEventListener() {}, setPointerCapture() {}, releasePointerCapture() {},
+    };
+    const fire = (k: string, x: number) => { for (const fn of l[k] ?? []) fn({ pointerId: 1, button: 0, clientX: x, clientY: 30, stopPropagation() {}, preventDefault() {} }); };
+    attachBoardDrag(title as unknown as HTMLElement, {
+      frameId: 'b1',
+      getZoom: () => 1,
+      onMove: (id, dx, dy, cx, cy) => { if (c.handleBoardDrag({ frameId: id, phase: 'move', clientX: cx, clientY: cy })) { rect.x += dx; rect.y += dy; } },
+      onEnd: (id, cancelled) => { c.handleBoardDrag({ frameId: id, phase: cancelled ? 'cancel' : 'end', clientX: NaN, clientY: NaN }); },
+    });
+    /** The live test's drag: down on the title, 30 moves to the edge, 40 hold moves (±1 px, 100 ms apart), up. */
+    function drag(side: 'left' | 'right') {
+      glowSides.clear();
+      const before = sends.length;
+      const x0 = rect.x + 300, tx = side === 'left' ? 1 : VW - 1;
+      fire('pointerdown', x0);
+      for (let i = 1; i <= 30; i++) { t += 16; fire('pointermove', x0 + ((tx - x0) * i) / 30); }
+      for (let i = 0; i < 40; i++) { t += 100; for (const fn of [...timers]) fn(); fire('pointermove', tx + (i % 2 ? (side === 'left' ? 1 : -1) : 0)); }
+      fire('pointerup', tx);
+      return { glowed: glowSides.has(side), sent: sends.slice(before) };
+    }
+    return { drag, swap: () => { layout = { left: layout.right, right: layout.left }; }, rect, pf };
+  }
+
+  it('the row lists only the Nothing phone (the live state behind the bug)', () => {
+    expect(live({ left: 'ios', right: 'android' }).pf.phones().map((p) => p.id)).toEqual(['android']);
+  });
+
+  it('iPhone on the left: holding at the left edge glows and sends to the iPhone', () => {
+    const r = live({ left: 'ios', right: 'android' });
+    const res = r.drag('left');
+    expect(res.glowed).toBe(true);
+    expect(res.sent).toHaveLength(1);
+    expect(res.sent[0]).toMatchObject({ side: 'left', target: 'ios' });
+    expect(r.rect).toEqual({ x: 0, y: 0, w: 620, h: 520 }); // snapped back
+  });
+
+  it('Nothing on the right: holding at the right edge sends to the Nothing phone', () => {
+    const r = live({ left: 'ios', right: 'android' });
+    const res = r.drag('right');
+    expect(res.glowed).toBe(true);
+    expect(res.sent[0]).toMatchObject({ side: 'right', target: 'android' });
+  });
+
+  it('two drags in a row (the second right after a commit) both send; after a swap both edges send again', () => {
+    const r = live({ left: 'ios', right: 'android' });
+    expect(r.drag('right').sent[0]).toMatchObject({ target: 'android' });
+    expect(r.drag('left').sent[0]).toMatchObject({ target: 'ios' });
+    expect(r.drag('left').sent[0]).toMatchObject({ target: 'ios' });
+    r.swap();
+    const left = r.drag('left'), right = r.drag('right');
+    expect(left.glowed && right.glowed).toBe(true);
+    expect(left.sent[0]).toMatchObject({ side: 'left', target: 'android' });
+    expect(right.sent[0]).toMatchObject({ side: 'right', target: 'ios' });
   });
 });

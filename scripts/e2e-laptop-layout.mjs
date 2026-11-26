@@ -115,6 +115,79 @@ function checkCluster(m, label, { allowWrap }) {
   check(!overlapBoard, `${label}: cluster never covers the board`);
 }
 
+/** In the page: drag the on-screen board by its title (synthetic pointer
+ *  events, as the live test did), hold it at one edge, release. */
+async function holdAtEdge(side) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const vp = document.querySelector('.mc-viewport');
+  const t = [...document.querySelectorAll('.mc-frame-title')].find((e) => { const q = e.getBoundingClientRect(); return q.width > 0 && q.left > 0 && q.right < innerWidth && q.top > 0; });
+  if (!t) return { error: 'no on-screen board title' };
+  const frame = t.closest('.mc-frame');
+  const start = frame.getBoundingClientRect().left;
+  let glowed = false;
+  const mo = new MutationObserver(() => { if (vp.classList.contains(`mc-edge-glow-${side}`)) glowed = true; });
+  mo.observe(vp, { attributes: true, attributeFilter: ['class'] });
+  const st = document.querySelector('.mc-canvas-status');
+  const lines = [];
+  const so = new MutationObserver(() => lines.push(st.textContent));
+  so.observe(st, { childList: true, characterData: true, subtree: true });
+  const r = t.getBoundingClientRect();
+  const x0 = r.left + r.width / 2, y0 = r.top + r.height / 2;
+  const tx = side === 'left' ? 1 : innerWidth - 1;
+  const ev = (type, x) => t.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y0, pointerId: 7, button: 0, buttons: 1, pointerType: 'mouse' }));
+  ev('pointerdown', x0);
+  for (let i = 1; i <= 30; i++) { ev('pointermove', x0 + ((tx - x0) * i) / 30); await sleep(16); }
+  for (let i = 0; i < 40; i++) { ev('pointermove', tx + (i % 2 ? (side === 'left' ? 1 : -1) : 0)); await sleep(100); }
+  ev('pointerup', tx);
+  await sleep(300);
+  mo.disconnect(); so.disconnect();
+  const sent = lines.filter((l) => /^Sent /.test(l));
+  return { glowed, sent, back: Math.abs(frame.getBoundingClientRect().left - start) < 2 };
+}
+
+/** A board held at EACH paired edge glows and is sent to that side's phone,
+ *  before and after swapping sides (SIM phones, the live 1550×656 window). */
+async function edgeSends(browser) {
+  console.log('-- edge sends 1550x656 (SIM phones)');
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e?.message || e)));
+  await page.setViewport({ width: 1550, height: 656, deviceScaleFactor: 1 });
+  await page.evaluateOnNewDocument((doc) => {
+    try { localStorage.setItem('mc.canvas.v1', JSON.stringify(doc)); localStorage.removeItem('mc.relay.layout'); } catch { /* checks fail on their own */ }
+  }, roomDoc([LAMP]));
+  await page.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForFunction(() => !!window.__canvas && !!document.querySelector('.mc-frame-title'), { timeout: 20_000 });
+  await new Promise((r) => setTimeout(r, 1500));
+  await page.evaluate(() => window.__canvas.run('connect devices and make a dashboard'));
+  const paired = await page.waitForFunction(() => /2 phones connected/.test(document.body.innerText), { timeout: 15_000 }).then(() => true, () => false);
+  check(paired, 'edge: two SIM phones joined');
+  await new Promise((r) => setTimeout(r, 2500));
+  const strip = () => page.evaluate(() => [...document.querySelectorAll('.mc-arrange-slot')].map((s) => s.textContent.trim()).join(' | '));
+  const name = { android: 'Nothing phone', ios: 'iPhone' };
+  const sides = async () => {
+    const s = await strip();
+    const left = /Nothing · left/.test(s) ? 'android' : /iPhone · left/.test(s) ? 'ios' : null;
+    const right = /Nothing · right/.test(s) ? 'android' : /iPhone · right/.test(s) ? 'ios' : null;
+    return { left, right, s };
+  };
+  for (const round of ['before swap', 'after swap']) {
+    if (round === 'after swap') { await page.evaluate(() => window.__canvas.run('swap phone sides')); await new Promise((r) => setTimeout(r, 800)); }
+    const lay = await sides();
+    check(!!lay.left && !!lay.right && lay.left !== lay.right, `edge ${round}: strip shows a phone on each side (${lay.s})`);
+    for (const side of ['left', 'right']) {
+      const res = await page.evaluate(holdAtEdge, side);
+      if (res.error) { check(false, `edge ${round} ${side}: ${res.error}`); continue; }
+      const want = name[lay[side]];
+      check(res.glowed, `edge ${round}: held at the ${side} edge glows`);
+      check(res.sent.length === 1 && res.sent[0].includes(want), `edge ${round}: held at the ${side} edge sends to the ${want} (${res.sent.join(' / ') || 'nothing sent'})`);
+      check(res.back, `edge ${round} ${side}: the board snaps back after the send`);
+    }
+  }
+  check(errors.length === 0, `edge: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
+  await page.close();
+}
+
 async function main() {
   const chrome = findChrome();
   if (!chrome) { console.error('e2e-laptop-layout: no Chrome found (set CHROME_PATH).'); return 2; }
@@ -215,6 +288,7 @@ async function main() {
       check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
       await page.close();
     }
+    await edgeSends(browser);
   } finally {
     await browser.close();
   }

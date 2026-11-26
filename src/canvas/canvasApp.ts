@@ -661,7 +661,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       // A keep-alive re-announce only re-learns who the phone is for the AI
       // monitor — no re-placing, no board republish every 20 s.
-      if (refresh) { phoneAi.announce(platform, deviceId, native); return; }
+      // A phone missing from the row (its first announce came while the row
+      // was idle) is listed on its next keep-alive (a no-op once listed).
+      if (refresh) { pairFirst.addPhone({ id: platform, label: phoneAi.announce(platform, deviceId, native) }); return; }
       pairFirst.addPhone({ id: platform, label: phoneAi.announce(platform, deviceId, native) });
       // Honour an explicit side; otherwise place it on its default side only if
       // that side is empty — never overwrite a manual swap the user already made.
@@ -716,9 +718,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // snapshot; the laptop board snaps back. SIM phones: same glow, no network.
   // Not an AI action, so it never reaches the AI feed — status line only.
   let boardSends = 0;
+  /** The edges a board may go to: the strip's layout, limited to phones that
+   *  are listed OR have live-announced this session (phoneSeenAt; cleared when
+   *  a phone drops). The row alone missed a phone that announced while it was
+   *  idle, leaving that phone's edge dark though the strip showed it. */
+  const edgeLayout = (): ScreenLayout => pairedEdgeLayout(screenLayout, pairFirst.phones(), {
+    live: !!hostSession, announced: [...phoneSeenAt.keys()] as PhonePlatform[],
+  });
   const boardEdge = createBoardEdgeTransferController({
     getViewportWidth: () => viewport.getBoundingClientRect().width || (typeof window !== 'undefined' ? window.innerWidth : 0),
-    getLayout: () => pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession }),
+    getLayout: () => edgeLayout(),
     getRect: (id) => { const f = reg.get(id); return f ? { ...f.rect } : null; },
     restoreRect: (id, rect) => { reg.setRect(id, rect); sync(); persist(); },
     getBoard: (id) => surfaces[id] ?? null,
@@ -5301,7 +5310,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     async sendBoard(to) {
       const id = focusId ?? lastFocus;
       if (!id || !surfaces[id]) return false;
-      const layout = pairedEdgeLayout(screenLayout, pairFirst.phones(), { live: !!hostSession });
+      const layout = edgeLayout();
       const side = layout.left === to ? 'left' : layout.right === to ? 'right' : null;
       if (!side) return false;
       const w = viewport.getBoundingClientRect().width || window.innerWidth;
