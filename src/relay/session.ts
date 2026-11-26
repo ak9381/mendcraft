@@ -10,6 +10,10 @@ import {
   cryptoRandom,
   isSessionId,
   parsePing,
+  parseAttention,
+  isAttentionWho,
+  ATTENTION_MIN_GAP_MS,
+  type AttentionWho,
   GIMBAL_CUE_RECEIVE_GAP_MS,
   isGimbalCue,
   isGimbalMode,
@@ -69,6 +73,12 @@ export interface HostSession extends SessionBase {
   readonly sid: string;
   /** Ask every phone still in the room to announce itself again (carries `sid`). */
   askWhoIsThere(): Promise<void>;
+  /** Which device she is facing right now (read when a pong goes out — the
+   *  phones learn it from the pong they already get; no new command). */
+  setAttention?(get: () => AttentionWho): void;
+  /** Push who she faces to the phones now ('attention'; only on a change,
+   *  ≥ ATTENTION_MIN_GAP_MS apart — the latest value always goes out). */
+  sendAttention?(who: AttentionWho): void;
   /** Ask the phone of `platform` to take the point-to-connect photo. */
   askSensePoint(platform: 'ios' | 'android'): Promise<void>;
   /** Ask the phones to play a DockKit body-language move (an allow-listed word,
@@ -120,6 +130,10 @@ export interface GuestSession extends SessionBase {
   onPong(cb: (nonce: string) => void): void;
   /** The host session id last learned (from a pong or a whoIsThere); null before. */
   hostSid(): string | null;
+  /** The device she was facing per the host's last pong, and when it came. */
+  attention?(): { who: AttentionWho; at: number } | null;
+  /** The host pushed a new attention value. */
+  onAttention?(cb: () => void): void;
   /** The host asked this phone to take the point-to-connect photo. */
   onSensePoint(cb: (platform: string) => void): void;
   /** The host asked for a gimbal body-language move (validated, rate-limited). */
@@ -274,6 +288,21 @@ export async function createHostSession(
   // Pings that name no (or another) session are first contact — or history
   // replayed on a reload: at most UNSIGNED_PING_BURST answers per UNSIGNED_PING_GAP_MS.
   let unsignedPongs: number[] = [];
+  let attentionGet: (() => AttentionWho) | null = null;
+  let attentionSent: AttentionWho | null = null;
+  let attentionWant: AttentionWho | null = null;
+  let attentionAt = -Infinity;
+  let attentionTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushAttention = (): void => {
+    attentionTimer = null;
+    const who = attentionWant;
+    if (!who || who === attentionSent || core.state !== 'paired') return;
+    const wait = attentionAt + ATTENTION_MIN_GAP_MS - now();
+    if (wait > 0) { attentionTimer = setTimeout(flushAttention, wait); return; }
+    attentionSent = who; attentionAt = now();
+    void transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'attention', text: JSON.stringify({ f: who, sid }) } })
+      .catch(() => { attentionSent = null; });
+  };
   let aliasCleared = false;
   /** admitMore() is holding the code open for another phone. */
   let admitting = false;
@@ -361,10 +390,11 @@ export async function createHostSession(
       }
       // A live ping is as good as a hello: the phone is in the room.
       core.setState(advancePair(core.state, 'peer-hello'));
-      void transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'pong', text: JSON.stringify({ n: ping.n, sid }) } })
+      const f = attentionGet?.();
+      void transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'pong', text: JSON.stringify(f ? { n: ping.n, sid, f } : { n: ping.n, sid }) } })
         .catch(() => undefined);
     } else if (msg.type === 'cmd') {
-      if (msg.cmd.kind === 'pong') return; // host → phone only
+      if (msg.cmd.kind === 'pong' || msg.cmd.kind === 'attention') return; // host → phone only
       if (core.state === 'paired') commandCb?.(msg.cmd);
     } else if (msg.type === 'frame') {
       if (core.state === 'paired') frameCb?.({ mimeType: msg.mimeType, dataBase64: msg.dataBase64 });
@@ -383,6 +413,12 @@ export async function createHostSession(
     token,
     code,
     sid,
+    setAttention: (get) => { attentionGet = get; },
+    sendAttention: (who) => {
+      if (!isAttentionWho(who)) return;
+      attentionWant = who;
+      if (!attentionTimer) flushAttention();
+    },
     state: () => core.state,
     onState: (cb) => core.onState(cb),
     onCommand: (cb) => {
@@ -473,6 +509,10 @@ export async function createGuestSession(
   let whoCb: (() => void) | null = null;
   let pongCb: ((nonce: string) => void) | null = null;
   let hostSid: string | null = null;
+  let attention: { who: AttentionWho; at: number } | null = null;
+  let attentionCb: (() => void) | null = null;
+  /** Nonces this phone pinged with → the host sid each ping named. */
+  const sentPings = new Map<string, string | null>();
   let senseCb: ((platform: string) => void) | null = null;
   let cueCb: ((kind: GimbalCueKind) => void) | null = null;
   let modeCb: ((mode: GimbalModeKind) => void) | null = null;
@@ -506,8 +546,22 @@ export async function createGuestSession(
     } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'pong') {
       const pong = parsePing(msg.cmd.text);
       if (!pong) return;
+      // Who she faces only from an answer to a ping THIS phone sent, signed
+      // with the session that ping named — never a replayed / old pong.
+      const sentSid = sentPings.get(pong.n);
+      sentPings.delete(pong.n);
+      if (pong.f && sentSid !== undefined && sentSid !== null && pong.sid === sentSid) {
+        attention = { who: pong.f, at: Date.now() };
+        attentionCb?.();
+      }
       if (pong.sid) hostSid = pong.sid;
       pongCb?.(pong.n);
+    } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'attention') {
+      // Pushed on a change: only from the session this phone already knows.
+      const a = parseAttention(msg.cmd.text);
+      if (!a || !hostSid || a.sid !== hostSid) return;
+      attention = { who: a.f, at: Date.now() };
+      attentionCb?.();
     } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'whoIsThere') {
       if (isSessionId(msg.cmd.text)) hostSid = msg.cmd.text;
       // Say hello first: after another phone's bye the host sits in 'gone' and
@@ -568,13 +622,19 @@ export async function createGuestSession(
     onWhoIsThere: (cb) => {
       whoCb = cb;
     },
-    ping: (nonce) => transport.publish(roomId, {
-      v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'ping', text: JSON.stringify(hostSid ? { n: nonce, sid: hostSid } : { n: nonce }) },
-    }),
+    ping: (nonce) => {
+      sentPings.set(nonce, hostSid);
+      if (sentPings.size > 16) sentPings.delete(sentPings.keys().next().value as string);
+      return transport.publish(roomId, {
+        v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'ping', text: JSON.stringify(hostSid ? { n: nonce, sid: hostSid } : { n: nonce }) },
+      });
+    },
     onPong: (cb) => {
       pongCb = cb;
     },
     hostSid: () => hostSid,
+    attention: () => attention,
+    onAttention: (cb) => { attentionCb = cb; },
     sendPrivacyAsk: (ask, timeoutMs = 20000) =>
       new Promise<PrivacyReply>((resolve, reject) => {
         const timer = setTimeout(() => {

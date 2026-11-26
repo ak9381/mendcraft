@@ -279,6 +279,12 @@ afterFirstPaint(() => {
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;
+        // Which device she faces (the laptop's pong carries it): a phone that
+        // can't see her face only takes over when no other device has her.
+        h.setRelayAttention(s ? {
+          get: () => s.attention?.() ?? null,
+          probe: () => { void s.ping?.(`f${Date.now().toString(36)}`).catch(() => undefined); },
+        } : null);
         // Only the iPhone, only for its own platform, and only from the host
         // (the session drops any sensePoint not sent by the host).
         s?.onSensePoint?.((platform) => { if (phonePlatform === 'ios' && platform === 'ios' && h.phoneSenseStatus()) h.pointForLaptop(); });

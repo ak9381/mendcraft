@@ -189,6 +189,38 @@ async function main() {
       const chromeOverTiles = end.chrome.filter((c) => end.leaves.some((t) => gap(c.box, t.box) < 0));
       check(chromeOverTiles.length === 0, `${vp.name}: no chrome over a tile at the end of the board${chromeOverTiles.length ? ` — ${chromeOverTiles.map((c) => c.sel).join(', ')}` : ''}`);
       if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-bottom.png`) });
+      // The phone's own facing pill (Hands on + camera live, forced here: no
+      // camera headless) and the Camera dot: in the bottom chrome band, never
+      // over the board, another control or the screen edge; text not cut.
+      const fp = await page.evaluate(() => {
+        const pill = document.querySelector('.mc-phone-facing');
+        const cam = document.querySelector('.mc-cam-on');
+        if (!pill) return null;
+        pill.hidden = false; pill.textContent = 'Can’t see you — hands on'; pill.classList.add('is-away'); // the longest label
+        if (cam) { cam.hidden = false; cam.dataset.state = 'live'; }
+        return true;
+      });
+      check(fp === true, `${vp.name}: the phone facing pill exists`);
+      if (fp) {
+        await new Promise((r) => setTimeout(r, 300));
+        const f = await page.evaluate(() => {
+          const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+          const pill = document.querySelector('.mc-phone-facing');
+          const sels = ['.mc-fab-mic', '.mc-join-pill', '.mc-phone-track-pill', '.mc-phone-hands-pill', '.mc-read-aloud', '.mc-cam-on', '.mc-talk-control'];
+          const others = sels.map((sel) => { const el = document.querySelector(sel); if (!el || el.hidden || getComputedStyle(el).display === 'none') return null; return { sel, box: box(el) }; }).filter(Boolean);
+          const vpEl = document.querySelector('.mc-viewport');
+          return { pill: box(pill), shown: getComputedStyle(pill).display !== 'none', cut: pill.scrollWidth > pill.clientWidth + 1, others, viewport: vpEl ? box(vpEl) : null, vw: innerWidth, vh: innerHeight };
+        });
+        const near = f.others.filter((o) => o.sel !== '.mc-talk-control' && gap(o.box, f.pill) < 4).map((o) => o.sel);
+        const onMic = f.others.filter((o) => (o.sel === '.mc-talk-control' || o.sel === '.mc-fab-mic') && gap(o.box, f.pill) < 4).map((o) => o.sel);
+        check(f.shown && f.pill.width > 0, `${vp.name}: facing pill shows`);
+        check(f.pill.left >= 0 && f.pill.right <= f.vw && f.pill.bottom <= f.vh, `${vp.name}: facing pill inside the screen`);
+        check(near.length === 0 && onMic.length === 0, `${vp.name}: facing pill touches no other control${near.length + onMic.length ? ` — ${[...near, ...onMic].join(', ')}` : ''}`);
+        check(!f.cut, `${vp.name}: facing pill text fits`);
+        const camBox = f.others.find((o) => o.sel === '.mc-cam-on')?.box;
+        check(!!f.viewport && f.viewport.bottom <= f.pill.top && (!camBox || f.viewport.bottom <= camBox.top), `${vp.name}: the board area ends above the facing pill and the Camera dot (${Math.round(f.viewport?.bottom ?? -1)} ≤ ${Math.round(f.pill.top)})`);
+        if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-facing.png`) });
+      }
       check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
       await page.close();
     }

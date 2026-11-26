@@ -230,16 +230,31 @@ export function createFacingTracker(opts: FacingOptions = {}): FacingTracker {
 export const HAND_GATE = {
   yawOut: 30, pitchUpOut: 25, pitchDownOut: 45,
   yawIn: 25, pitchUpIn: 20, pitchDownIn: 40,
-  /** A change must persist this long (ms). */
+  /** Turning back toward the screen must persist this long (ms). */
   debounceMs: 250,
+  /** Turning AWAY must persist this long (ms): two face frames
+   *  (FACE_INTERVAL_MS 200) — one misread frame never locks, a real turn
+   *  locks on the second frame instead of the third. */
+  leaveDebounceMs: 150,
   /** A (re)appearing face reports unknown (null) until seen this long. */
   settleMs: 500,
+  /** A face that goes MISSING (not turned: lost — a hand passing in front
+   *  of it, a fist raised to the chin) keeps its last state this long; past
+   *  it the gate reports null, which the hands treat as NOT facing. While a
+   *  hand is in view presence passes a longer grace (its LOST_TIMEOUT_MS):
+   *  her own hand over her face must never cancel a drag. A TURNED head
+   *  (face seen, past the limits) still locks after leaveDebounceMs. */
+  lostGraceMs: 1200,
 } as const;
 
 export interface HandGateConfig {
   yawOut: number; pitchUpOut: number; pitchDownOut: number;
   yawIn: number; pitchUpIn: number; pitchDownIn: number;
   debounceMs: number; settleMs: number;
+  /** Default debounceMs. */
+  leaveDebounceMs?: number;
+  /** Default 0 (no grace). */
+  lostGraceMs?: number;
 }
 
 /** Phone shell hand gate. A phone held normally sits BELOW the face, so the
@@ -252,6 +267,8 @@ export const PHONE_HAND_GATE: HandGateConfig = {
   yawIn: 25, pitchUpIn: 45, pitchDownIn: 25,
   debounceMs: HAND_GATE.debounceMs,
   settleMs: HAND_GATE.settleMs,
+  leaveDebounceMs: HAND_GATE.leaveDebounceMs,
+  lostGraceMs: HAND_GATE.lostGraceMs,
 };
 
 /** Pure: is this pose "facing" for the hand gate, given the current state? */
@@ -263,30 +280,50 @@ export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g: HandGateConfig
 
 export interface HandGate {
   /** Feed the focus face's pose (null = no face). Returns true (facing),
-   *  false (an actually turned head, debounced) or null (unknown: no face,
-   *  or a face seen for less than settleMs). */
-  update(pose: HeadPose | null, now: number): boolean | null;
+   *  false (an actually turned head, debounced) or null (unknown: no face
+   *  for longer than the lost grace, or a face seen for less than settleMs).
+   *  `lostGraceMs` overrides the config's grace for this call. */
+  update(pose: HeadPose | null, now: number, lostGraceMs?: number): boolean | null;
   reset(): void;
 }
 
 export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
   let seenSince: number | null = null;
+  let lastSeen = -Infinity;
+  let last: boolean | null = null;
+  let lastPoseOut = false;
   let ok = true;
   let pending: boolean | null = null;
   let pendingSince = 0;
+  const grace = g.lostGraceMs ?? 0;
+  const leaveMs = g.leaveDebounceMs ?? g.debounceMs;
   return {
-    update(pose, now) {
-      if (!pose) { seenSince = null; pending = null; ok = true; return null; }
+    update(pose, now, graceOverride) {
+      if (!pose) {
+        // Turned, then lost (a quick turn: one turned frame, then the face
+        // model loses her): not facing at once — never the grace's "true".
+        if (seenSince !== null && (pending === false || lastPoseOut)) {
+          ok = false; pending = null; last = false;
+          if (now - lastSeen < (graceOverride ?? grace)) return false;
+        }
+        // A face that went missing (a hand in front of it) keeps its state.
+        if (seenSince !== null && now - lastSeen < (graceOverride ?? grace)) return last;
+        seenSince = null; pending = null; ok = true; last = null; return null;
+      }
+      lastSeen = now;
+      // Past the lock limits (the looser *Out band) on this very frame.
+      lastPoseOut = !handGatePoseOk(pose, true, g);
       if (seenSince === null) { seenSince = now; ok = true; pending = null; }
       const want = handGatePoseOk(pose, ok, g);
       if (want === ok) pending = null;
       else {
         if (pending !== want) { pending = want; pendingSince = now; }
-        if (now - pendingSince >= g.debounceMs) { ok = want; pending = null; }
+        if (now - pendingSince >= (want ? g.debounceMs : leaveMs)) { ok = want; pending = null; }
       }
-      return now - seenSince >= g.settleMs ? ok : null;
+      last = now - seenSince >= g.settleMs ? ok : null;
+      return last;
     },
-    reset() { seenSince = null; ok = true; pending = null; },
+    reset() { seenSince = null; ok = true; pending = null; last = null; lastSeen = -Infinity; lastPoseOut = false; },
   };
 }
 

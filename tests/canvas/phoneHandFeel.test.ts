@@ -142,9 +142,10 @@ describe('the live pointer with the phone profile (390×844)', () => {
     tap();
     expect(btn.click).toHaveBeenCalledTimes(1);
     hp.setFacing?.(true, t);
-    expect(hp.handsLocked?.()).toBe(false);
+    expect(hp.handsLocked?.()).toBe(true); // facing again: settles first
     t += 500;
     tap();
+    expect(hp.handsLocked?.()).toBe(false);
     expect(btn.click).toHaveBeenCalledTimes(2);
   });
 });

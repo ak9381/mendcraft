@@ -47,7 +47,7 @@ export function dispatchRelayCommand(cmd: RelayCommand, handlers: RelayCommandHa
 /** Every toolbar / phone-menu `data-cmd` the canvas click map must handle. */
 export const TOOLBAR_CMDS = [
   'everything', 'new', 'save', 'undo',
-  'hands', 'dwell', 'register', 'reregister', 'teach', 'gestures',
+  'hands', 'dwell', 'handsalways', 'register', 'reregister', 'teach', 'gestures',
   'ai', 'offline', 'voice',
 ] as const;
 export type ToolbarCmd = (typeof TOOLBAR_CMDS)[number];

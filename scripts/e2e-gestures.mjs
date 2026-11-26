@@ -22,7 +22,11 @@
 //     scrolls while not facing; over a level control it steps the level
 //     (90 px up after the start = 3 steps) instead; over nothing scrollable
 //     it pans the canvas; a second peace after a scroll is Register, never
-//     one hand's Tools.
+//     one hand's Tools;
+//   - LOOK AWAY (no face seen, through the real facing gate): the cursor
+//     freezes, no highlight, no fist-tap click, no held-gesture fire, a
+//     running board drag is cancelled (the board goes back), and facing
+//     again only unlocks after the 300 ms settle.
 //
 //   npx vite --port 5173 &
 //   E2E_URL=http://localhost:5173 node scripts/e2e-gestures.mjs
@@ -502,6 +506,95 @@ async function main() {
     check(/Both hands peace → Register/.test(logG1) && !/Left peace/.test(logG1) && toolsG0 === toolsG1, `after a scroll, a second peace is Register, not Tools (${JSON.stringify(logG1.slice(0, 120))})`);
     await openHand(t + 3200, 300);
     await page.evaluate(() => { document.querySelector('#e2e-scroller')?.remove(); document.querySelector('#e2e-level')?.remove(); document.querySelector('.mc-scan-cancel')?.click(); });
+    t += 4000;
+
+    {
+    // H. LOOK AWAY through the camera path, face part included: every frame
+    //    sends the face list first (as canvasHands does), then the hands. No
+    //    face seen = NOT facing: nothing moves or acts — no cursor movement,
+    //    no highlight, no hold, no tap, no board drag (a running one goes
+    //    back) — and facing again only unlocks after the settle.
+    await wait(600); // the Tools chip's 450 ms toggle guard (wall clock)
+    const FACE = { box: { x: 0.4, y: 0.1, w: 0.2, h: 0.2, cx: 0.5, cy: 0.2 }, isOperator: true, facing: true, handGate: true, dim: false };
+    const look = (faces, spec, from, ms) => page.evaluate((faces, spec, from, ms) => {
+      const g = window.__mcGestures;
+      const hands = spec.map(([shape, side, x, y]) => g.hand(shape, side, { at: g.palmFor(x, y) }));
+      let tt = from;
+      for (; tt <= from + ms; tt += 33) { g.presenceFaces(faces, tt); g.presence(hands, tt); }
+      return tt;
+    }, faces, spec, from, ms);
+    const cursorXf = () => page.evaluate(() => [...document.querySelectorAll('.mc-hand-cursor')].find((c) => !c.hidden)?.style.transform ?? null);
+    const chip = await page.evaluate(() => { const r = document.querySelector('.mc-tools-chip').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    const toolsOpenH = () => page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    const tapAt = async (faces, x, y, from) => {
+      let tt = await look(faces, [['open', 'R', x, y]], from, 330);
+      tt = await look(faces, [['fist', 'R', x, y]], tt, 130);
+      return look(faces, [['open', 'R', x, y]], tt, 200);
+    };
+    // Facing: the hands work (control).
+    t = await look([FACE], [['open', 'R', 700, 700]], t, 700);
+    check(!(await page.evaluate(() => window.__mcGestures.handsLocked())), 'look-away: facing (settled face) → hands unlocked');
+    // Away: the cursor freezes while the hand sweeps across the Tools chip.
+    t = await look([], [['open', 'R', 700, 700]], t, 100);
+    check(await page.evaluate(() => window.__mcGestures.handsLocked()), 'look-away: no face seen → hands locked at once');
+    const xf0 = await cursorXf();
+    t = await look([], [['open', 'R', chip.x, chip.y]], t, 1200);
+    const awayUi = await page.evaluate(() => ({
+      xf: [...document.querySelectorAll('.mc-hand-cursor')].find((c) => !c.hidden)?.style.transform ?? null,
+      lit: document.querySelectorAll('.mc-gesture-target').length,
+      ring: !document.querySelector('.mc-highlight-layer')?.hidden,
+      hint: (() => { const h = document.querySelector('.mc-hand-away-hint'); return !!h && !h.hidden; })(),
+    }));
+    check(awayUi.xf === xf0 && awayUi.lit === 0 && !awayUi.ring && awayUi.hint,
+      `look-away: no cursor movement, no highlight, the "look at the screen" hint shows (${JSON.stringify({ ...awayUi, xf0 })})`);
+    // Away: a fist tap on Tools and a 2.5 s thumbs up do nothing.
+    const tools0 = await toolsOpenH();
+    const logH = await log();
+    t = await tapAt([], chip.x, chip.y, t);
+    t = await look([], [['thumbsUp', 'R', 700, 600]], t, 2500);
+    const hudH = await page.evaluate(() => !document.querySelector('.mc-gesture-hud')?.hidden);
+    check(await toolsOpenH() === tools0 && !/Right thumbs up/.test((await log()).replace(logH, '')) && !hudH,
+      'look-away: no fist-tap click and no held-gesture fire (thumbs up 2.5 s)');
+    // A board drag that is running when he looks away is cancelled: the board goes back.
+    // An unfocused board (a fist on the FOCUSED board pans instead).
+    await page.evaluate(() => window.__canvas.overview());
+    await wait(900);
+    t = await look([FACE], [['open', 'R', 700, 700]], t, 700);
+    const fr = await page.evaluate(() => {
+      const el = [...document.querySelectorAll('.mc-frame')].find((f) => { const r = f.getBoundingClientRect(); return r.width > 150 && r.bottom > 200 && r.left >= 0 && r.right <= innerWidth; });
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { id: el.dataset.frame, x: r.left + 24, y: Math.min(r.bottom, innerHeight) - 16 };
+    });
+    const rectOf = (id) => page.evaluate((id) => JSON.stringify(window.__canvas.snapshot().frames.find((f) => f.id === id)?.rect), id);
+    if (!fr) check(false, `look-away: a board on screen to drag (${await page.evaluate(() => JSON.stringify([...document.querySelectorAll('.mc-frame')].map((f) => { const r = f.getBoundingClientRect(); return [f.dataset.frame, Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]; })))})`);
+    else {
+      const r0 = await rectOf(fr.id);
+      t = await look([FACE], [['open', 'R', fr.x, fr.y]], t, 330);
+      t = await look([FACE], [['fist', 'R', fr.x, fr.y]], t, 460);
+      for (let k = 1; k <= 8; k++) t = await look([FACE], [['fist', 'R', fr.x + k * 12, fr.y]], t, 0);
+      const r1 = await rectOf(fr.id);
+      const diag = await page.evaluate((x, y) => { const e = document.elementFromPoint(x, y); return { grab: window.__mcGestures.state().grab, under: e ? `${e.tagName}.${e.className}` : null, cam: window.__mcGestures.state().camera }; }, fr.x, fr.y);
+      t = await look([], [['fist', 'R', fr.x + 100, fr.y]], t, 0);
+      for (let k = 1; k <= 8; k++) t = await look([], [['fist', 'R', fr.x + 100 + k * 12, fr.y]], t, 0);
+      t = await look([], [['open', 'R', fr.x + 200, fr.y]], t, 300);
+      const r2 = await rectOf(fr.id);
+      check(r1 !== r0 && r2 === r0, `look-away mid-drag: the board drag is cancelled and the board goes back (${r0} → ${r1} → ${r2}; ${JSON.stringify(diag)})`);
+    }
+    // Facing again: inside the settle a tap still does nothing; after it, it works.
+    t = await look([], [['open', 'R', 700, 700]], t, 300);
+    t = await look([FACE], [['open', 'R', chip.x, chip.y]], t, 0);
+    t = await look([FACE], [['fist', 'R', chip.x, chip.y]], t, 100);
+    t = await look([FACE], [['open', 'R', chip.x, chip.y]], t, 100);
+    check(await toolsOpenH() === tools0 && await page.evaluate(() => window.__mcGestures.handsLocked()), 'look-away: facing again, a tap inside the 300 ms settle does nothing');
+    t = await look([FACE], [['open', 'R', 700, 700]], t, 400);
+    t = await tapAt([FACE], chip.x, chip.y, t);
+    check(await toolsOpenH() !== tools0, `look-away: after the settle the same fist tap works (Tools ${tools0} → ${await toolsOpenH()})`);
+    if (await toolsOpenH() === 'true') { await wait(600); await page.evaluate(() => document.querySelector('.mc-tools-chip').click()); }
+    await page.evaluate((tt) => window.__mcGestures.facing(null, tt), t);
+    await look([FACE], [['open', 'R', 700, 950]], t, 400);
+    t += 1000;
+    }
 
     // 4) Badges go away with Hands.
     await page.evaluate(() => window.__mcGestures.show(false));

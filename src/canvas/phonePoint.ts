@@ -27,6 +27,9 @@ export interface PhoneSenseStatus {
   aimingAtHands?: boolean;
   /** Hands aim stopped on these axes: the error grew after moves ('yaw', 'pitch', 'yaw+pitch'). */
   aimSign?: string;
+  /** Hands on and live: she is facing THIS phone (its hands act) or not.
+   *  Absent while Hands is off. */
+  facing?: boolean;
 }
 
 export const NO_GIMBAL_ROW = 'No gimbal — pointing uses the laptop camera';
@@ -45,6 +48,9 @@ export const DIAG_AIMING_YES = 'aiming at hands: yes';
 export const DIAG_AIMING_NO = 'aiming at hands: no';
 /** The hands aim stopped an axis: its error grew after moves (sign inverted?). */
 export const DIAG_SIGN = 'aim sign?';
+/** Hands on and she is facing this phone: it has her attention. */
+export const FACING_ROW = 'Hands: on · she is facing it';
+export const NOT_FACING_ROW = 'Hands: on · not facing';
 export const POINT_OUT_OF_FRAME = 'I can’t see what you’re pointing at — move the device into the camera’s view.';
 export const PHONE_POINT_LINE = 'Point at it and hold still — the iPhone camera takes one photo.';
 export const PHONE_POINT_FALLBACK = 'The iPhone camera isn’t available for this — using the laptop camera.';
@@ -60,6 +66,7 @@ export function coerceSenseStatus(o: unknown): PhoneSenseStatus | null {
   if (typeof r.systemTracking === 'boolean') out.systemTracking = r.systemTracking;
   if (typeof r.aimingAtHands === 'boolean') out.aimingAtHands = r.aimingAtHands;
   if (r.aimSign === 'yaw' || r.aimSign === 'pitch' || r.aimSign === 'yaw+pitch') out.aimSign = r.aimSign;
+  if (typeof r.facing === 'boolean') out.facing = r.facing;
   return out;
 }
 
@@ -75,7 +82,7 @@ export function phoneSubState(s: PhoneSenseStatus | null | undefined, opts: { si
   else if (s.gimbal === 'ready' || s.gimbal === 'hands') parts.push(GIMBAL_READY_ROW);
   else if (opts.ios) parts.push(s.canPoint ? NO_GIMBAL_CAN_POINT_ROW : NO_GIMBAL_ROW);
   if (s.gimbal !== 'none' && !s.canPoint && opts.ios) parts.push(CAMERA_UNAVAILABLE_ROW);
-  if (s.hands) parts.push(HANDS_ON_ROW);
+  if (s.hands) parts.push(s.facing === true ? FACING_ROW : s.facing === false ? NOT_FACING_ROW : HANDS_ON_ROW);
   // Live-test diagnostics: what the iPhone really reads back.
   if (s.gimbal !== 'none' && typeof s.systemTracking === 'boolean') parts.push(s.systemTracking ? DIAG_TRACKING_ON : DIAG_TRACKING_OFF);
   if (s.gimbal !== 'none' && typeof s.aimingAtHands === 'boolean') parts.push(s.aimingAtHands ? DIAG_AIMING_YES : DIAG_AIMING_NO);

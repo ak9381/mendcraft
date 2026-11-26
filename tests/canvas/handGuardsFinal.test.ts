@@ -9,11 +9,15 @@ const canvasApp = readFileSync('src/canvas/canvasApp.ts', 'utf8');
 
 describe('taught gestures obey the hand guards (B4)', () => {
   it('matchFrame never runs while hands are locked (not facing) or a fist grab is running', () => {
-    const at = canvasApp.indexOf('teachPanel.matchFrame(hands, now)');
+    // The laptop hand router (handFacing.ts) calls the taught-gesture
+    // matcher only behind the facing lock and the grab check.
+    expect(canvasApp).toContain('teach: (hands, now) => teachPanel.matchFrame(');
+    const router = readFileSync('src/canvas/handFacing.ts', 'utf8');
+    const at = router.indexOf('d.teach?.(hands, now)');
     expect(at).toBeGreaterThan(-1);
-    const line = canvasApp.slice(canvasApp.lastIndexOf('\n', at), at);
-    expect(line).toContain('!handPointer?.handsLocked?.()');
-    expect(line).toContain('!handPointer?.isGrabActive()');
+    const line = router.slice(router.lastIndexOf('\n', at), at);
+    expect(line).toContain('!locked()');
+    expect(line).toContain('!d.pointer?.isGrabActive()');
   });
 });
 

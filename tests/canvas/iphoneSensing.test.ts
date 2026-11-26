@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS } from '../../src/canvas/phoneCamera';
 import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
-  CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FOLLOWING_HANDS_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
+  CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FACING_ROW, FOLLOWING_HANDS_ROW, NOT_FACING_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
   NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, DIAG_AIMING_NO, DIAG_AIMING_YES, DIAG_SIGN, DIAG_TRACKING_OFF, DIAG_TRACKING_ON, TRACKING_ROW, type PhoneSenseStatus,
 } from '../../src/canvas/phonePoint';
 import { ruleSuggestions } from '../../src/canvas/nextSteps';
@@ -41,6 +41,19 @@ describe('connect-devices row: iPhone sub-states', () => {
     // An older iPhone build that reports nothing: say so plainly, never "tracking".
     expect(phoneSubState(null, { ios: true })).toBe(NO_GIMBAL_ROW);
     expect(phoneSubState(null, { ios: false })).toBe('');
+  });
+
+  it('which device has her attention: a phone with Hands on reports facing, and the row says so', () => {
+    const st = (o: Partial<PhoneSenseStatus>): PhoneSenseStatus => ({ gimbal: 'none', sensor: false, hands: true, canPoint: false, ...o });
+    expect(phoneSubState(st({ facing: true }))).toBe(FACING_ROW);
+    expect(phoneSubState(st({ facing: false }))).toBe(NOT_FACING_ROW);
+    expect(phoneSubState(st({}))).toBe(HANDS_ON_ROW);
+    expect(coerceSenseStatus({ gimbal: 'none', hands: true, facing: true })?.facing).toBe(true);
+    expect(coerceSenseStatus({ gimbal: 'none', hands: true, facing: 'yes' })?.facing).toBeUndefined();
+    // The phone re-announces on a facing change; Android (no sensing layer)
+    // announces only while its Hands pill is on.
+    expect(app).toMatch(/onFacing: \(v\) => \{\s*senseChanged\(\);/);
+    expect(app).toContain("if (!phoneSensor) return phoneHands?.isOn() ?");
   });
 
   it('the laptop asks the iPhone only when it can point; a camera denial falls back to the laptop', () => {

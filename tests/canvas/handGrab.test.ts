@@ -7,10 +7,10 @@
 // A running grab only ends after the release grace (≥120 ms AND ≥3 open
 // frames), so a loose fist flickering open for a frame or two keeps it.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createHandPointer, GRAB_HOLD_MS, type HandPointer, type HandPointerOptions } from '../../src/canvas/handPointer';
+import { createHandPointer, FACING_RESUME_MS, GRAB_HOLD_MS, type HandPointer, type HandPointerOptions } from '../../src/canvas/handPointer';
 import { HAND_FEEL } from '../../src/canvas/handFeel';
 import { placePalm, synthFist, synthHand, synthRelaxed, synthThumbOutFist } from '../helpers/synthHands';
-import { fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
+import { cursorsOf, fakeButton, fakeFrame, fakeHandDoc, type FakeEl } from '../helpers/fakeHandDoc';
 import { syntheticHand } from '../../src/canvas/handShapeFixtures';
 
 const W = 1000;
@@ -684,13 +684,16 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
 
   // ---------------------------------------------------------------- facing gate
 
-  it('not facing (held ≥300 ms): no tap, no grab, no pan; the cursor dims and a hint shows', () => {
+  it('not facing: locked at once — no tap, no grab, no pan; the cursor dims and freezes, a hint shows', () => {
     const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     mount([btn], []);
     open(500, 400, 4);
     hp.setFacing!(false, t);
-    open(500, 400, 10); // ≈330 ms not facing → locked
-    expect(hp.handsLocked!()).toBe(true);
+    expect(hp.handsLocked!()).toBe(true); // the face gate already debounced it: no extra delay
+    const cursor = cursorsOf(lastDoc)[0];
+    const frozen = cursor.style.transform;
+    open(700, 200, 10);
+    expect(cursor.style.transform).toBe(frozen);
     expect(hp.target).toBeNull();
     const created = (lastDoc as unknown as { __created: { className: string; hidden: boolean; textContent?: string; classList: { contains(c: string): boolean } }[] }).__created;
     expect(created.filter((e) => e.className.includes('mc-hand-cursor')).some((c) => c.classList.contains('is-away'))).toBe(true);
@@ -704,13 +707,21 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(hp.clickTarget()).toBe(false);
   });
 
-  it('a glance away (< 300 ms) does not lock the hands', () => {
+  it(`facing again unlocks only after ${FACING_RESUME_MS} ms of continuous facing`, () => {
     const btn = fakeButton({ left: 450, top: 370, width: 100, height: 60 });
     mount([btn], []);
     open(500, 400, 4);
     hp.setFacing!(false, t);
-    open(500, 400, 6); // ≈200 ms
+    open(500, 400, 6);
     hp.setFacing!(true, t);
+    expect(hp.handsLocked!()).toBe(true);
+    open(500, 400, 8); // 264 ms
+    expect(hp.handsLocked!()).toBe(true);
+    hp.setFacing!(false, t); // away again inside the settle: the clock restarts
+    hp.setFacing!(true, t);
+    open(500, 400, 8);
+    expect(hp.handsLocked!()).toBe(true);
+    open(500, 400, 2); // ≥ 300 ms
     expect(hp.handsLocked!()).toBe(false);
     tap(500, 400);
     expect(btn.click).toHaveBeenCalledTimes(1);
@@ -726,18 +737,18 @@ describe('fist tap, one-fist grab, two-fist zoom', () => {
     expect(btn.click).toHaveBeenCalledTimes(1);
   });
 
-  it('a running grab ends cleanly when facing is lost > 400 ms, and the closed fist stays spent after facing returns', () => {
+  it('a running grab is CANCELLED (not committed) the moment facing is lost, and the closed fist stays spent after facing returns', () => {
     const f1 = fakeFrame({ left: 200, top: 200, width: 400, height: 300 }, 'f1');
     mount([], [f1]);
     fist(400, 350, HOLD);
     expect(board[0]?.phase).toBe('start');
     hp.setFacing!(false, t);
-    fist(400, 350, 8); // ≈260 ms: still grabbing
-    expect(hp.isBoardGrabbed()).toBe(true);
-    fist(400, 350, 6); // past 400 ms
-    expect(board.at(-1)?.phase).toBe('end');
+    expect(board.at(-1)?.phase).toBe('cancel');
+    expect(board.some((e) => e.phase === 'end')).toBe(false);
     expect(hp.isGrabActive()).toBe(false);
+    fist(400, 350, 14);
     hp.setFacing!(true, t);
+    fist(400, 350, 10); // the settle
     expect(hp.handsLocked!()).toBe(false);
     const n = board.length;
     fist(450, 350, HOLD + 5); // the same fist, still closed: no new grab

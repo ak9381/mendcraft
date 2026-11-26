@@ -1785,6 +1785,25 @@
   font-size: 15px; font-weight: 650; pointer-events: none;
 }
 .mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
+/* The phone's own "Facing phone / Not facing" pill (phoneHands.ts): the
+   laptop Facing pill's look, in the LEFT column just above Read aloud, clear
+   of the mic and the home indicator. Only while Hands is on and the camera
+   is live — and then the bottom chrome band grows by one short row (the
+   board area ends above the pill and the Camera dot; it never covers the
+   board). */
+.mc-phone-simple:has(.mc-phone-facing:not([hidden])) { --mc-phone-chrome-h: 160px; }
+.mc-phone-facing { display: none; }
+.mc-phone-simple .mc-phone-facing:not([hidden]) {
+  display: inline-flex; align-items: center; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(var(--mc-phone-row2) + var(--mc-phone-pill-h) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  /* Up to the Camera dot on the right (≈ 110 px + gaps): the longest
+     label, "Can't see you — hands on", fits on a 390 px phone. */
+  max-width: calc(100vw - 32px - 128px); box-sizing: border-box; padding: 4px 10px; border-radius: 999px;
+  background: rgba(11, 15, 20, 0.82); color: #fff; font-size: 15px; font-weight: 650;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.mc-phone-simple .mc-phone-facing.is-away { background: rgba(80, 60, 40, 0.88); }
+.mc-menu-open .mc-phone-facing { display: none !important; }
 
 /* ---- Button gestures (gestureControl.ts): amber 24px hand badges centred
    — the hand at the bound button's TOP-RIGHT corner, its L / R / L+R tag

@@ -103,7 +103,8 @@ import { matchCursors } from '../ui/handOverlay';
 import { setLivePinchThresholds } from '../input/handLogic';
 import { loadSetup } from '../setup/setupState';
 
-import { cameraHandsFromSelfie } from './handSpace';
+import { createLaptopHandRouter, readHandsAlways, writeHandsAlways } from './handFacing';
+import type { AttentionWho } from '../relay/protocol';
 import type { PlanExtra } from './planExtras';
 import { mountMicFab, MIC_ICON_SVG, LISTENING_STATUS, type MicFab } from './micFab';
 import { phoneSayText } from './phoneSay';
@@ -269,7 +270,7 @@ export function seedDoc(): CanvasDoc {
 
 /** Phone shell: clear space between a board's end and the bottom chrome. */
 const PHONE_BOARD_GAP = 12;
-const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill, .mc-phone-hands-pill, .mc-read-aloud, .mc-cam-on';
+const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill, .mc-phone-hands-pill, .mc-read-aloud, .mc-cam-on, .mc-phone-facing';
 
 /** Widest a focused room dashboard is shown (three tile columns). */
 export const ROOM_MAX_W = 1280;
@@ -380,6 +381,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           <section class="mc-more-group" aria-label="Hands"><h3 class="mc-more-title">Hands</h3>
             <button data-cmd="hands" class="mc-btn" aria-pressed="false" data-i18n="hands">Hands</button>
             <button data-cmd="dwell" class="mc-btn" aria-pressed="false">Hover to click</button>
+            <button data-cmd="handsalways" class="mc-btn" aria-pressed="false">Hands always on</button>
             <button data-cmd="teach" class="mc-btn">Teach a gesture</button>
             <button data-cmd="gestures" class="mc-btn">Custom gestures</button>
             <button data-cmd="reregister" class="mc-btn" hidden>Register again</button></section>
@@ -662,6 +664,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (sense) phoneSense.set(platform, sense); else phoneSense.delete(platform);
       if (JSON.stringify(prevSense) !== JSON.stringify(sense ?? undefined)) {
         pairFirst.refresh();
+        pushAttention();
         if (platform === 'ios') gimbalReported(prevSense?.gimbal !== undefined && prevSense.gimbal !== 'none', !!sense && sense.gimbal !== 'none');
       }
       // A keep-alive re-announce only re-learns who the phone is for the AI
@@ -3386,6 +3389,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (sheetOpen !== open) { void res.stop(); return false; } // she closed it while we connected
     pairingStop = res.stop;
     hostSession = res.session;
+    res.session.setAttention?.(() => attentionWho());
     // Phones already in the room (remembered pairs) learn this session's id.
     void res.session.askWhoIsThere().catch(() => undefined);
     // Pair-first pairs phones one after another: the first phone's proof must
@@ -3632,6 +3636,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.querySelector<HTMLElement>('[data-cmd=dwell]')?.setAttribute('aria-pressed', String(on));
   }
   setDwellClick(dwellClickOn);
+  // "Hands always on" (Tools > More > Hands, or say "hands always on"; "hands
+  // follow my face" restores the facing gate). Per device; the pill says so.
+  let handsAlways = readHandsAlways(storage);
+  function setHandsAlways(on: boolean, speak = true): void {
+    handsAlways = on;
+    writeHandsAlways(on, storage);
+    root.querySelector<HTMLElement>('[data-cmd=handsalways]')?.setAttribute('aria-pressed', String(on));
+    if (speak) say(on ? 'Hands always on: your hands act here even when you look away.' : 'Hands follow your face: they act only while you face this screen.');
+  }
+  setHandsAlways(handsAlways, false);
   const handTip = typeof document !== 'undefined' ? document.createElement('div') : null;
   if (handTip) { handTip.className = 'mc-hand-tooltip'; handTip.hidden = true; handTip.setAttribute('aria-hidden', 'true'); document.body.appendChild(handTip); }
   // Open-palm highlight (palmHighlight.ts): the palm moves a sticky highlight
@@ -3647,6 +3661,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
       })
     : null;
+  /** Where the board under a running hand drag started (a cancel puts it back). */
+  let handBoardFrom: { frameId: string; x: number; y: number } | null = null;
   const handPointer: HandPointer | null = typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
     ? createHandPointer(document, {
         targetOverride: (now) => palmHighlight?.forced(now) ?? null,
@@ -3663,8 +3679,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Held at a paired phone's edge, the board is sent there (boardEdge).
         onBoardMove: (ev) => {
           const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
-          if (ev.phase === 'start') { boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return; }
-          if (ev.phase === 'end') { boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
+          if (ev.phase === 'start') {
+            const f0 = reg.get(ev.frameId);
+            handBoardFrom = f0 ? { frameId: ev.frameId, x: f0.rect.x, y: f0.rect.y } : null;
+            boardEdge.handleBoardDrag({ ...at, phase: 'start' }); return;
+          }
+          if (ev.phase === 'end') { handBoardFrom = null; boardEdge.handleBoardDrag({ ...at, phase: 'end' }); persist(); return; }
+          if (ev.phase === 'cancel') {
+            // Looked away mid-drag: nothing is handed off and the board goes
+            // back to where the drag began.
+            boardEdge.handleBoardDrag({ ...at, phase: 'cancel' });
+            const from = handBoardFrom; handBoardFrom = null;
+            const f = reg.get(ev.frameId);
+            if (from && f && from.frameId === ev.frameId) { reg.setRect(ev.frameId, { ...f.rect, x: from.x, y: from.y }); sync(); }
+            return;
+          }
           if (ev.phase !== 'move') return;
           // The edge check runs even on a zero delta (a palm clamped at the edge);
           // a fist held perfectly still is covered by boardEdge's own hold timer.
@@ -3716,9 +3745,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Button gestures (gestureControl.ts): a fixed hand shape held still for
   // 2 s presses its bound button — a real click, the same path as the
   // mouse. Badges show only while Hands is on. Phones bind the short table.
-  // Facing gate: the operator's hand gate from presence frames.
-  let gestureFacing: boolean | null = null;
-  let gestureFaceX: number | null = null;
+  // Facing gate: handRouter (handFacing.ts) — one gate, read by every path.
   const gestures: GestureControl | null = typeof document !== 'undefined' && handPointer
     ? createGestureControl({
         root,
@@ -3813,7 +3840,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Gestures are paused while something else owns the hands: a fist grab,
    *  the not-facing lock, or the point-to-connect capture step. */
-  const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
+  const gesturesBlocked = (): boolean => handRouter.blocked();
   /** Finger counts (1/2/3) are off while a point capture is armed and for a
    *  second after it: a natural pointing hand must never press a chip. */
   const POINT_COUNT_QUIET_MS = 1000;
@@ -3823,31 +3850,45 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  cancels a hold and lets the overlays clear): the ONE shape read, then
    *  the pointer (which reuses it: a thumbs-up is never a fist), then the
    *  button gestures, then the taught-gesture matcher and point capture. */
+  // The pointer owns every live hand gesture (dwell-click, one-fist grab,
+  // two-fist zoom); the router feeds it, the plan peace, the button gestures
+  // and the taught gestures in that order, all behind the ONE facing gate.
+  const handRouter = createLaptopHandRouter({
+    pointer: handPointer,
+    gestures,
+    cameraAspect: () => handCameraAspect,
+    extraBlocked: () => !!pointWait,
+    suppressCounts: countsSuppressed,
+    planFrame: (hands, now, facing) => planHandFrame(hands as readonly (readonly CropPt[])[], now, facing),
+    teach: (hands, now) => teachPanel.matchFrame(hands as readonly (readonly CropPt[])[], now),
+    pointWait: (cam, now) => feedPointWait(cam as readonly (readonly CropPt[])[], now),
+    alwaysOn: () => handsAlways,
+    say: (text) => say(text),
+    now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+  });
+  /** Which device she is facing, for the phones (rides the host's pong). */
+  function attentionWho(): AttentionWho {
+    if (handRouter.faceSeenFacing()) return 'laptop';
+    for (const [p, s] of phoneSense) if (s.facing === true && (p === 'ios' || p === 'android')) return p;
+    return 'none';
+  }
+  /** Push who she faces to the phones when it changes (the session
+   *  rate-limits; the pong carries it too, as the fallback). */
+  function pushAttention(): void {
+    if (phoneShell || !hostSession?.sendAttention) return;
+    hostSession.sendAttention(attentionWho());
+  }
   function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
-    gestures?.read(hands, { faceX: gestureFaceX, cameraAspect: handCameraAspect });
-    // Presence hands are selfie-mirrored; the pointer + reach-box map expect camera space.
-    // The pointer owns every live hand gesture: dwell-click, one-fist
-    // grab (board move / pan) and two-fist zoom.
-    const cam = cameraHandsFromSelfie(hands);
-    handPointer?.update(cam, now);
-    const planPeaceCtx = planHandFrame(hands, now, gestureFacing);
-    gestures?.frame(hands, now, {
-      facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
-      suppressCounts: countsSuppressed(),
-      ...planPeaceCtx,
-    });
-    if (!hands.length) return;
-    // Taught gestures obey the same guards as built-ins: never while the
-    // hands are locked (not facing the screen) or a fist grab is running —
-    // and never over a fixed button gesture (held, or its shape showing).
-    if (!handPointer?.handsLocked?.() && !handPointer?.isGrabActive() && !gestures?.busy()) teachPanel.matchFrame(hands, now);
-    feedPointWait(cam, now);
+    handRouter.frame(hands, now);
   }
 
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —
   // a Hands pill next to Join laptop, persisted, off on first run. Same
   // pointer as the laptop; touch is untouched. Hand clicks/grabs only reach
   // the local activity log, never the AI feed that goes to the monitor.
+  let facingPillShown = false;
+  /** The phone's relay link: who she faces per the laptop, and a way to ask. */
+  let relayAttention: { get(): { who: string; at: number } | null; probe(): void } | null = null;
   const phoneHands = phoneShell && opts.phoneCamera && handPointer && typeof document !== 'undefined'
     ? mountPhoneHands(root, {
         camera: opts.phoneCamera,
@@ -3862,6 +3903,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         countsSuppressed,
         cameraAspect: () => handCameraAspect,
         planFrame: (selfie, t, facing) => planHandFrame(selfie as readonly (readonly CropPt[])[], t, facing),
+        alwaysOn: () => handsAlways,
+        // Another device has her attention (the laptop's pong says who, ≤ 20 s old).
+        othersFacing: () => {
+          const a = relayAttention?.get();
+          const me = opts.phoneSensing ? 'ios' : 'android';
+          return !!a && Date.now() - a.at < 20_000 && a.who !== 'none' && a.who !== me;
+        },
+        probeOthers: () => relayAttention?.probe(),
+        // Which device has her attention: the re-announce carries it.
+        onFacing: (v) => {
+          senseChanged();
+          // The pill showing / hiding resizes the board area (canvas.css).
+          const shown = v !== null;
+          if (shown !== facingPillShown) { facingPillShown = shown; requestAnimationFrame(() => fitPhone()); }
+        },
       })
     : null;
 
@@ -4021,14 +4077,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Hands only act while the user faces this screen: the operator's HAND
     // GATE, the same signal as the "Facing this device / Not facing" pill.
-    // No face, an unsettled face, or a stranger's face (registered operator
-    // lost) = unknown, which never locks the hands (handPointer adds the
-    // 300 ms hysteresis). Point-to-connect is intentionally NOT gated on
-    // facing: you look at the device you point at, not at this screen.
-    const op = f.faces.find((x) => x.isOperator);
-    handPointer?.setFacing?.(op ? (op.handGate ?? null) : null, now);
-    gestureFacing = op ? (op.handGate ?? null) : null;
-    gestureFaceX = op ? op.box.cx : null;
+    // Strict: no face, an unsettled face, or a stranger's face (registered
+    // operator lost) all count as NOT facing (handFacing.presenceHandFacing).
+    // Point-to-connect is intentionally NOT gated on facing: you look at the
+    // device you point at, not at this screen.
+    handRouter.presence(f, now);
+    pushAttention();
     if (f.aspect && f.aspect > 0) handCameraAspect = f.aspect;
     if (opts.sim) return; // replay drives the sim scan; no chip churn either
     if (scanPanel?.isOpen()) {
@@ -4093,6 +4147,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
         onPresence: onPresenceFrame,
+        facingView: () => handRouter.view(),
         // Draw each glass hand with its palm exactly on its own cursor
         // (one-to-one, ≤80 px), using this frame's cursors.
         handAnchors: (hands) => matchCursors(
@@ -4179,9 +4234,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     senseLast = k;
     for (const cb of senseSubs) cb();
   }
-  /** What this iPhone really has on (for its announce to the laptop). */
+  /** What this iPhone really has on (for its announce to the laptop). The
+   *  Android phone has no sensing layer: it announces only while its Hands
+   *  pill is on, so the laptop row can say whether she faces it. */
   function phoneSenseStatus(): PhoneSenseStatus | null {
-    if (!phoneSensor) return null;
+    const facing = phoneHands?.facing() ?? null;
+    if (!phoneSensor) return phoneHands?.isOn() ? { gimbal: 'none', sensor: false, hands: true, canPoint: false, ...(facing !== null ? { facing } : {}) } : null;
     // 'tracking' only when docked AND the plugin read back system tracking on
     // (gimbal mode 'face' is entered only on that confirmation).
     const mode = inputs.gimbal.mode();
@@ -4197,6 +4255,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
     if (diag) s.aimingAtHands = diag.aimingAtHands;
     if (diag?.signSuspect) s.aimSign = diag.signSuspect;
+    if (facing !== null) s.facing = facing;
     return s;
   }
   // ---- the gimbal tile (gimbalTile.ts) ----
@@ -4614,6 +4673,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           case 'handsOn': if (handsOn) say('Hands are already on.'); else press('hands'); break;
           case 'handsOff': if (!handsOn) say('Hands are already off.'); else press('hands'); break;
           case 'dwell': press('dwell'); break;
+          case 'handsAlways': if (handsAlways) say('Hands are already always on.'); else setHandsAlways(true); break;
+          case 'handsFollowFace': if (!handsAlways) say('Hands already follow your face.'); else setHandsAlways(false); break;
           case 'register': openScan(); break;
           case 'offline': if (!net.isOnline()) say('Already offline (simulated).'); else press('offline'); break;
           case 'online': if (net.isOnline()) say('Already online.'); else press('offline'); break;
@@ -4760,7 +4821,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), handsalways: () => setHandsAlways(!handsAlways), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
@@ -5191,7 +5252,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
       },
       /** The operator hand gate as presence would set it (false = not facing). */
-      facing: (v: boolean | null) => { gestureFacing = v; handPointer?.setFacing?.(v, typeof performance !== 'undefined' ? performance.now() : Date.now()); },
+      facing: (v: boolean | null, now?: number) => { handRouter.setFacing(v, now); },
+      /** A presence frame's face part through the REAL facing gate (what the
+       *  camera sends, on the replay's clock): `faces: []` = no face seen =
+       *  not facing. */
+      presenceFaces: (faces: PresenceFrame['faces'], now: number) => { handRouter.presence({ faces }, now); },
+      /** The one gate's view: locked (not facing or still settling). */
+      handsLocked: () => handRouter.locked(),
       /** For assertions: camera, any grab running, debug state. */
       state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
       /** Selfie-space wrist position that puts the PALM at screen (x, y). */
@@ -5669,6 +5736,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     /** iPhone: the laptop's gimbal tile asked for a mode ('gimbalMode'). The
      *  same handler as the spoken phrase; the re-announce reports the result. */
     gimbalMode: (mode: GimbalModeKind): void => { if (getGimbalPlugin()) gimbalMode(mode); },
+    /** Phone shell: the guest session's attention (from the host's pong). */
+    setRelayAttention: (src: { get(): { who: string; at: number } | null; probe(): void } | null) => { relayAttention = src; },
     onPhoneSenseChange: (cb: () => void) => { senseSubs.add(cb); return () => { senseSubs.delete(cb); }; },
   };
 }

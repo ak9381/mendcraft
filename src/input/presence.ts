@@ -76,6 +76,10 @@ export interface PresenceFrame {
    *  Never drawn, stored or sent anywhere. */
   operatorFace?: { x: number; y: number; z?: number }[] | null;
   facing: boolean;
+  /** The canvas HAND GATE for the focus face (the operator, or the main face
+   *  before registration), with the gate's short lost-face grace: true /
+   *  false / null (no face, or not settled). Present whenever faces run. */
+  handGate?: boolean | null;
   registered: boolean;
   paused: boolean;
   /** Camera frame height ÷ width (landmark y is normalised to it). */
@@ -213,6 +217,8 @@ export function createPresenceTracker(
   const facingTracker = createFacingTracker(opts?.facing);
   const handGate = createHandGate(opts?.handGate);
   let lastHandGate: boolean | null = null;
+  /** The last hand frame saw a hand (the face's lost grace is longer then). */
+  let handsInView = false;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
   const binder = createHandBinder();
@@ -262,7 +268,9 @@ export function createPresenceTracker(
       lastHandGate = handGate.update(pose, now);
       emitFacing(facing);
     } else {
-      lastHandGate = handGate.update(null, now); // no face → unknown, never "not facing"
+      // No face → its last state for the lost grace (longer while a hand is
+      // in view: her hand over her face), then null = not facing.
+      lastHandGate = handGate.update(null, now, handsInView ? LOST_TIMEOUT_MS : undefined);
       emitFacing(facingTracker.update({ yaw: 90, pitch: 90 }, now)); // no face → not facing
     }
   }
@@ -293,6 +301,7 @@ export function createPresenceTracker(
 
   function handleHands(result: HandLandmarkerResult): void {
     const now = ts;
+    handsInView = result.landmarks.length > 0;
     const rawHands = result.landmarks.map((landmarks, i) => ({
       landmarks,
       label: result.handedness?.[i]?.[0]?.categoryName,
@@ -339,6 +348,7 @@ export function createPresenceTracker(
       faces: faceFrames(),
       operatorFace: focusFace,
       facing: lastFacing,
+      ...(wantFaces ? { handGate: lastHandGate } : {}),
       registered: operator.registered,
       paused,
       aspect: video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : undefined,
