@@ -2,7 +2,6 @@
 // the tile only ever shows what the store projects. Optimistic pending state,
 // confirmed on ack, rolled back with an error on failure or timeout.
 import { levelRefusal } from './deviceGuard';
-import { VOLUME_TILE_STEP } from './lampPresets';
 import { deviceUpdate, type A2uiMessage, type DeviceState } from './surfacePlan';
 
 export type LampIntent = { deviceId: string; on?: boolean; brightness?: number };
@@ -188,17 +187,10 @@ export function createDeviceStore(
  *  go through it. `value` is the pressed chip's own value — a preset key, or
  *  a number for a level set directly (keyboard fine steps). Values are passed
  *  on as asked: the store refuses anything out of range. */
-export function tileIntent(name: string, deviceId: string, cur: DeviceState, value?: string | number): DeviceIntent | null {
-  const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
+export function tileIntent(name: string, deviceId: string, cur: DeviceState, _value?: string | number): DeviceIntent | null {
   switch (name) {
-    // Lamp presses are generated controls now: device.act → controlSpec.ts.
+    // Lamp and speaker presses are generated controls now: device.act → controlSpec.ts.
     case 'switch.toggle': return { deviceId, on: !cur.on };
-    case 'music.playPause': return { deviceId, playing: !cur.playing };
-    case 'music.next': return { deviceId, next: true };
-    case 'music.previous': return { deviceId, previous: true };
-    case 'music.louder': return { deviceId, volume: Math.min(100, (cur.volume ?? 50) + VOLUME_TILE_STEP) };
-    case 'music.softer': return { deviceId, volume: Math.max(0, (cur.volume ?? 50) - VOLUME_TILE_STEP) };
-    case 'music.volume': return num === null ? null : { deviceId, volume: num };
     default: return null;
   }
 }

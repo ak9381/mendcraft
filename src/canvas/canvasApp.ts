@@ -53,7 +53,7 @@ import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TI
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
-import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
+import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
 import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
@@ -61,7 +61,7 @@ import { createWizClient, resolveWizToken, type WizClient } from '../devices/wiz
 import { esc } from '../core/esc';
 import {
   CardTileElement, ChartTileElement, ConnectTileElement, FormTileElement, GridTileElement,
-  GimbalTileElement, DeviceTileElement, MusicTileElement, PlanBoardElement, RowTileElement, SceneTileElement,
+  GimbalTileElement, DeviceTileElement, PlanBoardElement, RowTileElement, SceneTileElement,
   SplitTileElement, StatTileElement, SwitchTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
@@ -298,7 +298,7 @@ export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number
 
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   for (const El of [
-    DeviceTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement, GimbalTileElement,
+    DeviceTileElement, PlanBoardElement, SwitchTileElement, SceneTileElement, ConnectTileElement, GimbalTileElement,
     RowTileElement, GridTileElement, CardTileElement, TabsTileElement, SplitTileElement,
     StatTileElement, ChartTileElement, TableTileElement, FormTileElement, VisualTileElement,
   ]) {
@@ -1353,12 +1353,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Every device command — tile press, gesture or voice — goes through this
   // one per-device lane, so they can never overtake each other.
   const actQueue = createActQueue(store);
-  // Speaker tiles say which player is behind them from the first paint:
-  // Spotify when she is connected, else the built-in player (labelled).
-  if (!opts.connector) {
-    const source = !opts.sim && loadTokens() ? 'spotify' as const : 'builtin' as const;
-    for (const [id, d] of Object.entries(store.all())) if (d.playing !== undefined) store.patch(id, { source });
+  // The speaker: only Spotify plays it, so it is a device here only while
+  // Spotify is connected (a test run's SIM speaker comes from its fixture).
+  // Nothing about it is made up: no track until Spotify names one.
+  if (!opts.sim && !opts.devices && !opts.connector && loadTokens() && !store.get(SPOTIFY_SPEAKER_ID)) {
+    store.add(SPOTIFY_SPEAKER_ID, { cls: 'music', on: false, brightness: 0, playing: false, volume: 50, trackTitle: '', source: 'spotify', playingOn: '', sim: false });
+    DEVICE_LABELS[SPOTIFY_SPEAKER_ID] ??= SPOTIFY_SPEAKER_LABEL;
   }
+  const spotifyConnected = (): boolean => !opts.sim && !!loadTokens();
   /** The lamps a board may show right now (managed ids in the device list). */
   const lampSlots = (): LampSlot[] => Object.keys(store.all()).filter(isManagedLampId).map((id) => ({ id, label: DEVICE_LABELS[id] ?? id }));
   /** Any plan about to be shown or applied names only lamps that exist: a
@@ -1515,7 +1517,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** One press on a generated device tile → the device lane, or the refusal said. */
   function devicePress(frameId: string, press: DevicePress): void {
-    const r = pressIntent(surfaces[frameId], press, (id) => store.get(id));
+    const r = pressIntent(surfaces[frameId], press, (id) => store.get(id), { spotifyConnected });
     if ('refusal' in r) {
       say(r.refusal);
       // The tile shows why too; a lamp that isn't answering is looked for again.
@@ -4882,7 +4884,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       // Device speech (works in any board — controls the docked dashboard mid-build).
       // "play <something>" on a speaker: a search, handled by the speaker connector
-      // (Spotify when connected, honest built-in fallback otherwise).
+      // (Spotify only; not connected, it is refused with the connect line).
       case 'musicSearch':
         void actQueue.act({ deviceId: r.deviceId, playing: true, query: r.query });
         say(`Looking for ${r.query}…`);

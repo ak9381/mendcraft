@@ -331,6 +331,87 @@ async function phones(page) {
 }
 SECTIONS.phones = phones;
 
+// ---- speaker: a generated speaker tile drives a (simulated) speaker through the same checked binding ----
+const SPEAKER_ID = 'speaker-sim';
+const SPEAKER_NOTE = "Dropped 1 control the speaker can't use.";
+const SPOTIFY_CONNECT_LINE = "Spotify isn't connected. Connect it, then try again. Nothing changed.";
+const musicTile = () => {
+  const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=music]'))?.shadowRoot;
+  return r ? {
+    state: r.querySelector('[data-device-state]')?.textContent.trim() ?? '',
+    sim: !!r.querySelector('.sim-badge'), away: !!r.querySelector('[data-unreachable]'), standard: !!r.querySelector('[data-standard]'),
+    toggles: [...r.querySelectorAll('[data-act=toggle]')].map((b) => b.textContent.trim()),
+    buttons: [...r.querySelectorAll('[data-act=button]')].map((b) => b.textContent.trim()),
+    levels: [...r.querySelectorAll('[data-level]')].map((l) => l.getAttribute('data-level')),
+    readouts: [...r.querySelectorAll('[data-readout]')].map((x) => x.textContent.trim()),
+  } : null;
+};
+const pressMusic = (sel) => [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=music]'))?.shadowRoot.querySelector(sel)?.click();
+const hasMusicTile = () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector('[data-device-cls=music]'));
+
+async function speaker(page) {
+  // One simulated speaker (test build + ?sim=1 only); the Gemini pass is the
+  // recorded speaker board.
+  await page.evaluateOnNewDocument((id) => {
+    const f = window.__mcFixtures ?? {};
+    const replies = { ...(f.replies ?? {}) };
+    replies['gemini.boardBetter'] = replies['gemini.board.speaker'];
+    window.__mcFixtures = { ...f, replies, devices: [{ id, cls: 'music', label: 'Speaker' }] };
+  }, SPEAKER_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check(await page.evaluate((id) => { const d = window.__mcCanvas.store.get(id); return !!d?.sim && d.cls === 'music' && !d.trackTitle; }, SPEAKER_ID), 'the fixture speaker is registered, marked SIM, with no track');
+
+  await page.evaluate(() => { window.__mcCanvas.run('add the speaker to the dashboard'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the speaker review opens'))) return;
+  check((await page.evaluate(reviewText)).includes('Replay'), 'the speaker review names "Replay"');
+  const said = await page.evaluate(reviewNotes);
+  check(said.includes(SPEAKER_NOTE), `the review says the brightness slider was dropped (got ${JSON.stringify(said)})`);
+  check(!(await page.evaluate(hasMusicTile)) && (await boardArtifacts(page)).length === 0, '0 speaker tiles and 0 boards until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, hasMusicTile, 10_000, 'a speaker tile after Approve'))) return;
+  const kept = await page.evaluate(musicTile);
+  check(kept.sim && !kept.away && !kept.standard && kept.state === 'Paused', `one SIM speaker tile with the model's controls, paused (got ${JSON.stringify(kept)})`);
+  check(JSON.stringify(kept.toggles) === '["Play"]' && JSON.stringify(kept.buttons) === '["Previous","Next"]' && JSON.stringify(kept.levels) === '["volume"]',
+    `play, previous, next and volume are there; the brightness slider is not (got ${JSON.stringify(kept)})`);
+  check(kept.readouts.length === 1 && /Nothing playing yet/.test(kept.readouts[0]), `the track readout shows no made-up title (got ${JSON.stringify(kept.readouts)})`);
+
+  // Press play: the tile follows the (simulated) speaker's answer.
+  await page.evaluate(pressMusic, '[data-act=toggle]');
+  await waitFor(page, () => { const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=music]'))?.shadowRoot; return /^Playing/.test(r?.querySelector('[data-device-state]')?.textContent ?? '') && !!r?.querySelector('.sim-badge'); }, 5_000, 'the tile shows playing with SIM')
+    .then((ok) => ok && check(true, 'play: the tile shows playing with the SIM label'));
+  check(await page.evaluate((id) => window.__mcCanvas.store.get(id)?.playing === true, SPEAKER_ID), 'the speaker is playing in the store');
+  // Volume +: one step from the approved slider.
+  const vol0 = await page.evaluate((id) => window.__mcCanvas.store.get(id)?.volume, SPEAKER_ID);
+  await page.evaluate(pressMusic, '[data-level=volume] [data-level-inc]');
+  await waitFor(page, (id, v) => window.__mcCanvas.store.get(id)?.volume === v + 10 && !window.__mcCanvas.store.get(id)?.pending, 5_000, 'volume up one step', SPEAKER_ID, vol0)
+    .then((ok) => ok && check(true, 'volume +: one step from the approved slider'));
+  // The same toggle pauses.
+  await page.evaluate(pressMusic, '[data-act=toggle]');
+  await waitFor(page, (id) => window.__mcCanvas.store.get(id)?.playing === false, 5_000, 'pause', SPEAKER_ID)
+    .then((ok) => ok && check(true, 'the same toggle pauses'));
+
+  await sleep(1200); // past the save debounce
+  const stored = await boardArtifacts(page);
+  check(stored.length === 1 && stored[0].by === 'replay' && JSON.stringify(stored[0].data.plan).includes('"type":"music"'), `the speaker board is stored, made by replay (got ${JSON.stringify(stored.map((a) => a.by))})`);
+  check(!(await page.evaluate(() => /Morning light|Monsoon raga|Built-in player/i.test(document.body.innerText + [...document.querySelectorAll('mc-device-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' ')))),
+    'no placeholder track or stand-in player anywhere on the page');
+
+  // The same board where no speaker is here (Spotify not connected): "Not
+  // connected", no track, and a press says to connect Spotify.
+  await page.evaluateOnNewDocument(() => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [] }; });
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, hasMusicTile, 10_000, 'the speaker board is back after the reload'))) return;
+  const away = await page.evaluate(musicTile);
+  check(away.away && !away.sim && /Nothing playing yet/.test(away.readouts[0] ?? ''), `with no speaker here the tile says "Not connected" and shows no track (got ${JSON.stringify(away)})`);
+  const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  await page.evaluate(pressMusic, '[data-act=toggle]');
+  await sleep(300);
+  const lines = await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark);
+  check(lines.includes(SPOTIFY_CONNECT_LINE), `a press says to connect Spotify (got ${JSON.stringify(lines)})`);
+  check(await page.evaluate((id) => !window.__mcCanvas.store.get(id), SPEAKER_ID), 'and no speaker is invented');
+}
+SECTIONS.speaker = speaker;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

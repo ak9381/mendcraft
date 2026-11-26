@@ -3,14 +3,18 @@
 // volume, "play <query>") goes to Spotify, on the best device its own device
 // list offers (see pickSpotifyDevice). The tile's track title is the real
 // track's title, never invented, and the tile says where it plays ("Spotify ·
-// iPhone"). Only when Spotify is NOT connected does the built-in player run,
-// labelled as such. Connected but no device to play on: nothing plays and she
-// is told how to make one show up — never a silent built-in fallback.
+// iPhone"). Spotify NOT connected (or its sign-in gone): nothing plays and she
+// is told to connect it — there is no stand-in player on the canvas.
+// Connected but no device to play on: nothing plays and she is told how to
+// make one show up.
 import { DeviceError, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
 import type { SpotifyDevice, SpotifySearchHit } from '../music/spotifyApi';
 
-export const NOT_CONNECTED_NOTICE = "Spotify isn't connected — playing the built-in track.";
+/** Said (and shown on the tile) when a speaker press arrives and Spotify is not connected. */
+export const SPOTIFY_CONNECT_LINE = "Spotify isn't connected. Connect it, then try again. Nothing changed.";
+/** The connector's name for the same line. */
+export const NOT_CONNECTED_NOTICE = SPOTIFY_CONNECT_LINE;
 /** How long the in-browser player gets to become ready before we give up on it. */
 export const BROWSER_DEVICE_MS = 4000;
 /** Asking Spotify what plays right after starting it: this many times, this far apart. */
@@ -19,7 +23,6 @@ export const NOW_PLAYING_GAP_MS = 600;
 export const NO_DEVICE_NOTICE = 'Open Spotify on your phone so it shows up, then try again.';
 export const PREMIUM_NOTICE = 'Spotify needs Premium to control playback.';
 export const NO_ANSWER_NOTICE = "Spotify didn't respond.";
-export const SIGNED_OUT_NOTICE = 'Spotify needs connecting again — playing on the built-in player.';
 
 /** Spotify answers 403 (reason PREMIUM_REQUIRED) when a free account tries to control playback. */
 export function isPremiumRequired(err: unknown): boolean {
@@ -37,9 +40,6 @@ export function isSpotifyAuthFailure(err: unknown): boolean {
   const e = err as { status?: number; message?: string } | null;
   return e?.status === 401 || /invalid_grant|refresh token|revoked|connect spotify first|access token/i.test(e?.message ?? '');
 }
-
-/** The tile's honest label for the fallback player. */
-export const BUILTIN_LABEL = 'Built-in player — Spotify not connected';
 
 export interface SpotifyConnectorDeps {
   inner: DeviceConnector;
@@ -78,13 +78,17 @@ export interface MusicWhere {
   target: string;
 }
 
-/** "Playing Morning light on the built-in player." / "Playing on iPhone via
- *  Spotify." — what plays (when known) and where, never a made-up title. */
+/** "Playing Blue in Green on iPhone via Spotify." / "Playing." — what plays
+ *  (when known) and where, never a made-up title or player. */
 export function playingLine(where: MusicWhere | null | undefined, title?: string): string {
   const what = title?.trim() ? `Playing ${title.trim()}` : 'Playing';
   if (where?.spotify) return `${what} on ${where.target || 'Spotify'} via Spotify.`;
-  return `${what} on the built-in player.`;
+  return `${what}.`;
 }
+
+/** The one speaker a Spotify sign-in gives this canvas (registered only while connected). */
+export const SPOTIFY_SPEAKER_ID = 'speaker-spotify';
+export const SPOTIFY_SPEAKER_LABEL = 'Speaker';
 
 export function isSpeakerDevice(deviceId: string): boolean {
   return deviceId.startsWith('speaker-');
@@ -158,20 +162,12 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
   const spotify = (extra: Partial<DeviceState>): Partial<DeviceState> => ({ ...extra, source: 'spotify', playingOn: target?.name ?? '', sim: false });
 
   /** Connected, but Spotify has nowhere to play: say how to fix it. Nothing
-   *  plays — the built-in player is never started silently in its place. */
+   *  plays in its place. */
   function noDevice(): Partial<DeviceState> {
     target = null;
     mark(false);
     deps.say(NO_DEVICE_NOTICE);
     return { playing: false, source: 'spotify', playingOn: '' };
-  }
-
-  async function builtin(intent: DeviceIntent, notice?: string): Promise<Partial<DeviceState>> {
-    if (notice) deps.say(notice);
-    target = null;
-    mark(false);
-    const { query: _q, ...rest } = intent;
-    return { ...(await deps.inner.run(rest)), source: 'builtin', playingOn: '' };
   }
 
   /** Move playback to the chosen device, once per session (`play` starts it there). */
@@ -218,8 +214,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
       if (!fresh && deps.resume) await deps.resume();
       const np = await settledNowPlaying();
       deps.say(spotifyPlayingLine(np?.title ?? '', np?.artist, target!.name));
-      // Never keep the built-in player's placeholder title: what Spotify says
-      // is playing, or no title at all.
+      // What Spotify says is playing, or no title at all.
       return spotify({ playing: true, trackTitle: np?.title ?? '' });
     }
     if (intent.volume !== undefined) {
@@ -235,11 +230,18 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     deps.say(message);
     throw new DeviceError(message);
   }
+  /** The stored sign-in stopped working: as good as not connected. */
+  function signedOut(): never {
+    target = null;
+    mark(false);
+    refuse(SPOTIFY_CONNECT_LINE);
+  }
 
   return {
     async run(intent: DeviceIntent): Promise<Partial<DeviceState>> {
       if (!isSpeakerDevice(intent.deviceId)) return deps.inner.run(intent);
-      if (!deps.isConnected()) return builtin(intent, intent.query ? NOT_CONNECTED_NOTICE : undefined);
+      // Not connected: nothing plays, nothing changes, she is told to connect it.
+      if (!deps.isConnected()) { target = null; mark(false); refuse(SPOTIFY_CONNECT_LINE); }
 
       if (intent.query) {
         try {
@@ -252,8 +254,8 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           deps.say(spotifyPlayingLine(hit.name, hit.artist, t.name));
           return spotify({ playing: true, trackTitle: hit.name });
         } catch (err) {
-          // The sign-in is gone: that is "not connected" — the built-in player, labelled.
-          if (isSpotifyAuthFailure(err)) return builtin(intent, SIGNED_OUT_NOTICE);
+          // The sign-in is gone: that is "not connected".
+          if (isSpotifyAuthFailure(err)) signedOut();
           if (isPremiumRequired(err)) refuse(PREMIUM_NOTICE);
           if (isDeviceGone(err)) return noDevice();
           const msg = err instanceof Error ? err.message : '';
@@ -280,7 +282,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
             err = second;
           }
         }
-        if (isSpotifyAuthFailure(err)) return builtin(intent, SIGNED_OUT_NOTICE);
+        if (isSpotifyAuthFailure(err)) signedOut();
         if (isPremiumRequired(err)) refuse(PREMIUM_NOTICE);
         refuse(NO_ANSWER_NOTICE);
       }

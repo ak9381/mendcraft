@@ -48,12 +48,6 @@ export const LAMP_SCENES: readonly ScenePreset[] = [
   { key: 'party', label: 'Party', sceneId: 4 },
 ];
 
-export interface VolumePreset { key: string; label: string; volume: number }
-export const VOLUME_PRESETS: readonly VolumePreset[] = [
-  { key: 'quiet', label: 'Quiet', volume: 20 },
-  { key: 'medium', label: 'Medium', volume: 50 },
-  { key: 'loud', label: 'Loud', volume: 80 },
-];
 
 /** A form "slider" field as discrete controls: a round step (about a tenth of
  *  the range) for − / +, and five evenly spaced preset chips, min to max. */

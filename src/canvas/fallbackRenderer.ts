@@ -1,16 +1,15 @@
 // Fallback A2UI renderer: takes the SAME gated A2UI messages
 // (createSurface / updateComponents / updateDataModel / deleteSurface)
-// and renders Column, Text, DeviceTile, PlanBoard, MusicTile, SwitchTile,
+// and renders Column, Text, DeviceTile, PlanBoard, SwitchTile,
 // SceneTile, ConnectTile into a host element without @a2ui/lit (plain DOM).
 //
 // Pure part: message reducer to a render tree with resolved bindings.
 import type { A2uiMessage, FormField } from './surfacePlan';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
-import { VOLUME_PRESETS, VOLUME_TILE_STEP, rangeNudge, rangePresets, rangeStep } from './lampPresets';
+import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 import { NOT_CONNECTED_BADGE, STANDARD_CONTROLS_NOTE, intentMatches, readoutText, sliderView, stateLine, tileState } from './deviceTile';
 import type { ControlSpec } from './controlSpec';
-import { BUILTIN_LABEL } from './spotifyConnector';
 import { GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_STAND, GIMBAL_TILE_LABEL } from './gimbalTile';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -769,57 +768,6 @@ export function renderNodeToDom(
       }
     });
     if (p.standard) el.appendChild(mk('p', 'note', STANDARD_CONTROLS_NOTE));
-    return el;
-  }
-
-  if (node.component === 'MusicTile') {
-    const playing = !!p.playing;
-    const vol = typeof p.volume === 'number' ? Math.max(0, Math.min(100, Math.round(p.volume))) : 50;
-    const track = p.trackTitle ? String(p.trackTitle) : '';
-    const spotify = p.source === 'spotify';
-    const where = p.playingOn ? String(p.playingOn) : '';
-    const el = mk('div', `mc-fb-tile music ${playing ? 'playing' : ''}`);
-    el.setAttribute('role', 'group');
-    el.setAttribute('aria-label', String(p.label || 'Music'));
-
-    const head = mk('div', 'row head');
-    head.appendChild(mk('span', 'label', String(p.label || 'Music')));
-    const source = mk('span', 'state source', spotify ? `Spotify${where ? ` · ${where}` : ''}` : BUILTIN_LABEL);
-    source.setAttribute('data-source', spotify ? 'spotify' : 'builtin');
-    head.appendChild(source);
-    el.appendChild(head);
-
-    const trackEl = mk('div', 'track');
-    trackEl.setAttribute('aria-live', 'polite');
-    trackEl.appendChild(mk('span', 'state', `${playing ? 'Now playing' : 'Paused'}${p.pending ? ' · checking…' : ''}`));
-    const title = mk('span', 'title', track || 'Nothing playing yet');
-    title.setAttribute('data-track', '');
-    trackEl.appendChild(title);
-    el.appendChild(trackEl);
-    if (p.error) el.appendChild(noteEl());
-
-    const transport = mk('div', 'transport');
-    transport.setAttribute('role', 'group');
-    transport.setAttribute('aria-label', 'Playback');
-    if (p.onPrevious) transport.appendChild(btn('Previous', 'previous', () => triggerAction(p.onPrevious)));
-    transport.appendChild(btn(playing ? 'Pause' : 'Play', 'playpause', () => triggerAction(p.onPlayPause), { cls: 'primary' }));
-    if (p.onNext) transport.appendChild(btn('Next', 'next', () => triggerAction(p.onNext)));
-    el.appendChild(transport);
-
-    const volume = levelEl('volume', VOLUME_TILE_STEP, `Volume ${vol} %`, vol, 0, 100);
-    const steps = mk('div', 'steps');
-    steps.appendChild(btn('−', 'softer', () => triggerAction(p.onSofter), { cls: 'step', label: 'Quieter', attrs: ['data-level-dec'] }));
-    const ro = mk('div', 'readout', 'Volume ');
-    ro.appendChild(readoutEl(`${vol} %`));
-    steps.appendChild(ro);
-    steps.appendChild(btn('+', 'louder', () => triggerAction(p.onLouder), { cls: 'step', label: 'Louder', attrs: ['data-level-inc'] }));
-    volume.appendChild(steps);
-    const presets = mk('div', 'chips');
-    for (const v of VOLUME_PRESETS) {
-      presets.appendChild(btn(v.label, 'volume', () => triggerAction(p.onVolume, { value: v.volume }), { label: `${v.label} volume`, pressed: vol === v.volume, value: v.volume }));
-    }
-    volume.appendChild(presets);
-    el.appendChild(volume);
     return el;
   }
 

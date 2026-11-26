@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { listDevices } from '../../src/music/spotifyApi';
-import { BUILTIN_LABEL, createSpotifyAwareConnector, isDeviceGone, isPremiumRequired, isSpotifyAuthFailure, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, PREMIUM_NOTICE, SIGNED_OUT_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
+import { createSpotifyAwareConnector, isDeviceGone, isPremiumRequired, isSpotifyAuthFailure, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, PREMIUM_NOTICE, SPOTIFY_CONNECT_LINE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -76,13 +76,13 @@ describe('createSpotifyAwareConnector', () => {
     expect(ack.trackTitle).toBe('');
   });
 
-  it('not connected: inner built-in player + the exact notice, no Spotify calls', async () => {
+  it('not connected: "play <song>" is refused with the connect line, no Spotify calls, nothing plays', async () => {
     const r = rig({ isConnected: () => false });
-    const ack = await r.c.run({ deviceId: 'speaker-a', playing: true, query: 'jazz' });
+    await expect(r.c.run({ deviceId: 'speaker-a', playing: true, query: 'jazz' })).rejects.toThrow(SPOTIFY_CONNECT_LINE);
     expect(r.calls).toEqual([]);
-    expect(r.said).toEqual([NOT_CONNECTED_NOTICE]);
-    expect(ack.trackTitle).toBe('Built-in');
-    expect(vi.mocked(r.inner.run).mock.calls[0][0]).not.toHaveProperty('query');
+    expect(r.said).toEqual([SPOTIFY_CONNECT_LINE]);
+    expect(NOT_CONNECTED_NOTICE).toBe(SPOTIFY_CONNECT_LINE);
+    expect(r.inner.run).not.toHaveBeenCalled();
   });
 
   it('search miss: notice, no fake title, playing false', async () => {
@@ -128,12 +128,17 @@ describe('createSpotifyAwareConnector', () => {
     expect(r.inner.run).not.toHaveBeenCalled();
   });
 
-  it('not connected: transport uses the built-in player, labelled as such', async () => {
+  it('not connected: a transport press is refused too, never a stand-in player', async () => {
     const r = rig({ isConnected: () => false });
-    const ack = await r.c.run({ deviceId: 'speaker-a', playing: true });
-    expect(ack).toMatchObject({ playing: true, source: 'builtin', playingOn: '' });
+    for (const i of [{ playing: true }, { playing: false }, { next: true }, { volume: 30 }]) {
+      await expect(r.c.run({ deviceId: 'speaker-a', ...i })).rejects.toThrow(SPOTIFY_CONNECT_LINE);
+    }
     expect(r.calls).toEqual([]);
-    expect(BUILTIN_LABEL).toBe('Built-in player — Spotify not connected');
+    expect(r.inner.run).not.toHaveBeenCalled();
+    // Through the store: the tile is put back as it was and shows the line.
+    const store = createDeviceStore({ 'speaker-a': { on: false, brightness: 0, playing: false, volume: 40 } }, r.c, () => {}, () => null);
+    expect(await store.act({ deviceId: 'speaker-a', playing: true })).toMatchObject({ playing: false, error: SPOTIFY_CONNECT_LINE });
+    expect(store.get('speaker-a')?.trackTitle ?? '').toBe('');
   });
 });
 
@@ -297,11 +302,13 @@ describe('the chosen Spotify device is not sticky (a fake Spotify API)', () => {
     expect(await store.act({ deviceId: 'speaker-a', volume: 60 })).toMatchObject({ volume: 40, error: "Spotify didn't respond." });
   });
 
-  it('a revoked / expired sign-in is "not connected": the built-in player takes over, labelled', async () => {
+  it('a revoked / expired sign-in is "not connected": refused with the connect line, nothing plays', async () => {
     const r = rig({ resume: async () => {}, transferPlayback: async () => { throw new Error('invalid_grant: Refresh token revoked'); } });
-    const ack = await r.c.run({ deviceId: 'speaker-a', playing: true });
-    expect(ack).toMatchObject({ playing: true, trackTitle: 'Built-in', source: 'builtin', playingOn: '' });
-    expect(r.said.at(-1)).toBe(SIGNED_OUT_NOTICE);
+    await expect(r.c.run({ deviceId: 'speaker-a', playing: true })).rejects.toThrow(SPOTIFY_CONNECT_LINE);
+    expect(r.said.at(-1)).toBe(SPOTIFY_CONNECT_LINE);
+    expect(r.inner.run).not.toHaveBeenCalled();
+    const q = rig({ searchAndPlay: async () => { throw new Error('invalid_grant: Refresh token revoked'); } });
+    await expect(q.c.run({ deviceId: 'speaker-a', playing: true, query: 'jazz' })).rejects.toThrow(SPOTIFY_CONNECT_LINE);
     expect(isSpotifyAuthFailure(status(401, 'The access token expired'))).toBe(true);
     expect(isSpotifyAuthFailure(status(502, 'Bad gateway'))).toBe(false);
   });

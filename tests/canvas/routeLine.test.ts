@@ -51,6 +51,9 @@ describe('routeLine: the table run() switches on', () => {
     ['connect devices and make a dashboard to control them', 'connectDevices'],
     ['connect this room', 'connectRoom'],
     ['connect everything in this room', 'connectRoom'],
+    // A device added to the dashboard is a reviewed board turn, never chat.
+    ['add the speaker to the dashboard', 'connectRoom'],
+    ['Add the lamp to my dashboard.', 'connectRoom'],
     ['draw the floor plan', 'floorPlan'],
     ['floor plan for Mrs Sharma\'s flat', 'floorPlan'],
     ['connect a device', 'connectSheet'],

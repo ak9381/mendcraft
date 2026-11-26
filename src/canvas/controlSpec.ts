@@ -12,6 +12,7 @@ import { CLASS_INTENTS, RANGES, lampStep, levelRefusal, type DeviceClass } from 
 import { LAMP_OFF_REFUSAL, lampOffRefusal, type DeviceIntent } from './deviceActions';
 import { LAMP_TILE_STEP, VOLUME_TILE_STEP, tempStep } from './lampPresets';
 import { tileComponentId, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
+import { SPOTIFY_CONNECT_LINE } from './spotifyConnector';
 
 export type Step = { step: 1 | -1 };
 export type IntentSpec =
@@ -311,8 +312,11 @@ export function sliderIntent(key: SliderKey, option: unknown, value: unknown): I
  *  (for a slider) `value` are read; anything else in it is ignored. */
 export interface DevicePress { tile?: unknown; control?: unknown; option?: unknown; value?: unknown; [k: string]: unknown }
 
-/** One press on an approved board → what to do, or the refusal to say. */
-export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, get: (id: string) => DeviceState | undefined): BindingResult & { deviceId?: string } {
+/** One press on an approved board → what to do, or the refusal to say.
+ *  `spotifyConnected`: a speaker that is not here because Spotify is not
+ *  connected says so (SPOTIFY_CONNECT_LINE) instead of the plain line. */
+export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, get: (id: string) => DeviceState | undefined,
+  o: { spotifyConnected?: () => boolean } = {}): BindingResult & { deviceId?: string } {
   if (!plan || typeof press.tile !== 'string' || typeof press.control !== 'number') return { refusal: UNKNOWN_CONTROL_REFUSAL };
   const option = typeof press.option === 'number' ? press.option : undefined;
   const hit = controlAt(plan, press.tile, press.control, option);
@@ -320,7 +324,11 @@ export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, g
   const slider = 'slider' in hit.spec ? hit.spec.slider : null;
   const spec = slider ? sliderIntent(slider, option, press.value) : (hit.spec as IntentSpec);
   if (!spec) return { refusal: UNKNOWN_CONTROL_REFUSAL };
-  const r = bindingIntent(hit.cls, hit.deviceId, spec, hit.cls === 'gimbal' ? undefined : get(hit.deviceId), slider ? press.value : undefined);
+  const cur = hit.cls === 'gimbal' ? undefined : get(hit.deviceId);
+  const r = bindingIntent(hit.cls, hit.deviceId, spec, cur, slider ? press.value : undefined);
+  if (hit.cls === 'music' && !cur && 'refusal' in r && r.refusal === NOT_CONNECTED_REFUSAL && o.spotifyConnected && !o.spotifyConnected()) {
+    return { refusal: SPOTIFY_CONNECT_LINE, deviceId: hit.deviceId };
+  }
   return { ...r, deviceId: hit.deviceId };
 }
 

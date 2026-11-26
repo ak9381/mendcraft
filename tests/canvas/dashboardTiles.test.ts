@@ -10,7 +10,6 @@ import {
   CATALOG_SCHEMAS,
   ConnectTileApi,
   DeviceTileApi,
-  MusicTileApi,
   SceneTileApi,
   SwitchTileApi,
 } from '../../src/canvas/catalogApi';
@@ -19,25 +18,12 @@ import { createDeviceStore } from '../../src/canvas/deviceActions';
 
 describe('Part 1: Dashboard tiles in A2UI catalog', () => {
   describe('Zod APIs and CATALOG_SCHEMAS', () => {
-    it('has strict schemas for MusicTile, SwitchTile, SceneTile, ConnectTile', () => {
-      expect(CATALOG_SCHEMAS.MusicTile).toBeDefined();
+    it('has strict schemas for SwitchTile, SceneTile, ConnectTile, and no MusicTile', () => {
+      // The speaker is a generated DeviceTile now.
+      expect(CATALOG_SCHEMAS.MusicTile).toBeUndefined();
       expect(CATALOG_SCHEMAS.SwitchTile).toBeDefined();
       expect(CATALOG_SCHEMAS.SceneTile).toBeDefined();
       expect(CATALOG_SCHEMAS.ConnectTile).toBeDefined();
-
-      // MusicTile valid & rejects extra props
-      const validMusic = {
-        label: 'Stereo',
-        playing: true,
-        trackTitle: 'Ambient Wave',
-        volume: 65,
-        onPlayPause: { event: { name: 'music.playPause' } },
-        onNext: { event: { name: 'music.next' } },
-        onLouder: { event: { name: 'music.louder' } },
-        onSofter: { event: { name: 'music.softer' } },
-      };
-      expect(MusicTileApi.schema.safeParse(validMusic).success).toBe(true);
-      expect(MusicTileApi.schema.safeParse({ ...validMusic, extraProp: 123 }).success).toBe(false);
 
       // SwitchTile valid & rejects extra props
       const validSwitch = {
@@ -138,18 +124,15 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       };
       expect(updateComponents).toBeDefined();
 
-      const musicComp = updateComponents.components.find((c) => c.component === 'MusicTile');
+      const musicComp = updateComponents.components.find((c) => c.component === 'DeviceTile' && c.cls === 'music');
       expect(musicComp).toMatchObject({
         id: 'music-spk-1',
-        component: 'MusicTile',
+        component: 'DeviceTile',
         label: 'Sonos',
         playing: { path: '/devices/spk-1/playing' },
         trackTitle: { path: '/devices/spk-1/trackTitle' },
         volume: { path: '/devices/spk-1/volume' },
-        onPlayPause: { event: { name: 'music.playPause', context: { deviceId: 'spk-1' } } },
-        onNext: { event: { name: 'music.next', context: { deviceId: 'spk-1' } } },
-        onLouder: { event: { name: 'music.louder', context: { deviceId: 'spk-1' } } },
-        onSofter: { event: { name: 'music.softer', context: { deviceId: 'spk-1' } } },
+        onAct: { event: { name: 'device.act', context: { deviceId: 'spk-1', tile: 'music-spk-1' } } },
       });
 
       const switchComp = updateComponents.components.find((c) => c.component === 'SwitchTile');
@@ -205,12 +188,11 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
             surfaceId: 'surf-1',
             components: [
               {
-                id: 'bad-music',
-                component: 'MusicTile',
+                id: 'bad-switch',
+                component: 'SwitchTile',
                 label: 'M',
-                playing: false,
-                volume: 50,
-                onPlayPause: { event: { name: 'music.playPause' } },
+                on: false,
+                onToggle: { event: { name: 'switch.toggle' } },
                 unauthorizedScript: 'eval()',
               },
             ],

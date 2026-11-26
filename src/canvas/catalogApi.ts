@@ -73,28 +73,6 @@ export const PlanBoardApi = {
     .strict(),
 };
 
-export const MusicTileApi = {
-  name: 'MusicTile',
-  schema: z
-    .object({
-      label: CommonSchemas.DynamicString,
-      playing: CommonSchemas.DynamicBoolean,
-      trackTitle: CommonSchemas.DynamicString.optional(),
-      volume: CommonSchemas.DynamicNumber,
-      pending: CommonSchemas.DynamicBoolean.optional(),
-      error: CommonSchemas.DynamicString.optional(),
-      onPlayPause: CommonSchemas.Action,
-      onNext: CommonSchemas.Action.optional(),
-      onLouder: CommonSchemas.Action.optional(),
-      onSofter: CommonSchemas.Action.optional(),
-      source: CommonSchemas.DynamicString.optional(),
-      playingOn: CommonSchemas.DynamicString.optional(),
-      onPrevious: CommonSchemas.Action.optional(),
-      onVolume: CommonSchemas.Action.optional(),
-    })
-    .strict(),
-};
-
 export const SwitchTileApi = {
   name: 'SwitchTile',
   schema: z
@@ -264,7 +242,6 @@ export const CATALOG_SCHEMAS: Record<string, ZodTypeAny> = {
   Text: A2uiText.schema,
   DeviceTile: DeviceTileApi.schema,
   PlanBoard: PlanBoardApi.schema,
-  MusicTile: MusicTileApi.schema,
   SwitchTile: SwitchTileApi.schema,
   SceneTile: SceneTileApi.schema,
   ConnectTile: ConnectTileApi.schema,

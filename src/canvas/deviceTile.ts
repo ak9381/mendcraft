@@ -32,10 +32,11 @@ export function tileState(p: Record<string, unknown>): TileState {
   };
 }
 
-/** "On · 70% · Relax", "Paused", "Off". */
+/** "On · 70% · Relax", "Playing · Blue in Green", "Paused", "Off". */
 export function stateLine(s: TileState): string {
   if (s.cls === 'lamp') return lampStateLine({ on: s.on, brightness: s.brightness, color: s.color, temp: s.temp, sceneId: s.sceneId });
-  if (s.cls === 'music') return s.playing ? 'Playing' : 'Paused';
+  // The title only when Spotify (or a SIM fixture) named one; never a placeholder.
+  if (s.cls === 'music') return s.playing ? (s.trackTitle ? `Playing · ${s.trackTitle}` : 'Playing') : 'Paused';
   if (s.cls === 'gimbal') return s.status || 'No stand docked';
   return s.on ? 'On' : 'Off';
 }
@@ -44,7 +45,7 @@ export function stateLine(s: TileState): string {
 export function readoutText(show: StateKey, s: TileState): string {
   if (show === 'trackTitle') return s.trackTitle || 'Nothing playing yet';
   if (show === 'playingOn') return s.playingOn || '—';
-  if (show === 'source') return s.source === 'spotify' ? 'Spotify' : 'Built-in player';
+  if (show === 'source') return s.source === 'spotify' ? 'Spotify' : '—';
   if (show === 'status') return s.status || '—';
   return stateLine(s);
 }

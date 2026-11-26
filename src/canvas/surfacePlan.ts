@@ -91,7 +91,8 @@ export interface DeviceState {
   playingOn?: string;
 }
 
-export type MusicSource = 'spotify' | 'builtin';
+/** '' = nothing has said yet (a SIM speaker, or before the first answer). */
+export type MusicSource = 'spotify' | '';
 
 /** What the gimbal tile shows — only ever what the iPhone reported. */
 export interface GimbalTileState {
@@ -179,12 +180,15 @@ function aliasTileRaw(o: Record<string, unknown>): Record<string, unknown> {
   return { type: 'tabs', tabs: [{ label: o.label, children }] };
 }
 
+/** What a note calls each class ("the speaker can't use"). */
+const CLASS_NOUN = { lamp: 'lamp', music: 'speaker', switch: 'switch', gimbal: 'stand' } as const;
+
 /** A device leaf's controls, checked against its class: dropped ones are
  *  counted in a note; none left (or none written) = standard controls. */
 function leafControls(o: Record<string, unknown>, cls: 'lamp' | 'music' | 'switch' | 'gimbal', notes: string[]): ControlSpec[] | undefined {
   if (o.controls === undefined) return undefined;
   const r = coerceControls(o.controls, cls);
-  if (r.dropped) notes.push(`Dropped ${r.dropped} control${r.dropped === 1 ? '' : 's'} the ${cls} can't use.`);
+  if (r.dropped) notes.push(`Dropped ${r.dropped} control${r.dropped === 1 ? '' : 's'} the ${CLASS_NOUN[cls]} can't use.`);
   return r.controls.length ? r.controls : undefined;
 }
 
@@ -447,36 +451,33 @@ export function expandPlan(
     } else if (t.type === 'plan') {
       components.push({ id, component: 'PlanBoard', boardId: t.boardId, template: t.template });
     } else if (t.type === 'music') {
+      // The speaker: the same one tile and one event as the lamp. Its track
+      // title is only ever what Spotify (or a SIM fixture) reported — '' when
+      // nothing has, never a placeholder.
+      const p = (k: string) => ({ path: `/devices/${t.deviceId}/${k}` });
       components.push({
         id,
-        component: 'MusicTile',
+        component: 'DeviceTile',
+        cls: 'music',
         label: t.label,
-        playing: { path: `/devices/${t.deviceId}/playing` },
-        trackTitle: { path: `/devices/${t.deviceId}/trackTitle` },
-        volume: { path: `/devices/${t.deviceId}/volume` },
-        pending: { path: `/devices/${t.deviceId}/pending` },
-        error: { path: `/devices/${t.deviceId}/error` },
-        onPlayPause: { event: { name: 'music.playPause', context: { deviceId: t.deviceId } } },
-        onNext: { event: { name: 'music.next', context: { deviceId: t.deviceId } } },
-        onLouder: { event: { name: 'music.louder', context: { deviceId: t.deviceId } } },
-        onSofter: { event: { name: 'music.softer', context: { deviceId: t.deviceId } } },
-        source: { path: `/devices/${t.deviceId}/source` },
-        playingOn: { path: `/devices/${t.deviceId}/playingOn` },
-        onPrevious: { event: { name: 'music.previous', context: { deviceId: t.deviceId } } },
-        onVolume: { event: { name: 'music.volume', context: { deviceId: t.deviceId } } },
+        deviceId: t.deviceId,
+        controls: t.controls ?? standardControls('music'),
+        standard: !t.controls,
+        playing: p('playing'), volume: p('volume'), trackTitle: p('trackTitle'), playingOn: p('playingOn'), source: p('source'),
+        pending: p('pending'), error: p('error'), sim: p('sim'), unreachable: p('unreachable'),
+        onAct: { event: { name: 'device.act', context: { deviceId: t.deviceId, tile: id } } },
       });
-      const s = devices[t.deviceId] ?? {};
+      const s = devices[t.deviceId];
       deviceData[t.deviceId] = {
-        ...s,
-        source: s.source ?? 'builtin',
-        playingOn: s.playingOn ?? '',
-        on: s.on ?? false,
-        brightness: s.brightness ?? 0,
-        playing: s.playing ?? false,
-        trackTitle: s.trackTitle ?? '',
-        volume: typeof s.volume === 'number' ? s.volume : 50,
-        pending: false,
-        error: s.error ?? '',
+        on: false, brightness: 0,
+        playing: s?.playing ?? false,
+        volume: typeof s?.volume === 'number' ? s.volume : 50,
+        trackTitle: s?.trackTitle ?? '',
+        playingOn: s?.playingOn ?? '',
+        source: s?.source ?? '',
+        pending: false, error: s?.error ?? '', sim: s?.sim ?? false,
+        // A speaker this canvas does not have (Spotify not connected, another laptop) shows "Not connected".
+        unreachable: !s || !!s.unreachable,
       };
     } else if (t.type === 'switch') {
       components.push({

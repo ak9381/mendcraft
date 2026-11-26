@@ -1359,10 +1359,11 @@ describe('UI fixes from the live run', () => {
   });
 
   it('(d) “play music” says what is playing and where', async () => {
-    expect(playingLine({ spotify: false, target: '' }, 'Morning light')).toBe('Playing Morning light on the built-in player.');
+    // Not on Spotify (a SIM speaker): what plays, never a made-up player.
+    expect(playingLine({ spotify: false, target: '' }, 'Blue in Green')).toBe('Playing Blue in Green.');
     expect(playingLine({ spotify: true, target: 'iPhone' }, '')).toBe('Playing on iPhone via Spotify.');
     expect(playingLine({ spotify: true, target: 'this browser' }, 'Blue in Green')).toBe('Playing Blue in Green on this browser via Spotify.');
-    expect(playingLine(null)).toBe('Playing on the built-in player.');
+    expect(playingLine(null)).toBe('Playing.');
     const src = await app();
     expect(src).toContain("if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`, { speak: true });");
     expect(src).toContain('status: musicWhere,');

@@ -10,7 +10,9 @@ export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRI
   /['"`]wiz-desk['"`]/, /['"`]wiz-ceiling['"`]/, /['"`]speaker-1['"`]/, /showcaseFixture/, /journeyReplay/, /__mcScripts/,
   /\bLampTileElement\b/, /\bBRIGHTNESS_PRESETS\b/,
   // Task 3: the names sim-main's pairing and seeded room used.
-  /Living room/, /Desk lamp/, /Ceiling light/];
+  /Living room/, /Desk lamp/, /Ceiling light/,
+  // Task 4: the speaker is a generated DeviceTile; no stand-in player, no seeded track.
+  /\bMusicTileElement\b/, /Morning light/, /Monsoon raga/];
 
 /** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
 const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [

@@ -11,7 +11,6 @@ import {
   FormTileApi,
   GridApi,
   DeviceTileApi,
-  MusicTileApi,
   PlanBoardApi,
   RowApi,
   SceneTileApi,
@@ -37,11 +36,11 @@ import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
-import { GimbalTileElement, MusicTileElement } from './deviceTiles';
+import { GimbalTileElement } from './deviceTiles';
 import { DeviceTileElement } from './deviceTile';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 
-export { DeviceTileElement, GimbalTileElement, MusicTileElement };
+export { DeviceTileElement, GimbalTileElement };
 /** The shared look of every device tile (each control at least 56 px tall,
  *  the hand-target size); kept in tileStyles.ts so the tile modules can use
  *  it without importing this file back. */
@@ -658,7 +657,6 @@ export class VisualTileElement extends A2uiLitElement<typeof VisualTileApi> {
 // Same shape as web_core's (internal) toWebComponentImplementation.
 export const DeviceTile = { ...DeviceTileApi, tagName: DeviceTileElement.tagName, element: DeviceTileElement as unknown as CustomElementConstructor };
 export const PlanBoard = { ...PlanBoardApi, tagName: PlanBoardElement.tagName, element: PlanBoardElement as unknown as CustomElementConstructor };
-export const MusicTile = { ...MusicTileApi, tagName: MusicTileElement.tagName, element: MusicTileElement as unknown as CustomElementConstructor };
 export const SwitchTile = { ...SwitchTileApi, tagName: SwitchTileElement.tagName, element: SwitchTileElement as unknown as CustomElementConstructor };
 export const SceneTile = { ...SceneTileApi, tagName: SceneTileElement.tagName, element: SceneTileElement as unknown as CustomElementConstructor };
 export const ConnectTile = { ...ConnectTileApi, tagName: ConnectTileElement.tagName, element: ConnectTileElement as unknown as CustomElementConstructor };
@@ -679,7 +677,6 @@ export const smartCanvasCatalog = new Catalog(ROOM_CATALOG_ID, '0.9', [
   A2uiText,
   DeviceTile,
   PlanBoard,
-  MusicTile,
   SwitchTile,
   SceneTile,
   ConnectTile,

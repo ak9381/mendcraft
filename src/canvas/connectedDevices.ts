@@ -59,7 +59,7 @@ export function connectedDeviceRows(i: ConnectedInput): DeviceRow[] {
     else rows.push({ device: l.label, status: 'SIM lamp', ok: false });
   }
   if (i.speaker) {
-    if (i.speaker.sim) rows.push({ device: 'Speaker', status: 'SIM · built-in player', ok: false });
+    if (i.speaker.sim) rows.push({ device: 'Speaker', status: 'SIM · simulated speaker', ok: false });
     else if (i.speaker.spotifyTokens && i.speaker.playingOn) rows.push({ device: 'Speaker', status: `Spotify · ${i.speaker.playingOn}`, ok: true });
     else if (i.speaker.spotifyTokens) rows.push({ device: 'Speaker', status: 'Spotify connected · nothing playing yet', ok: false });
     else rows.push({ device: 'Speaker', status: 'Spotify not connected', ok: false });

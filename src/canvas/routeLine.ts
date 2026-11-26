@@ -89,9 +89,10 @@ export function matchScrollVoice(text: string): { dir: 'up' | 'down'; page: bool
 const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
 
 /** "make a dashboard for my desk lamp", "build me a control panel", "I want a
- *  dashboard": a request to BUILD a board — a board turn with a review, never
- *  small talk. A question ("what is a dashboard?") has no build verb. */
-const BUILD_BOARD_RE = /\b(make|build|create|design|generate|set\s*up|give\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
+ *  dashboard", "add the speaker to the dashboard": a request to BUILD (or
+ *  rebuild) a board — a board turn with a review, never small talk. A
+ *  question ("what is a dashboard?") has no build verb. */
+const BUILD_BOARD_RE = /\b(make|build|create|design|generate|add|set\s*up|give\s+me|i\s+(?:want|need|would\s+like|['’]d\s+like))\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s+controls?)\b/i;
 // "show me a dashboard" builds one; "show me the control panel" / "show me
 // board 2" are navigation (or chat) unless they say dashboard or a new board.
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;

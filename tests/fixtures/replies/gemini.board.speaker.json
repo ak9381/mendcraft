@@ -1,0 +1,10 @@
+{
+  "engine": "gemini",
+  "model": "none (hand-written)",
+  "turnKind": "board",
+  "recordedAt": "2026-11-27T03:50:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. A board for the SIM speaker 'speaker-sim' (scripts/e2e-actual.mjs, section speaker, uses it as the Gemini pass of 'add the speaker to the dashboard'). It carries one foreign control on purpose (a brightness slider on a speaker), so the e2e can check it is dropped with a note. Re-record from a live run.",
+  "reply": "{\"kind\": \"room\", \"title\": \"Music\", \"tiles\": [{\"type\": \"music\", \"deviceId\": \"speaker-sim\", \"label\": \"Speaker\", \"controls\": [{\"kind\": \"toggle\", \"label\": \"Play\", \"intent\": {\"playing\": \"toggle\"}}, {\"kind\": \"readout\", \"label\": \"Now playing\", \"show\": \"trackTitle\"}, {\"kind\": \"slider\", \"label\": \"Volume\", \"key\": \"volume\"}, {\"kind\": \"slider\", \"label\": \"Brightness\", \"key\": \"brightness\"}, {\"kind\": \"button\", \"label\": \"Previous\", \"intent\": {\"previous\": true}}, {\"kind\": \"button\", \"label\": \"Next\", \"intent\": {\"next\": true}}]}]}"
+}

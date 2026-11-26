@@ -5,7 +5,7 @@
 // get their turn).
 import type { DeviceIntent } from './deviceActions';
 import { lampStep } from './deviceGuard';
-import { VOLUME_PRESETS, colourFromSpeech, sceneFromSpeech, tempStep } from './lampPresets';
+import { colourFromSpeech, sceneFromSpeech, tempStep } from './lampPresets';
 import type { StatusKey } from './languagePack';
 
 export type DeviceKind = 'lamp' | 'music' | 'switch';
@@ -51,6 +51,13 @@ const curBright = (d: DeviceRef) => (typeof d.brightness === 'number' ? d.bright
 const curVol = (d: DeviceRef) => (typeof d.volume === 'number' ? d.volume : 50);
 const labelList = (ds: readonly DeviceRef[], all: boolean) => (all ? 'everything' : ds.map((d) => d.label).join(' and '));
 
+/** The volume words she may say, and the level each one sets. */
+const SPOKEN_VOLUMES: readonly { key: string; label: string; volume: number }[] = [
+  { key: 'quiet', label: 'Quiet', volume: 20 },
+  { key: 'medium', label: 'Medium', volume: 50 },
+  { key: 'loud', label: 'Loud', volume: 80 },
+];
+
 export function parseDeviceCommands(text: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
@@ -72,8 +79,8 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     const pause = leads('pause') || (musicNamed && /\b(pause|stop)\b/.test(t));
     const next = leads('next|skip') || (musicNamed && /\b(next|skip)\b/.test(t));
     const previous = leads('previous') || /\b(last|go back a?) (song|track)\b/.test(t) || (musicNamed && /\b(previous|go back)\b/.test(t));
-    // "volume to quiet / medium / loud": the tile's own preset chips, by voice.
-    const preset = musicNamed ? VOLUME_PRESETS.find((v) => new RegExp(`\\b${v.key}\\b`).test(t)) : undefined;
+    // "volume to quiet / medium / loud": three spoken levels.
+    const preset = musicNamed ? SPOKEN_VOLUMES.find((v) => new RegExp(`\\b${v.key}\\b`).test(t)) : undefined;
     if (preset) return { intents: musics.map((d) => ({ deviceId: d.id, volume: preset.volume })), say: `Volume ${preset.label.toLowerCase()}.` };
     if (previous) return { intents: musics.map((d) => ({ deviceId: d.id, previous: true })), say: 'Previous song.' };
     const louder = /\blouder\b/.test(t) || (musicNamed && /\b(up|higher|increase)\b/.test(t));
