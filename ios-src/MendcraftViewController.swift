@@ -10,6 +10,8 @@ import Capacitor
 
 class MendcraftViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
+        // The canvas is light in both system themes: dark status-bar content.
+        setStatusBarStyle(.darkContent)
         bridge?.registerPluginInstance(MendcraftLanPlugin())
         bridge?.registerPluginInstance(MendcraftGimbalPlugin())
         bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
