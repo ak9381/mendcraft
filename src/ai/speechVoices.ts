@@ -401,3 +401,9 @@ export function voiceSpeaks(voice: SynthVoice | null, lang: string): boolean {
   if (!voice) return baseLang(lang) === 'en';
   return langMatches(voice, lang);
 }
+
+/** The voices a picker may list or use: on-device ones, plus online ones only
+ *  after she turned online voices on. */
+export function usableVoices(voices: readonly SynthVoice[], allowCloud: boolean): SynthVoice[] {
+  return voices.filter((v) => allowCloud || !isCloudVoice(v));
+}

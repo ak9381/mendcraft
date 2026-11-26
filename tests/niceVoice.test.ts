@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CLOUD_VOICE_KEY, MAC_VOICE_HINT, SPEECH_PITCH, SPEECH_RATE, isCloudVoice, isNoveltyVoice, listPickerVoices, loadAllowCloud, loadReadAloud,
-  macVoiceHintOnce, needsMacVoiceHint, parseChangeVoice, pickSpokenVoice, saveAllowCloud, saveReadAloud, saveVoice, speechPlatform, voiceKindLabel,
+  macVoiceHintOnce, needsMacVoiceHint, parseChangeVoice, pickSpokenVoice, saveAllowCloud, saveReadAloud, saveVoice, speechPlatform, usableVoices, voiceKindLabel,
   voiceSpeaks, voiceTier, type SynthVoice,
 } from '../src/ai/speechVoices';
 import { createSpeaker, type RawVoice, type UtteranceLike } from '../src/ai/speaker';
@@ -200,19 +200,110 @@ describe('speaking', () => {
     expect(f.log).toEqual([]);
   });
 
-  it('the voice list not loaded yet: the system default speaks (no voice forced)', () => {
-    const f = fakeSynth([]);
-    expect(createSpeaker({ synth: f.synth, makeUtterance: f.makeUtterance, storage: memStore() }).speak('Saved.')).toBe(true);
-    expect(f.spoken[0].voice).toBeNull();
-    expect(f.spoken[0].lang).toBe('en-US');
+  it('the studio and the pairing code have no speech path of their own left (they go through the speaker)', () => {
+    // Structural guard only — the behaviour is tested below, on the speaker they all use.
+    const main = readFileSync('src/main.ts', 'utf8');
+    expect(main).not.toMatch(/new SpeechSynthesisUtterance/);
+    expect(main).not.toMatch(/speechSynthesis\.speak\(/);
+    expect(readFileSync('src/ux/pairingChime.ts', 'utf8')).not.toMatch(/new SpeechSynthesisUtterance|speechSynthesis\.speak\(/);
+  });
+});
+
+describe('privacy: with "Online voices" off, no text can reach a cloud voice', () => {
+  /** The browser as the app sees it: a global speechSynthesis + SpeechSynthesisUtterance. */
+  function withBrowser<T>(voices: SynthVoice[], run: (b: { spoken: UtteranceLike[]; setVoices(v: SynthVoice[]): void; fireVoicesChanged(): void }) => T): T {
+    const g = globalThis as unknown as Record<string, unknown>;
+    const before = { synth: g.speechSynthesis, utter: g.SpeechSynthesisUtterance };
+    let list = voices;
+    const spoken: UtteranceLike[] = [];
+    const listeners: Array<() => void> = [];
+    g.speechSynthesis = { getVoices: () => list, cancel() {}, speak(u: UtteranceLike) { spoken.push(u); }, addEventListener(_t: string, f: () => void) { listeners.push(f); } };
+    g.SpeechSynthesisUtterance = function Utterance(this: UtteranceLike, text: string) { this.text = text; this.rate = 1; this.pitch = 1; this.lang = ''; this.voice = null; };
+    try { return run({ spoken, setVoices(v) { list = v; }, fireVoicesChanged() { listeners.forEach((f) => f()); } }); }
+    finally { g.speechSynthesis = before.synth; g.SpeechSynthesisUtterance = before.utter; }
+  }
+  const CLOUD_ONLY = [v('Google US English', 'en-US', { localService: false }), v('Google UK English Female', 'en-GB', { localService: false })];
+
+  it('voice list empty (not loaded yet): nothing is spoken — the browser default is never trusted', () => {
+    withBrowser([], (b) => {
+      expect(createSpeaker({ storage: memStore() }).speak('Lights on.')).toBe(false);
+      expect(b.spoken).toEqual([]);
+    });
   });
 
-  it('the studio and the pairing code use the same settings', () => {
-    const main = readFileSync('src/main.ts', 'utf8');
-    expect(main).not.toMatch(/utter\.rate = 1\.1/);
-    expect(main.match(/utter\.rate = SPEECH_RATE/g)).toHaveLength(2);
-    expect(main.match(/allowCloud: loadAllowCloud\(\)/g)).toHaveLength(2);
-    expect(readFileSync('src/ux/pairingChime.ts', 'utf8')).toMatch(/createSpeaker\(\)\.speak\(spoken, \{ rate: 0\.85 \}\)/);
+  it('…and the line is spoken with an on-device voice once the list arrives, if that is soon', () => {
+    withBrowser([], (b) => {
+      let t = 1000;
+      const speaker = createSpeaker({ storage: memStore(), now: () => t });
+      speaker.speak('Lights on.');
+      b.setVoices(MAC_NICE); t += 400; b.fireVoicesChanged();
+      expect(b.spoken.map((u) => u.text)).toEqual(['Lights on.']);
+      expect(b.spoken[0].voice!.localService).toBe(true);
+      // A line that waited too long is dropped, not blurted out later.
+      b.setVoices([]); speaker.speak('Saved.'); b.setVoices(MAC_NICE); t += 10_000; b.fireVoicesChanged();
+      expect(b.spoken).toHaveLength(1);
+    });
+  });
+
+  it('only cloud voices installed: nothing is spoken — auto-pick, an explicit cloud voice, and a saved one alike', () => {
+    withBrowser(CLOUD_ONLY, (b) => {
+      const store = memStore();
+      const speaker = createSpeaker({ storage: store });
+      expect(speaker.speak('Lights on.')).toBe(false);
+      expect(speaker.speak('Hello, this is Mendcraft.', { voice: CLOUD_ONLY[0] })).toBe(false); // a preview / "voice set" line
+      expect(speaker.speak('Voice set.', { voice: null })).toBe(false); // "change voice" with nothing to speak it
+      saveVoice(CLOUD_ONLY[0], store);
+      expect(speaker.speak('Lights on.')).toBe(false);
+      expect(b.spoken).toEqual([]);
+    });
+  });
+
+  it('the list arrived but holds only cloud voices: still silent', () => {
+    withBrowser([], (b) => {
+      const speaker = createSpeaker({ storage: memStore() });
+      speaker.speak('Lights on.');
+      b.setVoices(CLOUD_ONLY); b.fireVoicesChanged();
+      expect(b.spoken).toEqual([]);
+    });
+  });
+
+  it('a voice we cannot find in the browser\'s list is not spoken with the default instead', () => {
+    withBrowser(MAC_STOCK, (b) => {
+      expect(createSpeaker({ storage: memStore() }).speak('Hello.', { voice: v('Ghost', 'en-US') })).toBe(false);
+      expect(b.spoken).toEqual([]);
+    });
+  });
+
+  it('"Online voices" turned on: now it speaks — with the cloud voice she chose, or the default when none is named', () => {
+    withBrowser(CLOUD_ONLY, (b) => {
+      const store = memStore();
+      saveAllowCloud(true, store);
+      const speaker = createSpeaker({ storage: store });
+      expect(speaker.speak('Lights on.')).toBe(true);
+      expect(b.spoken[0].voice!.name).toBe('Google US English');
+    });
+    withBrowser([], (b) => {
+      const store = memStore();
+      saveAllowCloud(true, store);
+      expect(createSpeaker({ storage: store }).speak('Lights on.')).toBe(true);
+      expect(b.spoken[0].voice).toBeNull();
+    });
+  });
+
+  it('a mixed list (stock Mac in Chrome): the on-device voice speaks, never the Google one', () => {
+    withBrowser(MAC_STOCK, (b) => {
+      const speaker = createSpeaker({ storage: memStore() });
+      for (const line of ['Lights on.', 'Dimmed Desk lamp.', 'Saved.']) speaker.speak(line);
+      expect(b.spoken).toHaveLength(3);
+      for (const u of b.spoken) expect(u.voice!.localService).toBe(true);
+    });
+  });
+
+  it('the studio\'s list: cloud voices cannot be listed, previewed or picked until online voices are on', () => {
+    expect(usableVoices(MAC_STOCK, false).some(isCloudVoice)).toBe(false);
+    expect(usableVoices(MAC_STOCK, false).map((x) => x.name)).toContain('Samantha');
+    expect(usableVoices(MAC_STOCK, true).some(isCloudVoice)).toBe(true);
+    expect(usableVoices(CLOUD_ONLY, false)).toEqual([]);
   });
 });
 
