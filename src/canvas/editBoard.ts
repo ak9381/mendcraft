@@ -513,6 +513,11 @@ export interface EditBoardOptions {
    *  two-hand pinch), so the host can light an edge glow and commit a
    *  cross-device tile transfer. 'move' streams; 'end' drops; 'cancel' aborts. */
   onItemDrag?(ev: { frameId: string; key: string; phase: 'move' | 'end' | 'cancel'; clientX: number; clientY: number }): void;
+  /** True = the board always keeps its default flow: no absolute boxes, no
+   *  stored layout restored, Edit mode stays off. The phone shell's boards are
+   *  one column; a layout saved at another size (desktop, an older build)
+   *  squeezed and stacked its tiles on top of each other there. */
+  flowOnly?(): boolean;
 }
 
 export interface EditBoardController {
@@ -629,6 +634,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
     const items = opts.getItems(frameId);
     if (!items.length) return;
     unwrap(items);
+    if (opts.flowOnly?.()) return;
 
     const saved = loadFrameLayout(storage ?? { getItem: () => null }, frameId) ?? {};
     const hasSaved = Object.keys(saved).length > 0;
@@ -714,7 +720,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
   }
 
   function toggleEditing(): void {
-    if (!available) return;
+    if (!available || opts.flowOnly?.()) return;
     editing = !editing;
     applyFrame();
     renderButtons();
@@ -733,7 +739,7 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
   return {
     get editing() { return editing; },
     setEditing(on: boolean) {
-      if (on && !available) return;
+      if (on && (!available || opts.flowOnly?.())) return;
       if (editing === on) return;
       editing = on;
       applyFrame();

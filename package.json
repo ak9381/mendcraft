@@ -16,7 +16,8 @@
     "hands:reach": "node scripts/hand-reach.mjs",
     "e2e": "node scripts/e2e-journey.mjs",
     "e2e:gestures": "node scripts/e2e-gestures.mjs",
-    "e2e:plan-hands": "node scripts/e2e-plan-hands.mjs"
+    "e2e:plan-hands": "node scripts/e2e-plan-hands.mjs",
+    "e2e:phone-layout": "node scripts/e2e-phone-layout.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",

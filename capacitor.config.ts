@@ -14,6 +14,8 @@ const config: CapacitorConfig = {
     // "light background, dark content" on Android and iOS alike.
     SystemBars: { style: 'LIGHT' },
   },
+  // Behind the web content until (and around) the page: the canvas colour.
+  backgroundColor: '#F7F5F0',
   android: {
     // Camera preview (MediaPipe pinch) needs getUserMedia; Capacitor's
     // https://localhost scheme is a secure context so this works offline.
@@ -26,6 +28,10 @@ const config: CapacitorConfig = {
     // completed in the web app (https://mendcraft.web.app) — the /spotify
     // redirect cannot return to this webview yet.
     contentInset: 'always',
+    // The canvas colour behind the web content. Capacitor's default is
+    // systemBackground — black in Dark Mode — which showed as a solid black
+    // band under the status bar (the content inset) on the iPhone.
+    backgroundColor: '#F7F5F0',
   },
 };
 

@@ -257,6 +257,10 @@ export function seedDoc(): CanvasDoc {
   };
 }
 
+/** Phone shell: clear space between a board's end and the bottom chrome. */
+const PHONE_BOARD_GAP = 12;
+const PHONE_CHROME_SEL = '.mc-talk-control, .mc-join-pill, .mc-phone-track-pill, .mc-phone-hands-pill, .mc-read-aloud, .mc-cam-on';
+
 /** Widest a focused room dashboard is shown (three tile columns). */
 export const ROOM_MAX_W = 1280;
 
@@ -796,6 +800,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const editBoard = mountEditBoard(root as unknown as EditEl, {
     createElement: (tag) => document.createElement(tag) as unknown as EditEl,
     getAiPanelEl: () => aiPanel as unknown as EditEl,
+    // Phone shell: one column in the board's own flow, always.
+    flowOnly: () => phoneShell,
     getItems: (frameId) => {
       const plan = surfaces[frameId];
       const surfaceEl = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`);
@@ -1494,16 +1500,45 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (phoneOverview && !focusId) { camera = fitRects(list.map((r) => r.rect), vp(), 28); applyCamera(); return; }
     const f = (focusId ? reg.get(focusId) : undefined) ?? (lastFocus ? reg.get(lastFocus) : undefined) ?? list[0];
     if (focusId !== f.id) { focusId = f.id; lastFocus = f.id; }
-    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(viewport) : null;
-    const padTop = parseFloat(cs?.paddingTop ?? '0') || 0;
-    const padBottom = parseFloat(cs?.paddingBottom ?? '0') || 0;
     const v = vp();
-    const GUTTER = 16, TOP = 60 + padTop, BOTTOM = 128 + padBottom;
-    const fit = { w: Math.max(240, Math.floor(v.w - 2 * GUTTER)), h: Math.max(240, Math.floor(v.h - TOP - BOTTOM)) };
+    const { top: TOP, chrome } = phoneBands();
+    const GUTTER = 16;
+    const fit = { w: Math.max(240, Math.floor(v.w - 2 * GUTTER)), h: Math.max(240, Math.floor(chrome - PHONE_BOARD_GAP - TOP)) };
     focusFit.set(f.id, fit);
     sync();
     camera = { x: f.rect.x - GUTTER, y: f.rect.y - TOP, z: 1 };
     applyCamera();
+  }
+  /** Phone shell, viewport px: where the focused board's head rests (below
+   *  the status bar and the route badge) and where the bottom chrome (mic,
+   *  Join laptop, Track, Hands, Read aloud, the camera dot) starts. The
+   *  viewport itself ends above the chrome rows (canvas.css); the board is
+   *  sized and scrolled to end above whatever else rises over it. */
+  function phoneBands(): { top: number; chrome: number } {
+    const v = vp();
+    const vr = viewport.getBoundingClientRect();
+    let chrome = Infinity;
+    for (const el of root.querySelectorAll<HTMLElement>(PHONE_CHROME_SEL)) {
+      if (el.hidden) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height || r.top - vr.top < v.h / 2) continue; // bottom chrome only
+      chrome = Math.min(chrome, r.top - vr.top);
+    }
+    // canvas.css already ends the viewport above the chrome rows and below
+    // the route badge; a caption or camera dot can still reach above that.
+    return { top: PHONE_BOARD_GAP, chrome: Math.min(chrome, v.h) };
+  }
+  /** Phone shell: the focused board scrolls (the canvas moves) only between
+   *  its head at rest and its last tile just above the bottom chrome. */
+  function clampPhoneScroll(): void {
+    if (!phoneShell || !focusId) return;
+    const f = reg.get(focusId);
+    const el = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`);
+    if (!f || !el) return;
+    const { top, chrome } = phoneBands();
+    const minY = f.rect.y - top;
+    const maxY = Math.max(minY, f.rect.y + el.offsetHeight - (chrome - PHONE_BOARD_GAP));
+    camera = { ...camera, y: Math.min(maxY, Math.max(minY, camera.y)) };
   }
 
   let flight = 0;
@@ -4107,7 +4142,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 5) return;
-    dragged = true; camera = panBy(camera, dragYOnly ? 0 : dx, dy); drag = { x: e.clientX, y: e.clientY }; applyCamera();
+    dragged = true; camera = panBy(camera, dragYOnly ? 0 : dx, dy); drag = { x: e.clientX, y: e.clientY };
+    if (dragYOnly) clampPhoneScroll();
+    applyCamera();
   };
   const onWindowPointerUp = (e: PointerEvent) => {
     if (e.pointerType === 'touch' && touchPts.delete(e.pointerId) && touchPts.size < 2) {

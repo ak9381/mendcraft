@@ -1252,11 +1252,40 @@
 .mc-phone-simple .mc-arrange,
 .mc-phone-simple .mc-engine-bar,
 .mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
-.mc-phone-simple .mc-viewport { inset: 0; padding: var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) var(--safe-area-inset-right, env(safe-area-inset-right, 0px)) var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) var(--safe-area-inset-left, env(safe-area-inset-left, 0px)); }
+/* Bottom chrome geometry: two 44 px pill rows each side of the 84 px mic,
+   the mic centred on them, so the whole block is 112 px + the home-indicator
+   inset tall. Each side keeps 10 px clear of the mic. */
+.mc-phone-simple {
+  --mc-phone-pill-h: 44px; --mc-phone-row1: 16px; --mc-phone-row2: 68px; --mc-phone-mic-bottom: 22px;
+  /* 112 px of chrome + 8 px clear; the route badge ends 40 px down. */
+  --mc-phone-chrome-h: 120px; --mc-phone-top: 48px;
+  --mc-phone-side-w: calc(50vw - 42px - 10px - 16px);
+}
+/* Phone boards are ONE column whatever was stored: nested rows, grids and
+   splits stack their children too (their inline styles set the desktop
+   columns, hence !important). */
+.mc-phone-simple .mc-frame .mc-surface a2ui-basic-column { grid-template-columns: minmax(0, 1fr) !important; }
+.mc-phone-simple .mc-frame .mc-surface a2ui-basic-column > * { min-width: 0; }
+.mc-phone-simple mc-row { flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; }
+.mc-phone-simple mc-row > * { flex: 0 0 auto !important; width: 100% !important; min-width: 0 !important; }
+.mc-phone-simple mc-grid { grid-template-columns: minmax(0, 1fr) !important; }
+.mc-phone-simple mc-split > div { flex-direction: column !important; }
+.mc-phone-simple mc-card { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+/* The board area: below the status bar and the route badge, above the bottom
+   chrome. Both bands (and the status bar itself) are plain canvas colour, and
+   the board is clipped at them — it scrolls between, never under the mic,
+   the pills or the badge. */
+.mc-phone-simple .mc-viewport {
+  inset: auto; padding: 0;
+  top: calc(var(--mc-phone-top) + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  bottom: calc(var(--mc-phone-chrome-h) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+}
 .mc-phone-simple .mc-frame.dim { opacity: 1; }
 .mc-phone-simple .mc-talk-control {
   position: fixed; left: 50%; right: auto; top: auto; transform: translateX(-50%);
-  bottom: calc(20px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  bottom: calc(var(--mc-phone-mic-bottom) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; z-index: 60; width: auto;
 }
 .mc-phone-simple .mc-fab-mic {
@@ -1596,9 +1625,9 @@
 .mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
 .mc-phone-simple .mc-join-pill:not([hidden]) {
   display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
-  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
-  max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
+  bottom: calc(var(--mc-phone-row1) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
+  max-width: var(--mc-phone-side-w); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-join-panel:not([hidden]) {
   display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
@@ -1628,29 +1657,34 @@
 .mc-phone-hands-pill, .mc-cam-on { display: none; }
 .mc-phone-simple .mc-phone-hands-pill {
   display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
-  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
-  /* Never reaches the centre mic (≈ 2 × 58px wide around the middle). */
-  max-width: calc(50vw - 58px - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  bottom: calc(var(--mc-phone-row1) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
+  /* Never reaches the centre mic. */
+  max-width: var(--mc-phone-side-w); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 /* iPhone: the Track pill (hand SENSING for the gimbal / pointing; never acts
-   on the UI) sits just left of the Hands pill. */
+   on the UI) sits right of the mic, in the row above the Hands pill — side by
+   side they reached the mic on a 390–440 px phone. */
 .mc-phone-track-pill { display: none; }
 .mc-phone-simple .mc-phone-track-pill {
-  display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 112px;
-  bottom: calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 15px; font-weight: 650;
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(var(--mc-phone-row2) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650;
+  max-width: var(--mc-phone-side-w); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
 .mc-paired-sub { font-size: 15px; color: var(--text-dim, inherit); }
+/* The iPhone's Track pill owns that row: the indicator sits just above it
+   (the board's bottom reserve follows it while it shows — canvasApp.ts). */
+.mc-phone-simple:has(.mc-phone-track-pill) .mc-cam-on:not([hidden]) { bottom: calc(var(--mc-phone-row2) + var(--mc-phone-pill-h) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
 /* Facing gate has the hands locked ("Face phone"). */
 .mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
 .mc-phone-simple .mc-cam-on:not([hidden]) {
   /* Just above the Hands pill: the route badge owns the top centre and is
      wide enough on a phone to collide with a top-right chip. */
   display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
-  bottom: calc(92px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  bottom: calc(var(--mc-phone-row2) + 9px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
   font-size: 15px; font-weight: 650; pointer-events: none;
 }
@@ -1842,14 +1876,16 @@
 .mc-voice-pick > span { justify-self: start; }
 
 /* Read aloud: On / Off — a big (56 px) toggle below Talk in the hand
-   cluster; on the phone shell it sits bottom-left above the Join pill, clear
-   of the centre mic. Same setting as More -> Voice -> Read replies aloud. */
+   cluster; on the phone shell it is part of the bottom chrome, left of the
+   mic in the row above the Join pill (never over the board: the board's
+   bottom reserve covers both rows). Same setting as More -> Voice -> Read
+   replies aloud. */
 .mc-read-aloud { min-height: 56px; font-weight: 650; white-space: nowrap; }
 .mc-hand-cluster .mc-read-aloud { position: relative; width: 100%; min-width: 120px; min-height: 56px; justify-content: center; box-sizing: border-box; border-radius: 999px; }
 .mc-phone-simple .mc-read-aloud {
   display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
-  bottom: calc(92px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-  min-height: 56px; padding: 0 16px; border-radius: 999px; font-size: 16px;
-  max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
+  bottom: calc(var(--mc-phone-row2) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px;
+  max-width: var(--mc-phone-side-w); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-menu-open .mc-read-aloud { display: none !important; }
