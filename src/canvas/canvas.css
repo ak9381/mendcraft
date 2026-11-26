@@ -160,7 +160,8 @@
    .mc-swarm recompute against this narrower box), same shift the Tools chip
    and Talk fab already make for the same reason — see below. */
 .mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
-.mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
+/* Only an idle empty board hides the swarm: while a build streams into it the ghost is showing and the cursors must be too. */
+.mc-canvas:has(.mc-empty:not([hidden])):not(:has(.mc-ghost:not([hidden]))) .mc-swarm { visibility: hidden; pointer-events: none; }
 /* Starts under the bar/toast (--mc-bar-h already includes the gap) so the
    panel's title and close button are never covered. */
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: max(16px, var(--mc-bar-h, 80px)); bottom: 16px;
