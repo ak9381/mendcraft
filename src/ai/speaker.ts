@@ -53,8 +53,19 @@ function browserSynth(): SynthLike | null {
   const w = globalThis as unknown as { speechSynthesis?: SynthLike; SpeechSynthesisUtterance?: unknown; navigator?: { webdriver?: boolean } };
   // Automated browsers (tests, screenshots) never speak: on a Mac a headless
   // Chrome still talks out loud through the system voice.
-  if (w.navigator?.webdriver) return null;
-  return w.speechSynthesis && typeof w.SpeechSynthesisUtterance === 'function' ? w.speechSynthesis : null;
+  const synth = w.speechSynthesis && typeof w.SpeechSynthesisUtterance === 'function' ? w.speechSynthesis : null;
+  if (synth && w.navigator?.webdriver) {
+    // Everything else (voices, cancel) still works, so tests can check that
+    // speech is stopped — only the actual speaking is a no-op.
+    return new Proxy(synth, {
+      get(target, key) {
+        if (key === 'speak') return () => undefined;
+        const v = (target as unknown as Record<PropertyKey, unknown>)[key];
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+  }
+  return synth;
 }
 function browserUtterance(text: string): UtteranceLike {
   const U = (globalThis as unknown as { SpeechSynthesisUtterance: new (t: string) => UtteranceLike }).SpeechSynthesisUtterance;
