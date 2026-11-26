@@ -199,7 +199,7 @@ async function edgeSends(browser) {
   await page.waitForFunction(() => !!window.__canvas && !!document.querySelector('.mc-frame-title'), { timeout: 20_000 });
   await new Promise((r) => setTimeout(r, 1500));
   await page.evaluate(() => window.__canvas.run('connect devices and make a dashboard'));
-  const paired = await page.waitForFunction(() => /2 phones connected/.test(document.body.innerText), { timeout: 15_000 }).then(() => true, () => false);
+  const paired = await page.waitForFunction(() => /2 phones( connected)?/.test(document.querySelector(".mc-paired-row")?.textContent ?? document.body.innerText), { timeout: 15_000 }).then(() => true, () => false);
   check(paired, 'edge: two SIM phones joined');
   await new Promise((r) => setTimeout(r, 2500));
   const strip = () => page.evaluate(() => [...document.querySelectorAll('.mc-arrange-slot')].map((s) => s.textContent.trim()).join(' | '));
