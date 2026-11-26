@@ -20,6 +20,8 @@ import { redact, type CloudCall, type LedgerCounts } from '../core/ledger';
 import type { JobKind, JobStatus, QueuedJob } from '../offline/queue';
 import { coerceLayout, type ScreenLayout } from '../canvas/screenLayout';
 import { coerceSurfacePlan, type SurfacePlan } from '../canvas/surfacePlan';
+import { coerceBoardDrawings } from '../canvas/planDocs';
+import { ARTIFACT_BY, type ArtifactBy } from '../artifacts/artifact';
 
 export const SNAPSHOT_VERSION = 1 as const;
 
@@ -39,6 +41,28 @@ const LABEL_MAX = 80;
 const SENT_MAX = 600;
 
 const REASON_KEYS = Object.keys(REASON_TEXT) as RouteReason[];
+
+/** The whole snapshot rides in ONE Firestore document (1 MiB, at most 20 000
+ *  fields, counting every map key and array element). Board drawings share
+ *  this budget: the largest is shed first until the snapshot fits. */
+export const SNAPSHOT_MAX_BYTES = 900_000;
+export const SNAPSHOT_MAX_FIELDS = 15_000;
+
+const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+function utf8Bytes(json: string): number {
+  return encoder ? encoder.encode(json).length : json.length * 3;
+}
+/** Fields as Firestore counts them, conservatively: every map key and every
+ *  array element, nested. */
+export function snapshotFieldCount(v: unknown): number {
+  if (Array.isArray(v)) return v.reduce<number>((n, x) => n + 1 + snapshotFieldCount(x), 0);
+  if (v && typeof v === 'object') return Object.values(v as Record<string, unknown>).reduce<number>((n, x) => n + 1 + snapshotFieldCount(x), 0);
+  return 0;
+}
+/** Does a snapshot fit one relay message (UTF-8 bytes + fields)? */
+export function snapshotFits(snap: unknown): boolean {
+  return utf8Bytes(JSON.stringify(snap)) <= SNAPSHOT_MAX_BYTES && snapshotFieldCount(snap) <= SNAPSHOT_MAX_FIELDS;
+}
 
 /** Clamp a cloud ledger call's preview text so even an adversarial host can't
  *  flood the snapshot; `bytes` stays as recorded (the honest size that left). */
@@ -154,6 +178,9 @@ export interface SnapshotOmissions {
   queue: number;
   primitives: number;
   recipes: number;
+  /** Plan drawings left out of `boardDrawings` (invalid or over the size cap).
+   *  Present only when something was dropped. */
+  drawings?: number;
 }
 
 export interface ControlSnapshot {
@@ -181,6 +208,13 @@ export interface ControlSnapshot {
   /** When set, `board` was sent to ONE phone (a whole-board edge drag): only
    *  the phone of this platform shows it; the other phone ignores it. */
   boardFor?: 'ios' | 'android';
+  /** Who made `board` on the laptop (its stored artifact's maker): the phone
+   *  keeps the board under the same name. One of ARTIFACT_BY, else dropped. */
+  boardBy?: ArtifactBy;
+  /** What is drawn on `board`'s plan tiles right now (plan board id → plan
+   *  doc), BESIDE the surface plan — never inside it. Each doc sanitized,
+   *  only ids `board` has, size-capped (planDocs.coerceBoardDrawings). */
+  boardDrawings?: Record<string, Record<string, unknown>>;
   /** The most recent committed tile transfer (for the enter-from-edge animation). */
   transfer?: TransferMarker;
   omitted: SnapshotOmissions;
@@ -221,6 +255,13 @@ export interface ControlSnapshotInput {
   board?: unknown;
   /** Target phone for `board` (validated; anything else is dropped). */
   boardFor?: unknown;
+  /** Who made `board` (validated against ARTIFACT_BY; anything else is dropped). */
+  boardBy?: unknown;
+  /** Drawings for `board`'s plan tiles (re-sanitized; dropped if invalid). */
+  boardDrawings?: unknown;
+  /** Drawings the SENDER already left out (a rebuilt wire snapshot keeps
+   *  the count, so the phone can say so). */
+  omittedDrawings?: unknown;
   /** Last committed transfer marker. */
   transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
@@ -359,8 +400,11 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   }
   const transfer = coerceTransferMarker(input.transfer);
   const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
+  const boardBy = board && (ARTIFACT_BY as readonly unknown[]).includes(input.boardBy) ? input.boardBy as ArtifactBy : null;
+  const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
+  const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
 
-  return {
+  const snap: ControlSnapshot = {
     v: SNAPSHOT_VERSION,
     rev: Number.isFinite(input.rev) ? Math.round(input.rev as number) : 0,
     activeDevice: input.activeDevice ?? 'laptop',
@@ -376,6 +420,8 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(layout ? { layout } : {}),
     ...(board ? { board } : {}),
     ...(boardFor ? { boardFor } : {}),
+    ...(boardBy ? { boardBy } : {}),
+    ...(boardDrawings ? { boardDrawings } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
@@ -385,6 +431,20 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
       recipes: recipes.dropped,
     },
   };
+  const before = typeof input.omittedDrawings === 'number' && Number.isFinite(input.omittedDrawings) ? Math.max(0, Math.min(8, Math.round(input.omittedDrawings))) : 0;
+  let shed = bd.dropped + before;
+  // The whole snapshot must fit one relay message: shed drawings, largest
+  // first, until it does (the phone shows that board's starting layout).
+  while (snap.boardDrawings && !snapshotFits(snap)) {
+    const entries = Object.entries(snap.boardDrawings);
+    const size = (d: unknown): number => utf8Bytes(JSON.stringify(d));
+    const [biggest] = entries.reduce((a, b) => (size(b[1]) > size(a[1]) ? b : a));
+    const rest = Object.fromEntries(entries.filter(([k]) => k !== biggest));
+    if (Object.keys(rest).length) snap.boardDrawings = rest; else delete snap.boardDrawings;
+    shed++;
+  }
+  if (shed) snap.omitted = { ...snap.omitted, drawings: shed };
+  return snap;
 }
 
 /** Build the appliance block, adding the optional detail labels only when the
@@ -573,6 +633,9 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     layout: r.layout ? coerceLayout(r.layout) : null,
     board: r.board,
     boardFor: r.boardFor,
+    boardBy: r.boardBy,
+    boardDrawings: r.boardDrawings,
+    omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }

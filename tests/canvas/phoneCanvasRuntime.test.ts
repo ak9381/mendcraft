@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { applyGuestSnapshot, phoneRouteBadge } from '../../src/canvas/phoneCanvasRuntime';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
+import { buildControlSnapshot, coerceSnapshot } from '../../src/relay/controlSnapshot';
 
 const board: SurfacePlan = { kind: 'room', title: 'Living room', tiles: [] };
 
 describe('phoneRouteBadge', () => {
-  it('prefers Apple when it is ready; a scripted iOS shell never names Apple', () => {
+  it('prefers Apple when it is ready; a SIM iOS shell never names Apple', () => {
     expect(phoneRouteBadge({ appleReady: true, ios: true, sim: false, cloud: true })).toBe('Apple · on device');
-    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: true, cloud: true })).toBe('SIM · scripted');
+    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: true, cloud: true })).toBe('SIM · no live model');
   });
 
-  it('a scripted run (?sim=1, or no cloud model) is labelled SIM, never a bare real route', () => {
-    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: true, cloud: true })).toBe('SIM · Gemini · cloud');
-    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: false, cloud: false })).toBe('SIM · Gemini · cloud');
-    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: false, cloud: false })).toBe('SIM · scripted');
+  it('?sim=1 is labelled SIM; no cloud and no on-device model says there is no model', () => {
+    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: true, cloud: true })).toBe('SIM · no live model');
+    expect(phoneRouteBadge({ appleReady: false, ios: false, sim: false, cloud: false })).toBe('No model here');
+    expect(phoneRouteBadge({ appleReady: false, ios: true, sim: false, cloud: false })).toBe('No model here');
+    for (const sim of [true, false]) expect(phoneRouteBadge({ appleReady: false, ios: true, sim, cloud: false })).not.toMatch(/scripted|Gemini|Apple/);
   });
 
   it('shows Gemini cloud when that is the live route', () => {
@@ -27,17 +29,30 @@ describe('applyGuestSnapshot', () => {
     expect(applyGuestSnapshot({}, show)).toBe(false);
     expect(show).not.toHaveBeenCalled();
     expect(applyGuestSnapshot({ board }, show)).toBe(true);
-    expect(show).toHaveBeenCalledWith(board);
+    expect(show).toHaveBeenCalledWith(board, {});
   });
   it('a board sent to one phone shows only on that phone', () => {
     const ios = vi.fn();
     const android = vi.fn();
     expect(applyGuestSnapshot({ board, boardFor: 'ios' }, ios, 'ios')).toBe(true);
     expect(applyGuestSnapshot({ board, boardFor: 'ios' }, android, 'android')).toBe(false);
-    expect(ios).toHaveBeenCalledWith(board);
+    expect(ios).toHaveBeenCalledWith(board, {});
     expect(android).not.toHaveBeenCalled();
     // An untargeted board still mirrors to every phone.
     expect(applyGuestSnapshot({ board }, android, 'android')).toBe(true);
+  });
+  it("passes on who made the board, and the snapshot keeps only a known maker", () => {
+    const show = vi.fn();
+    expect(applyGuestSnapshot({ board, boardBy: 'gemini' }, show)).toBe(true);
+    expect(show).toHaveBeenCalledWith(board, {}, { by: 'gemini' });
+    const real: SurfacePlan = { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'Temperature', value: '21 °C' }] };
+    const wire = (boardBy: unknown) => coerceSnapshot(JSON.parse(JSON.stringify({ ...buildControlSnapshot({ board: real }), boardBy })));
+    expect(wire('replay')?.board).toBeTruthy();
+    expect(wire('replay')?.boardBy).toBe('replay');
+    expect(wire('admin')?.boardBy).toBeUndefined();
+    expect(wire({ by: 'gemini' })?.boardBy).toBeUndefined();
+    // No board, no maker.
+    expect(buildControlSnapshot({ boardBy: 'gemini' }).boardBy).toBeUndefined();
   });
 });
 

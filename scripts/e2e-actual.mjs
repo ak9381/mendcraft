@@ -208,6 +208,103 @@ async function dashboard(page) {
 }
 SECTIONS.dashboard = dashboard;
 
+// ---- phones: two SIM phones pair, the board goes to the right-hand phone, which re-checks and keeps it ----
+/** A phone page: an iPhone (Capacitor sees the WebKit bridge) or the Nothing phone (a narrow web view). */
+async function openPhone(page, ios) {
+  await page.setViewport({ width: ios ? 440 : 412, height: ios ? 956 : 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  if (ios) await page.evaluateOnNewDocument(() => { window.webkit = { messageHandlers: { bridge: { postMessage() {} } } }; });
+  return open(page, 'sim=1&fresh=1&hands=0').then((ok) => ok && waitFor(page, () => !!window.__mcGuestSnapshot, 20_000, 'the phone takes relay snapshots'));
+}
+const phoneTileText = () => [...document.querySelectorAll('mc-device-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' ');
+
+async function phones(page) {
+  await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+
+  // Pair: the SIM branch stands in for the chime (no sound, no relay).
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  const rows = () => [...document.querySelectorAll('.mc-paired-chip')].map((c) => ({ text: c.textContent.trim(), tick: !!c.querySelector('.mc-paired-check'), sim: !!c.querySelector('.mc-chip') }));
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  const paired = await page.evaluate(rows);
+  check(paired.length === 2 && paired.every((r) => r.tick && r.sim), `two paired rows, each with a tick and SIM (got ${JSON.stringify(paired)})`);
+  check(paired.some((r) => /iPhone/.test(r.text)) && paired.some((r) => /Nothing phone/.test(r.text)), 'the rows name the iPhone and the Nothing phone');
+
+  // "build the dashboard" is a normal generation turn with the devices present.
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
+  await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) return;
+  check((await page.evaluate(reviewText)).includes('Replay'), 'the dashboard review names "Replay"');
+  // (Pairing still opens the fixed "Connected devices" table board; Task 8 replaces it.)
+  const early = (await boardArtifacts(page)).filter((a) => a.title !== 'Connected devices');
+  check(early.length === 0, `no dashboard is stored until Approve (got ${JSON.stringify(early.map((a) => a.title))})`);
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'the dashboard is on the laptop'))) return;
+  await sleep(1200); // past the save debounce: the board is stored with its maker
+
+  // Send it to the right-hand phone.
+  const right = await page.evaluate(() => window.__mcCanvas.edgeLayout().right);
+  check(right === 'ios' || right === 'android', `a phone is on the right edge (got ${right})`);
+  const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  const sent = await page.evaluate((to) => window.__mcCanvas.sendBoard(to), right);
+  check(sent, 'the board is sent at the right edge');
+  const name = right === 'ios' ? 'iPhone' : 'Nothing phone';
+  const lines = await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark);
+  check(lines.includes(`Sent to ${name} (SIM).`), `__mcCanvas reports the send line (got ${JSON.stringify(lines)})`);
+  const snap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
+  check(snap?.boardFor === right && snap?.boardBy === 'replay' && !!snap?.board, `the snapshot targets that phone and names the maker (got ${JSON.stringify({ boardFor: snap?.boardFor, boardBy: snap?.boardBy })})`);
+  if (!snap) return;
+  const laptopControls = JSON.stringify(snap.board.tiles[0].children?.[0]?.controls ?? snap.board.tiles[0].controls ?? []);
+
+  // The phones (own browser contexts, so their stores are their own).
+  const ctx = page.browserContext();
+  const browser = ctx.browser();
+  const mk = async (ios) => { const c = await browser.createBrowserContext(); const p = await c.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(String(e?.message || e))); return { c, p, errs, ok: await openPhone(p, ios) }; };
+  const target = await mk(right === 'ios');
+  const other = await mk(right !== 'ios');
+  try {
+    if (!target.ok || !other.ok) return;
+    check(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), snap), `the ${name} takes the board`);
+    check(!(await other.p.evaluate((s) => window.__mcGuestSnapshot(s), snap)), 'the other phone ignores a board sent to the first');
+    await waitFor(target.p, () => /Not connected/.test([...document.querySelectorAll('mc-device-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' ')), 10_000, 'the lamp it cannot reach shows "Not connected"')
+      .then((ok) => ok && check(true, 'on the phone the lamp shows "Not connected"'));
+    await sleep(1200);
+    const kept = await boardArtifacts(target.p);
+    check(kept.length === 1 && kept[0].by === 'replay', `the phone keeps it as a board made by replay (got ${JSON.stringify(kept.map((a) => a.by))})`);
+    const keptControls = JSON.stringify(kept[0]?.data.plan.tiles[0].children?.[0]?.controls ?? kept[0]?.data.plan.tiles[0].controls ?? []);
+    check(keptControls === laptopControls, 'the kept board has the controls the laptop approved');
+    check((await boardArtifacts(other.p)).length === 0, 'the other phone keeps nothing');
+
+    // A forged control on the wire is dropped by the phone's own check.
+    const forged = JSON.parse(JSON.stringify(snap));
+    forged.rev += 1;
+    const lamp = forged.board.tiles[0].children?.[0] ?? forged.board.tiles[0];
+    lamp.controls.find((c) => c.kind === 'chips').options.push({ label: 'Blast', intent: { brightness: 500 } });
+    check(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), forged), 'the phone takes the forged board');
+    await sleep(1200);
+    const afterForged = await boardArtifacts(target.p);
+    check(afterForged.length === 1 && !JSON.stringify(afterForged[0].data).includes('Blast') && !(await target.p.evaluate(phoneTileText)).includes('Blast'), 'the 500 % chip is not shown or kept');
+
+    // A payload that is not a plan stores nothing.
+    const junk = { ...JSON.parse(JSON.stringify(snap)), rev: snap.rev + 2, board: { kind: 'room', tiles: 'nope' } };
+    check(!(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), junk)), 'a payload that is not a plan is refused');
+    await sleep(800);
+    const afterJunk = await boardArtifacts(target.p);
+    check(afterJunk.length === 1 && afterJunk[0].v === afterForged[0].v, 'and nothing new is stored');
+
+    // The phone opens with what it kept.
+    if (!(await open(target.p, 'sim=1&hands=0'))) return;
+    await waitFor(target.p, () => document.querySelectorAll('mc-device-tile').length === 1, 10_000, 'the kept board is back on the phone after a reload')
+      .then((ok) => ok && check(true, 'the phone opens with the board it kept'));
+    const again = await boardArtifacts(target.p);
+    check(again.length === 1 && again[0].by === 'replay', 'still made by replay after the reload');
+    check(target.errs.length === 0 && other.errs.length === 0, `no page errors on the phones${[...target.errs, ...other.errs].length ? `: ${[...target.errs, ...other.errs].slice(0, 3).join(' | ')}` : ''}`);
+  } finally {
+    await target.c.close();
+    await other.c.close();
+  }
+}
+SECTIONS.phones = phones;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

@@ -1202,7 +1202,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toContain('const fitted = fitPlan(planForBoard(frameId, proposed));'); // what she reviews and applies
     expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
-    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));');
+    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(phoneShell ? plan : fitLampTiles(plan, lampSlots()));');
   });
 
   it('review 5: a board keeps a lamp whenever there is one — the first real lamp it does not already show', () => {
@@ -1432,7 +1432,13 @@ describe('demo-run glitches', () => {
     expect(src).not.toMatch(/note: 'Playing a chime/);
   });
 
-  // (k) dark status-bar icons: checks android/** and the iOS Swift, which come with Task 3.
+  it('(k) dark status-bar icons on the light canvas, Android and iOS', async () => {
+    const styles = await read('android/app/src/main/res/values/styles.xml');
+    expect(styles).toContain('<item name="android:windowLightStatusBar">true</item>');
+    const activity = await read('android/app/src/main/java/app/mendcraft/relay/MainActivity.java');
+    expect(activity).toContain('bars.setAppearanceLightStatusBars(true);');
+    expect(await read('ios/plugins/MendcraftViewController.swift')).toMatch(/override var preferredStatusBarStyle: UIStatusBarStyle \{\s*return \.darkContent/);
+  });
 });
 
 describe('re-review fixes', () => {

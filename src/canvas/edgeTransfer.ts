@@ -287,19 +287,20 @@ export function pairedEdgeLayout(
  * or the focused board edited), after which the focused board mirrors again.
  */
 export interface SentBoardMemo {
-  remember(sent: { boardFor: PhonePlatform; board: SurfacePlan }, focusId: string | null, focusPlan: SurfacePlan | null): void;
-  /** What a routine republish should carry now. */
-  current(focusId: string | null, focusPlan: SurfacePlan | null): { board: SurfacePlan | null; boardFor?: PhonePlatform };
+  remember(sent: { boardFor: PhonePlatform; board: SurfacePlan; frameId?: string }, focusId: string | null, focusPlan: SurfacePlan | null): void;
+  /** What a routine republish should carry now. `frameId` = the board the
+   *  plan came from (its drawings ride along). */
+  current(focusId: string | null, focusPlan: SurfacePlan | null): { board: SurfacePlan | null; boardFor?: PhonePlatform; frameId: string | null };
 }
 
 export function createSentBoardMemo(): SentBoardMemo {
-  let last: { boardFor: PhonePlatform; board: SurfacePlan; focusId: string | null; focusPlan: SurfacePlan | null } | null = null;
+  let last: { boardFor: PhonePlatform; board: SurfacePlan; frameId?: string; focusId: string | null; focusPlan: SurfacePlan | null } | null = null;
   return {
     remember(sent, focusId, focusPlan) { last = { ...sent, focusId, focusPlan }; },
     current(focusId, focusPlan) {
-      if (last && last.focusId === focusId && last.focusPlan === focusPlan) return { board: last.board, boardFor: last.boardFor };
+      if (last && last.focusId === focusId && last.focusPlan === focusPlan) return { board: last.board, boardFor: last.boardFor, frameId: last.frameId ?? focusId };
       last = null;
-      return { board: focusPlan };
+      return { board: focusPlan, frameId: focusId };
     },
   };
 }

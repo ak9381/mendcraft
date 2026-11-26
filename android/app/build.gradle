@@ -17,6 +17,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // sim-main build installs beside the Relay app instead of replacing it.
+            applicationIdSuffix ".sim"
+            versionNameSuffix "-sim"
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -40,6 +45,9 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    // Optional Gemini Nano on-device (ML Kit GenAI checkStatus). Safe on
+    // phones without Nano — the plugin reports unavailable.
+    implementation "com.google.mlkit:genai-prompt:1.0.0-beta4"
 }
 
 apply from: 'capacitor.build.gradle'

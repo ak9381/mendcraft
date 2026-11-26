@@ -212,7 +212,7 @@ export function parsePlanCommand(utterance: string): PlanParse {
     return { op: 'add_fixture', kind, nums: { x: at.x, y: at.y, w: spec.w, d: spec.d } };
   }
 
-  // Text annotation: "add a label Kitchen", "text Living room".
+  // Text annotation: "add a label Kitchen", "text Hall".
   if (tokens[0] === 'label' || tokens[0] === 'text' || has('label')) {
     const content = tokens
       .filter((t) => !['add', 'a', 'an', 'the', 'label', 'text', 'here', 'say', 'put', 'new'].includes(t))

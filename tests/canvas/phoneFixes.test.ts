@@ -99,5 +99,14 @@ describe('phone review sheet layout', () => {
   });
 });
 
-// 'status bar icons are dark on the light canvas' checks android/** and the iOS
-// Swift, which are not part of the canvas port (they come with Task 3).
+describe('status bar icons are dark on the light canvas', () => {
+  it('Android: Capacitor SystemBars style LIGHT, and the theme asks for a light status bar', () => {
+    expect(read('capacitor.config.ts')).toMatch(/SystemBars:\s*\{[^}]*style:\s*'LIGHT'/);
+    expect(read('android/app/src/main/res/values/styles.xml')).toMatch(/<item name="android:windowLightStatusBar">true<\/item>/);
+    expect(read('android/app/src/main/java/app/mendcraft/relay/MainActivity.java')).toMatch(/setAppearanceLightStatusBars\(true\)/);
+  });
+
+  it('iOS: dark content status bar', () => {
+    expect(read('ios/plugins/MendcraftViewController.swift')).toMatch(/preferredStatusBarStyle: UIStatusBarStyle \{\s*return \.darkContent/);
+  });
+});

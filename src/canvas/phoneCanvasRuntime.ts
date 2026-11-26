@@ -28,23 +28,30 @@ const APPLE_REASON: Partial<Record<AppleAvailabilityStatus, string>> = {
 
 export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
   if (input.appleReady) return 'Apple · on device';
-  // ?sim=1, or no cloud model reachable: the engines are scripted. Say so —
-  // a scripted turn is never shown as a real model or a real send.
-  // On an iPhone whose Apple model isn't running, never name Apple.
-  if (input.sim || !input.cloud) return `SIM · ${input.ios ? 'scripted' : 'Gemini · cloud'}`;
+  // ?sim=1 has no live model (a test build answers from recorded replies);
+  // with no cloud model and no on-device one, nothing can answer. Say so —
+  // never a model that is not there. Never name Apple when it isn't running.
+  if (input.sim) return 'SIM · no live model';
+  if (!input.cloud) return 'No model here';
   const why = input.appleReason && APPLE_REASON[input.appleReason];
   return why ? `Gemini · cloud · ${why}` : 'Gemini · cloud';
 }
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor'>,
-  showBoard: (plan: SurfacePlan) => void,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy'> & { omitted?: { drawings?: number } },
+  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy'] }) => void,
   platform?: PhonePlatform,
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
   if (snap.boardFor && snap.boardFor !== platform) return false;
-  showBoard(snap.board);
+  // The board's current plan drawings ride with it (the phone re-checks them).
+  // A drawing left out (too big for the relay) is said on the phone. Who made
+  // the board on the laptop rides with it too: the phone keeps it under that name.
+  const omitted = snap.omitted?.drawings ?? 0;
+  const info = { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), ...(snap.boardBy ? { by: snap.boardBy } : {}) };
+  if (Object.keys(info).length) showBoard(snap.board, snap.boardDrawings ?? {}, info);
+  else showBoard(snap.board, snap.boardDrawings ?? {});
   return true;
 }
 

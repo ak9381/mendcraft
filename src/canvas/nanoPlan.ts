@@ -10,7 +10,7 @@
 // each device tile it makes shows the standard controls (controlSpec.ts),
 // footnoted as such.
 //
-//   room:        {"t":"Living room","d":["lamp-a","speaker-a"]}
+//   room:        {"t":"Study","d":["lamp-a","speaker-a"]}
 //   floor plan:  {"p":"twoBedroom"}
 import { extractJson } from '../ai/cloudJson';
 import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type Coerced, type PlanTemplate, type SurfacePlan, type TileSpec } from './surfacePlan';

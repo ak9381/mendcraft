@@ -29,7 +29,7 @@ describe('(a) a room dashboard never holds a floor-plan tile', () => {
     expect(roomWithoutPlanTiles({ kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'studio' }] }).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
   });
   it('every board, review and title goes through the strip; the goals no longer ask for a plan tile', () => {
-    expect(app).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));');
+    expect(app).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(phoneShell ? plan : fitLampTiles(plan, lampSlots()));');
     expect(app).toMatch(/summary\(fitPlan\(plan\)\)/);
     expect(app).not.toMatch(/add a room plan tile/);
     // (sim-main's scripted geminiRoom reply is stripped; no reply lives in src.)

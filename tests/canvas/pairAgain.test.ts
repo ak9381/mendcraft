@@ -126,7 +126,7 @@ const app = () => readFileSync(new URL('../../src/canvas/canvasApp.ts', import.m
 describe('review fixes', () => {
   it('I1: closing the extra-pairing card ends only that pairing — the phones stay', () => {
     const src = app();
-    const repair = src.slice(src.indexOf('if (pairingStop && hostSession && relayKept()) {'), src.indexOf('if (simEnv() || !net.isOnline()) {'));
+    const repair = src.slice(src.indexOf('if (pairingStop && hostSession && relayKept()) {'), src.indexOf('if (simPhones || !net.isOnline()) {'));
     expect(repair).toContain('onClose: () => { endExtraPairing(session); open.host.hidden = true; },');
     expect(repair).not.toContain('disconnectPhones()');
     expect(repair).toContain('setStatus(REPAIR_FAILED_LINE)');

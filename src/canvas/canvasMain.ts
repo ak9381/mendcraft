@@ -28,6 +28,7 @@ import { coerceLayout, joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsL
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
+import { coerceSnapshot } from '../relay/controlSnapshot';
 
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */
@@ -225,9 +226,19 @@ function reservedFrameIds(): string[] {
  *  history entry for that board says an engine; a replayed reply is 'replay'. */
 function artifactMaker(id: string): ArtifactBy {
   const frameId = frameIdOfArtifactId(id);
+  // A board this phone received keeps its maker on the laptop until she edits it here.
+  const received = frameId ? handle?.receivedBy(frameId) : undefined;
+  if (received) return received;
   const last = frameId ? handle?.history().filter((h) => h.frameId === frameId && !h.undone).at(-1) : undefined;
   if (!last || last.by === 'her') return 'person';
   return replayOn ? 'replay' : last.by;
+}
+/** Who made the board on a frame: what the next save would record when it has
+ *  history this session, else what its stored artifact says. */
+function boardMaker(frameId: string): ArtifactBy | undefined {
+  const id = `board-${frameId}`;
+  const touched = !!handle?.receivedBy(frameId) || !!handle?.history().some((h) => h.frameId === frameId && !h.undone);
+  return touched ? artifactMaker(id) : artifacts.find((a) => a.id === id)?.by;
 }
 /** Every save: the layout now, the changed artifacts without waiting. */
 function persistDoc(doc: CanvasDoc): void {
@@ -247,7 +258,7 @@ handle = mountCanvas(root, {
   gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   doc: startDoc,
   onPersist: persistDoc,
-  artifactBy: (frameId) => artifacts.find((a) => a.id === `board-${frameId}`)?.by,
+  artifactBy: boardMaker,
   dropped: loaded.dropped,
   loadNotes: loaded.notes,
   reservedFrameIds: reservedFrameIds(),
@@ -354,6 +365,14 @@ afterFirstPaint(() => {
       const storage = (() => { try { return localStorage; } catch { return null; } })();
       announcePhone(guestSession, phonePlatform, { deviceId: storage ? ensureDeviceId(storage) : undefined, native: isPhone, refresh: true, status: () => h.phoneSenseStatus() });
     });
+    // Sim + dev/e2e build: feed a relay `state` snapshot (wire JSON) through the
+    // SAME path a real one takes (coerceSnapshot, then applyGuestSnapshot).
+    if (sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1')) {
+      (window as unknown as { __mcGuestSnapshot?: (raw: unknown) => boolean }).__mcGuestSnapshot = (raw) => {
+        const snap = coerceSnapshot(raw);
+        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform);
+      };
+    }
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });
     void link.rejoinSaved();
     // Native webviews rarely fire pagehide on backgrounding: close the mic when

@@ -26,7 +26,7 @@ export function collectDeviceIds(t: TileSpec): string[] {
   return out;
 }
 
-/** "Board: Living room · 5 tiles" — the only board context the cloud gets. */
+/** "Board: Study · 5 tiles" — the only board context the cloud gets. */
 export function morphBoardLine(plan: SurfacePlan): string {
   const n = plan.tiles.length;
   return `Board: ${plan.title} · ${n} tile${n === 1 ? '' : 's'}`;
@@ -171,7 +171,7 @@ export function morphMeta(text: string): 'cancel' | 'undo' | null {
   return null;
 }
 
-/** History summary for one morph: "morph: Desk lamp — change color". */
+/** History summary for one morph: "morph: Lamp — change color". */
 export function morphSummary(label: string, utterance: string): string {
   return `morph: ${label} — ${utterance}`;
 }

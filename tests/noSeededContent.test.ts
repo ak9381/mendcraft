@@ -8,7 +8,16 @@ import { expect, it } from 'vitest';
 export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRIPTED_[A-Z_]+\b/, /\bscriptedEngine\b/,
   /\bscriptedReply\b/, /\bsimPlanEdit\b/, /\bSIM_POINT_IDENTITY\b/, /\bSIM_SCAN_DEVICES\b/, /\bSEEDED_LAMP_IDS\b/,
   /['"`]wiz-desk['"`]/, /['"`]wiz-ceiling['"`]/, /['"`]speaker-1['"`]/, /showcaseFixture/, /journeyReplay/, /__mcScripts/,
-  /\bLampTileElement\b/, /\bBRIGHTNESS_PRESETS\b/];
+  /\bLampTileElement\b/, /\bBRIGHTNESS_PRESETS\b/,
+  // Task 3: the names sim-main's pairing and seeded room used.
+  /Living room/, /Desk lamp/, /Ceiling light/];
+
+/** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
+const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [
+  { file: /^landing\//, re: /Living room|Desk lamp/, why: "main's marketing landing page, not the canvas" },
+  { file: /^plan\/templates\.ts$/, re: /Living room/, why: 'the floor-plan templates, stripped to blank in Task 7' },
+  { file: /^plan\/ai\.ts$/, re: /Living room/, why: "a room name in the plan prompt's JSON format example" },
+];
 
 const SRC = path.resolve(__dirname, '../src');
 
@@ -26,7 +35,12 @@ const hits: string[] = [];
 for (const file of srcFiles(SRC)) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
   lines.forEach((line, i) => {
-    for (const re of BANNED) if (re.test(line)) hits.push(`${path.relative(SRC, file)}:${i + 1} ${re.source}`);
+    const rel = path.relative(SRC, file);
+    for (const re of BANNED) {
+      if (!re.test(line)) continue;
+      if (EXEMPT.some((e) => e.file.test(rel) && e.re.source.split('|').includes(re.source))) continue;
+      hits.push(`${rel}:${i + 1} ${re.source}`);
+    }
   });
 }
 

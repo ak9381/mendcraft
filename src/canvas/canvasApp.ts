@@ -91,7 +91,7 @@ import { mountPhoneMenu } from './phoneMenu';
 import { armedSurfaceAt, collectControls, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
-import { feedDrawings, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
+import { coerceBoardDrawings, feedDrawings, planBoardIds, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
 import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
@@ -167,7 +167,8 @@ export interface CanvasOptions {
   /** Every save hands the whole document here (the caller splits it into
    *  layout + artifacts). Missing: the document stays in memory only. */
   onPersist?: (doc: CanvasDoc) => void;
-  /** Who made the stored board on a frame (its artifact's `by`), if known. */
+  /** Who made the board on a frame (what its stored artifact says, or would
+   *  say on the next save), if known. Sent with a board to a phone. */
   artifactBy?: (frameId: string) => ArtifactBy | undefined;
   /** Frame ids of stored boards not on the canvas (kept as they are): new
    *  boards never reuse them, so their saves can't collide. */
@@ -556,8 +557,58 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const sentBoard = createSentBoardMemo();
   function republishCurrentBoard(): void {
     const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
-    publishBoardTransfer(focusId ?? '', cur.board, null, cur.boardFor);
+    publishBoardTransfer(cur.frameId ?? focusId ?? '', cur.board, null, cur.boardFor);
   }
+  /** The board whose plan the phones hold now (last publish with a board). */
+  let publishedFrame: string | null = null;
+  let planRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  let planRepublishAt = -Infinity;
+  const planEditedFrames = new Set<string>();
+  /** Plan resends: at most one per second, trailing (the timer is never
+   *  pushed back, so a long run of hand edits still sends within ~1 s). */
+  const PLAN_RESEND_MIN_MS = 1000;
+  /** A plan drawing changed on `frameId` (an edit, an approved voice edit, an
+   *  Undo): the phone holding that board gets the new drawing — the same
+   *  republish (and the same target) as any other board update. */
+  function planDrawingChanged(frameId: string): void {
+    if (!(hostSession || simWire) || frameId !== publishedFrame) return;
+    planEditedFrames.add(frameId);
+    if (planRepublishTimer) return;
+    const now = Date.now();
+    planRepublishTimer = setTimeout(() => {
+      planRepublishTimer = null;
+      planRepublishAt = Date.now();
+      const edited = new Set(planEditedFrames);
+      planEditedFrames.clear();
+      // Only the board the phones hold now, with ITS target: never another
+      // board (B) to both phones because A's drawing changed.
+      const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
+      if (!cur.board || !cur.frameId || !edited.has(cur.frameId)) return;
+      publishBoardTransfer(cur.frameId, cur.board, null, cur.boardFor);
+    }, Math.max(250, planRepublishAt + PLAN_RESEND_MIN_MS - now));
+  }
+  /** "Couldn't send" is said once per failure run, not for every retry. */
+  let publishFailSaid = false;
+  /** What is drawn on `frameId`'s plan tiles right now: the live boards first
+   *  (the drawing as it is on screen), else what was saved with the board. */
+  function boardDrawingsOf(frameId: string, board: SurfacePlan): Record<string, unknown> {
+    const out: Record<string, unknown> = { ...(drawings[frameId] ?? {}) };
+    if (frameId) {
+      for (const pb of world.querySelectorAll<HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null }>(`[data-frame="${frameId}"] mc-plan-board`)) {
+        const st = pb.planState?.();
+        if (st) out[st.boardId] = st.doc;
+      }
+    }
+    const ids = new Set(planBoardIds(board));
+    for (const k of Object.keys(out)) if (!ids.has(k)) delete out[k];
+    return out;
+  }
+  // Sim + dev/e2e build only: no relay, so the snapshot a send WOULD publish
+  // is kept for the e2e (window.__mcLastBoardSnapshot, JSON as on the wire).
+  const simWire = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') && typeof window !== 'undefined';
+  /** SIM phones (scripted joins, labelled SIM): a dev or e2e build with ?sim=1
+   *  only. Everywhere else pairing is the real chime and relay, or says why not. */
+  const simPhones = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1');
 
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
     viewport.classList.toggle('mc-edge-glow-left', side === 'left' && glow > 0.05);
@@ -567,17 +618,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (near !== edgeNear) { edgeNear = near; showArrangeStrip(); }
   }
 
-  function publishBoardTransfer(_frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
-    if (!hostSession) return;
+  function publishBoardTransfer(frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
+    if (!hostSession && !simWire) return;
     try {
+      // The board's CURRENT drawing rides beside it (never inside the surface
+      // plan), so the phone shows the plan as edited, not its template.
+      const boardDrawings = board ? boardDrawingsOf(frameId, board) : null;
       const snap = buildControlSnapshot({
         rev: ++snapshotRev,
         layout: screenLayout,
         ...(board ? { board } : {}),
         ...(board && boardFor ? { boardFor } : {}),
+        // Who made it rides along, so the phone keeps it under that name.
+        ...(board && frameId && opts.artifactBy?.(frameId) ? { boardBy: opts.artifactBy(frameId) } : {}),
+        ...(boardDrawings && Object.keys(boardDrawings).length ? { boardDrawings } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
-      void hostSession.publishState(snap).catch(() => undefined);
+      publishedFrame = board ? frameId || null : publishedFrame;
+      if (simWire) (window as unknown as { __mcLastBoardSnapshot?: unknown }).__mcLastBoardSnapshot = JSON.parse(JSON.stringify(snap));
+      if (hostSession) {
+        void hostSession.publishState(snap).then(
+          () => { publishFailSaid = false; },
+          () => { if (board && !publishFailSaid) { publishFailSaid = true; say('Couldn’t send the board to the phone.'); } },
+        );
+      }
     } catch {
       // Snapshot build/publish is best-effort — never breaks the local drag.
     }
@@ -734,7 +798,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     onCommit: (s) => {
       if (hostSession) {
         // Only the phone on that side shows it (boardFor); the other ignores it.
-        sentBoard.remember({ boardFor: s.target, board: s.board }, focusId, focusId ? surfaces[focusId] ?? null : null);
+        sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
+        publishBoardTransfer(s.frameId, s.board, null, s.target);
+      } else if (simWire) {
+        sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
         publishBoardTransfer(s.frameId, s.board, null, s.target);
       }
       boardSends++;
@@ -830,7 +897,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function iphonePaired(): boolean { return !!hostSession && pairFirst.phones().some((p) => !p.sim && isIphoneRow(p)); }
   const pairFirst = createPairFirst({
     say: (t, o) => say(t, o),
-    sim: () => simEnv(),
+    sim: () => simPhones,
     busy: () => reviewBusy(),
     openPairing: async () => {
       let id = pairFrame ?? focusId ?? lastFocus;
@@ -1288,7 +1355,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Any plan about to be shown or applied names only lamps that exist: a
    *  seeded lamp after the swap, a bulb that has gone, or a plan written from
    *  a prompt built before discovery is fitted to the current lamps. */
-  const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));
+  // The phone reaches no lamp itself: a lamp on a board the laptop sent stays,
+  // and shows "Not connected" here, instead of being dropped or re-bound.
+  const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(phoneShell ? plan : fitLampTiles(plan, lampSlots()));
   /** A turn on the floor-plan board is a floor plan, whatever kind the model
    *  wrote (a 'room' reply there would otherwise lose its plan tile). */
   const planForBoard = (frameId: string, plan: SurfacePlan): SurfacePlan =>
@@ -1378,6 +1447,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const host = sid.endsWith('-dock')
       ? dockSurfaceEl
       : world.querySelector<HTMLElement>(`[data-frame="${sid}"] .mc-surface`);
+    // The surface exists in the processor even with nowhere to mount yet:
+    // recorded, so the next render deletes it first ("already exists").
+    live.add(sid);
     if (!host) return;
     host.innerHTML = '';
     const el = document.createElement('a2ui-surface') as HTMLElement & { surface: unknown };
@@ -1479,6 +1551,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     (drawings[frameId] ??= {})[st.boardId] = doc;
     setSavedPlanDoc(frameId, st.boardId, doc);
     persist();
+    planDrawingChanged(frameId);
   }
   function renderSurface(id: string): boolean {
     if (!surfaces[id]) return false;
@@ -2087,7 +2160,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   const isDeviceTile = (t: SurfacePlan['tiles'][number]): t is Extract<SurfacePlan['tiles'][number], { deviceId: string }> =>
     t.type === 'lamp' || t.type === 'music' || t.type === 'switch';
-  // The name she sees on a tile wins (a kept Gemini layout may rename "Desk lamp" to "Reading lamp").
+  // The name she sees on a tile wins (a kept Gemini layout may rename "Lamp" to "Reading lamp").
   const deviceTileFor = (id: string) => {
     const order = [focusId, ...reg.list().filter((f) => f.pinned).map((f) => f.id), ...Object.keys(surfaces)];
     for (const fid of order) {
@@ -2972,7 +3045,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // you look at the device you point at, not at this screen.
   const POINT_UTTERANCE = 'connect what I am pointing at';
   const POINT_WAIT_MS = 20_000;
-  /** How long "Desk lamp or ceiling light?" waits for her answer. */
+  /** How long "Lamp 1 or Lamp 2?" waits for her answer. */
   const POINT_CHOICE_MS = 20_000;
   /** prebooked: bytes already in the ledger (booked when the crop left).
    *  viaIphone: the iPhone took and identified the photo (its own receipt). */
@@ -2986,7 +3059,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let pointWait: { frameId: string; steady: SteadyHold; timer: ReturnType<typeof setTimeout>; cleanup: () => void; phone?: boolean; remote?: boolean } | null = null;
   /** Laptop: waiting for the iPhone's point photo result. */
   let iphonePoint: { frameId: string; timer: ReturnType<typeof setTimeout> } | null = null;
-  /** "Desk lamp or ceiling light?" is waiting for her answer (one question). */
+  /** "Lamp 1 or Lamp 2?" is waiting for her answer (one question). */
   let pointChoice: { frameId: string; r: PointIdentifyResult; o: PointOpts; choices: DeviceHint[]; timer: ReturnType<typeof setTimeout> } | null = null;
   /** Clear the pending question (and its expiry) and return it. */
   function takePointChoice(): NonNullable<typeof pointChoice> | null {
@@ -3371,8 +3444,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pairingHost = open.host;
       return true;
     }
-    if (simEnv() || !net.isOnline()) {
-      open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
+    if (simPhones || !net.isOnline()) {
+      open.sheet.setStatus(simPhones ? 'Joining a phone needs the network — this sim stays on this device.' : 'Joining a phone needs the network.');
       return false;
     }
     open.sheet.setStatus('Opening a Relay room…');
@@ -4698,7 +4771,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (morphFlow?.handleSpeech(text)) return true;
     // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
     if (pairFirst.handleSpeech(text)) return true;
-    // "Desk lamp or ceiling light?" after a point: her answer picks the device.
+    // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
     // plan board the line falls through to the normal routes.
@@ -5255,7 +5328,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     facingNow = facing;
     applyEditLock();
   }
-  function showRemoteBoard(plan: SurfacePlan): void {
+  const PLAN_TOO_BIG = 'This plan is too big to show on the phone — it shows the starting layout.';
+  /** Boards this phone received, by frame: who made them on the laptop, and
+   *  how many history entries the frame had then. Any later entry (her own
+   *  edit here) makes the next save hers. */
+  const receivedMakers = new Map<string, { by: ArtifactBy; entries: number }>();
+  const entriesOn = (frameId: string): number => history.list().filter((h) => h.frameId === frameId).length;
+  function receivedBy(frameId: string): ArtifactBy | undefined {
+    const r = receivedMakers.get(frameId);
+    if (!r) return undefined;
+    if (entriesOn(frameId) !== r.entries) { receivedMakers.delete(frameId); return undefined; }
+    return r.by;
+  }
+  /** A board from the laptop (already re-checked by coerceSnapshot). Shown on
+   *  the focused frame and saved like any board, under its maker's name. */
+  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; by?: ArtifactBy } = {}): void {
     let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
     if (!id) {
       const f = reg.add('note', plan.title || 'Board');
@@ -5264,9 +5351,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       reg.rename(id, plan.title);
     }
     surfaces[id] = plan;
+    if (info.by) receivedMakers.set(id, { by: info.by, entries: entriesOn(id) });
+    else receivedMakers.delete(id);
+    // The drawing the laptop has now replaces whatever this phone had for
+    // these plan tiles (re-checked here: never trust the snapshot). A board
+    // sent without one shows its template, not a stale copy.
+    if (boardDrawings !== undefined || planBoardIds(plan).length) {
+      const { drawings: incoming } = coerceBoardDrawings(boardDrawings ?? {}, plan);
+      if (Object.keys(incoming).length) drawings[id] = incoming;
+      else delete drawings[id];
+      for (const bid of planBoardIds(plan)) setSavedPlanDoc(id, bid, incoming[bid] ?? null);
+    }
     focusId = id;
     lastFocus = id;
+    // A phone with no board yet: the new frame's DOM must exist before the
+    // surface mounts into it (else the board stays blank and the next send
+    // throws "surface already exists").
+    if (!world.querySelector(`[data-frame="${id}"] .mc-surface`)) sync();
     renderSurface(id);
+    // The laptop's drawing did not fit the relay: say so — the board shows
+    // its starting layout, never passed off as her plan.
+    if ((info.drawingsOmitted ?? 0) > 0 && planBoardIds(plan).length) {
+      const frameId = id;
+      waitForLayout(() => {
+        for (const st of world.querySelectorAll<HTMLElement>(`[data-frame="${frameId}"] mc-plan-board .mc-plan-extra-status`)) st.textContent = PLAN_TOO_BIG;
+      });
+      say(PLAN_TOO_BIG);
+    }
     sync();
     persist();
     if (phoneShell) {
@@ -5747,10 +5858,36 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     void inputs.gimbal.setMode('face').then((r) => { const t = r.ok ? r.status : r.why; if (t) say(t); }).catch(() => {});
   }
 
+  /** Test build + ?sim=1 only: hold the focused board at the edge of the phone
+   *  `to` (a platform, or a side) until the dwell sends it, as a drag would. */
+  async function sendBoard(to: PhonePlatform | 'left' | 'right'): Promise<boolean> {
+    if (!simWire) return false;
+    const id = focusId ?? lastFocus;
+    if (!id || !surfaces[id]) return false;
+    const layout = edgeLayout();
+    const side = to === 'left' || to === 'right' ? (layout[to] ? to : null) : layout.left === to ? 'left' : layout.right === to ? 'right' : null;
+    if (!side) return false;
+    const w = viewport.getBoundingClientRect().width || window.innerWidth;
+    const at = { frameId: id, clientX: side === 'left' ? 1 : w - 1, clientY: window.innerHeight / 2 };
+    const before = boardSends;
+    boardEdge.handleBoardDrag({ ...at, phase: 'start' });
+    for (let t = 0; t < 40 && boardSends === before; t++) {
+      await new Promise((r) => setTimeout(r, 100));
+      boardEdge.handleBoardDrag({ ...at, phase: 'move' });
+    }
+    boardEdge.handleBoardDrag({ ...at, phase: 'end' });
+    return boardSends > before;
+  }
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
   return {
-    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), destroy,
+    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, receivedBy, sharedBoards: () => boardEdge.sharedBoards(), destroy,
+    /** Status lines said so far (a mark, then the lines said since it). */
+    statusMark: () => statusBase + statusLog.length,
+    statusSince: (mark: number) => statusLog.slice(Math.max(0, mark - statusBase)),
+    /** Which phone is on which edge now (only phones that can take a board). */
+    edgeLayout: () => edgeLayout(),
+    sendBoard,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
