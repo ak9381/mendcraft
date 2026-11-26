@@ -23,7 +23,7 @@ export const MONITOR_MAX_LINES = 40;
 export const DEVICES: readonly FeedDevice[] = ['laptop', 'iphone', 'android'];
 
 const STATE_TEXT: Record<EngineState, string> = {
-  idle: 'Ready', working: 'Working', done: 'Done', queued: 'Queued', failed: 'Failed', unavailable: 'Unavailable',
+  idle: 'Ready', working: 'Working', done: 'Done', queued: 'Queued', failed: 'Failed', unavailable: 'Unavailable', offline: 'Offline',
 };
 const DEVICE_NAME: Record<FeedDevice, string> = { laptop: 'Laptop', iphone: 'iPhone', android: 'Android phone' };
 const DEVICE_MODEL: Record<FeedDevice, string> = {

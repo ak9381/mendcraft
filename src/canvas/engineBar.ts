@@ -10,10 +10,14 @@
 import type { EngineId } from './aiTurn';
 import { formatFooterBytes } from './modelPanels';
 
-export type EngineState = 'idle' | 'working' | 'done' | 'queued' | 'failed' | 'unavailable';
+export type EngineState = 'idle' | 'working' | 'done' | 'queued' | 'failed' | 'unavailable' | 'offline';
 
 export interface EngineBar {
   set(engine: EngineId, state: EngineState, line?: string): void;
+  /** The cloud can't be reached (real or simulated): Gemini says Offline,
+   *  never Ready. Back online it returns to Ready unless something else
+   *  (a queued request) has taken over the card. */
+  setOffline(off: boolean): void;
   /** Animates the arrow between the cards for 1.2 s. */
   handoff(from: EngineId, to: EngineId): void;
   /** Real bytes that left; `simBytes` (SIM turns) shows as "SIM · would send N". */
@@ -37,7 +41,7 @@ export const CALM_AFTER_MS = 6000;
 export const ENGINE_LINE_MAX = 60;
 
 const STATE_TEXT: Record<EngineState, string> = {
-  idle: 'Ready', working: 'Working', done: 'Done', queued: 'Queued', failed: 'Failed', unavailable: 'Unavailable',
+  idle: 'Ready', working: 'Working', done: 'Done', queued: 'Queued', failed: 'Failed', unavailable: 'Unavailable', offline: 'Offline',
 };
 const WHERE: Record<EngineId, string> = { nano: 'on this device', gemini: 'cloud' };
 const NAME: Record<EngineId, string> = { nano: 'Nano', gemini: 'Gemini' };
@@ -111,6 +115,18 @@ export function mountEngineBar(root: HTMLElement, opts: { onOpen(engine: EngineI
         c.line.textContent = t;
         c.line.title = line;
         c.line.hidden = !t;
+      }
+    },
+    setOffline(off) {
+      const c = cards.gemini;
+      const cur = c.card.getAttribute('data-state');
+      if (off) {
+        if (cur === 'queued') return; // "Queued" already says it waits for the network
+        c.card.setAttribute('data-state', 'offline');
+        c.state.textContent = STATE_TEXT.offline;
+      } else if (cur === 'offline') {
+        c.card.setAttribute('data-state', 'idle');
+        c.state.textContent = STATE_TEXT.idle;
       }
     },
     handoff(from, to) {

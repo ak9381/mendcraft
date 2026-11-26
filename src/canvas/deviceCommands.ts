@@ -63,10 +63,15 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     // "the music" / "volume" / "song" lets "turn it down" and "stop" target the
     // speaker; bare "turn down" without a music word stays a lamp command.
     const musicNamed = /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t);
-    const play = /\b(play|resume)\b/.test(t);
-    const pause = /\bpause\b/.test(t) || (musicNamed && /\bstop\b/.test(t));
-    const next = /\bnext\b/.test(t);
-    const previous = /\bprevious\b/.test(t) || /\b(last|go back a?) (song|track)\b/.test(t) || (musicNamed && /\bgo back\b/.test(t));
+    // A music verb counts only when it IS the command ("next", "play",
+    // "pause please") or the sentence is about music ("next song", "play the
+    // music"). Inside any other sentence it is just a word: "a study NEXT to
+    // bedroom 2" or "add a PLAY area" must never touch the speaker.
+    const leads = (verbs: string) => new RegExp(`^(?:please |hey |ok |okay |can you |could you |now )*(?:${verbs})\\b`).test(t);
+    const play = leads('play|resume') || (musicNamed && /\b(play|resume)\b/.test(t));
+    const pause = leads('pause') || (musicNamed && /\b(pause|stop)\b/.test(t));
+    const next = leads('next|skip') || (musicNamed && /\b(next|skip)\b/.test(t));
+    const previous = leads('previous') || /\b(last|go back a?) (song|track)\b/.test(t) || (musicNamed && /\b(previous|go back)\b/.test(t));
     // "volume to quiet / medium / loud": the tile's own preset chips, by voice.
     const preset = musicNamed ? VOLUME_PRESETS.find((v) => new RegExp(`\\b${v.key}\\b`).test(t)) : undefined;
     if (preset) return { intents: musics.map((d) => ({ deviceId: d.id, volume: preset.volume })), say: `Volume ${preset.label.toLowerCase()}.` };

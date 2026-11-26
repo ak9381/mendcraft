@@ -56,6 +56,27 @@ describe('engine bar', () => {
     expect(q('.mc-engine-card[data-engine="gemini"]').querySelector('.mc-engine-where')!.textContent).toBe('cloud');
   });
 
+  it('offline: Gemini says Offline (never Ready), and Ready again when back online', () => {
+    const { bar, q } = mount();
+    const g = q('.mc-engine-card[data-engine="gemini"]');
+    bar.setOffline(true);
+    expect(g.attrs['data-state']).toBe('offline');
+    expect(g.querySelector('.mc-engine-state')!.textContent).toBe('Offline');
+    bar.setOffline(false);
+    expect(g.attrs['data-state']).toBe('idle');
+    expect(g.querySelector('.mc-engine-state')!.textContent).toBe('Ready');
+  });
+
+  it('offline does not hide a queued request; back online leaves Queued for the queue to clear', () => {
+    const { bar, q } = mount();
+    const g = q('.mc-engine-card[data-engine="gemini"]');
+    bar.set('gemini', 'queued');
+    bar.setOffline(true);
+    expect(g.attrs['data-state']).toBe('queued');
+    bar.setOffline(false);
+    expect(g.attrs['data-state']).toBe('queued');
+  });
+
   it('set() shows state and the last line', () => {
     const { bar, q } = mount();
     bar.set('nano', 'working', 'redacted a name');

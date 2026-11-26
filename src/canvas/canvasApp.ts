@@ -4098,6 +4098,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // ---- offline (simulate + real) ----
   function setOnline(on: boolean, announce = false): void {
     net.setOnline(on);
+    engineBar?.setOffline(!on);
     nextChips?.refresh();
     const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
     btn.setAttribute('aria-pressed', String(!on));

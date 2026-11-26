@@ -1387,6 +1387,8 @@
 .mc-engine-card[data-state="failed"] .mc-engine-line { color: var(--text); }
 .mc-engine-card[data-state="unavailable"] { opacity: 0.7; }
 .mc-engine-card[data-state="unavailable"] .mc-engine-dot { border-style: dashed; border-color: var(--text-dim); opacity: 1; }
+.mc-engine-card[data-state="offline"] { opacity: 0.75; }
+.mc-engine-card[data-state="offline"] .mc-engine-dot { border-style: dashed; border-color: var(--text-dim); opacity: 1; }
 .mc-engine-card[data-state="working"] .mc-engine-dot { animation: mc-engine-pulse 1.5s ease-out infinite; }
 @keyframes mc-engine-pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--eng) 55%, transparent); }

@@ -60,3 +60,26 @@ describe('natural music phrasing', () => {
       .toEqual([{ deviceId: 'wiz-desk', brightness: 20 }]);
   });
 });
+
+describe('music words inside other sentences are just words (live misparse: "next to" skipped the song)', () => {
+  const notMusic = [
+    'add a study next to bedroom 2',
+    'put the sofa next to the window',
+    'add a play area for the kids',
+    'make the room next door bigger',
+    'move the previous wall left',
+  ];
+  for (const s of notMusic) {
+    it(`"${s}" never touches the speaker`, () => {
+      const r = parseDeviceCommands(s, devices);
+      expect(r?.intents.some((i) => i.deviceId === 'speaker-1') ?? false).toBe(false);
+    });
+  }
+  it('commands that ARE music still work', () => {
+    expect(parseDeviceCommands('next', devices)!.intents).toEqual([{ deviceId: 'speaker-1', next: true }]);
+    expect(parseDeviceCommands('skip', devices)!.intents).toEqual([{ deviceId: 'speaker-1', next: true }]);
+    expect(parseDeviceCommands('please play', devices)!.intents).toEqual([{ deviceId: 'speaker-1', playing: true }]);
+    expect(parseDeviceCommands('play the next song', devices)!.intents).toEqual([{ deviceId: 'speaker-1', next: true }]);
+    expect(parseDeviceCommands('previous', devices)!.intents).toEqual([{ deviceId: 'speaker-1', previous: true }]);
+  });
+});
