@@ -18,7 +18,7 @@
 
 	<!-- Camera: hand gestures, and the one photo of a device she points at. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Mendcraft reads your hand gestures and recognises devices you point at.</string>
+	<string>Mendcraft reads your hand gestures, lets the stand follow your hands, and recognises devices you point at.</string>
 
 	<!-- Microphone: voice commands, and the laptop's pairing chime. -->
 	<key>NSMicrophoneUsageDescription</key>

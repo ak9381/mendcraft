@@ -83,8 +83,9 @@ the Xcode details, including Apple on-device AI.
   (`didBecomeActive`), when a stand docks, and from `viewDidAppear`. Manual
   pan/tilt with `setOrientation(relative:)`. iOS 18+, behind
   `#if canImport(DockKit)`; reports `available:false` otherwise. Nothing in
-  the flow requires it. The web layer aims at her hands, or in Add a device
-  lets her point or nudge and then holds the frame.
+  the flow requires it. "Follow my hands" runs a native front-camera Vision
+  hand tracker that drives `DockAccessory.track()` (the WebView camera is off
+  meanwhile); in Add a device she can point or nudge and then it holds the frame.
 - `MendcraftViewController.swift` — registers the plugins and re-asserts
   system tracking off on appear.
 - `MendcraftAppleAIPlugin.swift` — on-device Apple Foundation Models
