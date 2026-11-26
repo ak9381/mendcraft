@@ -11,7 +11,7 @@ import type { Pt } from '../input/handLogic';
 import { classifyHandShape, createHandPolarity, isFixedShape, stampShape, type HandShape, type HandSide, type LabelPolarity } from './handShape';
 import { createHoldEngine, createPairGrace, keyShapes, keySide, type GestureHand, type GestureKey, type HoldState } from './gestureHold';
 import {
-  CLOSER_SELECTORS, gestureName, resolveGesture,
+  CLOSER_SELECTORS, badgeSelectors, gestureName, resolveGesture,
   type GestureAction, type GestureBinding, type GestureEnv,
 } from './gestureBindings';
 import { handIconSvg, sideMark } from './gestureIcons';
@@ -34,6 +34,13 @@ export interface GestureFrameContext {
   /** The control directly under the hand pointer's raw point (if any): the
    *  highlight adopts it so the ring and the cursor never disagree. */
   direct?: HTMLElement | null;
+  /** This hand's peace sign is doing something else (a plan resize by
+   *  peace-and-move): it is no button gesture and does not move the highlight. */
+  claimedPeace?: (side: HandSide) => boolean;
+  /** This hand's peace must not SCROLL (a plan resize has armed on it or is
+   *  running). Wider than claimedPeace: it holds from the moment the peace
+   *  appears over a resizable plan element, so the scroll never starts first. */
+  noScrollPeace?: (side: HandSide) => boolean;
 }
 
 /** The open-palm highlight (palmHighlight.ts) as the controller sees it. */
@@ -56,6 +63,8 @@ export interface GestureControlOptions {
   /** Activity line after a gesture pressed something. */
   onFire?: (ev: { key: GestureKey; name: string; label: string; target: string | null }) => void;
   highlight?: HighlightHook | null;
+  /** The gesture layer turned on or off (Hands on / off). */
+  onActive?: (on: boolean) => void;
   /** Reach box (camera → screen) for the peace-scroll hand point; default laptop. */
   reach?: () => ReachBox;
   /** Peace-and-move over nothing scrollable: pan the canvas (screen px). */
@@ -159,7 +168,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   root.append(layer);
   const badges = new Map<GestureKey, HTMLElement>();
   for (const b of bindings) {
-    if (!b.targets.length) continue;
+    if (!b.targets.length && !b.when?.length) continue;
     const side = keySide(b.key);
     const shapes = keyShapes(b.key);
     const el = doc.createElement('div');
@@ -193,7 +202,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       const badge = badges.get(b.key);
       if (!badge) continue;
       let el: HTMLElement | null = null;
-      for (const s of b.targets) { el = env.visible(s); if (el) break; }
+      for (const s of badgeSelectors(b)) { el = env.visible(s); if (el) break; }
       if (!el || !onTop(el)) { badge.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       badge.hidden = false;
@@ -304,6 +313,11 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       let { shape } = rd;
       const { side } = rd;
       if (ctx.suppressCounts && COUNT_SHAPES.includes(shape)) shape = 'other';
+      if (shape === 'peace' && ctx.claimedPeace?.(side)) {
+        shapes.push({ shape: 'other', hand: side });
+        handsRead.push({ shape: 'other', hand: side, palm: palmCenter(h), scale: handScale(h) });
+        continue; // not a hold, and the highlight stays where it was
+      }
       shapes.push({ shape, hand: side });
       handsRead.push({ shape, hand: side, palm: palmCenter(h), scale: handScale(h) });
       // The highlight follows an open palm (or a loose, unclassified hand);
@@ -322,8 +336,10 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       const rd = reads[k];
       if (!rd || !hands[k]) continue;
       const pc = palmCenter(hands[k]);
+      // A peace the plan resize has taken never scrolls or steps a level.
+      const taken = rd.shape === 'peace' && !!(ctx.noScrollPeace?.(rd.side) || ctx.claimedPeace?.(rd.side));
       scrollHands.push({
-        side: rd.side, shape: rd.shape,
+        side: rd.side, shape: taken ? 'other' : rd.shape,
         point: mapToScreen({ x: 1 - pc.x, y: pc.y }, innerWidth, innerHeight, true, reach),
         scalePx: (handScale(hands[k]) / Math.max(1e-6, reach.y1 - reach.y0)) * innerHeight,
       });
@@ -374,6 +390,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     layer.hidden = !on;
     root.classList.toggle('mc-gestures-on', on);
     opts.highlight?.setActive(on);
+    opts.onActive?.(on);
     scroller.setActive(on);
     if (on) {
       placeBadges(null);

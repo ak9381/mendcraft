@@ -23,6 +23,20 @@ export interface GestureBinding {
   context?: GestureContext;
   /** No button: send this line through the app's run() router instead. */
   say?: string;
+  /** Contextual buttons that take this gesture while they are VISIBLE (the
+   *  floor plan's hand action bar: Remove, Rotate). A review still wins. */
+  when?: readonly { selector: string; label: string; unless?: string }[];
+}
+
+/** The floor plan's hand action bar (planHandSurface.ts). */
+const PLAN_REMOVE = { selector: '.mc-plan-hand-on .mc-plan-remove', label: 'Remove' } as const;
+// With the Tools palette open, L peace keeps meaning Tools (it closes it).
+const PLAN_ROTATE = { selector: '.mc-plan-hand-on .mc-plan-rotate', label: 'Rotate', unless: '.mc-tools-chip[aria-expanded="true"]' } as const;
+
+/** Where a binding's badge sits / what it presses first, in priority order. */
+export function badgeSelectors(b: GestureBinding): string[] {
+  const when = (b.when ?? []).map((w) => w.selector);
+  return b.context ? [...b.targets, ...when] : [...when, ...b.targets];
 }
 
 const chip = (n: number) => `.mc-next > button.mc-next-chip:nth-of-type(${n})`;
@@ -30,14 +44,14 @@ const chip = (n: number) => `.mc-next > button.mc-next-chip:nth-of-type(${n})`;
 /** Laptop / tablet canvas. */
 export const LAPTOP_GESTURES: readonly GestureBinding[] = [
   { key: 'R:thumbsUp', label: 'Approve', targets: ['.mc-review-approve', '.mc-proposal-keep'], context: 'approveOrPress' },
-  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose' },
+  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose', when: [PLAN_REMOVE] },
   { key: 'R:one', label: 'Next step 1', targets: [chip(1)] },
   { key: 'R:peace', label: 'Next step 2', targets: [chip(2)] },
   { key: 'R:three', label: 'Next step 3', targets: [chip(3)] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
   { key: 'L:thumbsDown', label: 'Undo', targets: ['.mc-cluster-undo', '[data-cmd=undo]'] },
   { key: 'L:one', label: 'New board', targets: ['[data-cmd=new]'] },
-  { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'] },
+  { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'], when: [PLAN_ROTATE] },
   { key: 'L:three', label: 'Talk', targets: ['.mc-fab-mic'] },
   // Both thumbs up opens More (AI monitor lives there, by voice and by palm).
   { key: '2:thumbsUp', label: 'More', targets: ['.mc-more-btn'] },
@@ -52,7 +66,7 @@ export const LAPTOP_GESTURES: readonly GestureBinding[] = [
 /** Phone shells (Android + the iPhone control layer), behind the Hands pill. */
 export const PHONE_GESTURES: readonly GestureBinding[] = [
   { key: 'R:thumbsUp', label: 'Approve', targets: ['.mc-review-approve', '.mc-proposal-keep'], context: 'approveOrPress' },
-  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose' },
+  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose', when: [PLAN_REMOVE] },
   { key: 'L:thumbsDown', label: 'Undo', targets: ['[data-cmd=undo]'] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
 ];
@@ -93,12 +107,25 @@ export function resolveGesture<E>(binding: GestureBinding, env: GestureEnv<E>): 
       const el = env.visible(s);
       if (el) return { kind: 'click', el, label };
     }
+    // Something open (Tools, a menu, a dialog, the AI drawer) is closed FIRST:
+    // thumbs-down must never remove a plan element while there is something
+    // on screen it would otherwise close.
+    const c = binding.context === 'declineOrClose' ? env.closer() : null;
+    if (c) return { kind: 'click', el: c, label: 'Close' };
+    for (const w of binding.when ?? []) {
+      const el = env.visible(w.selector);
+      if (el) return { kind: 'click', el, label: w.label };
+    }
     if (binding.context === 'approveOrPress') {
       const h = env.highlighted();
       return h ? { kind: 'click', el: h, label: 'Press' } : { kind: 'none', label: 'Press', why: 'Nothing is highlighted. Show an open palm to pick a button, then thumbs up.' };
     }
-    const c = env.closer();
-    return c ? { kind: 'click', el: c, label: 'Close' } : { kind: 'none', label: 'Close', why: 'Nothing open to close.' };
+    return { kind: 'none', label: 'Close', why: 'Nothing open to close.' };
+  }
+  for (const w of binding.when ?? []) {
+    if (w.unless && env.visible(w.unless)) continue;
+    const el = env.visible(w.selector);
+    if (el) return { kind: 'click', el, label: w.label };
   }
   for (const s of binding.targets) {
     const el = env.visible(s) ?? env.any(s);

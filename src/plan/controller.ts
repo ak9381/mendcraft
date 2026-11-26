@@ -7,6 +7,7 @@ import { validatePlanOp, type PlanOp } from './ops';
 import { buildPlanTemplate, isPlanTemplateName } from './templates';
 import { toDxf, toJson } from './export';
 import { emptyPlan, mmToMetresLabel, wallLength, type PlanDoc } from './doc';
+import { sanitizePlanDoc } from '../canvas/planDocs';
 import { generatePlan } from '../ai/hybrid';
 import type { DeixisTargetInfo } from '../ai/deixis';
 import type { ListItem, ModeController, StepResult } from '../core/controller';
@@ -138,8 +139,9 @@ export function createPlanController(): ModeController {
     dropRedo(n) { engine.dropRedo(n); },
 
     restoreSnapshot(snapshot): StepResult {
-      const d = snapshot as Partial<PlanDoc> | null;
-      if (!d || !Array.isArray(d.walls) || !Array.isArray(d.openings)) {
+      // Element by element: a snapshot can come from storage, which anyone can edit.
+      const d = sanitizePlanDoc(snapshot) as Partial<PlanDoc> | null;
+      if (!d) {
         return { ok: false, error: 'That snapshot is not a plan.', warnings: [] };
       }
       const doc: PlanDoc = { ...emptyPlan(), ...d } as PlanDoc;

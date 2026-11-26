@@ -1,4 +1,5 @@
 // Frames (boards) on the infinite canvas and the persisted canvas document.
+import { coerceDrawings, type Drawings } from './planDocs';
 import { MAX_Z, MIN_Z, type Camera, type Rect } from './camera';
 import { coerceSurfacePlan, type SurfacePlan } from './surfacePlan';
 import { coerceLanguagePack, type LanguagePack } from './languagePack';
@@ -9,6 +10,9 @@ export interface CanvasDoc {
   version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan>;
   /** Active non-English UI pack (validated), persisted so it works offline. */
   lang?: string; pack?: LanguagePack;
+  /** What was drawn on floor-plan boards: frame id → plan board id → plan
+   *  document. Beside `surfaces`, never inside them (see planDocs.ts). */
+  drawings?: Drawings;
 }
 
 export const CANVAS_DOC_VERSION = 1;
@@ -45,6 +49,8 @@ export function createFrameRegistry(initial: readonly Frame[] = []) {
     setPinned(id: string, on: boolean) { const f = find(id); if (f) f.pinned = on; },
     setKind(id: string, kind: FrameKind) { const f = find(id); if (f) f.kind = kind; },
     remove(id: string) { const i = frames.findIndex((f) => f.id === id); if (i < 0) return false; frames.splice(i, 1); return true; },
+    /** Put a closed board back as it was (Undo of "Close board"). */
+    restore(f: Frame) { if (find(f.id) || frames.length >= MAX_FRAMES) return false; frames.push(copy(f)); return true; },
   };
 }
 export type FrameRegistry = ReturnType<typeof createFrameRegistry>;
@@ -90,5 +96,6 @@ export function parseCanvasDoc(raw: unknown): CanvasDoc | null {
     const p = coerceLanguagePack(d.pack);
     if (p.ok) { pack = p.value; lang = p.value.lang; }
   }
-  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack };
+  const drawings = coerceDrawings(d.drawings, seen);
+  return { version: CANVAS_DOC_VERSION, camera: { x: c.x, y: c.y, z: c.z }, focusId, frames, surfaces, lang, pack, ...(Object.keys(drawings).length ? { drawings } : {}) };
 }

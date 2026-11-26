@@ -26,6 +26,8 @@ export type FormField =
 
 export type LeafTileSpec =
   | { type: 'lamp'; deviceId: string; label: string }
+  /** No drawing here, by design: a surface plan goes to models, morph edits
+   *  and the relay. What is drawn lives beside it (planDocs.ts). */
   | { type: 'plan'; boardId: string; template: PlanTemplate }
   | { type: 'music'; deviceId: string; label: string }
   | { type: 'switch'; deviceId: string; label: string }

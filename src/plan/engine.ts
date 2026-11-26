@@ -200,6 +200,16 @@ export class PlanEngine {
   }
 
   restore(doc: PlanDoc): PlanApplyResult {
+    // New ids must not collide with the restored ones (a saved drawing has
+    // w9; the counter may sit at 8 after the template was rebuilt).
+    let top = this.idCounter;
+    for (const group of [doc.walls, doc.openings, doc.rooms, doc.dims, doc.fixtures, doc.texts]) {
+      for (const o of group ?? []) {
+        const n = Number(/(\d+)$/.exec(String((o as { id?: unknown }).id ?? ''))?.[1]);
+        if (Number.isFinite(n) && n > top) top = n;
+      }
+    }
+    this.idCounter = top;
     this.undoStack.push(this.state);
     this.redoStack = [];
     this.state = normalizeSelection(structuredClone(doc));

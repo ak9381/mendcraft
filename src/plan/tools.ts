@@ -623,7 +623,9 @@ function createHostedTool(ctx: ToolContext, kind: 'door' | 'window' | 'opening')
   function track(p: ToolPointer): void {
     const world = ctx.toWorld(p.x, p.y);
     const d = docOf(ctx);
-    const hit = nearestWall(world, d.walls, Math.max(600, 30 / ctx.scale()));
+    // A hand reaches further than a mouse (plan/handEdit.ts HAND_WALL_REACH_PX),
+    // so the ghost shows wherever a fist tap would place.
+    const hit = nearestWall(world, d.walls, Math.max(600, (p.source === 'pinch' ? 160 : 30) / ctx.scale()));
     if (!hit) {
       ghost = null;
       ctx.setOverlay((ov) => ov.label({ x: p.x + 14, y: p.y - 10 }, `${label}: hover a wall`, '#94a3b8'));
