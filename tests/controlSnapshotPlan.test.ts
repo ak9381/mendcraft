@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildControlSnapshot, coerceSnapshot, snapshotBytes } from '../src/relay/controlSnapshot';
+import { buildControlSnapshot, coerceSnapshot, snapshotBytes, snapshotFieldCount, SNAPSHOT_MAX_BYTES, SNAPSHOT_MAX_FIELDS } from '../src/relay/controlSnapshot';
+import { createFakeTransport } from '../src/relay/transport';
+import { createHostSession, createGuestSession } from '../src/relay/session';
 import { fitsRoomMessageRules } from '../src/relay/protocol';
-import { BOARD_DRAWINGS_MAX_CHARS, coerceBoardDrawings, planBoardIds } from '../src/canvas/planDocs';
+import { coerceBoardDrawings, planBoardIds, sanitizePlanDoc } from '../src/canvas/planDocs';
 import { applyGuestSnapshot } from '../src/canvas/phoneCanvasRuntime';
 import { applyPlanEdit, planRooms } from '../src/canvas/planEdit';
 import { PlanEngine } from '../src/plan/engine';
@@ -68,16 +70,70 @@ describe('board snapshot carries the CURRENT plan drawing', () => {
     expect(buildControlSnapshot({ boardDrawings: { 'board-cad': doc } }).boardDrawings).toBeUndefined();
   });
 
-  it('is bounded: a drawing over the size cap is left out (counted), never cut', () => {
-    const doc = edited();
-    const texts = Array.from({ length: 1500 }, (_, i) => ({ id: `t${i}`, x: i, y: i, text: 'x'.repeat(190), size: 200 }));
-    const big = { ...doc, texts };
-    expect(JSON.stringify(big).length).toBeGreaterThan(BOARD_DRAWINGS_MAX_CHARS);
-    const snap = buildControlSnapshot({ board: BOARD, boardDrawings: { 'board-cad': big } });
-    expect(snap.boardDrawings).toBeUndefined();
+  // A LEGAL drawing (sanitizePlanDoc keeps it) that is still large: n text
+  // notes of `text` each.
+  const withTexts = (n: number, text: string) => ({ ...edited(), texts: Array.from({ length: n }, (_, i) => ({ id: `t${i}`, x: i, y: i, text, size: 200 })) });
+  const BOARD2: SurfacePlan = { kind: 'room', title: 'Two plans', tiles: [{ type: 'plan', boardId: 'big', template: 'studio' }, { type: 'plan', boardId: 'small', template: 'studio' }] };
+
+  it('the WHOLE snapshot is bounded in UTF-8 bytes: non-ASCII drawings are shed, largest first', () => {
+    // 1 550 notes of 190 chars of a 3-byte script: ~0.95 MB of UTF-8, yet
+    // under PLAN_DOC_MAX_CHARS in chars — a legal drawing.
+    const big = withTexts(1550, 'ಕ'.repeat(190));
+    expect(sanitizePlanDoc(big)).not.toBeNull();
+    expect(new TextEncoder().encode(JSON.stringify(big)).length).toBeGreaterThan(SNAPSHOT_MAX_BYTES);
+    const small = edited();
+    small.rooms[1].name = 'ಮಲಗುವ ಕೋಣೆ'; // a non-ASCII room name survives
+    const snap = buildControlSnapshot({ board: BOARD2, boardFor: 'ios', boardDrawings: { big, small } });
+    expect(Object.keys(snap.boardDrawings ?? {})).toEqual(['small']);
+    expect(names(snap.boardDrawings?.small)).toContain('ಮಲಗುವ ಕೋಣೆ');
+    expect(snap.omitted.drawings).toBe(1);
+    expect(snapshotBytes(snap)).toBeLessThanOrEqual(SNAPSHOT_MAX_BYTES);
+    // The count survives the wire, so the phone can say a drawing was left out.
+    const back = coerceSnapshot(JSON.parse(JSON.stringify(snap)))!;
+    expect(back.omitted.drawings).toBe(1);
+    expect(Object.keys(back.boardDrawings ?? {})).toEqual(['small']);
+  });
+
+  it('…and in Firestore fields (every key and array element counts)', () => {
+    // Many tiny notes + fixtures (2 000 each, the per-list cap): few bytes,
+    // but over the field budget.
+    const many = { ...withTexts(2000, 'a'), fixtures: Array.from({ length: 2000 }, (_, i) => ({ id: `fx${i}`, kind: 'bed', x: i, y: 0, w: 900, d: 2000, rotation: 0 })) };
+    expect(sanitizePlanDoc(many)).not.toBeNull();
+    expect(snapshotBytes(buildControlSnapshot({ board: BOARD2 }))).toBeLessThan(SNAPSHOT_MAX_BYTES);
+    expect(snapshotFieldCount(many)).toBeGreaterThan(SNAPSHOT_MAX_FIELDS);
+    const snap = buildControlSnapshot({ board: BOARD2, boardDrawings: { big: many, small: edited() } });
+    expect(Object.keys(snap.boardDrawings ?? {})).toEqual(['small']);
+    expect(snapshotFieldCount(snap)).toBeLessThanOrEqual(SNAPSHOT_MAX_FIELDS);
     expect(snap.omitted.drawings).toBe(1);
     // A normal edited plan is a few kB — far under a Firestore document.
-    expect(snapshotBytes(buildControlSnapshot({ board: BOARD, boardDrawings: { 'board-cad': doc } }))).toBeLessThan(20_000);
+    expect(snapshotBytes(buildControlSnapshot({ board: BOARD, boardDrawings: { 'board-cad': edited() } }))).toBeLessThan(20_000);
+  });
+
+  it('the phone is told when a drawing was left out', () => {
+    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ board: BOARD, boardDrawings: { 'board-cad': withTexts(1550, 'ಕ'.repeat(190)) } }))))!;
+    expect(snap.boardDrawings).toBeUndefined();
+    const show = vi.fn();
+    applyGuestSnapshot(snap, show, 'ios');
+    expect(show).toHaveBeenCalledWith(BOARD, {}, { drawingsOmitted: 1 });
+  });
+
+  it('a rejected publish is not kept for replay to late joiners', async () => {
+    const fake = createFakeTransport();
+    const t = { ...fake, async publish(room: string, msg: Parameters<typeof fake.publish>[1]) {
+      if (msg.type === 'state' && msg.snapshot.rev === 2) throw new Error('rejected');
+      return fake.publish(room, msg);
+    } };
+    const TOKEN = 'ABCDEFGHJKMNPQRSTVWXYZ01';
+    const host = await createHostSession(t, undefined, { token: TOKEN });
+    await host.publishState(buildControlSnapshot({ rev: 1, board: BOARD }));
+    await expect(host.publishState(buildControlSnapshot({ rev: 2, board: BOARD }))).rejects.toThrow();
+    const guest = await createGuestSession(t, TOKEN);
+    const seen: number[] = [];
+    guest.onSnapshot((s) => seen.push(s.rev));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen).toContain(1);
+    expect(seen).not.toContain(2);
+    await Promise.all([guest.close(), host.close()]);
   });
 
   it('finds plan tiles nested in containers', () => {

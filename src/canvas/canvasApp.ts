@@ -570,15 +570,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The board whose plan the phones hold now (last publish with a board). */
   let publishedFrame: string | null = null;
   let planRepublishTimer: ReturnType<typeof setTimeout> | null = null;
+  let planRepublishAt = -Infinity;
+  const planEditedFrames = new Set<string>();
+  /** Plan resends: at most one per second, trailing (the timer is never
+   *  pushed back, so a long run of hand edits still sends within ~1 s). */
+  const PLAN_RESEND_MIN_MS = 1000;
   /** A plan drawing changed on `frameId` (an edit, an approved voice edit, an
    *  Undo): the phone holding that board gets the new drawing — the same
-   *  republish (and the same target) as any other board update. Debounced so
-   *  a run of hand edits sends once. */
+   *  republish (and the same target) as any other board update. */
   function planDrawingChanged(frameId: string): void {
     if (!(hostSession || simWire) || frameId !== publishedFrame) return;
-    if (planRepublishTimer) clearTimeout(planRepublishTimer);
-    planRepublishTimer = setTimeout(() => { planRepublishTimer = null; republishCurrentBoard(); }, 250);
+    planEditedFrames.add(frameId);
+    if (planRepublishTimer) return;
+    const now = Date.now();
+    planRepublishTimer = setTimeout(() => {
+      planRepublishTimer = null;
+      planRepublishAt = Date.now();
+      const edited = new Set(planEditedFrames);
+      planEditedFrames.clear();
+      // Only the board the phones hold now, with ITS target: never another
+      // board (B) to both phones because A's drawing changed.
+      const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
+      if (!cur.board || !cur.frameId || !edited.has(cur.frameId)) return;
+      publishBoardTransfer(cur.frameId, cur.board, null, cur.boardFor);
+    }, Math.max(250, planRepublishAt + PLAN_RESEND_MIN_MS - now));
   }
+  /** "Couldn't send" is said once per failure run, not for every retry. */
+  let publishFailSaid = false;
   /** What is drawn on `frameId`'s plan tiles right now: the live boards first
    *  (the drawing as it is on screen), else what was saved with the board. */
   function boardDrawingsOf(frameId: string, board: SurfacePlan): Record<string, unknown> {
@@ -621,7 +639,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       });
       publishedFrame = board ? frameId || null : publishedFrame;
       if (simWire) (window as unknown as { __mcLastBoardSnapshot?: unknown }).__mcLastBoardSnapshot = JSON.parse(JSON.stringify(snap));
-      if (hostSession) void hostSession.publishState(snap).catch(() => undefined);
+      if (hostSession) {
+        void hostSession.publishState(snap).then(
+          () => { publishFailSaid = false; },
+          () => { if (board && !publishFailSaid) { publishFailSaid = true; say('Couldn’t send the board to the phone.'); } },
+        );
+      }
     } catch {
       // Snapshot build/publish is best-effort — never breaks the local drag.
     }
@@ -1419,6 +1442,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const host = sid.endsWith('-dock')
       ? dockSurfaceEl
       : world.querySelector<HTMLElement>(`[data-frame="${sid}"] .mc-surface`);
+    // The surface exists in the processor even with nowhere to mount yet:
+    // recorded, so the next render deletes it first ("already exists").
+    live.add(sid);
     if (!host) return;
     host.innerHTML = '';
     const el = document.createElement('a2ui-surface') as HTMLElement & { surface: unknown };
@@ -5245,7 +5271,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     facingNow = facing;
     applyEditLock();
   }
-  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown): void {
+  const PLAN_TOO_BIG = 'This plan is too big to show on the phone — it shows the starting layout.';
+  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number } = {}): void {
     let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
     if (!id) {
       const f = reg.add('note', plan.title || 'Board');
@@ -5270,6 +5297,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // throws "surface already exists").
     if (!world.querySelector(`[data-frame="${id}"] .mc-surface`)) sync();
     renderSurface(id);
+    // The laptop's drawing did not fit the relay: say so — the board shows
+    // its starting layout, never passed off as her plan.
+    if ((info.drawingsOmitted ?? 0) > 0 && planBoardIds(plan).length) {
+      const frameId = id;
+      waitForLayout(() => {
+        for (const st of world.querySelectorAll<HTMLElement>(`[data-frame="${frameId}"] mc-plan-board .mc-plan-extra-status`)) st.textContent = PLAN_TOO_BIG;
+      });
+      say(PLAN_TOO_BIG);
+    }
     sync();
     persist();
     if (phoneShell) {

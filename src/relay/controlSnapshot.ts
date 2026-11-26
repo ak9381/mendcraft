@@ -41,6 +41,28 @@ const SENT_MAX = 600;
 
 const REASON_KEYS = Object.keys(REASON_TEXT) as RouteReason[];
 
+/** The whole snapshot rides in ONE Firestore document (1 MiB, at most 20 000
+ *  fields, counting every map key and array element). Board drawings share
+ *  this budget: the largest is shed first until the snapshot fits. */
+export const SNAPSHOT_MAX_BYTES = 900_000;
+export const SNAPSHOT_MAX_FIELDS = 15_000;
+
+const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+function utf8Bytes(json: string): number {
+  return encoder ? encoder.encode(json).length : json.length * 3;
+}
+/** Fields as Firestore counts them, conservatively: every map key and every
+ *  array element, nested. */
+export function snapshotFieldCount(v: unknown): number {
+  if (Array.isArray(v)) return v.reduce<number>((n, x) => n + 1 + snapshotFieldCount(x), 0);
+  if (v && typeof v === 'object') return Object.values(v as Record<string, unknown>).reduce<number>((n, x) => n + 1 + snapshotFieldCount(x), 0);
+  return 0;
+}
+/** Does a snapshot fit one relay message (UTF-8 bytes + fields)? */
+export function snapshotFits(snap: unknown): boolean {
+  return utf8Bytes(JSON.stringify(snap)) <= SNAPSHOT_MAX_BYTES && snapshotFieldCount(snap) <= SNAPSHOT_MAX_FIELDS;
+}
+
 /** Clamp a cloud ledger call's preview text so even an adversarial host can't
  *  flood the snapshot; `bytes` stays as recorded (the honest size that left). */
 function clampCall(c: CloudCall): CloudCall {
@@ -231,6 +253,9 @@ export interface ControlSnapshotInput {
   boardFor?: unknown;
   /** Drawings for `board`'s plan tiles (re-sanitized; dropped if invalid). */
   boardDrawings?: unknown;
+  /** Drawings the SENDER already left out (a rebuilt wire snapshot keeps
+   *  the count, so the phone can say so). */
+  omittedDrawings?: unknown;
   /** Last committed transfer marker. */
   transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
@@ -372,7 +397,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
   const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
 
-  return {
+  const snap: ControlSnapshot = {
     v: SNAPSHOT_VERSION,
     rev: Number.isFinite(input.rev) ? Math.round(input.rev as number) : 0,
     activeDevice: input.activeDevice ?? 'laptop',
@@ -396,9 +421,22 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
       queue: queue.dropped,
       primitives: primitivesDropped,
       recipes: recipes.dropped,
-      ...(bd.dropped ? { drawings: bd.dropped } : {}),
     },
   };
+  const before = typeof input.omittedDrawings === 'number' && Number.isFinite(input.omittedDrawings) ? Math.max(0, Math.min(8, Math.round(input.omittedDrawings))) : 0;
+  let shed = bd.dropped + before;
+  // The whole snapshot must fit one relay message: shed drawings, largest
+  // first, until it does (the phone shows that board's starting layout).
+  while (snap.boardDrawings && !snapshotFits(snap)) {
+    const entries = Object.entries(snap.boardDrawings);
+    const size = (d: unknown): number => utf8Bytes(JSON.stringify(d));
+    const [biggest] = entries.reduce((a, b) => (size(b[1]) > size(a[1]) ? b : a));
+    const rest = Object.fromEntries(entries.filter(([k]) => k !== biggest));
+    if (Object.keys(rest).length) snap.boardDrawings = rest; else delete snap.boardDrawings;
+    shed++;
+  }
+  if (shed) snap.omitted = { ...snap.omitted, drawings: shed };
+  return snap;
 }
 
 /** Build the appliance block, adding the optional detail labels only when the
@@ -588,6 +626,7 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     board: r.board,
     boardFor: r.boardFor,
     boardDrawings: r.boardDrawings,
+    omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }

@@ -140,6 +140,15 @@ async function main() {
     await sleep(600);
     const p3 = await iphone.evaluate(phonePlan);
     check(p3.rooms.length === 1 && p3.rooms[0] === 'Studio', `a malformed drawing is refused: the template shows (${p3.rooms.join(', ')})`);
+    // A drawing the laptop left out (too big for the relay) is said on the phone.
+    const big = JSON.parse(JSON.stringify(snap2));
+    big.rev += 2;
+    delete big.boardDrawings;
+    big.omitted = { ...big.omitted, drawings: 1 };
+    await iphone.evaluate((s) => window.__mcGuestSnapshot(s), big);
+    await sleep(800);
+    const note = await iphone.evaluate(() => document.querySelector('mc-plan-board .mc-plan-extra-status')?.textContent ?? '');
+    check(/too big to show on the phone/.test(note), `the phone says the plan was too big (“${note}”)`);
 
     // Android gets the board when it is sent there.
     const sentA = await laptop.evaluate(() => window.__canvas.replay.sendBoard('android'));
