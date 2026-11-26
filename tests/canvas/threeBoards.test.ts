@@ -77,7 +77,7 @@ describe('the Connected devices board', () => {
   it('gimbal words, no stand, Chrome blocking, Spotify not connected, SIM never ticked', () => {
     const rows = connectedDeviceRows({
       iphone: { sim: false, gimbal: 'none' }, android: { sim: true },
-      lamps: [], lampWhy: 'Chrome is blocking local network access for this page — allow it in Site settings to control your lamp.',
+      lamps: [], lampWhy: 'Chrome is blocking this page from your lamp bridge — in Site settings turn on “Apps on device” (and “Local network”), then reload.',
       speaker: { sim: false, spotifyTokens: false, playingOn: '' },
     });
     expect(rows.find((r) => r.device === 'iPhone')?.status).toBe('Paired · Gimbal: no stand');

@@ -1,7 +1,7 @@
 // Chrome's Local Network Access: a page may be blocked from reaching the
 // local WiZ bridge (localhost / the LAN). When Chrome says so, we say so in
 // one plain line — never a silent fall back to simulated lamps.
-export const LNA_BLOCKED_LINE = 'Chrome is blocking local network access for this page — allow it in Site settings to control your lamp.';
+export const LNA_BLOCKED_LINE = 'Chrome is blocking this page from your lamp bridge — in Site settings turn on “Apps on device” (and “Local network”), then reload.';
 export const BULB_UNREACHABLE_LINE = 'I see a smart bulb, but I can’t reach it yet';
 
 /** The permission names Chrome has used for it (newer first). */
