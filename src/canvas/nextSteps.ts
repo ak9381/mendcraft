@@ -86,7 +86,11 @@ const step = (id: string, ctx?: NextStepCtx): NextStep => {
 export function ruleSuggestions(at: JourneyStep, ctx: NextStepCtx): NextStep[] {
   let ids = RULES[at];
   if (at === 'empty' && ctx.savedRoom) ids = ['floorplan', 'connect-device', 'everything'];
-  if (at === 'devices' && ctx.pairing) ids = ctx.asking ? ['point-device', 'name-device', 'build-dashboard'] : ['build-dashboard', 'connect-device'];
+  // Pairing: once a phone is paired (or she was asked "what next?") the next
+  // steps are point / name / build; before any phone, build or connect.
+  // The Connected devices board: on to the dashboard, then the floor plan.
+  if (at === 'devices' && ctx.devicesBoard && !ctx.pairing) ids = ['build-dashboard', 'floorplan', 'point-device'];
+  if (at === 'devices' && ctx.pairing) ids = ctx.asking || (ctx.phones ?? 0) > 0 ? ['point-device', 'name-device', 'build-dashboard'] : ['build-dashboard', 'connect-device'];
   const skip = new Set(ctx.done ?? []);
   if (ctx.lang && ctx.lang !== 'en') skip.add('kannada');
   const out = ids.filter((id) => !skip.has(id));

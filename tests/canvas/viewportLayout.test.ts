@@ -30,7 +30,8 @@ describe('viewport fit (CSS contract — live bbox check runs in Chrome via mac-
   });
 
   it('hides flying swarm cursors over the empty-board copy (chips stay in the AI drawer)', () => {
-    expect(css).toMatch(/\.mc-canvas:has\(\.mc-empty:not\(\[hidden\]\)\) \.mc-swarm/);
+    // ...but not while a build streams into that board (its ghost is showing).
+    expect(css).toMatch(/\.mc-canvas:has\(\.mc-empty:not\(\[hidden\]\)\):not\(:has\(\.mc-ghost:not\(\[hidden\]\)\)\) \.mc-swarm/);
   });
 });
 

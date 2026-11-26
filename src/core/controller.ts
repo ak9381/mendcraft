@@ -133,8 +133,14 @@ export interface ViewportHandle {
   screenScale?(): number;
   /** Orbit the 3D view by a screen-px delta (two-hand pinch midpoint move). */
   orbit3D?(dx: number, dy: number): void;
+  /** Orbit the 3D view by angles (radians): yaw about up, pitch. Eased. */
+  turn3D?(dYaw: number, dPitch: number): void;
+  /** Stop a 3D orbit at once (drop the easing still pending). */
+  orbitStop3D?(): void;
   /** Dolly the 3D view: factor > 1 moves closer (two-hand pinch span ratio). */
   dolly3D?(factor: number): void;
+  /** The 3D camera now (radians / mm), or null when 3D is not showing. */
+  camera3D?(): { azimuth: number; elevation: number; distance: number } | null;
   /** Hide / show a drawing layer (view only; the plan is untouched). */
   setLayerHidden?(layer: string, hidden: boolean): void;
   hiddenLayers?(): string[];

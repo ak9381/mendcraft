@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { orbitOffset, dollyOffset } from './orbit3d';
+import { orbitOffset, dollyOffset, easeTurn, ELEVATION, type TurnDelta } from './orbit3d';
 import { wallDir, wallLength, wallMidpoint, type Fixture, type PlanDoc } from './doc';
 // Segment math lives in editing.ts (pure, unit-tested): per-wall height and
 // per-opening sill/height are honoured there.
@@ -24,10 +24,18 @@ export interface ExtrudeView {
   walk(on: boolean, room?: string): boolean;
   walkStep(step: WalkStep): void;
   walking(): boolean;
-  /** Orbit the camera by a screen-pixel delta (two-hand pinch midpoint move). */
+  /** Orbit the camera by a screen-pixel delta (a held fist / pinch moving):
+   *  eased over the next frames, so a jittery hand still turns smoothly. */
   orbit(dxPx: number, dyPx: number): void;
+  /** Orbit by angles (radians): yaw about up, pitch = elevation. Eased. */
+  turn(dYaw: number, dPitch: number): void;
+  /** Drop the easing still pending: the camera stops where it is now. */
+  stopTurn(): void;
   /** Dolly the camera: factor > 1 moves closer (two-hand pinch span ratio). */
   dolly(factor: number): void;
+  /** The orbit camera now: azimuth / elevation (radians, about +z up) and
+   *  distance to the target (mm). For tests and the hand banner. */
+  cameraAngles(): { azimuth: number; elevation: number; distance: number };
 }
 
 /** Eye height and step sizes for the walkthrough, mm / degrees. */
@@ -52,6 +60,9 @@ export function createExtrudeView(
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  // Mouse and hand share the limits: never under the floor, never over the top.
+  controls.minPolarAngle = Math.PI / 2 - ELEVATION.max;
+  controls.maxPolarAngle = Math.PI / 2 - ELEVATION.min;
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 1.4);
   scene.add(hemi);
@@ -258,13 +269,19 @@ export function createExtrudeView(
     camera.position.set(controls.target.x + o.x, controls.target.y + o.y, controls.target.z + o.z);
     controls.update();
   }
-  function orbit(dxPx: number, dyPx: number): void {
+  // A hand turn is eased: each frame takes part of what is pending (loop()).
+  let pendingTurn: TurnDelta = { yaw: 0, pitch: 0 };
+  function turn(dYaw: number, dPitch: number): void {
     if (walkState) return; // orbiting is disabled while walking
+    pendingTurn = { yaw: pendingTurn.yaw + dYaw, pitch: pendingTurn.pitch + dPitch };
+  }
+  function orbit(dxPx: number, dyPx: number): void {
     const w = container.clientWidth || 1;
     const h = container.clientHeight || 1;
     // Match OrbitControls' feel: a full element width ≈ 2π azimuth, height ≈ π.
-    setCamOffset(orbitOffset(camOffset(), -(2 * Math.PI) * (dxPx / w), Math.PI * (dyPx / h)));
+    turn(-(2 * Math.PI) * (dxPx / w), Math.PI * (dyPx / h));
   }
+  function stopTurn(): void { pendingTurn = { yaw: 0, pitch: 0 }; }
   function dolly(factor: number): void {
     if (walkState) return;
     setCamOffset(dollyOffset(camOffset(), factor, 500, 200000));
@@ -281,6 +298,12 @@ export function createExtrudeView(
       w.heading += (w.th - w.heading) * 0.15;
       placeWalkCamera();
     } else {
+      if (pendingTurn.yaw || pendingTurn.pitch) {
+        const { step, rest } = easeTurn(pendingTurn);
+        pendingTurn = rest;
+        const o = orbitOffset(camOffset(), step.yaw, step.pitch, ELEVATION.min, ELEVATION.max);
+        camera.position.set(controls.target.x + o.x, controls.target.y + o.y, controls.target.z + o.z);
+      }
       controls.update();
     }
     renderer.render(scene, camera);
@@ -296,7 +319,14 @@ export function createExtrudeView(
     walkStep,
     walking: () => !!walkState,
     orbit,
+    turn,
+    stopTurn,
     dolly,
+    cameraAngles() {
+      const o = camOffset();
+      const r = Math.hypot(o.x, o.y, o.z) || 1;
+      return { azimuth: Math.atan2(o.y, o.x), elevation: Math.asin(Math.max(-1, Math.min(1, o.z / r))), distance: r };
+    },
     dispose() {
       window.removeEventListener('keydown', onWalkKey);
       animating = false;

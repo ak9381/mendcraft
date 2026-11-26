@@ -160,7 +160,8 @@
    .mc-swarm recompute against this narrower box), same shift the Tools chip
    and Talk fab already make for the same reason — see below. */
 .mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
-.mc-canvas:has(.mc-empty:not([hidden])) .mc-swarm { visibility: hidden; pointer-events: none; }
+/* Only an idle empty board hides the swarm: while a build streams into it the ghost is showing and the cursors must be too. */
+.mc-canvas:has(.mc-empty:not([hidden])):not(:has(.mc-ghost:not([hidden]))) .mc-swarm { visibility: hidden; pointer-events: none; }
 /* Starts under the bar/toast (--mc-bar-h already includes the gap) so the
    panel's title and close button are never covered. */
 .mc-ai { position: absolute; z-index: 9; right: 16px; top: max(16px, var(--mc-bar-h, 80px)); bottom: 16px;
@@ -415,6 +416,12 @@
   background: var(--panel);
   border-radius: var(--radius) var(--radius) 0 0;
 }
+/* The live "Pair phone" card floats in screen space (not inside the zoomed
+   board): at least 360 px wide where the screen allows, title always shown. */
+.mc-pair-float { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; pointer-events: none; }
+.mc-pair-float .mc-pairing-card { position: relative; left: auto; top: auto; transform: none; pointer-events: auto;
+  width: min(460px, calc(100vw - 32px)); min-width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); font-size: 17px; }
+.mc-pair-float .mc-pairing-card .mc-prop-title { font-size: 22px; }
 .mc-connect-close, .mc-pairing-close {
   min-width: 44px;
   min-height: 44px;
@@ -1541,7 +1548,17 @@
 .mc-plan-hand-note[hidden] { display: none; }
 .mc-plan-hand-toggle { display: none; }
 .mc-gestures-on .mc-plan-hand-toggle { display: inline-block; }
-.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer { display: none; }
+.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer, .mc-plan-3d-bar { display: none; }
+/* The 3D view by hand: the 2D drawing chrome steps aside (it does nothing in
+   3D and covered the model); a bar of 3D buttons the palm can highlight. */
+.mc-gestures-on .mc-plan-3d-on :is(.mc-palette, .mc-flyout, .mc-props, .mc-trash, .mc-status) { display: none !important; }
+.mc-gestures-on .mc-plan-3d-on .mc-plan-3d-bar:not([hidden]) {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  position: absolute; left: 12px; right: 140px; top: 12px; z-index: 31; pointer-events: none; justify-content: flex-start;
+}
+/* "3D view." says what the banner already says: the banner keeps the row. */
+.mc-gestures-on .mc-plan-extras:has(.mc-plan-hand-banner[data-kind="3d"]:not([hidden])) .mc-plan-extra-status { display: none; }
+.mc-plan-3d-bar .mc-plan-hand-btn { pointer-events: auto; min-width: 72px; }
 /* Big hit targets for a hand: every palette tool is at least 64 x 56. */
 .mc-gestures-on .mc-plan-board .mc-palette { grid-template-rows: repeat(auto-fill, 56px); gap: 6px; }
 .mc-gestures-on .mc-plan-board .mc-palette-btn { min-width: 64px; min-height: 56px; border-radius: 12px; }

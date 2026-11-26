@@ -14,6 +14,7 @@ export const LampTileApi = {
       pending: CommonSchemas.DynamicBoolean.optional(),
       error: CommonSchemas.DynamicString.optional(),
       sim: CommonSchemas.DynamicBoolean.optional(),
+      unreachable: CommonSchemas.DynamicBoolean.optional(),
       onToggle: CommonSchemas.Action,
       onBrighter: CommonSchemas.Action.optional(),
       onDimmer: CommonSchemas.Action.optional(),
@@ -92,6 +93,21 @@ export const ConnectTileApi = {
     .object({
       label: CommonSchemas.DynamicString.optional(),
       onConnect: CommonSchemas.Action,
+    })
+    .strict(),
+};
+
+export const GimbalTileApi = {
+  name: 'GimbalTile',
+  schema: z
+    .object({
+      label: CommonSchemas.DynamicString.optional(),
+      docked: CommonSchemas.DynamicBoolean,
+      mode: CommonSchemas.DynamicString.optional(),
+      status: CommonSchemas.DynamicString,
+      error: CommonSchemas.DynamicString.optional(),
+      onMode: CommonSchemas.Action,
+      onCue: CommonSchemas.Action,
     })
     .strict(),
 };
@@ -220,6 +236,7 @@ export const CATALOG_SCHEMAS: Record<string, ZodTypeAny> = {
   SwitchTile: SwitchTileApi.schema,
   SceneTile: SceneTileApi.schema,
   ConnectTile: ConnectTileApi.schema,
+  GimbalTile: GimbalTileApi.schema,
   Row: RowApi.schema,
   Grid: GridApi.schema,
   Card: CardApi.schema,

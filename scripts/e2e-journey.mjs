@@ -118,6 +118,11 @@ async function main() {
     check(end.url.includes('sim=1') && end.url.includes('hands=0'), `replay runs as sim=1&hands=0 (${end.url})`);
     check(end.boards.some((b) => b.plan?.kind === 'room' && /living room/i.test(b.title) && hasTile(b, (t) => t.type === 'lamp')), 'Living room dashboard exists');
     check(end.boards.some((b) => b.plan?.kind === 'plan' || hasTile(b, (t) => t.type === 'plan' && !/room-plan/.test(t.boardId || ''))), 'floor plan board exists');
+    // Three separate boards: Connected devices (a local table), the dashboard
+    // (no plan tile on it), and the floor plan on its own board.
+    check(end.boards.some((b) => b.title === 'Connected devices' && hasTile(b, (t) => t.type === 'table')), 'Connected devices board exists');
+    check(!end.boards.some((b) => b.plan?.kind === 'room' && hasTile(b, (t) => t.type === 'plan')), 'no dashboard holds a floor-plan tile');
+    check(end.boards.some((b) => b.title === 'Floor plan' && b.plan?.kind === 'plan' && !hasTile(b, (t) => t.type === 'lamp')), 'the floor plan is its own "Floor plan" board');
     const pointRan = result.steps.find((s) => s.id === 'point')?.outcome === 'done';
     if (pointRan) check(end.boards.some((b) => /^Board/i.test(b.title) && hasTile(b, (t) => t.type === 'lamp')), 'a Board with a WiZ lamp exists');
     else console.log('     (point-to-connect not in this build: no "Board with a WiZ lamp" check)');

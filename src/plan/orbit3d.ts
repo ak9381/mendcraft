@@ -49,3 +49,18 @@ export function dollyOffset(offset: Vec3, factor: number, minR: number, maxR: nu
   s.r = clamp(s.r / Math.max(factor, 1e-6), minR, maxR);
   return fromSpherical(s);
 }
+
+/** Elevation limits for the plan's 3D view (radians above the floor plane):
+ *  never under the floor, never flipped over the top. The mouse
+ *  (OrbitControls) uses the same limits. */
+export const ELEVATION = { min: 0.08, max: 1.45 } as const;
+
+export interface TurnDelta { yaw: number; pitch: number }
+
+/** One frame of easing towards a pending turn: take `k` of what is left. A
+ *  remainder under `eps` is taken whole, so the turn always ends. */
+export function easeTurn(pending: TurnDelta, k = 0.35, eps = 1e-4): { step: TurnDelta; rest: TurnDelta } {
+  if (Math.abs(pending.yaw) < eps && Math.abs(pending.pitch) < eps) return { step: { ...pending }, rest: { yaw: 0, pitch: 0 } };
+  const step = { yaw: pending.yaw * k, pitch: pending.pitch * k };
+  return { step, rest: { yaw: pending.yaw - step.yaw, pitch: pending.pitch - step.pitch } };
+}

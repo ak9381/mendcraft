@@ -185,3 +185,107 @@ export function dropUnbackedClaims(plan: SurfacePlan): { plan: SurfacePlan; note
   if (!notes.length && !renamed) return { plan, notes };
   return { plan: { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] }, notes };
 }
+
+// ---- the floor plan has its own board ----
+
+export const FLOOR_PLAN_TITLE = 'Floor plan';
+
+/** A room/dashboard board never holds a floor-plan tile (the floor plan is
+ *  its own board): plan tiles are removed from a room plan, an emptied group
+ *  goes with them, and a board left with nothing offers "Connect a device".
+ *  Same object when there was nothing to remove (and always for plan boards). */
+export function roomWithoutPlanTiles(plan: SurfacePlan): SurfacePlan {
+  if (plan.kind !== 'room') return plan;
+  let changed = false;
+  const walk = (tiles: TileSpec[]): TileSpec[] => {
+    const out: TileSpec[] = [];
+    for (const t of tiles) {
+      if (t.type === 'plan') { changed = true; continue; }
+      if (t.type === 'row' || t.type === 'grid' || t.type === 'card') {
+        const before = changed;
+        const children = walk(t.children);
+        if (children.length) out.push(changed === before ? t : { ...t, children });
+        else changed = true;
+      } else if (t.type === 'tabs') {
+        const before = changed;
+        const tabs = t.tabs.map((tab) => ({ ...tab, children: walk(tab.children) })).filter((tab) => tab.children.length);
+        if (!tabs.length) changed = true;
+        else out.push(changed === before ? t : { ...t, tabs });
+      } else if (t.type === 'split') {
+        const before = changed;
+        const first = walk(t.first), second = walk(t.second);
+        if (changed === before) out.push(t);
+        else if (first.length && second.length) out.push({ ...t, first, second });
+        else if (first.length + second.length) out.push({ type: 'row', children: [...first, ...second] });
+      } else out.push(t);
+    }
+    return out;
+  };
+  const tiles = walk(plan.tiles);
+  if (!changed) return plan;
+  return { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] };
+}
+
+/** Where "draw the floor plan" goes: the existing floor-plan board (kind
+ *  'plan'); else the board she is on when it is empty (it becomes "Floor
+ *  plan"); else a new board. Never a board with tiles on it. */
+export function floorPlanTarget(o: {
+  frames: readonly { id: string; title: string }[];
+  surfaces: Record<string, SurfacePlan | undefined>;
+  from: string | null;
+}): { id: string | null; existing?: boolean; reuseEmpty?: boolean; make?: boolean } {
+  const plan = o.frames.find((f) => o.surfaces[f.id]?.kind === 'plan')
+    ?? o.frames.find((f) => f.title === FLOOR_PLAN_TITLE && !o.surfaces[f.id]?.tiles.length);
+  if (plan) return { id: plan.id, existing: true };
+  if (o.from && o.frames.some((f) => f.id === o.from) && !o.surfaces[o.from]?.tiles.length) return { id: o.from, reuseEmpty: true };
+  return { id: null, make: true };
+}
+
+type PlanTile = Extract<TileSpec, { type: 'plan' }>;
+function firstPlanTile(tiles: readonly TileSpec[]): PlanTile | null {
+  for (const t of tiles) {
+    if (t.type === 'plan') return t;
+    const kids = childrenOf(t);
+    const hit = kids ? firstPlanTile(kids) : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** One-time load migration for boards saved before the floor plan had its
+ *  own board: a room board's plan tile (and what was drawn on it) moves to a
+ *  "Floor plan" board — the existing one, else a new one made by `addPlanFrame`
+ *  — BEFORE roomWithoutPlanTiles strips it, so nothing she drew is lost.
+ *  Mutates `surfaces` and `drawings`; returns the ids of boards it changed. */
+export function liftLegacyPlanTiles(
+  frames: readonly { id: string }[],
+  surfaces: Record<string, SurfacePlan>,
+  drawings: Record<string, Record<string, unknown>>,
+  addPlanFrame: () => string | null,
+): string[] {
+  const changed: string[] = [];
+  for (const f of [...frames]) {
+    const plan = surfaces[f.id];
+    if (plan?.kind !== 'room') continue;
+    const tile = firstPlanTile(plan.tiles);
+    if (!tile) continue;
+    let target = Object.keys(surfaces).find((id) => surfaces[id]?.kind === 'plan') ?? null;
+    if (!target) {
+      target = addPlanFrame();
+      if (!target) continue; // canvas full: leave the board as saved
+      surfaces[target] = { kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [tile] };
+      changed.push(target);
+    }
+    // The drawing follows its tile (unless the floor-plan board already has one).
+    const drawn = drawings[f.id]?.[tile.boardId];
+    if (drawn !== undefined) {
+      drawings[target] ??= {};
+      drawings[target][tile.boardId] ??= drawn;
+      delete drawings[f.id][tile.boardId];
+      if (!Object.keys(drawings[f.id]).length) delete drawings[f.id];
+    }
+    surfaces[f.id] = roomWithoutPlanTiles(plan);
+    changed.push(f.id);
+  }
+  return changed;
+}
