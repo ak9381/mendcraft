@@ -1627,3 +1627,22 @@
 .mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
   border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
 .mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* Peace-and-move (gestureScroll.ts): a small "Scrolling" hint by the hand,
+   an outline on what scrolls, a big level readout ("Volume 60 %") over a
+   level control, and "move to scroll" hints on areas that overflow — only
+   while Hands is on. Never takes pointer input. */
+.mc-scroll-layer { position: fixed; inset: 0; pointer-events: none; z-index: 81; }
+.mc-scroll-layer[hidden], .mc-scroll-hint[hidden], .mc-level-readout[hidden], .mc-scroll-badge[hidden] { display: none; }
+.mc-scroll-hint { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 6px; padding: 5px 12px 5px 8px;
+  border-radius: 999px; background: #2B2B2B; color: #FFFFFF; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 3px 10px rgb(0 0 0 / 0.25); }
+.mc-scroll-hint .mc-gi, .mc-scroll-badge .mc-gi { width: 18px; height: 18px; }
+.mc-scroll-target { outline: 3px dashed #E0A800; outline-offset: -3px; }
+.mc-level-target { outline: 4px solid #E0A800; outline-offset: 3px; }
+.mc-level-readout { position: absolute; left: 0; top: 0; padding: 10px 18px; border-radius: 16px; background: #2B2B2B; color: #FFC83D;
+  font: 700 30px/1.1 system-ui, sans-serif; box-shadow: 0 6px 18px rgb(0 0 0 / 0.3); white-space: nowrap; }
+.mc-level-readout.is-pulse { animation: mc-level-pulse 180ms ease-out; }
+@keyframes mc-level-pulse { 0% { scale: 1.08; } 100% { scale: 1; } }
+.mc-scroll-badge { position: absolute; left: 0; top: 0; translate: -100% 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px;
+  border-radius: 999px; background: #FFC83D; color: #2B2B2B; font: 700 12px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .mc-level-readout.is-pulse { animation: none; } }
