@@ -54,6 +54,12 @@ export interface DeviceStore {
   remove(id: string): void;
 }
 
+export const LAMP_OFF_REFUSAL = 'The lamp is off — turn it on first. Nothing changed.';
+/** A brightness change that does not ask for "on", on a lamp that is off:
+ *  sent to a real bulb it would switch it ON (at 10 %). */
+export const lampOffRefusal = (cur: DeviceState, i: DeviceIntent): boolean =>
+  !cur.on && i.on === undefined && i.brightness !== undefined && i.brightness > 0;
+
 /** A "play <query>" turn is a multi-step search-and-play, not a quick ack. */
 export const QUERY_TIMEOUT_MS = 15000;
 
@@ -100,7 +106,9 @@ export function createDeviceStore(
       const prev = state[intent.deviceId];
       if (!prev) throw new Error(`unknown device ${intent.deviceId}`);
       // Refuse, never clamp: an out-of-range level changes nothing and says why.
-      const refusal = levelRefusal(intent);
+      // And a lamp that is off stays off: only an explicit "on" (a chip, the
+      // + button, "turn it on") lights it — a dim or a step down never does.
+      const refusal = levelRefusal(intent) ?? (lampOffRefusal(prev, intent) ? LAMP_OFF_REFUSAL : null);
       if (refusal) {
         state[intent.deviceId] = { ...prev, pending: false, error: refusal };
         publish(intent.deviceId);
@@ -206,43 +214,65 @@ export function tileIntent(name: string, deviceId: string, cur: DeviceState, val
 
 /** Intents that set a level outright (a chip, or a keyboard fine step). */
 export const isLevelSet = (i: DeviceIntent): boolean => i.brightness !== undefined || i.temp !== undefined || i.volume !== undefined;
+/** Intents that change a lamp's power or look: anything still waiting to set a level is stale after one. */
+const supersedesLevels = (i: DeviceIntent): boolean => i.on !== undefined || i.sceneId !== undefined || i.rgb !== undefined;
 
 export const ACT_GAP_MS = 150;
 
-/** Level sets, calmed: per device at most one command in flight and one every
- *  `gapMs`; while one is out, only the LATEST value asked for is kept and sent
- *  next. So a held key or a burst of presses is never a burst of lamp
- *  commands with overlapping rollbacks — a failure rolls back to the last
- *  value that was really applied. Anything else goes straight to the store. */
+/** Every tile press for a device goes through ONE lane, in order, one command
+ *  in flight at a time.
+ *  - Level sets are calmed: at most one every `gapMs`, and while one is out
+ *    only the LATEST value asked for is kept. A held key or a burst of presses
+ *    is never a burst of lamp commands with overlapping rollbacks — a failure
+ *    rolls back to the last value that was really applied.
+ *  - Anything else (power, toggle, scene, colour, transport) runs in the order
+ *    it was pressed. A power or look change also DROPS a level set still
+ *    waiting: "off" pressed after a brightness chip must leave the lamp off,
+ *    never relit by the stale chip. */
 export function createActQueue(
   store: Pick<DeviceStore, 'act'>,
   gapMs = ACT_GAP_MS,
   clock: { now(): number; later(f: () => void, ms: number): unknown } = { now: () => Date.now(), later: (f, ms) => setTimeout(f, ms) },
 ): { act(intent: DeviceIntent): void; pending(deviceId: string): boolean } {
-  const lanes = new Map<string, { busy: boolean; lastAt: number; next: DeviceIntent | null; timer: boolean }>();
-  const lane = (id: string) => {
+  interface Lane { busy: boolean; lastAt: number; next: DeviceIntent | null; ordered: DeviceIntent[]; timer: boolean }
+  const lanes = new Map<string, Lane>();
+  const lane = (id: string): Lane => {
     let l = lanes.get(id);
-    if (!l) { l = { busy: false, lastAt: -Infinity, next: null, timer: false }; lanes.set(id, l); }
+    if (!l) { l = { busy: false, lastAt: -Infinity, next: null, ordered: [], timer: false }; lanes.set(id, l); }
     return l;
   };
+  function send(id: string, l: Lane, intent: DeviceIntent): void {
+    l.busy = true;
+    let p: Promise<unknown>;
+    try { p = store.act(intent); } catch { p = Promise.resolve(); }
+    void p.catch(() => undefined).then(() => { l.busy = false; pump(id); });
+  }
   function pump(id: string): void {
     const l = lane(id);
-    if (l.busy || !l.next) return;
+    if (l.busy) return;
+    // Presses that are not level sets first, in the order they came.
+    const ordered = l.ordered.shift();
+    if (ordered) { send(id, l, ordered); return; }
+    if (!l.next) return;
     const wait = l.lastAt + gapMs - clock.now();
     if (wait > 0) {
       if (!l.timer) { l.timer = true; clock.later(() => { l.timer = false; pump(id); }, wait); }
       return;
     }
     const intent = l.next;
-    l.next = null; l.busy = true; l.lastAt = clock.now();
-    void store.act(intent).catch(() => undefined).then(() => { l.busy = false; pump(id); });
+    l.next = null; l.lastAt = clock.now();
+    send(id, l, intent);
   }
   return {
     act(intent) {
-      if (!isLevelSet(intent)) { void store.act(intent).catch(() => undefined); return; }
-      lane(intent.deviceId).next = intent; // latest wins
+      const l = lane(intent.deviceId);
+      if (isLevelSet(intent) && intent.on !== false) l.next = intent; // latest wins
+      else {
+        if (supersedesLevels(intent)) l.next = null;
+        l.ordered.push(intent);
+      }
       pump(intent.deviceId);
     },
-    pending: (id) => { const l = lanes.get(id); return !!l && (l.busy || !!l.next); },
+    pending: (id) => { const l = lanes.get(id); return !!l && (l.busy || !!l.next || l.ordered.length > 0); },
   };
 }

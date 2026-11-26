@@ -8,7 +8,7 @@
 // is told how to make one show up — never a silent built-in fallback.
 import { DeviceError, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
-import { isNoActiveDevice, type SpotifyDevice, type SpotifySearchHit } from '../music/spotifyApi';
+import type { SpotifyDevice, SpotifySearchHit } from '../music/spotifyApi';
 
 export const NOT_CONNECTED_NOTICE = "Spotify isn't connected — playing the built-in track.";
 export const NO_DEVICE_NOTICE = 'Open Spotify on your phone so it shows up, then try again.';
@@ -18,8 +18,14 @@ export const SIGNED_OUT_NOTICE = 'Spotify needs connecting again — playing on 
 
 /** Spotify answers 403 (reason PREMIUM_REQUIRED) when a free account tries to control playback. */
 export function isPremiumRequired(err: unknown): boolean {
-  const e = err as { status?: number; reason?: string; message?: string } | null;
-  return e?.status === 403 || /premium/i.test(`${e?.reason ?? ''} ${e?.message ?? ''}`);
+  // Only when Spotify says so: a bare 403 can also be a restriction on one command.
+  const e = err as { reason?: string; message?: string } | null;
+  return e?.reason === 'PREMIUM_REQUIRED' || /premium required/i.test(e?.message ?? '');
+}
+/** The device playback was on is gone (Spotify's NO_ACTIVE_DEVICE) — not any 404. */
+export function isDeviceGone(err: unknown): boolean {
+  const e = err as { reason?: string; message?: string } | null;
+  return e?.reason === 'NO_ACTIVE_DEVICE' || /no active device/i.test(e?.message ?? '');
 }
 /** The stored sign-in no longer works (revoked, expired refresh token, 401). */
 export function isSpotifyAuthFailure(err: unknown): boolean {
@@ -217,7 +223,7 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           // The sign-in is gone: that is "not connected" — the built-in player, labelled.
           if (isSpotifyAuthFailure(err)) return builtin(intent, SIGNED_OUT_NOTICE);
           if (isPremiumRequired(err)) refuse(PREMIUM_NOTICE);
-          if (isNoActiveDevice(err)) return noDevice();
+          if (isDeviceGone(err)) return noDevice();
           const msg = err instanceof Error ? err.message : '';
           deps.say(/^No Spotify match/i.test(msg) ? `${msg}.` : `Couldn't play “${intent.query}” on Spotify.`);
           // Nothing played, and no title is made up: the tile just stops.
@@ -232,13 +238,13 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
         // The chosen device went away (a sleeping phone answers 404 "no active
         // device"): forget it, pick again from Spotify's list as it is NOW and
         // try once more. Still nothing to play on: say how to fix it.
-        if (isNoActiveDevice(err)) {
+        if (isDeviceGone(err)) {
           target = null;
           mark(false);
           try {
             return await transport(intent);
           } catch (second) {
-            if (isNoActiveDevice(second)) return noDevice();
+            if (isDeviceGone(second)) return noDevice();
             err = second;
           }
         }

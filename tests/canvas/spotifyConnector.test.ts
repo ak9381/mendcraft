@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { listDevices } from '../../src/music/spotifyApi';
-import { BUILTIN_LABEL, createSpotifyAwareConnector, isPremiumRequired, isSpotifyAuthFailure, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, PREMIUM_NOTICE, SIGNED_OUT_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
+import { BUILTIN_LABEL, createSpotifyAwareConnector, isDeviceGone, isPremiumRequired, isSpotifyAuthFailure, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, PREMIUM_NOTICE, SIGNED_OUT_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -256,7 +256,14 @@ describe('the chosen Spotify device is not sticky (a fake Spotify API)', () => {
     const store = createDeviceStore({ 'speaker-1': { on: false, brightness: 0, playing: true, volume: 40 } }, r.c, () => {}, () => null);
     const s = await store.act({ deviceId: 'speaker-1', playing: false });
     expect(s).toMatchObject({ playing: true, error: 'Spotify needs Premium to control playback.' });
-    expect(isPremiumRequired(status(403, 'x'))).toBe(true);
+    // Only Spotify's own PREMIUM_REQUIRED counts: another 403 is just a failure.
+    expect(isPremiumRequired(status(403, 'Restriction violated', 'UNKNOWN'))).toBe(false);
+    expect(isDeviceGone(status(404, 'Not found'))).toBe(false);
+    expect(isDeviceGone(noActive())).toBe(true);
+    const other = rig({ pause: async () => { throw status(403, 'Restriction violated', 'UNKNOWN'); } });
+    await expect(other.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow("Spotify didn't respond.");
+    const gone404 = rig({ pause: async () => { throw status(404, 'Not found'); } });
+    await expect(gone404.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow("Spotify didn't respond.");
     void speaker;
   });
 

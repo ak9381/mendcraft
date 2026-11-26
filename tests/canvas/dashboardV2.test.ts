@@ -3,7 +3,7 @@
 // routes for them, and room boards that never scroll inside themselves.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { createActQueue, createDeviceStore, lampLook, simulatedAck, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
+import { createActQueue, createDeviceStore, LAMP_OFF_REFUSAL, lampLook, lampOffRefusal, simulatedAck, tileIntent, type DeviceConnector, type DeviceIntent } from '../../src/canvas/deviceActions';
 import { mountItemHandles } from '../../src/canvas/editBoard';
 import { COLOUR_RANGE_REFUSAL, LAMP_RANGE_REFUSAL, SCENE_REFUSAL, TEMP_RANGE_REFUSAL, levelRefusal } from '../../src/canvas/deviceGuard';
 import { parseDeviceCommands, type DeviceRef } from '../../src/canvas/deviceCommands';
@@ -562,13 +562,61 @@ describe('review round 1', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('presses that are not level sets go straight through, in order', () => {
+  it('presses that are not level sets run in the order they were pressed, one at a time', async () => {
     const seen: DeviceIntent[] = [];
     const q = createActQueue({ act: async (i) => { seen.push(i); return lamp(); } });
     q.act({ deviceId: 'd', on: false });
     q.act({ deviceId: 'd', next: true });
     q.act({ deviceId: 'd', on: true, sceneId: 3 });
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(1); // the first goes out at once
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([{ deviceId: 'd', on: false }, { deviceId: 'd', next: true }, { deviceId: 'd', on: true, sceneId: 3 }]);
+  });
+
+  it('"off" after a brightness chip leaves the lamp off: the queued chip is dropped, never relights it', async () => {
+    vi.useFakeTimers();
+    try {
+      const sent: DeviceIntent[] = [];
+      const connector: DeviceConnector = { run: (i) => new Promise((res) => setTimeout(() => { sent.push(i); res(simulatedAck(lamp(), i)); }, 300)) };
+      const store = createDeviceStore({ d: lamp({ on: true, brightness: 50 }) }, connector, () => {}, () => null);
+      const q = createActQueue(store);
+      q.act({ deviceId: 'd', on: true, brightness: 60 }); // in flight
+      await vi.advanceTimersByTimeAsync(20);
+      q.act({ deviceId: 'd', on: true, brightness: 75 }); // waiting behind it
+      q.act(tileIntent('lamp.toggle', 'd', store.get('d'))!); // "Turn off"
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(sent.map((i) => (i.on === false ? 'off' : i.brightness))).toEqual([60, 'off']); // 75 never went out
+      expect(store.get('d').on).toBe(false);
+      expect(q.pending('d')).toBe(false);
+      // A scene pressed while a chip waits also wins over it.
+      q.act({ deviceId: 'd', on: true, brightness: 25 });
+      await vi.advanceTimersByTimeAsync(20);
+      q.act({ deviceId: 'd', on: true, brightness: 100 });
+      q.act({ deviceId: 'd', on: true, sceneId: 3 });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(sent.slice(2).map((i) => i.sceneId ?? i.brightness)).toEqual([25, 3]);
+      expect(store.get('d')).toMatchObject({ on: true, sceneId: 3 });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a lamp that is off stays off: Dimmer, a step down by gesture, or "dim" by voice never turn it on', async () => {
+    const run = vi.fn(async (i: DeviceIntent) => simulatedAck(lamp(), i));
+    const off = lamp({ on: false, brightness: 40 });
+    const store = createDeviceStore({ 'wiz-lamp-1': off }, { run }, () => {}, () => null);
+    // The tile's − button (also what the peace-and-move step down clicks).
+    const dimmer = tileIntent('lamp.dimmer', 'wiz-lamp-1', off)!;
+    expect(lampOffRefusal(off, dimmer)).toBe(true);
+    expect(await store.act(dimmer)).toMatchObject({ on: false, brightness: 40, error: LAMP_OFF_REFUSAL });
+    // Voice "dim the lamp" on an off lamp.
+    const spoken = parseDeviceCommands('dim the ceiling light', devices)!.intents[0];
+    expect(await store.act({ ...spoken, deviceId: 'wiz-lamp-1' })).toMatchObject({ on: false, error: LAMP_OFF_REFUSAL });
+    expect(run).not.toHaveBeenCalled(); // nothing reached the bulb
+    expect(LAMP_OFF_REFUSAL).toBe('The lamp is off — turn it on first. Nothing changed.');
+    // Asking for "on" still works: +, a chip, a colour, "turn it on".
+    expect((await store.act(tileIntent('lamp.brighter', 'wiz-lamp-1', off)!)).on).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+    // …and on a lamp that is ON, Dimmer is an ordinary step.
+    expect(lampOffRefusal(lamp({ on: true }), dimmer)).toBe(false);
   });
 
   it('a held arrow key is one step: key auto-repeat is ignored', () => {
