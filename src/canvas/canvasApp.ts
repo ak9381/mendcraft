@@ -430,8 +430,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const viewport = root.querySelector<HTMLElement>('.mc-viewport')!;
   const world = root.querySelector<HTMLElement>('.mc-world')!;
   const swarmEl = root.querySelector<HTMLElement>('.mc-swarm')!;
-  // One cursor per engine, parked on a tile of the focused board (never
-  // floating loose over the canvas); the other agents only light their tiles.
+  // The call's cursor parks on the focused board, each tile cursor on the tile
+  // it fills (never floating loose over the canvas; off the board = hidden).
   const swarmAnchor = (tileIndex: number | undefined): { x: number; y: number } | null => {
     const id = focusId ?? lastFocus;
     const frame = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"]`) : null;
@@ -448,7 +448,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   };
   const swarm: SwarmLayer = createSwarmLayer(swarmEl, {
     reducedMotion: reduced,
-    maxPerKind: 1,
     anchor: swarmAnchor,
     onReachTarget: (tileIndex, kind) => flashGhostTarget(tileIndex, kind),
   });
@@ -1852,17 +1851,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).
   showAi(AI_PANEL_ALWAYS_OPEN, true);
-  // sim's scripted engines can resolve near-instantly, which would settle
-  // the swarm (and open the review) before a screenshot — or a person — ever
-  // sees it mid-flight. Hold it visible for a minimum stretch in sim only;
-  // real network latency already paces it for everyone else.
-  const SWARM_MIN_HOLD_MS = 2600;
-  let swarmStartedAt = 0;
-  async function holdSwarmMinimum(): Promise<void> {
-    if (!opts.sim) return;
-    const remaining = SWARM_MIN_HOLD_MS - (Date.now() - swarmStartedAt);
-    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
-  }
+  // A fast reply (sim's scripted engines, a cached or on-device answer) would
+  // settle the swarm and open the review before anyone could read a cursor.
+  // Same rule in sim and live: the review waits until every cursor has landed
+  // on its tile plus a short linger (swarmAgents.LINGER_MS) — never longer, and
+  // never for work that did not happen.
+  // Only the call that STARTED this swarm may settle it: if a newer turn took
+  // the layer over (or an error already ended it), finish() says false and we
+  // leave the new turn's cursors alone.
+  async function finishSwarm(): Promise<void> { if (await swarm.finish()) settleSwarm(); }
   /** One ledger line for a turn, remembered against that turn's SentInfo
    *  (summed if the same turn really sends twice). A SIM turn books 0 real
    *  bytes — only what it would send. `prebooked`: bytes of this turn already
@@ -1922,7 +1919,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Swarm cursors follow the reply: one per tile it has really produced. */
   let swarmFollowsTiles = false;
-  function growSwarm(tiles: number): void { if (swarmFollowsTiles) swarm.setTiles(tiles); }
+  function growSwarm(names: readonly string[]): void { if (swarmFollowsTiles) swarm.setTiles(names.length, names); }
   function aiSent(utterance: string, s: SentInfo, ctx: { task?: SwarmTask; swarmPlan?: SwarmPlanInput; extraBytes?: number; prebookedBytes?: number; swarm?: boolean; /** live cloud turn: book bytes when a call really leaves */ defer?: boolean } = {}): void {
     // No auto-open: the engine bar shows the turn (click it for the drawer)
     // and the AI monitor carries the full story; the canvas stays clean.
@@ -1953,7 +1950,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // One cursor for this real call, in its engine's colour; a tile cursor
     // joins for each tile the reply really produces (growSwarm, from the
     // ghost) — never more cursors than tiles, never the other engine's.
-    swarmStartedAt = Date.now();
     const plan = ctx.swarmPlan ?? buildMixedSwarmPlan(s.engine, ctx.task ?? 'generic');
     swarmFollowsTiles = !ctx.swarmPlan;
     swarm.start(plan, opts.sim ? 1 : Date.now());
@@ -2035,7 +2031,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!el) return;
     clearGhostTimers(frameId);
     if (!g) { el.hidden = true; el.innerHTML = ''; return; }
-    growSwarm(g.tiles.length);
+    growSwarm(g.tiles.map(ghostKindWord));
     el.hidden = false;
     el.innerHTML = `<p class="mc-ghost-title">${esc(g.title ?? '…')}</p>` + g.tiles.map((t, i) =>
       `<div class="mc-ghost-tile ${t.type} stage-frame" data-tile-i="${i}">` +
@@ -2206,8 +2202,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const onlyCall = engineFor(engineId, '{}').id === 'gemini';
       const out = await streamTurn(frameId, engineId, utterance, script, 'dashboard', onlyCall ? ONE_CALL_ROOM_GOAL : undefined, surfaces[frameId] ?? null,
         () => { void connectRoom(frameId, utterance); });
-      await holdSwarmMinimum();
-      settleSwarm();
+      await finishSwarm();
       if (!out) { ghost(frameId, null); return null; }
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
       if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); return null; }
@@ -2233,8 +2228,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
-    await holdSwarmMinimum();
-    settleSwarm();
+    await finishSwarm();
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       tilesFilledLine(plan));
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
@@ -3050,7 +3044,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
     }
     const next = coerced.value;
-    settleSwarm();
+    await finishSwarm();
     const swapCount = Object.keys(next.strings).length;
     panels.forEngine('gemini').log('replied', `Kannada pack ready · ${swapCount} swaps`);
     panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
@@ -4750,7 +4744,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       cloudRetract,
       log: (engine, verb, detail) => panels.forEngine(engine).log(verb, detail),
       handoff: (reason) => panels.showHandoff('nano', reason),
-      settle: async () => { await holdSwarmMinimum(); settleSwarm(); autoHideAi(); },
+      settle: async () => { await finishSwarm(); autoHideAi(); },
+      settleNow: () => { settleSwarm(); autoHideAi(); },
       state: (text) => { aiPanel.querySelector('.mc-ai-state')!.textContent = text; say(text); },
     },
     typing: (on) => toolPalette.peekSay(on),

@@ -43,8 +43,10 @@ export interface MorphUiHooks {
   cloudRetract?(s: SentInfo): void;
   log(engine: 'nano' | 'gemini', verb: LogVerb, detail: string): void;
   handoff(reason: string): void;
-  /** Settle the swarm (the host may hold it on screen a minimum in sim). */
+  /** Success: let the cursors land and linger, then settle the swarm. */
   settle(): Promise<void> | void;
+  /** Cancel or failure: take the cursors down at once. */
+  settleNow(): void;
   state(text: string): void;
 }
 
@@ -304,7 +306,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     if (wasWorking) {
       // The model was already called; be honest that its reply is discarded.
       deps.ui.log('gemini', 'note', 'cancelled — the reply will not be applied');
-      void deps.ui.settle();
+      deps.ui.settleNow();
     }
   }
 
@@ -316,7 +318,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
   }
 
   async function settleFail(why: string): Promise<void> {
-    await deps.ui.settle();
+    deps.ui.settleNow();
     deps.ui.log('gemini', 'note', why);
     // A named cloud failure (App Check 403, offline…) is said where she looks.
     const line = /^Gemini/.test(why) ? `Couldn't make that change. ${why}` : "Couldn't make that change.";

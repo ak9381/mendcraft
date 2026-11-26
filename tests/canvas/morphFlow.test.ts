@@ -127,6 +127,7 @@ function fakeMic(opts: { supported?: boolean } = {}) {
 
 // ---- fake ui hooks ----
 function fakeUi(): MorphUiHooks & { log: MorphUiHooks['log'] & { calls: [string, string, string][] }; sentCalls: unknown[]; stateCalls: string[] } {
+  const counts = { soft: 0, hard: 0 };
   const logCalls: [string, string, string][] = [];
   const sentCalls: unknown[] = [];
   const stateCalls: string[] = [];
@@ -138,7 +139,9 @@ function fakeUi(): MorphUiHooks & { log: MorphUiHooks['log'] & { calls: [string,
     sent(s, o) { sentCalls.push({ s, o }); },
     log,
     handoff() {},
-    settle: async () => {},
+    settle: async () => { counts.soft++; },
+    settleNow: () => { counts.hard++; },
+    counts,
     state(text) { stateCalls.push(text); },
     sentCalls,
     stateCalls,
@@ -537,6 +540,8 @@ describe('cancel()', () => {
     flow.cancel();
     expect(h.ui.log.calls.some(([, verb]) => verb === 'note')).toBe(true);
     expect(flow.phase()).toBe('idle');
+    // Cancel takes the cursors down at once; it never waits for them to linger.
+    expect(h.ui.counts).toEqual({ soft: 0, hard: 1 });
     // The in-flight reply, once it resolves, must never be applied.
     resolveStream?.(JSON.stringify({ ...LAMP, label: 'too late' }));
     await new Promise((r) => setTimeout(r, 0));
