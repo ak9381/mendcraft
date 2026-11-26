@@ -161,7 +161,7 @@ export async function discoverRealLamps(client: WizClient, storage: IdStore = nu
     lamps.push({
       id: ids[f.ip], ip: f.ip, label: lampLabel(i),
       // The bulb's own state; one that would not answer is shown off, not guessed.
-      state: { on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false },
+      state: { on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false, unreachable: false },
     });
   }
   return lamps;
@@ -260,11 +260,12 @@ export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[
 }
 
 /** The lamps to start with when the bridge has not answered (yet, or at all):
- *  the bulbs it last really found on this machine, shown as SIM until it does
+ *  the bulbs it last really found on this machine, shown "Not reachable"
+ *  (and refused, never simulated) until it does
  *  — so boards saved with those lamps open with live tiles, not dead ones.
  *  Null when no bulb was ever found here (the seeded lamps stay). */
 export function rememberedLamps(storage: IdStore = null): RealLamp[] | null {
   const ids = rememberedLampIds(storage);
   if (!ids.length) return null;
-  return ids.map((id, i) => ({ id, ip: '', label: lampLabel(i), state: { on: false, brightness: 50, sim: true } }));
+  return ids.map((id, i) => ({ id, ip: '', label: lampLabel(i), state: { on: false, brightness: 50, sim: true, unreachable: true } }));
 }

@@ -39,6 +39,8 @@ describe('ruleSuggestions', () => {
     expect(ruleSuggestions('floorplan', ctx).map((s) => s.id)).toEqual(['check', '3d', 'dxf']);
     expect(ruleSuggestions('empty', ctx).map((s) => s.id)).toEqual(['connect-devices', 'floorplan', 'connect-device']);
     expect(ruleSuggestions('devices', { ...ctx, pairing: true }).map((s) => s.id)[0]).toBe('build-dashboard');
+    // Phones paired by "connect devices": point / name / build, in that order.
+    expect(ruleSuggestions('devices', { ...ctx, pairing: true, phones: 1 }).map((s) => s.label)).toEqual(['Point at a device', 'Name a device', 'Build the dashboard']);
     expect(ruleSuggestions('checked', ctx).map((s) => s.id)).toContain('kannada');
   });
   it('the empty-board chip starts the pair-first connect flow', () => {

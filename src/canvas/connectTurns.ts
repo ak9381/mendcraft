@@ -236,6 +236,9 @@ export function pointConnectFromIdentity(
     cloudSends?: number; chosenId?: string;
     /** The photo was taken and identified on the paired iPhone: nothing left this device. */
     viaIphone?: boolean;
+    /** Real lamps reachable right now: a "smart bulb" (no brand seen) may be
+     *  one of them, so they are offered for it like a WiZ identity would be. */
+    realLamps?: string[];
   } = {},
 ): PointOutcome {
   if (!result || !(result.identity.confidence >= POINT_MIN_CONFIDENCE)) return { ok: false, message: POINT_UNSURE_MESSAGE };
@@ -260,7 +263,8 @@ export function pointConnectFromIdentity(
   const idWords = new Set(words(identity.label));
   const labelMatch = (d: DeviceHint) => words(d.label).some((w) => idWords.has(w));
   const eligible = (opts.devices ?? []).filter((d) =>
-    mapKindToTile(d.kind, d.label, d.id).type === want && (!isWizDevice(d) || isWizIdentity(identity) || labelMatch(d)));
+    mapKindToTile(d.kind, d.label, d.id).type === want && (!isWizDevice(d) || isWizIdentity(identity) || labelMatch(d)
+      || (identity.kind === 'smart-bulb' && !!opts.realLamps?.includes(d.id))));
   let known: DeviceHint | undefined;
   if (opts.chosenId) known = eligible.find((d) => d.id === opts.chosenId);
   if (!known) {

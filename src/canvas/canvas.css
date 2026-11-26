@@ -416,6 +416,12 @@
   background: var(--panel);
   border-radius: var(--radius) var(--radius) 0 0;
 }
+/* The live "Pair phone" card floats in screen space (not inside the zoomed
+   board): at least 360 px wide where the screen allows, title always shown. */
+.mc-pair-float { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; pointer-events: none; }
+.mc-pair-float .mc-pairing-card { position: relative; left: auto; top: auto; transform: none; pointer-events: auto;
+  width: min(460px, calc(100vw - 32px)); min-width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); font-size: 17px; }
+.mc-pair-float .mc-pairing-card .mc-prop-title { font-size: 22px; }
 .mc-connect-close, .mc-pairing-close {
   min-width: 44px;
   min-height: 44px;

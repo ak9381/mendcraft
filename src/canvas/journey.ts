@@ -20,12 +20,14 @@ export interface JourneyCtx {
   shared?: boolean;
   /** The pair-first connect flow is running (phones pairing / "what next?"). */
   pairing?: boolean;
+  /** The focused board is the Connected devices board. */
+  devicesBoard?: boolean;
 }
 
 const DEVICE_TILES = new Set(['lamp', 'switch', 'music', 'scene']);
 
 export function journeyStepOf(board: JourneyBoard, ctx: JourneyCtx): JourneyStep {
-  if (ctx.pairing) return 'devices';
+  if (ctx.pairing || ctx.devicesBoard) return 'devices';
   if (!board.tiles.length) return 'empty';
   if (ctx.shared) return 'shared';
   if (!ctx.online) return 'offline';

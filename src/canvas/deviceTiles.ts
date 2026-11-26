@@ -11,7 +11,8 @@
 // Presets stay separate buttons.
 import { html, nothing, css } from 'lit';
 import { A2uiLitElement } from '@a2ui/lit/v0_9';
-import { LampTileApi, MusicTileApi } from './catalogApi';
+import { GimbalTileApi, LampTileApi, MusicTileApi } from './catalogApi';
+import { GIMBAL_CUE_BUTTONS, GIMBAL_MODE_BUTTONS, GIMBAL_NO_STAND, GIMBAL_TILE_LABEL } from './gimbalTile';
 import {
   BRIGHTNESS_PRESETS, LAMP_COLOURS, LAMP_SCENES, LAMP_TILE_STEP, TEMP_DEFAULT, TEMP_STEP, VOLUME_PRESETS, VOLUME_TILE_STEP, WHITE_PRESETS,
   activeColourKey, lampStateLine,
@@ -104,7 +105,8 @@ export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
       <div class="head">
         <div class="titles"><span class="label">${p.label}</span>
           <span class="state" aria-live="polite">${lampStateLine({ on, brightness: b, ...look })}${p.pending ? ' · checking…' : ''}</span></div>
-        ${p.sim ? html`<span class="badge sim-badge" title="Simulated — the WiZ bridge isn't reachable">SIM</span>` : nothing}
+        ${p.unreachable ? html`<span class="badge reach-badge" data-unreachable title="This lamp is real, but the WiZ bridge isn't answering">Not reachable</span>`
+          : p.sim ? html`<span class="badge sim-badge" title="Simulated — the WiZ bridge isn't reachable">SIM</span>` : nothing}
         <button class="primary power" data-act="toggle" @click=${() => p.onToggle?.()}>${on ? 'Turn off' : 'Turn on'}</button>
       </div>
       ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
@@ -184,6 +186,42 @@ export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
         <div class="chips">
           ${VOLUME_PRESETS.map((v) => html`<button data-act="volume" data-value=${v.volume} aria-label=${`${v.label} volume`} aria-pressed=${vol === v.volume ? 'true' : 'false'} @click=${() => fire(p.onVolume, v.volume)}>${v.label}</button>`)}
         </div>
+      </div>
+    </div>`;
+  }
+}
+
+/** The docked iPhone's stand: three mode buttons and two body-language cues,
+ *  each one press (>= 56 px, palm highlight + thumbs-up pressable). The status
+ *  line is only what the iPhone reported; a pressed mode is marked from that
+ *  report, never from the press. */
+export class GimbalTileElement extends A2uiLitElement<typeof GimbalTileApi> {
+  static readonly tagName = 'mc-gimbal-tile';
+  protected override readonly api = GimbalTileApi;
+  static override styles = [levelStyles, css`
+    .modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cues { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .modes button { min-height: 64px; }
+    @container (max-width: 340px) { .modes { grid-template-columns: minmax(0, 1fr); } }
+  `];
+  override render() {
+    const p = this.controller?.props;
+    if (!p) return nothing;
+    const docked = !!p.docked;
+    const mode = typeof p.mode === 'string' ? p.mode : '';
+    const status = p.status ? String(p.status) : GIMBAL_NO_STAND;
+    const label = p.label ? String(p.label) : GIMBAL_TILE_LABEL;
+    return html`<div class="tile ${docked && mode !== 'hold' ? 'active' : ''}" role="group" aria-label=${label} data-gimbal-docked=${docked ? 'true' : 'false'}>
+      <div class="head">
+        <div class="titles"><span class="label">${label}</span>
+          <span class="state" data-gimbal-status aria-live="polite">${status}</span></div>
+      </div>
+      ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
+      <div class="chips modes" role="group" aria-label="Gimbal mode">
+        ${GIMBAL_MODE_BUTTONS.map((b) => html`<button data-act="gimbal-mode" data-value=${b.value} aria-pressed=${docked && mode === b.value ? 'true' : 'false'} @click=${() => fire(p.onMode, b.value)}>${b.label}</button>`)}
+      </div>
+      <div class="chips cues" role="group" aria-label="Gimbal body language">
+        ${GIMBAL_CUE_BUTTONS.map((b) => html`<button data-act="gimbal-cue" data-value=${b.value} @click=${() => fire(p.onCue, b.value)}>${b.label}</button>`)}
       </div>
     </div>`;
   }

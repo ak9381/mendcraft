@@ -318,7 +318,8 @@ describe('a catch-up batch of phone lines is drained, not dropped', () => {
 describe('single-call boards, toast position, "show me a dashboard"', () => {
   it('a cloud-only draft carries the improve goal in its one prompt', () => {
     const app = read('src/canvas/canvasApp.ts');
-    expect(app).toMatch(/const ONE_CALL_ROOM_GOAL = 'Group the lights and add a room plan tile\.';/);
+    // The floor plan is its own board: the room goal never asks for a plan tile.
+    expect(app).toMatch(/const ONE_CALL_ROOM_GOAL = 'Group the lights\. No floor-plan tile: the floor plan has its own board\.';/);
     expect(app).toMatch(/const onlyCall = engineFor\(engineId, '\{\}'\)\.id === 'gemini';/);
     expect(app).toMatch(/streamTurn\(frameId, engineId, utterance, script, 'dashboard', onlyCall \? ONE_CALL_ROOM_GOAL : undefined,/);
   });

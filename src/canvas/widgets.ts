@@ -7,6 +7,7 @@ import {
   CardApi,
   ChartTileApi,
   ConnectTileApi,
+  GimbalTileApi,
   FormTileApi,
   GridApi,
   LampTileApi,
@@ -36,10 +37,10 @@ import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
-import { LampTileElement, MusicTileElement } from './deviceTiles';
+import { GimbalTileElement, LampTileElement, MusicTileElement } from './deviceTiles';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 
-export { LampTileElement, MusicTileElement };
+export { GimbalTileElement, LampTileElement, MusicTileElement };
 
 /** Wraps today's plan engine + SVG renderer as one catalog widget. */
 export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
@@ -648,6 +649,7 @@ export const MusicTile = { ...MusicTileApi, tagName: MusicTileElement.tagName, e
 export const SwitchTile = { ...SwitchTileApi, tagName: SwitchTileElement.tagName, element: SwitchTileElement as unknown as CustomElementConstructor };
 export const SceneTile = { ...SceneTileApi, tagName: SceneTileElement.tagName, element: SceneTileElement as unknown as CustomElementConstructor };
 export const ConnectTile = { ...ConnectTileApi, tagName: ConnectTileElement.tagName, element: ConnectTileElement as unknown as CustomElementConstructor };
+export const GimbalTile = { ...GimbalTileApi, tagName: GimbalTileElement.tagName, element: GimbalTileElement as unknown as CustomElementConstructor };
 export const RowTile = { ...RowApi, tagName: RowTileElement.tagName, element: RowTileElement as unknown as CustomElementConstructor };
 export const GridTile = { ...GridApi, tagName: GridTileElement.tagName, element: GridTileElement as unknown as CustomElementConstructor };
 export const CardTile = { ...CardApi, tagName: CardTileElement.tagName, element: CardTileElement as unknown as CustomElementConstructor };
@@ -668,6 +670,7 @@ export const smartCanvasCatalog = new Catalog(ROOM_CATALOG_ID, '0.9', [
   SwitchTile,
   SceneTile,
   ConnectTile,
+  GimbalTile,
   RowTile,
   GridTile,
   CardTile,
