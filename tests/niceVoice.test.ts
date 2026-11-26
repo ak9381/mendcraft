@@ -410,7 +410,9 @@ describe('wiring', () => {
     const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     expect(app).toMatch(/<button data-cmd="voice" class="mc-btn">Voice<\/button>/);
     expect(app).toMatch(/voice: \(\) => voiceSheet\.open\(\)/);
-    expect(app).toMatch(/if \(readAloud && t && t !== LISTENING_STATUS\) speaker\.speak\(/);
+    // Only opted-in lines are spoken, through ai/readAloud.ts (never every status line).
+    expect(app).toMatch(/createReadAloud\(\{ speaker, enabled: \(\) => readAloud, packLang: \(\) => pack\?\.lang \}\)/);
+    expect(app).toMatch(/else if \(o\.speak\) readAloudLines\.line\(/);
     expect(app).toMatch(/let readAloud = loadReadAloud\(voiceStore\);/);
   });
 });

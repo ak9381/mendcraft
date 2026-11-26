@@ -109,6 +109,7 @@ import { diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
 import { createSpeaker } from '../ai/speaker';
+import { createReadAloud } from '../ai/readAloud';
 import { clearSavedVoice, isCloudVoice, loadAllowCloud, loadReadAloud, loadSavedVoice, resolveChangeVoice, saveReadAloud, saveVoice, speechPlatform, type ChangeVoiceIntent } from '../ai/speechVoices';
 import { mountVoiceSheet } from './voiceSheet';
 import { mountEngineBar, type EngineBar } from './engineBar';
@@ -639,7 +640,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (next !== screenLayout) {
         setScreenLayout(next);
         const side = sideFor(next, platform);
-        if (side) say(`${platform === 'android' ? 'The Nothing phone' : 'The iPhone'} is on the ${side}.`);
+        if (side) say(`${platform === 'android' ? 'The Nothing phone' : 'The iPhone'} is on the ${side}.`, { speak: true });
       } else {
         // Already placed — still republish so the phone gets the current board.
         republishCurrentBoard();
@@ -757,7 +758,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const phoneSense = new Map<string, PhoneSenseStatus>();
   const isIphoneRow = (p: { id: string; label: string; sim: boolean }): boolean => p.id === 'ios' || (p.sim && /iphone/i.test(p.label));
   const pairFirst = createPairFirst({
-    say: (t) => say(t),
+    say: (t, o) => say(t, o),
     sim: () => simEnv(),
     busy: () => reviewBusy(),
     openPairing: async () => {
@@ -904,11 +905,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const voiceStore = storage as Storage;
   const speaker = createSpeaker({ storage: voiceStore });
   let readAloud = loadReadAloud(voiceStore);
-  const spokenLang = (t: string): string => (/[\u0C80-\u0CFF]/.test(t) ? 'kn-IN' : 'en-US');
-  const say = (t: string) => {
+  // Only lines a caller opts in are spoken (ai/readAloud.ts): AI replies,
+  // a review's title, a command's result or refusal, a pairing outcome.
+  // Hints, HUDs and "Listening…" are written, never read.
+  const readAloudLines = createReadAloud({ speaker, enabled: () => readAloud, packLang: () => pack?.lang });
+  /** `speak`: true reads this line aloud; a string reads that instead. */
+  type SayOptions = { speak?: boolean | string };
+  const say = (t: string, o: SayOptions = {}) => {
     statusEl.textContent = t; hideRetry();
     showPhoneSay(t === LISTENING_STATUS ? '' : t);
-    if (readAloud && t && t !== LISTENING_STATUS) speaker.speak(t.replace(/^SIM · /, ''), { lang: spokenLang(t) });
+    // The mic opening is new input from her: stop talking.
+    if (t === LISTENING_STATUS) readAloudLines.stop();
+    else if (o.speak) readAloudLines.line(typeof o.speak === 'string' ? o.speak : t);
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
@@ -925,10 +933,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     let shown = false;
     let spokeAny = false;
     const speakNext = (sentence: string): void => {
-      if (!readAloud || !sentence) return;
-      const o = { lang: spokenLang(sentence), onStart: () => replyTrace.spoken() };
+      if (!sentence) return;
       // The first sentence replaces whatever was being said; the rest queue.
-      const ok = spokeAny ? speaker.enqueue(sentence, o) : speaker.speak(sentence, o);
+      const ok = readAloudLines.sentence(sentence, !spokeAny, { onStart: () => replyTrace.spoken() });
       spokeAny = spokeAny || ok;
     };
     return {
@@ -999,6 +1006,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneMenu?.close();
     reviewLive = live ? { tokens: live.tokens.filter((t): t is SentInfo => !!t), facts: live.facts } : null;
     reviewDialog.open(model);
+    readAloudLines.line(model.title);
   }
   /** A turn's booked bytes changed: if its review is the one open, match it. */
   function refreshReviewFor(s: SentInfo): void {
@@ -1182,7 +1190,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const changed = applyRealLamps(lampSwap, lamps);
       for (const fid of changed) renderSurface(fid);
       if (changed.length) { sync(); updateDock(); persist(); }
-      say(lamps.length ? `Found ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.');
+      say(lamps.length ? `Found ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
     }).catch(() => { /* a broken bridge reply leaves the SIM lamps as they are */ });
   }
 
@@ -1271,7 +1279,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       ...expandPlan(plan, id, store.all(), { heading: false }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
-    if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`); return false; }
+    if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`, { speak: true }); return false; }
     // Saved drawings reach the plan boards before they mount.
     // A drawing belongs to its plan board id. Rendering never deletes one: an
     // edit that drops the plan tile can still be undone or rolled back, and
@@ -1730,7 +1738,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // empty board or claim the write landed.
       sync();
       updateDock();
-      say(saveSpokenLine(false, f?.title ?? null, ''));
+      say(saveSpokenLine(false, f?.title ?? null, ''), { speak: true });
       return;
     }
     savedAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -1744,12 +1752,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       persist();
       void flyTo(focusCam(fitBoardWidth(next)));
       window.dispatchEvent(new Event('resize'));
-      say(msg);
+      say(msg, { speak: true });
       return;
     }
     sync();
     updateDock();
-    say(msg);
+    say(msg, { speak: true });
   }
   function step(dir: 1 | -1): void {
     const list = reg.list(); if (!list.length) return;
@@ -2149,7 +2157,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onError: (why, failed) => {
         settleSwarm();
         panels.forEngine(failed ?? engineId).fail(why);
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
         offerRetry(retry);
       },
     }, { deviceIdSession, isCancelled: () => (sentInfo?.engine ?? engineId) === 'gemini' && !net.isOnline(), canHandoff: () => net.isOnline() }));
@@ -2202,7 +2210,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       settleSwarm();
       if (!out) { ghost(frameId, null); return null; }
       const check = gateMessages(expandPlan(out.plan, frameId, store.all()), CATALOG_SCHEMAS);
-      if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); return null; }
+      if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); return null; }
       const handedOff = lastTurnHandedOff;
       if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(out.plan)}, for Gemini to improve`);
       return { ...out, summary: summaryOf(summary, out.plan), status, handedOff };
@@ -2230,7 +2238,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       tilesFilledLine(plan));
     const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
-    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.'); bodyLanguage('no'); return Promise.resolve(false); }
+    if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); bodyLanguage('no'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
     // Where it actually ran (a phone's "Nano" step is really Deep in the cloud).
     const ranId: EngineId = si.engine;
@@ -2254,14 +2262,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           sync(); updateDock(); persist();
           const why = e instanceof Error ? e.message : 'The build failed after Approve';
           panels.forEngine(ranId).fail(why);
-          say(why);
+          say(why, { speak: true });
         }
       });
       const finish = (kept: boolean) => {
         reviewDialog.close(); ghost(frameId, null); pending = null;
         aiPanel.querySelector('.mc-ai-state')!.textContent = kept ? `Kept. Say “undo” to put it back.` : 'Dropped. Nothing changed.';
         autoHideAi();
-        say(kept ? `Kept: ${summary}. Say “undo” to put it back.` : 'Dropped. Nothing changed.');
+        say(kept ? `Kept: ${summary}. Say “undo” to put it back.` : 'Dropped. Nothing changed.', { speak: kept ? `Kept: ${summary}.` : 'Dropped. Nothing changed.' });
         done(kept);
       };
       const card = renderProposalCard(document, {
@@ -2405,10 +2413,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           full = await withBuildGimbal(() => engine.stream(turn.sent.prompt, (chunk) => { ghost(frameId, parsePartialPlan(chunk)); }));
         } catch (e) {
           const why = `Couldn’t add that device: ${e instanceof Error ? e.message : String(e)}`;
-          settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); ghost(frameId, null); return false;
+          settleSwarm(); aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); ghost(frameId, null); return false;
         }
         const parsed = parseModelPlan(full);
-        if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`); return false; }
+        if (!parsed.ok) { settleSwarm(); ghost(frameId, null); say(parsed.error.startsWith('The reply') ? parsed.error : `Refused the plan: ${parsed.error}`, { speak: true }); return false; }
         made = parsed.value;
       } else {
         // By name / scan: the same turn as a board build — a live on-device
@@ -2439,7 +2447,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           onError: (why, failed) => {
             settleSwarm();
             panels.forEngine(failed ?? turn.sent.engine).fail(why);
-            aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+            aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
             // Retry runs after this turn has let go of the board.
             offerRetry(() => { void connectTurn(frameId, utterance, turn, summary, status, o); });
           },
@@ -2751,11 +2759,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           say('I didn’t hear which one, so nothing was connected. Point again or name the device.');
         }, POINT_CHOICE_MS);
         pointChoice = { frameId, r, o, choices: out.choices, timer };
-        say(out.message);
+        say(out.message, { speak: true });
         return;
       }
       ledgerPointFailure(r, o, idNote);
-      say(out.message);
+      say(out.message, { speak: true });
       return;
     }
     await connectTurn(frameId, POINT_UTTERANCE, out.turn, `Connect: ${out.turn.request.devices[0]?.label ?? 'device'} (${out.identity.label})`, 'guess',
@@ -2926,14 +2934,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     flushPlanEdits();
     const h = history.undo();
     if (!h) { say('Nothing to undo.'); return; }
-    if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
-    if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`); return; }
+    if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`, { speak: true }); return; }
+    if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`, { speak: true }); return; }
     if (h.kind === 'resize' && h.rectBefore) {
       const cur = reg.get(h.frameId);
       // Its size goes back; where it was moved to since stays.
       if (cur) { reg.setRect(h.frameId, { ...cur.rect, w: h.rectBefore.w, h: h.rectBefore.h }); refit(h.frameId); }
       historyRender();
-      say(`Undid: ${h.summary}.`);
+      say(`Undid: ${h.summary}.`, { speak: true });
       return;
     }
     if (h.kind === 'close' && h.closedFrame) {
@@ -2943,7 +2951,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       sync();
       if (h.before) renderSurface(h.frameId);
       updateDock(); persist(); historyRender();
-      say(`Undid: ${h.summary}.`);
+      say(`Undid: ${h.summary}.`, { speak: true });
       return;
     }
     if (h.kind === 'plan') {
@@ -2961,7 +2969,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (el && !h.before) el.innerHTML = '';
     if (h.before) renderSurface(h.frameId);
     sync(); updateDock(); persist(); historyRender();
-    say(`Undid: ${h.summary}.`);
+    say(`Undid: ${h.summary}.`, { speak: true });
   }
 
   // ---- language pack (human in the loop) ----
@@ -3022,14 +3030,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         settleSwarm();
         const why = `Kannada draft didn’t arrive. ${geminiFailLine(e)}`;
         panels.forEngine('gemini').fail(why);
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
       }
       panels.forEngine('gemini').log('note', 'SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
       try { full = await engine.fallback.stream(prompt, () => {}); }
       catch (e2) {
         settleSwarm();
         const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
       }
     }
     let raw: unknown = null;
@@ -3039,7 +3047,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       settleSwarm();
       const why = coerced.error.startsWith('incomplete') ? INCOMPLETE_KN_LINE : `Refused the pack: ${coerced.error}`;
       panels.forEngine('gemini').fail(why);
-      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why); return;
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
     }
     const next = coerced.value;
     settleSwarm();
@@ -3080,7 +3088,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           else void actQueue.act({ deviceId: d.id, brightness: lampStep(cur - 20) });
         }
         const sk: StatusKey = intent === 'lampOn' ? 'lightsOn' : intent === 'lampOff' ? 'lightsOff' : intent === 'brighter' ? 'brighter' : intent === 'dimmer' ? 'dimmer' : 'done';
-        say(statusText(sk, pack));
+        say(statusText(sk, pack), { speak: true });
         return true;
       }
     }
@@ -3415,7 +3423,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!opts.sim) applyOwnerLock(owner);
     setRegChip('Registered');
     refreshRegisterLabels();
-    say('Registered. Tracking is locked to you.');
+    say('Registered. Tracking is locked to you.', { speak: true });
     setTimeout(() => closeScan(), 900); // leave the ✓ on screen for a beat
   }
   // Teach / custom-gestures share the same full-screen z-index tier as the
@@ -3450,7 +3458,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!on) speaker.stop(); // stop mid-sentence, at once
     paintReadAloud();
     voiceSheet.refresh();
-    say(on ? 'Read aloud on: replies are read aloud.' : 'Read aloud off: replies stay as text.');
+    say(on ? 'Read aloud on: replies are read aloud.' : 'Read aloud off: replies stay as text.', { speak: true });
   }
   paintReadAloud();
   // Browsers fill their voice list late: repaint an open sheet when it lands.
@@ -3744,7 +3752,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     } catch (e) {
       const why = `No answer. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
-      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
       settleEngines(); autoHideAi();
       return;
     }
@@ -3778,7 +3786,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
     if (!engine) rulesPanel.log('received', text);
     try {
-      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t); } });
+      const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t, { speak: true }); } });
       if (r.refused) bodyLanguage('no');
       if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally {
@@ -3907,7 +3915,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'history': openHistory(); return true;
       case 'planExtra': {
         const said = planBoard!.runExtra!(r.extra);
-        say(said);
+        say(said, { speak: true });
         if (ranOn && planExtraRan(said)) nextChips?.markDone(ranOn, r.extra);
         return true;
       }
@@ -3929,7 +3937,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           case 'buildNext': {
             const cur = focusId ?? lastFocus;
             if (cur && surfaces[cur]) reg.setPinned(cur, true);
-            save(); newBoard(); say('Saved. New board ready; your dashboard stays pinned.'); break;
+            save(); newBoard(); say('Saved. New board ready; your dashboard stays pinned.', { speak: true }); break;
           }
         }
         return true;
@@ -3956,7 +3964,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // "play music": once the player has really started, say what is
           // playing and where — not just "Playing."
           if (i.playing === true && pack?.lang !== 'kn') {
-            void acted.then((s) => { if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`); }).catch(() => undefined);
+            void acted.then((s) => { if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`, { speak: true }); }).catch(() => undefined);
           }
         }
         revealDeviceTiles(dc.intents.map((i) => i.deviceId));
@@ -3970,7 +3978,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           const line = spokenStatus(results, okLine);
           // "play music" that worked already said what plays and where (above).
           if (line === okLine && saysWhere) return;
-          say(line);
+          say(line, { speak: true });
         });
         if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
         return true;
@@ -4675,7 +4683,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const f = reg.get(frameId);
     if (!f) return false;
     const check = gateMessages(expandPlan(patched, frameId, store.all()), CATALOG_SCHEMAS);
-    if (!check.ok) { say(`Blocked a tile that did not pass the check: ${check.errors[0]}`); return false; }
+    if (!check.ok) { say(`Blocked a tile that did not pass the check: ${check.errors[0]}`, { speak: true }); return false; }
     const before = surfaces[frameId] ?? null;
     surfaces[frameId] = patched;
     const entry = history.push({ frameId, before, after: patched, by: 'gemini', summary });

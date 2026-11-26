@@ -186,3 +186,39 @@ describe('laptop: a one-frame second peace never unlatches a scroll (real gestur
     expect(r.fired).not.toContain('L:peace');
   });
 });
+
+describe('a repeating gesture hint is said once (it used to be re-said, and read aloud, on every hold)', () => {
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).innerWidth = 1440;
+    (globalThis as Record<string, unknown>).innerHeight = 900;
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).innerWidth;
+    delete (globalThis as Record<string, unknown>).innerHeight;
+  });
+
+  it('the same "nothing to press" hold, fired again and again, says its hint once per 10 s', () => {
+    const doc = new FakeDoc();
+    const root = new FakeEl(doc);
+    const said: string[] = [];
+    // Nothing on screen: every bound button is missing, so a hold has nothing to press.
+    (root as unknown as { querySelector: () => null }).querySelector = () => null;
+    const g = createGestureControl({ root: root as unknown as HTMLElement, bindings: LAPTOP_GESTURES, reach: () => REACH, say: (t) => said.push(t) });
+    g.setActive(true);
+    const fired: string[] = [];
+    let t = 0;
+    const hold = (ms: number, hands: ReturnType<typeof syntheticHand>[]) => {
+      for (const end = t + ms; t < end;) { t += 33; const s = g.frame(hands, t, { facing: true, faceX: 0.5 }); if (s.fired) fired.push(s.fired); }
+    };
+    const down = () => [syntheticHand('thumbsDown', 'R')];
+    // A resting hand misread as thumbs down, three times in 9 s.
+    for (let k = 0; k < 3; k++) { hold(2500, down()); hold(500, []); }
+    expect(fired.filter((f) => f === 'R:thumbsDown').length).toBe(3);
+    expect(said.length).toBe(1);
+    // After the quiet window it may be said again.
+    hold(10_000, []);
+    hold(2500, down());
+    expect(said.length).toBe(2);
+    g.setActive(false);
+  });
+});

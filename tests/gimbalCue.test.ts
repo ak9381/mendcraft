@@ -266,7 +266,7 @@ describe('wiring (source checks)', () => {
   it('Approve nods only after the build applied; refusals shake; pairing wakes', () => {
     expect(app).toMatch(/onKeep: \(\) => \{ prop\.accept\(\); finish\(true\); if \(built\) bodyLanguage\('yes'\);/);
     expect(app).toMatch(/if \(r\.refused\) bodyLanguage\('no'\)/);
-    expect(app).toMatch(/Blocked a plan that did not pass the check\.'\); bodyLanguage\('no'\)/);
+    expect(app).toMatch(/Blocked a plan that did not pass the check\.', \{ speak: true \}\); bodyLanguage\('no'\)/);
     // …on the phone's first LIVE announce of this laptop session (never on a
     // hello replayed from the room's history).
     expect(app).toMatch(/if \(live === 'first'\) \{[\s\S]{0,400}bodyLanguage\('wakeup'\);/);
