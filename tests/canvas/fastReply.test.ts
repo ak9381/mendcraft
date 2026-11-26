@@ -168,7 +168,7 @@ describe('2. the reply is shown and spoken as it arrives', () => {
     expect(live).toContain('showPhoneSay(t);');
     expect(live).toContain('for (const sentence of feed.push(t)) speakNext(sentence);');
     expect(live).toContain('createSentenceFeed({ firstAtClause: true })');
-    expect(live).toContain('const ok = spokeAny ? speaker.enqueue(sentence, o) : speaker.speak(sentence, o);');
+    expect(live).toContain('const ok = readAloudLines.sentence(sentence, !spokeAny, { onStart: () => replyTrace.spoken() });');
     expect(live).toContain('statusLog.push(t);'); // the final line is booked once, like say()
     const turn = src.slice(src.indexOf('async function openEndedTurn('), src.indexOf('// ---- commands ----'));
     expect(turn).toContain('live.update(full);');

@@ -1353,7 +1353,7 @@ describe('UI fixes from the live run', () => {
     expect(playingLine({ spotify: true, target: 'this browser' }, 'Blue in Green')).toBe('Playing Blue in Green on this browser via Spotify.');
     expect(playingLine(null)).toBe('Playing on the built-in player.');
     const src = await app();
-    expect(src).toContain("if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`);");
+    expect(src).toContain("if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`, { speak: true });");
     expect(src).toContain('status: musicWhere,');
     // the connector keeps "where" current
     const { createSpotifyAwareConnector } = await import('../../src/canvas/spotifyConnector');

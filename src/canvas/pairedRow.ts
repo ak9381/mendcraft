@@ -33,7 +33,8 @@ export function isContinue(text: string): boolean {
 export type PairFirstPhase = 'idle' | 'pairing' | 'asking' | 'live';
 
 export interface PairFirstDeps {
-  say(text: string): void;
+  /** `speak`: read this line aloud (pairing outcomes only). */
+  say(text: string, o?: { speak?: boolean }): void;
   /** Start the real pairing (chime + typed code). Resolves false when no relay is reachable. */
   openPairing(): Promise<boolean>;
   /** Run the lamp dashboard review (connectRoom). */
@@ -87,7 +88,7 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
     if (p.id !== GENERIC_ID) list = list.filter((x) => x.id !== GENERIC_ID);
     if (list.some((x) => x.id === p.id)) return;
     list = [...list, { id: p.id, label: p.label, sim: !!p.sim }];
-    d.say(`${p.sim ? 'SIM: ' : ''}${p.label} joined.`);
+    d.say(`${p.sim ? 'SIM: ' : ''}${p.label} joined.`, { speak: true });
     changed();
   }
 
@@ -148,7 +149,7 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
       const ok = await d.openPairing();
       if (gen !== mine) return;
       if (!ok) {
-        d.say('No pairing possible here (the Relay is not reachable), so continuing without phones.');
+        d.say('No pairing possible here (the Relay is not reachable), so continuing without phones.', { speak: true });
         buildNow();
       }
     },
