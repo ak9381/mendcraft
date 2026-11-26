@@ -44,7 +44,7 @@ import type { HostSession } from '../relay/session';
 import type { GimbalCueKind, GimbalModeKind } from '../relay/protocol';
 import { GIMBAL_ADDED, GIMBAL_ALREADY, GIMBAL_MODE_BUTTONS, GIMBAL_NO_BOARD, GIMBAL_NO_PHONE, GIMBAL_NO_ROOM, GIMBAL_NO_STAND, gimbalPress, gimbalTileState, planHasGimbal, withGimbalTile } from './gimbalTile';
 import { createCanvasInputs } from './canvasInputs';
-import { followWhileBuilding, NO_GIMBAL_WHY, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
+import { followWhileBuilding, HANDS_PAUSED, NO_GIMBAL_WHY, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileIntent, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
@@ -4065,28 +4065,47 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Hands pill, but it never acts on the UI and is not facing-gated. Runs
   // only while the Track pill is on or a follow-hands / point request is
   // active — docking alone never opens the camera.
+  /** The sensing camera was live at the last change (re-assert on a restart). */
+  let sensorWasLive = false;
   const phoneSensor: PhoneSensor | null = phoneShell && opts.phoneSensing && opts.phoneCamera && typeof document !== 'undefined'
     ? createPhoneSensor({
         camera: opts.phoneCamera,
         root,
         storage,
         onHands: (cam, now) => {
-          if (inputs.gimbal.mode() === 'hands') void inputs.gimbal.onHandsFrame(cam.map((points) => ({ points })), now).catch(() => {});
+          if (inputs.gimbal.mode() === 'hands') void inputs.gimbal.onHandsFrame(cam.map((points) => ({ points })), now).then(() => senseChanged()).catch(() => {});
           feedPointWait(cam, now);
         },
-        onChange: () => { senseChanged(); },
+        onChange: () => {
+          // The camera session just (re)started: DockKit can start tracking
+          // again on a new capture session — re-assert "off" in hands / hold.
+          const live = !!phoneSensor?.running();
+          if (live && !sensorWasLive) void inputs.gimbal.reassertOff?.().finally(() => senseChanged());
+          sensorWasLive = live;
+          senseChanged();
+        },
         say,
         onUserStop: () => {
           // Sensing off from the pill: a waiting point ends, and a hands follow
-          // with no frames left says so and follows the face instead.
+          // with no frames left says so and holds still (never the face).
           if (pointWait?.phone) { endPointWait(); say('Hand tracking off — nothing was captured.'); }
-          if (inputs.gimbal.mode() === 'hands' && !handsOn) void inputs.gimbal.setMode('face').then((r) => { const t = r.ok ? r.status : r.why; if (t) say(t); });
+          if (inputs.gimbal.mode() === 'hands' && !handsOn) say(HANDS_PAUSED);
         },
       })
     : null;
   const senseSubs = new Set<() => void>();
   let senseLast = '';
   let gimbalDocked = false;
+  // "aiming at hands" goes false on its own once no hand is seen: re-check.
+  if (phoneSensor && getGimbalPlugin() && typeof window !== 'undefined') {
+    // Also re-reads the plugin (isAvailable, 5 s TTL) so systemTracking and
+    // the 'hands' / 'tracking' claims never go stale.
+    const diagTimer = setInterval(() => {
+      if (!gimbalDocked) return;
+      void (inputs.gimbal.refresh?.() ?? Promise.resolve()).catch(() => {}).finally(() => senseChanged());
+    }, 1000);
+    addEventListener('pagehide', () => clearInterval(diagTimer), { once: true });
+  }
   function senseChanged(): void {
     const k = JSON.stringify(phoneSenseStatus());
     if (k === senseLast) return;
@@ -4099,8 +4118,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // 'tracking' only when docked AND the plugin read back system tracking on
     // (gimbal mode 'face' is entered only on that confirmation).
     const mode = inputs.gimbal.mode();
-    const gimbal = !gimbalDocked ? 'none' : mode === 'face' ? 'tracking' : mode === 'hands' && phoneSensor.running() ? 'hands' : 'ready';
-    return { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+    const diag = gimbalDocked ? inputs.gimbal.diag?.() : undefined;
+    // 'tracking' also needs the read-back: a face mode whose tracking DockKit
+    // dropped is not claimed. 'hands' needs the read-back OFF too: hands with
+    // DockKit still tracking would really be following the face.
+    const trackingOn = diag?.systemTracking;
+    const gimbal = !gimbalDocked ? 'none'
+      : mode === 'face' ? (trackingOn === false ? 'ready' : 'tracking')
+      : mode === 'hands' && phoneSensor.running() && trackingOn !== true ? 'hands' : 'ready';
+    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+    if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
+    if (diag) s.aimingAtHands = diag.aimingAtHands;
+    if (diag?.signSuspect) s.aimSign = diag.signSuspect;
+    return s;
   }
   // ---- the gimbal tile (gimbalTile.ts) ----
   /** What the tile shows: ONLY what the docked iPhone reported. */

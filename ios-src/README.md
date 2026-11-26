@@ -40,9 +40,17 @@ The web layer (`src/canvas/gimbalCanvas.ts`) picks one of three modes:
 - **face** — DockKit's own subject tracking (`setSystemTrackingEnabled(true)`).
   We never aim in this mode. This is what "follow me" / "follow my face" /
   "track me" asks for, and what the iPhone app asks for on launch.
-- **hands** — system tracking off; the web layer aims at her hands. Only when
-  a hand tracker is producing frames; otherwise the app says "Hand following
-  needs a hand tracker — following your face instead" and uses face.
+- **hands** — system tracking off and KEPT off (native re-reads
+  `isSystemTrackingEnabled` every 0.4 s, on every in-process capture-session
+  start and whenever DockKit reports tracked subjects, and turns it off again;
+  the web layer re-asserts when its camera goes live). The web layer aims at
+  her hands (smoothed, 4° dead zone, eased moves). No hand seen / no hand
+  tracker → the stand holds still. Never falls back to the face.
+- **Shake** (`cue({kind:"no"})`) is our own relative yaw shake (±11°, three
+  swings, ~1.2 s): DockKit's `.no` animation did not visibly move the stand.
+- **Diagnostics**: `isAvailable()` also returns `systemTracking`,
+  `dockSubjects` and `reasserts`; the iPhone's announce carries
+  `systemTracking` / `aimingAtHands`, shown in the laptop's devices row.
 - **hold** — both off ("hold still" / "stop following").
 
 The plugin no longer forces system tracking off on load, resume, dock or in

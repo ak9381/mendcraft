@@ -12,7 +12,8 @@ import {
   type GimbalCanvasController,
 } from '../../src/canvas/gimbalCanvas';
 import type { GimbalPlugin } from '../../src/devices/native';
-import { MAX_STEP_RAD } from '../../src/devices/native';
+import { DEFAULT_FOV, MAX_STEP_RAD } from '../../src/devices/native';
+import { HANDS_MAX_TRAVEL_RAD } from '../../src/devices/gimbalFollow';
 import type { Pt } from '../../src/input/handLogic';
 
 /** A 21-landmark hand whose wrist–middle-MCP midpoint sits at (x, y), camera space. */
@@ -126,13 +127,14 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(off.status).toBe(FACE_ON_STATUS);
     });
 
-    it('hands without a hand tracker: says so plainly and follows the face instead', async () => {
+    it('hands without a hand tracker: says so plainly and HOLDS STILL — never follows the face', async () => {
       const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => false });
       const r = await c.setMode('hands');
-      expect(r.ok).toBe(true);
-      expect(r.status).toBe(`${HANDS_NEED_TRACKER}. ${FACE_ON_STATUS}`);
-      expect(c.mode()).toBe('face');
-      expect(tracking).toBe(true);
+      expect(r).toEqual({ ok: false, why: HANDS_NEED_TRACKER });
+      expect(c.mode()).toBe('hands');
+      expect(tracking).toBe(false);
+      expect(trackingCalls.every((t) => t.enabled === false)).toBe(true);
+      expect(c.diag!().aimingAtHands).toBe(false);
     });
 
     it('hands with a tracker: system tracking OFF and the custom aim runs on camera-space frames', async () => {
@@ -140,8 +142,11 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       const r = await c.setMode('hands');
       expect(r).toEqual({ ok: true, status: HANDS_ON_STATUS });
       expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }]);
-      // Hand on the camera's right → pan right (+yaw).
+      // Hand on the camera's right → pan right (+yaw). Two frames in a row
+      // confirm the hand (a one-frame false hand never moves the stand).
       await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.5) }], 10_000);
+      expect(aimCalls).toHaveLength(0);
+      await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.5) }], 10_050);
       await Promise.resolve();
       expect(aimCalls).toHaveLength(1);
       expect(aimCalls[0].yaw).toBeGreaterThan(0);
@@ -188,21 +193,153 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       let now = 10_000;
       const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, followIntervalMs: 100 });
       await c.setMode('hands');
-      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      const frame = async (): Promise<void> => { await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now); };
+      await frame(); now += 50; await frame();
       expect(fakePlugin.aim).toHaveBeenCalledTimes(1);
       now += 800;
-      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now); // first move still in flight
+      await frame(); now += 50; await frame(); // first move still in flight
       expect(fakePlugin.aim).toHaveBeenCalledTimes(1);
       release!();
-      await Promise.resolve(); await Promise.resolve();
-      now += 300; // only 300 ms after the last attempt window opened… but 1100 since the first move
-      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      now += 50; await frame(); // starts the settle wait after the move
+      now += 300; await frame(); now += 50; await frame(); // settled + confirmed, > 700 ms since move 1
       expect(fakePlugin.aim).toHaveBeenCalledTimes(2);
-      now += 400; // < 700 ms since the second move: no third (followIntervalMs 100 is clamped up)
       release!();
-      await Promise.resolve(); await Promise.resolve();
-      await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      now += 50; await frame(); now += 300; await frame(); now += 50; await frame(); // < 700 ms since move 2
       expect(fakePlugin.aim).toHaveBeenCalledTimes(2);
+    });
+
+    it('hands: smoothed, dead zone — a hand near centre never moves the stand; jittery frames move it once', async () => {
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now });
+      await c.setMode('hands');
+      // Within ~4° of centre: no move at all, however long.
+      for (let i = 0; i < 40; i++) { now += 50; await c.onHandsFrame([{ points: OPEN_AT(0.52 + (i % 2) * 0.02, 0.51) }], now); }
+      expect(aimCalls).toHaveLength(0);
+      // Hand on the right: one eased move (gain < 1, never the whole error).
+      now += 50; await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.5) }], now);
+      now += 50; await c.onHandsFrame([{ points: OPEN_AT(0.86, 0.5) }], now);
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+      expect(aimCalls).toHaveLength(1);
+      expect(aimCalls[0].yaw).toBeGreaterThan(0);
+      expect(c.diag!(now).aimingAtHands).toBe(true);
+    });
+
+    it('hands: no hand seen → no aiming, and aimingAtHands goes false (holds still)', async () => {
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now });
+      await c.setMode('hands');
+      await c.onHandsFrame([], now);
+      await c.onHandsFrame([], now + 50);
+      expect(aimCalls).toHaveLength(0);
+      expect(c.diag!(now)).toEqual({ systemTracking: false, aimingAtHands: false, signSuspect: '' });
+      await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now + 100);
+      expect(c.diag!(now + 200).aimingAtHands).toBe(true);
+      now += 3000;
+      expect(c.diag!(now).aimingAtHands).toBe(false);
+    });
+
+    it('hands: DockKit read back tracking ON (e.g. a new capture session) → turned off again, never claimed as aiming', async () => {
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 1000 });
+      await c.setMode('hands');
+      expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }]);
+      // DockKit flipped it back on behind our back.
+      fakePlugin.isAvailable = vi.fn().mockResolvedValue({ available: true, systemTracking: true });
+      now += 2000;
+      // The re-assert's own read-back never comes: tracking stays reported ON.
+      fakePlugin.setSystemTrackingEnabled = vi.fn(async (o: { enabled: boolean; keepAlive?: boolean }) => { trackingCalls.push(o); return { ok: true, enabled: true }; });
+      await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now);
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+      expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }, { enabled: false, keepAlive: false }]);
+      // Hands seen, but DockKit is tracking: not claimed as aiming at hands.
+      expect(c.diag!(now)).toEqual({ systemTracking: true, aimingAtHands: false, signSuspect: '' });
+      // Rate-limited: no second re-assert within REASSERT_MIN_MS.
+      await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now + 100);
+      expect(trackingCalls).toHaveLength(2);
+      expect(trackingCalls.some((t) => t.enabled)).toBe(false);
+    });
+
+    /** A stand that turns the WRONG way (inverted yaw sign) and a hand at a fixed
+     *  world angle; the camera x follows from the stand's real yaw. `clampEdge`:
+     *  she keeps her hand at the frame edge (so the error stops growing). */
+    async function invertedRun(clampEdge: boolean): Promise<{ standYaw: number; maxAbs: number; c: GimbalCanvasController }> {
+      let standYaw = 0; let maxAbs = 0;
+      fakePlugin.aim = vi.fn(async (o: { yaw: number }) => { standYaw -= o.yaw; maxAbs = Math.max(maxAbs, Math.abs(standYaw)); return { ok: true }; });
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 1e9 });
+      await c.setMode('hands');
+      const hand = (15 * Math.PI) / 180;
+      const half = Math.tan(DEFAULT_FOV.h / 2);
+      for (let i = 0; i < 400; i++) {
+        now += 100;
+        let x = 0.5 + Math.tan(hand - standYaw) / (2 * half);
+        if (clampEdge) x = Math.min(0.97, Math.max(0.03, x));
+        await c.onHandsFrame(x > 0 && x < 1 ? [{ points: OPEN_AT(x, 0.5) }] : [], now);
+        for (let k = 0; k < 4; k++) await Promise.resolve();
+      }
+      return { standYaw, maxAbs, c };
+    }
+
+    it('inverted yaw sign: the growing error stops the axis and the announce diagnostic says "yaw"', async () => {
+      const r = await invertedRun(false);
+      expect(r.c.diag!().signSuspect).toBe('yaw');
+      expect(r.maxAbs).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+      expect((fakePlugin.aim as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(3);
+    });
+
+    it('inverted yaw sign with the hand kept at the frame edge: travel stays within ±45°', async () => {
+      const r = await invertedRun(true);
+      expect(r.maxAbs).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+      expect(Math.abs(r.standYaw)).toBeLessThanOrEqual(HANDS_MAX_TRAVEL_RAD + 1e-9);
+    });
+
+    it('correct sign: converges on the hand without stopping the axis', async () => {
+      let standYaw = 0;
+      fakePlugin.aim = vi.fn(async (o: { yaw: number }) => { standYaw += o.yaw; return { ok: true }; });
+      let now = 10_000;
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true, now: () => now, availabilityTtlMs: 1e9 });
+      await c.setMode('hands');
+      const hand = (20 * Math.PI) / 180; const half = Math.tan(DEFAULT_FOV.h / 2);
+      for (let i = 0; i < 200; i++) {
+        now += 100;
+        await c.onHandsFrame([{ points: OPEN_AT(0.5 + Math.tan(hand - standYaw) / (2 * half), 0.5) }], now);
+        for (let k = 0; k < 4; k++) await Promise.resolve();
+      }
+      expect(Math.abs(hand - standYaw)).toBeLessThan((4 * Math.PI) / 180);
+      expect(c.diag!().signSuspect).toBe('');
+    });
+
+    it('reassertOff: hands / hold send "off" again; face never does', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true });
+      await c.setMode('face');
+      await c.reassertOff!();
+      expect(trackingCalls).toEqual([{ enabled: true, keepAlive: false }]);
+      await c.setMode('hold');
+      await c.reassertOff!();
+      expect(trackingCalls.slice(1)).toEqual([{ enabled: false, keepAlive: false }, { enabled: false, keepAlive: false }]);
+      expect(c.diag!().systemTracking).toBe(false);
+    });
+
+    it('mode path: follow me → hands → hold → follow me toggles DockKit exactly on / off / off / on', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true });
+      expect((await c.setMode('face', { explicit: true })).ok).toBe(true);
+      expect(tracking).toBe(true);
+      expect(await c.setMode('hands', { explicit: true })).toEqual({ ok: true, status: HANDS_ON_STATUS });
+      expect(tracking).toBe(false);
+      expect(await c.setMode('hold', { explicit: true })).toEqual({ ok: true, status: HOLD_STATUS });
+      expect(tracking).toBe(false);
+      await c.onHandsFrame([{ points: OPEN_AT(0.95, 0.5) }], 1); await c.onHandsFrame([{ points: OPEN_AT(0.95, 0.5) }], 2);
+      expect(aimCalls).toEqual([]);
+      expect((await c.setMode('face', { explicit: true })).ok).toBe(true);
+      expect(tracking).toBe(true);
+      expect(trackingCalls.map((t) => t.enabled)).toEqual([true, false, false, true]);
+      // Redock while in hands never switches to the face.
+      await c.setMode('hands', { explicit: true });
+      await c.noteDocked!(false);
+      expect(await c.noteDocked!(true)).toBeNull();
+      expect(tracking).toBe(false);
     });
 
     it('launch dock race: not docked at mount → the plugin reason; docking later turns face follow on', async () => {

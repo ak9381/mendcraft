@@ -21,6 +21,12 @@ export interface PhoneSenseStatus {
   /** This phone can take the point photo: sensing exists and its camera is
    *  not in error (denied, lost). */
   canPoint: boolean;
+  /** Diagnostics (iPhone with a docked stand): DockKit system tracking as the
+   *  plugin read it back, and whether our aim is following a hand right now. */
+  systemTracking?: boolean;
+  aimingAtHands?: boolean;
+  /** Hands aim stopped on these axes: the error grew after moves ('yaw', 'pitch', 'yaw+pitch'). */
+  aimSign?: string;
 }
 
 export const NO_GIMBAL_ROW = 'No gimbal — pointing uses the laptop camera';
@@ -33,6 +39,12 @@ export const FOLLOWING_HANDS_ROW = 'Following your hands';
 /** Sensing only: the iPhone camera sees her; the stand is not claimed. */
 export const CAMERA_TRACKING_ROW = 'Camera tracking you';
 export const HANDS_ON_ROW = 'Hands: on';
+export const DIAG_TRACKING_ON = 'DockKit tracking: on';
+export const DIAG_TRACKING_OFF = 'DockKit tracking: off';
+export const DIAG_AIMING_YES = 'aiming at hands: yes';
+export const DIAG_AIMING_NO = 'aiming at hands: no';
+/** The hands aim stopped an axis: its error grew after moves (sign inverted?). */
+export const DIAG_SIGN = 'aim sign?';
 export const POINT_OUT_OF_FRAME = 'I can’t see what you’re pointing at — move the device into the camera’s view.';
 export const PHONE_POINT_LINE = 'Point at it and hold still — the iPhone camera takes one photo.';
 export const PHONE_POINT_FALLBACK = 'The iPhone camera isn’t available for this — using the laptop camera.';
@@ -44,7 +56,11 @@ export function coerceSenseStatus(o: unknown): PhoneSenseStatus | null {
   const r = o as Record<string, unknown>;
   const g = r.gimbal;
   if (g !== 'none' && g !== 'ready' && g !== 'tracking' && g !== 'hands') return null;
-  return { gimbal: g, sensor: r.sensor === true, hands: r.hands === true, canPoint: r.canPoint === true };
+  const out: PhoneSenseStatus = { gimbal: g, sensor: r.sensor === true, hands: r.hands === true, canPoint: r.canPoint === true };
+  if (typeof r.systemTracking === 'boolean') out.systemTracking = r.systemTracking;
+  if (typeof r.aimingAtHands === 'boolean') out.aimingAtHands = r.aimingAtHands;
+  if (r.aimSign === 'yaw' || r.aimSign === 'pitch' || r.aimSign === 'yaw+pitch') out.aimSign = r.aimSign;
+  return out;
 }
 
 /** The connect-devices row sub-state for one phone ('' = nothing to add). */
@@ -60,6 +76,10 @@ export function phoneSubState(s: PhoneSenseStatus | null | undefined, opts: { si
   else if (opts.ios) parts.push(s.canPoint ? NO_GIMBAL_CAN_POINT_ROW : NO_GIMBAL_ROW);
   if (s.gimbal !== 'none' && !s.canPoint && opts.ios) parts.push(CAMERA_UNAVAILABLE_ROW);
   if (s.hands) parts.push(HANDS_ON_ROW);
+  // Live-test diagnostics: what the iPhone really reads back.
+  if (s.gimbal !== 'none' && typeof s.systemTracking === 'boolean') parts.push(s.systemTracking ? DIAG_TRACKING_ON : DIAG_TRACKING_OFF);
+  if (s.gimbal !== 'none' && typeof s.aimingAtHands === 'boolean') parts.push(s.aimingAtHands ? DIAG_AIMING_YES : DIAG_AIMING_NO);
+  if (s.gimbal !== 'none' && s.aimSign) parts.push(`${DIAG_SIGN} ${s.aimSign}`);
   return parts.length ? sim + parts.join(' · ') : '';
 }
 

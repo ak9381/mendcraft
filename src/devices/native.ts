@@ -19,18 +19,28 @@ export interface LanPlugin {
 
 export interface GimbalPlugin {
   /** DockKit present, iOS 18+, and a stand is docked. */
-  isAvailable(): Promise<{ available: boolean; reason?: string; systemTracking?: boolean }>;
+  isAvailable(): Promise<{
+    available: boolean;
+    reason?: string;
+    /** DockKit isSystemTrackingEnabled, read back now. */
+    systemTracking?: boolean;
+    /** Subjects DockKit itself tracked in the last 1.5 s (diagnostic). */
+    dockSubjects?: number;
+    /** How often native found tracking back on while it should be off and turned it off again. */
+    reasserts?: number;
+  }>;
   /** Relative move in radians: yaw = pan (+ right), pitch = tilt (+ up).
    *  Native turns system tracking off for this move only, then restores it. */
-  aim(opts: { yaw: number; pitch: number; seconds?: number }): Promise<{ ok: boolean; error?: string }>;
+  aim(opts: { yaw: number; pitch: number; seconds?: number }): Promise<{ ok: boolean; error?: string; systemTracking?: boolean }>;
   /** Restore the last system-tracking state the web layer chose. */
   release(): Promise<void | { ok?: boolean; enabled?: boolean; error?: string }>;
   /** DockKit system (subject) tracking. Resolves with what is REALLY on:
    *  `enabled` is read back from DockKit, `error` is the native error text.
    *  keepAlive (opt-in) runs a minimal front-camera session while it is on. */
   setSystemTrackingEnabled?(opts: { enabled: boolean; keepAlive?: boolean }): Promise<{ ok: boolean; enabled?: boolean; keepAlive?: boolean; error?: string }>;
-  /** DockKit body language: DockAccessory.animate(motion:) .yes / .no / .wakeup.
-   *  ok:true only once DockKit accepted and ran the animation (3 s timeout);
+  /** DockKit body language: animate(motion:) .yes / .wakeup; "no" is a native
+   *  yaw shake (our own relative moves). ok:true only once the moves really
+   *  completed (3 s budget);
    *  otherwise reason says why (no stand docked, timeout, DockKit error).
    *  Optional: older app builds don't have it. */
   cue?(opts: { kind: 'yes' | 'no' | 'wakeup' }): Promise<{ ok: boolean; reason?: string }>;
