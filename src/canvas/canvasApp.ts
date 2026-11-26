@@ -51,6 +51,7 @@ import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, isDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
 import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, loadCanvasDoc, UNREADABLE_LINE } from './canvasStore';
+import { duplicateBoards, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
@@ -356,6 +357,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
     viewportWidth: window.innerWidth,
   }));
+  // A phone shows each board once: copies an older build saved (or the
+  // lift above just made) beside the one it already shows go, before render.
+  if (phoneShell) {
+    for (const dup of duplicateBoards(reg.list(), surfaces, focusId)) {
+      reg.remove(dup); delete surfaces[dup]; delete drawings[dup];
+      if (focusId === dup) focusId = null;
+      if (lastFocus === dup) lastFocus = focusId;
+    }
+  }
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -5293,8 +5303,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyEditLock();
   }
   const PLAN_TOO_BIG = 'This plan is too big to show on the phone — it shows the starting layout.';
+  /** A phone: take a board off quietly (a duplicate of one it shows). */
+  function dropDuplicateBoard(id: string): void {
+    if (live.has(id)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: id } }] as never); } catch { /* already gone */ } }
+    live.delete(id); deviceSurfaces.untrack(id);
+    reg.remove(id);
+    delete surfaces[id];
+    delete drawings[id];
+    if (focusId === id) focusId = null;
+    if (lastFocus === id) lastFocus = null;
+  }
   function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number } = {}): void {
-    let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
+    // Each board once: a board that arrives again (replay on re-pair, a
+    // republish) goes to the frame already showing it; other copies go.
+    const preferred = [focusId, lastFocus].find((x): x is string => !!x && !!reg.get(x)) ?? reg.list()[0]?.id ?? null;
+    const target = remoteBoardTarget(reg.list(), surfaces, plan, preferred);
+    for (const dup of target.duplicates) dropDuplicateBoard(dup);
+    let id = target.id;
     if (!id) {
       const f = reg.add('note', plan.title || 'Board');
       id = f.id;

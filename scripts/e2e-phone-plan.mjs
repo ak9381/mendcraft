@@ -157,6 +157,58 @@ async function main() {
     check(await android.evaluate((s) => window.__mcGuestSnapshot(s), snap3), 'the Nothing phone takes it');
     await waitFor(android, () => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Kitchen'), 10_000, 'Kitchen on the Nothing phone');
     if (SHOTS) await android.screenshot({ path: join(SHOTS, 'android-plan.png') });
+
+    // ---- re-pairing: the same board arrives again (replay on hello), and
+    //      again after the phone reloads — it shows ONCE ----
+    const shownOnce = () => ({
+      frames: document.querySelectorAll('.mc-frame').length,
+      plans: document.querySelectorAll('mc-plan-board').length,
+      surfaces: document.querySelectorAll('.mc-surface > *').length,
+      titles: (document.body.innerText.match(/Floor plan/g) || []).length,
+      studio: (document.body.innerText.match(/Studio/g) || []).length,
+    });
+    const once0 = await android.evaluate(shownOnce);
+    console.log('     android before replay', JSON.stringify(once0));
+    if (process.env.DEBUG_TEXT) console.log(await android.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 600)));
+    await android.evaluate((s) => window.__mcGuestSnapshot(s), snap3);
+    await sleep(800);
+    const replayed = { ...snap3, rev: (snap3.rev ?? 0) + 5 };
+    await android.evaluate((s) => window.__mcGuestSnapshot(s), replayed);
+    await sleep(800);
+    const once1 = await android.evaluate(shownOnce);
+    console.log('     android after replay', JSON.stringify(once1));
+    check(once1.frames === 1 && once1.plans === 1, `a replayed board shows once on the Nothing phone (${JSON.stringify(once1)})`);
+    await android.reload({ waitUntil: 'domcontentloaded' });
+    await android.waitForFunction(() => !!window.__mcGuestSnapshot, { timeout: 20_000 });
+    await sleep(1200);
+    console.log('     android after reload', JSON.stringify(await android.evaluate(shownOnce)));
+    await android.evaluate((s) => window.__mcGuestSnapshot(s), replayed);
+    await sleep(1200);
+    const once2 = await android.evaluate(shownOnce);
+    console.log('     android after reload + replay', JSON.stringify(once2));
+    check(once2.frames === 1 && once2.plans === 1 && once2.titles <= once0.titles, `after re-pairing the board still shows once (${JSON.stringify(once2)})`);
+    // A phone that saved a board from an older build (a dashboard that still
+    // held the plan tile): on reload that tile is lifted to its own "Floor
+    // plan" board — and the laptop's Floor plan must land THERE, not on a
+    // second board.
+    await android.evaluate(() => {
+      const r = { x: 0, y: 0, w: 1000, h: 680 };
+      localStorage.setItem('mc.canvas.v1', JSON.stringify({
+        version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+        frames: [{ id: 'f1', kind: 'note', title: 'Dashboard', rect: r, pinned: false }],
+        surfaces: { f1: { kind: 'room', title: 'Dashboard', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'plan', boardId: 'board-cad', template: 'studio' }] } },
+      }));
+    });
+    await android.reload({ waitUntil: 'domcontentloaded' });
+    await android.waitForFunction(() => !!window.__mcGuestSnapshot, { timeout: 20_000 });
+    await sleep(1200);
+    console.log('     android legacy reload', JSON.stringify(await android.evaluate(shownOnce)));
+    await android.evaluate((s) => window.__mcGuestSnapshot(s), { ...replayed, rev: replayed.rev + 1 });
+    await sleep(1200);
+    const once3 = await android.evaluate(shownOnce);
+    console.log('     android legacy reload + replay', JSON.stringify(once3));
+    if (process.env.DEBUG_TEXT) console.log(await android.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 600)));
+    check(once3.plans === 1 && once3.titles === 1, `a phone with an older saved board shows the Floor plan once (${JSON.stringify(once3)})`);
     check(errors.length === 0, `no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
   } finally {
     await browser.close();
