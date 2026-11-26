@@ -42,6 +42,10 @@ export function labelIntents(intents: readonly DeviceIntent[]): string {
       if (i.on === true) bits.push('on');
       if (i.on === false) bits.push('off');
       if (typeof i.brightness === 'number') bits.push(`b${i.brightness}`);
+      if (typeof i.temp === 'number') bits.push(`t${i.temp}`);
+      if (i.rgb) bits.push(`c${i.rgb.r},${i.rgb.g},${i.rgb.b}`);
+      if (typeof i.sceneId === 'number') bits.push(`s${i.sceneId}`);
+      if (i.previous) bits.push('prev');
       if (i.playing === true) bits.push('play');
       if (i.playing === false) bits.push('pause');
       if (i.next) bits.push('next');

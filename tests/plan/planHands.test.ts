@@ -538,3 +538,45 @@ describe('contextual fixed gestures for the plan', () => {
     expect(duplicateKeys(PHONE_GESTURES)).toEqual([]);
   });
 });
+
+import { isStorablePlanDoc, savedPlanDoc, setSavedPlanDoc, storablePlanDoc } from '../../src/canvas/planDocs';
+import { coerceSurfacePlan } from '../../src/canvas/surfacePlan';
+
+describe('the drawing is stored with the board', () => {
+  it('a plan tile keeps a sane `doc` through validation and drops a bad one', () => {
+    const doc = { walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 3000, y: 0 }, thickness: 100 }], openings: [], rooms: [], dims: [], fixtures: [], texts: [], selectedId: 'w1', selectedIds: ['w1'] };
+    const ok = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc }] });
+    expect(ok.ok && (ok.value.tiles[0] as { doc?: unknown }).doc).toEqual(doc);
+    const bad = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc: 'rm -rf' }] });
+    expect(bad.ok && 'doc' in bad.value.tiles[0]).toBe(false);
+  });
+
+  it('what is stored has no selection, and the registry hands it to the board by frame + plan id', () => {
+    const rig = planHandRig();
+    rig.apply({ op: 'add_wall', x1: 0, y1: 0, x2: 3000, y2: 0 });
+    const d = storablePlanDoc(rig.doc())!;
+    expect(d.selectedId).toBeNull();
+    expect((d.walls as unknown[]).length).toBe(1);
+    expect(isStorablePlanDoc({ walls: 1 })).toBe(false);
+    setSavedPlanDoc('f1', 'p-cad', d);
+    expect(savedPlanDoc('f1', 'p-cad')).toBe(d);
+    expect(savedPlanDoc('f2', 'p-cad')).toBeNull();
+    // A fresh controller restored from it shows the same wall.
+    const again = planHandRig();
+    again.controller.restoreSnapshot?.(d);
+    expect(again.doc().walls).toHaveLength(1);
+    setSavedPlanDoc('f1', 'p-cad', null);
+    expect(savedPlanDoc('f1', 'p-cad')).toBeNull();
+    rig.destroy(); again.destroy();
+  });
+
+  it('focusBox is the selected element on screen (what the view keeps visible after an edit)', () => {
+    const rig = planHandRig();
+    rig.apply({ op: 'add_wall', x1: 1000, y1: 2000, x2: 4000, y2: 2000 });
+    rig.hand.select(rig.doc().walls[0].id);
+    expect(rig.hand.focusBox()).toEqual({ left: 300, top: 500, right: 600, bottom: 500 });
+    rig.hand.select(null);
+    expect(rig.hand.focusBox()).toBeNull();
+    rig.destroy();
+  });
+});

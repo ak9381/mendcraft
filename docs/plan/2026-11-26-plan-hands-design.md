@@ -46,5 +46,10 @@ Plan edits (hand or mouse) now land in the canvas history as `kind: 'plan'` entr
 - **Scroll / level merge.** `planPeace.taken(side)` (armed or resizing) keeps the scroll gesture off that hand; `claimed(side)` keeps the 2 s hold off it. Peace-and-move over the size steppers goes through the shared `levelControl.adjustLevel`.
 - **Board buttons** for hands on the focused board's header: Smaller, Bigger, Close board (Close is one Undo away).
 
+## Round 3 (26 Nov)
+- **The drawing is stored with the board.** After each plan edit (and each plan Undo) the plan document, without its selection, is written onto the board's plan tile as `doc`, so it rides the existing canvas document: reload, a board re-render, and Close + Undo keep the drawing. It never travels in the A2UI message; `planDocs.ts` hands it to the plan board when it mounts.
+- **Re-frame after an edit.** If what a hand edit drew, moved or resized ends up outside the visible drawing area, the view pans to it (and zooms out first if it cannot fit).
+- **Hands growth is display-only.** A focused plan board is shown at the free screen size while Hands is on (the same display-only fit the canvas already uses to narrow a focused board); its stored size is untouched, so it goes back when Hands goes off.
+
 ## Not in this pass
-In the 3D view a held fist turns the model and two fists move the camera; there is no walk-through by hand. Typing a label's text needs voice or a keyboard. Plan drawing edits are not stored with the board. See `2026-11-26-hands-coverage.md`.
+In the 3D view a held fist turns the model and two fists move the camera; there is no walk-through by hand. Typing a label's text needs voice or a keyboard. A plan Undo entry from before a board was re-rendered cannot be undone (the canvas says so). See `2026-11-26-hands-coverage.md`.

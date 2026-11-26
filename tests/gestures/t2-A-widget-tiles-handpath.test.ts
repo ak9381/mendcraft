@@ -98,19 +98,24 @@ describe('A2-017 FormTile checkbox: pinch-tap-equivalent change event flips the 
   });
 });
 
-describe('A2-018 FormTile slider: pinch-drag-equivalent input event sets a precise value', () => {
-  it('firing an input event with target.value updates the submitted value', () => {
+describe('A2-018 FormTile level field: no slider — step buttons and preset chips set the value', () => {
+  it('one press on a step button or a preset chip updates the submitted value', () => {
     const onAction = vi.fn();
     const el = renderTile('FormTile', {
       type: 'form', title: 'Prefs', submitLabel: 'Save',
       fields: [{ kind: 'slider', id: 'vol', label: 'Volume', value: 10, min: 0, max: 100 }],
     }, onAction);
-    const slider = tag(el, 'input').find((i) => i.attrs.type === 'range')!;
-    expect(slider).toBeTruthy();
-    slider.fire('input', { target: { value: '42' } });
+    // A hand cannot drag a slider: there is no range input any more.
+    expect(tag(el, 'input').find((i) => i.attrs.type === 'range')).toBeUndefined();
+    const level = findAll(el, (e) => e.attrs['data-level'] === 'value')[0];
+    expect(level.attrs['aria-valuenow']).toBe('10');
+    findAll(level, (e) => 'data-level-inc' in e.attrs)[0].fire('click'); // 10 → 20
+    expect(level.attrs['aria-valuenow']).toBe('20');
+    expect(findAll(level, (e) => 'data-level-readout' in e.attrs)[0].textContent).toBe('20');
+    button(el, '75').fire('click'); // a preset chip
     button(el, 'Save').fire('click');
     const call = onAction.mock.calls[0][0] as FallbackAction;
-    expect(call.context?.values).toEqual({ vol: 42 });
+    expect(call.context?.values).toEqual({ vol: 75 });
   });
 });
 

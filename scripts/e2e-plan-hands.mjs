@@ -342,6 +342,9 @@ async function main() {
     check(!!(await P(() => window.__ph.banner())), 'Hand edit on again: the banner is back');
 
     // ---- board buttons for hands: Smaller, Close board, Undo
+    const drawing0 = await P(() => { const d = window.__ph.doc(); return JSON.stringify([d.walls.length, d.openings.length, d.fixtures.length]); });
+    const stored = await P(() => { const t = JSON.stringify(window.__canvas.snapshot()); return /"type":"plan"[^}]*"doc":\{/.test(t) || /"doc":\{"walls"/.test(t); });
+    check(stored, 'the drawing is stored with the board (on its plan tile)');
     const w0 = await P(() => window.__canvas.snapshot().frames.find((f) => document.querySelector(`[data-frame="${f.id}"] mc-plan-board`)).rect.w);
     await P(() => document.querySelector('.mc-frame.focused .mc-frame-smaller').click());
     await wait(500);
@@ -357,6 +360,7 @@ async function main() {
     await P(() => { window.__ph.hold('thumbsDown', 'L', 500, 300, 2200); window.__ph.gone(); });
     check(await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc, 5000), 'left thumbs-down (Undo) brings the board back');
     await wait(500);
+    check((await P(() => { const d = window.__ph.doc(); return JSON.stringify([d.walls.length, d.openings.length, d.fixtures.length]); })) === drawing0, `and the drawing came back with it (${drawing0})`);
 
     // ---- Hands off: all of it goes away
     await P(() => window.__mcGestures.show(false));
@@ -364,6 +368,19 @@ async function main() {
     const off = await P(() => { const h = window.__ph.host(); const vis = (s) => [...h.querySelectorAll(s)].some((el) => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0); return { banner: window.__ph.banner(), bar: vis('.mc-plan-hand-bar'), hot: vis('.mc-plan-hot') }; });
     check(off.banner === null && !off.bar && !off.hot, 'Hands off: no banner, bar or handles');
     await shot('16-hands-off');
+    await wait(900);
+    const sizes = await P(() => { const f = window.__canvas.snapshot().frames.find((x) => document.querySelector(`[data-frame="${x.id}"] mc-plan-board`)); const el = document.querySelector(`[data-frame="${f.id}"]`); return { stored: f.rect.w, shown: Math.round(parseFloat(el.style.width)) }; });
+    check(sizes.shown === Math.round(sizes.stored) || sizes.shown < sizes.stored, `Hands off: the board shows at its own stored size (${Math.round(sizes.stored)} px stored, ${sizes.shown} px shown)`);
+
+    // ---- reload: the drawing is still there
+    await wait(600); // the debounced save
+    await page.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    const again = await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc, 15_000);
+    check(again, 'after a reload the plan board is back');
+    if (again) {
+      const d1 = await page.evaluate(() => { const d = document.querySelector('mc-plan-board .mc-plan-board').__mcPlanDoc(); return JSON.stringify([d.walls.length, d.openings.length, d.fixtures.length]); });
+      check(d1 === drawing0, `and it still shows what was drawn (${d1})`);
+    }
 
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   } finally {

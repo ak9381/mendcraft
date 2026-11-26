@@ -30,49 +30,16 @@ import { createPlanRenderer } from '../plan/renderer';
 import { beginTwoHandDraw, beginTwoHandMeasure, beginTwoHandSession, TAPE_KEEP_MS, type TwoHandSession, type TwoHandTape } from '../plan/twoHandSession';
 import { snapToGrid } from '../plan/snap';
 import { mountPlanHandSurface, type PlanHandSurface } from './planHandSurface';
+import { savedPlanDoc } from './planDocs';
 import type { ViewportHandle } from '../core/controller';
 import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
+import { LampTileElement, MusicTileElement } from './deviceTiles';
+import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 
-export class LampTileElement extends A2uiLitElement<typeof LampTileApi> {
-  static readonly tagName = 'mc-lamp-tile';
-  protected override readonly api = LampTileApi;
-  static override styles = css`
-    :host { display: block; }
-    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 var(--font-sans, system-ui), 'Noto Sans Kannada', sans-serif; color: var(--text, #2B2B2B); }
-    .tile.on { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    .label { font-size: 24px; font-weight: 600; }
-    .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
-    .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
-    .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
-    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
-    .sim-badge { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-dim, #6E6A63); border: 1.5px solid var(--border, #E4E0D8); border-radius: 999px; padding: 2px 8px; }
-  `;
-  override render() {
-    const p = this.controller?.props;
-    if (!p) return nothing;
-    const on = !!p.on;
-    const b = typeof p.brightness === 'number' ? p.brightness : 0;
-    return html`<div class="tile ${on ? 'on' : ''}" role="group" aria-label=${String(p.label)}>
-      <div class="row"><span class="label">${p.label}</span>
-        <span class="state" aria-live="polite">${on ? `On · ${b}%` : 'Off'}</span>
-        ${p.sim ? html`<span class="sim-badge" title="Simulated — the WiZ bridge isn't reachable">SIM</span>` : nothing}
-        ${p.pending ? html`<span class="pending">checking…</span>` : nothing}</div>
-      <div class="meter" aria-hidden="true"><i style="width:${on ? b : 0}%"></i></div>
-      ${p.error ? html`<div class="error" role="status">${p.error}</div>` : nothing}
-      <div class="row">
-        <button class="primary" data-act="toggle" @click=${() => p.onToggle?.()}>${on ? 'Turn off' : 'Turn on'}</button>
-        <button data-act="dimmer" @click=${() => p.onDimmer?.()}>Dimmer</button>
-        <button data-act="brighter" @click=${() => p.onBrighter?.()}>Brighter</button>
-      </div></div>`;
-  }
-}
+export { LampTileElement, MusicTileElement };
 
 /** Wraps today's plan engine + SVG renderer as one catalog widget. */
 export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
@@ -108,6 +75,11 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     const status = this.querySelector<HTMLElement>('.mc-plan-extra-status');
     if (status) status.textContent = next ? 'Hand edit on: a fist on the plan draws and moves things.' : 'Hand edit off: a fist on the plan moves the board.';
     return next;
+  }
+  /** This board's plan id and its drawing right now (for saving with the board). */
+  planState(): { boardId: string; doc: unknown } | null {
+    const p = this.controller?.props;
+    return p && this.extraCtl ? { boardId: String(p.boardId), doc: this.extraCtl.snapshot() } : null;
   }
   /** Canvas Undo for one plan edit (an `mc-plan-edit` history entry). */
   undoPlanEdit(steps: number, epoch: number): number {
@@ -152,6 +124,10 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.extraCtl = controller;
     this.is3d = false;
     controller.applyGenerated?.({ ops: buildPlanTemplate(p.template) });
+    // The drawing as the user left it (stored with the board) replaces the template.
+    const frameId = this.closest<HTMLElement>('[data-frame]')?.dataset.frame;
+    const saved = frameId ? savedPlanDoc(frameId, String(p.boardId)) : null;
+    if (saved) controller.restoreSnapshot?.(saved);
     const view = createPlanRenderer(host, controller, () => {});
     this.view = view;
     // Hand edit (the live fist pipeline): banner, element handles, action bar
@@ -249,47 +225,6 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.view?.dispose();
     this.view = null;
     this.mounted = null;
-  }
-}
-
-export class MusicTileElement extends A2uiLitElement<typeof MusicTileApi> {
-  static readonly tagName = 'mc-music-tile';
-  protected override readonly api = MusicTileApi;
-  static override styles = css`
-    :host { display: block; }
-    .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; min-height: 180px; display: grid; gap: 12px; background: var(--panel, #FFFFFF); font: 500 20px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
-    .tile.playing { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.08); }
-    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    .label { font-size: 24px; font-weight: 600; }
-    .state { font-variant-numeric: tabular-nums; }
-    button { font: inherit; min-height: 64px; min-width: 120px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
-    button:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 3px; }
-    button.primary { background: var(--action-fill, #9A5F1C); border-color: var(--action-fill, #9A5F1C); color: #FFFFFF; }
-    .meter { height: 14px; border-radius: 7px; background: var(--panel-2, #F1EEE6); overflow: hidden; }
-    .meter > i { display: block; height: 100%; background: var(--action, #C98B3C); }
-    .pending { color: var(--text-dim, #6E6A63); } .error { color: var(--danger, #B5453A); }
-  `;
-  override render() {
-    const p = this.controller?.props;
-    if (!p) return nothing;
-    const playing = !!p.playing;
-    const vol = typeof p.volume === 'number' ? Math.max(0, Math.min(100, Math.round(p.volume))) : 50;
-    const track = p.trackTitle ? String(p.trackTitle) : '';
-    return html`<div class="tile ${playing ? 'playing' : ''}" role="group" aria-label=${String(p.label)}>
-      <div class="row">
-        <span class="label">${p.label}</span>
-        <span class="state" aria-live="polite">${playing ? 'Playing' : 'Paused'}${track ? ` · ${track}` : ''} · ${vol}%</span>
-        ${p.pending ? html`<span class="pending">checking…</span>` : nothing}
-      </div>
-      <div class="meter" aria-hidden="true"><i style="width:${vol}%"></i></div>
-      ${p.error ? html`<div class="error" role="status">${p.error}</div>` : nothing}
-      <div class="row">
-        <button class="primary" data-act="playpause" @click=${() => p.onPlayPause?.()}>${playing ? 'Pause' : 'Play'}</button>
-        <button data-act="softer" @click=${() => p.onSofter?.()}>Softer</button>
-        <button data-act="louder" @click=${() => p.onLouder?.()}>Louder</button>
-        ${p.onNext ? html`<button data-act="next" @click=${() => p.onNext?.()}>Next</button>` : nothing}
-      </div>
-    </div>`;
   }
 }
 
@@ -606,7 +541,12 @@ export class FormTileElement extends A2uiLitElement<typeof FormTileApi> {
     .label { color: var(--text-dim, #6E6A63); font-size: 15px; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
     .fieldLabel { font-weight: 600; }
-    input[type="range"] { flex: 1; min-width: 120px; }
+    .level { flex: 1 1 280px; display: grid; gap: 12px; }
+    .steps { display: grid; grid-template-columns: 56px minmax(0, 1fr) 56px; gap: 12px; align-items: center; }
+    .steps .step { min-width: 56px; font-size: 26px; line-height: 1; padding: 0; }
+    .readout { text-align: center; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr)); gap: 12px; }
+    .presets button { min-width: 56px; padding: 4px 6px; }
     input[type="checkbox"] { width: 24px; height: 24px; }
     button { font: inherit; min-height: 56px; min-width: 100px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
     button.choice.active { border-color: var(--accent, #6B8F71); background: rgb(107 143 113 / 0.12); }
@@ -622,7 +562,26 @@ export class FormTileElement extends A2uiLitElement<typeof FormTileApi> {
       return html`<input type="checkbox" aria-label=${f.label} .checked=${!!this.valueFor(f)} @change=${(e: Event) => { this.values[f.id] = (e.target as HTMLInputElement).checked; this.requestUpdate(); }} />`;
     }
     if (f.kind === 'slider') {
-      return html`<input type="range" aria-label=${f.label} min=${f.min ?? 0} max=${f.max ?? 100} .value=${String(this.valueFor(f))} @input=${(e: Event) => { this.values[f.id] = Number((e.target as HTMLInputElement).value); this.requestUpdate(); }} />`;
+      // No slider: a hand cannot drag one. Step buttons and preset chips,
+      // each one press; arrow keys still give a keyboard user fine steps.
+      const min = f.min ?? 0, max = f.max ?? 100;
+      const v = Number(this.valueFor(f));
+      const set = (n: number) => { this.values[f.id] = Math.max(Math.min(min, max), Math.min(Math.max(min, max), n)); this.requestUpdate(); };
+      const fine = (e: KeyboardEvent) => {
+        if (e.repeat) return; // one press = one step
+        const d = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -1 : 0;
+        if (d) { e.preventDefault(); set(v + d * rangeStep(min, max) / 10); }
+      };
+      return html`<div class="level" data-level="value" data-level-step=${rangeStep(min, max)} aria-valuemin=${min} aria-valuemax=${max} aria-valuenow=${v} role="group" aria-label=${`${f.label} ${v}`} @keydown=${fine}>
+        <div class="steps">
+          <button type="button" class="step" data-level-dec aria-label=${`${f.label}: lower`} @click=${() => set(rangeNudge(v, -1, min, max))}>−</button>
+          <div class="readout"><span data-level-readout>${v}</span></div>
+          <button type="button" class="step" data-level-inc aria-label=${`${f.label}: higher`} @click=${() => set(rangeNudge(v, 1, min, max))}>+</button>
+        </div>
+        <div class="chips presets">
+          ${rangePresets(min, max).map((n) => html`<button type="button" class="choice ${v === n ? 'active' : ''}" aria-label=${`${f.label} ${n}`} aria-pressed=${v === n ? 'true' : 'false'} @click=${() => set(n)}>${n}</button>`)}
+        </div>
+      </div>`;
     }
     return html`<span style="display:flex;gap:8px;flex-wrap:wrap">
       ${f.options.map((opt) => html`<button type="button" class="choice ${this.valueFor(f) === opt ? 'active' : ''}" aria-pressed=${this.valueFor(f) === opt} @click=${() => { this.values[f.id] = opt; this.requestUpdate(); }}>${opt}</button>`)}

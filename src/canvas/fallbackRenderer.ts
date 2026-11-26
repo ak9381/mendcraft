@@ -7,6 +7,11 @@
 import type { A2uiMessage, FormField } from './surfacePlan';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
+import {
+  BRIGHTNESS_PRESETS, LAMP_COLOURS, LAMP_SCENES, LAMP_TILE_STEP, TEMP_DEFAULT, TEMP_STEP, VOLUME_PRESETS, VOLUME_TILE_STEP, WHITE_PRESETS,
+  activeColourKey, lampStateLine, rangeNudge, rangePresets, rangeStep,
+} from './lampPresets';
+import { BUILTIN_LABEL } from './spotifyConnector';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -577,14 +582,53 @@ export function renderNodeToDom(
         input.addEventListener('change', (e) => { values[f.id] = !!(e as { target?: { checked?: boolean } }).target?.checked; });
         row.appendChild(input);
       } else if (f.kind === 'slider') {
-        const input = doc.createElement('input');
-        input.setAttribute('type', 'range');
-        input.setAttribute('aria-label', f.label);
-        input.setAttribute('min', String(f.min ?? 0));
-        input.setAttribute('max', String(f.max ?? 100));
-        input.setAttribute('value', String(f.value ?? f.min ?? 0));
-        input.addEventListener('input', (e) => { values[f.id] = Number((e as { target?: { value?: string } }).target?.value ?? 0); });
-        row.appendChild(input);
+        // No slider: step buttons and preset chips, each one press.
+        const min = f.min ?? 0, max = f.max ?? 100;
+        const level = doc.createElement('div');
+        level.className = 'level';
+        level.setAttribute('data-level', 'value');
+        level.setAttribute('data-level-step', String(rangeStep(min, max)));
+        level.setAttribute('role', 'group');
+        level.setAttribute('aria-label', f.label);
+        level.setAttribute('aria-valuemin', String(min));
+        level.setAttribute('aria-valuemax', String(max));
+        const readout = doc.createElement('span');
+        readout.className = 'readout';
+        readout.setAttribute('data-level-readout', '');
+        const chips: Array<{ el: HTMLElement; n: number }> = [];
+        const set = (n: number): void => {
+          const v = Math.max(Math.min(min, max), Math.min(Math.max(min, max), n));
+          values[f.id] = v;
+          readout.textContent = String(v);
+          level.setAttribute('aria-valuenow', String(v));
+          level.setAttribute('aria-label', `${f.label} ${v}`);
+          for (const c of chips) c.el.setAttribute('aria-pressed', String(c.n === v));
+        };
+        const step = (text: string, dir: 1 | -1, attr: string): HTMLElement => {
+          const b = doc.createElement('button');
+          b.setAttribute('type', 'button');
+          b.className = 'step';
+          b.setAttribute(attr, '');
+          b.setAttribute('aria-label', `${f.label}: ${dir > 0 ? 'higher' : 'lower'}`);
+          b.textContent = text;
+          b.addEventListener('click', () => set(rangeNudge(Number(values[f.id]), dir, min, max)));
+          return b;
+        };
+        level.appendChild(step('−', -1, 'data-level-dec'));
+        level.appendChild(readout);
+        level.appendChild(step('+', 1, 'data-level-inc'));
+        for (const n of rangePresets(min, max)) {
+          const b = doc.createElement('button');
+          b.setAttribute('type', 'button');
+          b.className = 'mc-fb-preset';
+          b.setAttribute('aria-label', `${f.label} ${n}`);
+          b.textContent = String(n);
+          b.addEventListener('click', () => set(n));
+          chips.push({ el: b, n });
+          level.appendChild(b);
+        }
+        set(Number(values[f.id]));
+        row.appendChild(level);
       } else if (f.kind === 'choice') {
         for (const opt of f.options) {
           const btn = doc.createElement('button');
@@ -637,57 +681,119 @@ export function renderNodeToDom(
     return el;
   }
 
+  // ---- device tiles: discrete, one-press controls (no slider) ----
+  // Same structure and level-control contract as the Lit tiles (deviceTiles.ts):
+  // one [data-level] element per level, holding [data-level-dec] /
+  // [data-level-inc] step buttons and a [data-level-readout].
+  function mk(tag: string, className: string, text?: string): HTMLElement {
+    const e = doc.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function btn(text: string, act: string, onClick: () => void, o: { cls?: string; label?: string; pressed?: boolean; value?: string | number; attrs?: string[] } = {}): HTMLElement {
+    const b = mk('button', o.cls ?? '', text);
+    b.setAttribute('type', 'button');
+    b.setAttribute('data-act', act);
+    if (o.label) b.setAttribute('aria-label', o.label);
+    if (o.pressed !== undefined) b.setAttribute('aria-pressed', String(o.pressed));
+    if (o.value !== undefined) b.setAttribute('data-value', String(o.value));
+    for (const a of o.attrs ?? []) b.setAttribute(a, '');
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function levelEl(kind: string, step: number, label: string, now: number, min: number, max: number): HTMLElement {
+    const el = mk('div', 'level');
+    el.setAttribute('data-level', kind);
+    el.setAttribute('data-level-step', String(step));
+    el.setAttribute('aria-valuenow', String(now));
+    el.setAttribute('aria-valuemin', String(min));
+    el.setAttribute('aria-valuemax', String(max));
+    el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', label);
+    return el;
+  }
+  function readoutEl(text: string): HTMLElement {
+    const r = mk('span', 'readout-value', text);
+    r.setAttribute('data-level-readout', '');
+    return r;
+  }
+  function noteEl(): HTMLElement {
+    const n = mk('p', 'note error', String(p.error ?? ''));
+    n.setAttribute('role', 'status');
+    return n;
+  }
+
   if (node.component === 'LampTile') {
     const on = !!p.on;
     const brightness = typeof p.brightness === 'number' ? p.brightness : 0;
-    const el = doc.createElement('div');
-    el.className = `mc-fb-tile lamp ${on ? 'on' : ''}`;
+    const temp = typeof p.temp === 'number' ? p.temp : 0;
+    const color = typeof p.color === 'string' ? p.color : '';
+    const sceneId = typeof p.sceneId === 'number' ? p.sceneId : 0;
+    const look = { color, temp, sceneId };
+    const colourKey = on ? activeColourKey(look) : '';
+    const whiteOn = on && !color && !sceneId;
+    const el = mk('div', `mc-fb-tile lamp ${on ? 'on' : ''}`);
     el.setAttribute('role', 'group');
     el.setAttribute('aria-label', String(p.label || 'Lamp'));
 
-    const rowTop = doc.createElement('div');
-    rowTop.className = 'row';
-    const labelSpan = doc.createElement('span');
-    labelSpan.className = 'label';
-    labelSpan.textContent = String(p.label || 'Lamp');
-    const stateSpan = doc.createElement('span');
-    stateSpan.className = 'state';
+    const head = mk('div', 'row head');
+    head.appendChild(mk('span', 'label', String(p.label || 'Lamp')));
+    const stateSpan = mk('span', 'state', `${lampStateLine({ on, brightness, ...look })}${p.pending ? ' · checking…' : ''}`);
     stateSpan.setAttribute('aria-live', 'polite');
-    stateSpan.textContent = on ? `On · ${brightness}%` : 'Off';
-    rowTop.appendChild(labelSpan);
-    rowTop.appendChild(stateSpan);
-    el.appendChild(rowTop);
+    head.appendChild(stateSpan);
+    if (p.sim) head.appendChild(mk('span', 'sim-badge', 'SIM'));
+    head.appendChild(btn(on ? 'Turn off' : 'Turn on', 'toggle', () => triggerAction(p.onToggle), { cls: 'primary' }));
+    el.appendChild(head);
+    if (p.error) el.appendChild(noteEl());
 
-    const meter = doc.createElement('div');
-    meter.className = 'meter';
-    meter.setAttribute('aria-hidden', 'true');
-    const bar = doc.createElement('i');
-    bar.style.width = `${on ? brightness : 0}%`;
-    meter.appendChild(bar);
-    el.appendChild(meter);
-
-    const rowBtns = doc.createElement('div');
-    rowBtns.className = 'row';
-
-    const btnToggle = doc.createElement('button');
-    btnToggle.className = 'primary';
-    btnToggle.textContent = on ? 'Turn off' : 'Turn on';
-    btnToggle.addEventListener('click', () => triggerAction(p.onToggle));
-    rowBtns.appendChild(btnToggle);
-
-    if (p.onDimmer) {
-      const btnDimmer = doc.createElement('button');
-      btnDimmer.textContent = 'Dimmer';
-      btnDimmer.addEventListener('click', () => triggerAction(p.onDimmer));
-      rowBtns.appendChild(btnDimmer);
+    const bright = levelEl('brightness', LAMP_TILE_STEP, `Brightness ${on ? `${brightness} %` : 'off'}`, brightness, 10, 100);
+    const steps = mk('div', 'steps');
+    steps.appendChild(btn('−', 'dimmer', () => triggerAction(p.onDimmer), { cls: 'step', label: 'Dimmer', attrs: ['data-level-dec'] }));
+    const ro = mk('div', 'readout', 'Brightness ');
+    ro.appendChild(readoutEl(on ? `${brightness} %` : 'Off'));
+    steps.appendChild(ro);
+    steps.appendChild(btn('+', 'brighter', () => triggerAction(p.onBrighter), { cls: 'step', label: 'Brighter', attrs: ['data-level-inc'] }));
+    bright.appendChild(steps);
+    const presets = mk('div', 'chips presets');
+    for (const v of BRIGHTNESS_PRESETS) {
+      presets.appendChild(btn(`${v}%`, 'level', () => triggerAction(p.onLevel, { value: v }), { label: `Brightness ${v} %`, pressed: on && brightness === v, value: v }));
     }
-    if (p.onBrighter) {
-      const btnBrighter = doc.createElement('button');
-      btnBrighter.textContent = 'Brighter';
-      btnBrighter.addEventListener('click', () => triggerAction(p.onBrighter));
-      rowBtns.appendChild(btnBrighter);
+    bright.appendChild(presets);
+    el.appendChild(bright);
+
+    const colours = mk('div', 'chips colours');
+    colours.setAttribute('role', 'group');
+    colours.setAttribute('aria-label', 'Colour');
+    for (const c of LAMP_COLOURS) {
+      const b = btn(c.label, 'color', () => triggerAction(p.onColor, { value: c.key }), { cls: 'swatch', pressed: colourKey === c.key, value: c.key });
+      b.style.setProperty?.('--swatch', c.swatch);
+      colours.appendChild(b);
     }
-    el.appendChild(rowBtns);
+    el.appendChild(colours);
+
+    const scenes = mk('div', 'chips scenes');
+    scenes.setAttribute('role', 'group');
+    scenes.setAttribute('aria-label', 'Scenes');
+    for (const s of LAMP_SCENES) {
+      scenes.appendChild(btn(s.label, 'scene', () => triggerAction(p.onScene, { value: s.key }), { label: `${s.label} scene`, pressed: on && sceneId === s.sceneId, value: s.key }));
+    }
+    el.appendChild(scenes);
+
+    const white = levelEl('temp', TEMP_STEP, `White ${whiteOn && temp ? `${temp} kelvin` : 'not set'}`, temp || TEMP_DEFAULT, 2200, 6500);
+    const wsteps = mk('div', 'steps');
+    wsteps.appendChild(btn('−', 'warmer', () => triggerAction(p.onWarmer), { cls: 'step', label: 'Warmer', attrs: ['data-level-dec'] }));
+    const wro = mk('div', 'readout', 'White ');
+    wro.appendChild(readoutEl(whiteOn && temp ? `${temp} K` : '—'));
+    wsteps.appendChild(wro);
+    wsteps.appendChild(btn('+', 'cooler', () => triggerAction(p.onCooler), { cls: 'step', label: 'Cooler', attrs: ['data-level-inc'] }));
+    white.appendChild(wsteps);
+    const whites = mk('div', 'chips white');
+    for (const w of WHITE_PRESETS) {
+      whites.appendChild(btn(w.label, 'white', () => triggerAction(p.onWhite, { value: w.key }), { label: `${w.label} white`, pressed: whiteOn && temp === w.temp, value: w.key }));
+    }
+    white.appendChild(whites);
+    el.appendChild(white);
     return el;
   }
 
@@ -695,60 +801,50 @@ export function renderNodeToDom(
     const playing = !!p.playing;
     const vol = typeof p.volume === 'number' ? Math.max(0, Math.min(100, Math.round(p.volume))) : 50;
     const track = p.trackTitle ? String(p.trackTitle) : '';
-    const el = doc.createElement('div');
-    el.className = `mc-fb-tile music ${playing ? 'playing' : ''}`;
+    const spotify = p.source === 'spotify';
+    const where = p.playingOn ? String(p.playingOn) : '';
+    const el = mk('div', `mc-fb-tile music ${playing ? 'playing' : ''}`);
     el.setAttribute('role', 'group');
     el.setAttribute('aria-label', String(p.label || 'Music'));
 
-    const rowTop = doc.createElement('div');
-    rowTop.className = 'row';
-    const labelSpan = doc.createElement('span');
-    labelSpan.className = 'label';
-    labelSpan.textContent = String(p.label || 'Music');
-    const stateSpan = doc.createElement('span');
-    stateSpan.className = 'state';
-    stateSpan.setAttribute('aria-live', 'polite');
-    stateSpan.textContent = `${playing ? 'Playing' : 'Paused'}${track ? ` · ${track}` : ''} · ${vol}%`;
-    rowTop.appendChild(labelSpan);
-    rowTop.appendChild(stateSpan);
-    el.appendChild(rowTop);
+    const head = mk('div', 'row head');
+    head.appendChild(mk('span', 'label', String(p.label || 'Music')));
+    const source = mk('span', 'state source', spotify ? `Spotify${where ? ` · ${where}` : ''}` : BUILTIN_LABEL);
+    source.setAttribute('data-source', spotify ? 'spotify' : 'builtin');
+    head.appendChild(source);
+    el.appendChild(head);
 
-    const meter = doc.createElement('div');
-    meter.className = 'meter';
-    meter.setAttribute('aria-hidden', 'true');
-    const bar = doc.createElement('i');
-    bar.style.width = `${vol}%`;
-    meter.appendChild(bar);
-    el.appendChild(meter);
+    const trackEl = mk('div', 'track');
+    trackEl.setAttribute('aria-live', 'polite');
+    trackEl.appendChild(mk('span', 'state', `${playing ? 'Now playing' : 'Paused'}${p.pending ? ' · checking…' : ''}`));
+    const title = mk('span', 'title', track || 'Nothing playing yet');
+    title.setAttribute('data-track', '');
+    trackEl.appendChild(title);
+    el.appendChild(trackEl);
+    if (p.error) el.appendChild(noteEl());
 
-    const rowBtns = doc.createElement('div');
-    rowBtns.className = 'row';
+    const transport = mk('div', 'transport');
+    transport.setAttribute('role', 'group');
+    transport.setAttribute('aria-label', 'Playback');
+    if (p.onPrevious) transport.appendChild(btn('Previous', 'previous', () => triggerAction(p.onPrevious)));
+    transport.appendChild(btn(playing ? 'Pause' : 'Play', 'playpause', () => triggerAction(p.onPlayPause), { cls: 'primary' }));
+    if (p.onNext) transport.appendChild(btn('Next', 'next', () => triggerAction(p.onNext)));
+    el.appendChild(transport);
 
-    const btnPlay = doc.createElement('button');
-    btnPlay.className = 'primary';
-    btnPlay.textContent = playing ? 'Pause' : 'Play';
-    btnPlay.addEventListener('click', () => triggerAction(p.onPlayPause));
-    rowBtns.appendChild(btnPlay);
-
-    if (p.onSofter) {
-      const btnSofter = doc.createElement('button');
-      btnSofter.textContent = 'Softer';
-      btnSofter.addEventListener('click', () => triggerAction(p.onSofter));
-      rowBtns.appendChild(btnSofter);
+    const volume = levelEl('volume', VOLUME_TILE_STEP, `Volume ${vol} %`, vol, 0, 100);
+    const steps = mk('div', 'steps');
+    steps.appendChild(btn('−', 'softer', () => triggerAction(p.onSofter), { cls: 'step', label: 'Quieter', attrs: ['data-level-dec'] }));
+    const ro = mk('div', 'readout', 'Volume ');
+    ro.appendChild(readoutEl(`${vol} %`));
+    steps.appendChild(ro);
+    steps.appendChild(btn('+', 'louder', () => triggerAction(p.onLouder), { cls: 'step', label: 'Louder', attrs: ['data-level-inc'] }));
+    volume.appendChild(steps);
+    const presets = mk('div', 'chips');
+    for (const v of VOLUME_PRESETS) {
+      presets.appendChild(btn(v.label, 'volume', () => triggerAction(p.onVolume, { value: v.volume }), { label: `${v.label} volume`, pressed: vol === v.volume, value: v.volume }));
     }
-    if (p.onLouder) {
-      const btnLouder = doc.createElement('button');
-      btnLouder.textContent = 'Louder';
-      btnLouder.addEventListener('click', () => triggerAction(p.onLouder));
-      rowBtns.appendChild(btnLouder);
-    }
-    if (p.onNext) {
-      const btnNext = doc.createElement('button');
-      btnNext.textContent = 'Next';
-      btnNext.addEventListener('click', () => triggerAction(p.onNext));
-      rowBtns.appendChild(btnNext);
-    }
-    el.appendChild(rowBtns);
+    volume.appendChild(presets);
+    el.appendChild(volume);
     return el;
   }
 

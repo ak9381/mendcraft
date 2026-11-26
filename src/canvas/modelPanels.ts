@@ -240,9 +240,10 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       const mark = VERB_MARK[verb] ?? '';
       line.innerHTML = `<span class="mc-term-mark">${mark}</span><span class="mc-term-time">${nowHHMMSS()}</span>` +
         `<span class="mc-term-verb">${verb}</span><span class="mc-term-detail">${esc(detail)}</span>`;
-      lines.append(line);
+      // Newest on top: the line just written is always the first one in view.
+      if (typeof lines.prepend === 'function') lines.prepend(line); else lines.append(line);
       syncEmpty();
-      body.scrollTop = body.scrollHeight;
+      body.scrollTop = 0;
       api.setWorking(!DONE_VERBS.has(verb));
       if (verb === 'fail') panel.classList.add('is-failing');
       else if (DONE_VERBS.has(verb)) panel.classList.remove('is-failing');

@@ -21,7 +21,8 @@ export interface Rect { left: number; top: number; width: number; height: number
 export interface ItemLayout { left: number; top: number; width: number; height: number }
 
 export const MIN_ITEM_SIZE: Size = { width: 220, height: 200 };
-export const MAX_ITEM_SIZE: Size = { width: 640, height: 520 };
+// Tall enough for the lamp tile (brightness, colours, scenes and whites are ~600 px in a narrow column).
+export const MAX_ITEM_SIZE: Size = { width: 640, height: 760 };
 const PAD = 12;
 /** No real vertical ceiling: the frame body scrolls (`overflow: auto`). */
 const TALL = 100000;
@@ -285,6 +286,13 @@ export function mountItemHandles(
   const max = opts.max ?? MAX_ITEM_SIZE;
   const slop = opts.engageSlopPx ?? 6;
 
+  /** How much the board is zoomed on screen (a room dashboard may be shown
+   *  zoomed out): pointer travel is screen px, the layout is board px. */
+  function zoom(): number {
+    const el = item as unknown as { offsetWidth?: number; getBoundingClientRect?(): { width: number } };
+    const shown = el.getBoundingClientRect?.().width ?? 0;
+    return el.offsetWidth && shown > 0 ? shown / el.offsetWidth : 1;
+  }
   function apply(): void {
     item.style.left = `${layout.left}px`;
     item.style.top = `${layout.top}px`;
@@ -307,7 +315,8 @@ export function mountItemHandles(
       if (!pastSlop(e.clientX - moveStart.x, e.clientY - moveStart.y, slop)) return;
       moveStart.engaged = true;
     }
-    layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x), top: moveStart.top + (e.clientY - moveStart.y) }, opts.getBounds());
+    const z = zoom();
+    layout = clampMove({ ...layout, left: moveStart.left + (e.clientX - moveStart.x) / z, top: moveStart.top + (e.clientY - moveStart.y) / z }, opts.getBounds());
     apply();
     opts.onMoveDrag?.('move', e.clientX, e.clientY);
   }
@@ -349,7 +358,8 @@ export function mountItemHandles(
       if (!pastSlop(e.clientX - resizeStart.x, e.clientY - resizeStart.y, slop)) return;
       resizeStart.engaged = true;
     }
-    layout = resizeByHandle(resizeStart.box, resizeStart.dir, e.clientX - resizeStart.x, e.clientY - resizeStart.y, opts.getBounds(), min, max);
+    const z = zoom();
+    layout = resizeByHandle(resizeStart.box, resizeStart.dir, (e.clientX - resizeStart.x) / z, (e.clientY - resizeStart.y) / z, opts.getBounds(), min, max);
     apply();
   }
   function onResizeEnd(): void {
@@ -626,7 +636,13 @@ export function mountEditBoard(root: EditEl, opts: EditBoardOptions): EditBoardC
 
     const column = items[0].el.parentElement;
     if (!column) return;
-    const rects = items.map((it) => it.el.getBoundingClientRect());
+    // Measured on screen, stored in the board's own px: a room dashboard may be
+    // shown zoomed out (the whole board in view), and a tile captured at that
+    // scale would come back too small for its own controls.
+    const first = items[0]?.el as unknown as { offsetWidth?: number; getBoundingClientRect(): Rect } | undefined;
+    const shown = first?.getBoundingClientRect().width ?? 0;
+    const k = first?.offsetWidth && shown > 0 ? shown / first.offsetWidth : 1;
+    const rects = items.map((it) => { const r = it.el.getBoundingClientRect(); return { left: r.left / k, top: r.top / k, width: r.width / k, height: r.height / k }; });
     const originLeft = Math.min(...rects.map((r) => r.left));
     const originTop = Math.min(...rects.map((r) => r.top));
 

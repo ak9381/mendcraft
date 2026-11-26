@@ -26,7 +26,7 @@ Any `button`, link, `role=button/tab/switch/checkbox/menuitem/option` or `summar
 | Board: focus | Yes | Fist tap on the title | Title was 39 px tall. **Fixed:** ≥ 48 px while Hands is on |
 | Board: move | Yes, tested | Held fist on the board or its title | — |
 | Board: resize | Yes | **Added (round 2):** "Smaller" / "Bigger" on the focused board's header (56 px), Hands on only | Steps of 20 %, no free resize. A focused board never shows larger than the free screen |
-| Board: close / pin | Yes | **Added (round 2):** "Close board" on the focused board's header; Undo brings the board back. The dock's Unpin and the phone's "Pin on this device" are buttons | A floor plan that is closed and brought back restarts from its template (plan drawing edits are not stored with the board) |
+| Board: close / pin | Yes | "Close board" on the focused board's header; Undo brings the board back, with its drawing (round 3). The dock's Unpin and the phone's "Pin on this device" are buttons | — |
 | Board Edit mode: move / resize tiles | Yes | Held fist on a tile's move or resize handle | **Fixed (round 2):** handles are 56 px while Hands is on |
 | Board to a paired phone (edge transfer) | Yes | Held fist drags the board to the screen edge | — |
 | Dock (pinned tile, Unpin, agent chips) | Yes | Highlight + thumbs-up, fist tap | — |
@@ -97,7 +97,7 @@ Any `button`, link, `role=button/tab/switch/checkbox/menuitem/option` or `summar
 1. **Text entry** (say box, labels, number fields) — voice only.
 2. **`select` controls** in generated form tiles.
 3. **Multi-select / marquee / copy-paste** on the plan.
-4. **Plan drawing edits are not stored with the board**: a reload, a re-render of the board, or Close + Undo restarts the plan from its template.
+4. **Plan Undo across a re-render**: the drawing is now stored with the board (round 3), but a plan Undo entry made before the board was re-rendered or reloaded cannot be taken back.
 5. **Phone**: fixed shapes for chips / Tools / Talk / Rotate; nothing here was run on a device.
 6. **Monitor window** — no hand control of its own.
 7. **Real camera**: every result here is from synthetic frames.

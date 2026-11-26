@@ -17,7 +17,7 @@
 import { createServer } from 'node:http';
 import dgram from 'node:dgram';
 import { randomBytes } from 'node:crypto';
-import { isAllowedOrigin, isIPv4, sanitizeParams } from './wizBridge.lib.mjs';
+import { isAllowedOrigin, isIPv4, validateParams } from './wizBridge.lib.mjs';
 
 const WIZ_PORT = 38899;
 const BROADCAST = '255.255.255.255';
@@ -169,7 +169,11 @@ const server = createServer(async (req, res) => {
       const ip = body.ip || args.bulb;
       if (!ip) return send(res, origin, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
       if (!isIPv4(ip)) return send(res, origin, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
-      return send(res, origin, 200, { result: await request(ip, { method: 'setPilot', params: sanitizeParams(body.params) }) });
+      // Out-of-range or unknown params are refused here (400), never clamped
+      // and never sent to the bulb.
+      const checked = validateParams(body.params);
+      if (!checked.ok) return send(res, origin, 400, { error: checked.error, refused: true });
+      return send(res, origin, 200, { result: await request(ip, { method: 'setPilot', params: checked.params }) });
     }
     send(res, origin, 404, { error: 'not found' });
   } catch (err) {

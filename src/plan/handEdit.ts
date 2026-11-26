@@ -21,6 +21,7 @@ import { ortho45, normRect } from './drawTools';
 import { clampOpeningOffset, nearestWall, projectToWall } from './hosting';
 import { pointInPolygon } from './hitTest';
 import { fixtureSpec } from './fixtures';
+import { fixturePolygon } from './editing';
 import { fixtureKindOf } from './tools';
 import { GRID_MM, measureSnap, snapToGrid, snapToObjects, snapValueToGrid } from './snap';
 import {
@@ -113,6 +114,9 @@ export interface PlanHandEdit {
   selection(): HandSelection | null;
   remove(): boolean;
   rotate(): boolean;
+  /** Client-px box of the selected element (what the last edit made or
+   *  changed), or null — the view brings it back on screen if it left. */
+  focusBox(): { left: number; top: number; right: number; bottom: number } | null;
   /** One 10 cm step on a size axis (the stepper buttons). */
   step(axis: 'a' | 'b', dir: 1 | -1): boolean;
   /** Peace-and-move resize: begin, feed the hand travel (px), end / cancel. */
@@ -754,7 +758,32 @@ export function createPlanHandEdit(host: HandEditHost): PlanHandEdit {
     return { ...base, kind: 'place', text: stroke ? `Placing a ${what} — open your hand to drop it` : `Placing a ${what} — fist-tap where it goes${snapNote}` };
   }
 
+  function focusBox(): { left: number; top: number; right: number; bottom: number } | null {
+    const d = doc();
+    const id = selectedId();
+    const f = id ? findObject(d, id) : null;
+    if (!id || !f) return null;
+    let pts: Point[] = [];
+    if (f.kind === 'wall') pts = [(f.obj as Wall).a, (f.obj as Wall).b];
+    else if (f.kind === 'room') pts = roomPolygon(f.obj as Room, d) ?? [];
+    else if (f.kind === 'opening') {
+      const o = f.obj as Opening;
+      const w = d.walls.find((x) => x.id === o.wallId);
+      if (w) pts = [pointAlong(w, o.offset), pointAlong(w, o.offset + o.width)];
+    } else if (f.kind === 'fixture') pts = fixturePolygon(f.obj as Fixture);
+    else if (f.kind === 'text') pts = [{ x: (f.obj as TextLabel).x, y: (f.obj as TextLabel).y }];
+    else {
+      const dim = f.obj as Dimension;
+      const w = dim.wallId ? d.walls.find((x) => x.id === dim.wallId) : undefined;
+      pts = w ? [w.a, w.b] : dim.a && dim.b ? [dim.a, dim.b] : [];
+    }
+    if (!pts.length) return null;
+    const s = pts.map((p) => ctx.toScreen(p));
+    return { left: Math.min(...s.map((p) => p.x)), top: Math.min(...s.map((p) => p.y)), right: Math.max(...s.map((p) => p.x)), bottom: Math.max(...s.map((p) => p.y)) };
+  }
+
   return {
+    focusBox,
     mode, hover, tap, fistStart, fistMove, fistEnd, fistCancel,
     busy: () => !!stroke || !!resize,
     targets, select, selection, remove, rotate, step,

@@ -1,6 +1,7 @@
 // Smart canvas — the compact "surface plan" that Nano drafts and Gemini
 // upgrades. Models never write raw A2UI: they emit this small JSON, which is
 // coerced here and expanded deterministically into A2UI v0.9 messages.
+import { isStorablePlanDoc } from './planDocs';
 import { sanitizeVisualMarkup } from './visualSanitize';
 
 export const PROTOCOL = 'v0.9' as const;
@@ -26,7 +27,9 @@ export type FormField =
 
 export type LeafTileSpec =
   | { type: 'lamp'; deviceId: string; label: string }
-  | { type: 'plan'; boardId: string; template: PlanTemplate }
+  /** `doc`: the drawing as the user left it (plan/doc.ts PlanDoc), when it
+   *  differs from the template. Stored with the board; see planDocs.ts. */
+  | { type: 'plan'; boardId: string; template: PlanTemplate; doc?: unknown }
   | { type: 'music'; deviceId: string; label: string }
   | { type: 'switch'; deviceId: string; label: string }
   | { type: 'scene'; sceneId: string; label: string }
@@ -63,7 +66,20 @@ export interface DeviceState {
   error?: string;
   /** True once we know this lamp isn't the real WiZ bulb (bridge unreachable). */
   sim?: boolean;
+  /** Lamp look — only one of these is set at a time (0 / '' = not in that mode). */
+  /** White colour temperature, Kelvin. */
+  temp?: number;
+  /** Colour as "#rrggbb". */
+  color?: string;
+  /** WiZ scene id. */
+  sceneId?: number;
+  /** Speaker: which player is behind the tile. */
+  source?: MusicSource;
+  /** Speaker: where Spotify is playing ("iPhone", "this browser"). */
+  playingOn?: string;
 }
+
+export type MusicSource = 'spotify' | 'builtin';
 
 export interface SceneState {
   active: boolean;
@@ -172,7 +188,7 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   if (o.type === 'plan') {
     const boardId = typeof o.boardId === 'string' && ID_RE.test(o.boardId) ? o.boardId : 'plan-1';
     const template = (PLAN_TEMPLATES as readonly string[]).includes(String(o.template)) ? (o.template as PlanTemplate) : 'studio';
-    return { ok: true, value: { type: 'plan', boardId, template } };
+    return { ok: true, value: { type: 'plan', boardId, template, ...(isStorablePlanDoc(o.doc) ? { doc: o.doc } : {}) } };
   }
   if (o.type === 'scene') {
     const sceneId = typeof o.sceneId === 'string' && ID_RE.test(o.sceneId) ? o.sceneId : null;
@@ -375,9 +391,22 @@ export function expandPlan(
         onBrighter: { event: { name: 'lamp.brighter', context: { deviceId: t.deviceId } } },
         onDimmer: { event: { name: 'lamp.dimmer', context: { deviceId: t.deviceId } } },
         sim: { path: `/devices/${t.deviceId}/sim` },
+        temp: { path: `/devices/${t.deviceId}/temp` },
+        color: { path: `/devices/${t.deviceId}/color` },
+        sceneId: { path: `/devices/${t.deviceId}/sceneId` },
+        // One press each; the chip's own value rides along with the click.
+        onLevel: { event: { name: 'lamp.level', context: { deviceId: t.deviceId } } },
+        onColor: { event: { name: 'lamp.color', context: { deviceId: t.deviceId } } },
+        onScene: { event: { name: 'lamp.scene', context: { deviceId: t.deviceId } } },
+        onWhite: { event: { name: 'lamp.white', context: { deviceId: t.deviceId } } },
+        onWarmer: { event: { name: 'lamp.warmer', context: { deviceId: t.deviceId } } },
+        onCooler: { event: { name: 'lamp.cooler', context: { deviceId: t.deviceId } } },
       });
       const s = devices[t.deviceId] ?? { on: false, brightness: 50 };
-      deviceData[t.deviceId] = { on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false };
+      deviceData[t.deviceId] = {
+        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false,
+        temp: s.temp ?? 0, color: s.color ?? '', sceneId: s.sceneId ?? 0,
+      };
     } else if (t.type === 'plan') {
       components.push({ id, component: 'PlanBoard', boardId: t.boardId, template: t.template });
     } else if (t.type === 'music') {
@@ -394,10 +423,16 @@ export function expandPlan(
         onNext: { event: { name: 'music.next', context: { deviceId: t.deviceId } } },
         onLouder: { event: { name: 'music.louder', context: { deviceId: t.deviceId } } },
         onSofter: { event: { name: 'music.softer', context: { deviceId: t.deviceId } } },
+        source: { path: `/devices/${t.deviceId}/source` },
+        playingOn: { path: `/devices/${t.deviceId}/playingOn` },
+        onPrevious: { event: { name: 'music.previous', context: { deviceId: t.deviceId } } },
+        onVolume: { event: { name: 'music.volume', context: { deviceId: t.deviceId } } },
       });
       const s = devices[t.deviceId] ?? {};
       deviceData[t.deviceId] = {
         ...s,
+        source: s.source ?? 'builtin',
+        playingOn: s.playingOn ?? '',
         on: s.on ?? false,
         brightness: s.brightness ?? 0,
         playing: s.playing ?? false,
@@ -522,6 +557,11 @@ export function deviceUpdate(surfaceId: string, deviceId: string, s: DeviceState
   if (s.trackTitle !== undefined) value.trackTitle = s.trackTitle;
   if (s.volume !== undefined) value.volume = s.volume;
   if (s.sim !== undefined) value.sim = s.sim;
+  if (s.temp !== undefined) value.temp = s.temp;
+  if (s.color !== undefined) value.color = s.color;
+  if (s.sceneId !== undefined) value.sceneId = s.sceneId;
+  if (s.source !== undefined) value.source = s.source;
+  if (s.playingOn !== undefined) value.playingOn = s.playingOn;
 
   return {
     version: PROTOCOL,

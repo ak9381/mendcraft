@@ -393,6 +393,117 @@ async function main() {
     await page.evaluate(() => window.__mcGestures.show(false));
     await wait(200);
     check(!(await visible('.mc-gesture-badge:not([hidden])')), 'badges hide when Hands goes off');
+
+    // 5) The device tiles' discrete controls are palm-highlight targets: an
+    //    open palm lands on a colour swatch / a preset chip inside the lamp
+    //    tile, and a held right thumbs-up presses it (one press = one action).
+    const dash = await browser.newPage();
+    await dash.setViewport({ width: 1440, height: 900 });
+    dash.on('pageerror', (e) => errors.push(String(e?.message || e)));
+    // A saved room board with two lamps and the speaker (the demo dashboard).
+    await dash.evaluateOnNewDocument(() => {
+      try {
+        localStorage.setItem('mc.canvas.v1', JSON.stringify({
+          version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null,
+          frames: [{ id: 'f1', kind: 'room', title: 'Living room', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }],
+          surfaces: { f1: { kind: 'room', title: 'Living room', tiles: [
+            { type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' },
+            { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' },
+            { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+          ] } },
+        }));
+      } catch { /* storage blocked: the checks below fail loudly */ }
+    });
+    await dash.goto(`${BASE}/canvas.html?sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    check(await waitFor(dash, () => !!window.__mcGestures && !!document.querySelector('.mc-frame [data-focus]')), 'dashboard page is up');
+    await dash.evaluate(() => document.querySelector('.mc-frame [data-focus]').click());
+    check(await waitFor(dash, () => !!document.querySelector('.mc-frame.focused mc-lamp-tile')?.shadowRoot?.querySelector('[data-act=color]')), 'the lamp tile shows its colour swatches');
+    await wait(900); // the focus flight settles
+    await dash.evaluate(() => window.__mcGestures.show(true));
+    const tileRoot = () => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot;
+    const noSlider = await dash.evaluate(`(${tileRoot})().querySelectorAll('input[type=range], [role=slider]').length`);
+    check(noSlider === 0, 'the lamp tile has no slider');
+    const sizes = await dash.evaluate(`[...(${tileRoot})().querySelectorAll('button')].map((b) => Math.min(b.offsetWidth, b.offsetHeight))`);
+    check(sizes.length >= 26 && Math.min(...sizes) >= 56, `every lamp-tile control is at least 56 px (${sizes.length} controls, smallest ${Math.min(...sizes)} px)`);
+    let dt = 1000;
+    const aimAndPress = async (selector) => {
+      const aimed = await dash.evaluate((selector, from) => {
+        const g = window.__mcGestures;
+        const el = document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector(selector);
+        const r = el.getBoundingClientRect();
+        const at = g.palmFor(r.left + r.width / 2, r.top + r.height / 2);
+        for (let k = 0; k <= 30; k++) g.feed([g.hand('open', 'R', { at })], from + k * 33);
+        return { same: g.highlighted() === el, name: g.highlighted()?.textContent?.trim() ?? null };
+      }, selector, dt);
+      const fired = await dash.evaluate((from) => {
+        const g = window.__mcGestures;
+        const hand = g.hand('thumbsUp', 'R', { at: { x: 0.68, y: 0.7 } });
+        let f = null;
+        for (let t = from; t <= from + 2100; t += 33) { const s = g.feed([hand], t); if (s.fired) f = s.fired; }
+        for (let t = from + 2200; t <= from + 2800; t += 33) g.feed([], t);
+        return f;
+      }, dt + 1100);
+      dt += 5000;
+      await wait(700);
+      return { ...aimed, fired };
+    };
+    const lampState = () => dash.evaluate(() => document.querySelector('.mc-frame.focused mc-lamp-tile').shadowRoot.querySelector('.state').textContent.trim());
+    const blue = await aimAndPress('[data-act=color][data-value=blue]');
+    check(blue.same, `an open palm highlights the Blue swatch inside the lamp tile (${blue.name})`);
+    const afterBlue = await lampState();
+    check(blue.fired === 'R:thumbsUp' && /Blue/.test(afterBlue), `right thumbs-up pressed it: the lamp is blue ("${afterBlue}")`);
+    const chip = await aimAndPress('[data-act=level][data-value="75"]');
+    const afterChip = await lampState();
+    check(chip.same && /75%/.test(afterChip), `palm + thumbs-up on the 75% chip sets the brightness ("${afterChip}")`);
+    const step = await aimAndPress('[data-level=brightness] [data-level-inc]');
+    const afterStep = await lampState();
+    check(step.same && /85%/.test(afterStep), `palm + thumbs-up on + is one step ("${afterStep}")`);
+
+    // 6) Peace-and-move over the speaker's volume control steps it through the
+    //    tile's own − / + buttons (levelControl.ts adjustLevel), and over the
+    //    lamp's brightness control too — never a scroll, never a canvas pan.
+    const levelProbe = (tag, kind) => dash.evaluate((tag, kind) => {
+      const el = document.querySelector(`.mc-frame.focused ${tag}`).shadowRoot.querySelector(`[data-level=${kind}]`);
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, now: Number(el.getAttribute('aria-valuenow')), readout: el.querySelector('[data-level-readout]').textContent.trim() };
+    }, tag, kind);
+    const peaceUp = async (tag, kind) => {
+      const before = await levelProbe(tag, kind);
+      const cam0 = await dash.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+      dt += 4000;
+      // One unbroken hold (frames 33 ms apart on the synthetic clock): a
+      // deliberate start upward beginning on the control, a settle, then
+      // 60 px more up = 2 steps, then hold.
+      const big = await dash.evaluate((x, y, from) => {
+        const g = window.__mcGestures;
+        const at = (yy) => ({ at: g.palmFor(x, yy) });
+        let tt = from;
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(y + 40 - k * 12))], (tt += 33));
+        for (let k = 0; k <= 10; k++) g.presence([g.hand('peace', 'R', at(y - 200))], (tt += 33));
+        const clicks = { inc: 0 };
+        const el = [...document.querySelectorAll('.mc-frame.focused mc-lamp-tile, .mc-frame.focused mc-music-tile')].map((t) => t.shadowRoot.querySelector('.mc-level-target')).find(Boolean);
+        el?.querySelector('[data-level-inc]')?.addEventListener('click', () => { clicks.inc++; });
+        for (let k = 1; k <= 12; k++) g.presence([g.hand('peace', 'R', at(y - 200 - k * 5))], (tt += 33));
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', at(y - 260))], (tt += 33));
+        const text = document.querySelector('.mc-level-readout')?.textContent ?? '';
+        const outlined = el?.getAttribute('data-level') ?? null;
+        for (let k = 0; k <= 20; k++) g.presence([], (tt += 33));
+        return { text, outlined, clicks: clicks.inc };
+      }, before.x, before.y, dt);
+      await wait(1200);
+      const after = await levelProbe(tag, kind);
+      const cam1 = await dash.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
+      return { before, after, big, still: cam0 === cam1 };
+    };
+    const vol = await peaceUp('mc-music-tile', 'volume');
+    check(vol.big.outlined === 'volume' && vol.big.clicks === 2, `peace moving up over the volume control takes hold of it; 60 px more up = 2 presses of its own + button (${vol.big.clicks})`);
+    check(vol.after.now > vol.before.now && (vol.after.now - vol.before.now) % 10 === 0 && vol.after.readout === `${vol.after.now} %`, `the volume stepped through the normal device path (${vol.before.now} → ${vol.after.now}; tile reads "${vol.after.readout}")`);
+    check(/^Volume \d+ %$/.test(vol.big.text), `big level readout by the hand ("${vol.big.text}")`);
+    check(vol.still, 'stepping the volume never moves the canvas');
+    const bri = await peaceUp('mc-lamp-tile', 'brightness');
+    check(bri.big.outlined === "brightness" && bri.after.now > bri.before.now && bri.after.now <= 100 && /^Brightness \d+ %$/.test(bri.big.text) && bri.still,
+      `peace moving up over the lamp's brightness steps it by tens (${bri.before.now} → ${bri.after.now}; "${bri.big.text}")`);
+    await dash.close();
     check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   } finally {
     await browser.close().catch(() => {});

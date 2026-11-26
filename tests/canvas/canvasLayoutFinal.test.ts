@@ -68,9 +68,10 @@ describe('hosting rewrites (C7)', () => {
   it('/monitor and /canvas go to their pages before the catch-all', () => {
     const fb = JSON.parse(readFileSync('firebase.json', 'utf8')) as { hosting: { rewrites: { source: string; destination: string }[] } };
     const r = fb.hosting.rewrites;
-    expect(r.map((x) => x.source)).toEqual(['/monitor', '/canvas', '**']);
+    expect(r.map((x) => x.source)).toEqual(['/monitor', '/activity', '/canvas', '**']);
     expect(r[0].destination).toBe('/monitor.html');
-    expect(r[1].destination).toBe('/canvas.html');
+    expect(r[1].destination).toBe('/activity.html');
+    expect(r[2].destination).toBe('/canvas.html');
   });
 });
 

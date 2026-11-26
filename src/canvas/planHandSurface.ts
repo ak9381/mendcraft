@@ -115,9 +115,36 @@ export function mountPlanHandSurface(o: {
     setLive: (v) => view.setLiveGesture?.(v),
     panByPx: (dx, dy) => view.panByPx?.(dx, dy),
     aim: (x, y, r) => view.aim?.(x, y, r)?.id ?? null,
-    onEdit: (summary) => journal.note(summary),
+    onEdit: (summary) => { journal.note(summary); queueMicrotask(reveal); },
     onChange: () => refresh(),
   });
+
+  /** After a hand edit: if what was drawn / moved / resized is (partly) off
+   *  the visible drawing area, bring it back — pan when it fits at this
+   *  zoom, otherwise zoom out just enough first. */
+  function reveal(): void {
+    if (hand.busy() || view.is3D?.()) return;
+    for (let pass = 0; pass < 2; pass++) {
+      const box = hand.focusBox();
+      if (!box) return;
+      const r = host.getBoundingClientRect();
+      const pal = host.querySelector<HTMLElement>('.mc-palette')?.getBoundingClientRect();
+      const hole = { left: (pal && pal.width > 8 ? pal.right : r.left) + 24, top: r.top + 24, right: r.right - 24, bottom: r.bottom - 48 };
+      const bw = box.right - box.left, bh = box.bottom - box.top;
+      const hw = hole.right - hole.left, hh = hole.bottom - hole.top;
+      if (box.left >= hole.left && box.right <= hole.right && box.top >= hole.top && box.bottom <= hole.bottom) return;
+      if (bw > hw || bh > hh) {
+        if (pass) return;
+        view.zoomAt?.(Math.min(hw / Math.max(1, bw), hh / Math.max(1, bh)) * 0.92, (hole.left + hole.right) / 2, (hole.top + hole.bottom) / 2);
+        continue; // then centre it
+      }
+      const dx = bw > hw ? 0 : box.left < hole.left ? hole.left - box.left : box.right > hole.right ? hole.right - box.right : 0;
+      const dy = bh > hh ? 0 : box.top < hole.top ? hole.top - box.top : box.bottom > hole.bottom ? hole.bottom - box.bottom : 0;
+      if (dx || dy) view.panByPx?.(dx, dy);
+      refresh();
+      return;
+    }
+  }
 
   // ---- DOM
   const banner = doc.createElement('div');
