@@ -6,12 +6,27 @@
 // iPhone"). Only when Spotify is NOT connected does the built-in player run,
 // labelled as such. Connected but no device to play on: nothing plays and she
 // is told how to make one show up — never a silent built-in fallback.
-import type { DeviceConnector, DeviceIntent } from './deviceActions';
+import { DeviceError, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
-import type { SpotifyDevice, SpotifySearchHit } from '../music/spotifyApi';
+import { isNoActiveDevice, type SpotifyDevice, type SpotifySearchHit } from '../music/spotifyApi';
 
 export const NOT_CONNECTED_NOTICE = "Spotify isn't connected — playing the built-in track.";
 export const NO_DEVICE_NOTICE = 'Open Spotify on your phone so it shows up, then try again.';
+export const PREMIUM_NOTICE = 'Spotify needs Premium to control playback.';
+export const NO_ANSWER_NOTICE = "Spotify didn't respond.";
+export const SIGNED_OUT_NOTICE = 'Spotify needs connecting again — playing on the built-in player.';
+
+/** Spotify answers 403 (reason PREMIUM_REQUIRED) when a free account tries to control playback. */
+export function isPremiumRequired(err: unknown): boolean {
+  const e = err as { status?: number; reason?: string; message?: string } | null;
+  return e?.status === 403 || /premium/i.test(`${e?.reason ?? ''} ${e?.message ?? ''}`);
+}
+/** The stored sign-in no longer works (revoked, expired refresh token, 401). */
+export function isSpotifyAuthFailure(err: unknown): boolean {
+  const e = err as { status?: number; message?: string } | null;
+  return e?.status === 401 || /invalid_grant|refresh token|revoked|connect spotify first|access token/i.test(e?.message ?? '');
+}
+
 /** The tile's honest label for the fallback player. */
 export const BUILTIN_LABEL = 'Built-in player — Spotify not connected';
 
@@ -147,6 +162,42 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
     return true;
   }
 
+  /** One speaker action on Spotify. Throws what Spotify threw. */
+  async function transport(intent: DeviceIntent): Promise<Partial<DeviceState>> {
+    if (intent.next || intent.previous) {
+      if (!(await ensureTarget(intent.deviceId, false))) return noDevice();
+      const step = intent.next ? deps.next : deps.previous;
+      const n = step ? await step() : null;
+      return spotify({ playing: true, trackTitle: n?.title ?? '' });
+    }
+    if (intent.playing === false) {
+      if (deps.pause) await deps.pause();
+      return spotify({ playing: false });
+    }
+    if (intent.playing === true) {
+      const fresh = !target;
+      // First play of the session starts playback on the chosen device;
+      // after that Play is a plain resume there.
+      if (!(await ensureTarget(intent.deviceId, true))) return noDevice();
+      if (!fresh && deps.resume) await deps.resume();
+      const np = await deps.nowPlaying?.().catch(() => null);
+      deps.say(spotifyPlayingLine(np?.title ?? '', np?.artist, target!.name));
+      return spotify({ playing: true, ...(np?.title ? { trackTitle: np.title } : {}) });
+    }
+    if (intent.volume !== undefined) {
+      if (!(await ensureTarget(intent.deviceId, false))) return noDevice();
+      if (deps.setVolume) await deps.setVolume(intent.volume);
+      return spotify({ volume: intent.volume });
+    }
+    return spotify({});
+  }
+
+  /** Say it, and throw it: the store restores the tile and shows this reason. */
+  function refuse(message: string): never {
+    deps.say(message);
+    throw new DeviceError(message);
+  }
+
   return {
     async run(intent: DeviceIntent): Promise<Partial<DeviceState>> {
       if (!isSpeakerDevice(intent.deviceId)) return deps.inner.run(intent);
@@ -163,6 +214,10 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
           deps.say(spotifyPlayingLine(hit.name, hit.artist, t.name));
           return spotify({ playing: true, trackTitle: hit.name });
         } catch (err) {
+          // The sign-in is gone: that is "not connected" — the built-in player, labelled.
+          if (isSpotifyAuthFailure(err)) return builtin(intent, SIGNED_OUT_NOTICE);
+          if (isPremiumRequired(err)) refuse(PREMIUM_NOTICE);
+          if (isNoActiveDevice(err)) return noDevice();
           const msg = err instanceof Error ? err.message : '';
           deps.say(/^No Spotify match/i.test(msg) ? `${msg}.` : `Couldn't play “${intent.query}” on Spotify.`);
           // Nothing played, and no title is made up: the tile just stops.
@@ -171,38 +226,26 @@ export function createSpotifyAwareConnector(deps: SpotifyConnectorDeps): DeviceC
       }
 
       try {
-        if (intent.next || intent.previous) {
-          if (!(await ensureTarget(intent.deviceId, false))) return noDevice();
-          const step = intent.next ? deps.next : deps.previous;
-          const n = step ? await step() : null;
-          return spotify({ playing: true, trackTitle: n?.title ?? '' });
+        return await transport(intent);
+      } catch (first) {
+        let err: unknown = first;
+        // The chosen device went away (a sleeping phone answers 404 "no active
+        // device"): forget it, pick again from Spotify's list as it is NOW and
+        // try once more. Still nothing to play on: say how to fix it.
+        if (isNoActiveDevice(err)) {
+          target = null;
+          mark(false);
+          try {
+            return await transport(intent);
+          } catch (second) {
+            if (isNoActiveDevice(second)) return noDevice();
+            err = second;
+          }
         }
-        if (intent.playing === false) {
-          if (deps.pause) await deps.pause();
-          return spotify({ playing: false });
-        }
-        if (intent.playing === true) {
-          const fresh = !target;
-          // First play of the session starts playback on the chosen device;
-          // after that Play is a plain resume there.
-          if (!(await ensureTarget(intent.deviceId, true))) return noDevice();
-          if (!fresh && deps.resume) await deps.resume();
-          const np = await deps.nowPlaying?.().catch(() => null);
-          deps.say(spotifyPlayingLine(np?.title ?? '', np?.artist, target!.name));
-          return spotify({ playing: true, ...(np?.title ? { trackTitle: np.title } : {}) });
-        }
-        if (intent.volume !== undefined) {
-          if (!(await ensureTarget(intent.deviceId, false))) return noDevice();
-          if (deps.setVolume) await deps.setVolume(intent.volume);
-          return spotify({ volume: intent.volume });
-        }
-      } catch (err) {
-        // Throw so the store restores the previous state and shows its error
-        // instead of the tile claiming a change that didn't happen.
-        deps.say("Spotify didn't respond.");
-        throw err instanceof Error ? err : new Error('Spotify request failed');
+        if (isSpotifyAuthFailure(err)) return builtin(intent, SIGNED_OUT_NOTICE);
+        if (isPremiumRequired(err)) refuse(PREMIUM_NOTICE);
+        refuse(NO_ANSWER_NOTICE);
       }
-      return spotify({});
     },
   };
 }

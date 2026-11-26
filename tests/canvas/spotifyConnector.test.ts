@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import { listDevices } from '../../src/music/spotifyApi';
-import { BUILTIN_LABEL, createSpotifyAwareConnector, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
+import { BUILTIN_LABEL, createSpotifyAwareConnector, isPremiumRequired, isSpotifyAuthFailure, NO_DEVICE_NOTICE, NOT_CONNECTED_NOTICE, PREMIUM_NOTICE, SIGNED_OUT_NOTICE, pickSpotifyDevice, spotifyPlayingLine, spotifySearchQuery } from '../../src/canvas/spotifyConnector';
 import type { DeviceConnector } from '../../src/canvas/deviceActions';
 
 function rig(over: Partial<Parameters<typeof createSpotifyAwareConnector>[0]> = {}) {
@@ -117,7 +117,7 @@ describe('spotifyAware connector — fixes', () => {
   it('transport failure throws (store restores state) and says so', async () => {
     const r = rig({ pause: async () => { throw new Error('boom'); } });
     await r.c.run({ deviceId: 'speaker-1', playing: true, query: 'jazz' });
-    await expect(r.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow('boom');
+    await expect(r.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow("Spotify didn't respond.");
     expect(r.said.at(-1)).toBe("Spotify didn't respond.");
   });
 
@@ -201,6 +201,78 @@ describe('which Spotify device plays (a fake Spotify device list)', () => {
   it('spotifyPlayingLine names the track, the artist and the device', () => {
     expect(spotifyPlayingLine('Song', undefined, 'iPhone')).toBe('Playing Song on iPhone via Spotify.');
     expect(spotifyPlayingLine('', undefined, 'iPhone')).toBe('Playing Spotify on iPhone via Spotify.');
+  });
+});
+
+describe('the chosen Spotify device is not sticky (a fake Spotify API)', () => {
+  const status = (code: number, message: string, reason?: string) => Object.assign(new Error(message), { status: code, reason });
+  const noActive = () => status(404, 'Player command failed: No active device found', 'NO_ACTIVE_DEVICE');
+  const speaker = () => createDeviceStore(
+    { 'speaker-1': { on: false, brightness: 0, playing: true, trackTitle: 'Morning light', volume: 40 } },
+    { run: async () => ({}) }, () => {}, () => null,
+  );
+
+  it('the iPhone fell asleep (404 no active device): re-pick from the list as it is now, transfer, retry once', async () => {
+    let devices = [{ id: 'd-phone', name: 'iPhone', type: 'Smartphone', isActive: true, volume: 0.5 }];
+    let asleep = false;
+    const volumes: number[] = [];
+    const r = rig({
+      listDevices: async () => devices,
+      setVolume: async (v: number) => { if (asleep) { asleep = false; throw noActive(); } volumes.push(v); },
+    });
+    await r.c.run({ deviceId: 'speaker-1', volume: 30 });
+    expect(r.calls).toEqual(['transfer:d-phone:false']);
+    // The phone sleeps; Spotify now lists the laptop instead.
+    asleep = true;
+    devices = [{ id: 'd-mac', name: 'MacBook Pro', type: 'Computer', isActive: false, volume: 0.5 }];
+    const ack = await r.c.run({ deviceId: 'speaker-1', volume: 50 });
+    expect(r.calls).toEqual(['transfer:d-phone:false', 'transfer:d-mac:false']);
+    expect(volumes).toEqual([30, 50]);
+    expect(ack).toMatchObject({ volume: 50, source: 'spotify', playingOn: 'MacBook Pro' });
+    expect(r.said).not.toContain("Spotify didn't respond.");
+  });
+
+  it('asleep and nothing else listed: the "open Spotify on your phone" notice, not "didn\'t respond"', async () => {
+    let devices = [{ id: 'd-phone', name: 'iPhone', type: 'Smartphone', isActive: true, volume: 0.5 }];
+    let asleep = false;
+    const r = rig({
+      listDevices: async () => devices, browserDevice: async () => undefined,
+      pause: async () => { if (asleep) throw noActive(); },
+      next: async () => { if (asleep) throw noActive(); return { title: 'x' }; },
+    });
+    await r.c.run({ deviceId: 'speaker-1', next: true });
+    asleep = true; devices = [];
+    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toEqual({ playing: false, source: 'spotify', playingOn: '' });
+    expect(r.said.at(-1)).toBe(NO_DEVICE_NOTICE);
+    // It re-targets by itself once a device is back.
+    asleep = false; devices = [{ id: 'd-phone', name: 'iPhone', type: 'Smartphone', isActive: false, volume: 0.5 }];
+    expect(await r.c.run({ deviceId: 'speaker-1', next: true })).toMatchObject({ playing: true, playingOn: 'iPhone' });
+  });
+
+  it('403: "Spotify needs Premium to control playback." — said, and shown on the tile by the store', async () => {
+    const r = rig({ pause: async () => { throw status(403, 'Player command failed: Premium required', 'PREMIUM_REQUIRED'); } });
+    await expect(r.c.run({ deviceId: 'speaker-1', playing: false })).rejects.toThrow(PREMIUM_NOTICE);
+    expect(r.said.at(-1)).toBe('Spotify needs Premium to control playback.');
+    const store = createDeviceStore({ 'speaker-1': { on: false, brightness: 0, playing: true, volume: 40 } }, r.c, () => {}, () => null);
+    const s = await store.act({ deviceId: 'speaker-1', playing: false });
+    expect(s).toMatchObject({ playing: true, error: 'Spotify needs Premium to control playback.' });
+    expect(isPremiumRequired(status(403, 'x'))).toBe(true);
+    void speaker;
+  });
+
+  it('the store shows the real reason for any other Spotify failure', async () => {
+    const r = rig({ setVolume: async () => { throw status(502, 'Bad gateway'); } });
+    const store = createDeviceStore({ 'speaker-1': { on: false, brightness: 0, playing: true, volume: 40 } }, r.c, () => {}, () => null);
+    expect(await store.act({ deviceId: 'speaker-1', volume: 60 })).toMatchObject({ volume: 40, error: "Spotify didn't respond." });
+  });
+
+  it('a revoked / expired sign-in is "not connected": the built-in player takes over, labelled', async () => {
+    const r = rig({ resume: async () => {}, transferPlayback: async () => { throw new Error('invalid_grant: Refresh token revoked'); } });
+    const ack = await r.c.run({ deviceId: 'speaker-1', playing: true });
+    expect(ack).toMatchObject({ playing: true, trackTitle: 'Built-in', source: 'builtin', playingOn: '' });
+    expect(r.said.at(-1)).toBe(SIGNED_OUT_NOTICE);
+    expect(isSpotifyAuthFailure(status(401, 'The access token expired'))).toBe(true);
+    expect(isSpotifyAuthFailure(status(502, 'Bad gateway'))).toBe(false);
   });
 });
 
