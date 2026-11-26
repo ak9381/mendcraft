@@ -48,9 +48,14 @@ export interface StreamOptions {
   /** A short reply is wanted: an on-device engine ends the call once the
    *  text is this long instead of letting the model write on. */
   maxChars?: number;
-  /** On device: the model's queue gave this call its turn (a deadline should
-   *  count from here, not from the time spent waiting in line). */
+  /** On device: the model's queue gave this call its turn. */
   onStart?: () => void;
+  /** On device: the session exists — the model is loaded and is answering. A
+   *  reply deadline counts from here: not from the time spent waiting in
+   *  line, and not from the time the model took to load. */
+  onReady?: () => void;
+  /** On device: the model is taking a while to load (true) / has loaded (false). */
+  onLoading?: (loading: boolean) => void;
   /** Cloud: one model call really left this device (hedges and retries each
    *  count). Bytes are booked here, not when the turn was started. */
   onCloudSend?: () => void;
@@ -176,6 +181,9 @@ export interface TurnUi {
    *  retry is another one). Book the bytes here — `onSent` only opens the
    *  turn; a call that never left books nothing. */
   onCloudSend?(s: SentInfo): void;
+  /** The on-device model is loading (true) — say "Nano is loading the
+   *  model…" — or has finished loading and is answering (false). */
+  onNanoLoading?(loading: boolean): void;
   /** A call booked by onCloudSend turned out never to have left: un-book it. */
   onCloudRetract?(s: SentInfo): void;
   onText?(full: string): void;
@@ -259,6 +267,12 @@ export const GHOST_EVERY_MS = 120;
 /** The longest an on-device call may sit in the model's queue before its
  *  20 s clock starts regardless. */
 export const NANO_QUEUE_WAIT_MS = 15_000;
+/** The longest the model may take to load (create its session) before the
+ *  turn stops waiting and says so. Not part of the 20 s reply budget. */
+export const NANO_LOAD_MAX_MS = 45_000;
+/** What the on-device engine reports when that ceiling ran out. */
+export const NANO_STILL_LOADING = 'was still loading the model';
+export const NANO_LOADING_LINE = 'Nano is loading the model…';
 
 /** A failure a second identical call cannot fix: don't spend a retry on it. */
 function worthRetry(e: unknown): boolean {
@@ -415,7 +429,9 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   const TIMED_OUT = Symbol('nano-timeout');
   let begin!: () => void;
   const began = new Promise<void>((r) => { begin = r; });
-  void sleep(opts.nanoQueueWaitMs ?? NANO_QUEUE_WAIT_MS).then(begin);
+  // Backstop only (an engine that never reports its session): the clock
+  // starts anyway once the longest allowed wait in line and load have passed.
+  void sleep(opts.nanoQueueWaitMs ?? NANO_QUEUE_WAIT_MS + NANO_LOAD_MAX_MS).then(begin);
   const deadline = began.then(() => sleep(budgetMs)).then(() => { if (!over) ctl?.abort(); return TIMED_OUT; });
   const timed = async (p: Promise<string>): Promise<string> => {
     p.catch(() => undefined); // an aborted stream may reject after the deadline already won
@@ -423,7 +439,10 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
     if (got === TIMED_OUT) throw new Error(`took longer than ${Math.round(budgetMs / 1000)} s`);
     return got as string;
   };
-  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onStart: begin };
+  // The 20 s budget is for Nano ANSWERING. It starts when the session exists
+  // (onReady) — a model that was evicted and takes 18 s to load back has not
+  // used any of it. Loading has its own ceiling, inside the engine.
+  const so: StreamOptions = { constraint: nanoReq.constraint, signal: ctl?.signal, onReady: begin, onLoading: (loading) => ui.onNanoLoading?.(loading) };
   let why: string;
   let unsupported = false;
   try {
@@ -455,7 +474,8 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
   ctl?.abort(); // stop the model: nobody is waiting for this reply any more
 
   const cloud = engine.handoff;
-  const nanoLine = unsupported ? NANO_COULD_NOT_RUN : `Nano couldn’t finish (${why})`;
+  const stillLoading = why === NANO_STILL_LOADING;
+  const nanoLine = unsupported ? NANO_COULD_NOT_RUN : stillLoading ? 'Nano was still loading' : `Nano couldn’t finish (${why})`;
   const head = `${nanoLine}. `;
   if (!cloud) { ui.onError?.(`${head}Gemini isn’t available here to take over.`, 'nano'); return null; }
   if (opts.canHandoff && !opts.canHandoff()) { ui.onError?.(`${head}You’re offline, so Gemini can’t take over. ${NOTHING_SENT}`, 'nano'); return null; }

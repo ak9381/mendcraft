@@ -90,7 +90,7 @@ function cloudEngine(id: EngineId, cloud: CloudStream, routeNote?: string): Surf
     id, sim: false, routeLine: routeNote,
     stream: (prompt, onText, opts) => {
       // A plugin's on-device generate has no queue: it starts at once.
-      if (id === 'nano') opts?.onStart?.();
+      if (id === 'nano') { opts?.onStart?.(); opts?.onReady?.(); }
       return cloud(prompt, onText, opts?.shape || opts?.onCloudSend ? { shape: opts.shape, onSend: opts.onCloudSend, onRetract: opts.onCloudRetract } : undefined);
     },
   };

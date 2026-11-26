@@ -86,6 +86,8 @@ const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !params.h
       signal: o?.signal,
       onChunk: onText,
       onStart: o?.onStart,
+      onReady: o?.onReady,
+      onLoading: o?.onLoading,
       maxChars: o?.maxChars,
     })
   : null;
