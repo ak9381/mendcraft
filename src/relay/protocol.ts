@@ -1,12 +1,20 @@
 // Relay pairing protocol — pure helpers, no DOM and no Firebase. A laptop
 // (host) opens a room named by a high-entropy capability token; a phone
-// (guest) joins by scanning the QR URL or typing the short code. Everything
+// (guest) joins by hearing the laptop chime (last-resort: short code). Everything
 // here is deterministic and unit-tested: token/code generation, join-URL
 // build/parse, the message envelope, and the pairing state machine.
 
-/** Crockford base32: no I/L/O/U, so codes survive being read aloud or typed. */
 import type { ControlSnapshot } from './controlSnapshot';
+import {
+  validatePrivacyAsk,
+  validatePrivacyReply,
+  type PrivacyAsk,
+  type PrivacyReply,
+} from '../ai/privacyRouter';
 
+export type { PrivacyAsk, PrivacyReply } from '../ai/privacyRouter';
+
+/** Crockford base32: no I/L/O/U, so codes survive being read aloud or typed. */
 export const TOKEN_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** 24 chars × 5 bits = 120 bits of entropy — the room id is the capability. */
 export const TOKEN_LENGTH = 24;
@@ -100,7 +108,15 @@ export function isPhoneRoute(pathname: string, search: string): boolean {
   return new URLSearchParams(search).get('view') === 'phone';
 }
 
-/** Does this location want the iPad /control dashboard instead of the editor? */
+/** Does this location want the /mobile phone companion (the pair /
+ *  dashboard / split story)? Matches `/mobile` or `?view=mobile`; boot redirects
+ *  it to the standalone /mobile.html entry. */
+export function isMobileRoute(pathname: string, search: string): boolean {
+  if (/^\/mobile\/?$/.test(pathname)) return true;
+  return new URLSearchParams(search).get('view') === 'mobile';
+}
+
+/** Does this location want the optional /control dashboard instead of the editor? */
 export function isControlRoute(pathname: string, search: string): boolean {
   if (/^\/control\/?$/.test(pathname)) return true;
   return new URLSearchParams(search).get('view') === 'control';
@@ -134,6 +150,7 @@ export function isLandingRoute(pathname: string, search: string): boolean {
   if (isStudioRoute(pathname, search)) return false;
   if (isRemoteRoute(pathname, search)) return false;
   if (isPhoneRoute(pathname, search)) return false;
+  if (isMobileRoute(pathname, search)) return false;
   if (isControlRoute(pathname, search)) return false;
   if (isJudgesRoute(pathname, search)) return false;
   if (isSpotifyRoute(pathname, search)) return false;
@@ -142,21 +159,182 @@ export function isLandingRoute(pathname: string, search: string): boolean {
 
 // ---- message envelope -------------------------------------------------------
 
-// 'control' is the read-only iPad dashboard: it subscribes to a host's room and
+// 'control' is the optional read-only /control dashboard: it subscribes to a host's room and
 // receives privacy-safe state snapshots. It never drives the editor, so it only
 // ever sends presence (hello/bye) — never a command or a frame.
 export type RelayRole = 'host' | 'phone' | 'control';
 
-export type RelayCommandKind = 'undo' | 'redo' | 'command' | 'nudge' | 'mic';
+// 'transfer' and 'announce' are the cross-device pick-and-drop kinds. They
+// PIGGYBACK on the existing `cmd` message (which firestore.rules only requires
+// to be a map) and carry their JSON payload in `text` — so no new message
+// `type` and no new top-level key is added, and no rules deploy is needed.
+//   • 'transfer' — a committed tile move (phone→host, or host relaying one on):
+//     text is a serialized TileTransfer (see canvas/tileTransfer.ts).
+//   • 'announce' — a phone telling the hub who it is (deviceId/platform/side):
+//     text is a small JSON object the hub coerces.
+//   • 'aiEvent' — a phone's compact AI-activity line for the laptop's AI
+//     monitor (engine/verb/short redacted text/state/the phone's own cloud
+//     byte total). Display only: not model inference, never ledgered. Text is
+//     a small JSON object coerced by canvas/phoneAiFeed.ts.
+//   • 'whoIsThere' — host → phones: "announce yourselves again". Sent after a
+//     phone drops (the relay can't say which one), so the phones still here
+//     re-announce. No payload. Phones only honour it from the host.
+//   • 'sensePoint' — host → phones: "take the point-to-connect photo with your
+//     camera" (iPhone hand sensing). text: {"platform":"ios"}. Phones only
+//     honour it from the host, and only for their own platform.
+//   • 'pointResult' — phone → host: what that photo was identified as (or why
+//     not). text: a small JSON object coerced by canvas/phonePoint.ts. The
+//     photo itself never rides the relay.
+//   • 'gimbalCue' — host → phones: "play this DockKit body-language move"
+//     (nod yes on Approve, shake no on a refusal, wakeup on pairing). text is
+//     exactly one of GIMBAL_CUES — never user content. Phones only honour it
+//     from the host; the host rate-limits it (GIMBAL_CUE_MIN_GAP_MS).
+//   • 'gimbalMode' — host → phones: "switch the docked stand to this mode"
+//     (the laptop's gimbal tile: follow me / follow my hands / hold still).
+//     text is exactly one of GIMBAL_MODES — never user content. The iPhone
+//     runs it through the same handler as the spoken phrase and re-announces
+//     what DockKit REALLY reports; the laptop never claims the switch itself.
+//   • 'attention' — host → phones: which device she is facing right now.
+//     text: JSON {f, sid} — f exactly one of laptop / ios / android / none,
+//     sid the host's session id (a phone only takes it when sid is the
+//     session it already knows). Sent when it changes, ≥ ATTENTION_MIN_GAP_MS
+//     apart (the latest value always goes out). Phones only honour it from
+//     the host.
+//   • 'ping' — phone → host: "are you really there?". text: JSON {n, sid?} —
+//     n is the phone's one-time nonce, sid the host session it believes it is
+//     talking to. 'pong' — host → phone: JSON {n, sid} echoing the nonce with
+//     the host's current session id. This round trip is the phone's only
+//     proof that the laptop hears it ("Laptop ✓"); a hello or an old state
+//     message in the room is not. Handled inside the sessions.
+export type RelayCommandKind =
+  | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
+  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong' | 'attention';
+
+/** The only DockKit animations the laptop may ask for (no user content). */
+export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
+export const GIMBAL_CUES: readonly GimbalCueKind[] = ['yes', 'no', 'wakeup'];
+/** At most one gimbal cue per this many ms (the sender's gate). */
+export const GIMBAL_CUE_MIN_GAP_MS = 2000;
+/** The receiver's gate: a little shorter, so relay jitter between two cues
+ *  the sender spaced 2 s apart never drops a valid one. */
+export const GIMBAL_CUE_RECEIVE_GAP_MS = 1500;
+export function isGimbalCue(v: unknown): v is GimbalCueKind {
+  return typeof v === 'string' && (GIMBAL_CUES as readonly string[]).includes(v);
+}
+
+/** The only gimbal modes the laptop may ask the docked iPhone for: the same
+ *  words parseGimbalSpeech returns for "follow me" / "follow my hands" /
+ *  "hold still". */
+export type GimbalModeKind = 'face' | 'hands' | 'hold';
+export const GIMBAL_MODES: readonly GimbalModeKind[] = ['face', 'hands', 'hold'];
+export function isGimbalMode(v: unknown): v is GimbalModeKind {
+  return typeof v === 'string' && (GIMBAL_MODES as readonly string[]).includes(v);
+}
+
+export interface CueLimiter {
+  /** Would `kind` pass now? Doesn't stamp. */
+  ready(kind?: GimbalCueKind): boolean;
+  /** Record that `kind` was sent/played now. */
+  mark(kind?: GimbalCueKind): void;
+  /** ready + mark in one step: true = go, false = drop. */
+  allow(kind?: GimbalCueKind): boolean;
+}
+
+/** A "<= 1 per minGapMs" gate. One exception: a 'no' right after a 'yes'
+ *  (a refusal straight after an Approve) is let through once; the gap
+ *  restarts from it. */
+export function createCueLimiter(minGapMs = GIMBAL_CUE_MIN_GAP_MS, now: () => number = () => Date.now()): CueLimiter {
+  let last = -Infinity;
+  let lastKind: GimbalCueKind | null = null;
+  const ready = (kind?: GimbalCueKind): boolean =>
+    now() - last >= minGapMs || (kind === 'no' && lastKind === 'yes');
+  const mark = (kind?: GimbalCueKind): void => { last = now(); lastKind = kind ?? null; };
+  return {
+    ready,
+    mark,
+    allow(kind) {
+      if (!ready(kind)) return false;
+      mark(kind);
+      return true;
+    },
+  };
+}
+
+/** Gimbal modes: at most one per `minGapMs` (default 1 s), and the same mode
+ *  again within `sameModeMs` (default 5 s) is a repeat, dropped. A different
+ *  mode after the gap always passes; the same mode passes again once the
+ *  window is over (the stand may have changed on its own meanwhile). */
+export const GIMBAL_MODE_MIN_GAP_MS = 1000;
+export const GIMBAL_MODE_REPEAT_MS = 5000;
+export interface ModeLimiter {
+  ready(mode: GimbalModeKind): boolean;
+  mark(mode: GimbalModeKind): void;
+  allow(mode: GimbalModeKind): boolean;
+}
+export function createModeLimiter(minGapMs = GIMBAL_MODE_MIN_GAP_MS, sameModeMs = GIMBAL_MODE_REPEAT_MS, now: () => number = () => Date.now()): ModeLimiter {
+  let last = -Infinity;
+  let lastMode: GimbalModeKind | null = null;
+  const ready = (mode: GimbalModeKind): boolean => {
+    const gap = now() - last;
+    if (gap < minGapMs) return false;
+    return !(mode === lastMode && gap < sameModeMs);
+  };
+  const mark = (mode: GimbalModeKind): void => { last = now(); lastMode = mode; };
+  return { ready, mark, allow(mode) { if (!ready(mode)) return false; mark(mode); return true; } };
+}
 
 export interface RelayCommand {
   kind: RelayCommandKind;
-  /** For kind 'command': the typed utterance to run through the shared pipeline. */
+  /** For 'command': the typed utterance to run. For 'transfer'/'announce': the
+   *  size-capped JSON payload (parsed by the canvas, never run as an utterance). */
   text?: string;
   /** For kind 'nudge': unit direction, each of dx/dy in {-1, 0, 1}. */
   dx?: number;
   dy?: number;
 }
+
+/** Max length of a 'command' utterance. */
+export const CMD_TEXT_MAX = 500;
+/** Max length of a 'transfer'/'announce' JSON blob carried in `cmd.text`. Well
+ *  under the room-message document limit; a tile spec is far smaller. */
+export const CMD_JSON_MAX = 16_000;
+/** Max length of a 'ping'/'pong' JSON blob ({n, sid}). */
+export const PING_JSON_MAX = 160;
+/** A host session id / ping nonce: short, opaque, no user content. */
+export function isSessionId(x: unknown): x is string {
+  return typeof x === 'string' && /^[A-Za-z0-9_-]{4,40}$/.test(x);
+}
+/** Which device she is facing (rides the host's pong; no user content). */
+export type AttentionWho = 'laptop' | 'ios' | 'android' | 'none';
+const ATTENTION: readonly string[] = ['laptop', 'ios', 'android', 'none'];
+/** Host → phones 'attention' at most this often (the latest always goes out). */
+export const ATTENTION_MIN_GAP_MS = 150;
+export function isAttentionWho(v: unknown): v is AttentionWho {
+  return typeof v === 'string' && ATTENTION.includes(v);
+}
+/** Parse an 'attention' payload {f, sid}; null when malformed. */
+export function parseAttention(text: unknown): { f: AttentionWho; sid: string } | null {
+  if (typeof text !== 'string' || text.length > PING_JSON_MAX) return null;
+  try {
+    const o = JSON.parse(text) as { f?: unknown; sid?: unknown };
+    if (!o || typeof o !== 'object' || !isAttentionWho(o.f) || !isSessionId(o.sid)) return null;
+    return { f: o.f, sid: o.sid };
+  } catch { return null; }
+}
+/** Parse a ping/pong payload; null when malformed. A pong may carry `f`:
+ *  the device she is facing, as the host knows it. */
+export function parsePing(text: unknown): { n: string; sid: string | null; f?: AttentionWho } | null {
+  if (typeof text !== 'string' || text.length > PING_JSON_MAX) return null;
+  try {
+    const o = JSON.parse(text) as { n?: unknown; sid?: unknown; f?: unknown };
+    if (!o || typeof o !== 'object' || !isSessionId(o.n)) return null;
+    const out: { n: string; sid: string | null; f?: AttentionWho } = { n: o.n, sid: isSessionId(o.sid) ? o.sid : null };
+    if (typeof o.f === 'string' && ATTENTION.includes(o.f)) out.f = o.f as AttentionWho;
+    return out;
+  } catch { return null; }
+}
+/** Max length of an 'aiEvent' JSON blob — one short activity line. */
+export const AI_EVENT_JSON_MAX = 600;
 
 /** The phone's in-app music player state, relayed to the host so it can appear
  *  on the /control dashboard. Carries only title/playing/volume — no audio. */
@@ -171,7 +349,7 @@ export interface MusicStatus {
  *  imported from recipes) so the protocol stays DOM/feature-free. */
 export const RUN_DEVICES: readonly string[] = ['designer', 'browser', 'lamp', 'music', 'android', 'iphone'];
 
-/** "Run this saved recipe" — sent from the iPad /control dashboard (or a phone)
+/** "Run this saved recipe" — sent from the optional /control dashboard (or a phone)
  *  into the room; the device that owns the recipe executes it. */
 export interface RelayRunRequest {
   runId: string;
@@ -220,12 +398,18 @@ export type RelayMessage =
   /** The phone's music-player state (title/playing/volume) — relayed to the host
    *  so the /control dashboard can show it. No audio ever leaves the phone. */
   | { v: 1; from: 'phone'; type: 'music'; music: MusicStatus }
-  /** The laptop's privacy-safe state for the iPad /control dashboard. Only a
+  /** The laptop's privacy-safe state for the optional /control dashboard. Only a
    *  host sends it; the snapshot carries NO camera/landmark/audio (see
    *  controlSnapshot.ts). Validated loosely here and re-coerced on receipt. */
-  | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot };
+  | { v: 1; from: 'host'; type: 'state'; snapshot: ControlSnapshot }
+  /** Phone → desktop hub: raw prompt for Nano+rules redaction. Not sent to Gemini. */
+  | { v: 1; from: 'phone'; type: 'privacyAsk'; ask: PrivacyAsk }
+  /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
+  | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong', 'attention'];
+/** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
+const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult', 'ping', 'pong'];
 
 function isUnit(n: unknown): boolean {
   return n === undefined || n === -1 || n === 0 || n === 1;
@@ -236,7 +420,18 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const c = raw as Record<string, unknown>;
   if (typeof c.kind !== 'string' || !COMMAND_KINDS.includes(c.kind)) return null;
-  if (c.kind === 'command' && (typeof c.text !== 'string' || !c.text.trim() || c.text.length > 500)) return null;
+  if (c.kind === 'command' && (typeof c.text !== 'string' || !c.text.trim() || c.text.length > CMD_TEXT_MAX)) return null;
+  // 'transfer'/'announce' require a non-empty, size-capped JSON blob in `text`.
+  if (JSON_KINDS.includes(c.kind) && (typeof c.text !== 'string' || !c.text || c.text.length > CMD_JSON_MAX)) return null;
+  if (c.kind === 'aiEvent' && (c.text as string).length > AI_EVENT_JSON_MAX) return null;
+  if ((c.kind === 'ping' || c.kind === 'pong') && (c.text as string).length > PING_JSON_MAX) return null;
+  // 'whoIsThere' may carry the host's session id, nothing else.
+  if (c.kind === 'whoIsThere' && c.text !== undefined && !isSessionId(c.text)) return null;
+  // 'gimbalCue' carries one allow-listed word and nothing else.
+  if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
+  if (c.kind === 'gimbalMode') return isGimbalMode(c.text) ? { kind: 'gimbalMode', text: c.text } : null;
+  // 'attention' carries one allow-listed word and the host session id.
+  if (c.kind === 'attention') return parseAttention(c.text) ? { kind: 'attention', text: c.text as string } : null;
   if (c.kind === 'nudge' && !(isUnit(c.dx) && isUnit(c.dy) && (c.dx || c.dy))) return null;
   const out: RelayCommand = { kind: c.kind as RelayCommandKind };
   if (typeof c.text === 'string') out.text = c.text;
@@ -316,7 +511,9 @@ export function validateMessage(raw: unknown): RelayMessage | null {
     case 'state':
       // Only a host publishes state; the payload is validated loosely here
       // (object with the snapshot version) and defensively re-coerced by the
-      // dashboard via coerceSnapshot before anything is rendered.
+      // dashboard via coerceSnapshot before anything is rendered. The cast
+      // below is UNCHECKED wire data — every consumer of this message's
+      // `snapshot` MUST call coerceSnapshot() on it before reading any field.
       if (from !== 'host') return null;
       if (typeof m.snapshot !== 'object' || m.snapshot === null) return null;
       if ((m.snapshot as { v?: unknown }).v !== 1) return null;
@@ -347,19 +544,93 @@ export function validateMessage(raw: unknown): RelayMessage | null {
       const music = validateMusic(m.music);
       return music ? { v: 1, from: 'phone', type: 'music', music } : null;
     }
+    case 'privacyAsk': {
+      if (from !== 'phone') return null;
+      const ask = validatePrivacyAsk(m.ask);
+      return ask ? { v: 1, from: 'phone', type: 'privacyAsk', ask } : null;
+    }
+    case 'privacyReply': {
+      if (from !== 'host') return null;
+      const reply = validatePrivacyReply(m.reply);
+      return reply ? { v: 1, from: 'host', type: 'privacyReply', reply } : null;
+    }
     default:
       return null;
   }
 }
 
+// ---- room-write rules mirror -------------------------------------------------
+
+/** Keep in lockstep with `isValidMessage` in firestore.rules — this is a pure
+ *  TS mirror of the same shape/size check, so client payloads can be tested
+ *  against it without a Firestore emulator.
+ *
+ *  NOTE (transfer/announce): the cross-device pick-and-drop kinds add NO new
+ *  message `type` and NO new top-level key — they are ordinary `cmd` messages
+ *  whose `cmd` map carries the payload in `text`. The rules only require `cmd`
+ *  to be a map (checked by isMapField below) and `type` to be `cmd`, so these
+ *  kinds already fit without any firestore.rules change / deploy. */
+const ROOM_MESSAGE_KEYS: readonly string[] = [
+  'v', 'from', 'type', 'at',
+  'cmd', 'run', 'runStatus', 'runControl',
+  'mimeType', 'dataBase64', 'music', 'snapshot', 'ask', 'reply',
+];
+const ROOM_MESSAGE_TYPES: readonly string[] = [
+  'hello', 'bye', 'cmd', 'run', 'runStatus', 'runControl',
+  'frame', 'music', 'state', 'privacyAsk', 'privacyReply',
+];
+/** ~150KB of raw JPEG once decoded — well above the 320px-wide, quality-0.5
+ *  stills remotePage.ts actually sends. */
+export const ROOM_MESSAGE_DATA_BASE64_MAX = 200_000;
+const ROOM_MESSAGE_MIME_TYPE_MAX = 40;
+
+function isSizedString(data: Record<string, unknown>, key: string, maxSize: number): boolean {
+  if (!(key in data)) return true;
+  const v = data[key];
+  return typeof v === 'string' && v.length <= maxSize;
+}
+function isMapField(data: Record<string, unknown>, key: string): boolean {
+  if (!(key in data)) return true;
+  const v = data[key];
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** True when a room-message write would pass firestore.rules' `isValidMessage`
+ *  (shape allowlist + size caps). Ignores the `at` server-timestamp sentinel's
+ *  exact value since that only resolves on the server. */
+export function fitsRoomMessageRules(raw: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const data = raw as Record<string, unknown>;
+  return (
+    Object.keys(data).every((k) => ROOM_MESSAGE_KEYS.includes(k)) &&
+    data.v === 1 &&
+    (data.from === 'host' || data.from === 'phone' || data.from === 'control') &&
+    typeof data.type === 'string' && ROOM_MESSAGE_TYPES.includes(data.type) &&
+    isSizedString(data, 'mimeType', ROOM_MESSAGE_MIME_TYPE_MAX) &&
+    isSizedString(data, 'dataBase64', ROOM_MESSAGE_DATA_BASE64_MAX) &&
+    isMapField(data, 'cmd') &&
+    isMapField(data, 'run') &&
+    isMapField(data, 'runStatus') &&
+    isMapField(data, 'runControl') &&
+    isMapField(data, 'music') &&
+    isMapField(data, 'snapshot') &&
+    isMapField(data, 'ask') &&
+    isMapField(data, 'reply')
+  );
+}
+
 // ---- pairing state machine --------------------------------------------------
 
-export type PairState = 'idle' | 'waiting' | 'paired' | 'gone';
-export type PairEvent = 'create' | 'peer-hello' | 'peer-bye' | 'close';
+export type PairState = 'idle' | 'waiting' | 'paired' | 'gone' | 'disconnected';
+export type PairEvent = 'create' | 'peer-hello' | 'peer-bye' | 'close' | 'listen-error';
 
 /** Advance the pairing state; unknown transitions keep the current state. */
 export function advancePair(state: PairState, event: PairEvent): PairState {
   if (event === 'close') return 'idle';
+  // A dropped/denied listener (rules change, transport failure) can hit from
+  // any state except idle — surface it explicitly instead of freezing on the
+  // last-known state, which looks connected when it is not.
+  if (event === 'listen-error') return state === 'idle' ? state : 'disconnected';
   switch (state) {
     case 'idle':
       return event === 'create' ? 'waiting' : state;
@@ -369,6 +640,9 @@ export function advancePair(state: PairState, event: PairEvent): PairState {
       return event === 'peer-bye' ? 'gone' : state;
     case 'gone':
       // A peer may rejoin the same room (e.g. the phone reloaded).
+      return event === 'peer-hello' ? 'paired' : state;
+    case 'disconnected':
+      // The listener can resubscribe and see the peer again.
       return event === 'peer-hello' ? 'paired' : state;
   }
 }
@@ -384,5 +658,7 @@ export function pairStateLabel(state: PairState, role: RelayRole): string {
       return role === 'host' ? 'Phone remote connected.' : 'Paired with the laptop.';
     case 'gone':
       return role === 'host' ? 'Phone left the room.' : 'Laptop left the room.';
+    case 'disconnected':
+      return 'Connection lost — check your network.';
   }
 }

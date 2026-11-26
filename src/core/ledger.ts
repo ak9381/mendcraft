@@ -1,8 +1,8 @@
 // "WHAT LEFT THIS DEVICE" LEDGER — the honest accounting layer behind the badge.
 //
 // Every AI result in this app resolves to one of three sources: `cloud` (a round
-// trip to Firebase AI Logic), `on-device` (Gemini Nano, nothing left the
-// browser), or `rules` (the deterministic parser, no AI at all). This module is
+// trip to Firebase AI Logic), `on-device` (Gemini Nano or Apple Intelligence,
+// nothing left the device), or `rules` (the deterministic parser, no AI at all). This module is
 // the single source of truth for WHAT that means in privacy terms:
 //
 //   - a `cloud` event is RECORDED in full: the abstract payload that was sent
@@ -41,7 +41,7 @@ export interface CloudCall {
 export interface LedgerCounts {
   /** Cloud round trips (things that left the device). */
   cloud: number;
-  /** On-device (Nano) inferences — private, nothing uploaded. */
+  /** On-device inferences (Nano or Apple) — private, nothing uploaded. */
   onDevice: number;
   /** Deterministic rule answers — private, no AI. */
   rules: number;

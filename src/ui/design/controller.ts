@@ -8,7 +8,7 @@ import { validateUiOp, type UiOp } from './ops';
 import { buildUiTemplate, isUiTemplateName } from './templates';
 import { activeFrame, locate, nodeLabel, type Frame, type FramePreset } from './doc';
 import { toHtml, toSvg } from './export';
-import { generateUi } from '../../ai/hybrid';
+import { generateUi } from '../../ai/hybridStudio';
 import type { DeixisTargetInfo } from '../../ai/deixis';
 import type { ListItem, ModeController, StepResult } from '../../core/controller';
 

@@ -19,7 +19,11 @@ const isNativeShell = Boolean(cap?.isNativePlatform?.());
 // DockKit gimbal); the old lamp & music remote stays at /phone.
 const isIosShell = isNativeShell && cap?.getPlatform?.() === 'ios';
 
-if (isSpotifyRoute(window.location.pathname, window.location.search)) {
+// sim-main: native shells and /canvas open the smart canvas page.
+const { wantsCanvas, canvasUrl } = await import('./canvas/route');
+if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)) {
+  window.location.replace(canvasUrl(window.location.search));
+} else if (isSpotifyRoute(window.location.pathname, window.location.search)) {
   // OAuth redirect: exchange the auth code, stash tokens, go back to the page
   // she came from. On the iOS Capacitor shell this route is not used — Connect
   // opens the web app instead (the hosted /spotify URL cannot return into the app).

@@ -4,18 +4,14 @@ import {
   getMode,
   listModes,
   setActiveMode,
-  partMode,
   planMode,
 } from '../src/core/modes';
-import { isTemplateCommand } from '../src/core/ruleParser';
-import { TEMPLATE_NAMES } from '../src/core/templates';
 
 const isClarify = (r: object): boolean => 'clarify' in r;
 
 describe('mode registry', () => {
-  it('hosts the part, plan, and ui modes', () => {
-    const ids = listModes().map((m) => m.id);
-    expect(ids).toEqual(expect.arrayContaining(['part', 'plan', 'ui']));
+  it('is CAD-only: plan is the single registered mode', () => {
+    expect(listModes().map((m) => m.id)).toEqual(['plan']);
   });
 
   it('defaults to the ready 2D plan mode (the hero)', () => {
@@ -23,28 +19,13 @@ describe('mode registry', () => {
     expect(getActiveMode().status).toBe('ready');
   });
 
-  it('plan, part, and ui are ready; an unknown id refuses to activate', () => {
-    expect(getMode('plan')?.status).toBe('ready');
-    expect(getMode('part')?.status).toBe('ready');
-    expect(getMode('ui')?.status).toBe('ready');
-    expect(setActiveMode('ui')).toBe(true);
-    expect(getActiveMode().id).toBe('ui');
+  it('UI design and 3D part modes are gone; unknown ids refuse to activate', () => {
+    expect(getMode('ui')).toBeUndefined();
+    expect(getMode('part')).toBeUndefined();
+    expect(setActiveMode('ui')).toBe(false);
+    expect(setActiveMode('part')).toBe(false);
     expect(setActiveMode('nope')).toBe(false);
-    // Part stays reachable (mode switch / ?mode=part).
-    expect(setActiveMode('part')).toBe(true);
-    expect(getActiveMode().id).toBe('part');
-    // Restore the default.
-    expect(setActiveMode('plan')).toBe(true);
-  });
-
-  it('exposes the 3D part mode with starter items and quick-start hints', () => {
-    const part = getMode('part');
-    expect(part).toBe(partMode);
-    expect(part?.label).toBe('3D part');
-    expect(part?.starterItems).toEqual(TEMPLATE_NAMES);
-    expect(part?.hints.length).toBeGreaterThan(0);
-    expect(part?.inputPlaceholder).toMatch(/cup grip/i);
-    expect(part?.exampleCommand).toBe('cup grip');
+    expect(getActiveMode().id).toBe('plan');
   });
 
   it('exposes the plan mode with a DXF export label and plan hints', () => {
@@ -58,29 +39,6 @@ describe('mode registry', () => {
   it("every plan quick-start button parses to something buildable (not a clarify)", () => {
     for (const h of planMode.hints) {
       expect(isClarify(planMode.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
-    }
-  });
-
-  it("every part quick-start button parses to a buildable command", () => {
-    for (const h of partMode.hints) {
-      expect(isClarify(partMode.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
-    }
-    const cup = partMode.parse('cup grip');
-    expect(isTemplateCommand(cup as never) && (cup as { template: string }).template).toBe('cupGrip');
-  });
-
-  it('the ui mode is ready with an HTML export label and screen hints', () => {
-    const ui = getMode('ui')!;
-    expect(ui.status).toBe('ready');
-    expect(ui.label).toBe('UI design');
-    expect(ui.exportLabel).toMatch(/html/i);
-    expect(ui.exampleCommand).toBe('login screen');
-    expect(ui.starterItems.length).toBeGreaterThan(0);
-  });
-
-  it('every ui quick-start button parses to something buildable (not a clarify)', () => {
-    for (const h of getMode('ui')!.hints) {
-      expect(isClarify(getMode('ui')!.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
     }
   });
 });

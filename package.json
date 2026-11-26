@@ -18,19 +18,26 @@
     "@types/qrcode": "^1.5.6",
     "@types/three": "^0.187.0",
     "axe-core": "^4.14.0",
+    "fake-indexeddb": "^6.2.8",
+    "happy-dom": "^21.0.4",
     "puppeteer-core": "^25.17.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "vitest": "^5.1.0"
   },
   "dependencies": {
+    "@a2ui/lit": "^0.15.0",
+    "@a2ui/web_core": "^0.15.0",
     "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.2",
     "@capacitor/ios": "^8.6.2",
     "@mediapipe/tasks-vision": "^1.2.3",
     "firebase": "^13.3.0",
+    "lit": "^3.3.3",
     "qrcode": "^1.5.4",
     "three": "^0.187.0",
-    "three-bvh-csg": "^0.0.18"
+    "three-bvh-csg": "^0.0.18",
+    "zod": "^3.25.76"
   }
 }

@@ -4,6 +4,9 @@
 // wheel/keyboard pan+zoom. An optional three.js overlay extrudes the walls to
 // 3D as a *view* (not a second editor). Implements the generic ViewportHandle.
 
+import { filterLayers, isLayerId, type LayerId } from '../cad/layers';
+import type { MaterialPlan } from '../cad/materials';
+import type { ExtrudeView, WalkStep } from './extrude3d';
 import type { ModeController, ViewportHandle } from '../core/controller';
 import { createToolController, type OverlayDraw, type ToolContext } from '../core/tools';
 import { createFullscreenControl, createPalette, createTrash } from '../core/palette';
@@ -19,7 +22,7 @@ import {
   rotateSelected,
 } from './tools';
 import { createPropsPanel } from './propsPanel';
-import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp } from './editing';
+import { fixtureHandlePoint, fixturePolygon, tempDims, tempDimEditOp, toggleSelection } from './editing';
 import { pickPlan, DEFAULT_AIM_RADIUS_PX } from './hitTest';
 import { fixtureSpec, fixtureSymbol, fixtureLocalToWorld } from './fixtures';
 import { setPlanCursor } from './ruleParser';
@@ -66,7 +69,8 @@ export function createPlanRenderer(
   // the overall size re-fits automatically (see render()).
   let fitSig: string | null = null;
 
-  const doc = (): PlanDoc => controller.snapshot() as PlanDoc;
+  const hidden = new Set<LayerId>();
+  const doc = (): PlanDoc => filterLayers(controller.snapshot() as PlanDoc, hidden);
   const toScreen = (p: Point) => ({ x: originX + p.x * scale, y: originY - p.y * scale });
   function toWorld(clientX: number, clientY: number): Point {
     const rect = svg.getBoundingClientRect();
@@ -81,16 +85,30 @@ export function createPlanRenderer(
     return `${r(b.min.x)},${r(b.min.y)},${r(b.max.x)},${r(b.max.y)}`;
   }
 
+  // Hand edit: a comfortable fist stroke (150–250 px) should be 2–3 m, so the
+  // plan is held between 60 and 80 px per metre, with only the palette and
+  // the hand banner / bar kept clear. Larger plans overflow and are panned.
+  let handFit = false;
+  /** The view was zoomed / panned by hand while hand fit was on. */
+  let handView = false;
+  const HAND_SCALE = { min: 0.06, max: 0.08 };
+  function handInsets(): { left: number; top: number; right: number; bottom: number } {
+    const host = container.getBoundingClientRect();
+    const pal = (container.querySelector('.mc-palette') as HTMLElement | null)?.getBoundingClientRect();
+    return { left: pal && pal.width > 8 ? pal.right - host.left + 12 : 16, top: 16, right: 16, bottom: 44 };
+  }
+
   function fitView(): void {
     fitSig = boundsSig();
     const b = planBounds(doc());
     const rect = svg.getBoundingClientRect();
-    const W = rect.width || 800;
-    const H = rect.height || 600;
+    const inset = handFit ? handInsets() : overlayInsets();
+    const W = Math.max(120, (rect.width || 800) - inset.left - inset.right);
+    const H = Math.max(120, (rect.height || 600) - inset.top - inset.bottom);
     if (!b) {
       scale = 0.08;
-      originX = W / 2;
-      originY = H / 2;
+      originX = inset.left + W / 2;
+      originY = inset.top + H / 2;
       return;
     }
     // Fit the plan PLUS the drawn annotations: the overall outer dimensions sit
@@ -98,9 +116,9 @@ export function createPlanRenderer(
     // reserve that band (+label headroom) on those two sides and a little
     // breathing room on the others — otherwise the bottom "8.00 m" dimension and
     // its label clip at the viewport edge after zoom-to-fit.
-    const pad = 700; // breathing room (mm)
+    const pad = handFit ? 400 : 700; // breathing room (mm)
     const band = 900; // outer-dimension offset (matches OUT in render())
-    const label = 650; // headroom for the dimension text at fit scale (mm)
+    const label = handFit ? 350 : 650; // headroom for the dimension text at fit scale (mm)
     const minX = b.min.x - band - label;
     const minY = b.min.y - band - label;
     const maxX = b.max.x + pad;
@@ -108,10 +126,58 @@ export function createPlanRenderer(
     const w = maxX - minX;
     const h = maxY - minY;
     scale = Math.min(W / w, H / h, 0.3);
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    originX = W / 2 - cx * scale;
-    originY = H / 2 + cy * scale;
+    const fitScale = scale;
+    if (handFit) scale = Math.max(HAND_SCALE.min, Math.min(HAND_SCALE.max, scale));
+    // Held above the fit (the plan overflows): centre the walls themselves,
+    // not the outer-dimension band around them.
+    const tight = handFit && scale > fitScale;
+    const cx = tight ? (b.min.x + b.max.x) / 2 : (minX + maxX) / 2;
+    const cy = tight ? (b.min.y + b.max.y) / 2 : (minY + maxY) / 2;
+    originX = inset.left + W / 2 - cx * scale;
+    originY = inset.top + H / 2 + cy * scale;
+  }
+
+  /** Keep the plan in the visible hole, not under the brand island or docks. */
+  function overlayInsets(): { left: number; top: number; right: number; bottom: number } {
+    const host = container.getBoundingClientRect();
+    const cover = (sel: string): DOMRect | null => {
+      const e = (container.querySelector(sel) || document.querySelector(sel)) as HTMLElement | null;
+      if (!e || e.hidden || e.classList.contains('is-collapsed')) return null;
+      const r = e.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return null;
+      if (r.right < host.left + 8 || r.left > host.right - 8 || r.bottom < host.top + 8 || r.top > host.bottom - 8) return null;
+      return r;
+    };
+    let left = 16, top = 16, right = 16, bottom = 16;
+    const bump = (r: DOMRect | null) => {
+      if (!r) return;
+      const toLeft = r.right - host.left;
+      const toRight = host.right - r.left;
+      const toTop = r.bottom - host.top;
+      const toBottom = host.bottom - r.top;
+      const xs = [toLeft, toRight], ys = [toTop, toBottom];
+      // Grow the nearest edge so the room sits in the remaining hole.
+      if (Math.min(...xs) <= Math.min(...ys)) {
+        if (toLeft <= toRight) left = Math.max(left, toLeft + 12);
+        else right = Math.max(right, toRight + 12);
+      } else {
+        if (toTop <= toBottom) top = Math.max(top, toTop + 12);
+        else bottom = Math.max(bottom, toBottom + 12);
+      }
+    };
+    bump(cover('#statusbar'));
+    bump(cover('#topbar'));
+    bump(cover('.mc-palette'));
+    bump(cover('#zoom-island'));
+    bump(cover('#btn-panel-chip'));
+    bump(cover('#panel'));
+    bump(cover('.mc-copilot'));
+    bump(cover('.mc-props.is-expanded'));
+    bump(cover('.mc-trash'));
+    // Floor so docks never leave a sliver even if query fails mid-layout.
+    top = Math.max(top, 72);
+    bottom = Math.max(bottom, 148);
+    return { left, top, right, bottom };
   }
 
   // ---- hit-testing (doors/windows, fixture slack, optional magnet radius) ----
@@ -161,6 +227,22 @@ export function createPlanRenderer(
   status.className = 'mc-status';
   status.setAttribute('role', 'status');
   container.appendChild(status);
+  let hintHide: ReturnType<typeof setTimeout> | undefined;
+  let hintFade: ReturnType<typeof setTimeout> | undefined;
+  function showHint(text: string, opts: { sticky?: boolean } = {}): void {
+    status.textContent = text;
+    status.classList.remove('is-fading');
+    if (hintHide) clearTimeout(hintHide);
+    if (hintFade) clearTimeout(hintFade);
+    if (!text || opts.sticky) return;
+    hintHide = setTimeout(() => {
+      status.classList.add('is-fading');
+      hintFade = setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('is-fading');
+      }, 500);
+    }, 2600);
+  }
 
   const trash = createTrash(container);
 
@@ -171,7 +253,7 @@ export function createPlanRenderer(
         onSelect(controller.selectedId());
         render();
       } else if (r.error) {
-        status.textContent = r.error;
+        showHint(r.error, { sticky: true });
       }
       return r;
     },
@@ -197,7 +279,7 @@ export function createPlanRenderer(
       render();
     },
     setStatus(text) {
-      status.textContent = text;
+      showHint(text);
     },
     overTrash: (x, y) => trash.isOver(x, y),
     setTrashHover: (on) => trash.setHover(on),
@@ -208,7 +290,7 @@ export function createPlanRenderer(
     defaultId: 'select',
     onToolChange(id) {
       palette.setActive(id);
-      status.textContent = tools.find((t) => t.id === id)?.hint ?? '';
+      showHint(tools.find((t) => t.id === id)?.hint ?? '');
     },
   });
   const palette = createPalette(container, paletteItems(tools), {
@@ -216,15 +298,20 @@ export function createPlanRenderer(
     onPlaceStart: (id, x, y) => toolCtl.beginPlace(id, { x, y, source: 'mouse' }),
   });
   const fsCtl = createFullscreenControl(container, container, (hint) => {
-    status.textContent = hint;
+    showHint(hint);
   });
   const propsPanel = createPropsPanel(container, {
     apply: (op) => ctx.apply(op),
     snapshot: () => doc(),
     selectedId: () => controller.selectedId(),
+    actions: {
+      rotate: () => rotateSelected(ctx),
+      duplicate: () => duplicateSelected(ctx),
+      remove: () => deleteSelected(ctx),
+    },
   });
   palette.setActive('select');
-  status.textContent = tools[0].hint ?? '';
+  showHint(tools[0].hint ?? '');
 
   /** Overlay helpers for the active tool (client px → svg-local px). */
   function makeOverlay(g: SVGGElement): OverlayDraw {
@@ -335,11 +422,17 @@ export function createPlanRenderer(
   ctx.editText = openTextEditor;
 
   // ---- rendering ----
+  /** B-028: a wall chain mid-way must not be reframed under the next click
+   *  (the add_wall of each segment changes the bounds). toolCtl is created
+   *  above, but guard the very first renders anyway. */
+  function toolChainBusy(): boolean {
+    try { return toolCtl.active().busy?.() ?? false; } catch { return false; }
+  }
   function render(): void {
     if (!fitted) {
       fitView();
       fitted = true;
-    } else if (!toolBusy && !panning && boundsSig() !== fitSig) {
+    } else if (!handFit && !toolBusy && !liveGesture && !panning && !toolChainBusy() && boundsSig() !== fitSig) {
       // A discrete edit (voice/text/keyboard) changed the overall size — reframe
       // so the result stays fully visible (e.g. stretching the shared wall to
       // 4 m makes the plan taller). Guarded against in-progress drag/pan so a
@@ -664,6 +757,8 @@ export function createPlanRenderer(
 
   function textNode(x: number, y: number, s: string, size: number, fill: string, anchor: string): SVGTextElement {
     const t = el('text', { x, y, 'font-size': size, fill, 'text-anchor': anchor, 'font-family': 'system-ui, sans-serif' });
+    t.classList.add('mc-num');
+    t.style.fontVariantNumeric = 'tabular-nums';
     t.textContent = s;
     return t;
   }
@@ -672,6 +767,8 @@ export function createPlanRenderer(
   let panning: { x: number; y: number } | null = null;
   // A tool gesture (drag/draw) is in flight — suppress auto re-fit meanwhile.
   let toolBusy = false;
+  /** A two-hand edit is live (canvas plan board): hold the framing still. */
+  let liveGesture = false;
 
   svg.addEventListener('mousedown', (e) => {
     // SVG isn't focusable, so a canvas click's default action blurs to <body>
@@ -794,14 +891,24 @@ export function createPlanRenderer(
   resize.observe(container);
 
   // ---- optional 3D extrude view ----
-  let view3d: { update(): void; dispose(): void } | null = null;
+  let view3d: ExtrudeView | null = null;
+  let loading3d: Promise<ExtrudeView> | null = null;
+  let pendingMaterials: MaterialPlan | null = null;
+  function ensure3D(): Promise<ExtrudeView> {
+    if (view3d) return Promise.resolve(view3d);
+    loading3d ??= import('./extrude3d').then(({ createExtrudeView }) => {
+      view3d = createExtrudeView(container, () => doc(), WALL_HEIGHT_MM);
+      svg.style.display = 'none';
+      if (pendingMaterials) view3d.setMaterials(pendingMaterials);
+      view3d.update();
+      loading3d = null;
+      return view3d;
+    });
+    return loading3d;
+  }
   function toggle3D(on: boolean): boolean {
     if (on && !view3d) {
-      void import('./extrude3d').then(({ createExtrudeView }) => {
-        view3d = createExtrudeView(container, () => doc(), WALL_HEIGHT_MM);
-        svg.style.display = 'none';
-        view3d.update();
-      });
+      void ensure3D();
       return true;
     }
     if (!on && view3d) {
@@ -825,15 +932,18 @@ export function createPlanRenderer(
     render,
     fit,
     pick,
-    beginDrag(clientX, clientY) {
+    beginDrag(clientX, clientY, opts) {
       lastPinch = { x: clientX, y: clientY };
+      // additive (hand pinch-hold on empty floor, then drag) = Shift+drag: an
+      // additive marquee. Only the Select tool reads it.
+      const shift = !!opts?.additive && toolCtl.activeId() === 'select';
       const item = palette.itemAt(clientX, clientY);
       if (item) {
         toolCtl.beginPlace(item.toolId, { x: clientX, y: clientY, source: 'pinch' });
         pinchActive = true;
         return true;
       }
-      pinchActive = toolCtl.down({ x: clientX, y: clientY, source: 'pinch' });
+      pinchActive = toolCtl.down({ x: clientX, y: clientY, source: 'pinch', ...(shift ? { shift } : {}) });
       toolBusy = pinchActive;
       return pinchActive;
     },
@@ -861,6 +971,18 @@ export function createPlanRenderer(
       toolCtl.up(p);
       return handled;
     },
+    toggleSelectAt(clientX, clientY) {
+      if (toolCtl.activeId() !== 'select' || toolCtl.placing()) return false;
+      // A tight magnet (12px): a hold just off an object starts an additive
+      // marquee instead of grabbing the nearest wall.
+      const hit = aimAt(clientX, clientY, 12);
+      if (!hit.id) return false;
+      // Toggle directly (not via the Select tool's down): a pinch's generous
+      // handle radius would grab a selected wall's endpoint instead.
+      const d = doc();
+      const cur = d.selectedIds?.length ? [...d.selectedIds] : controller.selectedId() ? [controller.selectedId()!] : [];
+      return ctx.apply({ op: 'select_set', ids: toggleSelection(cur, hit.id) }).ok;
+    },
     hover(clientX, clientY) {
       setPlanCursor(toWorld(clientX, clientY));
       toolCtl.hover({ x: clientX, y: clientY, source: 'pinch' });
@@ -869,7 +991,97 @@ export function createPlanRenderer(
     aim(clientX, clientY, radiusPx = DEFAULT_AIM_RADIUS_PX) {
       return aimAt(clientX, clientY, radiusPx);
     },
+    handHost: () => ({ ctx, tools: toolCtl }),
+    setHandFit(on) {
+      if (on === handFit) return;
+      handFit = on;
+      // The user's own zoom / pan (two fists, a fist on empty floor) survives
+      // hand edit going off and on again (3D, the Hand edit switch, tile
+      // Edit): only a view nobody has touched is re-fitted.
+      if (!handView) { fitView(); fitted = true; }
+      render();
+    },
     toggle3D,
+    is3D: () => !!view3d || !!loading3d,
+    zoom(factor) {
+      const rect = svg.getBoundingClientRect();
+      const cx = (rect.width || 800) / 2;
+      const cy = (rect.height || 600) / 2;
+      const f = Math.min(4, Math.max(0.25, factor));
+      originX = cx - (cx - originX) * f;
+      originY = cy - (cy - originY) * f;
+      scale *= f;
+      fitted = true;
+      render();
+    },
+    // Anchored zoom about a client-space point — the two-hand pinch zooms about
+    // the pinch midpoint so the plan tracks the fingers (not the view centre).
+    zoomAt(factor, clientX, clientY) {
+      const rect = svg.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      if (handFit) handView = true;
+      // Never past 10–400 px per metre: a runaway two-hand zoom stays usable.
+      const f = Math.min(4, Math.max(0.25, factor, 0.01 / scale), 0.4 / scale);
+      originX = cx - (cx - originX) * f;
+      originY = cy - (cy - originY) * f;
+      scale *= f;
+      fitted = true;
+      render();
+    },
+    // A two-hand edit is live: like a tool drag, never reframe under the hands
+    // (the hands' world points would drift and the edit would run away).
+    setLiveGesture(on) { liveGesture = on; if (!on) render(); },
+    // Pan by a screen-pixel delta — the translation leg of the two-hand pinch.
+    panByPx(dx, dy) {
+      if (handFit) handView = true;
+      originX += dx;
+      originY += dy;
+      fitted = true;
+      render();
+    },
+    // Client px → world mm and the current px-per-mm, for the two-hand edit
+    // planner (src/plan/twoHandEdit.ts), which reasons in world space.
+    toWorld: (clientX, clientY) => toWorld(clientX, clientY),
+    screenScale: () => scale,
+    orbit3D(dx, dy) { view3d?.orbit(dx, dy); },
+    turn3D(dYaw, dPitch) { view3d?.turn(dYaw, dPitch); },
+    orbitStop3D() { view3d?.stopTurn(); },
+    dolly3D(factor) { view3d?.dolly(factor); },
+    camera3D: () => view3d?.cameraAngles() ?? null,
+    setLayerHidden(layer, isHidden) {
+      if (!isLayerId(layer)) return;
+      if (isHidden) hidden.add(layer); else hidden.delete(layer);
+      render();
+      view3d?.update();
+    },
+    hiddenLayers: () => [...hidden],
+    async setMaterials(plan) {
+      pendingMaterials = plan as MaterialPlan;
+      // Apply immediately when 3D is already up — `await ensure3D()` would
+      // yield a microtask even if the view exists, and accept+renderAll
+      // could run before colours land on the meshes.
+      if (view3d) {
+        view3d.setMaterials(pendingMaterials);
+        return;
+      }
+      const v = await ensure3D();
+      v.setMaterials(pendingMaterials);
+    },
+    currentMaterials: () => pendingMaterials,
+    async walk(on, room) {
+      if (!on) {
+        if (view3d) view3d.walk(false);
+        return false;
+      }
+      const v = await ensure3D();
+      return v.walk(true, room);
+    },
+    walkStep(step) {
+      view3d?.walkStep(step as WalkStep);
+    },
+    walking: () => !!view3d?.walking(),
+    showHint,
     dispose() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);

@@ -19,12 +19,19 @@ import {
   headPose,
   boxArea,
   createFacingTracker,
+  createHandGate,
   createOperatorTracker,
   createPresenceGate,
   type FaceSignature,
   type FaceBox,
+  type FacingOptions,
+  type HandGateConfig,
 } from './faceLogic';
+export type { FaceSignature } from './faceLogic';
 import { createHandBinder, type HandCandidate } from './handBinding';
+import type { OwnerHands } from './handSignature';
+import { resolveCameraStream } from './cameraShare';
+import { ensureSquareCanvas, unletterboxLandmarks } from './squareFrame';
 
 export type { HandEvent, HandFrame } from './handLogic';
 export type { FaceBox } from './faceLogic';
@@ -35,8 +42,13 @@ const HAND_MODEL_URL =
 const FACE_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
-/** Run face detection on every Nth hand frame to spare laptop GPUs. */
-const FACE_EVERY = 3;
+/** FaceLandmarker interval — a few fps, so the Facing pill stays cheap. */
+export const FACE_INTERVAL_MS = 200;
+
+/** Whether enough time has passed to run another face frame. */
+export function shouldRunFace(now: number, last: number, interval = FACE_INTERVAL_MS): boolean {
+  return now - last >= interval;
+}
 const LOST_TIMEOUT_MS = 2500;
 
 /** Face as drawn by the overlay (box already mirrored to screen space 0..1). */
@@ -45,6 +57,12 @@ export interface FaceFrame {
   /** The locked operator (or, before registration, the main/largest face). */
   isOperator: boolean;
   facing: boolean;
+  /** Canvas HAND GATE for this face (operator only; null otherwise): true =
+   *  facing, false = an actually turned head (looser thresholds than
+   *  `facing` — looking down at the keyboard is fine), null = unknown (a
+   *  face just (re)appeared and hasn't settled, or none). Only an explicit
+   *  false locks the hands, and the canvas "Not facing" pill follows it. */
+  handGate?: boolean | null;
   /** Non-operator faces are drawn greyed out. */
   dim: boolean;
 }
@@ -58,18 +76,32 @@ export interface PresenceFrame {
    *  Never drawn, stored or sent anywhere. */
   operatorFace?: { x: number; y: number; z?: number }[] | null;
   facing: boolean;
+  /** The canvas HAND GATE for the focus face (the operator, or the main face
+   *  before registration), with the gate's short lost-face grace: true /
+   *  false / null (no face, or not settled). Present whenever faces run. */
+  handGate?: boolean | null;
   registered: boolean;
   paused: boolean;
+  /** Camera frame height ÷ width (landmark y is normalised to it). */
+  aspect?: number;
 }
 
 export interface PresenceTracker {
-  start(): Promise<void>;
+  /** Optional existing stream: attach tracking to a live preview instead of a new getUserMedia. */
+  start(existing?: MediaStream): Promise<void>;
   stop(): void;
   setPinchThreshold(on: number, off: number): void;
   /** Lock onto the current main (largest, most frontal) face. Returns false if none. */
   register(): boolean;
   /** Forget the signature and revert to best-2-hands behaviour. */
   reregister(): void;
+  /** Lock onto a previously captured signature (sessionStorage re-lock). */
+  registerSignature(sig: FaceSignature): void;
+  /** The owner's scanned hand proportions — binding prefers matching hands. */
+  setOwnerHands(owner: OwnerHands | null): void;
+  /** The signature of the current main face (pre-registration) or the one the
+   *  operator registered with — for persisting across a reload. Stays on-device. */
+  currentSignature(): FaceSignature | null;
   readonly isRegistered: boolean;
   readonly isFacing: boolean;
   readonly isPaused: boolean;
@@ -101,26 +133,92 @@ function mirrorBox(b: FaceBox): FaceBox {
   return { x, y: b.y, w: b.w, h: b.h, cx: 1 - b.cx, cy: b.cy };
 }
 
+/** A track muted this long counts as lost (WebKit MUTES a camera track
+ *  when another capture — a call, another app, a native session — takes the
+ *  camera; it does not end it). */
+export const CAMERA_MUTE_LOST_MS = 2000;
+
+/** Fire `onLost` when a live camera track ends on its own (unplug, OS
+ *  revoke) or stays muted for CAMERA_MUTE_LOST_MS — not when we called
+ *  stop() (stillLive is then false). An unmute in time cancels it. */
+export function watchTracksForEnd(
+  stream: { getTracks(): Array<{ addEventListener(type: 'ended' | 'mute' | 'unmute', fn: () => void): void }> },
+  onLost: () => void,
+  stillLive: () => boolean,
+  timers: { set(fn: () => void, ms: number): unknown; clear(id: unknown): void } = {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+  },
+): void {
+  let fired = false;
+  const lost = (): void => { if (!fired && stillLive()) { fired = true; onLost(); } };
+  for (const t of stream.getTracks()) {
+    let muteTimer: unknown = null;
+    t.addEventListener('ended', lost);
+    t.addEventListener('mute', () => {
+      if (muteTimer !== null) return;
+      muteTimer = timers.set(() => { muteTimer = null; lost(); }, CAMERA_MUTE_LOST_MS);
+    });
+    t.addEventListener('unmute', () => {
+      if (muteTimer !== null) { timers.clear(muteTimer); muteTimer = null; }
+    });
+  }
+}
+
+/** A registered operator's hands keep flowing while the presence gate has
+ *  not paused (her face may be briefly hidden, e.g. behind her own hand):
+ *  they bind to her last-seen face box. Only a pause — or no box ever — drops them. */
+export function bindOperatorHands(paused: boolean, lastBox: unknown): boolean {
+  return !paused && lastBox != null;
+}
+
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
+  opts?: {
+    onCameraLost?: () => void;
+    /** When false, skip FaceLandmarker. Default true. */
+    detectFaces?: boolean;
+    /** When false, skip HandLandmarker (phone companion Facing pill). Default true. */
+    detectHands?: boolean;
+    /** Minimum ms between tracking runs, read every animation frame (the
+     *  phone throttles to ~10 fps with no hand in view). Default 0: every
+     *  animation frame. */
+    frameIntervalMs?: () => number;
+    /** Hand-gate thresholds (default HAND_GATE; the phone passes PHONE_HAND_GATE). */
+    handGate?: HandGateConfig;
+    /** Facing-tracker options (the phone passes PHONE_FACING). */
+    facing?: FacingOptions;
+  },
 ): PresenceTracker {
   const video = document.createElement('video');
   video.playsInline = true;
   video.muted = true;
   video.style.display = 'none';
+  // Tagged so point-to-connect grabs the very frame the landmarks came from.
+  video.setAttribute?.('data-mc-hand-tracker', '1');
   document.body.appendChild(video);
 
+  const wantFaces = opts?.detectFaces !== false;
+  const wantHands = opts?.detectHands !== false;
   let handLm: HandLandmarker | null = null;
+  let squareBuf: HTMLCanvasElement | null = null;
   let faceLm: FaceLandmarker | null = null;
   let stream: MediaStream | null = null;
+  let ownsStream = true;
   let rafId = 0;
   let running = false;
-  let frameCount = 0;
+  let stopped = false;
+  let lastFaceAt = -Infinity;
+  let lastRunAt = -Infinity;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
-  const facingTracker = createFacingTracker();
+  const facingTracker = createFacingTracker(opts?.facing);
+  const handGate = createHandGate(opts?.handGate);
+  let lastHandGate: boolean | null = null;
+  /** The last hand frame saw a hand (the face's lost grace is longer then). */
+  let handsInView = false;
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
   const binder = createHandBinder();
@@ -165,9 +263,14 @@ export function createPresenceTracker(
     focusFace = focusIdx !== null ? (result.faceLandmarks[focusIdx] ?? null) : null;
     if (focusIdx !== null) {
       const c = candidates[focusIdx];
-      const facing = facingTracker.update(headPose(result.faceLandmarks[focusIdx], c.matrix), now);
+      const pose = headPose(result.faceLandmarks[focusIdx], c.matrix);
+      const facing = facingTracker.update(pose, now);
+      lastHandGate = handGate.update(pose, now);
       emitFacing(facing);
     } else {
+      // No face → its last state for the lost grace (longer while a hand is
+      // in view: her hand over her face), then null = not facing.
+      lastHandGate = handGate.update(null, now, handsInView ? LOST_TIMEOUT_MS : undefined);
       emitFacing(facingTracker.update({ yaw: 90, pitch: 90 }, now)); // no face → not facing
     }
   }
@@ -191,12 +294,14 @@ export function createPresenceTracker(
       box: mirrorBox(c.signature.box),
       isOperator: i === focusIdx,
       facing: i === focusIdx && lastFacing,
+      handGate: i === focusIdx ? lastHandGate : null,
       dim: operator.registered ? i !== operatorIdx : i !== mainIdx,
     }));
   }
 
   function handleHands(result: HandLandmarkerResult): void {
     const now = ts;
+    handsInView = result.landmarks.length > 0;
     const rawHands = result.landmarks.map((landmarks, i) => ({
       landmarks,
       label: result.handedness?.[i]?.[0]?.categoryName,
@@ -212,16 +317,20 @@ export function createPresenceTracker(
       paused = presence.paused;
       emitPaused(paused);
 
-      if (paused || !operatorPresent) {
-        // Lost the operator: end any active drag cleanly and feed no hands.
+      if (!bindOperatorHands(paused, operator.lastBox)) {
+        // Lost the operator for good (the gate paused): end any active drag
+        // cleanly and feed no hands. A face only briefly hidden — her own hand
+        // in front of it — keeps her hands, bound to her last-seen face box,
+        // for the gate's grace (LOST_TIMEOUT_MS).
         acceptedInputs = [];
         rejectedPts = rawHands.map((h) => h.landmarks.map((p) => ({ x: 1 - p.x, y: p.y })));
       } else {
-        const box = operator.lastBox!;
+        const box = operator.lastBox!; // last seen: still hers within the grace
         const cands: HandCandidate[] = rawHands.map((h, i) => ({
           index: i,
           wrist: h.landmarks[WRIST],
           label: h.label,
+          points: h.landmarks,
         }));
         const acceptedIdx = binder.bind(cands, box);
         const acceptedSet = new Set(acceptedIdx);
@@ -239,64 +348,149 @@ export function createPresenceTracker(
       faces: faceFrames(),
       operatorFace: focusFace,
       facing: lastFacing,
+      ...(wantFaces ? { handGate: lastHandGate } : {}),
       registered: operator.registered,
       paused,
+      aspect: video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : undefined,
     });
   }
 
+  function squareSource(): HTMLVideoElement | HTMLCanvasElement {
+    try {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h || w === h) return video;
+      if (!squareBuf) {
+        const doc = video.ownerDocument ?? (typeof document !== 'undefined' ? document : null);
+        if (!doc) return video;
+        squareBuf = doc.createElement('canvas');
+      }
+      return ensureSquareCanvas(video, squareBuf);
+    } catch {
+      return video;
+    }
+  }
+
   function loop(): void {
-    if (!running || !handLm || !faceLm || video.readyState < 2) {
+    if (!running || video.readyState < 2 || (!handLm && !faceLm)) {
       rafId = requestAnimationFrame(loop);
       return;
     }
-    ts = performance.now();
+    const at = performance.now();
+    const minGap = opts?.frameIntervalMs?.() ?? 0;
+    if (minGap > 0 && at - lastRunAt < minGap) {
+      rafId = requestAnimationFrame(loop);
+      return;
+    }
+    lastRunAt = at;
+    ts = at;
     // Timestamps must strictly increase per MediaPipe task.
-    if (frameCount % FACE_EVERY === 0) {
-      const fr = faceLm.detectForVideo(video, ts);
+    // Face runs at a few fps (FACE_INTERVAL_MS) so the small Facing pill
+    // stays cheap next to the hand tracker.
+    const src = squareSource();
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const usedSquare = src !== video;
+    let ranFace = false;
+    if (wantFaces && faceLm && shouldRunFace(ts, lastFaceAt)) {
+      lastFaceAt = ts;
+      ranFace = true;
+      const fr = faceLm.detectForVideo(src, ts);
+      if (usedSquare && fr.faceLandmarks) {
+        fr.faceLandmarks = fr.faceLandmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
+      }
       updateFaces(fr, ts);
     }
-    const hr = handLm.detectForVideo(video, ts + 0.5);
-    handleHands(hr);
-    frameCount++;
+    if (handLm) {
+      const hr = handLm.detectForVideo(src, ts + 0.5);
+      if (usedSquare && hr.landmarks) {
+        hr.landmarks = hr.landmarks.map((lm) => unletterboxLandmarks(lm, vw, vh));
+      }
+      handleHands(hr);
+    } else if (ranFace) {
+      // Face-only (phone look-to-edit): still emit a frame per face run, or
+      // onFrame subscribers would never see the facing signal.
+      handleHands({ landmarks: [], worldLandmarks: [], handedness: [], handednesses: [] } as unknown as HandLandmarkerResult);
+    }
     rafId = requestAnimationFrame(loop);
   }
 
-  async function start(): Promise<void> {
-    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-    // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
-    // locked-down GPUs, software renderers) cannot create it, so fall back to the
-    // CPU delegate automatically rather than failing the whole camera. Tracking is
-    // slower on CPU but still works — far better than no hands/face at all.
-    handLm = await createWithFallback((delegate) =>
-      HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-        runningMode: 'VIDEO',
-        numHands: 4,
-      }),
-    );
-    faceLm = await createWithFallback((delegate) =>
-      FaceLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
-        runningMode: 'VIDEO',
-        numFaces: 4,
-        outputFacialTransformationMatrixes: true,
-      }),
-    );
+  async function start(existing?: MediaStream): Promise<void> {
+    stopped = false;
+    // Ask for the camera FIRST, in parallel with the wasm/model downloads, so
+    // Chrome's permission prompt appears immediately and a model/CSP failure
+    // can never hide it (the old order threw before getUserMedia was reached,
+    // so the user never even saw a camera prompt).
+    const picked = resolveCameraStream(existing);
+    const streamPromise: Promise<{ stream: MediaStream; owns: boolean }> = picked.stream
+      ? Promise.resolve({ stream: picked.stream, owns: false })
+      : navigator.mediaDevices
+          .getUserMedia({ video: { width: 640, height: 480 }, audio: false })
+          .then((s) => ({ stream: s, owns: true }));
+    // Mark the rejection handled so a camera failure during model loading
+    // never surfaces as an unhandled rejection; the real await below rethrows.
+    streamPromise.catch(() => undefined);
 
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    try {
+      const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+      // Try the fast GPU (WebGL) delegate first; some machines (headless Chrome,
+      // locked-down GPUs, software renderers) cannot create it, so fall back to the
+      // CPU delegate automatically rather than failing the whole camera. Tracking is
+      // slower on CPU but still works — far better than no hands/face at all.
+      if (wantHands) {
+        handLm = await createWithFallback((delegate) =>
+          HandLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
+            runningMode: 'VIDEO',
+            numHands: 4,
+          }),
+        );
+      }
+      if (wantFaces) {
+        faceLm = await createWithFallback((delegate) =>
+          FaceLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
+            runningMode: 'VIDEO',
+            numFaces: 4,
+            outputFacialTransformationMatrixes: true,
+          }),
+        );
+      }
+    } catch (err) {
+      // Models/wasm failed: release the camera we may have just opened.
+      streamPromise
+        .then(({ stream: s, owns }) => { if (owns) for (const t of s.getTracks()) t.stop(); })
+        .catch(() => undefined);
+      throw err;
+    }
+
+    const got = await streamPromise;
+    // stop() was called while the models loaded (the phone hid, or the user
+    // turned hands off): never start the loop after the fact.
+    if (stopped) {
+      if (got.owns) for (const t of got.stream.getTracks()) t.stop();
+      stop();
+      return;
+    }
+    stream = got.stream;
+    ownsStream = got.owns;
     video.srcObject = stream;
     await video.play();
+    if (stopped) { stop(); return; }
 
     running = true;
+    if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running);
     rafId = requestAnimationFrame(loop);
   }
 
   function stop(): void {
+    stopped = true;
     running = false;
     cancelAnimationFrame(rafId);
-    for (const track of stream?.getTracks() ?? []) track.stop();
+    if (ownsStream) {
+      for (const track of stream?.getTracks() ?? []) track.stop();
+    }
     stream = null;
     video.srcObject = null;
+    video.remove(); // idempotent: no-op if already detached
     handLm?.close();
     faceLm?.close();
     handLm = null;
@@ -304,16 +498,33 @@ export function createPresenceTracker(
     onFrame?.({ hands: [], rejectedHands: [], faces: [], facing: lastFacing, registered: operator.registered, paused: false });
   }
 
+  let registeredSig: FaceSignature | null = null;
+
   function register(): boolean {
     if (mainIdx === null) return false;
-    operator.register(candidates[mainIdx].signature);
+    registeredSig = candidates[mainIdx].signature;
+    operator.register(registeredSig);
     operatorIdx = mainIdx;
     gate.reset();
     binder.reset();
     return true;
   }
 
+  function registerSignature(sig: FaceSignature): void {
+    registeredSig = sig;
+    operator.register(sig);
+    operatorIdx = null; // re-acquired on the next face frame that matches
+    gate.reset();
+    binder.reset();
+  }
+
+  function currentSignature(): FaceSignature | null {
+    if (registeredSig) return registeredSig;
+    return mainIdx !== null ? candidates[mainIdx]?.signature ?? null : null;
+  }
+
   function reregister(): void {
+    registeredSig = null;
     operator.reset();
     operatorIdx = null;
     gate.reset();
@@ -327,6 +538,9 @@ export function createPresenceTracker(
     setPinchThreshold(on, off) { processor.setPinchThreshold(on, off); },
     register,
     reregister,
+    registerSignature,
+    currentSignature,
+    setOwnerHands(owner) { binder.setOwnerHands(owner); },
     get isRegistered() { return operator.registered; },
     get isFacing() { return lastFacing; },
     get isPaused() { return lastPaused; },

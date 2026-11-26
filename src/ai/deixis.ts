@@ -11,7 +11,7 @@
 // untrusted-JSON parsing, colour math, and the resolution→op mapping. No
 // network, no Firebase, no DOM — unit tests never need a model or a camera.
 
-import { NAMED_COLORS, toColor } from '../ui/design/colors';
+import { NAMED_COLORS, toColor } from '../core/colors';
 
 // ---------------------------------------------------------------------------
 // Trigger gate: only run the point-and-say path for a deictic adjustment the

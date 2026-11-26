@@ -1,6 +1,8 @@
 // Pure (MediaPipe-free, DOM-free) two-hand pinch logic + skeleton geometry.
 // Kept separate from hands.ts so it can be unit-tested.
 
+import { isFistPose, isClosingToFist } from './gestures';
+
 export const THUMB_TIP = 4;
 export const INDEX_TIP = 8;
 export const WRIST = 0;
@@ -21,12 +23,35 @@ export const HAND_COLORS: ReadonlyArray<{ idle: string; pinch: string }> = [
   { idle: '#e879f9', pinch: '#4ade80' },
 ];
 
-// Loose by default so a soft / incomplete close (arthritis, tremor) still
-// registers. Values are thumb–index gap ÷ wrist–middle-MCP (hand size), so
-// they stay stable as the hand moves toward or away from the camera.
-// Calibration and the interaction profile may tighten or loosen these.
-export const DEFAULT_PINCH_ON = 0.50;
-export const DEFAULT_PINCH_OFF = 0.64;
+// Values are thumb–index gap ÷ wrist–middle-MCP (hand size), so they stay
+// stable as the hand moves toward or away from the camera. These MUST match
+// HAND_FEEL.pinchOn/pinchOff (src/canvas/handFeel.ts) and PINCH_CLASSIFY
+// (gestures.ts) — one pinch definition across pointer, keep and overlay; a
+// consistency test guards it. The old 0.50/0.64 was loose enough that a
+// half-closed pointing hand read as a pinch (the "hover triggers things"
+// bug); 0.38/0.52 is back near the original M1 feel (0.35/0.48), deliberate
+// but still forgiving of an incomplete close. Calibration and the
+// interaction profile may tighten or loosen these per user.
+// Units: thumb–index tip / wrist→middle-MCP, same as trace `pinchDistance`.
+// Real MediaPipe closes around 0.18–0.20, not 0.045 (synthetic almost-touch).
+// Enter 0.20 / exit 0.30 is a tighter band than the 0.24 / 0.33 live-test
+// default; the pointer also holds ~80 ms before pinch-down.
+export const DEFAULT_PINCH_ON = 0.20;
+export const DEFAULT_PINCH_OFF = 0.30;
+
+/** Runtime pinch band (defaults, then first-run/Tools or a rolling baseline). */
+export const PINCH_LIVE = { on: DEFAULT_PINCH_ON, off: DEFAULT_PINCH_OFF };
+
+export function setLivePinchThresholds(on: number, off: number): void {
+  if (!(on > 0) || !Number.isFinite(on) || !Number.isFinite(off) || off <= on) return;
+  PINCH_LIVE.on = on;
+  PINCH_LIVE.off = off;
+}
+
+export function resetLivePinchThresholds(): void {
+  PINCH_LIVE.on = DEFAULT_PINCH_ON;
+  PINCH_LIVE.off = DEFAULT_PINCH_OFF;
+}
 /** Movement (in mirrored screen units) that disqualifies a pinch from being a tap. */
 export const TAP_MOVE_LIMIT = 0.045;
 
@@ -49,6 +74,9 @@ export interface HandInput {
 export interface HandFrame {
   /** Stable slot 0 or 1 -> colour. */
   slot: number;
+  /** MediaPipe handedness label ("Left"/"Right"), when known — the owner
+   *  registration flow uses it for "show your right hand". */
+  label?: string;
   /** All 21 points, mirrored to screen space (0..1). */
   points: Pt[];
   pinching: boolean;
@@ -163,12 +191,14 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
     const frames: HandFrame[] = [];
     const present = new Set(slotOf);
 
-    // Hands that disappeared: end their pinch and forget their label.
+    // Hands that disappeared: end their pinch, but KEEP their handedness label
+    // so a hand returning after a tracking dip (even when both hands drop out
+    // together and MediaPipe re-reports them in a different array order) re-binds
+    // to its original colour slot by label rather than by array position.
     slots.forEach((st, i) => {
       if (!present.has(i) && st.seen) {
         release(i);
         st.seen = false;
-        st.label = undefined;
       }
     });
 
@@ -181,12 +211,17 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       const ratio = pinchGapRatio(lm);
       const strength = pinchStrength(ratio, pinchOn, pinchOff);
       // Mirror x so the overlay matches a front-facing camera.
-      const points = lm.map((p) => ({ x: 1 - p.x, y: p.y }));
+      // z (MediaPipe depth) rides along when present: the hand pointer's
+      // 3D finger-bend test needs it for fingers pointing at the camera.
+      const points = lm.map((p) => {
+        const z = (p as Pt & { z?: number }).z;
+        return typeof z === 'number' ? { x: 1 - p.x, y: p.y, z } : { x: 1 - p.x, y: p.y };
+      });
       const aim = aimPoint(points, pinchOn, pinchOff);
       const x = aim.x;
       const y = aim.y;
 
-      if (!st.pinching && ratio < pinchOn) {
+      if (!st.pinching && ratio < pinchOn && !isFistPose(lm) && !isClosingToFist(lm)) {
         st.pinching = true;
         st.tapCandidate = true;
         st.lastX = x;
@@ -211,6 +246,7 @@ export function createHandsProcessor(onEvent: (e: HandEvent) => void) {
       const colors = HAND_COLORS[slot];
       frames.push({
         slot,
+        label: st.label,
         points,
         pinching: st.pinching,
         owner: owner === slot,

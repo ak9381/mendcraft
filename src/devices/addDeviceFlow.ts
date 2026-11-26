@@ -144,7 +144,7 @@ export async function runAddDevice(d: FlowDeps): Promise<FlowOutcome> {
     if (!frame) return fail('look', mode === 'room'
       ? 'No camera picture. Put the phone on its stand facing the room, or just say “add the lamp”.'
       : 'No camera picture. Turn the camera on and point it at the device, or just say “add the lamp”.');
-    step({ step: 'look', state: 'ok', detail: 'Got one still picture (not stored).' });
+    step({ step: 'look', state: 'ok', detail: 'Got one still picture (used for this answer only; Mendcraft keeps no copy).' });
 
     // 2 identify (room mode: the device she points at or names)
     step({ step: 'identify', state: 'active', detail: mode === 'room' ? 'Asking Gemini Nano which device you mean…' : 'Asking Gemini Nano what this is…', source: 'on-device' });

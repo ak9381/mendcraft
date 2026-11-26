@@ -77,7 +77,7 @@ export function normalizeTranscript(raw: string): string {
   const out: string[] = [];
   let prevWord = '';
   for (const tok of t.split(/\s+/)) {
-    const word = tok.toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+    const word = tok.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
     if (!word) continue; // punctuation-only token
     if (FILLER_WORDS.has(word)) continue;
     if (word === prevWord) continue; // stutter: "move move it"

@@ -1,0 +1,212 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createCanvasInputs, type CanvasInputsCallbacks } from '../../src/canvas/canvasInputs';
+import type { CanvasHandEvent, CanvasHandsStop } from '../../src/canvas/canvasHands';
+import { HANDS_PAUSED, type GimbalCanvasController } from '../../src/canvas/gimbalCanvas';
+
+function createFakeGimbal(overrides: Partial<GimbalCanvasController> = {}): GimbalCanvasController {
+  return {
+    mode: vi.fn(() => 'face' as const),
+    setMode: vi.fn(async () => ({ ok: false, why: 'The gimbal works in the iPhone app' })),
+    onPoint: vi.fn(async () => ({ ok: true })),
+    onHandsFrame: vi.fn(async () => ({ ok: true })),
+    scan: vi.fn(async () => ({ ok: false, why: 'The gimbal works in the iPhone app' })),
+    release: vi.fn(async () => ({ ok: true })),
+    ...overrides,
+  };
+}
+
+describe('canvasInputs', () => {
+  it('wires canvasHands events to callbacks: pinch->keep, brush->drop, palm->palm', async () => {
+    let capturedHandler: ((ev: CanvasHandEvent) => void) | null = null;
+    const fakeMount = vi.fn((_root: HTMLElement, onEvent: (ev: CanvasHandEvent) => void) => {
+      capturedHandler = onEvent;
+      const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
+      return stopFn as unknown as CanvasHandsStop;
+    });
+
+    const on: CanvasInputsCallbacks = {
+      keep: vi.fn(),
+      drop: vi.fn(),
+      palm: vi.fn(),
+      status: vi.fn(),
+    };
+
+    const fakeGimbal = createFakeGimbal();
+    const inputs = createCanvasInputs({
+      hands: fakeMount,
+      gimbal: fakeGimbal,
+      on,
+    });
+
+    const fakeRoot = {} as HTMLElement;
+    await inputs.start(fakeRoot);
+
+    expect(fakeMount).toHaveBeenCalledWith(fakeRoot, expect.any(Function));
+    expect(capturedHandler).not.toBeNull();
+
+    // Fire pinch -> keep
+    capturedHandler!({ type: 'keep' });
+    expect(on.keep).toHaveBeenCalledTimes(1);
+
+    // Fire drop -> drop
+    capturedHandler!({ type: 'drop' });
+    expect(on.drop).toHaveBeenCalledTimes(1);
+
+    // Fire palm -> palm
+    capturedHandler!({ type: 'palm' });
+    expect(on.palm).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds point events to gimbal onPoint', async () => {
+    let capturedHandler: ((ev: CanvasHandEvent) => void) | null = null;
+    const fakeMount = vi.fn((_root: HTMLElement, onEvent: (ev: CanvasHandEvent) => void) => {
+      capturedHandler = onEvent;
+      return Object.assign(vi.fn(), { stop: vi.fn() }) as unknown as CanvasHandsStop;
+    });
+
+    const fakeGimbal = createFakeGimbal();
+    const inputs = createCanvasInputs({
+      hands: fakeMount,
+      gimbal: fakeGimbal,
+    });
+
+    await inputs.start({} as HTMLElement);
+    capturedHandler!({ type: 'point', point: { x: 0.35, y: 0.65 } });
+
+    expect(fakeGimbal.onPoint).toHaveBeenCalledWith({ x: 0.35, y: 0.65 });
+  });
+
+  it('feeds frame events to gimbal onHandsFrame UN-MIRRORED (camera space) in hands mode, and raw to onFrame', async () => {
+    let capturedHandler: ((ev: CanvasHandEvent) => void) | null = null;
+    const fakeMount = vi.fn((_root: HTMLElement, onEvent: (ev: CanvasHandEvent) => void) => {
+      capturedHandler = onEvent;
+      return Object.assign(vi.fn(), { stop: vi.fn() }) as unknown as CanvasHandsStop;
+    });
+
+    const fakeGimbal = createFakeGimbal({ mode: vi.fn(() => 'hands' as const) });
+    const onFrame = vi.fn();
+    const inputs = createCanvasInputs({
+      hands: fakeMount,
+      gimbal: fakeGimbal,
+      on: { frame: onFrame },
+    });
+
+    await inputs.start({} as HTMLElement);
+    // Presence hands are selfie-mirrored (x' = 1 - x); the gimbal gets camera space.
+    const hands = [[{ x: 0.2, y: 0.5 }]];
+    capturedHandler!({ type: 'frame', hands, now: 1234 });
+
+    expect(fakeGimbal.onHandsFrame).toHaveBeenCalledWith([{ points: [{ x: 0.8, y: 0.5 }] }], 1234);
+    expect(onFrame).toHaveBeenCalledWith(hands, 1234);
+  });
+
+  it('handles speech commands for gimbal and returns true for valid phrases', async () => {
+    const onStatus = vi.fn();
+    const fakeGimbal = createFakeGimbal({
+      setMode: vi.fn(async (m) => ({ ok: false, why: 'The gimbal works in the iPhone app' })),
+      scan: vi.fn(async () => ({ ok: false, why: 'The gimbal works in the iPhone app' })),
+    });
+
+    const inputs = createCanvasInputs({
+      gimbal: fakeGimbal,
+      on: { status: onStatus },
+    });
+
+    // Valid gimbal commands
+    expect(inputs.handleSpeech('follow me')).toBe(true);
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('face', { explicit: true });
+
+    expect(inputs.handleSpeech('follow my hands')).toBe(true);
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hands', { explicit: true });
+
+    expect(inputs.handleSpeech('stop following')).toBe(true);
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('hold', { explicit: true });
+
+    expect(inputs.handleSpeech('connect what I am pointing at')).toBe(true);
+    expect(fakeGimbal.setMode).toHaveBeenCalledWith('point', { explicit: true });
+
+    expect(inputs.handleSpeech('scan the room')).toBe(true);
+    expect(fakeGimbal.scan).toHaveBeenCalled();
+
+    // Allow async setMode/scan callbacks to resolve and update status
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStatus).toHaveBeenCalledWith('The gimbal works in the iPhone app');
+
+    // Unrelated speech returns false
+    expect(inputs.handleSpeech('turn on the light')).toBe(false);
+    expect(inputs.handleSpeech('new board')).toBe(false);
+  });
+
+  it('stop() releases gimbal and stops hands tracking', async () => {
+    const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
+    const fakeMount = vi.fn(() => stopFn as unknown as CanvasHandsStop);
+    const fakeGimbal = createFakeGimbal();
+
+    const inputs = createCanvasInputs({
+      hands: fakeMount,
+      gimbal: fakeGimbal,
+    });
+
+    await inputs.start({} as HTMLElement);
+    inputs.stop();
+
+    expect(stopFn.stop).toHaveBeenCalled();
+    expect(fakeGimbal.release).toHaveBeenCalled();
+  });
+
+  it('does not feed frames to the gimbal unless it is in hands mode', async () => {
+    let capturedHandler: ((ev: CanvasHandEvent) => void) | null = null;
+    const fakeMount = vi.fn((_root: HTMLElement, onEvent: (ev: CanvasHandEvent) => void) => {
+      capturedHandler = onEvent;
+      return Object.assign(vi.fn(), { stop: vi.fn() }) as unknown as CanvasHandsStop;
+    });
+    const fakeGimbal = createFakeGimbal();
+    const inputs = createCanvasInputs({ hands: fakeMount, gimbal: fakeGimbal });
+    await inputs.start({} as HTMLElement);
+    capturedHandler!({ type: 'frame', hands: [[{ x: 0.2, y: 0.5 }]], now: 1 });
+    expect(fakeGimbal.onHandsFrame).not.toHaveBeenCalled();
+  });
+
+  it('reports what is really enabled on success, and the plugin error on failure', async () => {
+    const onStatus = vi.fn();
+    const fakeGimbal = createFakeGimbal({
+      setMode: vi.fn(async (m) => (m === 'face'
+        ? { ok: true, status: 'DockKit tracking on — needs a camera app/camera running' }
+        : { ok: false, why: 'Couldn’t turn DockKit tracking off: boom' })),
+    });
+    const inputs = createCanvasInputs({ gimbal: fakeGimbal, on: { status: onStatus } });
+    inputs.handleSpeech('track me');
+    inputs.handleSpeech('hold still');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onStatus).toHaveBeenCalledWith('DockKit tracking on — needs a camera app/camera running');
+    expect(onStatus).toHaveBeenCalledWith('Couldn’t turn DockKit tracking off: boom');
+  });
+
+  it('stopping hands while the gimbal follows hands holds still — never falls back to the face (never a silent stop)', async () => {
+    const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
+    const fakeGimbal = createFakeGimbal({
+      mode: vi.fn(() => 'hands' as const),
+      setMode: vi.fn(async () => ({ ok: true, status: 'x' })),
+    });
+    const onStatus = vi.fn();
+    const inputs = createCanvasInputs({ hands: vi.fn(() => stopFn as unknown as CanvasHandsStop), gimbal: fakeGimbal, on: { status: onStatus } });
+    await inputs.start({} as HTMLElement);
+    inputs.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fakeGimbal.setMode).not.toHaveBeenCalled();
+    expect(fakeGimbal.release).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenCalledWith(HANDS_PAUSED);
+  });
+
+  it('stopping hands while the iPhone sensing layer still feeds frames: nothing changes, nothing said', async () => {
+    const stopFn = Object.assign(vi.fn(), { stop: vi.fn() });
+    const fakeGimbal = createFakeGimbal({ mode: vi.fn(() => 'hands' as const) });
+    const onStatus = vi.fn();
+    const inputs = createCanvasInputs({ hands: vi.fn(() => stopFn as unknown as CanvasHandsStop), gimbal: fakeGimbal, sensing: () => true, on: { status: onStatus } });
+    await inputs.start({} as HTMLElement);
+    inputs.stop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fakeGimbal.setMode).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+});

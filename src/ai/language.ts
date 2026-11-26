@@ -17,7 +17,7 @@
 // Pure: it decides, labels and pairs captions; it never calls a model, Firebase,
 // a speech API or the DOM, so every branch is unit-tested without a network.
 
-import { SOURCE_TEXT, badgeLabel, type RouteReason } from './router';
+import { badgeLabel, sourceText, type OnDeviceKind, type RouteReason } from './router';
 import type { Source } from './hybrid';
 
 export interface Language {
@@ -209,11 +209,18 @@ export function languageBadgeLabel(
   reason: RouteReason,
   lang: Language,
   translated: boolean,
+  kind: OnDeviceKind = 'nano',
 ): string {
-  if (translated && shouldTranslate(lang) && source !== 'rules') {
-    return `${SOURCE_TEXT[source]} · ${lang.englishName}`;
+  if (reason === 'handed-off') {
+    if (translated && shouldTranslate(lang) && source !== 'rules') {
+      return `${kind === 'apple' ? 'Apple' : 'Nano'} → Gemini · ${lang.englishName}`;
+    }
+    return badgeLabel(source, reason, kind);
   }
-  return badgeLabel(source, reason);
+  if (translated && shouldTranslate(lang) && source !== 'rules') {
+    return `${sourceText(source, kind)} · ${lang.englishName}`;
+  }
+  return badgeLabel(source, reason, kind);
 }
 
 // ---------------------------------------------------------------------------

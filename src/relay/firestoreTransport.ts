@@ -10,12 +10,15 @@
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
 import { validateMessage, type RelayMessage } from './protocol';
 import type { RelayTransport } from './transport';
+import { createRoomFeed, type RestartClock, type RoomDoc } from './roomFeed';
 
 export type FirestoreProbe =
   | { ok: true; transport: RelayTransport }
   | { ok: false; reason: string };
 
 const PROBE_TIMEOUT_MS = 5000;
+/** How many of a room's newest messages are scanned for the host's proof that its short code is live. */
+const ALIAS_PROOF_SCAN = 12;
 
 /**
  * Try to stand up a Firestore transport. Resolves {ok:false} (never throws)
@@ -39,6 +42,8 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
       new Promise((_, reject) => setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS)),
     ]);
 
+    // One connection, one restart gap, however many rooms listen on it.
+    const restartClock: RestartClock = { last: -Infinity };
     const transport: RelayTransport = {
       kind: 'firestore',
       async publish(roomId, msg) {
@@ -47,21 +52,59 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
           at: fs.serverTimestamp(),
         });
       },
-      subscribe(roomId, onMsg) {
-        return fs.onSnapshot(
-          fs.query(fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at')),
-          (snap) => {
-            for (const change of snap.docChanges()) {
-              if (change.type !== 'added') continue;
-              const msg: RelayMessage | null = validateMessage(change.doc.data());
-              if (msg) onMsg(msg);
-            }
+      // The server time a message got: a session's start marker (what is
+      // older than it in the room is history, see session.ts).
+      async publishStamped(roomId, msg) {
+        const ref = await fs.addDoc(fs.collection(db, 'rooms', roomId, 'messages'), {
+          ...msg,
+          at: fs.serverTimestamp(),
+        });
+        try {
+          const at = (await fs.getDocFromServer(ref)).data()?.at as { toMillis?: () => number } | undefined;
+          return { at: typeof at?.toMillis === 'function' ? at.toMillis() : null };
+        } catch {
+          return { at: null };
+        }
+      },
+      subscribe(roomId, onMsg, onError, since) {
+        // The live listener, backed by a slow catch-up read: onSnapshot can go
+        // quiet without an error (see roomFeed.ts), which left a paired laptop
+        // deaf to its phone. Both are bounded by the session's start: the
+        // room's older history is never downloaded.
+        const messages = fs.collection(db, 'rooms', roomId, 'messages');
+        const toDoc = (d: { id: string; data(): Record<string, unknown> }): RoomDoc => {
+          const data = d.data();
+          const at = data.at as { toMillis?: () => number } | null | undefined;
+          return { id: d.id, at: typeof at?.toMillis === 'function' ? at.toMillis() : null, data };
+        };
+        const from = (at: number | null) => (at === null
+          ? fs.query(messages, fs.orderBy('at'))
+          : fs.query(messages, fs.where('at', '>=', fs.Timestamp.fromMillis(at)), fs.orderBy('at')));
+        const feed = createRoomFeed({
+          since,
+          restartClock,
+          listen: (at, onDocs, onListenError) => fs.onSnapshot(
+            from(at),
+            (snap) => {
+              onDocs(snap.docChanges().filter((c) => c.type === 'added').map((c) => toDoc(c.doc)));
+            },
+            () => {
+              // Listen failed (rules denial, offline, room deleted). Tell the
+              // caller so the pairing state machine can move to an explicit
+              // 'disconnected' state instead of freezing silently on the last
+              // one — "paired" would otherwise look connected when it isn't.
+              onListenError();
+            },
+          ),
+          fetchSince: async (at) => (await fs.getDocsFromServer(from(at))).docs.map(toDoc),
+          restart: async () => { await fs.disableNetwork(db); await fs.enableNetwork(db); },
+          onDoc: (data, at) => {
+            const msg: RelayMessage | null = validateMessage(data);
+            if (msg) onMsg(msg, { at });
           },
-          () => {
-            // Listen failed (rules/offline). Sessions keep their last state; the
-            // UI surfaces connectivity via the pairing state, not a crash.
-          },
-        );
+          onError,
+        });
+        return () => feed.stop();
       },
       async setAlias(code, roomId) {
         await fs.setDoc(fs.doc(db, 'rooms', code), { room: roomId });
@@ -73,6 +116,20 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
       },
       async clearAlias(code) {
         await fs.deleteDoc(fs.doc(db, 'rooms', code));
+      },
+      // firestore.rules lets the alias doc hold only {room}, so it cannot
+      // carry a createdAt: the room's newest HOST message (server time)
+      // vouches for it instead. A host that is gone stops vouching; while it
+      // is here its own 5-minute timer (and endAdmission) clear the alias.
+      async aliasFreshAt(_code, roomId) {
+        const recent = await fs.getDocsFromServer(fs.query(
+          fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at', 'desc'), fs.limit(ALIAS_PROOF_SCAN),
+        ));
+        for (const d of recent.docs) {
+          const data = d.data() as { from?: unknown; at?: { toMillis?: () => number } | null };
+          if (data.from === 'host' && typeof data.at?.toMillis === 'function') return data.at.toMillis();
+        }
+        return null;
       },
     };
     return { ok: true, transport };

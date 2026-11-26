@@ -26,12 +26,22 @@ import {
   type Room,
   type Wall,
 } from './doc';
-import { DEFAULTS } from './ops';
+import { DEFAULTS, PLAN_LIMITS } from './ops';
 
 const docOf = (ctx: ToolContext): PlanDoc => ctx.snapshot() as PlanDoc;
 
 /** Object-snap radius in mm that tracks the zoom (≥ one grid cell, ~14 px). */
 const snapRadius = (ctx: ToolContext): number => Math.max(GRID_MM, 14 / ctx.scale());
+
+// Grab radii for the direct-manipulation handles (wall endpoint, fixture rotate)
+// in screen px. A mouse is precise, so it keeps the tight legacy targets; a hand
+// pinch is the hardest case for shaky / low-effort input to land on a tiny
+// handle, so it gets a far more forgiving target in the spirit of the app's own
+// 56 px aim-radius convention (hitTest.DEFAULT_AIM_RADIUS_PX). See B-104, B-111.
+const ENDPOINT_GRAB_PX = { mouse: 10, pinch: 26 } as const;
+const ROTATE_GRAB_PX = { mouse: 12, pinch: 26 } as const;
+const grabRadius = (p: ToolPointer, tbl: { mouse: number; pinch: number }): number =>
+  p.source === 'pinch' ? tbl.pinch : tbl.mouse;
 
 // ─── Selection helpers (also used by the renderer's global keys) ────────────
 
@@ -189,6 +199,8 @@ function createSelectTool(ctx: ToolContext): Tool {
     | { kind: 'end'; wallId: string; end: 'a' | 'b' }
     | { kind: 'multi'; ids: string[]; grabWorld: Point; applied: Point }
     | { kind: 'rotate'; id: string }
+    | { kind: 'resizeFix'; id: string }
+    | { kind: 'resizeOpening'; id: string; edge: 'near' | 'far' }
     | { kind: 'marquee'; startWorld: Point; additive: boolean }
     | null;
   let drag: Drag = null;
@@ -198,20 +210,78 @@ function createSelectTool(ctx: ToolContext): Tool {
     if (selectionIds(ctx).length !== 1) return null;
     const wall = docOf(ctx).walls.find((w) => w.id === ctx.selectedId());
     if (!wall) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
     for (const end of ['a', 'b'] as const) {
       const s = ctx.toScreen(wall[end]);
-      if (Math.hypot(s.x - p.x, s.y - p.y) <= 10) return { wallId: wall.id, end };
+      if (Math.hypot(s.x - p.x, s.y - p.y) <= r) return { wallId: wall.id, end };
     }
     return null;
   }
 
-  /** Rotate handle of the single selected fixture, hit within 12 px. */
+  /** Rotate handle of the single selected fixture (forgiving radius by source). */
   function rotateHandleAt(p: ToolPointer): string | null {
     if (selectionIds(ctx).length !== 1) return null;
     const f = docOf(ctx).fixtures.find((x) => x.id === ctx.selectedId());
     if (!f) return null;
     const s = ctx.toScreen(fixtureHandlePoint(f, 30 / ctx.scale()));
-    return Math.hypot(s.x - p.x, s.y - p.y) <= 12 ? f.id : null;
+    return Math.hypot(s.x - p.x, s.y - p.y) <= grabRadius(p, ROTATE_GRAB_PX) ? f.id : null;
+  }
+
+  /** A corner of the single selected fixture's footprint, for drag-to-resize
+   *  (B-123). Forgiving radius by source, like the endpoint/rotate handles. */
+  function fixtureCornerAt(p: ToolPointer): string | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const f = docOf(ctx).fixtures.find((x) => x.id === ctx.selectedId());
+    if (!f) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    for (const corner of fixturePolygon(f)) {
+      const s = ctx.toScreen(corner);
+      if (Math.hypot(s.x - p.x, s.y - p.y) <= r) return f.id;
+    }
+    return null;
+  }
+
+  /** A corner of the single selected room's polygon, mapped to the owning
+   *  wall's endpoint. Dragging it reuses move_end, whose cascade already pulls
+   *  the coincident neighbour wall, so the whole corner moves (B-120). */
+  function roomCornerAt(p: ToolPointer): { wallId: string; end: 'a' | 'b' } | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const d = docOf(ctx);
+    const room = d.rooms.find((r) => r.id === ctx.selectedId());
+    if (!room) return null;
+    const poly = roomPolygon(room, d);
+    if (!poly) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    for (const v of poly) {
+      const s = ctx.toScreen(v);
+      if (Math.hypot(s.x - p.x, s.y - p.y) > r) continue;
+      for (const wid of room.wallIds) {
+        const w = d.walls.find((x) => x.id === wid);
+        if (!w) continue;
+        if (Math.hypot(w.a.x - v.x, w.a.y - v.y) < 1) return { wallId: wid, end: 'a' };
+        if (Math.hypot(w.b.x - v.x, w.b.y - v.y) < 1) return { wallId: wid, end: 'b' };
+      }
+    }
+    return null;
+  }
+
+  /** A jamb (near/far edge) of the single selected opening, for drag-to-resize
+   *  the opening width directly on canvas (B-122). Forgiving radius by source. */
+  function openingJambAt(p: ToolPointer): { id: string; edge: 'near' | 'far' } | null {
+    if (selectionIds(ctx).length !== 1) return null;
+    const o = docOf(ctx).openings.find((x) => x.id === ctx.selectedId());
+    if (!o) return null;
+    const wall = docOf(ctx).walls.find((w) => w.id === o.wallId);
+    if (!wall) return null;
+    const r = grabRadius(p, ENDPOINT_GRAB_PX);
+    const jambs = [
+      { edge: 'near' as const, s: ctx.toScreen(pointAlong(wall, o.offset)) },
+      { edge: 'far' as const, s: ctx.toScreen(pointAlong(wall, o.offset + o.width)) },
+    ]
+      .map((j) => ({ ...j, d: Math.hypot(j.s.x - p.x, j.s.y - p.y) }))
+      .filter((j) => j.d <= r)
+      .sort((a, b) => a.d - b.d);
+    return jambs.length ? { id: o.id, edge: jambs[0].edge } : null;
   }
 
   function marqueeOverlay(start: Point, cur: Point): void {
@@ -227,9 +297,9 @@ function createSelectTool(ctx: ToolContext): Tool {
     label: 'Select',
     icon: '⬚',
     shortcut: 'v',
-    hint: 'Click to select (Shift toggles, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
+    hint: 'Click to select (Shift-click adds, drag empty canvas for a marquee); drag to move; Ctrl+R rotates; drop on the bin to delete.',
     onDown(p) {
-      const handle = endpointAt(p);
+      const handle = endpointAt(p) ?? roomCornerAt(p);
       if (handle) {
         drag = { kind: 'end', ...handle };
         return true;
@@ -237,6 +307,16 @@ function createSelectTool(ctx: ToolContext): Tool {
       const rotId = rotateHandleAt(p);
       if (rotId) {
         drag = { kind: 'rotate', id: rotId };
+        return true;
+      }
+      const resizeId = fixtureCornerAt(p);
+      if (resizeId) {
+        drag = { kind: 'resizeFix', id: resizeId };
+        return true;
+      }
+      const jamb = openingJambAt(p);
+      if (jamb) {
+        drag = { kind: 'resizeOpening', ...jamb };
         return true;
       }
       const world = ctx.toWorld(p.x, p.y);
@@ -283,6 +363,58 @@ function createSelectTool(ctx: ToolContext): Tool {
         if (delta < -180) delta += 360;
         if (Math.abs(delta) >= 1) ctx.apply({ op: 'rotate', target: f.id, angle: delta });
         ctx.setStatus(`Rotation ${Math.round(desired)}° (snaps to 15°)`);
+        return;
+      }
+      if (drag.kind === 'resizeFix') {
+        const f = d.fixtures.find((x) => x.id === (drag as { id: string }).id);
+        if (!f) return;
+        // Work in the fixture's own (un-rotated) frame, anchored at its centre,
+        // so dragging a corner scales w/d symmetrically and never moves x/y —
+        // matching set_size, which only changes w/d.
+        const rad = (f.rotation * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = world.x - f.x;
+        const dy = world.y - f.y;
+        const lx = dx * cos + dy * sin;
+        const ly = -dx * sin + dy * cos;
+        const { min, max } = PLAN_LIMITS.fixtureSize;
+        const w = Math.max(min, Math.min(max, snapValueToGrid(Math.abs(lx) * 2)));
+        const dd = Math.max(min, Math.min(max, snapValueToGrid(Math.abs(ly) * 2)));
+        if (Math.abs(w - f.w) >= 1 || Math.abs(dd - f.d) >= 1) {
+          ctx.apply({ op: 'set_size', target: f.id, w, d: dd });
+          ctx.setStatus(`${mmToMetresLabel(w)} × ${mmToMetresLabel(dd)}`);
+        }
+        return;
+      }
+      if (drag.kind === 'resizeOpening') {
+        const rd = drag as { id: string; edge: 'near' | 'far' };
+        const o = d.openings.find((x) => x.id === rd.id);
+        const wall = o && d.walls.find((w) => w.id === o.wallId);
+        if (!o || !wall) return;
+        const len = wallLength(wall);
+        const t = Math.max(0, Math.min(len, projectToWall(world, wall).t));
+        const { min, max } = PLAN_LIMITS.openingWidth;
+        // Anchor the opposite jamb: dragging the far edge grows toward b (offset
+        // fixed); dragging the near edge grows toward a (far edge fixed).
+        if (rd.edge === 'far') {
+          const width = Math.max(min, Math.min(max, len - o.offset, snapValueToGrid(t - o.offset)));
+          if (Math.abs(width - o.width) >= 1) {
+            ctx.apply({ op: 'set_width', target: o.id, width });
+            ctx.setStatus(`Width ${mmToMetresLabel(width)}`);
+          }
+        } else {
+          const farEdge = o.offset + o.width;
+          const width = Math.max(min, Math.min(max, farEdge, snapValueToGrid(farEdge - t)));
+          const offset = farEdge - width;
+          if (Math.abs(width - o.width) >= 1) {
+            ctx.apply({ op: 'batch', ops: [
+              { op: 'set_width', target: o.id, width },
+              { op: 'move_opening', target: o.id, offset },
+            ] });
+            ctx.setStatus(`Width ${mmToMetresLabel(width)}`);
+          }
+        }
         return;
       }
       overTrash = ctx.overTrash(p.x, p.y);
@@ -349,7 +481,7 @@ function createSelectTool(ctx: ToolContext): Tool {
         const ids = drag.additive ? [...new Set([...selectionIds(ctx), ...hits])] : hits;
         ctx.setOverlay(null);
         setSelection(ctx, ids);
-      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && overTrash) {
+      } else if (drag && drag.kind !== 'end' && drag.kind !== 'rotate' && drag.kind !== 'resizeFix' && drag.kind !== 'resizeOpening' && overTrash) {
         deleteSelected(ctx);
       }
       drag = null;
@@ -410,6 +542,7 @@ function createWallTool(ctx: ToolContext): Tool {
     icon: '─',
     shortcut: 'w',
     hint: 'Click to place wall points (ortho/45° + snap). Click the last point again, double-click, Enter or Esc to finish.',
+    busy: () => chain.pts.length > 0,
     onDown(p) {
       const pt = nextPoint(ctx.toWorld(p.x, p.y));
       const res = chainClick(chain, pt, 150);
@@ -490,7 +623,9 @@ function createHostedTool(ctx: ToolContext, kind: 'door' | 'window' | 'opening')
   function track(p: ToolPointer): void {
     const world = ctx.toWorld(p.x, p.y);
     const d = docOf(ctx);
-    const hit = nearestWall(world, d.walls, Math.max(600, 30 / ctx.scale()));
+    // A hand reaches further than a mouse (plan/handEdit.ts HAND_WALL_REACH_PX),
+    // so the ghost shows wherever a fist tap would place.
+    const hit = nearestWall(world, d.walls, Math.max(600, (p.source === 'pinch' ? 160 : 30) / ctx.scale()));
     if (!hit) {
       ghost = null;
       ctx.setOverlay((ov) => ov.label({ x: p.x + 14, y: p.y - 10 }, `${label}: hover a wall`, '#94a3b8'));
@@ -637,9 +772,15 @@ function createMeasureTool(ctx: ToolContext): Tool {
     label: 'Measure',
     icon: '⟼',
     shortcut: 'shift+m',
-    hint: 'Click points to measure (snaps to endpoints, midpoints and BOTH wall faces, with a marker). Enter turns the chain into a permanent dimension; Esc clears.',
+    hint: 'Click points to measure (snaps to endpoints, midpoints and BOTH wall faces, with a marker). Enter — or tapping the last point again — turns the chain into a permanent dimension; Esc clears.',
     onDown(p) {
       const s = snap(ctx.toWorld(p.x, p.y));
+      // Re-tapping the last point = Enter (a hand or touch has no Enter key).
+      const last = pts[pts.length - 1];
+      if (last && pts.length >= 2 && Math.hypot(s.point.x - last.x, s.point.y - last.y) * ctx.scale() <= 12) {
+        makeDimension();
+        return true;
+      }
       pts = [...pts, s.point];
       updateOverlay();
       return true;

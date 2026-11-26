@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CODE_LENGTH,
+  ROOM_MESSAGE_DATA_BASE64_MAX,
   TOKEN_ALPHABET,
   TOKEN_LENGTH,
   advancePair,
   buildJoinUrl,
+  fitsRoomMessageRules,
   generateRoomToken,
   groupCode,
   isRemoteRoute,
@@ -20,7 +22,7 @@ import {
   type RelayMessage,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
+import { ALIAS_TTL_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
 
 const seqRandom =
   (start = 0): RandomBytes =>
@@ -125,6 +127,53 @@ describe('relay message envelope', () => {
   });
 });
 
+describe('room-write rules shape (mirrors firestore.rules isValidMessage)', () => {
+  const at = new Date();
+
+  it('accepts every real message shape a client publishes', () => {
+    const samples: unknown[] = [
+      { v: 1, from: 'phone', type: 'hello', at },
+      { v: 1, from: 'host', type: 'bye', at },
+      { v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'undo' }, at },
+      { v: 1, from: 'phone', type: 'cmd', cmd: { kind: 'command', text: 'add a door' }, at },
+      { v: 1, from: 'control', type: 'run', run: { runId: 'r1', recipeId: 'c1', device: 'lamp' }, at },
+      { v: 1, from: 'host', type: 'runStatus', runStatus: { runId: 'r1', recipeId: 'c1', status: 'running' }, at },
+      { v: 1, from: 'control', type: 'runControl', runControl: { runId: 'r1', decision: 'confirm' }, at },
+      { v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: 'a'.repeat(5000), at },
+      { v: 1, from: 'phone', type: 'music', music: { title: 'Song', playing: true, volume: 0.5 }, at },
+      { v: 1, from: 'host', type: 'state', snapshot: { v: 1 }, at },
+      { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'j1', text: 'hi' }, at },
+      { v: 1, from: 'host', type: 'privacyReply', reply: { jobId: 'j1', text: 'hi', routeLine: 'x', sentBytes: 2, cleaned: true }, at },
+    ];
+    for (const s of samples) expect(fitsRoomMessageRules(s)).toBe(true);
+  });
+
+  it('rejects a payload with a key outside the known message shape', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'hello', at, extra: 'nope' })).toBe(false);
+  });
+
+  it('rejects a camera still over the size cap', () => {
+    const big = 'a'.repeat(ROOM_MESSAGE_DATA_BASE64_MAX + 1);
+    expect(
+      fitsRoomMessageRules({ v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: big, at }),
+    ).toBe(false);
+    const ok = 'a'.repeat(ROOM_MESSAGE_DATA_BASE64_MAX);
+    expect(
+      fitsRoomMessageRules({ v: 1, from: 'phone', type: 'frame', mimeType: 'image/jpeg', dataBase64: ok, at }),
+    ).toBe(true);
+  });
+
+  it('rejects an unknown role or type', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'attacker', type: 'hello', at })).toBe(false);
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'evil', at })).toBe(false);
+    expect(fitsRoomMessageRules({ v: 2, from: 'phone', type: 'hello', at })).toBe(false);
+  });
+
+  it('rejects a non-map payload for a nested field', () => {
+    expect(fitsRoomMessageRules({ v: 1, from: 'phone', type: 'cmd', cmd: 'not-a-map', at })).toBe(false);
+  });
+});
+
 describe('pairing state machine', () => {
   it('walks idle → waiting → paired → gone', () => {
     let s: PairState = 'idle';
@@ -145,10 +194,20 @@ describe('pairing state machine', () => {
   });
 
   it('has a status line for every state and role', () => {
-    for (const state of ['idle', 'waiting', 'paired', 'gone'] as const) {
+    for (const state of ['idle', 'waiting', 'paired', 'gone', 'disconnected'] as const) {
       expect(pairStateLabel(state, 'host')).toBeTruthy();
       expect(pairStateLabel(state, 'phone')).toBeTruthy();
     }
+  });
+
+  it('moves to an explicit disconnected state on a listener error, from any non-idle state', () => {
+    expect(advancePair('idle', 'listen-error')).toBe('idle'); // never started listening
+    expect(advancePair('waiting', 'listen-error')).toBe('disconnected');
+    expect(advancePair('paired', 'listen-error')).toBe('disconnected');
+    expect(advancePair('gone', 'listen-error')).toBe('disconnected');
+    // A fresh peer-hello (resubscribe succeeded) recovers it.
+    expect(advancePair('disconnected', 'peer-hello')).toBe('paired');
+    expect(advancePair('disconnected', 'close')).toBe('idle');
   });
 });
 
@@ -185,6 +244,44 @@ describe('fake transport', () => {
   });
 });
 
+describe('host session short-code alias TTL', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('auto-expires the short code if nobody joins in time', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    await vi.advanceTimersByTimeAsync(ALIAS_TTL_MS);
+    expect(await t.resolveAlias(host.code)).toBeNull();
+    // A late close() after the alias already expired must not throw.
+    await host.close();
+  });
+
+  it('does not fire the expiry timer once the phone has paired', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.state()).toBe('paired');
+    // A hello alone keeps the code (old hellos are replayed after a reload);
+    // it goes once the phone names this session in a ping.
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    await guest.ping('p1-aaaa');
+    await vi.advanceTimersByTimeAsync(0);
+    await guest.ping('p2-bbbb');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await t.resolveAlias(host.code)).toBeNull(); // cleared on proof, not by the timer
+    await vi.advanceTimersByTimeAsync(ALIAS_TTL_MS);
+    await guest.close();
+    await host.close();
+  });
+});
+
 describe('host + guest sessions over the fake transport', () => {
   it('pairs, exchanges commands and frames, and parts', async () => {
     const t = createFakeTransport();
@@ -204,7 +301,11 @@ describe('host + guest sessions over the fake transport', () => {
     await flush();
     expect(host.state()).toBe('paired');
     expect(guest.state()).toBe('paired');
-    expect(await t.resolveAlias(host.code)).toBeNull(); // alias cleared on pair
+    await guest.ping('p1-aaaa'); // learns the host's session id from the pong
+    await flush();
+    await guest.ping('p2-bbbb'); // names it: live proof
+    await flush();
+    expect(await t.resolveAlias(host.code)).toBeNull(); // alias cleared on proof
 
     await guest.sendCommand({ kind: 'undo' });
     await guest.sendCommand({ kind: 'command', text: 'add a door' });
@@ -221,6 +322,30 @@ describe('host + guest sessions over the fake transport', () => {
 
     await host.close();
     expect(host.state()).toBe('idle');
+  });
+
+  it('moves to disconnected (not a silent freeze) when the transport listener errors', async () => {
+    const base = createFakeTransport();
+    const errorCbs: Array<() => void> = [];
+    const flaky: typeof base = {
+      ...base,
+      subscribe(roomId, onMsg, onError) {
+        if (onError) errorCbs.push(onError);
+        return base.subscribe(roomId, onMsg, onError);
+      },
+    };
+    const host = await createHostSession(flaky, seqRandom());
+    const guest = await createGuestSession(flaky, host.token);
+    await flush();
+    expect(host.state()).toBe('paired');
+
+    // host's listener is the first subscribe() call.
+    expect(errorCbs.length).toBeGreaterThanOrEqual(1);
+    errorCbs[0]!();
+    expect(host.state()).toBe('disconnected');
+
+    await guest.close();
+    await host.close();
   });
 
   it('relays phone music state to the host while paired', async () => {
@@ -266,5 +391,51 @@ describe('host + guest sessions over the fake transport', () => {
     await flush();
     expect(host.state()).toBe('paired');
     expect(guest2.state()).toBe('paired');
+  });
+});
+
+describe('privacyAsk / privacyReply on the wire', () => {
+  it('accepts a phone ask and a host reply, and rejects the wrong role', () => {
+    const ask = { jobId: 'pv-1', text: 'email Priya Rao' };
+    expect(validateMessage({ v: 1, from: 'phone', type: 'privacyAsk', ask })).toEqual({
+      v: 1, from: 'phone', type: 'privacyAsk', ask,
+    });
+    expect(validateMessage({ v: 1, from: 'host', type: 'privacyAsk', ask })).toBeNull();
+    const reply = { jobId: 'pv-1', text: 'Hi Priya Rao', routeLine: 'routed via Mac: Nano cleaned, then Gemini', sentBytes: 20, cleaned: true };
+    expect(validateMessage({ v: 1, from: 'host', type: 'privacyReply', reply })).toMatchObject({ type: 'privacyReply', reply });
+    expect(validateMessage({ v: 1, from: 'phone', type: 'privacyReply', reply })).toBeNull();
+  });
+
+  it('a guest ask is cleaned on the host and the filled reply comes back', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    host.onPrivacyAsk((ask) => {
+      void host.sendPrivacyReply({
+        jobId: ask.jobId,
+        text: 'Hi Priya Rao',
+        routeLine: 'routed via Mac: Nano cleaned, then Gemini',
+        sentBytes: 24,
+        cleaned: true,
+      });
+    });
+    const reply = await guest.sendPrivacyAsk({ jobId: 'pv-9', text: 'email Priya Rao' });
+    expect(reply.text).toBe('Hi Priya Rao');
+    expect(reply.cleaned).toBe(true);
+    expect(reply.sentBytes).toBe(24);
+  });
+
+  it('rejects an in-flight privacyAsk immediately on close(), instead of hanging for the full timeout', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    // The host never replies — without the fix this would hang for timeoutMs.
+    const pending = guest.sendPrivacyAsk({ jobId: 'pv-10', text: 'email Priya Rao' }, 20000);
+    await flush();
+    await guest.close();
+    await expect(pending).rejects.toThrow(/closed/);
+    await host.close();
   });
 });

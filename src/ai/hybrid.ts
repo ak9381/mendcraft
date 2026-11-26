@@ -1,20 +1,16 @@
-// Firebase AI Logic hybrid wrapper: Gemini Nano on-device when available,
-// gemini-3.5-flash-lite in the cloud otherwise, deterministic rule parser as
-// the always-on floor. Every model response is re-validated with validateOp
-// before it can reach the engine.
+// Firebase AI Logic hybrid wrapper: on-device model when available (Gemini
+// Nano in Chrome, Apple Foundation Models in the iOS Capacitor shell, or
+// Android ML Kit), gemini-3.5-flash-lite in the cloud otherwise,
+// deterministic rule parser as the always-on floor. Every model response is
+// re-validated with validateOp before it can reach the engine.
 
 import { type Op } from '../core/ops';
-import { isTemplateName, type TemplateName } from '../core/templates';
+import { parseRefinedQuery, refinePrompt } from '../references/query';
 import { getActiveMode } from '../core/modes';
-import { parseCommand, isTemplateCommand } from '../core/ruleParser';
 import { coercePlanGenerate } from '../plan/ai';
 import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
 import { buildPlanTemplate, type PlanTemplateName } from '../plan/templates';
 import { validatePlanOp, type PlanOp } from '../plan/ops';
-import { coerceUiGenerate } from '../ui/design/ai';
-import { parseUiCommand, isUiGenerate } from '../ui/design/ruleParser';
-import { buildUiTemplate } from '../ui/design/templates';
-import type { Frame, FramePreset } from '../ui/design/doc';
 import {
   buildFusionConstraint,
   buildFusionPrompt,
@@ -46,9 +42,42 @@ import {
   type DeviceIdentity, type EffectVerdict, type IdentifyHint,
 } from '../devices/identify';
 import { coerceConnector, type Connector } from '../devices/connector';
-import { initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
+import { appCheckTokenError, initAppCheck, APP_CHECK_FAIL_MSG, type AppCheckStatus } from '../firebase/appCheck';
+import { cloudCallError, explainCloudFailure, GEMINI_NOT_SET_UP, type CloudFailure } from './cloudErrors';
+import { nanoQueue, NanoQueueSkipped } from './nanoQueue';
+import { nanoTrace } from './nanoTrace';
+import { watchCloudFetch } from './cloudFetchWatch';
 import { initRemoteConfig, remoteSettings } from '../firebase/remoteConfig';
+import {
+  classifyCloudFailure,
+  delay,
+  extractJson,
+  hasCompleteJson,
+  HIGH_DEMAND_BACKOFF_MS,
+  mergeStreamText,
+  RATE_LIMIT_BACKOFF_MS,
+  safeResponseText,
+  safeStreamChunk,
+  type CloudFailKind,
+} from './cloudJson';
+import { HEDGE_AFTER_MS, HEDGE_CLOUD_MODEL, PRIMARY_CLOUD_MODEL, raceHedged } from './hedge';
 import { initTelemetry, recordInference } from '../firebase/telemetry';
+import { refinePromptForMockups, parseGeneratedOptions, generatedToHits, REF_GENERATE_CONSTRAINT } from '../references/mockups';
+import type { GenerateKind, RefHit } from '../references/types';
+import { CAD_TOOL_CONSTRAINT, cadToolPrompt, coerceToolCall, type ToolCall } from '../cad/tools';
+import {
+  CONDENSE_CONSTRAINT, CONDENSE_TIMEOUT_MS, coerceCondensed, condensePrompt, wordCount,
+  type CondenseOutcome,
+} from './condense';
+import { COPILOT_ANSWER_CONSTRAINT, EMAIL_CONSTRAINT, copilotAnswerPrompt, emailPrompt } from '../cad/copilot';
+import { MATERIAL_CONSTRAINT, MATERIAL_PROMPT, coerceMaterialPlan, presetFor, type MaterialPlan } from '../cad/materials';
+import { coerceEmailDraft, type EmailDraft } from '../cad/siteChecklist';
+import { fillVisible, protectText } from '../privacy/directory';
+import {
+  appleStatusToDevice, appleTextModel, checkAppleAvailability, getAppleAIPlugin,
+  type AppleAIPlugin,
+} from './appleAI';
+import type { OnDeviceKind } from './router';
 
 export type { AppCheckStatus } from '../firebase/appCheck';
 export type { FusionContext, FusionCursor, NearbyElement } from './intentFusion';
@@ -85,23 +114,11 @@ export interface GeneratePlanResult {
   source: Source;
 }
 
-/** UI-mode "generate a whole screen" result (a validated Frame or a clarify). */
-export interface GenerateUiResult {
-  frame?: Frame;
-  clarify?: string;
-  note?: string;
-  source: Source;
-}
-
 export interface VerifyResult {
   matchesIntent: boolean;
   issue: string | null;
   source: Source;
 }
-
-export type TemplateResult =
-  | { template: TemplateName; params: Record<string, number>; source: Source }
-  | { clarify: string; source: Source };
 
 export interface HybridStatus {
   appCheck: AppCheckStatus;
@@ -109,6 +126,8 @@ export interface HybridStatus {
   message: string | null;
   /** Last AI error (cloud or on-device), for the UI and console. */
   lastError: string | null;
+  /** Why the last cloud JSON call failed, if it did. */
+  lastFailKind: CloudFailKind | null;
 }
 
 /** Minimal surface of Chrome's global LanguageModel (Prompt API). */
@@ -121,6 +140,14 @@ export interface TextGenModel {
   generateContent(
     request: string,
   ): Promise<{ response: { text: () => string; inferenceSource?: string } }>;
+  /** Optional streaming path. On a timeout we keep any JSON already received
+   *  instead of dropping the whole call. */
+  generateContentStream?(
+    request: string,
+  ): Promise<{
+    stream: AsyncIterable<{ text: () => string; inferenceSource?: string }>;
+    response: Promise<{ text: () => string; inferenceSource?: string }>;
+  }>;
   initializeDeviceModel?(onProgress?: (p: number) => void): Promise<void>;
 }
 
@@ -185,8 +212,13 @@ interface Models {
   langDetect?: TextGenModel | null;
   /** Accessibility explainer (ONLY_IN_CLOUD, a11y-explain schema). */
   a11yExplain?: TextGenModel | null;
+  a11yExplainHedge?: TextGenModel | null;
   /** On-device hand-profile picker (PREFER_ON_DEVICE, numbers-only; never cloud). */
   handAdapt?: TextGenModel | null;
+  /** Ramble condenser (ONLY_ON_DEVICE; the raw ramble never rides to the cloud). */
+  condense?: TextGenModel | null;
+  /** Next-step chips: Nano picks ids from a fixed list (ONLY_ON_DEVICE; never cloud). */
+  nextSteps?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
   /** Cloud TTS model (spoken replies in her language); null if unsupported. */
@@ -199,6 +231,22 @@ interface Models {
   effectCheckCloud?: MultimodalGenModel | null;
   /** Add-a-device: write a declarative connector once (ONLY_IN_CLOUD). */
   connectorWriter?: TextGenModel | null;
+  /** Reference drawings / layout frames as SVG JSON (ONLY_IN_CLOUD, text model). */
+  refGenerate?: TextGenModel | null;
+  /** CAD copilot: Nano picks ONE typed CAD tool (PREFER_ON_DEVICE) + cloud twin. */
+  cadTool?: TextGenModel | null;
+  cadToolCloud?: TextGenModel | null;
+  /** CAD copilot: hard questions, client email drafts, 3D materials (ONLY_IN_CLOUD). */
+  copilotAnswer?: TextGenModel | null;
+  /** Backup cloud model (gemini-3.1-flash-lite) for hedged copilot answers. */
+  copilotAnswerHedge?: TextGenModel | null;
+  copilotEmail?: TextGenModel | null;
+  copilotEmailHedge?: TextGenModel | null;
+  copilotMaterials?: TextGenModel | null;
+  copilotMaterialsHedge?: TextGenModel | null;
+  /** Unconstrained JSON cloud model for the smart canvas (plans + language packs). */
+  canvasCloud?: TextGenModel | null;
+  canvasCloudHedge?: TextGenModel | null;
 }
 
 export interface ModelOverrides {
@@ -214,7 +262,10 @@ export interface ModelOverrides {
   fusionLang?: TextGenModel | null;
   langDetect?: TextGenModel | null;
   a11yExplain?: TextGenModel | null;
+  a11yExplainHedge?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
+  condense?: TextGenModel | null;
+  nextSteps?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
   deviceSee?: MultimodalGenModel | null;
@@ -222,12 +273,27 @@ export interface ModelOverrides {
   effectCheck?: MultimodalGenModel | null;
   effectCheckCloud?: MultimodalGenModel | null;
   connectorWriter?: TextGenModel | null;
+  refGenerate?: TextGenModel | null;
+  cadTool?: TextGenModel | null;
+  cadToolCloud?: TextGenModel | null;
+  copilotAnswer?: TextGenModel | null;
+  copilotAnswerHedge?: TextGenModel | null;
+  copilotEmail?: TextGenModel | null;
+  copilotEmailHedge?: TextGenModel | null;
+  copilotMaterials?: TextGenModel | null;
+  copilotMaterialsHedge?: TextGenModel | null;
+  canvasCloud?: TextGenModel | null;
+  canvasCloudHedge?: TextGenModel | null;
+  /** Fake for the per-turn ONLY_ON_DEVICE model (streamOnDevice). */
+  onDeviceModel?: ((params: OnDeviceModelParams) => TextGenModel) | null;
   enabled?: boolean;
   appCheck?: AppCheckStatus;
   /** Force the reported on-device model status (test seam for adaptHandProfile). */
   deviceModel?: DeviceModelStatus;
   /** Fake Chrome LanguageModel; null = browser without the Prompt API. */
   languageModel?: LanguageModelProvider | null;
+  /** Fake or injected MendcraftAppleAI Capacitor plugin (iOS on-device model). */
+  appleAI?: AppleAIPlugin | null;
 }
 
 /**
@@ -258,10 +324,11 @@ export const DEIXIS_CREATE_OPTIONS = {
 };
 
 const ON_DEVICE_TIMEOUT_MS = 15000;
-/** Cloud "generate a whole plan/template" budget. A hung cloud call must fall
- *  back to the deterministic template within a few seconds, never leave the UI
- *  spinning (the deployed path has to degrade to RULES honestly and promptly). */
-const CLOUD_GENERATE_TIMEOUT_MS = 6000;
+/** Cloud budget for a warm call. A hung cloud call must still fall back to
+ *  rules promptly — first calls after load or reconnect get a longer budget. */
+export const CLOUD_GENERATE_TIMEOUT_MS = 8000;
+/** Extra budget for the first cloud generate (App Check + model cold start). */
+export const CLOUD_FIRST_TIMEOUT_MS = 20000;
 
 // ---------------------------------------------------------------------------
 // Structured-output schemas. The on-device Prompt API takes a plain JSON Schema
@@ -306,18 +373,43 @@ function toFirebaseSchema(node: Record<string, unknown>, S: any): any {
 // seam, status, and routing.
 
 let testOverrides: ModelOverrides | null = null;
+/** Builds a Firebase AI Logic ONLY_ON_DEVICE model for one call (set by
+ *  initFirebase). Null until Firebase AI Logic has started. */
+let onDeviceFactory: ((params: OnDeviceModelParams) => TextGenModel) | null = null;
 let cached: Models | null = null;
 let initPromise: Promise<Models | null> | null = null;
 let deviceModelStatus: DeviceModelStatus = 'idle';
+/** Which on-device engine last reported ready (Nano vs Apple). */
+let onDeviceKind: OnDeviceKind | null = null;
 let appCheckState: AppCheckStatus = 'skipped';
 let statusMessage: string | null = null;
 let lastError: string | null = null;
+let lastFailKind: CloudFailKind | null = null;
+/** True once a cloud generate has finished (or returned usable partial JSON). */
+let cloudSettled = false;
+let warmPromise: Promise<boolean> | null = null;
+let warmDevicePromise: Promise<boolean> | null = null;
 
 function resetStatus(): void {
   deviceModelStatus = 'idle';
+  onDeviceKind = null;
   appCheckState = 'skipped';
   statusMessage = null;
   lastError = null;
+  lastFailKind = null;
+  cloudSettled = false;
+  warmPromise = null;
+  warmDevicePromise = null;
+}
+
+/** Short = guideline explain and similar; long = materials, email, copilot. */
+export function cloudBudgetMs(kind: 'short' | 'long' = 'short'): number {
+  if (kind === 'long') return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS * 2 : CLOUD_FIRST_TIMEOUT_MS;
+  return cloudSettled ? CLOUD_GENERATE_TIMEOUT_MS : Math.max(CLOUD_GENERATE_TIMEOUT_MS, 12_000);
+}
+
+function markCloudSettled(): void {
+  cloudSettled = true;
 }
 
 function noteError(where: string, err: unknown): void {
@@ -336,9 +428,671 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+/** How long an on-device call may wait for the model before it gives up
+ *  (and its caller falls back to rules or its redacted cloud twin). */
+export const ON_DEVICE_MAX_WAIT_MS = 6000;
+/** The longest one SDK on-device call may hold the model's slot. */
+export const ON_DEVICE_MAX_RUN_MS = 20_000;
+/** The longest an on-device call may spend creating its session — which is
+ *  where an evicted model is loaded back (17.7 s measured). Its own ceiling:
+ *  loading is not the model being slow to answer. */
+export const ON_DEVICE_LOAD_MAX_MS = 45_000;
+/** How long a load may run before it is worth saying "loading the model". */
+export const ON_DEVICE_LOADING_NOTE_MS = 700;
+/** The reason given when the load ceiling ran out. */
+export const STILL_LOADING = 'was still loading the model';
+/** Where a slow model load stands, for the "loading the model" line. */
+export type NanoLoadState = 'loading' | 'loaded' | 'gave-up' | 'failed';
+
+/** Route a model's calls through the shared Nano queue: one on-device prompt
+ *  at a time, and a call that waited too long is never started. A streamed
+ *  call holds its slot until the stream has finished. */
+export function queueOnDevice<T extends object>(model: T, queue = nanoQueue, maxWaitMs = ON_DEVICE_MAX_WAIT_MS, maxRunMs = ON_DEVICE_MAX_RUN_MS): T {
+  const m = model as Record<string, unknown>;
+  // The SDK's on-device call can't be aborted, so a call that never settles
+  // must not hold the one slot for ever: it gives it back after maxRunMs.
+  const bounded = <R,>(p: Promise<R>): Promise<R> => withTimeout(p, maxRunMs, 'on-device call');
+  const once = m.generateContent;
+  if (typeof once === 'function') {
+    m.generateContent = (...args: unknown[]) => queue.run(() => bounded((once as (...a: unknown[]) => Promise<unknown>).apply(model, args)), { maxWaitMs });
+  }
+  const streamed = m.generateContentStream;
+  if (typeof streamed === 'function') {
+    m.generateContentStream = (...args: unknown[]) => new Promise((resolve, reject) => {
+      queue.run(async () => {
+        const started = await bounded((streamed as (...a: unknown[]) => Promise<{ response?: Promise<unknown> }>).apply(model, args));
+        resolve(started);
+        try { await bounded(Promise.resolve(started.response)); } catch { /* the reader sees the error */ }
+      }, { maxWaitMs }).catch(reject);
+    });
+  }
+  return model;
+}
+
+type ModelResponse = { text: () => string; inferenceSource?: string };
+
+/**
+ * Run a cloud generate with a hard timeout. If the model can stream, a timeout
+ * still counts when we already have parseable JSON (partial output). Otherwise
+ * the caller falls back to rules.
+ */
+export async function generateWithBudget(
+  model: TextGenModel,
+  prompt: string,
+  ms: number,
+  label: string,
+  onChunk?: (text: string) => void,
+): Promise<{ response: ModelResponse }> {
+  if (typeof model.generateContentStream === 'function') {
+    let latest = '';
+    let inferenceSource: string | undefined;
+    const run = (async () => {
+      const started = await model.generateContentStream!(prompt);
+      try {
+        for await (const chunk of started.stream) {
+          const safe = safeStreamChunk(chunk);
+          if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
+          if (safe.text) {
+            latest = mergeStreamText(latest, safe.text);
+            try { onChunk?.(latest); } catch { /* UI preview must not fail the call */ }
+            // The SDK's final `response` sometimes hangs for seconds after the
+            // last useful chunk. Once we have a fully closed JSON value, stop.
+            if (hasCompleteJson(latest)) {
+              markCloudSettled();
+              return { text: () => latest, inferenceSource: chunk.inferenceSource ?? inferenceSource };
+            }
+          }
+          if (chunk.inferenceSource) inferenceSource = chunk.inferenceSource;
+        }
+      } catch (err) {
+        // A mid-stream parse/text() error is recoverable when we already have text.
+        if (!latest) throw err;
+      }
+      if (started.response) {
+        try {
+          const final = await started.response;
+          const safe = safeResponseText(final);
+          if (safe.failKind === 'safety') throw new Error(`${label} safety: blocked`);
+          return { text: () => safe.text || final.text(), inferenceSource: final.inferenceSource ?? inferenceSource };
+        } catch (err) {
+          if (latest) return { text: () => latest, inferenceSource };
+          throw err;
+        }
+      }
+      return { text: () => latest, inferenceSource };
+    })();
+    try {
+      const response = await withTimeout(run, ms, label);
+      markCloudSettled();
+      return { response };
+    } catch (err) {
+      if (latest && extractJson(latest) != null) {
+        markCloudSettled();
+        return { response: { text: () => latest, inferenceSource } };
+      }
+      throw err;
+    }
+  }
+  const { response } = await withTimeout(model.generateContent(prompt), ms, label);
+  markCloudSettled();
+  const safe = safeResponseText(response);
+  if (safe.failKind === 'safety') {
+    throw new Error(`${label} safety: ${safe.failKind}`);
+  }
+  if (safe.text) {
+    return { response: { text: () => safe.text, inferenceSource: (response as { inferenceSource?: string }).inferenceSource } };
+  }
+  return { response };
+}
+
+/** What a canvas cloud call is expected to return: a board plan, any JSON
+ *  object (a language pack, one revised tile), or a short plain-text reply
+ *  (the model is JSON-only, so the words arrive as a JSON string or inside
+ *  a one-field object). */
+export type CanvasReplyShape = 'board' | 'json' | 'text';
+
+const TEXT_KEYS = ['reply', 'response', 'answer', 'text', 'message'];
+export function acceptCanvasReply(raw: unknown, shape: CanvasReplyShape): unknown | null {
+  if (shape === 'board') return looksLikeSurfacePlan(raw) ? raw : null;
+  if (shape === 'json') return raw && typeof raw === 'object' && Object.keys(raw as object).length ? raw : null;
+  if (typeof raw === 'string') return raw.trim() || null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  for (const k of TEXT_KEYS) if (typeof o[k] === 'string' && (o[k] as string).trim()) return (o[k] as string).trim();
+  const strings = Object.values(o).filter((v): v is string => typeof v === 'string' && !!v.trim());
+  return strings.length === 1 ? strings[0].trim() : null;
+}
+
+/** A canvas reply worth racing on: an object with a `tiles` list at the top
+ *  or one envelope down (e.g. {"plan":{...}}), which the canvas layer unwraps.
+ *  A bare `{}` or tile-less object must NOT win the hedge race — it made the
+ *  live board turn fail with "tiles must be a list" while the backup model
+ *  would have answered (live-build study, 01:40 IST). */
+export function looksLikeSurfacePlan(raw: unknown, depth = 0): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 2) return false;
+  const o = raw as Record<string, unknown>;
+  if (Array.isArray(o.tiles)) return true;
+  return Object.values(o).some((v) => looksLikeSurfacePlan(v, depth + 1));
+}
+
+export interface CanvasCloudHooks {
+  /** The real fetch was called for one Gemini request of this call (a hedge or a
+   *  retry is another one). Seen on the real fetch — see cloudFetchWatch. */
+  onSend?: () => void;
+  /** That request failed with no response at all: the network never
+   *  delivered it. */
+  onRetract?: () => void;
+}
+type CanvasCloudResult =
+  | { ok: true; text: string }
+  | { ok: false; why: string; kind: CloudFailKind | null;
+      /** Known for certain from the real fetch: no request of this call was
+       *  delivered. Undefined when fetch could not be watched. */
+      nothingSent?: boolean };
+
+/** The cloud board call with its own failure record (two overlapping calls
+ *  never read each other's error). */
+async function runCanvasCloud(prompt: string, onChunk: ((text: string) => void) | undefined, shape: CanvasReplyShape, hooks: CanvasCloudHooks): Promise<CanvasCloudResult> {
+  const models = await ensureModels();
+  // Never use the copilot/template/intent models: those have their own response
+  // schemas and will ignore a surface-plan prompt. The canvas model is JSON-only.
+  let primary = models?.canvasCloud ?? null;
+  let backup = models?.canvasCloudHedge ?? null;
+  if (!primary) {
+    const why = appCheckState === 'failed' ? `AppCheck: ${statusMessage ?? 'failed to start'}` : !isEnabled() ? GEMINI_NOT_SET_UP : 'no cloud model answered';
+    return { ok: false, why, kind: null, nothingSent: true }; // no model to call: nothing was even tried
+  }
+  // Same privacy path as the rest of hybrid: directory tokens, then rules-first
+  // redaction. The canvas ledger should record this redacted payload.
+  const sent = protectText(prompt);
+  // Bytes are booked on the REAL fetch: while this call runs, requests to the
+  // Gemini endpoint that carry this prompt are counted as they are issued.
+  const watch = watchCloudFetch(sent.text, { onIssued: hooks.onSend, onUndelivered: hooks.onRetract });
+  const nothingSent = (): boolean | undefined => (watch.active ? watch.delivered() === 0 : undefined);
+  // The watch outlives this function when the hedge's losing leg is still
+  // retrying: its requests are sends too. It stops when every leg is done.
+  let handedOver = false;
+  let failKind: CloudFailKind | null = null;
+  let failWhy = '';
+  try {
+    const got = await requestHedgedJson(
+      primary,
+      backup,
+      sent.text,
+      cloudBudgetMs('long'),
+      'canvas plan',
+      (raw) => acceptCanvasReply(raw, shape),
+      shape === 'text' ? undefined : onChunk,
+      // The primary's reason wins; a backup failure only fills a gap.
+      (kind, detail) => { if (!failWhy) { failKind = kind; failWhy = `canvas plan: ${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`; } },
+      (handedOver = true, () => watch.stop()),
+    );
+    if (!got) return { ok: false, why: failWhy || 'no cloud model answered', kind: failKind, nothingSent: nothingSent() };
+    const visible = fillVisible(typeof got.value === 'string' ? got.value : JSON.stringify(got.value));
+    try { onChunk?.(visible.text); } catch { /* UI preview must not fail the call */ }
+    return { ok: true, text: visible.text };
+  } catch (err) {
+    noteError('canvas plan', err);
+    return { ok: false, why: err instanceof Error ? err.message : String(err), kind: null, nothingSent: nothingSent() };
+  } finally {
+    if (!handedOver) watch.stop();
+  }
+}
+
+/**
+ * Smart-canvas seam: stream a surface-plan prompt through the cloud (Firebase AI
+ * Logic) and resolve the full text. Returns null when no cloud model is reachable
+ * or the call failed. Re-validation of the returned JSON happens in the canvas
+ * layer (coerceSurfacePlan / gate).
+ */
+export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) => void, shape: CanvasReplyShape = 'board'): Promise<string | null> {
+  const got = await runCanvasCloud(prompt, onChunk, shape, {});
+  return got.ok ? got.text : null;
+}
+
+/**
+ * The same cloud board call, but a failure is an error that says why in plain
+ * words (App Check 403, no connection, quota, …) instead of a silent null —
+ * the canvas shows that line and offers Retry; it never substitutes a draft.
+ */
+export async function streamCanvasPlanOrThrow(prompt: string, onChunk?: (text: string) => void, shape: CanvasReplyShape = 'board', hooks: CanvasCloudHooks = {}): Promise<string> {
+  const got = await runCanvasCloud(shape === 'text' ? `${prompt}\nReply as JSON: {"reply": string}` : prompt, onChunk, shape, hooks);
+  if (got.ok) return got.text;
+  const source = got.kind === 'parse' || got.kind === 'empty' ? 'parse' : got.why;
+  throw await cloudCallError(source, testOverrides ? undefined : appCheckTokenError, got.nothingSent);
+}
+
+// ---------------------------------------------------------------------------
+// ON-DEVICE BOARD CALLS, through Firebase AI Logic (ONLY_ON_DEVICE).
+
+/** What the SDK hands to Chrome's Prompt API for one on-device model. */
+export interface OnDeviceModelParams {
+  createOptions: Record<string, unknown>;
+  promptOptions?: { responseConstraint?: Record<string, unknown> };
+}
+
+export interface OnDeviceStreamRequest {
+  /** Fixed instructions: ride in the session's `initialPrompts`. */
+  system?: string;
+  /** This turn's prompt. */
+  prompt: string;
+  /** JSON schema the reply must match (`responseConstraint`). */
+  constraint?: Record<string, unknown>;
+  /** Stop: the wait ends at once and the session is destroyed. */
+  signal?: AbortSignal;
+  onChunk?: (full: string) => void;
+  /** The queue gave this call the model (its session is not created yet). */
+  onStart?: () => void;
+  /** The session exists — the model is loaded and the prompt is running: the
+   *  caller's reply deadline starts HERE, never while the model is loading. */
+  onReady?: () => void;
+  /** The model is taking a while to load ('loading'), then how that load
+   *  ended: 'loaded' (it is answering), 'gave-up' (the load ceiling ran
+   *  out) or 'failed' (stopped or broke while loading). Only after 'loading'. */
+  onLoading?: (state: NanoLoadState) => void;
+  /** A short reply is wanted: once the text is this long the call ends (and
+   *  the model is freed) instead of letting it write on. */
+  maxChars?: number;
+  /** Injectable for tests. */
+  queue?: typeof nanoQueue;
+  yieldToPage?: () => Promise<void>;
+  now?: () => number;
+}
+
+/** Text in, text out, English. */
+export const NANO_CREATE_OPTIONS = ON_DEVICE_CREATE_OPTIONS;
+/** How long a board call may wait for the one model before it gives up
+ *  (and the turn goes to Gemini). */
+export const ON_DEVICE_BOARD_MAX_WAIT_MS = 15_000;
+/** How long a burst of buffered chunks may run before the page gets a turn. */
+const ON_DEVICE_YIELD_EVERY_MS = 24;
+
+/** The SDK's on-device path cannot be aborted, and (measured on real Chrome)
+ *  aborting the signal given to create() does not stop a prompt that is
+ *  already running. The SDK does keep the session it made on the model's
+ *  Chrome adapter, so stopping also destroys that session directly. */
+function destroySdkSession(model: unknown): void {
+  try {
+    const session = (model as { chromeAdapter?: { oldSession?: { destroy?: () => void } } } | null)?.chromeAdapter?.oldSession;
+    session?.destroy?.();
+  } catch { /* already gone */ }
+}
+
+/** Has the SDK already created this model's session (its create() resolved)? */
+function sdkSessionReady(model: unknown): boolean {
+  try { return !!(model as { chromeAdapter?: { oldSession?: unknown } } | null)?.chromeAdapter?.oldSession; } catch { return false; }
+}
+
+/** Destroys the previous call's session (the SDK keeps each model's last
+ *  session alive; one finished board session is enough to keep Nano loaded). */
+let lastOnDeviceStop: (() => void) | null = null;
+
+function onDeviceModelFor(params: OnDeviceModelParams): TextGenModel {
+  const make = testOverrides ? testOverrides.onDeviceModel ?? null : onDeviceFactory;
+  if (!make) throw new Error(isEnabled() ? 'Firebase AI Logic didn’t start, so the on-device model can’t be used' : 'Firebase AI Logic isn’t set up, so the on-device model can’t be used');
+  return make(params);
+}
+
+/**
+ * ONE on-device prompt through Firebase AI Logic: a per-call ONLY_ON_DEVICE
+ * model (so the reply schema can name this turn's devices), streamed, through
+ * the page's one Nano queue. The source is re-checked on every chunk — text
+ * that did not come from the device is refused.
+ *
+ * Stopping: the SDK's on-device path takes no abort signal, so stopping means
+ * (1) the caller stops waiting at once and the queue slot is freed, (2) the
+ * stream iterator is returned, and (3) the AbortSignal given to the session's
+ * create() is aborted, which is how the Prompt API destroys a session.
+ */
+export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string> {
+  const queue = req.queue ?? nanoQueue;
+  const now = req.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const yieldToPage = req.yieldToPage ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
+  await ensureModels();
+  const asked = Date.now();
+  // The model is being loaded by the warm-up right now: wait for that load
+  // and use the loaded model, rather than abort it and start a second create.
+  // The wait is part of this call's load: it says "loading the model", and
+  // the load ceiling (ON_DEVICE_LOAD_MAX_MS) covers the wait and the call's
+  // own create together — never 45 s of waiting and then 45 s more.
+  let loadMaxMs = ON_DEVICE_LOAD_MAX_MS;
+  // Only a warm-up that is really loading the model is waited for. One still
+  // waiting in the queue is not loading anything: this request goes through
+  // the queue as usual (ahead of it — the warm-up is the lowest job).
+  const warm = warmLoading ? boardWarm : null;
+  if (warm) {
+    nanoTrace('on-device call: waiting for the warm-up that is loading the model');
+    // The model has the call (it is loading for it): the caller's reply clock
+    // must not start while it waits.
+    try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
+    let said = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    timers.push(setTimeout(() => { said = true; try { req.onLoading?.('loading'); } catch { /* a label only */ } }, ON_DEVICE_LOADING_NOTE_MS));
+    let onAbort: (() => void) | null = null;
+    const outcome = await Promise.race<'loaded' | 'failed' | 'timeout' | 'stopped'>([
+      warm.then((ok) => (ok ? 'loaded' as const : 'failed' as const), () => 'failed' as const),
+      new Promise((r) => { timers.push(setTimeout(() => r('timeout'), Math.min(WARM_WAIT_MAX_MS, ON_DEVICE_LOAD_MAX_MS))); }),
+      new Promise((r) => { if (!req.signal) return; onAbort = () => r('stopped'); if (req.signal.aborted) onAbort(); else req.signal.addEventListener('abort', onAbort, { once: true }); }),
+    ]);
+    for (const t of timers) clearTimeout(t);
+    if (onAbort) req.signal?.removeEventListener('abort', onAbort);
+    const waited = Date.now() - asked;
+    nanoTrace(`on-device call: warm-up ${outcome} after ${waited} ms of waiting`);
+    if (outcome === 'stopped') throw new Error('stopped');
+    if (outcome === 'timeout') {
+      // Still loading at the ceiling: the honest handoff, and no second
+      // create next to the one that is still loading.
+      if (said) { try { req.onLoading?.('gave-up'); } catch { /* a label only */ } }
+      throw new Error(STILL_LOADING);
+    }
+    if (said && outcome === 'loaded') { try { req.onLoading?.('loaded'); } catch { /* a label only */ } }
+    loadMaxMs = Math.max(1000, ON_DEVICE_LOAD_MAX_MS - waited);
+  }
+  return queue.run(async () => {
+    if (req.signal?.aborted) throw new Error('stopped');
+    const t0 = Date.now();
+    nanoTrace(`on-device call: waited ${t0 - asked} ms for the model's queue`);
+    try { req.onStart?.(); } catch { /* the caller's clock must not fail the call */ }
+    // The previous call's session is kept until THIS one is answering, so the
+    // model always has a live session and is never unloaded in between.
+    const stopPrevious = lastOnDeviceStop;
+    lastOnDeviceStop = null;
+    let previousStopped = false;
+    const releasePrevious = (): void => { if (!previousStopped) { previousStopped = true; stopPrevious?.(); } };
+    const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let iterator: AsyncIterator<{ text: () => string; inferenceSource?: string }> | null = null;
+    let model: TextGenModel | null = null;
+    const stop = (): void => {
+      try { void iterator?.return?.(); } catch { /* already done */ }
+      session?.abort();
+      destroySdkSession(model);
+    };
+    model = onDeviceModelFor({
+      createOptions: {
+        ...ON_DEVICE_CREATE_OPTIONS,
+        ...(req.system ? { initialPrompts: [{ role: 'system', content: [{ type: 'text', value: req.system }] }] } : {}),
+        ...(session ? { signal: session.signal } : {}),
+      },
+      ...(req.constraint ? { promptOptions: { responseConstraint: req.constraint } } : {}),
+    });
+    let onAbort: (() => void) | null = null;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => { stop(); reject(new Error('stopped')); };
+      req.signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    aborted.catch(() => undefined);
+    let sawChunk = false;
+    let enough = false;
+    let cutShort = false;
+    // Two clocks, one after the other. While the session is being created
+    // (the model may be loading back after an eviction) only the generous
+    // load ceiling runs. The reply's own 20 s starts when the session exists.
+    let ready = false;
+    let said = false;
+    // The call is over (answered, stopped, out of time): a session that
+    // turns up after this starts no clock and tells nobody.
+    let closed = false;
+    let gaveUp = false;
+    let loadCap: ReturnType<typeof setTimeout> | null = null;
+    let loadNote: ReturnType<typeof setTimeout> | null = null;
+    let runCap: ReturnType<typeof setTimeout> | null = null;
+    let readyPoll: ReturnType<typeof setInterval> | null = null;
+    let outOfTime: (e: Error) => void = () => undefined;
+    const clocks = new Promise<never>((_, reject) => { outOfTime = reject; });
+    clocks.catch(() => undefined);
+    const stopClocks = (): void => {
+      closed = true;
+      if (loadCap) clearTimeout(loadCap);
+      if (loadNote) clearTimeout(loadNote);
+      if (runCap) clearTimeout(runCap);
+      if (readyPoll) clearInterval(readyPoll);
+      loadCap = loadNote = runCap = null; readyPoll = null;
+    };
+    function markReady(): void {
+      if (ready || closed) return;
+      ready = true;
+      if (loadCap) { clearTimeout(loadCap); loadCap = null; }
+      if (loadNote) { clearTimeout(loadNote); loadNote = null; }
+      if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
+      nanoTrace(`on-device call: session ready ${Date.now() - t0} ms after it got the model`);
+      if (said) { try { req.onLoading?.('loaded'); } catch { /* a label only */ } }
+      try { req.onReady?.(); } catch { /* the caller's clock must not fail the call */ }
+      runCap = setTimeout(() => outOfTime(new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`)), ON_DEVICE_MAX_RUN_MS);
+    }
+    loadCap = setTimeout(() => { if (!ready) { gaveUp = true; outOfTime(new Error(STILL_LOADING)); } }, loadMaxMs);
+    loadNote = setTimeout(() => { if (!ready) { said = true; nanoTrace('on-device call: the model is loading'); try { req.onLoading?.('loading'); } catch { /* a label only */ } } }, ON_DEVICE_LOADING_NOTE_MS);
+    readyPoll = setInterval(() => { if (sdkSessionReady(model)) markReady(); }, WARM_SESSION_POLL_MS);
+    const work = (async (): Promise<string> => {
+      let full = '';
+      const take = (chunk: { text: () => string; inferenceSource?: string }): void => {
+        if (sourceOf(chunk) !== 'on-device') throw new Error('the reply did not come from the on-device model');
+        let piece = '';
+        try { piece = chunk.text(); } catch { piece = ''; }
+        if (!piece) return;
+        // Deltas (current Chrome) or the text so far (older builds). A delta
+        // that repeats the tail ("ro" + "o") is still new text.
+        full = full && piece.length > full.length && piece.startsWith(full) ? piece : full + piece;
+        if (!sawChunk) { sawChunk = true; markReady(); releasePrevious(); nanoTrace(`on-device call: first chunk ${Date.now() - t0} ms after it got the model`); }
+        if (req.maxChars && full.length >= req.maxChars) enough = true;
+        try { req.onChunk?.(full); } catch (e) { if (e instanceof Error && e.name === 'MidStreamOffline') throw e; }
+      };
+      if (typeof model.generateContentStream === 'function') {
+        const started = await model.generateContentStream(req.prompt);
+        // The SDK creates the session before its stream is handed back.
+        markReady();
+        started.response?.catch(() => undefined);
+        iterator = started.stream[Symbol.asyncIterator]();
+        let lastYield = now();
+        for (;;) {
+          const step = await iterator.next();
+          if (step.done) break;
+          if (req.signal?.aborted) throw new Error('stopped');
+          take(step.value);
+          // A short reply was asked for and it is long enough: stop here, so
+          // the model is free again instead of writing on.
+          if (enough) { cutShort = true; break; }
+          // Buffered chunks resolve back to back as microtasks: hand the page
+          // a frame so a long reply can never freeze it.
+          if (now() - lastYield >= ON_DEVICE_YIELD_EVERY_MS) { await yieldToPage(); lastYield = now(); }
+        }
+      } else {
+        const { response } = await model.generateContent(req.prompt);
+        take(response);
+      }
+      if (req.signal?.aborted) throw new Error('stopped');
+      return full;
+    })();
+    work.catch(() => undefined);
+    let finished = false;
+    try {
+      // A call Chrome never settles still gives the slot back: at the load
+      // ceiling while it is loading, at the max run once it is answering.
+      const text = await Promise.race([work, aborted, clocks])
+        .catch((e) => {
+          const msg = e instanceof Error ? e.message : '';
+          if (/^took longer than/.test(msg)) throw e;
+          if (msg === STILL_LOADING) { markOnDeviceUnloaded('it was still loading'); throw e; }
+          // Not stopped by us and not a refused request: Chrome dropped the
+          // session — the model was probably unloaded. Warm it again.
+          if (msg !== 'stopped' && !/NotSupportedError|request is invalid|did not come from the on-device/i.test(`${e instanceof Error ? e.name : ''} ${msg}`)) markOnDeviceUnloaded(msg.slice(0, 60) || 'the call failed');
+          throw e;
+        });
+      finished = !cutShort; // a reply cut short still has a session writing: stop it below
+      recordInference('on-device', 'board', Date.now() - t0);
+      onDeviceLoaded = true;
+      onDeviceUsedAt = Date.now();
+      nanoTrace(`on-device call: done in ${Date.now() - t0} ms, output ${text.length} chars`);
+      // Keep this finished session (it keeps Nano loaded) until the next call.
+      const kept = model;
+      lastOnDeviceStop = () => { session?.abort(); destroySdkSession(kept); };
+      return text;
+    } finally {
+      if (onAbort) req.signal?.removeEventListener('abort', onAbort);
+      stopClocks();
+      if (said && !ready) { try { req.onLoading?.(gaveUp ? 'gave-up' : 'failed'); } catch { /* a label only */ } }
+      releasePrevious();
+      if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms${cutShort ? ' (reply long enough)' : ''}`); stop(); }
+    }
+  }, { priority: 10, signal: req.signal, maxWaitMs: ON_DEVICE_BOARD_MAX_WAIT_MS });
+}
+
+/** The warm-up's reply schema (kept to keywords Chrome accepts). */
+export const WARM_CONSTRAINT: Record<string, unknown> = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
+let boardWarm: Promise<boolean> | null = null;
+/** The warm-up holds the model and is loading it (not just queued). */
+let warmLoading = false;
+/** The longest a warm-up's create() (the cold model load) may take. */
+export const WARM_CREATE_MAX_MS = 60_000;
+/** The longest a request waits for a warm-up already loading the model. */
+export const WARM_WAIT_MAX_MS = 45_000;
+/** The longest the warm-up waits in the model's queue behind real jobs (it is
+ *  the lowest job: a real request always goes first). */
+export const WARM_QUEUE_WAIT_MS = 30_000;
+/** Where the background warm-up stands, for the engine bar's loading line. */
+export type WarmState = 'loading' | 'loaded' | 'failed';
+const warmListeners = new Set<(s: WarmState) => void>();
+/** Hear the warm-up start loading the model and finish (loaded / failed). */
+export function onWarmState(cb: (s: WarmState) => void): () => void {
+  warmListeners.add(cb);
+  return () => { warmListeners.delete(cb); };
+}
+function warmSays(s: WarmState): void {
+  for (const cb of [...warmListeners]) { try { cb(s); } catch { /* a label only */ } }
+}
+/** When the on-device model last answered (0: never on this page). */
+let onDeviceUsedAt = 0;
+/** Once the warm-up's session exists, its ~10-character reply gets this long. */
+export const WARM_PROMPT_TIMEOUT_MS = 5000;
+/** How often the warm-up looks whether its session has been created. */
+const WARM_SESSION_POLL_MS = 100;
+/** An on-device call has finished on this page: the model is in memory. */
+let onDeviceLoaded = false;
+export const onDeviceModelLoaded = (): boolean => onDeviceLoaded;
+
+/**
+ * Load Nano ahead of the first board turn: one tiny on-device prompt through
+ * the same SDK path, so the cold start (about 14 s on the laptop measured)
+ * is paid by the page and not by her first request. It runs below every real
+ * job.
+ *
+ * create() is NOT timed: it is where the cold load happens, it can be long,
+ * and while it runs the warm-up is pre-emptible (a request pushes it aside:
+ * session destroyed, slot freed). Once the session exists the model is
+ * loaded, only the tiny reply is left, and that gets WARM_PROMPT_TIMEOUT_MS;
+ * from then on the warm-up is left to finish rather than thrown away.
+ * Resolves true when the model is loaded (also when a real call already
+ * loaded it). A false result may be retried — see ai/nanoWarm.
+ */
+export function warmBoardOnDevice(queue = nanoQueue, opts: { promptTimeoutMs?: number; createMaxMs?: number } = {}): Promise<boolean> {
+  if (onDeviceLoaded) return Promise.resolve(true);
+  boardWarm ??= (async () => {
+    await ensureModels();
+    try {
+      await queue.run(async () => {
+        const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const model = onDeviceModelFor({
+          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
+          promptOptions: { responseConstraint: WARM_CONSTRAINT },
+        });
+        nanoTrace('warm-up: started');
+        warmLoading = true;
+        warmSays('loading');
+        const t0 = Date.now();
+        let poll: ReturnType<typeof setInterval> | null = null;
+        let deadline: ReturnType<typeof setTimeout> | null = null;
+        // create() is the cold load: it gets a generous ceiling (so a create
+        // Chrome never settles cannot hold the model for ever). The tiny
+        // prompt's own short clock starts only once the session exists.
+        const timedOut = new Promise<never>((_, reject) => {
+          const createCap = setTimeout(() => { if (!deadline) reject(new Error('on-device warm-up create timed out')); }, opts.createMaxMs ?? WARM_CREATE_MAX_MS);
+          const arm = (): void => {
+            if (deadline || !sdkSessionReady(model)) return;
+            if (poll) { clearInterval(poll); poll = null; }
+            clearTimeout(createCap);
+            nanoTrace(`warm-up: session created after ${Date.now() - t0} ms`);
+            deadline = setTimeout(() => reject(new Error('on-device warm-up prompt timed out')), opts.promptTimeoutMs ?? WARM_PROMPT_TIMEOUT_MS);
+          };
+          poll = setInterval(arm, WARM_SESSION_POLL_MS);
+          arm();
+          timedOut_cleanup = () => { clearTimeout(createCap); if (poll) clearInterval(poll); if (deadline) clearTimeout(deadline); };
+        });
+        timedOut.catch(() => undefined);
+        try {
+          const reply = model.generateContent('Reply with JSON only: {"ok":true}');
+          reply.catch(() => undefined);
+          await Promise.race([reply, timedOut]);
+        } catch (e) {
+          // Timed out (or failed): its session must not keep generating.
+          session?.abort(); destroySdkSession(model);
+          nanoTrace('warm-up: stopped (timed out or failed)');
+          throw e;
+        } finally {
+          timedOut_cleanup?.();
+          timedOut_cleanup = null;
+        }
+        nanoTrace(`warm-up: prompt answered ${Date.now() - t0} ms after it started`);
+        lastOnDeviceStop ??= () => { session?.abort(); destroySdkSession(model); };
+        // Never pre-empted: a request that arrives while the model is loading
+        // waits for THIS load (streamOnDevice awaits it) instead of aborting it
+        // and starting a second create — one create in flight at a time.
+        // Lowest job: it waits in line behind real jobs (a busy model at page
+        // load — next-step picks, intent — no longer skips the warm-up).
+      }, { priority: -1, maxWaitMs: WARM_QUEUE_WAIT_MS });
+      onDeviceLoaded = true;
+      onDeviceUsedAt = Date.now();
+      nanoTrace('warm-up: done — the model is loaded');
+      warmSays('loaded');
+      return true;
+    } catch {
+      warmSays('failed');
+      return false;
+    } finally {
+      warmLoading = false;
+      boardWarm = null; // a later attempt starts fresh (and returns at once when loaded)
+    }
+  })();
+  return boardWarm;
+}
+let timedOut_cleanup: (() => void) | null = null;
+/** When the on-device model last answered on this page (0: never). */
+export const onDeviceLastUsedAt = (): number => onDeviceUsedAt;
+
+/** The warm-up now running (null when none): a request waits for it. */
+export const warmUpInFlight = (): Promise<boolean> | null => boardWarm;
+
+const unloadedListeners = new Set<() => void>();
+/** Hear when the on-device model seems to have been unloaded (a call failed
+ *  that was not stopped by us): the page should warm it again. */
+export function onOnDeviceUnloaded(cb: () => void): () => void {
+  unloadedListeners.add(cb);
+  return () => { unloadedListeners.delete(cb); };
+}
+function markOnDeviceUnloaded(why: string): void {
+  if (!onDeviceLoaded) return;
+  onDeviceLoaded = false;
+  nanoTrace(`model may be unloaded (${why}): it will be warmed again`);
+  for (const cb of unloadedListeners) { try { cb(); } catch { /* a listener must not fail the call */ } }
+}
+
+/** Is this address unable to pass App Check right now? Null when a token was
+ *  issued (or App Check isn't running). Asks App Check only — no model call. */
+export async function cloudAccessProblem(): Promise<CloudFailure | null> {
+  if (testOverrides || !isEnabled() || appCheckState !== 'ready') return null;
+  const refused = await appCheckTokenError();
+  if (!refused) return null;
+  const f = explainCloudFailure(`AppCheck: ${refused instanceof Error ? refused.message : String(refused)}`);
+  return f.kind === 'app-check-403' || f.kind === 'app-check' ? f : null;
+}
+
 /** Test seam: inject mock models (and force enabled/disabled) without Firebase. */
 export function setModelsForTest(overrides: ModelOverrides | null): void {
   testOverrides = overrides;
+  onDeviceFactory = null;
+  lastOnDeviceStop = null;
+  boardWarm = null;
+  warmLoading = false;
+  onDeviceLoaded = false;
+  onDeviceUsedAt = 0;
   cached = null;
   initPromise = null;
   resetStatus();
@@ -353,13 +1107,78 @@ export function getDeviceModelStatus(): DeviceModelStatus {
   return deviceModelStatus;
 }
 
+export function getOnDeviceKind(): OnDeviceKind | null {
+  return onDeviceKind;
+}
+
 export function getHybridStatus(): HybridStatus {
-  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError };
+  return { appCheck: appCheckState, deviceModel: deviceModelStatus, message: statusMessage, lastError, lastFailKind };
 }
 
 export async function prepareHybrid(): Promise<HybridStatus> {
   await ensureModels();
+  if (!testOverrides && isEnabled() && appCheckState !== 'failed') {
+    void warmCloud();
+  }
   return getHybridStatus();
+}
+
+/** Cheap cloud ping after load or when the network comes back, so the first
+ *  real copilot call is not the cold-start one. No-ops in tests. */
+export async function warmCloud(): Promise<boolean> {
+  if (testOverrides) return false;
+  if (warmPromise) return warmPromise;
+  warmPromise = (async () => {
+    const models = await ensureModels();
+    const model = models?.a11yExplain ?? models?.copilotAnswer ?? models?.template ?? models?.intentCloud ?? models?.intent;
+    if (!model) return false;
+    try {
+      await generateWithBudget(model, 'Reply with JSON only: {"ok":true}', CLOUD_FIRST_TIMEOUT_MS, 'cloud warm-up');
+      return true;
+    } catch (err) {
+      noteError('cloud warm-up', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // A schema or model error still means App Check and the connection ran,
+      // so later user calls can use the warm budget. Only a timeout stays cold.
+      if (!/timed out/i.test(msg)) {
+        markCloudSettled();
+        return true;
+      }
+      return false;
+    } finally {
+      if (!cloudSettled) warmPromise = null;
+    }
+  })();
+  return warmPromise;
+}
+
+
+/** Create and ping the on-device session so the first real Nano intent pick
+ *  is a short follow-up rather than a cold create. No-ops in tests, when Nano
+ *  is not ready, or when Firebase is unconfigured. */
+export async function warmOnDevice(): Promise<boolean> {
+  if (testOverrides) return false;
+  if (deviceModelStatus !== 'ready') return false;
+  if (warmDevicePromise) return warmDevicePromise;
+  warmDevicePromise = (async () => {
+    const models = await ensureModels();
+    const model = models?.cadTool ?? models?.intent;
+    if (!model) return false;
+    try {
+      if (model.initializeDeviceModel) await model.initializeDeviceModel();
+      await withTimeout(
+        model.generateContent('She said: "zoom to fit"\nReply JSON only: {"tool":"zoom","args":{"to":"fit"},"confidence":1}'),
+        ON_DEVICE_TIMEOUT_MS,
+        'on-device warm-up',
+      );
+      return true;
+    } catch (err) {
+      noteError('on-device warm-up', err);
+      warmDevicePromise = null;
+      return false;
+    }
+  })();
+  return warmDevicePromise;
 }
 
 /**
@@ -413,7 +1232,10 @@ async function ensureModels(): Promise<Models | null> {
       fusionLang: testOverrides.fusionLang ?? null,
       langDetect: testOverrides.langDetect ?? null,
       a11yExplain: testOverrides.a11yExplain ?? null,
+      a11yExplainHedge: testOverrides.a11yExplainHedge ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
+      condense: testOverrides.condense ?? null,
+      nextSteps: testOverrides.nextSteps ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
       deviceSee: testOverrides.deviceSee ?? null,
@@ -421,15 +1243,27 @@ async function ensureModels(): Promise<Models | null> {
       effectCheck: testOverrides.effectCheck ?? null,
       effectCheckCloud: testOverrides.effectCheckCloud ?? null,
       connectorWriter: testOverrides.connectorWriter ?? null,
+      refGenerate: testOverrides.refGenerate ?? null,
+      cadTool: testOverrides.cadTool ?? null,
+      cadToolCloud: testOverrides.cadToolCloud ?? null,
+      copilotAnswer: testOverrides.copilotAnswer ?? null,
+      copilotAnswerHedge: testOverrides.copilotAnswerHedge ?? null,
+      copilotEmail: testOverrides.copilotEmail ?? null,
+      copilotEmailHedge: testOverrides.copilotEmailHedge ?? null,
+      copilotMaterials: testOverrides.copilotMaterials ?? null,
+      copilotMaterialsHedge: testOverrides.copilotMaterialsHedge ?? null,
+      canvasCloud: testOverrides.canvasCloud ?? null,
+      canvasCloudHedge: testOverrides.canvasCloudHedge ?? null,
     };
   }
-  if (!isEnabled()) {
+  let base: Models | null = null;
+  if (isEnabled()) {
+    if (!cached) initPromise ??= initFirebase();
+    base = cached ?? (await initPromise);
+  } else {
     appCheckState = 'skipped';
-    return null;
   }
-  if (cached) return cached;
-  initPromise ??= initFirebase();
-  return initPromise;
+  return withAppleModels(base);
 }
 
 async function initFirebase(): Promise<Models | null> {
@@ -455,7 +1289,7 @@ async function initFirebase(): Promise<Models | null> {
     await initTelemetry(app);
     const cloudModel = remoteSettings().cloudModel;
 
-    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema, ResponseModality } =
+    const { getAI, getGenerativeModel, getTemplateGenerativeModel, GoogleAIBackend, InferenceMode, Schema, ResponseModality, ThinkingLevel } =
       await import('firebase/ai');
     // useLimitedUseAppCheckTokens: each Firebase AI Logic request carries a
     // fresh single-use App Check token (for replay protection) instead of the
@@ -472,16 +1306,28 @@ async function initFirebase(): Promise<Models | null> {
     const templateSchema = toFirebaseSchema(modeAi.generateConstraint, Schema);
     // Intent fusion: the same op vocabulary + a confidence field, one source of
     // truth (the mode's opConstraint) for both the Nano and cloud schemas.
+    // Every ONLY_ON_DEVICE model shares the page's one Nano queue (see
+    // queueOnDevice): Nano is a single model, and the SDK's Chrome adapter
+    // destroys a model's previous session when a new call starts.
+    const onDeviceModel = (params: Parameters<typeof getGenerativeModel>[1]) => queueOnDevice(getGenerativeModel(ai, params));
+    // Per-call on-device models (streamOnDevice): same SDK, same mode, built
+    // per turn because the reply schema names this turn's devices.
+    onDeviceFactory = (onDeviceParams) => getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: onDeviceParams as never,
+    }) as unknown as TextGenModel;
     const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
     const fusionSchema = toFirebaseSchema(fusionConstraint, Schema);
-    const a11ySchema = toFirebaseSchema(buildA11yConstraint(modeAi.opConstraint), Schema);
 
-    const intent = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: opSchema },
-      },
+    // ONLY_ON_DEVICE, like handAdapt/condense below: compileCommand() sends the
+    // raw utterance here, and PREFER_ON_DEVICE's cloud fallback can fire
+    // silently (no throw) on the SDK's own call — which would leak that raw
+    // text with no redaction, since the explicit cloud retry (intentCloud,
+    // via callWithCloudRetry) only runs on a thrown error. ONLY_ON_DEVICE
+    // removes the silent path entirely; the explicit retry still carries the
+    // redacted prompt.
+    const intent = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
         promptOptions: { responseConstraint: modeAi.opConstraint },
@@ -508,12 +1354,13 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
-    const fusion = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
-      },
+    // ONLY_ON_DEVICE for the same reason as `intent` above — fuseIntent()'s
+    // non-forceCloud path sends the raw utterance here by design (Nano never
+    // leaves the device), which PREFER_ON_DEVICE's silent cloud fallback would
+    // defeat. The explicit forceCloud/retry paths keep using fusionCloud with
+    // the redacted prompt.
+    const fusion = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
         promptOptions: { responseConstraint: fusionConstraint },
@@ -523,12 +1370,12 @@ async function initFirebase(): Promise<Models | null> {
     // Point-and-say: the one multimodal model — a still crop + pointer resolve
     // "this". Image payloads ride the same Firebase AI Logic call, nothing else.
     const deixisSchema = toFirebaseSchema(DEIXIS_CONSTRAINT, Schema);
-    const deixis = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: deixisSchema },
-      },
+    // ONLY_ON_DEVICE, same reasoning as `intent`/`fusion` — resolveDeixis()
+    // sends the raw utterance AND the camera crop image here; a silent
+    // PREFER_ON_DEVICE cloud fallback would leak both. deixisCloud below
+    // still serves the explicit retry-on-throw path with redacted parts.
+    const deixis = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: DEIXIS_CREATE_OPTIONS,
         promptOptions: { responseConstraint: DEIXIS_CONSTRAINT },
@@ -558,12 +1405,9 @@ async function initFirebase(): Promise<Models | null> {
     });
     // Nano with non-English input (en/es/ja). Same schema as `fusion`; the
     // caller only routes here after checkLanguageAvailability() said yes.
-    const fusionLang = getGenerativeModel(ai, {
-      mode: InferenceMode.PREFER_ON_DEVICE,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: fusionSchema },
-      },
+    // ONLY_ON_DEVICE, same reasoning as `fusion` above.
+    const fusionLang = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_LANG_CREATE_OPTIONS,
         promptOptions: { responseConstraint: fusionConstraint },
@@ -585,14 +1429,6 @@ async function initFirebase(): Promise<Models | null> {
         generationConfig: { responseMimeType: 'application/json', responseSchema: verifySchema },
       },
     });
-    const a11yExplain = getGenerativeModel(ai, {
-      mode: InferenceMode.ONLY_IN_CLOUD,
-      inCloudParams: {
-        model: cloudModel,
-        generationConfig: { responseMimeType: 'application/json', responseSchema: a11ySchema },
-      },
-    });
-
     // Hand-adaptive input: ONLY_ON_DEVICE, with NO inCloudParams at all. The raw
     // hand numbers must never leave the device, and ONLY_ON_DEVICE gives the SDK
     // no cloud transport to fall back to (it errors instead of going to cloud if
@@ -600,11 +1436,31 @@ async function initFirebase(): Promise<Models | null> {
     // uploaded. This is stronger than PREFER_ON_DEVICE, which can silently fall
     // back to the cloud. adaptHandProfile() still gates on Nano being ready so
     // the ONLY_ON_DEVICE "not ready" error never fires in normal use.
-    const handAdapt = getGenerativeModel(ai, {
+    const handAdapt = onDeviceModel({
       mode: InferenceMode.ONLY_ON_DEVICE,
       onDeviceParams: {
         createOptions: ON_DEVICE_CREATE_OPTIONS,
         promptOptions: { responseConstraint: PROFILE_CONSTRAINT },
+      },
+    });
+
+    // Ramble condenser (ai/condense): ONLY_ON_DEVICE like handAdapt — the long
+    // natural ramble must never ride this call to the cloud. A miss keeps her
+    // raw words everywhere and the route line unchanged.
+    const condense = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: CONDENSE_CONSTRAINT },
+      },
+    });
+    // Next-step chips: ONLY_ON_DEVICE with no cloud params — the pick is a
+    // convenience, so a missing Nano means the rule list, never a cloud call.
+    const nextSteps = getGenerativeModel(ai, { // queued per call in pickNextStepsOnDevice, with its own short max run
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: {
+        createOptions: ON_DEVICE_CREATE_OPTIONS,
+        promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
       },
     });
 
@@ -673,9 +1529,69 @@ async function initFirebase(): Promise<Models | null> {
       },
     });
 
+    // Reference drawings and layout frames: a cloud *text* model returns SVG
+    // JSON. Image-generating models need the Blaze plan; billing is not enabled.
+    const refGenerate = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: {
+        model: cloudModel,
+        generationConfig: { responseMimeType: 'application/json', responseSchema: toFirebaseSchema(REF_GENERATE_CONSTRAINT, Schema) },
+      },
+    });
+
+    // CAD copilot. Nano picks a typed tool on the device; the cloud twin only
+    // runs if the on-device call throws. Hard questions, email drafts and 3D
+    // materials are cloud-only text/JSON models (no image models: no billing).
+    // ONLY_ON_DEVICE, same reasoning as `intent`/`fusion`/`deixis` above —
+    // pickCadTool() sends the raw utterance here; cadToolCloud below still
+    // serves the explicit retry-on-throw path with a redacted prompt.
+    const cadTool = onDeviceModel({
+      mode: InferenceMode.ONLY_ON_DEVICE,
+      onDeviceParams: { createOptions: ON_DEVICE_CREATE_OPTIONS, promptOptions: { responseConstraint: CAD_TOOL_CONSTRAINT } },
+    });
+    const jsonGen = (constraint: Record<string, unknown>) => ({
+      responseMimeType: 'application/json' as const,
+      responseSchema: toFirebaseSchema(constraint, Schema),
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+    });
+    const cloudJson = (constraint: Record<string, unknown>, model = cloudModel) => getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model, generationConfig: jsonGen(constraint) },
+    });
+    const cadToolCloud = cloudJson(CAD_TOOL_CONSTRAINT);
+    const copilotAnswer = cloudJson(COPILOT_ANSWER_CONSTRAINT);
+    const copilotAnswerHedge = cloudModel === HEDGE_CLOUD_MODEL
+      ? null
+      : cloudJson(COPILOT_ANSWER_CONSTRAINT, HEDGE_CLOUD_MODEL);
+    // Smart canvas: JSON in, JSON out, no copilot/template schema so a board
+    // plan or a language pack can both come back as the prompt describes.
+    const canvasJsonGen = {
+      responseMimeType: 'application/json' as const,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+    };
+    const canvasCloud = getGenerativeModel(ai, {
+      mode: InferenceMode.ONLY_IN_CLOUD,
+      inCloudParams: { model: cloudModel, generationConfig: canvasJsonGen },
+    });
+    const canvasCloudHedge = cloudModel === HEDGE_CLOUD_MODEL
+      ? null
+      : getGenerativeModel(ai, {
+          mode: InferenceMode.ONLY_IN_CLOUD,
+          inCloudParams: { model: HEDGE_CLOUD_MODEL, generationConfig: canvasJsonGen },
+        });
+    const copilotEmail = cloudJson(EMAIL_CONSTRAINT);
+    const copilotEmailHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(EMAIL_CONSTRAINT, HEDGE_CLOUD_MODEL);
+    const copilotMaterials = cloudJson(MATERIAL_CONSTRAINT);
+    const copilotMaterialsHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(MATERIAL_CONSTRAINT, HEDGE_CLOUD_MODEL);
+    const a11yConstraint = buildA11yConstraint(modeAi.opConstraint);
+    const a11yExplain = cloudJson(a11yConstraint);
+    const a11yExplainHedge = cloudModel === HEDGE_CLOUD_MODEL ? null : cloudJson(a11yConstraint, HEDGE_CLOUD_MODEL);
+
     cached = {
-      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, handAdapt, promptTemplate, tts,
-      deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter,
+      cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
+      canvasCloud, canvasCloudHedge,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, nextSteps, promptTemplate, tts,
+      deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
   } catch (err) {
@@ -686,6 +1602,75 @@ async function initFirebase(): Promise<Models | null> {
     cached = null;
     return null;
   }
+}
+
+function applePlugin(): AppleAIPlugin | null {
+  if (testOverrides && 'appleAI' in testOverrides) return testOverrides.appleAI ?? null;
+  return getAppleAIPlugin();
+}
+
+function blankModels(): Models {
+  return {
+    intent: null,
+    template: null,
+    verify: null,
+    fusion: null,
+    deixis: null,
+    deixisCloud: null,
+    intentCloud: null,
+    verifyCloud: null,
+    fusionCloud: null,
+    fusionLang: null,
+    langDetect: null,
+    a11yExplain: null,
+    a11yExplainHedge: null,
+    handAdapt: null,
+    condense: null,
+    nextSteps: null,
+    promptTemplate: null,
+    tts: null,
+    deviceSee: null,
+    deviceSeeCloud: null,
+    effectCheck: null,
+    effectCheckCloud: null,
+    connectorWriter: null,
+    refGenerate: null,
+    cadTool: null,
+    cadToolCloud: null,
+    copilotAnswer: null,
+    copilotAnswerHedge: null,
+    copilotEmail: null,
+    copilotEmailHedge: null,
+    copilotMaterials: null,
+    copilotMaterialsHedge: null,
+    canvasCloud: null,
+    canvasCloudHedge: null,
+  };
+}
+
+/** Overlay Apple on-device text models when the iOS plugin is available.
+ *  Image jobs stay on the existing path (on-device Apple is text-only here).
+ *  Does not require Firebase — Quick still works if the cloud path is down. */
+async function withAppleModels(base: Models | null): Promise<Models | null> {
+  const plugin = applePlugin();
+  if (!plugin) return base;
+  const checked = await checkAppleAvailability(plugin);
+  if (checked?.status !== 'available') return base;
+  onDeviceKind = 'apple';
+  deviceModelStatus = 'ready';
+  const modeAi = getActiveMode().ai;
+  const fusionConstraint = buildFusionConstraint(modeAi.opConstraint);
+  const overlay: Partial<Models> = {
+    intent: appleTextModel(modeAi.opConstraint, plugin),
+    verify: appleTextModel(modeAi.verifyConstraint, plugin),
+    fusion: appleTextModel(fusionConstraint, plugin),
+    fusionLang: appleTextModel(fusionConstraint, plugin),
+    handAdapt: appleTextModel(PROFILE_CONSTRAINT, plugin),
+    condense: appleTextModel(CONDENSE_CONSTRAINT, plugin),
+    nextSteps: appleTextModel(NEXT_STEPS_CONSTRAINT, plugin),
+    cadTool: appleTextModel(CAD_TOOL_CONSTRAINT, plugin),
+  };
+  return { ...(base ?? blankModels()), ...overlay };
 }
 
 function languageModelProvider(): LanguageModelProvider | null {
@@ -708,16 +1693,32 @@ function mapAvailability(a: string): DeviceModelStatus {
  * Safe to call on page load; updates and returns the device status.
  */
 export async function checkDeviceAvailability(): Promise<DeviceModelStatus> {
+  const preferChrome = Boolean(testOverrides && 'languageModel' in testOverrides);
+  if (!preferChrome) {
+    const plugin = applePlugin();
+    if (plugin) {
+      const checked = await checkAppleAvailability(plugin);
+      const status = checked?.status ?? 'unavailable';
+      deviceModelStatus = appleStatusToDevice(status);
+      onDeviceKind = 'apple';
+      return deviceModelStatus;
+    }
+  }
   const lm = languageModelProvider();
   if (!lm) {
     deviceModelStatus = 'unsupported';
+    onDeviceKind = null;
     return deviceModelStatus;
   }
   try {
     deviceModelStatus = mapAvailability(await lm.availability(ON_DEVICE_CREATE_OPTIONS));
+    onDeviceKind = deviceModelStatus === 'ready' || deviceModelStatus === 'downloadable' || deviceModelStatus === 'downloading'
+      ? 'nano'
+      : null;
   } catch (err) {
     noteError('LanguageModel.availability', err);
     deviceModelStatus = 'unavailable';
+    onDeviceKind = null;
   }
   return deviceModelStatus;
 }
@@ -753,6 +1754,20 @@ export async function checkLanguageAvailability(langCode: string): Promise<boole
  * alone is not proof.
  */
 export async function initDeviceModel(onProgress?: (p: number) => void): Promise<boolean> {
+  const preferChrome = Boolean(testOverrides && 'languageModel' in testOverrides);
+  const plugin = preferChrome ? null : applePlugin();
+  if (plugin) {
+    const before = await checkDeviceAvailability();
+    if (before === 'unsupported' || before === 'unavailable' || before === 'failed') return false;
+    if (before === 'ready') {
+      try { await plugin.prewarm?.(); } catch (err) { noteError('Apple prewarm', err); }
+      return true;
+    }
+    deviceModelStatus = 'downloading';
+    try { await plugin.prewarm?.(); } catch (err) { noteError('Apple prewarm', err); }
+    const after = await checkDeviceAvailability();
+    return after === 'ready';
+  }
   const before = await checkDeviceAvailability();
   if (before === 'unsupported' || before === 'unavailable') return false;
   const models = await ensureModels();
@@ -787,51 +1802,61 @@ function sourceOf(resp: { inferenceSource?: string }): Source {
   return 'cloud';
 }
 
-function extractJson(text: string): unknown {
-  const stripped = text.replace(/```(?:json)?/gi, '').trim();
-  const start = stripped.indexOf('{');
-  const end = stripped.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(stripped.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-}
-
-function numericParams(raw: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (typeof raw === 'object' && raw !== null) {
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      const n = typeof v === 'string' ? Number(v) : v;
-      if (typeof n === 'number' && Number.isFinite(n)) out[k] = n;
-    }
-  }
-  return out;
-}
-
-type ModelResponse = { text: () => string; inferenceSource?: string };
-
 /**
  * Hybrid call. In PREFER_ON_DEVICE the SDK does not fall back to the cloud if
  * the on-device prompt itself throws (or hangs), so retry once on the
- * cloud-only twin before giving up to the rule parser.
+ * cloud-only twin before giving up to the rule parser. The retry sends
+ * `cloudPrompt` (the caller's REDACTED rebuild — see ai/redact), never the raw
+ * on-device prompt, so her words don't ride a failure path to the cloud.
  */
+const nanoBusyListeners = new Set<(label: string) => void>();
+/** Hear about an on-device job that went to the cloud twin because the one
+ *  on-device model was busy (the canvas shows "Nano busy → Gemini"). */
+export function onNanoBusyHandoff(cb: (label: string) => void): () => void {
+  nanoBusyListeners.add(cb);
+  return () => { nanoBusyListeners.delete(cb); };
+}
+function tellNanoBusy(label: string): void {
+  for (const cb of nanoBusyListeners) { try { cb(label); } catch { /* a listener must not fail the call */ } }
+}
+
 async function callWithCloudRetry(
   hybrid: TextGenModel,
   cloud: TextGenModel | null,
   prompt: string,
   label: string,
+  timeoutMs: number = ON_DEVICE_TIMEOUT_MS,
+  cloudPrompt: string = prompt,
 ): Promise<ModelResponse | null> {
   try {
-    const { response } = await withTimeout(hybrid.generateContent(prompt), ON_DEVICE_TIMEOUT_MS, label);
+    const { response } = await withTimeout(hybrid.generateContent(prompt), timeoutMs, label);
     return response;
   } catch (err) {
     noteError(`${label} (hybrid)`, err);
     if (!cloud) throw err;
-    const { response } = await cloud.generateContent(prompt);
+    if (err instanceof NanoQueueSkipped) tellNanoBusy(label);
+    // The cloud retry needs its own hard timeout just like every other cloud
+    // call here: if it hangs (slow network / stalled AI-Logic stream) the caller
+    // would otherwise never resolve OR reject, so the rules-floor fallback never
+    // fires and the turn freezes with no error surfaced.
+    const { response } = await withTimeout(
+      cloud.generateContent(cloudPrompt),
+      CLOUD_GENERATE_TIMEOUT_MS,
+      `${label} (cloud retry)`,
+    );
     return { text: () => response.text(), inferenceSource: 'in_cloud' };
   }
+}
+
+/** Fusion context bound for the cloud: nearby-element labels are plan text that
+ *  can carry a person's name, so they get the same rules-first redaction as the
+ *  utterance. Ids/kinds (what the model actually answers with) are untouched. */
+function redactCtxForCloud(ctx: FusionContext, planNames: string[]): FusionContext {
+  if (!ctx.nearby.some((n) => n.label)) return ctx;
+  return {
+    ...ctx,
+    nearby: ctx.nearby.map((n) => (n.label ? { ...n, label: protectText(n.label, planNames).text } : n)),
+  };
 }
 
 /** Prepend the Remote Config prompt preamble (if any) to a big-job prompt. */
@@ -891,13 +1916,19 @@ export async function compileCommand(
   utterance: string,
   sceneSummary: string,
   selectedId: string | null,
+  opts?: { planNames?: string[] },
 ): Promise<CompileResult> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (models?.intent) {
     try {
-      const prompt = `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${utterance}"`;
-      const response = await callWithCloudRetry(models.intent, models.intentCloud ?? null, prompt, 'intent');
+      const buildPrompt = (u: string) =>
+        `${getActiveMode().ai.intentPrompt}\nScene: ${sceneSummary}\nSelected: ${selectedId ?? 'none'}\nCommand: "${u}"`;
+      const prompt = buildPrompt(utterance);
+      const cloudPrompt = buildPrompt(protectText(utterance, opts?.planNames ?? []).text);
+      const response = await callWithCloudRetry(
+        models.intent, models.intentCloud ?? null, prompt, 'intent', ON_DEVICE_TIMEOUT_MS, cloudPrompt,
+      );
       // The active mode coerces untrusted JSON into a validated result (or null).
       const result = response ? getActiveMode().coerce(extractJson(response.text()), utterance) : null;
       if (result) {
@@ -955,6 +1986,9 @@ export async function fuseIntent(
     fewShot?: string;
     /** The router already escalated THIS command, so the few-shot may go cloud. */
     examplesCloudOk?: boolean;
+    /** Plan text labels (main.planLabelNames) so a cloud leg redacts the same
+     *  person-like labels the ledger's commandPayload does. */
+    planNames?: string[];
   },
 ): Promise<FusionOutcome> {
   const t0 = Date.now();
@@ -971,13 +2005,25 @@ export async function fuseIntent(
       // Privacy gate: the phrasebook may ride a cloud call only on the sanctioned
       // escalation; otherwise it is on-device only.
       const fewShot = opts?.fewShot && (!opts.forceCloud || opts.examplesCloudOk) ? opts.fewShot : undefined;
-      const prompt = buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang, fewShot);
+      // Rules-first redaction (ai/redact): any prompt bound for the cloud —
+      // forceCloud or the retry below — carries the SAME redacted utterance the
+      // ledger records. Only the on-device Nano prompt keeps her raw words.
+      const planNames = opts?.planNames ?? [];
+      const cloudPrompt = buildFusionPrompt(
+        mode.ai.intentPrompt, protectText(utterance, planNames).text,
+        redactCtxForCloud(ctx, planNames), opts?.lang, fewShot,
+      );
+      const prompt = opts?.forceCloud
+        ? cloudPrompt
+        : buildFusionPrompt(mode.ai.intentPrompt, utterance, ctx, opts?.lang, fewShot);
       // An on-device call carrying the private phrasebook must NOT silently fall
       // back to the cloud twin (that would leak it without an escalation); it
       // drops to the rules floor instead. Only an explicit forceCloud escalation
       // sends examples to the cloud.
       const retry = opts?.forceCloud || fewShot ? null : models.fusionCloud ?? null;
-      const response = await callWithCloudRetry(primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse');
+      const response = await callWithCloudRetry(
+        primary, retry, prompt, opts?.forceCloud ? 'fuse-cloud' : 'fuse', ON_DEVICE_TIMEOUT_MS, cloudPrompt,
+      );
       const parsed = response
         ? parseFusionResult(extractJson(response.text()), mode.coerce.bind(mode), utterance)
         : null;
@@ -1002,13 +2048,20 @@ export async function fuseIntent(
  *  Detector is missing and the on-device script/word checks were ambiguous.
  *  Sends the transcript text only; the caller records it in the ledger as
  *  'lang-detect'. Returns null with no cloud model or on any failure. */
-export async function detectLanguageCloud(text: string): Promise<{ detection: Detection; ms: number } | null> {
+export async function detectLanguageCloud(
+  text: string,
+  opts?: { planNames?: string[] },
+): Promise<{ detection: Detection; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   const model = models?.langDetect;
   if (!model) return null;
   try {
-    const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(text)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
+    // ONLY_IN_CLOUD: the transcript is redacted (ai/redact) before it leaves,
+    // matching the ledger's recorded payload. Detection only needs the script
+    // and common words, never her family's names.
+    const sent = protectText(text, opts?.planNames ?? []).text;
+    const { response } = await withTimeout(model.generateContent(cloudDetectPrompt(sent)), CLOUD_GENERATE_TIMEOUT_MS, 'lang-detect');
     const detection = parseCloudDetection(extractJson(response.text()));
     if (!detection) return null;
     recordInference('cloud', 'lang-detect', Date.now() - t0);
@@ -1035,7 +2088,7 @@ export interface RecipePickOutcome {
 export async function pickRecipeHybrid(
   utterance: string,
   candidates: readonly RecipeRef[],
-  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string } },
+  opts?: { forceCloud?: boolean; lang?: { code: string; englishName: string }; planNames?: string[] },
 ): Promise<RecipePickOutcome | null> {
   if (candidates.length === 0) return null;
   const t0 = Date.now();
@@ -1043,9 +2096,14 @@ export async function pickRecipeHybrid(
   const primary = opts?.forceCloud ? models?.fusionCloud : models?.fusion;
   if (!models || !primary) return null;
   try {
-    const prompt = buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
+    // Cloud legs (forceCloud or the retry) get the redacted utterance — the
+    // same text the ledger records; the on-device prompt keeps her raw words.
+    const cloudPrompt = buildRecipePickPrompt(
+      protectText(utterance, opts?.planNames ?? []).text, candidates, opts?.lang?.englishName,
+    );
+    const prompt = opts?.forceCloud ? cloudPrompt : buildRecipePickPrompt(utterance, candidates, opts?.lang?.englishName);
     const retry = opts?.forceCloud ? null : models.fusionCloud ?? null;
-    const response = await callWithCloudRetry(primary, retry, prompt, 'recipe-pick');
+    const response = await callWithCloudRetry(primary, retry, prompt, 'recipe-pick', ON_DEVICE_TIMEOUT_MS, cloudPrompt);
     if (!response) return null;
     const pick = parseRecipePick(extractJson(response.text()), candidates.map((c) => c.id));
     const source = sourceOf(response);
@@ -1085,7 +2143,8 @@ export async function resolveDeixis(
   opts: {
     pointer: { x: number; y: number } | null;
     candidates: readonly DeixisCandidate[];
-    space: 'plan' | 'ui';
+    space: 'plan';
+    planNames?: string[];
   },
 ): Promise<DeixisOutcome | null> {
   const t0 = Date.now();
@@ -1100,6 +2159,20 @@ export async function resolveDeixis(
   const parts: Array<string | ImagePart> = image
     ? [prompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
     : [prompt];
+  const planNames = opts.planNames ?? [];
+  const cloudUtterance = protectText(utterance, planNames).text;
+  const cloudCandidates = opts.candidates.map((c) => (
+    c.label ? { ...c, label: protectText(c.label, planNames).text } : c
+  ));
+  const cloudPrompt = buildDeixisPrompt(cloudUtterance, {
+    hasImage: image !== null,
+    pointer: opts.pointer,
+    candidates: cloudCandidates,
+    space: opts.space,
+  });
+  const cloudParts: Array<string | ImagePart> = image
+    ? [cloudPrompt, { inlineData: { mimeType: image.mimeType, data: image.dataBase64 } }]
+    : [cloudPrompt];
   let response: ModelResponse | null = null;
   try {
     ({ response } = await withTimeout(models.deixis.generateContent(parts), ON_DEVICE_TIMEOUT_MS, 'deixis'));
@@ -1107,7 +2180,7 @@ export async function resolveDeixis(
     noteError('deixis (hybrid)', err);
     if (!models.deixisCloud) return null;
     try {
-      const r = await models.deixisCloud.generateContent(parts);
+      const r = await models.deixisCloud.generateContent(cloudParts);
       response = { text: () => r.response.text(), inferenceSource: 'in_cloud' };
     } catch (err2) {
       noteError('deixis (cloud)', err2);
@@ -1163,46 +2236,20 @@ Printability warnings: ${JSON.stringify(warnings)}`;
   return { matchesIntent: warnings.length === 0, issue: warnings[0] ?? null, source: 'rules' };
 }
 
-export async function generateTemplate(prompt: string): Promise<TemplateResult> {
-  const models = await ensureModels();
-  if (models?.template) {
-    try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
-      const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.part, 'template',
-      );
-      const parsed = response ? extractJson(response.text()) : null;
-      if (typeof parsed === 'object' && parsed !== null) {
-        const o = parsed as Record<string, unknown>;
-        if (isTemplateName(o.template)) {
-          const source = sourceOf(response!);
-          recordInference(source, 'generate-template');
-          return { template: o.template, params: numericParams(o.params), source };
-        }
-      }
-    } catch (err) {
-      noteError('template model', err);
-    }
-  }
-  recordInference('rules', 'generate-template');
-  const ruled = parseCommand(prompt);
-  if (isTemplateCommand(ruled)) return { ...ruled, source: 'rules' };
-  return { clarify: 'Which design: cup grip, phone stand, hook, or utensil holder?', source: 'rules' };
-}
-
 /**
  * Plan-mode "generate a whole plan" (ONLY_IN_CLOUD, same hybrid wrapper as the
  * part template path). The cloud model returns {ops:[...]}; code re-validates
  * and caps them. Falls back to the deterministic rule parser + a plan template
  * when the cloud is unavailable, so "two bedroom plan" works with no AI.
  */
-export async function generatePlan(prompt: string): Promise<GeneratePlanResult> {
+export async function generatePlan(prompt: string, opts?: { planNames?: string[] }): Promise<GeneratePlanResult> {
   const models = await ensureModels();
   if (models?.template) {
     try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
+      const sent = protectText(prompt, opts?.planNames ?? []).text;
+      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${sent}"`);
       const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.plan, 'plan generate',
+        models, jobPrompt, sent, remoteSettings().templateIds.plan, 'plan generate',
       );
       const coerced = response ? coercePlanGenerate(extractJson(response.text())) : null;
       if (coerced && 'ops' in coerced && coerced.ops.length) {
@@ -1242,59 +2289,108 @@ export async function generatePlan(prompt: string): Promise<GeneratePlanResult> 
   return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
 }
 
-/**
- * UI-mode "generate a whole screen" (same hybrid wrapper as the plan generate
- * path). The cloud model returns a compact DOCUMENT; code expands + re-validates
- * it into a Frame. Falls back to the deterministic rule parser + a UI template
- * (login / landing / pricing) when the cloud is unavailable, so "login screen"
- * works with no AI.
- */
-export async function generateUi(prompt: string): Promise<GenerateUiResult> {
-  const models = await ensureModels();
-  if (models?.template) {
-    try {
-      const jobPrompt = withPreamble(`${getActiveMode().ai.templatePrompt}\nRequest: "${prompt}"`);
-      const response = await runBigCloudJob(
-        models, jobPrompt, prompt, remoteSettings().templateIds.screen, 'ui generate',
-      );
-      const coerced = response ? coerceUiGenerate(extractJson(response.text())) : null;
-      if (coerced && 'frame' in coerced) {
-        const source = sourceOf(response!);
-        recordInference(source, 'generate-ui');
-        return { frame: coerced.frame, source };
-      }
-      if (coerced && 'clarify' in coerced) {
-        const source = sourceOf(response!);
-        recordInference(source, 'generate-ui');
-        return { clarify: coerced.clarify, source };
-      }
-      noteError('ui generate', new Error('cloud screen was empty or invalid; using a template'));
-    } catch (err) {
-      noteError('ui generate model', err);
-    }
-  }
-  recordInference('rules', 'generate-ui');
-  // Rules fallback: a named template → an expanded, validated Frame.
-  const ruled = parseUiCommand(prompt);
-  const mobile = /\b(mobile|phone)\b/.test(prompt.toLowerCase());
-  const preset: FramePreset = mobile ? 'mobile' : 'desktop';
-  let template = isUiGenerate(ruled) ? ruled.generate : null;
-  let note: string | undefined;
-  if (!template && getActiveMode().isDesignRequest(prompt)) {
-    template = 'login';
-    note = 'Cloud design was unavailable — built a login template instead.';
-  }
-  if (template) {
-    const frame = buildUiTemplate(template, isUiGenerate(ruled) ? ruled.preset ?? preset : preset);
-    if (frame) return { frame, note, source: 'rules' };
-  }
-  return { clarify: 'Try "login screen", "landing hero", "pricing section", or "mobile frame".', source: 'rules' };
+/** Cloud explanations (and optional alternative fixes) for a11y issues. */
+function logCloudFail(label: string, kind: CloudFailKind, detail = ''): void {
+  lastFailKind = kind;
+  noteError(label, new Error(`${kind}${detail ? `: ${detail.slice(0, 400)}` : ''}`));
 }
 
-/** Cloud explanations (and optional alternative fixes) for a11y issues. */
+/**
+ * One structured JSON cloud call with tolerant parse, a single retry on empty
+ * or invalid output, and backoff on HTTP 429. Safety blocks are not retried.
+ */
+async function requestJson<T>(
+  model: TextGenModel,
+  prompt: string,
+  budgetMs: number,
+  label: string,
+  coerce: (raw: unknown) => T | null,
+  onChunk?: (text: string) => void,
+  onFail?: (kind: CloudFailKind, detail: string) => void,
+): Promise<{ value: T; source: Source } | null> {
+  const run = async (): Promise<{ value: T | null; kind: CloudFailKind | null; source: Source; detail: string }> => {
+    try {
+      const { response } = await generateWithBudget(model, prompt, budgetMs, label, onChunk);
+      const text = response.text();
+      if (!text || !text.trim()) return { value: null, kind: 'empty', source: sourceOf(response), detail: '' };
+      const raw = extractJson(text);
+      if (raw == null) return { value: null, kind: 'parse', source: sourceOf(response), detail: text };
+      const value = coerce(raw);
+      if (value == null) return { value: null, kind: 'parse', source: sourceOf(response), detail: text };
+      return { value, kind: null, source: sourceOf(response), detail: '' };
+    } catch (err) {
+      return { value: null, kind: classifyCloudFailure(err), source: 'cloud', detail: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
+  let result = await run();
+  if (!result.value && (result.kind === '429' || result.kind === 'high-demand')) {
+    const waits = result.kind === '429' ? RATE_LIMIT_BACKOFF_MS : HIGH_DEMAND_BACKOFF_MS;
+    for (const wait of waits) {
+      await delay(wait);
+      result = await run();
+      if (result.value || (result.kind !== '429' && result.kind !== 'high-demand')) break;
+    }
+  } else if (!result.value && (result.kind === 'parse' || result.kind === 'empty' || result.kind === 'timeout')) {
+    result = await run();
+  }
+  if (!result.value) {
+    logCloudFail(label, result.kind ?? 'other', result.detail);
+    try { onFail?.(result.kind ?? 'other', result.detail); } catch { /* reporting only */ }
+    return null;
+  }
+  lastFailKind = null;
+  lastError = null;
+  return { value: result.value, source: result.source };
+}
+
+/** Structured JSON call with a 2 s hedge to gemini-3.1-flash-lite. */
+async function requestHedgedJson<T>(
+  primary: TextGenModel | null | undefined,
+  backup: TextGenModel | null | undefined,
+  prompt: string,
+  budgetMs: number,
+  label: string,
+  coerce: (raw: unknown) => T | null,
+  onChunk?: (text: string) => void,
+  onFail?: (kind: CloudFailKind, detail: string) => void,
+  /** Every leg that was started has finished — including the one that lost
+   *  the race and went on retrying. Called exactly once. */
+  onAllSettled?: () => void,
+): Promise<{ value: T; source: Source; model: string; ms: number } | null> {
+  if (!primary) { onAllSettled?.(); return null; }
+  const primaryModel = remoteSettings().cloudModel || PRIMARY_CLOUD_MODEL;
+  // The race resolves on the first good answer, but the losing leg keeps
+  // going (its own retries and backoffs still send requests).
+  const legs: Promise<unknown>[] = [];
+  const leg = <R,>(p: Promise<R>): Promise<R> => { legs.push(p.then(() => undefined, () => undefined)); return p; };
+  let raced: Awaited<ReturnType<typeof raceHedged<{ value: T; source: Source }>>>;
+  try {
+    raced = await raceHedged({
+      primary: () => leg(requestJson(primary, prompt, budgetMs, label, coerce, onChunk, onFail))
+        .then((got) => got ?? null),
+      backup: backup
+        ? () => leg(requestJson(backup, prompt, budgetMs, `${label} (3.1)`, coerce, undefined, onFail))
+          .then((got) => got ?? null)
+        : undefined,
+      hedgeAfterMs: HEDGE_AFTER_MS,
+      primaryModel,
+      backupModel: HEDGE_CLOUD_MODEL,
+    });
+  } finally {
+    // Once the race is over no new leg starts; wait for the ones that did.
+    if (onAllSettled) void Promise.all(legs).then(onAllSettled, onAllSettled);
+  }
+  if (!raced) return null;
+  console.info(`[mendcraft] ${label} hedge: ${raced.model} won in ${raced.ms} ms`);
+  return { value: raced.value.value, source: raced.value.source, model: raced.model, ms: raced.ms };
+}
+
 export interface ExplainA11yResult {
   items: A11yExplanation[];
   source: Source;
+  model?: string;
+  ms?: number;
 }
 
 const A11Y_EXPLAIN_PROMPT = `You are an accessibility reviewer inside a design tool. The tool's own CODE already measured each issue below against the cited standard — do not re-measure or dispute the numbers. For EACH issue, write a short plain-language "explanation" (max 2 sentences: why it matters for the user, and what the fix does), keeping the cited standard's name. Optionally propose a "fix" as ONE op from the vocabulary below when a single op would resolve the issue. Reply JSON only: {"items":[{"id":"<issue id>","explanation":"...","fix":{...}?}]}.`;
@@ -1308,6 +2404,7 @@ const A11Y_EXPLAIN_PROMPT = `You are an accessibility reviewer inside a design t
 export async function explainAccessibility(
   issues: readonly Pick<A11yIssue, 'id' | 'rule' | 'message' | 'citation'>[],
   summary: string,
+  planNames: string[] = [],
 ): Promise<ExplainA11yResult> {
   const t0 = Date.now();
   const models = await ensureModels();
@@ -1315,24 +2412,27 @@ export async function explainAccessibility(
     try {
       const mode = getActiveMode();
       const prompt = withPreamble(
-        `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${summary}`,
+        `${A11Y_EXPLAIN_PROMPT}\nOp vocabulary:\n${mode.ai.intentPrompt}\nIssues: ${JSON.stringify(issues)}\nDesign: ${protectText(summary, planNames).text}`,
       );
-      const { response } = await withTimeout(
-        models.a11yExplain.generateContent(prompt),
-        CLOUD_GENERATE_TIMEOUT_MS,
+      const got = await requestHedgedJson(
+        models.a11yExplain,
+        models.a11yExplainHedge,
+        prompt,
+        cloudBudgetMs('short'),
         'a11y explain',
+        (raw) => {
+          const items = coerceA11yExplanations(
+            raw,
+            issues.map((i) => i.id),
+            (fix) => mode.coerce(fix),
+          );
+          return items.length ? items : null;
+        },
       );
-      const items = coerceA11yExplanations(
-        extractJson(response.text()),
-        issues.map((i) => i.id),
-        (raw) => mode.coerce(raw),
-      );
-      if (items.length) {
-        const source = sourceOf(response);
-        recordInference(source, 'a11y-explain', Date.now() - t0);
-        return { items, source };
+      if (got) {
+        recordInference(got.source, 'a11y-explain', Date.now() - t0);
+        return { items: got.value, source: got.source, model: got.model, ms: Date.now() - t0 };
       }
-      noteError('a11y explain', new Error('cloud explanations were empty or invalid'));
     } catch (err) {
       noteError('a11y explain model', err);
     }
@@ -1440,10 +2540,117 @@ export async function adaptHandProfile(metrics: HandMetrics): Promise<AdaptHandR
   return { ...rules, ms: Date.now() - t0 };
 }
 
+/**
+ * NANO RAMBLE CONDENSER (on-device only). Turn a long natural ramble into one
+ * short command before the copilot/fusion paths (and the cloud payload) see
+ * it. Same privacy posture as adaptHandProfile: an ONLY_ON_DEVICE model with
+ * no cloud transport, gated on Nano being ready, source re-checked
+ * belt-and-suspenders. Null on any miss — the caller keeps her raw words and
+ * the route line is unchanged. Never cloud; the deterministic gates live in
+ * ai/condense.ts (shouldCondense / coerceCondensed).
+ */
+export async function condenseUtterance(
+  utterance: string,
+  opts?: { timeoutMs?: number },
+): Promise<CondenseOutcome | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.condense || deviceModelStatus !== 'ready') return null;
+  try {
+    const { response } = await withTimeout(
+      models.condense.generateContent(condensePrompt(utterance)),
+      opts?.timeoutMs ?? CONDENSE_TIMEOUT_MS,
+      'condense',
+    );
+    if (sourceOf(response) !== 'on-device') {
+      noteError('condense', new Error('resolved off-device; keeping her raw words'));
+      return null;
+    }
+    const text = coerceCondensed(extractJson(response.text()), utterance);
+    if (!text) return null;
+    recordInference('on-device', 'condense', Date.now() - t0);
+    return { text, fromWords: wordCount(utterance), toWords: wordCount(text), ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('condense', err);
+    return null;
+  }
+}
+
+/** Prompt API responseConstraint for the next-step pick. */
+export const NEXT_STEPS_CONSTRAINT: Record<string, unknown> = {
+  type: 'object',
+  properties: { ids: { type: 'array', items: { type: 'string' } } },
+  required: ['ids'],
+};
+/** A pick is a convenience that runs while the page is idle, so it gets a
+ *  generous budget — the rule chips are already on screen meanwhile. */
+export const NEXT_STEPS_TIMEOUT_MS = 8000;
+
+/**
+ * NEXT-STEP CHIPS (on-device only). Nano reorders a fixed list of step ids;
+ * the caller (canvas/nextSteps) parses the reply strictly. Same posture as
+ * condenseUtterance: ONLY_ON_DEVICE model, gated on Nano being ready, source
+ * re-checked. Null on any miss — the caller shows the rule list, labelled so.
+ */
+export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?: number }): Promise<string | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.nextSteps) return null;
+  if (deviceModelStatus === 'idle') await checkDeviceAvailability();
+  if (deviceModelStatus !== 'ready') return null;
+  // Never compete with a board turn (or anything else) for the one model.
+  if (!testOverrides && !nanoQueue.idle()) return null;
+  const budget = opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS;
+  // A per-call model with its own session: when the pick runs out of time (or
+  // fails) that session is destroyed, so Nano is not left generating a reply
+  // nobody will read while the next real request waits behind it.
+  const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let own: TextGenModel | null = null;
+  let done = false;
+  try {
+    let response: ModelResponse;
+    if (testOverrides) {
+      ({ response } = await withTimeout(models.nextSteps.generateContent(prompt), budget, 'next steps'));
+    } else {
+      // Never waits in line, and holds the model's slot for its budget at most.
+      ({ response } = await nanoQueue.run(() => {
+        own = onDeviceModelFor({
+          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
+          promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
+        });
+        return withTimeout(own.generateContent(prompt), budget, 'next steps');
+      }, { maxWaitMs: 0 }));
+    }
+    done = true;
+    if (sourceOf(response) !== 'on-device') {
+      noteError('next steps', new Error('resolved off-device; using the rule list'));
+      return null;
+    }
+    recordInference('on-device', 'next-steps', Date.now() - t0);
+    return response.text();
+  } catch (err) {
+    // A slow or busy model is expected here and the rule chips already show:
+    // not an error worth a console warning on every load.
+    if (err instanceof NanoQueueSkipped || /timed out/i.test(err instanceof Error ? err.message : '')) return null;
+    noteError('next steps', err);
+    return null;
+  } finally {
+    // Timed out or failed: stop the session. A finished pick's session is
+    // dropped too — a chip pick is not worth keeping a session alive for.
+    if (own) { if (!done) nanoTrace('next steps: stopped (timed out or failed)'); session?.abort(); destroySdkSession(own); }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ADD A DEVICE (Control Anything-style, plus reuse, a sandbox and proof).
 
 export interface FrameImage { mimeType: string; dataBase64: string }
+
+/** Filled in by a vision call: how many times the photo may have left the
+ *  device (the hybrid model routed to the cloud, and/or the cloud twin was
+ *  tried), and whether a cloud model actually answered — so the caller's
+ *  ledger counts every send, even when the answer is unusable. */
+export interface VisionTrace { cloudSends: number; cloudAnswered?: boolean }
 
 /** Multimodal hybrid call: PREFER_ON_DEVICE first, cloud twin if it throws. */
 async function callVision(
@@ -1451,18 +2658,25 @@ async function callVision(
   cloud: MultimodalGenModel | null | undefined,
   parts: Array<string | ImagePart>,
   label: string,
+  trace?: VisionTrace,
 ): Promise<ModelResponse | null> {
   if (hybridModel) {
     try {
       const { response } = await withTimeout(hybridModel.generateContent(parts), ON_DEVICE_TIMEOUT_MS, label);
+      if (trace && sourceOf(response) === 'cloud') { trace.cloudSends += 1; trace.cloudAnswered = true; }
       return response;
     } catch (err) {
+      // PREFER_ON_DEVICE without a ready Nano routes to the cloud: the photo
+      // may have left even though no answer came back (e.g. our timeout).
+      if (trace && deviceModelStatus !== 'ready') trace.cloudSends += 1;
       noteError(`${label} (hybrid)`, err);
     }
   }
   if (!cloud) return null;
+  if (trace) trace.cloudSends += 1;
   try {
     const r = await withTimeout(cloud.generateContent(parts), CLOUD_GENERATE_TIMEOUT_MS * 2, `${label} cloud`);
+    if (trace) trace.cloudAnswered = true;
     return { text: () => r.response.text(), inferenceSource: 'in_cloud' };
   } catch (err) {
     noteError(`${label} (cloud)`, err);
@@ -1477,11 +2691,12 @@ const imagePart = (f: FrameImage): ImagePart => ({ inlineData: { mimeType: f.mim
 export async function identifyDevice(
   frame: FrameImage,
   hint?: IdentifyHint,
+  trace?: VisionTrace,
 ): Promise<{ identity: DeviceIdentity; source: Source; ms: number } | null> {
   const t0 = Date.now();
   const models = await ensureModels();
   if (!models) return null;
-  const response = await callVision(models.deviceSee, models.deviceSeeCloud, [buildIdentifyPrompt(hint), imagePart(frame)], 'device identify');
+  const response = await callVision(models.deviceSee, models.deviceSeeCloud, [buildIdentifyPrompt(hint), imagePart(frame)], 'device identify', trace);
   const identity = response ? parseIdentity(extractJson(response.text())) : null;
   if (!identity) return null;
   const source = sourceOf(response!);
@@ -1537,4 +2752,226 @@ export async function checkDeviceEffect(
   const source = sourceOf(response!);
   recordInference(source, 'effect-check', Date.now() - t0);
   return { ...parsed, source, ms: Date.now() - t0 };
+}
+
+/** Turn a fuzzy or non-English reference request into a short image-search
+ *  query. Nano first (the intent PREFER_ON_DEVICE model) and the cloud twin
+ *  otherwise. Returns null when no model can run; the caller keeps the local query. */
+export async function refineSearchQuery(
+  request: string,
+): Promise<{ query: string; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.intent) return null;
+  try {
+    const response = await callWithCloudRetry(
+      models.intent,
+      models.intentCloud ?? null,
+      refinePrompt(request),
+      'refine-search',
+      ON_DEVICE_TIMEOUT_MS,
+      refinePrompt(protectText(request).text),
+    );
+    const query = response ? parseRefinedQuery(response.text()) : null;
+    if (!query) return null;
+    const source = sourceOf(response!);
+    recordInference(source, 'refine-search', Date.now() - t0);
+    return { query, source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('refine-search', err);
+    return null;
+  }
+}
+
+/** Gemini SVG reference drawings or layout frames (cloud text model only).
+ *  Image-generating models are not used — they need Blaze billing, which is
+ *  not enabled. Returns 3–4 sanitized cards labeled Gemini · cloud, or null. */
+export async function generateReferenceOptions(
+  query: string,
+  kind: GenerateKind,
+): Promise<{ hits: RefHit[]; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  const model = models?.refGenerate;
+  if (!model) return null;
+  const q = query.trim();
+  if (!q) return null;
+  try {
+    const { response } = await withTimeout(
+      model.generateContent(refinePromptForMockups(q, kind)),
+      CLOUD_GENERATE_TIMEOUT_MS,
+      'ref-generate',
+    );
+    const options = parseGeneratedOptions(response.text(), kind);
+    if (options.length < 3) return null;
+    const source = sourceOf(response);
+    recordInference(source, 'ref-generate', Date.now() - t0);
+    return { hits: generatedToHits(options), source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('ref-generate', err);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CAD copilot (src/cad). Nano on the device understands her request and picks
+// a typed tool; cloud Gemini handles only the hard parts. Every result is
+// untrusted JSON, re-checked by the cad/ coercers before anything uses it.
+
+/** Nano (on device) picks ONE CAD tool for her words. `allowCloud` = may the
+ *  cloud twin run if the on-device call throws (false when offline). */
+export async function pickCadTool(
+  utterance: string,
+  summary: string,
+  opts: { allowCloud: boolean; timeoutMs?: number; planNames?: string[] },
+): Promise<{ call: ToolCall; confidence: number; source: Source; ms: number } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.cadTool) return null;
+  try {
+    const build = (u: string) =>
+      `${cadToolPrompt(summary.slice(0, 1200))}\nShe said: "${u}"\nReply JSON only: {"tool":"...","args":{...},"confidence":0..1}`;
+    const prompt = build(utterance);
+    const cloudPrompt = build(protectText(utterance, opts.planNames ?? []).text);
+    const response = await callWithCloudRetry(
+      models.cadTool, opts.allowCloud ? models.cadToolCloud ?? null : null, prompt, 'cad tool', opts.timeoutMs, cloudPrompt,
+    );
+    if (!response) return null;
+    const raw = extractJson(response.text());
+    const call = coerceToolCall(raw);
+    if (!call) return null;
+    const c = (raw as { confidence?: unknown }).confidence;
+    const confidence = typeof c === 'number' && Number.isFinite(c) ? Math.min(1, Math.max(0, c > 1 ? c / 100 : c)) : 0.6;
+    const source = sourceOf(response);
+    recordInference(source, 'cad-tool', Date.now() - t0);
+    return { call, confidence, source, ms: Date.now() - t0 };
+  } catch (err) {
+    noteError('cad tool', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini answers a hard question about the plan (2-4 sentences) and may
+ *  suggest tool calls, which the app stages as PENDING changes. */
+function coerceCopilotAnswer(raw: unknown): { answer: string; calls: ToolCall[]; why: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const answer = typeof o.answer === 'string' ? o.answer.trim().slice(0, 1200)
+    : typeof o.Answer === 'string' ? o.Answer.trim().slice(0, 1200) : '';
+  if (!answer) return null;
+  const calls = Array.isArray(o.calls) ? o.calls.map(coerceToolCall).filter((c): c is ToolCall => !!c).slice(0, 6) : [];
+  return { answer, calls, why: typeof o.why === 'string' ? o.why.slice(0, 300) : '' };
+}
+
+export async function askCopilot(
+  question: string,
+  summary: string,
+  region: string,
+  onChunk?: (text: string) => void,
+  planNames: string[] = [],
+): Promise<{ answer: string; calls: ToolCall[]; why: string; source: Source; ms: number; model: string } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotAnswer) return null;
+  try {
+    const peek = (text: string) => {
+      const raw = extractJson(text);
+      if (!raw || typeof raw !== 'object') return;
+      const a = (raw as Record<string, unknown>).answer;
+      if (typeof a === 'string' && a.trim()) onChunk?.(a.trim());
+    };
+    const sent = protectText(question).text;
+    const prompt = withPreamble(copilotAnswerPrompt(sent, protectText(summary, planNames).text, region));
+    const got = await requestHedgedJson(
+      models.copilotAnswer,
+      models.copilotAnswerHedge,
+      prompt,
+      cloudBudgetMs('long'),
+      'copilot answer',
+      coerceCopilotAnswer,
+      onChunk ? peek : undefined,
+    );
+    if (!got) return null;
+    recordInference('cloud', 'copilot-answer', Date.now() - t0);
+    return { ...got.value, source: got.source, ms: Date.now() - t0, model: got.model };
+  } catch (err) {
+    noteError('copilot answer', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini drafts a short client email from the site checklist. The app
+ *  only ever SHOWS it and opens her mail app on her confirm; nothing is sent. */
+export async function draftClientEmail(
+  items: { question: string; answer?: string }[],
+  summary: string,
+  planNames: string[] = [],
+): Promise<{ draft: EmailDraft; source: Source; ms: number; model?: string } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotEmail || items.length === 0) return null;
+  try {
+    const safeItems = items.map((i) => ({
+      question: protectText(i.question).text,
+      answer: i.answer ? protectText(i.answer).text : i.answer,
+    }));
+    const safeSummary = protectText(summary, planNames).text;
+    const got = await requestHedgedJson(
+      models.copilotEmail,
+      models.copilotEmailHedge,
+      withPreamble(emailPrompt(safeItems, safeSummary)),
+      cloudBudgetMs('long'),
+      'client email',
+      coerceEmailDraft,
+    );
+    if (!got) return null;
+    recordInference('cloud', 'client-email', Date.now() - t0);
+    return { draft: got.value, source: got.source, ms: Date.now() - t0, model: got.model };
+  } catch (err) {
+    noteError('client email', err);
+    return null;
+  }
+}
+
+/** Cloud Gemini proposes 3D materials + lighting as structured data. */
+export async function proposeMaterials(
+  request: string,
+  summary: string,
+  planNames: string[] = [],
+): Promise<{ plan: MaterialPlan; source: Source; ms: number; model?: string } | null> {
+  const t0 = Date.now();
+  const models = await ensureModels();
+  if (!models?.copilotMaterials) return null;
+  try {
+    const sent = protectText(request).text;
+    const got = await requestHedgedJson(
+      models.copilotMaterials,
+      models.copilotMaterialsHedge,
+      withPreamble(`${MATERIAL_PROMPT}\nRequest: "${sent}"\nRooms: ${protectText(summary, planNames).text.slice(0, 600)}`),
+      cloudBudgetMs('long'),
+      'materials',
+      (raw) => coerceMaterialPlan(raw, presetFor(request)),
+    );
+    if (!got) return null;
+    recordInference('cloud', 'materials', Date.now() - t0);
+    return { plan: got.value, source: got.source, ms: Date.now() - t0, model: got.model };
+  } catch (err) {
+    noteError('materials', err);
+    return null;
+  }
+}
+
+/** Dev-only hook so a local headless probe can call cloud Gemini directly.
+ *  Stripped from production builds by `import.meta.env.DEV`. */
+if (import.meta.env.DEV) {
+  (globalThis as unknown as { __mcCloudProbe?: unknown }).__mcCloudProbe = {
+    prepareHybrid,
+    getHybridStatus,
+    warmCloud,
+    askCopilot,
+    condenseUtterance,
+    draftClientEmail,
+    proposeMaterials,
+    explainAccessibility,
+  };
 }

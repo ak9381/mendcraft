@@ -18,6 +18,10 @@ export interface DeviceIdentity {
   confidence: number;
   /** Where it is in the frame, normalised 0–1 (for aiming the gimbal). */
   box?: { x: number; y: number; w: number; h: number };
+  /** Point-to-connect: a second device is about as close to where she points
+   *  (its kind and brand), so the canvas asks which one instead of guessing. */
+  alsoKind?: string;
+  alsoBrand?: string;
 }
 
 export type EffectVerdict = 'done' | 'not_done' | 'unsure';
@@ -33,6 +37,8 @@ export const IDENTIFY_CONSTRAINT = {
     label: { type: 'string' },
     confidence: { type: 'number' },
     box: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, w: { type: 'number' }, h: { type: 'number' } } },
+    alsoKind: { type: 'string' },
+    alsoBrand: { type: 'string' },
   },
   required: ['kind', 'label', 'confidence'],
 };
@@ -87,11 +93,12 @@ export interface IdentifyHint { pointer?: { x: number; y: number }; name?: strin
 
 export function buildIdentifyPrompt(hint: IdentifyHint = {}): string {
   const extra: string[] = [];
-  if (hint.pointer) extra.push(`The person is pointing at x=${hint.pointer.x.toFixed(2)}, y=${hint.pointer.y.toFixed(2)} (0-1, from the top-left); pick the device nearest to where she points.`);
+  if (hint.pointer) extra.push(`The person is pointing at x=${hint.pointer.x.toFixed(2)}, y=${hint.pointer.y.toFixed(2)} (0-1, from the top-left); pick the device nearest to where she points. If a second device is about equally close, also set "alsoKind" (and "alsoBrand") to it; otherwise leave them out.`);
   if (hint.name) extra.push(`She called it "${hint.name.replace(/"/g, "'").slice(0, 40)}"; pick the device that matches.`);
   const which = extra.length ? 'the device she means' : 'the single main electrical device';
   return `You see ONE photo from a home camera${extra.length ? ' that may show a whole room' : ''}. Name ${which} in it that could be controlled over Wi-Fi (a smart bulb, lamp, speaker, TV, fan, plug or AC).${extra.length ? `\n${extra.join('\n')}` : ''}
 Reply JSON: {"kind": one of ${DEVICE_KINDS.join('|')}, "brand": brand if a logo or shape makes it clear else "", "model": "", "label": short friendly name, "confidence": 0-1, "box": {"x","y","w","h"} as 0-1 fractions of the image}.
+Speakers count too: e.g. a Marshall speaker (black/brown box, brass knobs, script logo) is kind "speaker", brand "Marshall" — only when you can see it.
 If no such device is visible use kind "none". Do not guess a brand you cannot see.`;
 }
 
@@ -121,6 +128,12 @@ export function parseIdentity(raw: unknown): DeviceIdentity | null {
   const conf = clamp01(o.confidence) ?? 0.5;
   const label = s(o.label, 40) || `${s(o.brand, 30)} ${k}`.trim();
   const out: DeviceIdentity = { kind: k, brand: s(o.brand, 30), model: s(o.model, 40), label, confidence: conf };
+  const also = s(o.alsoKind, 20).toLowerCase();
+  if (also && also !== 'none' && also !== k && (DEVICE_KINDS as readonly string[]).includes(also)) {
+    out.alsoKind = also;
+    const ab = s(o.alsoBrand, 30);
+    if (ab) out.alsoBrand = ab;
+  }
   const b = o.box && typeof o.box === 'object' ? (o.box as Record<string, unknown>) : null;
   if (b) {
     const x = clamp01(b.x), y = clamp01(b.y), w = clamp01(b.w), h = clamp01(b.h);

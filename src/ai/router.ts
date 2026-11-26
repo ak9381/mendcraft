@@ -24,7 +24,8 @@ export type RouteReason =
   | 'no-device'      // cloud: no usable on-device model here
   | 'offline'        // rules: no AI available at all (Firebase missing / blocked)
   | 'fallback'       // rules: an AI path failed, the deterministic floor answered
-  | 'pointed';       // deixis: resolved from a camera crop + pointer (point and say)
+  | 'pointed'        // deixis: resolved from a camera crop + pointer (point and say)
+  | 'handed-off';    // Nano picked the tool; Gemini did the heavy work (materials, research)
 
 /** What the router knows about the world when it decides. */
 export interface RouterEnv {
@@ -127,6 +128,14 @@ export const SOURCE_TEXT: Record<Source, string> = {
   rules: 'Rules',
 };
 
+/** Which on-device model actually answered. Default is Chrome/Android Nano. */
+export type OnDeviceKind = 'nano' | 'apple';
+
+export function sourceText(source: Source, kind: OnDeviceKind = 'nano'): string {
+  if (source === 'on-device' && kind === 'apple') return 'Apple · on device';
+  return SOURCE_TEXT[source];
+}
+
 export const REASON_TEXT: Record<RouteReason, string> = {
   exact: 'exact command',
   private: 'private',
@@ -136,11 +145,16 @@ export const REASON_TEXT: Record<RouteReason, string> = {
   offline: 'offline',
   fallback: 'fallback',
   pointed: 'point + say',
+  'handed-off': 'Nano → Gemini',
 };
 
-/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private", "Rules · exact command". */
-export function badgeLabel(source: Source, reason: RouteReason): string {
-  return `${SOURCE_TEXT[source]} · ${REASON_TEXT[reason]}`;
+/** Badge text: "Gemini · cloud · big job", "Gemini Nano · on device · private",
+ *  "Apple · on device · private", "Rules · exact command".
+ *  A Nano/Apple-then-Gemini hand-off is labelled plainly as "Nano → Gemini"
+ *  or "Apple → Gemini". */
+export function badgeLabel(source: Source, reason: RouteReason, kind: OnDeviceKind = 'nano'): string {
+  if (reason === 'handed-off') return kind === 'apple' ? 'Apple → Gemini' : 'Nano → Gemini';
+  return `${sourceText(source, kind)} · ${REASON_TEXT[reason]}`;
 }
 
 // ---------------------------------------------------------------------------

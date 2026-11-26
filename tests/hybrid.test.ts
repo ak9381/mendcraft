@@ -1,30 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  askCopilot,
+  draftClientEmail,
+  explainAccessibility,
   compileCommand,
+  detectLanguageCloud,
+  fuseIntent,
   generatePlan,
-  generateTemplate,
   getDeviceModelStatus,
   getHybridStatus,
   initDeviceModel,
   checkDeviceAvailability,
   isDesignRequest,
   isEnabled,
+  pickCadTool,
+  pickRecipeHybrid,
   prepareHybrid,
+  proposeMaterials,
+  refineSearchQuery,
+  resolveDeixis,
+  warmOnDevice,
   setModelsForTest,
   verifyOp,
+  generateReferenceOptions,
+  type FusionContext,
   type TextGenModel,
 } from '../src/ai/hybrid';
-import { partMode, setActiveMode } from '../src/core/modes';
+import { setActiveMode } from '../src/core/modes';
 import { resetRemoteConfig, setRemoteConfigForTest } from '../src/firebase/remoteConfig';
 
 const model = (text: string, inferenceSource?: string): TextGenModel => ({
   generateContent: async () => ({ response: { text: () => text, inferenceSource } }),
 });
 
-// The hybrid wrapper is mode-agnostic (it coerces/parses via the active mode).
-// These tests exercise the 3D-part op vocabulary, so pin the active mode to
-// 'part'; the default is now the 'plan' hero.
-beforeEach(() => setActiveMode('part'));
+// The hybrid wrapper is mode-agnostic; Mendcraft is CAD-only, so these run
+// against the 2D plan op vocabulary.
+beforeEach(() => setActiveMode('plan'));
 afterEach(() => {
   setModelsForTest(null);
   setActiveMode('plan');
@@ -34,44 +45,38 @@ describe('hybrid compileCommand', () => {
   it('falls back to the rule parser when disabled (no Firebase calls)', async () => {
     setModelsForTest({ enabled: false });
     expect(isEnabled()).toBe(false);
-    const r = await compileCommand('move left 10', '{}', null);
+    const r = await compileCommand('undo', '{}', null);
     expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 });
+    expect(r.result).toEqual({ op: 'undo' });
     expect(r.ms).toBeGreaterThanOrEqual(0);
   });
 
   it('uses the mocked model and labels on-device source', async () => {
-    setModelsForTest({
-      enabled: true,
-      intent: model('{"op":"move","target":"selected","dx":10,"dy":0,"dz":0}', 'on_device'),
-    });
-    const r = await compileCommand('move right 10', '{}', null);
+    setModelsForTest({ enabled: true, intent: model('{"op":"undo"}', 'on_device') });
+    const r = await compileCommand('take that back', '{}', null);
     expect(r.source).toBe('on-device');
-    expect(r.result).toEqual({ op: 'move', target: 'selected', dx: 10, dy: 0, dz: 0 });
+    expect(r.result).toEqual({ op: 'undo' });
   });
 
   it('labels cloud source and strips code fences', async () => {
-    setModelsForTest({
-      enabled: true,
-      intent: model('```json\n{"op":"fillet","target":"selected","radius":2}\n```', 'in_cloud'),
-    });
-    const r = await compileCommand('fillet 2', '{}', 'p1');
+    setModelsForTest({ enabled: true, intent: model('```json\n{"op":"redo"}\n```', 'in_cloud') });
+    const r = await compileCommand('redo that', '{}', null);
     expect(r.source).toBe('cloud');
-    expect(r.result).toMatchObject({ op: 'fillet', radius: 2 });
+    expect(r.result).toEqual({ op: 'redo' });
   });
 
   it('rejects invalid model JSON and falls back to rules', async () => {
     setModelsForTest({ enabled: true, intent: model('this is not json at all') });
-    const r = await compileCommand('mirror x', '{}', null);
+    const r = await compileCommand('add a door', '{}', null);
     expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ op: 'mirror', target: 'selected', axis: 'x' });
+    expect(r.result).toMatchObject({ op: 'add_door' });
   });
 
   it('rejects valid JSON that is not a valid op', async () => {
     setModelsForTest({ enabled: true, intent: model('{"op":"explode","target":"everything"}') });
-    const r = await compileCommand('make it taller by 5', '{}', null);
+    const r = await compileCommand('undo', '{}', null);
     expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ op: 'scale', target: 'selected', deltaMm: { z: 5 } });
+    expect(r.result).toEqual({ op: 'undo' });
   });
 
   it('falls back to rules when the model throws', async () => {
@@ -84,25 +89,11 @@ describe('hybrid compileCommand', () => {
     expect(r.result).toEqual({ op: 'undo' });
   });
 
-  it('passes through template and clarify results from the model', async () => {
-    setModelsForTest({
-      enabled: true,
-      intent: model('{"template":"phoneStand","params":{"angleDeg":70}}', 'in_cloud'),
-    });
-    const r = await compileCommand('something to prop my phone', '{}', null);
-    expect(r.result).toEqual({ template: 'phoneStand', params: { angleDeg: 70 } });
-
-    setModelsForTest({ enabled: true, intent: model('{"clarify":"Which part?"}', 'on_device') });
+  it('passes through clarify results from the model', async () => {
+    setModelsForTest({ enabled: true, intent: model('{"clarify":"Which wall?"}', 'on_device') });
     const r2 = await compileCommand('move it', '{}', null);
-    expect(r2.result).toEqual({ clarify: 'Which part?' });
+    expect(r2.result).toEqual({ clarify: 'Which wall?' });
     expect(r2.source).toBe('on-device');
-  });
-
-  it('rejects a bogus template name from the model', async () => {
-    setModelsForTest({ enabled: true, intent: model('{"template":"rocketLauncher","params":{}}') });
-    const r = await compileCommand('cup grip', '{}', null);
-    expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ template: 'cupGrip', params: {} });
   });
 });
 
@@ -143,63 +134,6 @@ describe('hybrid verifyOp', () => {
     setModelsForTest({ enabled: true, verify: model('{"matchesIntent":"maybe"}') });
     const r = await verifyOp(op, '{}', '{}', []);
     expect(r).toEqual({ matchesIntent: true, issue: null, source: 'rules' });
-  });
-});
-
-describe('hybrid generateTemplate', () => {
-  it('uses the cloud template model and labels source', async () => {
-    setModelsForTest({
-      enabled: true,
-      template: model('{"template":"hook","params":{"rodDiameterMm":8}}', 'in_cloud'),
-    });
-    const r = await generateTemplate('something to hang my bag on');
-    expect(r).toEqual({ template: 'hook', params: { rodDiameterMm: 8 }, source: 'cloud' });
-  });
-
-  it('drops non-numeric params from model output', async () => {
-    setModelsForTest({
-      enabled: true,
-      template: model('{"template":"cupGrip","params":{"cupDiameterMm":"80","color":"red"}}'),
-    });
-    const r = await generateTemplate('grip for my cup');
-    expect(r).toEqual({ template: 'cupGrip', params: { cupDiameterMm: 80 }, source: 'cloud' });
-  });
-
-  it('falls back to rules when disabled', async () => {
-    setModelsForTest({ enabled: false });
-    const r = await generateTemplate('phone stand');
-    expect(r).toEqual({ template: 'phoneStand', params: {}, source: 'rules' });
-    const unknown = await generateTemplate('a spaceship');
-    expect(unknown.source).toBe('rules');
-    expect('clarify' in unknown).toBe(true);
-  });
-});
-
-describe('verifier and op schemas', () => {
-  // The constraints now live on the active mode; assert the part mode's.
-  const OP_RESPONSE_CONSTRAINT = partMode.ai.opConstraint as { properties: Record<string, never> };
-  const VERIFY_RESPONSE_CONSTRAINT = partMode.ai.verifyConstraint;
-
-  it('gives the verifier its own {matchesIntent, issue} schema', () => {
-    expect(VERIFY_RESPONSE_CONSTRAINT).toEqual({
-      type: 'object',
-      properties: {
-        matchesIntent: { type: 'boolean' },
-        issue: { type: 'string' },
-      },
-    });
-    expect(VERIFY_RESPONSE_CONSTRAINT).not.toHaveProperty('properties.op');
-  });
-
-  it('mirrors op fields in the on-device constraint and accepts numeric depth', () => {
-    const props = OP_RESPONSE_CONSTRAINT.properties as Record<string, never>;
-    expect(props.depth).toEqual({ anyOf: [{ type: 'number' }, { type: 'string' }] });
-    expect(props.params.properties).toMatchObject({ w: { type: 'number' }, diameter: { type: 'number' } });
-    expect(props.deltaMm.properties).toEqual({
-      x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' },
-    });
-    expect(props.op).toEqual({ type: 'string' });
-    expect(props.dx).toEqual({ type: 'number' });
   });
 });
 
@@ -332,20 +266,40 @@ describe('cloud retry when the on-device call throws', () => {
     setModelsForTest({
       enabled: true,
       intent: { generateContent: async () => { throw new Error('nano blew up'); } },
-      intentCloud: model('{"template":"cupGrip","params":{}}', 'in_cloud'),
+      intentCloud: model('{"op":"undo"}', 'in_cloud'),
     });
-    const r = await compileCommand('cup grip', '{}', null);
+    const r = await compileCommand('take it back', '{}', null);
     expect(r.source).toBe('cloud');
-    expect(r.result).toEqual({ template: 'cupGrip', params: {} });
+    expect(r.result).toEqual({ op: 'undo' });
     expect(getHybridStatus().lastError).toContain('nano blew up');
   });
 
-  it('falls to rules (still loading the template) when both fail', async () => {
+  it('falls to rules when both fail', async () => {
     const boom: TextGenModel = { generateContent: async () => { throw new Error('down'); } };
     setModelsForTest({ enabled: true, intent: boom, intentCloud: boom });
-    const r = await compileCommand('cup grip', '{}', null);
+    const r = await compileCommand('undo', '{}', null);
     expect(r.source).toBe('rules');
-    expect(r.result).toEqual({ template: 'cupGrip', params: {} });
+    expect(r.result).toEqual({ op: 'undo' });
+  });
+
+  it('falls to rules when the cloud retry hangs (never settles)', async () => {
+    // On-device throws, then the cloud retry leg hangs. Without a hard timeout
+    // on that retry the turn would never resolve OR reject and the UI freezes.
+    vi.useFakeTimers();
+    try {
+      setModelsForTest({
+        enabled: true,
+        intent: { generateContent: async () => { throw new Error('nano blew up'); } },
+        intentCloud: { generateContent: () => new Promise(() => {}) }, // never settles
+      });
+      const promise = compileCommand('undo', '{}', null);
+      await vi.advanceTimersByTimeAsync(9000); // past CLOUD_GENERATE_TIMEOUT_MS
+      const r = await promise;
+      expect(r.source).toBe('rules');
+      expect(r.result).toEqual({ op: 'undo' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -362,9 +316,9 @@ describe('App Check required', () => {
     expect(status.appCheck).toBe('failed');
     expect(status.message).toMatch(/App Check/i);
 
-    const compiled = await compileCommand('move left 10', '{}', null);
+    const compiled = await compileCommand('undo', '{}', null);
     expect(compiled.source).toBe('rules');
-    expect(compiled.result).toEqual({ op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 });
+    expect(compiled.result).toEqual({ op: 'undo' });
 
     const verdict = await verifyOp(
       { op: 'move', target: 'selected', dx: -10, dy: 0, dz: 0 },
@@ -469,7 +423,7 @@ describe('server prompt templates (Remote Config driven)', () => {
     '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
 
   it('calls the server prompt-template model when a template ID is set', async () => {
-    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate', screen: '', part: '' } });
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate' } });
     const calls: { templateId: string; templateVariables: Record<string, unknown> }[] = [];
     setModelsForTest({
       enabled: true,
@@ -491,7 +445,7 @@ describe('server prompt templates (Remote Config driven)', () => {
   });
 
   it('falls back to the inline cloud model when the server template fails', async () => {
-    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate', screen: '', part: '' } });
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate' } });
     setModelsForTest({
       enabled: true,
       template: model(PLAN_DOC, 'in_cloud'),
@@ -533,5 +487,305 @@ describe('isDesignRequest', () => {
     expect(isDesignRequest('move left 10')).toBe(false);
     expect(isDesignRequest('make it taller by 5')).toBe(false);
     expect(isDesignRequest('cup grip')).toBe(false);
+  });
+});
+
+describe('generateReferenceOptions (SVG text model, no image billing)', () => {
+  const svg = (n: number) => `<svg viewBox="0 0 10 10"><circle cx="${n}" cy="2" r="1"/></svg>`;
+  const payload = JSON.stringify({
+    options: [
+      { title: 'Front view', kind: 'drawing', svg: svg(2) },
+      { title: 'Side view', kind: 'drawing', svg: svg(5) + '<script>alert(1)</script>' },
+      { title: 'Top view', kind: 'drawing', svg: svg(8) },
+    ],
+  });
+
+  it('returns 3–4 sanitized Gemini · cloud cards from the cloud text model', async () => {
+    setModelsForTest({ enabled: true, refGenerate: model(payload) });
+    const r = await generateReferenceOptions('hand holding a cup', 'drawing');
+    expect(r).not.toBeNull();
+    expect(r!.hits).toHaveLength(3);
+    expect(r!.hits.every((h) => h.credit === 'Gemini · cloud')).toBe(true);
+    expect(r!.hits.every((h) => h.source === 'Gemini')).toBe(true);
+    expect(r!.hits[1].thumbUrl.startsWith('data:image/svg+xml')).toBe(true);
+    expect(r!.source).toBe('cloud');
+    expect(r!.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns null when the cloud model is missing or the reply is unusable', async () => {
+    setModelsForTest({ enabled: true });
+    expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
+    setModelsForTest({ enabled: true, refGenerate: model('{"options":[]}') });
+    expect(await generateReferenceOptions('hand holding a cup', 'drawing')).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Privacy: every cloud request that carries the user's words must send the SAME
+// redacted text the ledger records (ai/redact.redactForCloud). On-device Nano
+// prompts and the rules floor keep her raw words.
+
+describe('cloud redaction (the request matches the ledger receipt)', () => {
+  const MOTHER = 'Does this bedroom work for my mother Lakshmi?';
+
+  /** A model that records every prompt it is asked and replies `text`. */
+  const spy = (text: string, inferenceSource?: string) => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => {
+        prompts.push(p);
+        return { response: { text: () => text, inferenceSource } };
+      },
+    };
+    return { m, prompts };
+  };
+  /** An on-device model that records its prompt, then throws (→ cloud retry). */
+  const throwing = () => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => { prompts.push(p); throw new Error('nano down'); },
+    };
+    return { m, prompts };
+  };
+
+  const ctx: FusionContext = {
+    space: 'plan', unit: 'mm', cursor: { x: 100, y: 200 }, hoverId: null, selectedIds: [], nearby: [],
+  };
+
+  beforeEach(() => setActiveMode('plan'));
+
+  it('fuseIntent forceCloud sends [name] to the cloud, never Lakshmi', async () => {
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await fuseIntent(MOTHER, ctx, { forceCloud: true });
+    expect(r.source).toBe('cloud');
+    expect(cloud.prompts).toHaveLength(1);
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('on-device fuseIntent keeps her raw words in the Nano prompt', async () => {
+    const nano = spy('{"op":"undo","confidence":0.9}', 'on_device');
+    setModelsForTest({ enabled: true, fusion: nano.m });
+    const r = await fuseIntent(MOTHER, ctx);
+    expect(r.source).toBe('on-device');
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(nano.prompts[0]).not.toContain('[name]');
+  });
+
+  it('a failed on-device fusion retries on the cloud with a REDACTED prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusion: nano.m, fusionCloud: cloud.m });
+    const r = await fuseIntent(MOTHER, ctx);
+    expect(r.source).toBe('cloud');
+    // The raw on-device prompt was never re-sent to the cloud.
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('fuseIntent redacts person-like plan labels on the cloud leg (planNames)', async () => {
+    const cloud = spy('{"op":"undo","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    await fuseIntent('put a bed in Lakshmi', ctx, { forceCloud: true, planNames: ['Lakshmi', 'Kitchen'] });
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('Kannada cloud fusion still works through redaction (pass-through text)', async () => {
+    const cloud = spy('{"op":"add_door","target":"w2","translation":"put a door here","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await fuseIntent('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು', ctx, {
+      forceCloud: true, lang: { code: 'kn', englishName: 'Kannada' },
+    });
+    expect(r.source).toBe('cloud');
+    expect(r.result).toMatchObject({ op: 'add_door', target: 'w2' });
+    expect(r.translation).toBe('put a door here');
+    expect(cloud.prompts[0]).toContain('ಬಾಗಿಲು');
+  });
+
+  const PLAN_DOC =
+    '{"rooms":[{"x":0,"y":0,"w":4000,"h":3000,"name":"Bedroom 1"},{"x":4000,"y":0,"w":4000,"h":3000,"name":"Bedroom 2"}],"unit":"mm"}';
+
+  it('generatePlan redacts the cloud prompt and stays idempotent', async () => {
+    const cloud = spy(PLAN_DOC, 'in_cloud');
+    setModelsForTest({ enabled: true, template: cloud.m });
+    await generatePlan('a bedroom plan for my mother Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+    // A caller that already redacted sends the identical prompt (idempotent).
+    await generatePlan('a bedroom plan for my mother [name]');
+    expect(cloud.prompts[1]).toBe(cloud.prompts[0]);
+  });
+
+  it('generatePlan sends the redacted request to the server prompt template', async () => {
+    setRemoteConfigForTest({ templateIds: { plan: 'plan_generate' } });
+    try {
+      const calls: { templateId: string; templateVariables: Record<string, unknown> }[] = [];
+      setModelsForTest({
+        enabled: true,
+        template: { generateContent: async () => { throw new Error('inline must not run'); } },
+        promptTemplate: {
+          generateContent: async (req) => {
+            calls.push(req);
+            return { response: { text: () => PLAN_DOC, inferenceSource: 'in_cloud' } };
+          },
+        },
+      });
+      await generatePlan('a bedroom plan for my mother Lakshmi');
+      expect(calls[0].templateVariables.request).toContain('[name]');
+      expect(String(calls[0].templateVariables.request)).not.toContain('Lakshmi');
+    } finally {
+      resetRemoteConfig();
+    }
+  });
+
+  it('askCopilot redacts a phone number and stays idempotent', async () => {
+    const cloud = spy('{"answer":"Yes, it fits.","calls":[],"why":""}');
+    setModelsForTest({ enabled: true, copilotAnswer: cloud.m });
+    const r = await askCopilot('Call me on +91 98765 43210 about the bedroom', 'plan {}', 'India');
+    expect(r?.answer).toBe('Yes, it fits.');
+    expect(cloud.prompts[0]).toContain('[phone]');
+    expect(cloud.prompts[0]).not.toContain('98765');
+    await askCopilot('Call me on [phone] about the bedroom', 'plan {}', 'India');
+    expect(cloud.prompts[1]).toBe(cloud.prompts[0]);
+  });
+
+  it('detectLanguageCloud sends the redacted transcript', async () => {
+    const cloud = spy('{"lang":"en","confidence":0.9}');
+    setModelsForTest({ enabled: true, langDetect: cloud.m });
+    await detectLanguageCloud(MOTHER);
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('pickRecipeHybrid redacts the utterance on the cloud leg', async () => {
+    const cloud = spy('{"recipeId":"r1","confidence":0.9}');
+    setModelsForTest({ enabled: true, fusionCloud: cloud.m });
+    const r = await pickRecipeHybrid(`morning light for my mother Lakshmi`, [
+      { id: 'r1', name: 'morning light', aliases: [] },
+    ], { forceCloud: true });
+    expect(r?.id).toBe('r1');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('compileCommand retries a failed on-device call with a REDACTED cloud prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"op":"undo"}', 'in_cloud');
+    setModelsForTest({ enabled: true, intent: nano.m, intentCloud: cloud.m });
+    await compileCommand(MOTHER, '{}', null);
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('deixis cloud retry redacts the utterance (and person-like candidate labels)', async () => {
+    const prompts: string[] = [];
+    setModelsForTest({
+      enabled: true,
+      deixis: { generateContent: async () => { throw new Error('nano down'); } },
+      deixisCloud: {
+        generateContent: async (parts) => {
+          prompts.push(String(parts[0]));
+          return { response: { text: () => '{"target":"none","confidence":0}' } };
+        },
+      },
+    });
+    await resolveDeixis("make Lakshmi's room brighter", null, {
+      pointer: null,
+      candidates: [{ id: 'room-1', kind: 'room', label: 'Lakshmi' }],
+      space: 'plan',
+      planNames: ['Lakshmi'],
+    });
+    expect(prompts[0]).toContain('[name]');
+    expect(prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('pickCadTool cloud retry prompt is redacted', async () => {
+    const nano = throwing();
+    const cloud = spy('{"tool":"zoom","args":{"to":"fit"},"confidence":1}', 'in_cloud');
+    setModelsForTest({ enabled: true, cadTool: nano.m, cadToolCloud: cloud.m });
+    await pickCadTool(MOTHER, 'plan {}', { allowCloud: true });
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('proposeMaterials redacts the request before it reaches Gemini (ONLY_IN_CLOUD, no prior redaction)', async () => {
+    const cloud = spy('{"lighting":{"sunIntensity":1}}', 'in_cloud');
+    setModelsForTest({ enabled: true, copilotMaterials: cloud.m });
+    await proposeMaterials('warm materials for my mother Lakshmi\'s room', 'plan {}');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+
+  it('refineSearchQuery retries a failed on-device call with a REDACTED cloud prompt', async () => {
+    const nano = throwing();
+    const cloud = spy('{"query":"bedroom tile"}', 'in_cloud');
+    setModelsForTest({ enabled: true, intent: nano.m, intentCloud: cloud.m });
+    await refineSearchQuery("tile like my mother Lakshmi's kitchen");
+    expect(nano.prompts[0]).toContain('Lakshmi');
+    expect(cloud.prompts[0]).toContain('[name]');
+    expect(cloud.prompts[0]).not.toContain('Lakshmi');
+  });
+});
+
+describe('on-device warm-up', () => {
+  it('no-ops under test overrides (does not call a model)', async () => {
+    setModelsForTest({ enabled: true, appCheck: 'ready', cadTool: model('{"tool":"zoom","args":{"to":"fit"},"confidence":1}') });
+    expect(await warmOnDevice()).toBe(false);
+  });
+});
+
+describe('cloud copilot calls redact the plan summary (room-label names)', () => {
+  // generateContent runs before coercion, so a capturing model records the
+  // exact prompt string sent to the cloud even if the (junk) reply fails to
+  // coerce. The summary carries plan room names; a room renamed to a person's
+  // name must not reach the cloud. Regression for commit 64a993a.
+  const capture = () => {
+    const prompts: string[] = [];
+    const m: TextGenModel = {
+      generateContent: async (p: string) => { prompts.push(p); return { response: { text: () => '{}' } }; },
+    };
+    return { m, prompts };
+  };
+
+  it('askCopilot redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotAnswer: cap.m });
+    await askCopilot('what is the minimum door width here', 'rooms: Lakshmi bedroom 4000x3000', 'IN', undefined, ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+    expect(cap.prompts.some((p) => p.includes('4000x3000'))).toBe(true); // dimensions survive
+  });
+
+  it('proposeMaterials redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotMaterials: cap.m });
+    await proposeMaterials('warm oak look', 'rooms: Lakshmi bedroom', ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+  });
+
+  it('draftClientEmail redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, copilotEmail: cap.m });
+    await draftClientEmail([{ question: 'ramp?', answer: 'yes' }], 'rooms: Lakshmi bedroom', ['Lakshmi']);
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
+  });
+
+  it('explainAccessibility redacts a plan name in the summary', async () => {
+    const cap = capture();
+    setModelsForTest({ enabled: true, a11yExplain: cap.m });
+    await explainAccessibility(
+      [{ id: 'x1', rule: 'ramp', message: 'steep', citation: 'IS' }],
+      'rooms: Lakshmi bedroom',
+      ['Lakshmi'],
+    );
+    expect(cap.prompts.length).toBeGreaterThan(0);
+    for (const p of cap.prompts) expect(p).not.toContain('Lakshmi');
   });
 });

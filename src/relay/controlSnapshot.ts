@@ -1,5 +1,5 @@
 // CONTROL-ROOM SNAPSHOT — the small, privacy-safe state the laptop publishes to
-// the paired iPad /control dashboard. It is PURE (no DOM, no Firebase, no
+// the optional /control dashboard. It is PURE (no DOM, no Firebase, no
 // model): buildControlSnapshot() clamps, redacts, and omits so that whatever
 // leaves the laptop is honest and bounded.
 //
@@ -18,6 +18,8 @@ import { REASON_TEXT, badgeLabel, type RouteReason } from '../ai/router';
 import type { Source } from '../ai/hybrid';
 import { redact, type CloudCall, type LedgerCounts } from '../core/ledger';
 import type { JobKind, JobStatus, QueuedJob } from '../offline/queue';
+import { coerceLayout, type ScreenLayout } from '../canvas/screenLayout';
+import { coerceSurfacePlan, type SurfacePlan } from '../canvas/surfacePlan';
 
 export const SNAPSHOT_VERSION = 1 as const;
 
@@ -100,7 +102,7 @@ export interface QueueEntry {
   seq: number;
 }
 
-/** One shared-recipe card for the iPad dashboard: what it does, which device
+/** One shared-recipe card for the /control dashboard: what it does, which device
  *  runs it, who taught it. No steps/ops leave — just the summary line. */
 export interface RecipeCard {
   id: string;
@@ -110,6 +112,39 @@ export interface RecipeCard {
   /** One human line ("7 steps · adds room…" or "Opens mail.example.com"). */
   summary: string;
   steps: number;
+}
+
+/** One change-log entry for the /control dashboard: who changed what, why, and its review
+ *  state. No geometry or snapshots leave — just the human line. */
+export interface ChangeCard {
+  id: string;
+  who: 'her' | 'nano' | 'gemini' | 'rules';
+  title: string;
+  why: string;
+  status: 'pending' | 'applied' | 'rejected' | 'reverted';
+}
+
+/** One site-checklist question for the /control dashboard. */
+export interface ChecklistCard {
+  id: string;
+  question: string;
+  status: 'open' | 'answered' | 'emailed' | 'done';
+  offline: boolean;
+  answer?: string;
+}
+
+export const CHANGES_MAX = 12;
+export const CHECKLIST_MAX = 12;
+
+/** A committed cross-device tile move, carried in the snapshot so BOTH phones
+ *  (not just the sender) learn about it and animate the tile entering from the
+ *  matching edge. The tile's content rides in `board`; this is just the marker.
+ *  `rev` lets a target apply the enter-animation exactly once. */
+export interface TransferMarker {
+  componentId: string;
+  to: 'laptop' | 'left' | 'right';
+  enterEdge: 'left' | 'right';
+  rev: number;
 }
 
 /** What the caps dropped — surfaced so the dashboard never hides truncation. */
@@ -133,6 +168,21 @@ export interface ControlSnapshot {
   caption: CaptionLine | null;
   scene: SceneSnapshot | null;
   recipes: RecipeCard[];
+  /** Reviewed change log (newest last); present when there are entries. */
+  changes?: ChangeCard[];
+  /** Site checklist; present when there are items. */
+  checklist?: ChecklistCard[];
+  /** Which phone is on which side of the laptop (screen arrangement). Optional:
+   *  old snapshots without it still coerce; phones default to the empty layout. */
+  layout?: ScreenLayout;
+  /** The shared board the phones mirror/pick tiles from. Re-validated through
+   *  coerceSurfacePlan (bounded, no media). Optional + backward compatible. */
+  board?: SurfacePlan;
+  /** When set, `board` was sent to ONE phone (a whole-board edge drag): only
+   *  the phone of this platform shows it; the other phone ignores it. */
+  boardFor?: 'ios' | 'android';
+  /** The most recent committed tile transfer (for the enter-from-edge animation). */
+  transfer?: TransferMarker;
   omitted: SnapshotOmissions;
 }
 
@@ -163,6 +213,16 @@ export interface ControlSnapshotInput {
   caption?: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null;
   scene?: SceneInput | null;
   recipes?: RecipeCardInput[];
+  changes?: { id: string; actor: string; title: string; why?: string; status: string }[];
+  checklist?: { id: string; question: string; status: string; askedOffline?: boolean; answer?: string }[];
+  /** Screen arrangement (coerced defensively, so wire junk is safe). */
+  layout?: ScreenLayout | null;
+  /** Shared board (re-coerced via coerceSurfacePlan; dropped if invalid). */
+  board?: unknown;
+  /** Target phone for `board` (validated; anything else is dropped). */
+  boardFor?: unknown;
+  /** Last committed transfer marker. */
+  transfer?: { componentId?: unknown; to?: unknown; enterEdge?: unknown; rev?: unknown } | null;
 }
 
 export interface RecipeCardInput {
@@ -266,6 +326,40 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     };
   }
 
+  const WHO = ['her', 'nano', 'gemini', 'rules'] as const;
+  const CST = ['pending', 'applied', 'rejected', 'reverted'] as const;
+  const IST = ['open', 'answered', 'emailed', 'done'] as const;
+  const changes = keepLast((input.changes ?? [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && (WHO as readonly string[]).includes(c.actor) && (CST as readonly string[]).includes(c.status))
+    .map((c): ChangeCard => ({
+      id: safeText(c.id, 40), who: c.actor as ChangeCard['who'], status: c.status as ChangeCard['status'],
+      title: safeText(c.title ?? '', LABEL_MAX), why: safeText(c.why ?? '', SUMMARY_MAX),
+    })), CHANGES_MAX).kept;
+  const checklist = keepLast((input.checklist ?? [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && typeof c.question === 'string' && c.question.trim() && (IST as readonly string[]).includes(c.status))
+    .map((c): ChecklistCard => ({
+      id: safeText(c.id, 40), question: safeText(c.question, SUMMARY_MAX), status: c.status as ChecklistCard['status'],
+      offline: c.askedOffline === true,
+      ...(c.answer ? { answer: safeText(c.answer, SUMMARY_MAX) } : {}),
+    })), CHECKLIST_MAX).kept;
+
+  // Screen arrangement, shared board, and the last transfer marker — all
+  // optional and added only when present, so snapshots that predate these
+  // fields (or a laptop that never arranges phones) stay byte-for-byte as before
+  // and old consumers are unaffected.
+  // Only carry a layout when at least one phone is actually placed — an empty
+  // {left:null,right:null} (no arrangement / wire junk) is omitted so old
+  // snapshots and un-arranged laptops stay field-for-field identical.
+  const coercedLayout = input.layout ? coerceLayout(input.layout) : null;
+  const layout = coercedLayout && (coercedLayout.left || coercedLayout.right) ? coercedLayout : null;
+  let board: SurfacePlan | null = null;
+  if (input.board !== undefined && input.board !== null) {
+    const c = coerceSurfacePlan(input.board);
+    if (c.ok) board = c.value;
+  }
+  const transfer = coerceTransferMarker(input.transfer);
+  const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
+
   return {
     v: SNAPSHOT_VERSION,
     rev: Number.isFinite(input.rev) ? Math.round(input.rev as number) : 0,
@@ -277,6 +371,12 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     caption,
     scene,
     recipes: recipes.kept,
+    ...(changes.length ? { changes } : {}),
+    ...(checklist.length ? { checklist } : {}),
+    ...(layout ? { layout } : {}),
+    ...(board ? { board } : {}),
+    ...(boardFor ? { boardFor } : {}),
+    ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
       ledgerCalls: calls.dropped,
@@ -304,6 +404,25 @@ function buildAppliances(
   return out;
 }
 
+/** Coerce an untrusted transfer marker, or null when malformed/absent. */
+function coerceTransferMarker(
+  raw: ControlSnapshotInput['transfer'],
+): TransferMarker | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const to = raw.to;
+  const edge = raw.enterEdge;
+  const componentId = typeof raw.componentId === 'string' ? raw.componentId : '';
+  if (!componentId || componentId.length > 80) return null;
+  if (to !== 'laptop' && to !== 'left' && to !== 'right') return null;
+  if (edge !== 'left' && edge !== 'right') return null;
+  return {
+    componentId: componentId.slice(0, 80),
+    to,
+    enterEdge: edge,
+    rev: typeof raw.rev === 'number' && Number.isFinite(raw.rev) ? Math.round(raw.rev) : 0,
+  };
+}
+
 function clampPrimitive(p: ScenePrimitive): ScenePrimitive {
   if (p.t === 'seg') {
     return { t: 'seg', x1: clampFinite(p.x1), y1: clampFinite(p.y1), x2: clampFinite(p.x2), y2: clampFinite(p.y2) };
@@ -328,7 +447,7 @@ const DEVICES: readonly DeviceId[] = ['laptop', 'phone', 'other'];
 const APPLIANCES: readonly ApplianceState[] = ['on', 'off', 'unknown'];
 const SOURCES: readonly Source[] = ['on-device', 'cloud', 'rules'];
 const STATUSES: readonly JobStatus[] = ['queued', 'running', 'ready', 'error'];
-const KINDS: readonly JobKind[] = ['plan', 'ui', 'a11y'];
+const KINDS: readonly JobKind[] = ['plan', 'a11y', 'question'];
 
 function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
@@ -440,6 +559,21 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     caption,
     scene,
     recipes,
+    changes: (Array.isArray(r.changes) ? r.changes : []).map((c) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return { id: str(o.id), actor: str(o.who), title: str(o.title), why: str(o.why), status: str(o.status) };
+    }),
+    checklist: (Array.isArray(r.checklist) ? r.checklist : []).map((c) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return { id: str(o.id), question: str(o.question), status: str(o.status), askedOffline: o.offline === true, answer: str(o.answer) || undefined };
+    }),
+    // New optional fields — absent on old snapshots, so these stay undefined and
+    // buildControlSnapshot omits them (backward compatible). coerceSurfacePlan /
+    // coerceLayout / coerceTransferMarker re-validate the untrusted wire data.
+    layout: r.layout ? coerceLayout(r.layout) : null,
+    board: r.board,
+    boardFor: r.boardFor,
+    transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }
 

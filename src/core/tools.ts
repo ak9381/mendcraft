@@ -72,6 +72,10 @@ export interface Tool {
   onKey?(e: KeyboardEvent): boolean;
   /** Esc / tool switch: abort any in-progress gesture. */
   onCancel?(): void;
+  /** A multi-click gesture is mid-way (e.g. a wall chain with points down):
+   *  the host must hold its framing still so the next click lands where the
+   *  user aims (B-028). */
+  busy?(): boolean;
   /** Palette pick-and-place released over the canvas. */
   onPlace?(p: ToolPointer): void;
 }

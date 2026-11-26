@@ -165,7 +165,16 @@ export interface FacingOptions {
   leaveDeg?: number;
   /** A change must persist this long before it takes effect (ms). */
   debounceMs?: number;
+  /** Extra allowance (deg) for an UPWARD pitch (pitch < 0, chin up toward a
+   *  camera below the face). Default 0 (symmetric). The phone shell uses
+   *  PHONE_FACING: a phone held at chest height sees the face from below. */
+  pitchUpExtraDeg?: number;
 }
+
+/** Phone look-to-edit facing: a normal low grip puts the camera below the
+ *  face (pitch ≈ −20…−40°), so upward pitch gets 25° more room — the same
+ *  allowance PHONE_HAND_GATE adds over HAND_GATE. */
+export const PHONE_FACING: FacingOptions = { pitchUpExtraDeg: 25 };
 
 export interface FacingTracker {
   update(pose: HeadPose, now: number): boolean;
@@ -177,13 +186,15 @@ export function createFacingTracker(opts: FacingOptions = {}): FacingTracker {
   const enterDeg = opts.enterDeg ?? 20;
   const leaveDeg = opts.leaveDeg ?? 28;
   const debounceMs = opts.debounceMs ?? 250;
+  const upExtra = opts.pitchUpExtraDeg ?? 0;
 
   let facing = false;
   let pendingTarget: boolean | null = null;
   let pendingSince = 0;
 
   function update(pose: HeadPose, now: number): boolean {
-    const mag = Math.max(Math.abs(pose.yaw), Math.abs(pose.pitch));
+    const pitchMag = pose.pitch < 0 ? Math.max(0, -pose.pitch - upExtra) : pose.pitch;
+    const mag = Math.max(Math.abs(pose.yaw), pitchMag);
     // Hysteresis: the bar to stay facing (leaveDeg) is looser than to enter.
     const wantFacing = facing ? mag < leaveDeg : mag < enterDeg;
     if (wantFacing === facing) {
@@ -206,6 +217,113 @@ export function createFacingTracker(opts: FacingOptions = {}): FacingTracker {
     update,
     get isFacing() { return facing; },
     reset() { facing = false; pendingTarget = null; pendingSince = 0; },
+  };
+}
+
+// ---- hand gate (canvas hands: "Not facing" locks the hands) ----
+
+/** Looser than the look-to-sync facing thresholds: looking down at the
+ *  keyboard or your own hands must NOT lock the hands. Pitch > 0 is looking
+ *  DOWN (nose toward the chin — headPoseFromLandmarks; the matrix pose uses
+ *  the same Rx convention). Hysteresis: lock past the *Out values, unlock
+ *  inside the *In values. */
+export const HAND_GATE = {
+  yawOut: 30, pitchUpOut: 25, pitchDownOut: 45,
+  yawIn: 25, pitchUpIn: 20, pitchDownIn: 40,
+  /** Turning back toward the screen must persist this long (ms). */
+  debounceMs: 250,
+  /** Turning AWAY must persist this long (ms): two face frames
+   *  (FACE_INTERVAL_MS 200) — one misread frame never locks, a real turn
+   *  locks on the second frame instead of the third. */
+  leaveDebounceMs: 150,
+  /** A (re)appearing face reports unknown (null) until seen this long. */
+  settleMs: 500,
+  /** A face that goes MISSING (not turned: lost — a hand passing in front
+   *  of it, a fist raised to the chin) keeps its last state this long; past
+   *  it the gate reports null, which the hands treat as NOT facing. While a
+   *  hand is in view presence passes a longer grace (its LOST_TIMEOUT_MS):
+   *  her own hand over her face must never cancel a drag. A TURNED head
+   *  (face seen, past the limits) still locks after leaveDebounceMs. */
+  lostGraceMs: 1200,
+} as const;
+
+export interface HandGateConfig {
+  yawOut: number; pitchUpOut: number; pitchDownOut: number;
+  yawIn: number; pitchUpIn: number; pitchDownIn: number;
+  debounceMs: number; settleMs: number;
+  /** Default debounceMs. */
+  leaveDebounceMs?: number;
+  /** Default 0 (no grace). */
+  lostGraceMs?: number;
+}
+
+/** Phone shell hand gate. A phone held normally sits BELOW the face, so the
+ *  head reads as pitched UP (pitch < 0) by 20–40° while the user looks
+ *  straight at it — HAND_GATE's 25° up-limit would lock the hands with an
+ *  ordinary grip. Up gets 50°/45°; down (looking at the desk past the phone)
+ *  is tighter than the laptop's (30°/25°), yaw is unchanged. */
+export const PHONE_HAND_GATE: HandGateConfig = {
+  yawOut: 30, pitchUpOut: 50, pitchDownOut: 30,
+  yawIn: 25, pitchUpIn: 45, pitchDownIn: 25,
+  debounceMs: HAND_GATE.debounceMs,
+  settleMs: HAND_GATE.settleMs,
+  leaveDebounceMs: HAND_GATE.leaveDebounceMs,
+  lostGraceMs: HAND_GATE.lostGraceMs,
+};
+
+/** Pure: is this pose "facing" for the hand gate, given the current state? */
+export function handGatePoseOk(pose: HeadPose, wasOk: boolean, g: HandGateConfig = HAND_GATE): boolean {
+  const yaw = Math.abs(pose.yaw);
+  if (wasOk) return yaw <= g.yawOut && pose.pitch >= -g.pitchUpOut && pose.pitch <= g.pitchDownOut;
+  return yaw < g.yawIn && pose.pitch > -g.pitchUpIn && pose.pitch < g.pitchDownIn;
+}
+
+export interface HandGate {
+  /** Feed the focus face's pose (null = no face). Returns true (facing),
+   *  false (an actually turned head, debounced) or null (unknown: no face
+   *  for longer than the lost grace, or a face seen for less than settleMs).
+   *  `lostGraceMs` overrides the config's grace for this call. */
+  update(pose: HeadPose | null, now: number, lostGraceMs?: number): boolean | null;
+  reset(): void;
+}
+
+export function createHandGate(g: HandGateConfig = HAND_GATE): HandGate {
+  let seenSince: number | null = null;
+  let lastSeen = -Infinity;
+  let last: boolean | null = null;
+  let lastPoseOut = false;
+  let ok = true;
+  let pending: boolean | null = null;
+  let pendingSince = 0;
+  const grace = g.lostGraceMs ?? 0;
+  const leaveMs = g.leaveDebounceMs ?? g.debounceMs;
+  return {
+    update(pose, now, graceOverride) {
+      if (!pose) {
+        // Turned, then lost (a quick turn: one turned frame, then the face
+        // model loses her): not facing at once — never the grace's "true".
+        if (seenSince !== null && (pending === false || lastPoseOut)) {
+          ok = false; pending = null; last = false;
+          if (now - lastSeen < (graceOverride ?? grace)) return false;
+        }
+        // A face that went missing (a hand in front of it) keeps its state.
+        if (seenSince !== null && now - lastSeen < (graceOverride ?? grace)) return last;
+        seenSince = null; pending = null; ok = true; last = null; return null;
+      }
+      lastSeen = now;
+      // Past the lock limits (the looser *Out band) on this very frame.
+      lastPoseOut = !handGatePoseOk(pose, true, g);
+      if (seenSince === null) { seenSince = now; ok = true; pending = null; }
+      const want = handGatePoseOk(pose, ok, g);
+      if (want === ok) pending = null;
+      else {
+        if (pending !== want) { pending = want; pendingSince = now; }
+        if (now - pendingSince >= (want ? g.debounceMs : leaveMs)) { ok = want; pending = null; }
+      }
+      last = now - seenSince >= g.settleMs ? ok : null;
+      return last;
+    },
+    reset() { seenSince = null; ok = true; pending = null; last = null; lastSeen = -Infinity; lastPoseOut = false; },
   };
 }
 

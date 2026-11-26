@@ -114,7 +114,7 @@ export function stairStepCount(lengthMm: number): number {
 
 /** Interior detail lines of a component in LOCAL space (the outer footprint is
  *  drawn separately from `outline`). Recognisable architectural symbols. */
-export function fixtureSymbol(f: Pick<Fixture, 'kind' | 'w' | 'd'>): SymPrim[] {
+export function fixtureSymbol(f: Pick<Fixture, 'kind' | 'w' | 'd'> & { steps?: number }): SymPrim[] {
   const hw = f.w / 2;
   const hd = f.d / 2;
   const out: SymPrim[] = [];
@@ -122,7 +122,7 @@ export function fixtureSymbol(f: Pick<Fixture, 'kind' | 'w' | 'd'>): SymPrim[] {
 
   switch (f.kind) {
     case 'stairs': {
-      const n = stairStepCount(f.w);
+      const n = f.steps ?? stairStepCount(f.w);
       const step = f.w / n;
       for (let i = 1; i < n; i++) {
         const x = -hw + i * step;

@@ -4,17 +4,48 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { orbitOffset, dollyOffset, easeTurn, ELEVATION, type TurnDelta } from './orbit3d';
 import { wallDir, wallLength, wallMidpoint, type Fixture, type PlanDoc } from './doc';
 // Segment math lives in editing.ts (pure, unit-tested): per-wall height and
 // per-opening sill/height are honoured there.
 import { wallSegments } from './editing';
 import { fixtureSpec, stairStepCount } from './fixtures';
+import { roomCentroid, planBounds } from './doc';
+import { MATERIAL_PRESETS, sunVector, type MaterialPlan } from '../cad/materials';
+
+export type WalkStep = 'forward' | 'back' | 'left' | 'right' | 'turn_left' | 'turn_right';
+
+export interface ExtrudeView {
+  update(): void;
+  dispose(): void;
+  /** Apply Gemini (or preset) materials + lighting to the scene. */
+  setMaterials(plan: MaterialPlan): void;
+  /** First-person walk mode at eye height; `room` = start in that room. */
+  walk(on: boolean, room?: string): boolean;
+  walkStep(step: WalkStep): void;
+  walking(): boolean;
+  /** Orbit the camera by a screen-pixel delta (a held fist / pinch moving):
+   *  eased over the next frames, so a jittery hand still turns smoothly. */
+  orbit(dxPx: number, dyPx: number): void;
+  /** Orbit by angles (radians): yaw about up, pitch = elevation. Eased. */
+  turn(dYaw: number, dPitch: number): void;
+  /** Drop the easing still pending: the camera stops where it is now. */
+  stopTurn(): void;
+  /** Dolly the camera: factor > 1 moves closer (two-hand pinch span ratio). */
+  dolly(factor: number): void;
+  /** The orbit camera now: azimuth / elevation (radians, about +z up) and
+   *  distance to the target (mm). For tests and the hand banner. */
+  cameraAngles(): { azimuth: number; elevation: number; distance: number };
+}
+
+/** Eye height and step sizes for the walkthrough, mm / degrees. */
+export const WALK = { eye: 1550, step: 600, turnDeg: 30 } as const;
 
 export function createExtrudeView(
   container: HTMLElement,
   getDoc: () => PlanDoc,
   height: number,
-): { update(): void; dispose(): void } {
+): ExtrudeView {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xeef2f7);
   const camera = new THREE.PerspectiveCamera(50, 1, 10, 500000);
@@ -22,23 +53,35 @@ export function createExtrudeView(
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
   renderer.domElement.className = 'plan-3d';
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  // Mouse and hand share the limits: never under the floor, never over the top.
+  controls.minPolarAngle = Math.PI / 2 - ELEVATION.max;
+  controls.maxPolarAngle = Math.PI / 2 - ELEVATION.min;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 1.4));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8a8a, 1.4);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffffff, 1.2);
   sun.position.set(1, -1, 2);
   scene.add(sun);
+  // Interior wall faces sit in shadow of the wall boxes (no bounce light in
+  // this simple scene). A fill keeps matte white paint reading white and
+  // light oak reading warm, not dark olive-grey.
+  const fill = new THREE.AmbientLight(0xffffff, 0.55);
+  scene.add(fill);
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.95, metalness: 0 });
 
   let group = new THREE.Group();
   scene.add(group);
-  const material = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.9 });
-  const structMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85 });
-  const furnMat = new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.85 });
-  const sanMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6 });
+  const material = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.9, metalness: 0 });
+  const structMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85, metalness: 0 });
+  const furnMat = new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.85, metalness: 0 });
+  const sanMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6, metalness: 0 });
 
   /** Add a component's 3D blocks: stairs step up, columns are prisms/cylinders,
    *  everything else is a simple low box at its sensible sitting height. */
@@ -53,9 +96,9 @@ export function createExtrudeView(
       g.add(mesh);
     };
     if (f.kind === 'stairs') {
-      const n = stairStepCount(f.w);
+      const n = f.steps ?? stairStepCount(f.w);
       const step = f.w / n;
-      const riser = spec.height / n;
+      const riser = f.rise ?? spec.height / n;
       for (let i = 0; i < n; i++) {
         const h = (i + 1) * riser;
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(step, f.d, h), structMat);
@@ -105,7 +148,17 @@ export function createExtrudeView(
       n++;
     }
     for (const f of doc.fixtures) addFixture(group, f);
+    // A floor slab under the plan, so materials and the walk read as a room.
+    const b = planBounds(doc);
+    if (b) {
+      const fw = b.max.x - b.min.x + 400;
+      const fh = b.max.y - b.min.y + 400;
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), floorMat);
+      floor.position.set((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, -1);
+      group.add(floor);
+    }
     scene.add(group);
+    if (walkState) return; // keep her place while walking
     if (n > 0) {
       const center = new THREE.Vector3(cx / n, cy / n, height / 2);
       controls.target.copy(center);
@@ -124,18 +177,158 @@ export function createExtrudeView(
   ro.observe(container);
   resize();
 
+  // ---- materials ----
+  function setMaterials(plan: MaterialPlan): void {
+    const set = (m: THREE.MeshStandardMaterial, look: { color: string; roughness: number }) => {
+      m.color.set(look.color);
+      m.roughness = look.roughness;
+      m.metalness = 0;
+      // A little emissive lift so interior faces (no bounced light) still
+      // show the chosen colour — white paint stays white, oak stays warm.
+      m.emissive.set(look.color);
+      m.emissiveIntensity = 0.18;
+      m.needsUpdate = true;
+    };
+    set(material, plan.walls);
+    set(floorMat, plan.floor);
+    set(structMat, plan.structure);
+    set(furnMat, plan.furniture);
+    set(sanMat, plan.sanitary);
+    const l = plan.lighting;
+    sun.intensity = Math.max(l.sunIntensity, 0.6);
+    sun.color.set(l.sunColor);
+    const v = sunVector(l);
+    sun.position.set(v.x, v.y, v.z);
+    hemi.color.set(0xffffff);
+    hemi.intensity = Math.max(l.ambientIntensity, 1.15);
+    const sky = new THREE.Color(l.skyColor);
+    const skyLum = sky.r * 0.21 + sky.g * 0.72 + sky.b * 0.07;
+    fill.intensity = skyLum < 0.25
+      ? Math.max(0.35, l.ambientIntensity * 0.4)
+      : Math.max(0.75, l.ambientIntensity * 0.45);
+    scene.background = sky;
+  }
+
+  // ---- first-person walk ----
+  let walkState: { x: number; y: number; heading: number; tx: number; ty: number; th: number } | null = null;
+  function placeWalkCamera(): void {
+    if (!walkState) return;
+    const w = walkState;
+    camera.position.set(w.x, w.y, WALK.eye);
+    camera.lookAt(w.x + Math.cos(w.heading) * 1000, w.y + Math.sin(w.heading) * 1000, WALK.eye);
+  }
+  function walk(on: boolean, room?: string): boolean {
+    if (!on) {
+      walkState = null;
+      controls.enabled = true;
+      camera.fov = 50;
+      camera.updateProjectionMatrix();
+      build();
+      return false;
+    }
+    const doc = getDoc();
+    const want = room?.trim().toLowerCase();
+    const r = (want && doc.rooms.find((x) => x.name.toLowerCase().includes(want))) || doc.rooms[0];
+    const c = r ? roomCentroid(r, doc) : null;
+    const b = planBounds(doc);
+    const start = c ?? (b ? { x: (b.min.x + b.max.x) / 2, y: (b.min.y + b.max.y) / 2 } : { x: 0, y: 0 });
+    walkState = { x: start.x, y: start.y, heading: Math.PI / 2, tx: start.x, ty: start.y, th: Math.PI / 2 };
+    controls.enabled = false;
+    camera.fov = 70;
+    camera.updateProjectionMatrix();
+    placeWalkCamera();
+    return true;
+  }
+  function walkStep(step: WalkStep): void {
+    if (!walkState) return;
+    const w = walkState;
+    const turn = (WALK.turnDeg * Math.PI) / 180;
+    if (step === 'turn_left') { w.th += turn; return; }
+    if (step === 'turn_right') { w.th -= turn; return; }
+    const ang = w.th + (step === 'left' ? Math.PI / 2 : step === 'right' ? -Math.PI / 2 : step === 'back' ? Math.PI : 0);
+    w.tx += Math.cos(ang) * WALK.step;
+    w.ty += Math.sin(ang) * WALK.step;
+  }
+  function onWalkKey(e: KeyboardEvent): void {
+    if (!walkState) return;
+    const map: Record<string, WalkStep> = {
+      ArrowUp: 'forward', w: 'forward', ArrowDown: 'back', s: 'back',
+      ArrowLeft: 'turn_left', a: 'turn_left', ArrowRight: 'turn_right', d: 'turn_right',
+    };
+    const st = map[e.key];
+    if (st) { walkStep(st); e.preventDefault(); }
+  }
+  window.addEventListener('keydown', onWalkKey);
+
+  // Hand-driven orbit/dolly: manipulate the camera offset (position − target)
+  // via the pure spherical helpers, then let controls.update() apply damping.
+  function camOffset(): { x: number; y: number; z: number } {
+    return { x: camera.position.x - controls.target.x, y: camera.position.y - controls.target.y, z: camera.position.z - controls.target.z };
+  }
+  function setCamOffset(o: { x: number; y: number; z: number }): void {
+    camera.position.set(controls.target.x + o.x, controls.target.y + o.y, controls.target.z + o.z);
+    controls.update();
+  }
+  // A hand turn is eased: each frame takes part of what is pending (loop()).
+  let pendingTurn: TurnDelta = { yaw: 0, pitch: 0 };
+  function turn(dYaw: number, dPitch: number): void {
+    if (walkState) return; // orbiting is disabled while walking
+    pendingTurn = { yaw: pendingTurn.yaw + dYaw, pitch: pendingTurn.pitch + dPitch };
+  }
+  function orbit(dxPx: number, dyPx: number): void {
+    const w = container.clientWidth || 1;
+    const h = container.clientHeight || 1;
+    // Match OrbitControls' feel: a full element width ≈ 2π azimuth, height ≈ π.
+    turn(-(2 * Math.PI) * (dxPx / w), Math.PI * (dyPx / h));
+  }
+  function stopTurn(): void { pendingTurn = { yaw: 0, pitch: 0 }; }
+  function dolly(factor: number): void {
+    if (walkState) return;
+    setCamOffset(dollyOffset(camOffset(), factor, 500, 200000));
+  }
+
   let animating = true;
   function loop(): void {
     if (!animating) return;
-    controls.update();
+    if (walkState) {
+      // Ease towards the target so each step glides (no motion-sick jumps).
+      const w = walkState;
+      w.x += (w.tx - w.x) * 0.15;
+      w.y += (w.ty - w.y) * 0.15;
+      w.heading += (w.th - w.heading) * 0.15;
+      placeWalkCamera();
+    } else {
+      if (pendingTurn.yaw || pendingTurn.pitch) {
+        const { step, rest } = easeTurn(pendingTurn);
+        pendingTurn = rest;
+        const o = orbitOffset(camOffset(), step.yaw, step.pitch, ELEVATION.min, ELEVATION.max);
+        camera.position.set(controls.target.x + o.x, controls.target.y + o.y, controls.target.z + o.z);
+      }
+      controls.update();
+    }
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
   loop();
+  setMaterials(MATERIAL_PRESETS.default);
 
   return {
     update: build,
+    setMaterials,
+    walk,
+    walkStep,
+    walking: () => !!walkState,
+    orbit,
+    turn,
+    stopTurn,
+    dolly,
+    cameraAngles() {
+      const o = camOffset();
+      const r = Math.hypot(o.x, o.y, o.z) || 1;
+      return { azimuth: Math.atan2(o.y, o.x), elevation: Math.asin(Math.max(-1, Math.min(1, o.z / r))), distance: r };
+    },
     dispose() {
+      window.removeEventListener('keydown', onWalkKey);
       animating = false;
       ro.disconnect();
       controls.dispose();

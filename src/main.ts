@@ -89,7 +89,8 @@ import { checkLanguageAvailability, type FusionOutcome } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
-import { generatePlan, generateUi } from './ai/hybrid';
+import { generatePlan } from './ai/hybrid';
+import { generateUi } from './ai/hybridStudio';
 import { isFirebaseConfigured } from './firebase/app';
 import {
   createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
@@ -1439,6 +1440,8 @@ let lastPointer: {
  */
 async function runPointAndSay(utterance: string, t0: number, decision: RouteDecision): Promise<boolean | null> {
   if (!lastPointer || !controller.deixisInfo) return null;
+  // The canvas port's hybrid resolves pointing on floor plans only.
+  if (mode.id !== 'plan') return null;
   const pointedId = viewport.pick(lastPointer.clientX, lastPointer.clientY);
   const kindOf = (id: string): string => controller.deixisInfo?.(id)?.kind ?? id.replace(/[-_]?\d+$/, '');
   const items = controller.listItems();
@@ -1463,7 +1466,7 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
     }
   }
   const outcome = await resolveDeixis(utterance, image, {
-    pointer: pointerPx, candidates, space: mode.id as 'plan' | 'ui',
+    pointer: pointerPx, candidates, space: 'plan',
   });
   if (!outcome) return null;
   const res = outcome.resolution;
@@ -1781,7 +1784,7 @@ const staged = new Map<string, StagedResult>();
  *  re-entering acceptJob before the async remove settles (double-apply). */
 const settling = new Set<string>();
 
-const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', ui: 'Screen', a11y: 'A11y audit' };
+const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', ui: 'Screen', a11y: 'A11y audit', question: 'Question' };
 
 /** Only plan/ui modes queue generation jobs; part stays fully synchronous. */
 function bigJobKind(): JobKind | null {

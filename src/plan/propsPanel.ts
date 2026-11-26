@@ -18,6 +18,10 @@ export interface PropsPanelIO {
   apply(op: unknown): { ok: boolean; error?: string };
   snapshot(): PlanDoc;
   selectedId(): string | null;
+  /** On-screen twins of the keyboard chords (Ctrl+R, Ctrl+D, Delete) so a
+   *  hand — or a touch screen — can do what the keys do. Each returns whether
+   *  it applied. */
+  actions?: { rotate?(): boolean; duplicate?(): boolean; remove?(): boolean };
 }
 
 export interface PropsPanelHandle {
@@ -44,9 +48,15 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       r.appendChild(v);
     } else {
       r.appendChild(control);
+      for (const b of stepButtons.get(control) ?? []) r.appendChild(b);
     }
     return r;
   }
+
+  // − / + beside every number field: a hand (or touch) can't type a number
+  // and the native spinner arrows are a few px tall. Each press nudges by the
+  // field's step and commits through the same path as typing (B-072..074).
+  const stepButtons = new WeakMap<HTMLElement, HTMLElement[]>();
 
   function numInput(value: number, step: number, onCommit: (v: number) => void): HTMLInputElement {
     const inp = document.createElement('input');
@@ -57,9 +67,46 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       const v = Number(inp.value);
       if (Number.isFinite(v)) onCommit(v);
     });
+    const mk = (dir: -1 | 1): HTMLElement => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mc-props-step';
+      b.textContent = dir < 0 ? '−' : '+';
+      b.setAttribute('aria-label', `${dir < 0 ? 'Decrease' : 'Increase'} by ${step}`);
+      b.addEventListener('click', () => {
+        const cur = Number(inp.value);
+        if (!Number.isFinite(cur)) return;
+        const v = Math.max(0, cur + dir * step);
+        inp.value = String(v);
+        onCommit(v);
+      });
+      return b;
+    };
+    stepButtons.set(inp, [mk(-1), mk(1)]);
     return inp;
   }
 
+  function actionsRow(canRotate: boolean): HTMLElement | null {
+    const a = io.actions;
+    if (!a) return null;
+    const box = document.createElement('div');
+    box.className = 'mc-props-row mc-props-actions';
+    const add = (label: string, title: string, fn?: () => boolean) => {
+      if (!fn) return;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener('click', () => { fn(); });
+      box.appendChild(b);
+    };
+    if (canRotate) add('Rotate 90°', 'Rotate 90° (Ctrl+R)', a.rotate);
+    add('Duplicate', 'Duplicate (Ctrl+D)', a.duplicate);
+    add('Delete', 'Delete (Del)', a.remove);
+    return box.children.length ? box : null;
+  }
+
+  let expanded = false;
   function update(): void {
     root.innerHTML = '';
     const d = io.snapshot();
@@ -67,10 +114,19 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
     const ids = d.selectedIds?.length ? d.selectedIds : id ? [id] : [];
     if (ids.length === 0) {
       root.hidden = true;
+      root.classList.remove('is-expanded');
       return;
     }
-    const title = document.createElement('div');
+    const title = document.createElement('button');
+    title.type = 'button';
     title.className = 'mc-props-title';
+    title.setAttribute('aria-expanded', String(expanded));
+    title.addEventListener('click', () => {
+      expanded = !expanded;
+      root.classList.toggle('is-expanded', expanded);
+      title.setAttribute('aria-expanded', String(expanded));
+    });
+    root.classList.toggle('is-expanded', expanded);
     root.appendChild(title);
 
     // Multi-selection: show the count and edit the props the items share.
@@ -93,6 +149,8 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
         root.appendChild(row('Height (mm)', numInput(walls[0].height ?? DEFAULTS.wallHeight, 100, (v) =>
           batch(walls.map((w) => ({ op: 'set_height', target: w.id, height: v }))))));
       }
+      const act = actionsRow(ids.some((x) => d.fixtures.some((f) => f.id === x) || d.openings.some((o) => o.id === x && o.kind === 'door')));
+      if (act) root.appendChild(act);
       root.hidden = false;
       return;
     }
@@ -164,6 +222,8 @@ export function createPropsPanel(host: HTMLElement, io: PropsPanelIO): PropsPane
       title.textContent = `Dimension ${dim.id}`;
       root.appendChild(row('Measures', w ? `${w.id} · ${mmToMetresLabel(wallLength(w))}` : '—'));
     }
+    const act = actionsRow(!!fixture || opening?.kind === 'door');
+    if (act) root.appendChild(act);
     root.hidden = false;
   }
 

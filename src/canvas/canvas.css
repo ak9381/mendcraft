@@ -1,0 +1,2029 @@
+/* Smart canvas shell. Warm-paper palette, scoped to this page only (the rest
+   of the app keeps the dark tokens from style.css) — everything mounted
+   under .mc-canvas (including portaled overlays: review dialog, teach
+   panel, swarm dock mini terminal, phone menu) inherits these via the DOM,
+   since they're all appended inside the .mc-canvas root element. */
+.mc-canvas, #spike {
+  --bg: #F7F5F0;
+  --panel: #FFFFFF;
+  --panel-2: #F1EEE6;
+  --border: #E4E0D8;
+  --text: #2B2B2B;
+  --mc-ai-w: 320px;
+  --text-dim: #6E6A63;
+  --accent: #6B8F71;
+  --accent-2: #5A7BA6;
+  --focus: #5A7BA6;
+  /* Shared with widgets.ts's device tiles (lamp/music/switch/scene): amber
+     for the one primary action a tile offers, a muted warm red for errors —
+     never the old dark-theme's periwinkle/coral/mint literals. */
+  --action: #C98B3C;
+  /* Contrast-safe pair (WCAG 4.5:1+): white text on --action-fill is 5.2:1
+     (white on --action is only 2.9:1); --accent-ink is sage for TEXT on
+     paper (5.4:1), --accent stays for borders, dots and fills. */
+  --action-fill: #9A5F1C;
+  --accent-ink: #4F7356;
+  --danger: #B5453A;
+  --a2ui-color-on-background: var(--text);
+  --a2ui-color-background: transparent;
+  --a2ui-color-primary: var(--accent);
+  --a2ui-color-border: var(--border);
+  --a2ui-text-caption-color: var(--text-dim);
+  --a2ui-font-size-2xl: 32px; --a2ui-font-size-xl: 28px; --a2ui-font-size-l: 24px; --a2ui-font-size-m: 20px;
+  color: var(--text);
+}
+.mc-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: 100%; overflow: hidden; background: var(--bg); }
+.mc-viewport { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab;
+  background-image: radial-gradient(circle, rgb(43 43 43 / 0.08) 1px, transparent 1.4px); }
+.mc-canvas[data-mode=focus] .mc-viewport { cursor: default; }
+.mc-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.mc-frame { position: absolute; display: flex; flex-direction: column; border-radius: 20px; background: var(--panel);
+  border: 2px solid var(--border); box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); transition: opacity 0.2s ease, border-color 0.2s ease; }
+.mc-frame.focused { border-color: var(--accent); }
+.mc-frame.dim { opacity: 0.35; }
+.mc-canvas[data-mode=overview] .mc-frame { cursor: zoom-in; }
+.mc-canvas[data-mode=overview] .mc-frame:hover { border-color: var(--accent); }
+.mc-frame-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.mc-frame-title { all: unset; font-size: 26px; font-weight: 650; color: var(--text); cursor: grab; }
+.mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
+.mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+.mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+/* More below the fold: the last 24px fade out instead of a hard cut, so a
+   clipped tile reads as "scroll for more". */
+.mc-frame.focused .mc-frame-body.is-more-below { mask-image: linear-gradient(#000 calc(100% - 24px), transparent); }
+.mc-surface mc-plan-board, .mc-surface .mc-plan-board { display: block; height: 520px; }
+
+/* Edit mode (editBoard.ts): every tile pulled into its own absolutely
+   positioned wrapper inside one `.mc-edit-canvas`, so it can be dragged and
+   resized freely. Chrome (border + handles) only shows while `.mc-editing`
+   is on the canvas — the layout itself (left/top/width/height, set inline
+   by editBoard.ts) stays applied either way. */
+.mc-edit-canvas { position: relative; }
+/* No overflow:hidden here — the move/resize grips sit just outside this
+   box (negative top/left/right/bottom below) and would get clipped, unable
+   to receive clicks/pinches, if this box clipped its own overflow. */
+.mc-edit-item { border-radius: 16px; }
+.mc-edit-item > :first-child { display: block; width: 100%; height: 100%; }
+/* Explicit min-width/min-height here: the global `button{min-width/height:
+   var(--target)}` (60px touch target) is a different property than `width`/
+   `height`, so it would otherwise stack as a floor underneath these and
+   force the corner grips up to 60px regardless of the size set below. */
+.mc-edit-move, .mc-edit-resize { display: none; position: absolute; width: 44px; height: 44px; min-width: 44px; min-height: 44px; align-items: center; justify-content: center;
+  border-radius: 50%; border: 2px solid var(--border); background: #FFFFFF; color: var(--text); font-size: 18px; line-height: 1; padding: 0;
+  cursor: grab; touch-action: none; z-index: 2; box-shadow: 0 2px 8px rgb(0 0 0 / 0.1); }
+.mc-edit-move:active, .mc-edit-resize:active { cursor: grabbing; }
+.mc-edit-move:focus-visible, .mc-edit-resize:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-edit-canvas.mc-editing .mc-edit-item { outline: 2px dashed var(--border); outline-offset: 3px; }
+.mc-edit-canvas.mc-editing .mc-edit-move, .mc-edit-canvas.mc-editing .mc-edit-resize { display: flex; }
+/* Move grip sits in the tile centre so it never collides with the corner /
+   edge resize handles that now ring the tile. */
+.mc-edit-move { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+/* Eight resize handles: four corners + four edges, each anchored at the
+   opposite side (A4-006..A4-012). Edges are centred on their side. */
+.mc-edit-resize-nw { top: -22px; left: -22px; cursor: nwse-resize; }
+.mc-edit-resize-ne { top: -22px; right: -22px; cursor: nesw-resize; }
+.mc-edit-resize-se { bottom: -22px; right: -22px; cursor: nwse-resize; }
+.mc-edit-resize-sw { bottom: -22px; left: -22px; cursor: nesw-resize; }
+.mc-edit-resize-n { top: -22px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.mc-edit-resize-s { bottom: -22px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.mc-edit-resize-w { top: 50%; left: -22px; transform: translateY(-50%); cursor: ew-resize; }
+.mc-edit-resize-e { top: 50%; right: -22px; transform: translateY(-50%); cursor: ew-resize; }
+
+/* Edit / Done / Reset layout trio: stacked above the Tools chip, same fixed
+   column (right: 24px), same shift-for-the-AI-panel pattern. Amber only for
+   the active Edit/Done control — warm paper otherwise. */
+.mc-edit-toggle, .mc-edit-reset { position: fixed; z-index: 40; right: 24px; min-height: 52px; padding: 0 18px;
+  border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
+  font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-edit-toggle { bottom: 172px; }
+/* Register chip already occupies this column's next slot up from Edit
+   (same right edge). Stack Reset one chip above Register so both stay
+   tappable in Edit mode. */
+.mc-edit-reset { bottom: 300px; min-height: 44px; font-size: 15px; }
+.mc-edit-toggle:focus-visible, .mc-edit-reset:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-edit-toggle[aria-pressed=true] { background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
+/* A greyed Edit on an empty canvas reads as broken on camera: hide it until there is a board to edit. */
+.mc-edit-toggle:disabled { display: none; }
+/* Cluster owns placement — do not set `right` on these chips when the AI drawer is open. */
+@media (max-width: 600px) { .mc-edit-toggle, .mc-edit-reset { display: none; } }
+.mc-empty { display: grid; place-content: center; text-align: center; height: 100%; font-size: 22px; color: var(--text-dim); gap: 8px; }
+.mc-empty-lead { font-size: 30px; color: var(--text); font-weight: 650; margin: 0; max-width: 22ch; justify-self: center; }
+.mc-empty-talk { display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: 56px; min-width: 180px; padding: 0 22px; font-size: 20px; justify-self: center; margin: 8px 0 4px; }
+.mc-empty-talk svg { width: 28px; height: 28px; }
+.mc-empty-talk-caption { margin: 0; font-size: 15px; color: var(--text-dim); min-height: 1.2em; }
+.mc-empty-talk-caption.is-error { color: #8B2E2E; }
+.mc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.mc-ghost { position: absolute; inset: 0; padding: 20px; background: var(--panel); border-radius: 0 0 18px 18px; z-index: 4; display: grid; align-content: start; gap: 12px; pointer-events: none; }
+.mc-ghost-title { margin: 0; font-size: 28px; font-weight: 650; color: var(--accent); opacity: 0.85; }
+.mc-ghost-tile { border: 2px dashed var(--accent); border-radius: 16px; min-height: 120px; padding: 18px; font-size: 22px;
+  color: var(--text); background: rgb(107 143 113 / 0.08); animation: mc-ghost-in 0.25s ease both; }
+.mc-ghost-tile.plan { min-height: 220px; }
+.mc-ghost-tile.next { min-height: 60px; opacity: 0.4; animation: mc-ghost-pulse 1s ease-in-out infinite alternate; }
+@keyframes mc-ghost-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes mc-ghost-pulse { to { opacity: 0.15; } }
+.mc-ghost:not([hidden]) ~ .mc-surface { opacity: 0.25; }
+/* Progressive tile fill: an empty frame first, then a kind badge (the
+   Gemini "tile frame" cursor landing), then the typed label/value (the
+   Nano "label" cursor landing) — see flashGhostTarget in canvasApp.ts. */
+.mc-ghost-tile.stage-frame { opacity: 0.55; }
+.mc-ghost-tile.stage-controls, .mc-ghost-tile.stage-labels { opacity: 1; transition: opacity 0.2s ease; }
+.mc-ghost-tile-kind { font-weight: 650; }
+/* The swarm's target: a selection box + '+' crosshair on the TILE the
+   cursor just landed on, not on the cursor badge itself. */
+.mc-ghost-tile.is-swarm-target { position: relative; outline: 3px solid var(--accent, #6B8F71); outline-offset: 2px; }
+.mc-ghost-tile.is-swarm-target::before { content: '+'; position: absolute; top: -12px; left: -12px; width: 20px; height: 20px;
+  display: grid; place-content: center; border-radius: 50%; background: var(--panel); color: var(--accent, #6B8F71); font-size: 14px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .mc-ghost-tile.stage-frame { opacity: 1; } }
+/* Swarm build cursors: decoration-looking, but each one is a real sub-step
+   of the model work (see src/canvas/swarmAgents.ts). Never intercepts
+   pointer/hand hit-testing. Paper-coloured chip with the agent's own muted
+   accent (Nano green / Gemini blue, from swarmAgents.ts) as the only colour. */
+.mc-swarm { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.mc-swarm-cursor { position: absolute; display: flex; align-items: center; gap: 6px; transform: translate(-50%, -50%);
+  padding: 4px 12px 4px 8px; border-radius: 999px; background: rgb(255 255 255 / 0.96);
+  border: 1px solid var(--mc-swarm-color, var(--accent)); box-shadow: 0 2px 8px rgb(0 0 0 / 0.08); white-space: nowrap; pointer-events: none; }
+.mc-swarm-arrow { width: 10px; height: 10px; border-radius: 2px; background: var(--mc-swarm-color, var(--accent));
+  clip-path: polygon(0 0, 100% 35%, 35% 100%); }
+.mc-swarm-label { font-size: 15px; font-weight: 600; color: var(--text); }
+.mc-swarm-cursor.is-editing { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 3px; }
+.mc-swarm-cursor.is-editing::after { content: '+'; position: absolute; left: -16px; top: 50%; transform: translateY(-50%);
+  font-size: 12px; color: var(--mc-swarm-color, var(--accent)); }
+/* The dock chip for this agent is open: ring the matching cursor so the two
+   views of the same agent read as one thing. */
+.mc-swarm-cursor.is-dock-open { outline: 2px solid var(--mc-swarm-color, var(--accent)); outline-offset: 4px; }
+.mc-swarm-pill { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; padding: 6px 14px;
+  border-radius: 999px; background: rgb(255 255 255 / 0.95); border: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) { .mc-swarm-cursor { transition: none; } }
+/* The terminal column is reserved: cursors and the pill they summarise stay
+   inside the visible board area and never fly under it (percentages inside
+   .mc-swarm recompute against this narrower box), same shift the Tools chip
+   and Talk fab already make for the same reason — see below. */
+.mc-canvas.is-ai-pinned .mc-swarm { right: calc(var(--mc-ai-w, 320px) + 32px); }
+/* Only an idle empty board hides the swarm: while a build streams into it the ghost is showing and the cursors must be too. */
+.mc-canvas:has(.mc-empty:not([hidden])):not(:has(.mc-ghost:not([hidden]))) .mc-swarm { visibility: hidden; pointer-events: none; }
+/* Starts under the bar/toast (--mc-bar-h already includes the gap) so the
+   panel's title and close button are never covered. */
+.mc-ai { position: absolute; z-index: 9; right: 16px; top: max(16px, var(--mc-bar-h, 80px)); bottom: 16px;
+  width: min(var(--mc-ai-w, 320px), 340px); max-width: min(340px, calc(100vw - 24px)); min-width: 0;
+  overflow: hidden; padding: 12px 14px 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.08); font-size: 16px; display: flex; flex-direction: column; min-height: 0; }
+.mc-ai-scrim { position: fixed; inset: 0; z-index: 8; background: transparent; }
+.mc-ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto; margin: 0 0 8px; }
+.mc-ai-h { margin: 0; position: static; width: auto; height: auto; overflow: visible; clip: auto;
+  font-size: 16px; font-weight: 650; color: var(--text); }
+.mc-ai-close { flex: 0 0 auto; min-width: 44px; min-height: 44px; width: 44px; height: 44px; padding: 0;
+  border: 0; border-radius: 999px; background: var(--panel-2, #F1EEE6); color: var(--text); font-size: 22px;
+  line-height: 1; cursor: pointer; }
+.mc-ai-close:focus-visible { outline: 3px solid var(--focus, #C98B3C); outline-offset: 2px; }
+.mc-ai-history-empty { color: var(--text-dim); font-size: 15px; margin: 4px 0 8px; }
+.mc-ai-history-empty[hidden] { display: none; }
+.mc-ai-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 2px; }
+/* Keep line stays on screen; the panels/prompt/reply/history scroll above. */
+.mc-ai-pending { flex: 0 0 auto; background: transparent; border-top: 1px solid var(--border); padding-top: 10px; margin-top: 8px; }
+.mc-ai-pending:has(.mc-ai-state:empty) { display: none; border: 0; padding: 0; margin: 0; }
+.mc-ai-h3 { margin: 16px 0 6px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+.mc-ai-empty, .mc-ai-state, .mc-ai-ledger-total { color: var(--text-dim); margin: 6px 0; }
+.mc-ai-ledger-total { font-size: 15px; }
+.mc-ai-state { color: var(--text-dim); }
+.mc-ai details { margin: 8px 0; } .mc-ai summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.mc-ai pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 10px;
+  border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); font-size: 15px; font-family: ui-monospace, Consolas, monospace, 'Noto Sans Kannada'; line-height: 1.45; color: var(--text); }
+/* History stays discreet — a quiet trailing log, not a second focal point
+   next to the live terminals. */
+.mc-ai-history { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: 15px; opacity: 0.85; }
+.mc-ai-live-log { list-style: none; margin: 0 0 12px; padding: 0; font-size: 15px; color: var(--text); }
+.mc-ai-live-log li { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--border, #E4E0D8); line-height: 1.4; }
+.mc-ai-live-log .mc-ai-live-kind { display: inline-block; min-width: 3.6em; font-weight: 650; letter-spacing: 0.04em;
+  font-size: 15px; color: var(--text-dim); margin-right: 6px; }
+.mc-ai-close[hidden] { display: none !important; }
+.mc-ai-history .undone { color: var(--text-dim); text-decoration: line-through; }
+
+/* Two live terminals — "nano · on this device" and "gemini · cloud" —
+   stacked on the right with their agent dock directly under each, matching
+   screens/palette/term.html: dark charcoal chrome on the warm paper canvas,
+   never neon, never a travelling card. */
+.mc-terminals { display: flex; flex-direction: column; gap: 14px; }
+.mc-terminal-col { display: flex; flex-direction: column; gap: 8px; }
+.mc-terminal { position: relative; border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
+/* Bottom-right corner resize grip (A6-008): mouse/touch drag or a virtual-hand
+   pinch-drag (it's a [data-mc-resize-handle]) grows/shrinks the terminal. Sized
+   generously (44px) for a less-precise hand pointer; the diagonal lines read as
+   the usual resize affordance. */
+.mc-term-resize { position: absolute; right: 0; bottom: 0; width: 44px; height: 44px; z-index: 2;
+  cursor: nwse-resize; touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 0 50%, #6B6761 50% 58%, transparent 58% 66%, #6B6761 66% 74%, transparent 74%); }
+.mc-term-resize:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+/* Terminals mirrored inside a review are read-only context: no resize grip there
+   (it bled over Reject on phones). */
+.mc-review-extra .mc-term-resize { display: none; }
+@keyframes mc-term-blink-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(180 60 50 / 0); }
+  50% { box-shadow: 0 0 0 3px rgb(180 60 50 / 0.9); }
+}
+.mc-terminal.is-failing {
+  animation: mc-term-blink-red 0.45s ease-in-out 3;
+  outline: 2px solid #c45c4e;
+}
+.mc-terminal .mc-term-line--fail { color: #e07a6e; }
+
+/* Draggable (pinch-hold on the title bar, or mouse/touch): docked in the
+   column's normal flow until first moved, then a fixed floating window that
+   snaps to stay fully on screen and remembers its spot for the session —
+   see dragPanel.ts. A plain spacer holds its old slot open underneath it. */
+.mc-terminal.is-floating { position: fixed; z-index: 46; width: min(460px, calc(100% - 48px)); max-height: 60vh; }
+.mc-terminal.is-floating .mc-term-body { max-height: calc(60vh - 40px); }
+.mc-terminal-spacer { height: 0; }
+.mc-term-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: #2C2C2C; font-size: 15px; color: #D8D4CC; }
+.mc-term-drag { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; cursor: grab; touch-action: none; border-radius: 6px; }
+.mc-term-drag:active { cursor: grabbing; }
+.mc-term-drag:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+.mc-term-reset-pos { flex: 0 0 auto; min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; padding: 0; border: none; background: transparent;
+  color: #8A867E; font-size: 15px; line-height: 1; cursor: pointer; }
+.mc-term-reset-pos:hover, .mc-term-reset-pos:focus-visible { color: #D8D4CC; }
+.mc-term-reset-pos:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+.mc-term-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim); }
+.mc-terminal-nano .mc-term-dot, .mc-mini-terminal[data-kind="nano"] .mc-term-dot { background: #8FB394; }
+.mc-terminal-gemini .mc-term-dot, .mc-mini-terminal[data-kind="gemini"] .mc-term-dot { background: #8FA9CC; }
+.mc-term-title { font-weight: 650; }
+.mc-term-where { color: #8A867E; }
+/* Lives in the terminal's head, not its scrolling body — stays visible and
+   stable (for a screenshot or a glance) however many lines log afterward,
+   until reconnecting actually clears the queue. */
+.mc-term-queued { flex: 1 1 auto; font-weight: 650; font-size: 15px; padding: 3px 9px; border-radius: 999px;
+  background: rgb(201 139 60 / 0.22); color: #E7B274; }
+.mc-term-body { position: relative; padding: 12px 14px; font-family: ui-monospace, 'DejaVu Sans Mono', Consolas, monospace;
+  font-size: 15px; line-height: 1.7; max-height: 220px; overflow: auto; }
+.mc-term-lines { display: flex; flex-direction: column; }
+.mc-term-line { margin: 0; color: #D8D4CC; white-space: pre-wrap; word-break: break-word; }
+.mc-term-mark { display: inline-block; width: 1.1em; color: inherit; }
+.mc-term-time { color: #8A867E; margin-right: 8px; }
+.mc-term-verb { display: inline-block; min-width: 66px; margin-right: 4px; }
+.mc-term-line--redact { color: #C9B48A; }
+.mc-terminal-nano .mc-term-line--done, .mc-terminal-nano .mc-term-line--replied { color: #8FB394; }
+.mc-terminal-gemini .mc-term-line--done, .mc-terminal-gemini .mc-term-line--replied { color: #8FA9CC; }
+.mc-term-cursor { color: #8A867E; animation: mc-term-blink 1s step-start infinite; }
+@keyframes mc-term-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mc-term-cursor { animation: none; } }
+
+/* Agent dock: a compact row of chips under each terminal, one per agent of
+   that engine — tapping/pinching one opens its mini terminal. */
+.mc-term-dock { margin: 0; }
+.mc-term-dock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-dock-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 10px 4px 8px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 15px; cursor: pointer; }
+.mc-dock-chip-cursor { width: 8px; height: 8px; border-radius: 50%; background: var(--chip-color, var(--accent)); flex: 0 0 auto; }
+.mc-dock-chip.is-working { border-color: var(--chip-color, var(--accent)); }
+.mc-dock-chip.is-working .mc-dock-chip-cursor { animation: mc-chip-pulse 2.4s ease-in-out infinite; }
+.mc-dock-chip.is-done { opacity: 0.7; }
+.mc-dock-chip.is-done .mc-dock-chip-cursor { background: transparent; border: 1px solid var(--chip-color, var(--accent)); }
+.mc-dock-chip-mark { color: var(--chip-color, var(--accent)); font-size: 11px; font-weight: 700; }
+.mc-dock-chip[aria-pressed=true] { outline: 2px solid var(--chip-color, var(--accent)); outline-offset: 2px; }
+.mc-dock-chip-overflow { color: var(--text-dim); }
+@keyframes mc-chip-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { .mc-dock-chip.is-working .mc-dock-chip-cursor { animation: none; } }
+
+/* Every past turn's chips, kept for the whole session but folded away by
+   default so the dock never grows taller than one row until she opens it. */
+.mc-term-dock-history { margin-top: 6px; }
+.mc-term-dock-history summary { min-height: 44px; display: inline-flex; align-items: center; padding: 2px 10px;
+  border-radius: 999px; color: var(--text-dim); font-size: 15px; cursor: pointer; list-style: none; }
+.mc-term-dock-history summary::-webkit-details-marker { display: none; }
+.mc-term-dock-history summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mc-term-dock-history[open] summary { color: var(--text); }
+.mc-term-dock-history-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-height: 120px; overflow: auto; }
+.mc-term-dock-history-chips .mc-dock-chip { opacity: 0.6; }
+
+/* Floating mini terminal: one agent's own log, same charcoal chrome as the
+   two main terminals, opened by tapping/pinching its dock chip. Docked in a
+   fixed spot right next to the terminal column it was opened from — a chip
+   only exists while that column is open, never near the flying cursors
+   (which stay mid-canvas) or the Tools/Talk fabs (reserved below it). */
+.mc-mini-terminal { position: fixed; z-index: 45; right: calc(min(var(--mc-ai-w, 320px), 340px) + 24px); left: auto; bottom: 180px; top: auto; transform: none;
+  width: min(360px, calc(100vw - min(var(--mc-ai-w, 320px), 340px) - 48px)); max-width: calc(100vw - 24px); max-height: min(60vh, 420px); display: flex; flex-direction: column;
+  border-radius: 12px; overflow: hidden; background: #232323; box-shadow: 0 2px 10px rgb(0 0 0 / 0.08); }
+.mc-mini-terminal .mc-term-body { flex: 1 1 auto; max-height: none; }
+.mc-mini-close { margin-left: auto; min-width: 44px; min-height: 44px; padding: 0; border: none; background: transparent;
+  color: #8A867E; font-size: 16px; line-height: 1; cursor: pointer; }
+.mc-mini-close:focus-visible { outline: 2px solid #8FA9CC; outline-offset: 2px; }
+
+/* One compact bar spanning under both terminals: what stayed on this device
+   vs. what actually left it, as real bytes — never a fabricated number. */
+.mc-ai-footer { margin: 10px 0 0; padding: 8px 2px 0; border-top: 1px solid var(--border); font-size: 15px; color: var(--text-dim); }
+
+.mc-eyebrow { margin: 0; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+.mc-prop-title { margin: 4px 0 14px; font-size: 26px; font-weight: 650; color: var(--text); }
+.mc-bar { position: absolute; left: 16px; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; border-radius: 18px; background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); backdrop-filter: blur(8px);
+  /* Above the full-screen review dialog (z-index 50, see .mc-review-dialog) so Save/Tools/etc.
+     stay reachable while a review (including the Gemini follow-up one) is open. */
+  z-index: 51; }
+/* Laptop: the bar (open Tools, a wrapped status line) ends short of the
+   right-hand hand cluster (canvasApp syncClusterInset), never over it. */
+@media (min-width: 601px) { .mc-canvas:not(.mc-phone-simple):has(.mc-hand-cluster) .mc-bar { right: max(16px, var(--mc-cluster-in, 16px)); } }
+.mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.mc-bar-btns { display: contents; }
+/* Open Tools = the say box first, then Show everything, New board, Save, a
+   quieter Undo, and More (Hands / Screens / Demo). */
+.mc-bar-tools > .mc-say { order: -1; }
+.mc-btn.mc-btn-quiet { background: transparent; }
+.mc-more { position: relative; display: flex; }
+.mc-more-btn { display: inline-flex; align-items: center; gap: 8px; }
+.mc-more-caret { width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg); transition: transform 150ms ease-out; }
+.mc-more-btn[aria-expanded=true] .mc-more-caret { transform: translateY(2px) rotate(-135deg); }
+.mc-more-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 52; display: grid; gap: 14px;
+  min-width: 260px; padding: 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12); }
+.mc-more-group { display: flex; flex-direction: column; gap: 8px; }
+.mc-more-title { margin: 0 4px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+.mc-more-group > .mc-btn { width: 100%; text-align: left; padding: 0 16px; }
+@media (prefers-reduced-motion: reduce) { .mc-more-caret { transition: none; } }
+/* Morph's type-it path (no mic): peek just the say box, not the buttons row. */
+.mc-bar-tools.mc-bar-tools-peek .mc-bar-btns { display: none; }
+.mc-btn { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); font-size: 18px; min-height: 52px; }
+.mc-btn.primary { background: var(--text); color: #FFFFFF; border-color: var(--text); }
+/* Quiet hover and a small press, so a click visibly lands (scale, not
+   transform: positioned buttons keep their own transforms). */
+.mc-btn:hover:not(:disabled) { border-color: var(--text-dim); }
+.mc-btn:active:not(:disabled) { scale: 0.97; transition: scale 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .mc-btn:active:not(:disabled) { scale: none; } }
+.mc-say { display: flex; gap: 8px; flex: 1 1 420px; min-width: 0; }
+.mc-say input { flex: 1; min-width: 0; min-height: 52px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); font-size: 18px; text-overflow: ellipsis; }
+.mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
+.mc-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mc-status-row .mc-canvas-status { flex: 1 1 auto; min-width: 0; }
+/* Tools closed (desktop): the status line is a dark centred toast that fades
+   ~6 s after the last line (say() clears it), not a permanent full-width pill. */
+@media (min-width: 601px) {
+  .mc-bar:has(.mc-bar-tools[hidden]) { left: 50%; right: auto; transform: translateX(-50%); width: max-content;
+    max-width: min(720px, calc(100vw - 32px)); padding: 8px 18px; border-radius: 999px; border-color: transparent;
+    background: rgb(43 43 43 / 0.88); backdrop-filter: none; box-shadow: 0 6px 18px rgb(0 0 0 / 0.16); }
+  .mc-bar:has(.mc-bar-tools[hidden]) .mc-canvas-status { color: #FFFFFF; }
+  .mc-bar:has(.mc-bar-tools[hidden]):has(.mc-canvas-status:empty):has(.mc-retry[hidden]) { display: none; }
+}
+.mc-retry { min-height: 44px; min-width: 44px; padding: 0 16px; }
+.mc-retry[hidden] { display: none; }
+.mc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (prefers-reduced-motion: reduce) { .mc-frame { transition: none; } }
+
+/* Pinned-board dock (left, under the bar): a second A2UI surface showing the
+   pinned room's lamp tiles so it stays controllable while editing another board. */
+.mc-dock { position: absolute; z-index: 8; left: 16px; top: var(--mc-bar-h, 132px); width: 260px; max-height: calc(100% - var(--mc-bar-h, 132px) - 84px);
+  overflow: auto; border-radius: 18px; background: var(--panel); border: 1px solid var(--border); padding: 14px; }
+.mc-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.mc-dock-title { font-size: 18px; font-weight: 650; color: var(--text); }
+.mc-dock-surface { display: grid; gap: 12px; }
+.mc-btn[aria-pressed=true] { border-color: var(--accent-ink); background: var(--panel-2); color: var(--accent-ink); }
+.mc-ai-history li { margin: 4px 0; } .mc-ai-history .who { color: var(--text-dim); }
+.mc-ai-history .mc-hist-undo { margin-left: 8px; min-height: 44px; font-size: 15px; padding: 4px 10px; }
+
+/* Author display rules must never beat the hidden attribute. */
+.mc-canvas [hidden] { display: none !important; }
+.mc-btn { white-space: nowrap; }
+.mc-say { min-width: 0; }
+
+/* Connect a device sheet & pairing card */
+.mc-connect-sheet, .mc-pairing-card {
+  position: absolute;
+  z-index: 9;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+  overflow: auto;
+  padding: 24px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.12);
+}
+.mc-connect-head, .mc-pairing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+/* The card scrolls inside the board when it is taller than it; its title and
+   Close stay pinned at the top (drawn over the card's own padding). */
+.mc-connect-head, .mc-pairing-head {
+  position: sticky;
+  top: -24px;
+  z-index: 1;
+  margin: -24px -24px 12px;
+  padding: 24px 24px 8px;
+  background: var(--panel);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+/* The live "Pair phone" card floats in screen space (not inside the zoomed
+   board): at least 360 px wide where the screen allows, title always shown. */
+.mc-pair-float { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 16px; pointer-events: none; }
+.mc-pair-float .mc-pairing-card { position: relative; left: auto; top: auto; transform: none; pointer-events: auto;
+  width: min(460px, calc(100vw - 32px)); min-width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); font-size: 17px; }
+.mc-pair-float .mc-pairing-card .mc-prop-title { font-size: 22px; }
+.mc-connect-close, .mc-pairing-close {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-content: center;
+  font-size: 20px;
+}
+.mc-connect-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+.mc-connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.mc-connect-opt {
+  width: 100%;
+  min-height: 54px;
+  font-size: 19px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+.mc-connect-name-wrap {
+  display: flex;
+  width: 100%;
+}
+.mc-connect-input {
+  flex: 1;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 18px;
+}
+.mc-pair-qr-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+}
+.mc-pair-qr-wrap img {
+  border-radius: var(--radius-sm);
+  background: #FFFFFF;
+  padding: 8px;
+}
+.mc-pair-code-row {
+  text-align: center;
+  font-size: 18px;
+  color: var(--text);
+  margin: 12px 0;
+}
+.mc-pair-code {
+  font-size: 24px;
+  letter-spacing: 0.08em;
+  color: var(--accent-ink);
+}
+.mc-connect-status, .mc-pair-status {
+  font-size: 16px;
+  color: var(--text-dim);
+  min-height: 1.2em;
+  margin: 4px 0 10px;
+}
+.mc-pair-note {
+  font-size: 15px;
+  color: var(--text-dim);
+  text-align: center;
+  margin: 8px 0 0;
+}
+
+/* Phone and short laptop: full-width AI panel so the Keep line isn't clipped. */
+@media (max-width: 600px) {
+  /* Phones: the bar sits in the thumb zone at the bottom: the say row, then
+     Review / New board / Menu. Other tools live in the menu sheet (phoneMenu.ts). */
+  /* Flush to the bottom edge and full width so no board tile peeks through a
+     gap below or beside the floating pill (the stray glyph under the bar). The
+     pill keeps its rounded top; the bottom padding fills the safe-area strip. */
+  .mc-bar { left: 0; right: 0; top: auto; bottom: 0; padding: 8px calc(8px + var(--safe-area-inset-left, env(safe-area-inset-left, 0px))) calc(8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))) calc(8px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
+    border-radius: 18px 18px 0 0; border-bottom: none; }
+  .mc-bar-tools { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 8px; }
+  .mc-phone .mc-bar-btns { display: none; }
+  .mc-phone-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .mc-phone-actions > .mc-btn { min-height: 48px; white-space: nowrap; padding: 0 8px; }
+  .mc-btn { min-height: 44px; font-size: 16px; }
+  .mc-say { flex: 0 0 auto; min-width: 0; }
+  .mc-say .mc-btn { flex: 0 0 auto; white-space: nowrap; }
+  .mc-dock { top: calc(8px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); max-height: calc(100% - var(--mc-bar-h, 132px) - 16px); }
+  .mc-say input { min-height: 44px; font-size: 16px; }
+  .mc-canvas-status { font-size: 15px; }
+  /* Start below the top-right mic FAB (top 12px + 64px tall) so its nano
+     terminal header never hides under the mic — the FAB floats in the clear
+     strip above. */
+  .mc-ai { left: auto; right: 8px; width: min(var(--mc-ai-w, 320px), calc(100vw - 160px)); min-width: 0; top: calc(84px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); bottom: calc(var(--mc-bar-h, 132px) - 16px); }
+  .mc-ai pre { max-height: 120px; }
+  .mc-mini-terminal { left: 8px; right: 8px; width: auto; transform: none; top: auto; bottom: calc(8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) + 80px); max-height: 50vh; }
+  /* Keep the floating review clear of the bottom thumb bar: a full-width
+     sheet, no resize grip (a saved size isn't applied on a phone). */
+  .mc-review-dialog { top: calc(24px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); right: 24px;
+    width: min(360px, calc(100vw - 48px)); min-width: 0;
+    max-height: calc(100dvh - var(--mc-bar-h, 132px) - 48px);
+    padding-top: 0; padding-bottom: 0; }
+  .mc-review-resize { display: none; }
+  .mc-review-head { padding: 10px 8px 8px 16px; }
+  .mc-review-title { font-size: 19px; }
+  .mc-review-body { padding: 0 16px 16px; }
+  .mc-review-card-host .mc-proposal { padding: 10px 12px; }
+  .mc-review-card-host .mc-proposal-title { font-size: 18px; }
+  .mc-review-card-host .mc-proposal p { font-size: 15px; margin: 4px 0 0; }
+  .mc-review-change-label { font-size: 18px; }
+  .mc-review-change-detail { font-size: 16px; }
+  .mc-review-actions { position: relative; bottom: auto; gap: 10px 48px; margin-top: 10px;
+    background: transparent; box-shadow: none; }
+  .mc-review-approve, .mc-review-reject, .mc-review-ask-else { min-height: 60px; min-width: 0; font-size: 18px; padding: 0 12px; }
+  .mc-review-ask-else { min-height: 56px; }
+}
+@media (max-width: 420px) {
+  .mc-ai { padding: 10px 12px; }
+  .mc-dock { width: 200px; }
+}
+
+/* Teach a gesture — record mode overlay. */
+.mc-teach {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(43, 43, 43, 0.45);
+}
+.mc-teach-card {
+  position: relative;
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+}
+.mc-teach-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  cursor: pointer;
+}
+.mc-teach-note { font-size: 15px; opacity: 0.7; margin: 0 28px 12px 0; }
+.mc-teach-count { font-size: 28px; font-weight: 600; margin: 8px 0; }
+.mc-teach-conflict { color: #b5651d; font-size: 15px; }
+.mc-teach-describe { display: flex; gap: 8px; }
+.mc-teach-describe input { flex: 1; min-height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; }
+.mc-teach-list { list-style: none; margin: 0; padding: 0; }
+.mc-teach-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.mc-teach-meter { font-size: 15px; opacity: 0.75; }
+.mc-proposal-engine { font-size: 15px; opacity: 0.7; margin-left: 8px; }
+
+/* Phone tools menu (phoneMenu.ts). iOS: bottom sheet with a grabber.
+   Android: Material 3 modal sheet with 28dp top corners and tonal buttons. */
+.mc-menu-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.mc-menu-icon, .mc-menu-icon::before, .mc-menu-icon::after { display: block; width: 18px; height: 2px; border-radius: 2px; background: currentColor; }
+.mc-menu-icon { position: relative; }
+.mc-menu-icon::before, .mc-menu-icon::after { content: ''; position: absolute; left: 0; }
+.mc-menu-icon::before { top: -6px; }
+.mc-menu-icon::after { top: 6px; }
+.mc-menu-scrim { position: fixed; inset: 0; z-index: 60; background: rgb(43 43 43 / 0.35); }
+.mc-menu-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 61; max-height: 80vh; overflow: auto;
+  padding: 8px 16px calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); background: var(--panel); color: var(--text);
+  border-top-left-radius: 16px; border-top-right-radius: 16px; box-shadow: 0 -8px 28px rgb(0 0 0 / 0.12);
+  animation: mc-sheet-in 200ms ease-out; touch-action: pan-y; }
+.mc-menu-android { border-top-left-radius: 28px; border-top-right-radius: 28px; font-family: Roboto, system-ui, sans-serif; }
+.mc-menu-ios { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }
+/* The bar stays 36×5 but the hit area is 116×25 so a pinch can grab it
+   (hand swipe-down = pinch-drag the grabber, phoneMenu.ts). */
+.mc-menu-grabber { display: flex; align-items: center; justify-content: center; width: 116px; height: 25px; margin: -6px auto -2px; cursor: grab; touch-action: none; }
+.mc-menu-grabber::before { content: ''; width: 36px; height: 5px; border-radius: 999px; background: var(--border); }
+.mc-menu-android .mc-menu-grabber { margin: 6px auto 2px; }
+.mc-menu-android .mc-menu-grabber::before { width: 32px; height: 4px; }
+.mc-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mc-menu-title { margin: 0; font-size: 22px; font-weight: 650; }
+.mc-menu-close { min-height: 44px; }
+.mc-menu-group { margin-top: 16px; }
+.mc-menu-group-title { margin: 0 0 8px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
+/* The open menu sheet owns the bottom of the screen: no pill draws over it. */
+.mc-menu-open .mc-join-pill, .mc-menu-open .mc-phone-hands-pill, .mc-menu-open .mc-phone-track-pill { display: none !important; }
+.mc-menu-items { display: flex; flex-direction: column; gap: 8px; }
+.mc-menu-items > .mc-btn { width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; padding: 0 16px; }
+.mc-menu-ios .mc-menu-items > .mc-btn { min-height: 44px; border-radius: 12px; }
+.mc-menu-android .mc-menu-items > .mc-btn { border-radius: 999px; border-color: transparent; background: var(--panel-2); }
+.mc-menu-items > .mc-btn[aria-pressed='true'] { outline: 2px solid var(--accent); outline-offset: -2px; }
+@keyframes mc-sheet-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mc-menu-sheet { animation: none; } }
+
+/* Big floating mic (micFab.ts): reachable by tap, keyboard and hand pinch. */
+.mc-fab-mic { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: inline-flex; align-items: center; gap: 10px;
+  min-width: 72px; min-height: 72px; padding: 0 22px 0 20px; border-radius: 999px; border: 2px solid var(--border);
+  background: #FFFFFF; color: var(--text); font-size: 18px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.12); }
+.mc-fab-mic:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-fab-mic.is-listening { background: var(--text); color: #FFFFFF; border-color: var(--text); }
+.mc-fab-mic.is-listening::after { content: ''; position: absolute; inset: -8px; border-radius: inherit;
+  border: 3px solid var(--accent); animation: mc-mic-pulse 1.4s ease-out infinite; pointer-events: none; }
+@keyframes mc-mic-pulse { from { opacity: 1; transform: scale(0.96); } to { opacity: 0; transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { .mc-fab-mic.is-listening::after { animation: none; opacity: 1; } }
+/* Cluster owns Talk placement when the AI drawer is open. */
+@media (max-width: 600px) {
+  /* Phones: top-right, clear of the thumb bar and the Proposal sheet (thumbs also have a talk toggle in the bar). */
+  .mc-fab-mic { right: 12px; bottom: auto; top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); min-width: 64px; min-height: 64px; padding: 0 18px; }
+  .mc-fab-mic .mc-fab-mic-label { display: none; }
+  .mc-fab-mic.is-listening .mc-fab-mic-label { display: inline; }
+  .mc-canvas.is-ai-pinned .mc-fab-mic { right: 12px; }
+  .mc-menu-open .mc-fab-mic { display: none; }
+}
+
+/* On-canvas Tools chip (toolPalette.ts): the bar's buttons + say box stay
+   hidden (no fixed chrome) until voice, palm, or this chip summon them. */
+.mc-tools-chip { position: fixed; z-index: 40; right: 24px; bottom: 108px; min-height: 52px; padding: 0 20px;
+  border-radius: 999px; border: 2px solid var(--border); background: #FFFFFF; color: var(--text);
+  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-tools-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.mc-tools-chip[aria-expanded=true] { border-color: var(--accent-ink); color: var(--accent-ink); }
+/* Cluster owns Tools placement when the AI drawer is open. */
+@media (max-width: 600px) { .mc-tools-chip { display: none; } }
+
+/* Fully empty canvas (?fresh=1): a soft centred prompt instead of fixed chrome. */
+.mc-blank { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 10px; pointer-events: none; z-index: 1; }
+.mc-blank-lead { margin: 0; font-size: 34px; font-weight: 650; color: var(--text); }
+.mc-blank-hint { margin: 0; font-size: 18px; color: var(--text-dim); }
+.mc-blank-phone { display: none; }
+/* Phone shell: the blank canvas says what to do (desktop hint and Register stay desktop-only). */
+.mc-phone-simple .mc-blank { padding: 0 24px; }
+.mc-phone-simple .mc-blank-lead { font-size: 26px; }
+.mc-phone-simple .mc-blank-hint, .mc-phone-simple .mc-blank-register { display: none; }
+.mc-phone-simple .mc-blank-phone { display: block; margin: 0; font-size: 18px; color: var(--text-dim); }
+
+/* Hand pointer feedback (handPointer.ts): no dot, no big rings. A modest
+   frame on the targeted control, plus a small macOS-style coral arrow that
+   follows the index fingertip everywhere else (a 4-arrow move icon while
+   fisted). Fixed overlays so they work for controls inside shadow DOM too. */
+.mc-hand-frame, .mc-hand-cursor { position: fixed; left: 0; top: 0; z-index: 85; pointer-events: none; }
+.mc-hand-frame { border-radius: 14px; border: 3px solid #f07a60;
+  box-shadow: 0 0 0 4px rgb(240 122 96 / 0.22), 0 0 14px rgb(240 122 96 / 0.35); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.mc-hand-frame.is-pressed { border-width: 4px; box-shadow: 0 0 0 6px rgb(240 122 96 / 0.35), 0 0 18px rgb(240 122 96 / 0.5); }
+/* Small coral arrow — hotspot is the SVG's own drawn tip, which sits at the
+   shape's origin, so translate(x,y) alone puts the tip exactly at the hand's
+   index fingertip. */
+.mc-hand-cursor { width: 15px; height: 19px; background-repeat: no-repeat; background-size: contain;
+  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); transition: scale 90ms ease, filter 90ms ease; scale: 1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 19'%3E%3Cpath d='M1 1 L1 15.2 L4.4 11.8 L7.3 18.2 L9.9 17 L7 10.6 L13.8 10.6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1.1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.mc-hand-cursor.is-pinched { scale: 0.92; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)) brightness(0.88); }
+/* Fist (grab/move): a centred 4-arrow move icon (see paint()'s -50%/-50% transform). */
+.mc-hand-cursor.is-fist { width: 20px; height: 20px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1 L13 6 L11 6 L11 9 L14 9 L14 7 L19 10 L14 13 L14 11 L11 11 L11 14 L13 14 L10 19 L7 14 L9 14 L9 11 L6 11 L6 13 L1 10 L6 7 L6 9 L9 9 L9 6 L7 6 Z' fill='%23f07a60' stroke='%232b2b2b' stroke-width='1' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+/* Pinch-hold on a plan object added it to the selection: a brief amber bloom. */
+.mc-hand-cursor.mc-hand-ring-held { filter: drop-shadow(0 0 7px rgb(201 139 60 / 0.9)); }
+/* Text fields are wide: a 3% grow on a 1200px input spills ~18px over the
+   Go button beside it, so the hand (and mouse) then hit the input instead. */
+.hand-hover:not(input, textarea, select, [data-hand-dismiss]) { scale: 1.03; }
+@media (prefers-reduced-motion: reduce) { .mc-hand-frame, .mc-hand-cursor { transition: none; } .hand-hover { scale: none; } }
+
+/* Floating review window that reads like a PLAN (reviewDialog.ts): ~560px,
+   starts top-right inside the 24px safe zone, left of the hand cluster, with
+   the board visible behind it. Header (title + engine chip), "You asked",
+   THE PLAN (+ / ~ / − lines — the only part that scrolls), a compact honesty
+   footer, and big Approve / Reject / Ask-else that never scroll away.
+   Fist-grab or mouse-drag the title bar to move it; drag the bottom-right
+   corner to resize it (420×320 … 80vw×85vh, remembered). */
+.mc-review-dialog:focus { outline: none; }
+.mc-review-dialog { position: fixed; z-index: 50; inset: auto;
+  top: calc(var(--mc-bar-h, 64px) + 24px);
+  right: calc(min(var(--mc-ai-w, 320px), 340px) + 70px);
+  left: auto; bottom: auto;
+  width: min(560px, calc(100vw - 48px));
+  min-width: min(420px, calc(100vw - 48px));
+  max-width: 80vw;
+  box-sizing: border-box;
+  max-height: min(85vh, calc(100vh - var(--mc-bar-h, 64px) - 48px));
+  background: #FBF7EF;
+  color: #2B2B2B;
+  border: 1px solid var(--border, #E4E0D8);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgb(43 43 43 / 0.18), 0 2px 8px rgb(43 43 43 / 0.06);
+  display: flex; flex-direction: column;
+  padding: 0; overflow: hidden; container-type: inline-size; }
+.mc-review-dialog.is-floating { right: auto; max-height: 85vh; }
+/* Keep the review window left of the hand cluster (≤160px wide + 24px gap),
+   and never wider than the room left of it. */
+.mc-review-dialog:not(.is-floating) { right: calc(max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) + 184px);
+  max-width: calc(100vw - max(180px, 13vw, min(var(--mc-ai-w, 320px), 340px) + 40px) - 184px - 24px); }
+@media (max-width: 600px) { .mc-review-dialog:not(.is-floating) { right: 24px; max-width: calc(100vw - 48px); } }
+.mc-review-head { display: flex; align-items: flex-start; gap: 8px; flex: 0 0 auto;
+  padding: 14px 12px 10px 24px;
+  cursor: grab; }
+.mc-review-head:active { cursor: grabbing; }
+.mc-review-drag { flex: 1 1 auto; min-width: 0; min-height: 48px; display: flex; align-items: center; }
+.mc-review-titles { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mc-review-title { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; color: #2B2B2B; }
+.mc-review-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mc-review-engine, .mc-review-sim { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px;
+  border-radius: 999px; font-size: 15px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.mc-review-engine { background: rgb(107 143 113 / 0.16); color: #3D6145; }
+.mc-review-engine[data-engine="gemini"] { background: rgb(90 123 166 / 0.14); color: #3A5679; }
+.mc-review-sim { background: #2B2B2B; color: #FBF7EF; letter-spacing: 0.06em; font-size: 15px; }
+.mc-review-engine[hidden], .mc-review-sim[hidden] { display: none; }
+.mc-review-body { flex: 1 1 auto; min-height: 0; width: 100%; margin: 0; box-sizing: border-box;
+  display: flex; flex-direction: column; overflow: hidden; padding: 0 24px 20px; }
+.mc-review-asked { flex: 0 0 auto; margin: 0 0 14px; font-size: 16px; line-height: 1.4; color: #5E5A54;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mc-review-asked[hidden] { display: none; }
+/* THE PLAN — the visual centre, and the only part that scrolls. */
+.mc-review-plan { flex: 1 1 auto; min-height: 72px; overflow: auto; overscroll-behavior: contain;
+  background: #FFFFFF; border: 1px solid var(--border, #E4E0D8); border-radius: 14px; padding: 12px 16px 14px; }
+.mc-review-plan-head { margin: 0 0 6px; font-size: 15px; font-weight: 650; color: #6E6A63; }
+.mc-review-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mc-review-plan-list[hidden] { display: none; }
+.mc-review-change { display: flex; align-items: flex-start; gap: 14px; padding: 10px 0; border-top: 1px solid #F0ECE4; }
+.mc-review-change:first-child { border-top: 0; }
+.mc-review-op { flex: 0 0 auto; min-width: 76px; height: 28px; padding: 0 8px; box-sizing: border-box; border-radius: 8px; display: grid; place-items: center;
+  font-size: 15px; font-weight: 650; line-height: 1; margin-top: 1px; }
+.mc-review-change.is-add .mc-review-op { background: rgb(107 143 113 / 0.18); color: #3D6145; }
+.mc-review-change.is-change .mc-review-op { background: rgb(201 139 60 / 0.18); color: #855419; }
+.mc-review-change.is-remove .mc-review-op { background: rgb(181 69 58 / 0.14); color: #973A30; }
+.mc-review-change.is-none .mc-review-op { background: #F1EEE6; color: #6E6A63; }
+.mc-review-change-text { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; }
+.mc-review-change-label { font-size: 19px; font-weight: 600; line-height: 1.35; color: #2B2B2B; overflow-wrap: anywhere; }
+.mc-review-change-detail { font-size: 17px; line-height: 1.35; color: #6E6A63; overflow-wrap: anywhere; }
+.mc-review-change.is-remove .mc-review-change-label { text-decoration: line-through; text-decoration-color: rgb(151 58 48 / 0.5); }
+.mc-review-card-host { flex: 0 0 auto; }
+/* With a plan list, the card is only the keep/drop proxy (Approve/Reject and
+   voice "keep"/"drop" click its buttons) — kept in the DOM, never shown. */
+.mc-review-card-host.is-proxy-only { display: none; }
+/* The underlying Proposal's own Keep/Drop stay in the DOM — Approve/Reject
+   proxy-click them, and voice "keep"/"drop" still work — but are never shown
+   here; the review's own Approve/Reject/Ask buttons are the only visible
+   decision controls. */
+.mc-review-card-host .mc-proposal-actions { display: none; }
+.mc-review-more { margin-top: 10px; font-size: 15px; color: #6E6A63; }
+.mc-review-more[hidden] { display: none; }
+.mc-review-more > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.mc-review-extra:empty { display: none; }
+/* Honesty footer: why this engine, and exactly what left this device. */
+.mc-review-honesty { flex: 0 0 auto; margin: 12px 2px 0; display: flex; flex-direction: column; gap: 2px; }
+.mc-review-honesty[hidden] { display: none; }
+.mc-review-honesty p { margin: 0; font-size: 15px; line-height: 1.4; color: #5E5A54; }
+.mc-review-honesty p[hidden] { display: none; }
+.mc-review-why { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* The byte count never shrinks or ellipsizes; only the "what" text does. */
+/* One line, read as one line: what left and its size sit inline (not as flex
+   items, which lay out — and copy — as separate lines). A long description is
+   cut with an ellipsis; the size always stays, right after it. */
+.mc-review-left { display: block; min-width: 0; font-weight: 600; color: #2B2B2B; white-space: nowrap; overflow: hidden; }
+.mc-review-left-what { display: inline-block; max-width: calc(100% - 9ch); overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.mc-review-left-bytes { display: inline; white-space: pre; }
+.mc-review-actions { position: relative; bottom: auto; flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 12px 48px;
+  margin-top: 14px; padding: 0; background: transparent; }
+.mc-review-approve, .mc-review-reject, .mc-review-ask-else {
+  min-height: 60px; min-width: 140px; font-size: 18px; font-weight: 600;
+  padding: 0 24px; box-sizing: border-box; border-radius: 14px;
+  white-space: nowrap; /* a label never wraps inside its button */
+}
+.mc-review-approve { flex: 1.4 1 0; background: var(--action-fill, #9A5F1C); color: #FFFFFF; border-color: var(--action-fill, #9A5F1C); }
+.mc-review-reject { flex: 1 1 0; background: #FFFFFF; }
+.mc-review-ask-else { flex: 1 1 100%; min-height: 56px; background: transparent; border-color: #D8D2C6; color: #4A4640; }
+/* Wide enough: all three decisions on one row. */
+@container (min-width: 760px) {
+  .mc-review-ask-else { flex: 1.2 1 0; min-height: 60px; }
+}
+/* Pinch-sized ✕ in the window header, never over Approve/Reject. */
+.mc-review-close { position: static; top: auto; right: auto; z-index: 2;
+  width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center; font-size: 22px; line-height: 1; flex: 0 0 auto;
+  background: transparent; border-color: transparent; color: #6E6A63; }
+.mc-review-close:hover { background: #F1EEE6; }
+/* Bottom-right resize grip — a [data-mc-resize-handle], so mouse, touch and
+   the hand's pinch-drag all work. 44px hit area for a less-precise hand. */
+.mc-review-resize { position: absolute; right: 2px; bottom: 2px; width: 44px; height: 44px; z-index: 3;
+  cursor: nwse-resize; touch-action: none; border-bottom-right-radius: 18px;
+  background:
+    linear-gradient(135deg, transparent 0 52%, #A39D92 52% 58%, transparent 58% 68%, #A39D92 68% 74%, transparent 74%); }
+.mc-review-resize:hover { background-color: rgb(201 139 60 / 0.12); }
+.mc-review-resize:focus-visible { outline: 2px solid #5A7BA6; outline-offset: -2px; }
+
+.mc-reg-chip { position: fixed; top: 64px; left: 50%; translate: -50% 0; z-index: 49;
+  background: var(--panel, #FBF7EF); border: 1px solid rgb(107 143 113 / 0.5); color: var(--text, #2B2B2B);
+  border-radius: 999px; padding: 6px 14px; font-size: 15px;
+  box-shadow: 0 2px 10px rgb(43 43 43 / 0.08); pointer-events: none; }
+.mc-reg-chip[hidden] { display: none; }
+
+/* Guided registration (scanPanel.ts/scanRegistration.ts): the amber chip and
+   blank-canvas CTA open a full-viewport scan overlay with a progress ring and
+   step checklist, so owner face+hands registration reads as one clear flow. */
+.mc-register-chip { position: fixed; z-index: 40; right: 24px; bottom: 236px; min-height: 52px; padding: 0 20px;
+  border-radius: 999px; border: 2px solid var(--action-fill); background: var(--action-fill); color: #FFFFFF;
+  font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 20px rgb(0 0 0 / 0.1); }
+.mc-register-chip:hover { filter: brightness(0.95); }
+.mc-register-chip:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+/* Cluster owns Register placement when the AI drawer is open. */
+@media (max-width: 600px) { .mc-register-chip { display: none; } }
+
+.mc-blank .mc-blank-register { pointer-events: auto; justify-self: center; margin-top: 10px;
+  min-height: 56px; padding: 0 30px; font-size: 17px; font-weight: 600; border-radius: 999px;
+  background: var(--action-fill); border-color: var(--action-fill); color: #FFFFFF; }
+
+.mc-scan { position: fixed; inset: 0; z-index: 90; display: grid; place-content: center; background: rgb(43 43 43 / 0.25); }
+.mc-scan[hidden] { display: none; }
+.mc-scan-card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px;
+  padding: 28px 32px; width: min(380px, calc(100vw - 48px)); display: grid; gap: 14px;
+  justify-items: center; text-align: center; box-shadow: 0 18px 48px rgb(43 43 43 / 0.18); }
+.mc-scan-card h2 { margin: 0; font-size: 20px; color: var(--text); }
+.mc-scan-ring { width: 110px; height: 110px; }
+.mc-scan-ring-track { fill: none; stroke: var(--panel-2); stroke-width: 7; }
+.mc-scan-ring-fill { fill: none; stroke: var(--action); stroke-width: 7; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 55px 55px; transition: stroke-dashoffset 120ms linear; }
+.mc-scan-ring-label { font: 600 15px system-ui, sans-serif; fill: var(--text); }
+.mc-scan.is-done .mc-scan-ring-fill { stroke: var(--accent); }
+.mc-scan-prompt { margin: 0; font-size: 15px; color: var(--text); min-height: 1.4em; }
+.mc-scan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: start; }
+.mc-scan-steps li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 15px; }
+.mc-scan-steps li.is-active { color: var(--text); font-weight: 600; }
+.mc-scan-steps li.is-done { color: var(--text); }
+.mc-scan-tick { display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--border); position: relative; }
+.mc-scan-steps li.is-done .mc-scan-tick { border-color: var(--accent); background: var(--accent); }
+.mc-scan-steps li.is-done .mc-scan-tick::after { content: '\2713'; color: #FFFFFF; font-size: 12px;
+  line-height: 18px; display: block; text-align: center; }
+.mc-scan .mc-scan-cancel { min-height: 48px; padding: 0 26px; }
+@media (prefers-reduced-motion: reduce) { .mc-scan-ring-fill { transition: none; } }
+
+/* MORPH CARD (morphCard.ts): the small anchored card that names a tile when
+   a pinch-hold/long-press arms a morph, then walks listening -> working ->
+   done/empty/error. Warm-paper palette like the rest of the canvas chrome —
+   no glow, no neon, no purple, only the one soft shadow below. Anchored with
+   `position: fixed` by morphCard.ts itself (left/top/bottom), so this rule
+   only sets the look, not the placement math. Sits above tile content and
+   the floating chips/docks, below the full-screen review dialog and scan
+   overlay. */
+.mc-morph-card { position: fixed; z-index: 49; width: min(320px, calc(100vw - 16px));
+  background: #F7F5F0; color: #2A2A26; border: 1px solid #D8D4C8; border-left: 3px solid #C98B3C;
+  border-radius: 14px; padding: 14px 16px; display: grid; gap: 10px;
+  box-shadow: 0 2px 8px rgb(42 42 38 / 0.12); }
+.mc-morph-card[hidden] { display: none; }
+.mc-morph-card-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.mc-morph-card-title strong { font-weight: 700; }
+.mc-morph-card-line { margin: 0; font-size: 15px; color: #2A2A26; display: flex; align-items: center; gap: 8px; min-height: 1.4em; }
+.mc-morph-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.mc-morph-dot.is-sage { background: #6B8F71; }
+.mc-morph-dot.is-amber { background: #C98B3C; }
+.mc-morph-chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.mc-morph-cancel, .mc-morph-undo { min-height: 44px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid #D8D4C8; background: #FFFFFF; color: #2A2A26; font-size: 15px; font-weight: 600; cursor: pointer; }
+.mc-morph-cancel:hover, .mc-morph-undo:hover { filter: brightness(0.97); }
+.mc-morph-undo { border-color: #C98B3C; color: #C98B3C; }
+
+/* MORPH HOLD RING + TARGET OUTLINE (morphFlow.ts): the amber fill ring at
+   the frozen hold point (progress is shown, not hidden in a timer — release
+   before the fill completes and nothing happens), and the 2px amber outline
+   on the tile a fired morph is about. The ring's conic-gradient fill is set
+   inline by morphFlow; this only shapes the donut. No glow, no neon. */
+.mc-morph-ring { position: fixed; z-index: 48; width: 44px; height: 44px; border-radius: 50%;
+  pointer-events: none; -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px)); }
+.mc-morph-ring[hidden] { display: none; }
+
+/* SELF-CHECK MARK (selfCheck.ts): a small dot pinned to a tile's corner
+   right after it's built or morphed — amber while checking, sage once it
+   passes, a restrained warning colour if it still fails after the one fix
+   pass. pointer-events: none so it never blocks the real hit-test it is
+   itself verifying. No new colours: reuses --action/--accent/--danger. */
+.mc-self-check { position: fixed; z-index: 47; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+/* Inside the canvas world: moves with its board; a passed mark fades out. */
+.mc-self-check.is-anchored { position: absolute; z-index: 3; transition: opacity 400ms ease-out; }
+.mc-self-check.is-gone { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .mc-self-check.is-anchored { transition: none; } }
+.mc-self-check.is-checking { background: var(--action, #C98B3C); }
+.mc-self-check.is-passed { background: var(--accent, #6B8F71); }
+.mc-self-check.is-warning { background: var(--danger, #B5453A); }
+
+.mc-morph-target { outline: 2px solid #C98B3C; outline-offset: 3px; border-radius: 10px; }
+.mc-morph-target.is-morph-pulse { outline-width: 3px; outline-color: #B57830; }
+@media (prefers-reduced-motion: no-preference) {
+  .mc-morph-target.is-morph-pulse { transition: outline-color 180ms ease, outline-width 180ms ease; }
+}
+
+/* Hand dwell tooltip (A1-047 / A5-017): hands have no mouseover, so the
+   native `title` never shows — this bubble mirrors it for the hand cursor. */
+.mc-hand-tooltip {
+  position: fixed;
+  z-index: 10000;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  max-width: min(220px, calc(100vw - 16px));
+  box-sizing: border-box;
+  padding: 6px 12px;
+  font-size: 15px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* At most two lines, the rest ellipsized. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+/* Placed by canvasApp (placeBubble): its left/top are the bubble's corner. */
+.mc-hand-tooltip.is-placed, .mc-hand-tooltip.is-placed.below { transform: none; }
+.mc-hand-tooltip.below { transform: translate(-50%, 0); }
+.mc-hand-tooltip[hidden] { display: none; }
+
+/* Floor-plan board: the tool palette (13 tools, ~610px tall) was centred in a
+   ~420px board with overflow hidden, so Select, Wall, Column and Furniture were
+   clipped — unreachable by mouse, touch or hand. Pin it to the board's top and
+   bottom and let it flow into a second column instead of overflowing. */
+.mc-plan-board .mc-palette {
+  top: 8px; bottom: 8px; transform: none;
+  display: grid; grid-auto-flow: column; grid-template-rows: repeat(auto-fill, 46px);
+  align-content: start; gap: 4px;
+}
+
+/* ---- cross-device: edge glow + screen-arrangement strip -------------------
+   The viewport edge lights up as a tile nears the side where a phone is paired
+   (see setEdgeGlow in canvasApp). The arrangement strip remembers which phone
+   is on which side. */
+.mc-viewport::before,
+.mc-viewport::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 24px;
+  pointer-events: none; opacity: 0; transition: opacity 120ms ease; z-index: 30;
+}
+.mc-viewport::before { left: 0; background: linear-gradient(to right, var(--accent), transparent); }
+.mc-viewport::after { right: 0; background: linear-gradient(to left, var(--accent), transparent); }
+.mc-viewport.mc-edge-glow-left::before { opacity: 0.85; }
+.mc-viewport.mc-edge-glow-right::after { opacity: 0.85; }
+
+.mc-arrange {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
+  display: flex; align-items: center; gap: 0.5rem; z-index: 40;
+  padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  font-size: 0.85rem; color: var(--text);
+}
+.mc-arrange[hidden] { display: none; }
+.mc-arrange-label { font-weight: 600; color: var(--text-dim, #777); }
+.mc-arrange-slot {
+  padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.mc-arrange-laptop { padding: 0.15rem 0.5rem; color: var(--text-dim, #777); }
+.mc-arrange-swap { min-height: 2.2rem; }
+
+/* Hand skeletons must paint ABOVE the tools bar (z 51) and the hand cluster
+   (z 72). pointer-events stay none so pinches still hit the controls underneath. */
+.mc-canvas .hand-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 80;
+}
+
+/* Mid-screen right-side cluster: Register, Tools, Talk, Read aloud, Undo, Edit.
+   Docked to the right edge (24px) so it never sits on top of a board: Fit
+   and the overview take clusterInset() out of the board area. The hand
+   reach box maps to the full screen (handPointer.mapToScreen), so the edge
+   column is reachable without a full arm stretch. Equal-width 120×52px
+   targets, 24px gaps. Moves left of the AI drawer only while that is open
+   (the drawer no longer opens by itself during a turn, only on a failure). */
+.mc-hand-cluster {
+  position: fixed;
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
+  /* Below the review window (50) and modal dialogs, so they're never covered. */
+  z-index: 49;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+  pointer-events: none;
+  width: max-content;
+  min-width: 120px;
+  max-width: min(240px, calc(100vw - 32px));
+}
+.mc-hand-cluster > * { pointer-events: auto; width: 100%; box-sizing: border-box; }
+.mc-canvas:has(.mc-ai:not([hidden])) .mc-hand-cluster { right: calc(min(var(--mc-ai-w, 320px), 340px) + 40px); }
+/* One Register on screen: the empty-state button owns it while the blank
+   canvas shows; after registration it lives under Tools > More > Hands. */
+.mc-canvas:has(.mc-blank:not([hidden])) .mc-hand-cluster .mc-register-chip { display: none; }
+.mc-hand-cluster .mc-fab-mic,
+.mc-hand-cluster .mc-tools-chip,
+.mc-hand-cluster .mc-edit-toggle,
+.mc-hand-cluster .mc-edit-reset,
+.mc-hand-cluster .mc-register-chip,
+.mc-hand-cluster .mc-talk-control {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  z-index: auto;
+}
+.mc-hand-cluster .mc-fab-mic,
+.mc-hand-cluster .mc-tools-chip,
+.mc-hand-cluster .mc-edit-toggle,
+.mc-hand-cluster .mc-register-chip,
+.mc-hand-cluster .mc-edit-reset {
+  min-height: 52px;
+  min-width: 120px;
+  width: 100%;
+  justify-content: center;
+  box-sizing: border-box;
+}
+.mc-hand-cluster .mc-talk-control { align-items: stretch; width: 100%; }
+.mc-hand-cluster .mc-fab-mic { width: 100%; min-width: 120px; min-height: 52px; }
+.mc-hand-cluster .mc-edit-reset { min-height: 52px; min-width: 120px; }
+
+/* Dwell-click ring: fills around the arrow tip, then the click fires. */
+.mc-hand-dwell {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(#f07a60 calc(var(--mc-dwell, 0) * 360deg), rgb(240 122 96 / 0.2) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+}
+.mc-hand-dwell[hidden] { display: none; }
+
+.mc-talk-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.mc-talk-caption {
+  margin: 0;
+  max-width: 240px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(11, 15, 20, 0.88);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+}
+.mc-talk-caption { white-space: pre-line; }
+.mc-talk-caption.is-error { background: #8b2e2e; }
+.mc-talk-caption[hidden] { display: none; }
+
+/* Small, non-blocking facing pill. Never a full-screen square. */
+.mc-facing-banner {
+  position: fixed;
+  top: calc(10px + 108px + 8px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 71;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(340px, calc(100vw - 220px));
+  padding: 10px 16px 10px 18px;
+  border-radius: 999px;
+  background: rgba(11, 15, 20, 0.82);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+}
+.mc-facing-banner[hidden] { display: none; }
+.mc-facing-banner.is-away { background: rgba(80, 60, 40, 0.88); }
+.mc-facing-banner-hide {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 8px;
+  min-height: 32px;
+  border-radius: 999px;
+}
+.mc-facing-banner-hide:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* Draft / approval summary on the light canvas: a LIGHT card with dark text.
+   The shared .mc-proposal rule (style.css) is a dark studio card whose
+   `color: var(--text)` becomes #2B2B2B inside .mc-canvas — unreadable. */
+.mc-review-card-host .mc-proposal,
+.mc-canvas .mc-proposal {
+  background: #FFFFFF;
+  color: #2B2B2B;
+  border: 1px solid var(--border, #E4E0D8);
+  box-shadow: 0 8px 24px rgb(11 15 20 / 0.08);
+}
+.mc-review-card-host .mc-proposal-title,
+.mc-canvas .mc-proposal-title,
+.mc-review-card-host .mc-proposal p,
+.mc-canvas .mc-proposal p { color: #2B2B2B; }
+.mc-canvas .mc-proposal.is-guess .mc-proposal-badge,
+.mc-review-card-host .mc-proposal.is-guess .mc-proposal-badge {
+  background: #334155;
+  color: #F8FAFC;
+}
+.mc-term-empty { margin: 12px 14px; font-size: 13px; color: #C8C6BF; }
+.mc-term-body { min-height: 48px; }
+
+/* Small top-centre camera preview with the original green face box. */
+.mc-face-preview {
+  position: fixed;
+  top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 144px;
+  height: 108px;
+  pointer-events: none;
+  z-index: 70;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b0f14;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.28);
+  opacity: 0.92;
+}
+.mc-face-preview-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  background: #0b0f14;
+}
+.mc-face-preview-box {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.mc-hand-cursor.is-palm-scroll::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: -18px;
+  width: 8px;
+  height: 28px;
+  background:
+    linear-gradient(#fff, #fff) 3px 0 / 2px 28px no-repeat,
+    linear-gradient(#fff, #fff) 0 0 / 8px 2px no-repeat,
+    linear-gradient(#fff, #fff) 0 26px / 8px 2px no-repeat,
+    polygon(evenodd, 0 0, 8px 0, 4px 7px),
+    #0000;
+  /* Low-poly vertical double-arrow (up + down) beside the frozen cursor. */
+  clip-path: polygon(4px 0, 8px 8px, 5px 8px, 5px 20px, 8px 20px, 4px 28px, 0 20px, 3px 20px, 3px 8px, 0 8px);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+  pointer-events: none;
+}
+.mc-hand-cursor.is-palm-scroll::before {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: 0;
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+/* Fist-grab on a tile: a short lift shadow while the hand carries it. */
+.mc-edit-item.is-hand-lift {
+  box-shadow: 0 14px 28px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
+  transform: translateY(-3px);
+  z-index: 6;
+  transition: box-shadow 120ms ease, transform 120ms ease;
+}
+
+
+
+.mc-hand-confirm {
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 86;
+  pointer-events: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(11, 15, 20, 0.88);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.25);
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+.mc-hand-confirm[hidden] { display: none; }
+
+/* ---- Phone-simple shell (iOS / Android app, or <600px): canvas only, one
+   bottom-centre push-to-talk mic, a small route badge top centre. ---- */
+.mc-phone-simple .mc-bar,
+.mc-phone-simple .mc-ai,
+.mc-phone-simple .mc-ai-scrim,
+.mc-phone-simple .mc-dock,
+.mc-phone-simple .mc-swarm,
+.mc-phone-simple .mc-hand-cluster,
+.mc-phone-simple .mc-tools-chip,
+.mc-phone-simple .mc-edit-toggle,
+.mc-phone-simple .mc-edit-reset,
+.mc-phone-simple .mc-register-chip,
+.mc-phone-simple .mc-reg-chip,
+.mc-phone-simple .mc-facing-banner,
+.mc-phone-simple .mc-mini-terminal,
+.mc-phone-simple .mc-swarm-dock,
+.mc-phone-simple .mc-phone-menu,
+.mc-phone-simple .mc-menu-btn,
+.mc-phone-simple .mc-tool-palette,
+.mc-phone-simple .mc-arrange,
+.mc-phone-simple .mc-engine-bar,
+.mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
+/* Bottom chrome geometry: two 44 px pill rows each side of the 84 px mic,
+   the mic centred on them, so the whole block is 112 px + the home-indicator
+   inset tall. Each side keeps 10 px clear of the mic. */
+.mc-phone-simple {
+  --mc-phone-pill-h: 44px; --mc-phone-row1: 16px; --mc-phone-row2: 68px; --mc-phone-mic-bottom: 22px;
+  /* 112 px of chrome + 8 px clear; the route badge ends 40 px down. */
+  --mc-phone-chrome-h: 120px; --mc-phone-top: 48px;
+  --mc-phone-side-w: calc(50vw - 42px - 10px - 16px);
+}
+/* Phone boards are ONE column whatever was stored: nested rows, grids and
+   splits stack their children too (their inline styles set the desktop
+   columns, hence !important). */
+.mc-phone-simple .mc-frame .mc-surface a2ui-basic-column { grid-template-columns: minmax(0, 1fr) !important; }
+.mc-phone-simple .mc-frame .mc-surface a2ui-basic-column > * { min-width: 0; }
+.mc-phone-simple mc-row { flex-direction: column !important; flex-wrap: nowrap !important; align-items: stretch !important; }
+.mc-phone-simple mc-row > * { flex: 0 0 auto !important; width: 100% !important; min-width: 0 !important; }
+.mc-phone-simple mc-grid { grid-template-columns: minmax(0, 1fr) !important; }
+.mc-phone-simple mc-split > div { flex-direction: column !important; }
+.mc-phone-simple mc-card { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+/* The board area: below the status bar and the route badge, above the bottom
+   chrome. Both bands (and the status bar itself) are plain canvas colour, and
+   the board is clipped at them — it scrolls between, never under the mic,
+   the pills or the badge. */
+.mc-phone-simple .mc-viewport {
+  inset: auto; padding: 0;
+  top: calc(var(--mc-phone-top) + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  bottom: calc(var(--mc-phone-chrome-h) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+}
+.mc-phone-simple .mc-frame.dim { opacity: 1; }
+.mc-phone-simple .mc-talk-control {
+  position: fixed; left: 50%; right: auto; top: auto; transform: translateX(-50%);
+  bottom: calc(var(--mc-phone-mic-bottom) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 10px; z-index: 60; width: auto;
+}
+.mc-phone-simple .mc-fab-mic {
+  position: static; width: 84px; height: 84px; min-width: 84px; min-height: 84px; padding: 0;
+  border-radius: 50%; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none;
+  box-shadow: 0 10px 26px rgb(0 0 0 / 0.22);
+}
+.mc-phone-simple .mc-fab-mic svg { width: 36px; height: 36px; }
+.mc-phone-simple .mc-fab-mic .mc-fab-mic-label { display: none; }
+.mc-phone-simple .mc-talk-caption { max-width: calc(100vw - 48px); text-align: center; }
+.mc-phone-simple.is-edit-locked .mc-fab-mic { opacity: 0.45; pointer-events: none; }
+.mc-route-badge {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  padding: 5px 12px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
+  font-size: 15px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap; pointer-events: none;
+}
+/* The open review carries its own engine + SIM chips; the badge would sit on its title. */
+.mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-route-badge { display: none; }
+.mc-look-hint {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); margin: 0;
+  bottom: calc(124px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  padding: 10px 18px; border-radius: 999px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+  font-size: 16px; font-weight: 650; white-space: nowrap; pointer-events: none;
+}
+.mc-phone-simple.is-edit-locked .mc-viewport { cursor: default; }
+.mc-phone-simple.is-edit-locked .mc-frame-body { pointer-events: none; }
+.mc-phone-simple .is-phone-selected { outline: 3px solid var(--action); outline-offset: 3px; border-radius: 14px; }
+/* Phones: touch edits are always on, but the move/resize grips (and the
+   dashed outline) show only on the tile she selected — not as dots over
+   every lamp and speaker. */
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) > :is(.mc-edit-move, .mc-edit-resize) { display: none; }
+.mc-phone-simple .mc-edit-canvas.mc-editing .mc-edit-item:not(.is-phone-selected):not(:has(> .is-phone-selected)) { outline: none; }
+
+/* ---- Calmer screen: engine bar, overlay AI panel, corner face chip ------- */
+/* Both engines, always visible, bottom-centre. Nano is green (on this device),
+   Gemini is blue (cloud); the dot, ring and tint follow the engine, and the
+   state overrides (queued amber, failed red, unavailable grey) win over both. */
+.mc-engine-bar {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 48;
+  display: flex; align-items: center; gap: 10px; box-sizing: border-box;
+  max-width: calc(100vw - 32px); padding: 8px 14px 8px 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 22px;
+  box-shadow: 0 10px 28px rgb(43 43 43 / 0.10), 0 1px 0 rgb(255 255 255 / 0.8) inset;
+  font-size: 14px; color: var(--text);
+}
+.mc-engine-card {
+  --eng: var(--accent);
+  flex: 1 1 224px; min-width: 0; width: 232px; min-height: 52px; box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  padding: 7px 14px 7px 12px; border-radius: 15px; text-align: left; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); font: inherit;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.mc-engine-card[data-engine="gemini"] { --eng: var(--accent-2); }
+.mc-engine-card:hover { border-color: var(--eng); }
+.mc-engine-card:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.mc-engine-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mc-engine-name { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
+.mc-engine-where { font-size: 15px; color: var(--text-dim); white-space: nowrap; }
+.mc-engine-where::before { content: "\00b7\00a0"; }
+.mc-engine-dot {
+  flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; box-sizing: border-box;
+  border: 2px solid var(--eng); background: transparent; opacity: 0.85;
+}
+.mc-engine-body { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 15px; line-height: 1.25; }
+.mc-engine-state { flex: 0 0 auto; font-weight: 650; color: var(--text-dim); }
+.mc-engine-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.mc-engine-line:not([hidden])::before { content: "\00b7\00a0"; }
+/* Two lines per card: who and where, then the state. The detail line echoed
+   her own words; it stays in the DOM (title, AI monitor) but is not shown. */
+.mc-engine-line, .mc-engine-line[hidden] { display: none; }
+
+.mc-engine-card[data-state="working"] { border-color: var(--eng); background: color-mix(in srgb, var(--eng) 9%, var(--panel)); }
+.mc-engine-card[data-state="working"] .mc-engine-dot,
+.mc-engine-card[data-state="done"] .mc-engine-dot { background: var(--eng); opacity: 1; }
+.mc-engine-card[data-state="working"] .mc-engine-state,
+.mc-engine-card[data-state="done"] .mc-engine-state { color: color-mix(in srgb, var(--eng) 70%, #000); }
+.mc-engine-card[data-state="working"] .mc-engine-line { color: var(--text); }
+.mc-engine-card[data-state="queued"] .mc-engine-dot { background: var(--action); border-color: var(--action); opacity: 1; }
+.mc-engine-card[data-state="queued"] .mc-engine-state { color: var(--action-fill); }
+.mc-engine-card[data-state="failed"] { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.mc-engine-card[data-state="failed"] .mc-engine-dot { background: var(--danger); border-color: var(--danger); opacity: 1; }
+.mc-engine-card[data-state="failed"] .mc-engine-state { color: var(--danger); }
+.mc-engine-card[data-state="failed"] .mc-engine-line { color: var(--text); }
+.mc-engine-card[data-state="unavailable"] { opacity: 0.7; }
+.mc-engine-card[data-state="unavailable"] .mc-engine-dot { border-style: dashed; border-color: var(--text-dim); opacity: 1; }
+.mc-engine-card[data-state="offline"] { opacity: 0.75; }
+.mc-engine-card[data-state="offline"] .mc-engine-dot { border-style: dashed; border-color: var(--text-dim); opacity: 1; }
+.mc-engine-card[data-state="working"] .mc-engine-dot { animation: mc-engine-pulse 1.5s ease-out infinite; }
+@keyframes mc-engine-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--eng) 55%, transparent); }
+  80%, 100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--eng) 0%, transparent); }
+}
+
+/* Handoff: the arrow between the cards wakes up for 1.2 s and points the way. */
+.mc-engine-link { flex: 0 0 auto; display: flex; align-items: center; width: 40px; color: var(--border); }
+.mc-engine-link-line { flex: 1 1 auto; height: 2px; border-radius: 2px; background: currentColor; background-size: 220% 100%; }
+.mc-engine-link-head { font-size: 10px; line-height: 1; margin-left: -3px; }
+.mc-engine-bar[data-handoff$="-nano"] .mc-engine-link { transform: scaleX(-1); }
+.mc-engine-bar.is-handoff .mc-engine-link { color: var(--accent-2); }
+.mc-engine-bar[data-handoff="gemini-nano"].is-handoff .mc-engine-link { color: var(--accent); }
+.mc-engine-bar.is-handoff .mc-engine-link-line {
+  background-image: linear-gradient(90deg, currentColor 0%, currentColor 40%, color-mix(in srgb, currentColor 25%, transparent) 60%, currentColor 100%);
+  animation: mc-engine-flow 1.2s linear 1;
+}
+.mc-engine-bar.is-handoff .mc-engine-link-head { animation: mc-engine-pop 1.2s ease-out 1; }
+@keyframes mc-engine-flow { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes mc-engine-pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.7); } }
+
+.mc-engine-bytes { flex: 0 0 auto; padding-left: 12px; border-left: 1px solid var(--border); font-size: 15px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-engine-agents { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-dim); }
+.mc-engine-agents, .mc-engine-agents[hidden] { display: none; }
+@media (max-width: 1240px) { .mc-engine-agents { display: none; } .mc-engine-card { width: 200px; } }
+/* 601-1240px: centred, the bar would run under the zoom controls; start it
+   right of them instead (zoom HUD is 16px + ~244px wide). */
+@media (min-width: 601px) and (max-width: 1240px) { .mc-engine-bar { left: 276px; transform: none; max-width: calc(100vw - 292px); } }
+/* Wide screens: clear of the zoom HUD (left) and the camera preview (right);
+   below 1241px the narrower cards above keep it from squeezing. */
+@media (min-width: 1241px) { .mc-engine-bar { max-width: max(680px, min(760px, calc(100vw - 600px))); } }
+@media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
+@media (max-width: 600px) { .mc-engine-bar { display: none; } }
+/* A short window (a 656 px laptop window): one line per engine card and a
+   lower bar, so a room board's chip row fits above it (bottomInset measures
+   the bar's real top). Cards stay 44 px targets. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-engine-bar { bottom: 8px; padding: 4px 12px 4px 4px; }
+  .mc-engine-card { min-height: 44px; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 4px 12px 4px 10px; }
+  .mc-engine-where { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-engine-card, .mc-engine-card[data-state="working"] .mc-engine-dot,
+  .mc-engine-bar.is-handoff .mc-engine-link-line, .mc-engine-bar.is-handoff .mc-engine-link-head { animation: none; transition: none; }
+}
+/* The bar replaces the swarm pill on desktop; the phones strip sits directly
+   above it */
+.mc-canvas:has(.mc-engine-bar) .mc-swarm-pill { display: none; }
+.mc-canvas:has(.mc-engine-bar) .mc-arrange { bottom: 92px; }
+/* The AI panel overlays the boards while a model works. Keep its foot above
+   the engine bar and the corner face chip. */
+@media (min-width: 601px) {
+  .mc-canvas:has(.mc-engine-bar) .mc-ai { bottom: 148px; }
+}
+
+/* Face preview (large, so you can see your hands) + a SMALL quiet "Facing" pill above it. */
+.mc-canvas .mc-face-preview {
+  top: auto; left: auto; transform: none;
+  right: 16px; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  width: 288px; height: 216px; border-radius: 12px; opacity: 1; z-index: 70;
+  border: 1px solid rgb(0 0 0 / 0.12); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.mc-canvas .mc-facing-banner {
+  top: auto; left: auto; transform: none;
+  right: 16px; bottom: calc(16px + 216px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  max-width: 220px; padding: 5px 6px 5px 12px; gap: 4px; z-index: 71;
+  font-size: 15px; font-weight: 600; line-height: 1.2;
+}
+.mc-canvas .mc-facing-banner-hide { font-size: 15px; min-height: 44px; min-width: 44px; padding: 4px 8px; }
+.mc-canvas .mc-face-preview[hidden] { display: none; }
+/* The camera preview owns the bottom-right corner while it shows: the hand
+   cluster then lives in the space ABOVE it (and its Facing pill) instead of
+   being centred on the whole screen, so its last button is never behind the
+   preview. One column with tighter gaps; only a window too short for that
+   wraps a second column (to the right, reading on in order) — buttons never
+   overlap and never shrink. Its box is FIXED (not var(--mc-bar-h)): the top
+   bar growing for Tools or a status line must never move a button under a
+   pointing palm — the open Tools bar (z 51) may pass over it instead. */
+.mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
+  top: 76px;
+  bottom: calc(16px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  transform: none;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-content: flex-end;
+  gap: 12px;
+  column-gap: 16px;
+  max-width: none;
+}
+.mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster > * { width: 168px; }
+/* A short window: a smaller camera preview leaves the cluster room for one column. */
+@media (max-height: 860px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple) { --mc-cam-h: 144px; }
+  .mc-canvas:not(.mc-phone-simple) .mc-face-preview { width: 192px; height: 144px; }
+  .mc-canvas:not(.mc-phone-simple) .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
+}
+/* A shorter window still (a 656 px laptop window): the six buttons come down
+   to the 44 px touch floor with 6 px gaps, so the column (6 × 44 + 5 × 6 =
+   294 px) still fits between the top bar and the camera preview instead of
+   wrapping Edit into a second column. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 6px; }
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster > *,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-fab-mic,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-read-aloud { min-height: 44px; }
+}
+@media (max-width: 1240px) {
+  .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
+    bottom: calc(96px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+}
+/* Up to 1240px wide the engine bar can reach the corner: lift the chip + pill above it. */
+@media (max-width: 1240px) {
+  .mc-canvas .mc-face-preview { bottom: calc(96px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas .mc-facing-banner { bottom: calc(96px + var(--mc-cam-h, 216px) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+}
+/* The chip + pill own the bottom-right corner: the AI panel's foot stops above them.
+   chip = 16 + 216; pill = chip + 8 + ~38. */
+@media (min-width: 601px) {
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(242px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(290px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+}
+@media (min-width: 601px) and (max-width: 1240px) {
+  .mc-canvas:has(.mc-face-preview) .mc-ai { bottom: calc(322px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+  .mc-canvas:has(.mc-facing-banner:not([hidden])) .mc-ai { bottom: calc(370px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+}
+/* Hands locked while not facing the screen: dimmed cursor + a small hint. */
+.mc-hand-cursor.is-away { opacity: 0.35; filter: grayscale(1); }
+.mc-hand-away-hint {
+  position: fixed; left: 0; top: 0; z-index: 86; pointer-events: none;
+  padding: 6px 12px; border-radius: 999px; background: #0b0f14; color: #ffffff;
+  font: 700 15px/1.2 system-ui, sans-serif; white-space: nowrap;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.3);
+}
+.mc-hand-away-hint[hidden] { display: none; }
+
+/* Plan board header: Check / 3D / DXF. >= 52px so a hand can dwell them. */
+.mc-plan-extras { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.mc-plan-extra { min-height: 52px; min-width: 72px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--border, #E4E0D8); background: var(--panel, #fff); color: var(--text, #2B2B2B); font: 600 18px/1 system-ui, sans-serif; cursor: pointer; }
+.mc-plan-extra[aria-pressed="true"] { background: var(--accent-ink, #4F7356); color: #fff; border-color: var(--accent-ink, #4F7356); }
+.mc-plan-extra-status { flex: 1 1 200px; font: 500 16px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
+
+/* ---- floor plan: HAND EDIT (docs/plan/2026-11-26-plan-hands-design.md) ----
+   Everything here shows only while Hands is on (.mc-gestures-on on the root). */
+/* A board's title is a fist target (tap = focus, hold = move): never under
+   48 px ON SCREEN, also in overview where the world is zoomed out (--mc-z). */
+.mc-gestures-on .mc-frame-title { display: inline-flex; align-items: center; min-height: max(48px, calc(48px / var(--mc-z, 1))); min-width: max(96px, calc(96px / var(--mc-z, 1))); }
+/* Board buttons for hands: only on the focused board while Hands is on. */
+.mc-frame-hand-acts { display: none; margin-left: auto; gap: 10px; }
+.mc-gestures-on .mc-frame.focused .mc-frame-hand-acts { display: inline-flex; }
+.mc-frame-hand-acts .mc-btn { min-height: 56px; min-width: 96px; font-size: 18px; font-weight: 650; }
+.mc-frame-close { border-color: #B5453A; color: #8E2F26; }
+/* Grips a held fist drags: 56 px while Hands is on (44 px for a mouse). */
+.mc-gestures-on .mc-review-resize { width: 56px; height: 56px; }
+.mc-gestures-on .mc-edit-move, .mc-gestures-on .mc-edit-resize { width: 56px; height: 56px; min-width: 56px; min-height: 56px; }
+.mc-gestures-on .mc-term-drag { min-height: 44px; }
+.mc-gestures-on .mc-term-resize { min-width: 56px; min-height: 56px; }
+.mc-gestures-on .mc-m-boardchip { min-height: 48px; }
+/* Hand edit: the plan takes the height the screen has, so it can show at
+   60–80 px per metre; the mouse hint pill gives way to the hand banner. */
+.mc-gestures-on .mc-frame.focused .mc-plan-board.mc-plan-hand-on { height: max(340px, calc(100vh - 465px)) !important; }
+.mc-gestures-on .mc-frame.focused:has(.mc-plan-hands) .mc-frame-body { padding: 0 12px; }
+.mc-gestures-on .mc-plan-hands .mc-plan-extras { margin-top: 8px; }
+.mc-gestures-on .mc-plan-hand-banner:not([hidden]) { max-height: 56px; overflow: hidden; }
+.mc-plan-hand-banner.is-note .mc-plan-hand-text { color: #FFE08A; }
+/* The toolbar's status line takes its own row only when it says something. */
+.mc-gestures-on .mc-plan-hands .mc-plan-extra-status:empty { display: none; }
+.mc-gestures-on .mc-plan-hands .mc-plan-extra-status { flex-basis: 100%; }
+.mc-gestures-on .mc-plan-hands .mc-plan-extras { flex-wrap: wrap; }
+.mc-gestures-on .mc-plan-hand-on .mc-status { display: none; }
+.mc-plan-scale { display: none; }
+.mc-gestures-on .mc-plan-hand-on .mc-plan-scale:not([hidden]) {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px; position: absolute; right: 76px; bottom: 10px; z-index: 6;
+  font: 700 14px/1 system-ui, sans-serif; color: #2B2B2B; pointer-events: none;
+}
+.mc-plan-scale-bar { display: block; height: 8px; box-sizing: border-box; border: 2px solid #2B2B2B; border-top: 0; }
+.mc-plan-hand-note { flex: 1 1 100%; font: 600 15px/1.3 system-ui, sans-serif; color: #FFE08A; }
+.mc-plan-hand-note[hidden] { display: none; }
+.mc-plan-hand-toggle { display: none; }
+.mc-gestures-on .mc-plan-hand-toggle { display: inline-block; }
+.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer, .mc-plan-3d-bar { display: none; }
+/* The 3D view by hand: the 2D drawing chrome steps aside (it does nothing in
+   3D and covered the model); a bar of 3D buttons the palm can highlight. */
+.mc-gestures-on .mc-plan-3d-on :is(.mc-palette, .mc-flyout, .mc-props, .mc-trash, .mc-status) { display: none !important; }
+.mc-gestures-on .mc-plan-3d-on .mc-plan-3d-bar:not([hidden]) {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  position: absolute; left: 12px; right: 140px; top: 12px; z-index: 31; pointer-events: none; justify-content: flex-start;
+}
+/* "3D view." says what the banner already says: the banner keeps the row. */
+.mc-gestures-on .mc-plan-extras:has(.mc-plan-hand-banner[data-kind="3d"]:not([hidden])) .mc-plan-extra-status { display: none; }
+.mc-plan-3d-bar .mc-plan-hand-btn { pointer-events: auto; min-width: 72px; }
+/* Big hit targets for a hand: every palette tool is at least 64 x 56. */
+.mc-gestures-on .mc-plan-board .mc-palette { grid-template-rows: repeat(auto-fill, 56px); gap: 6px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn { min-width: 64px; min-height: 56px; border-radius: 12px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn .mc-ico { font-size: 20px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn .mc-lbl { font-size: 13px; font-weight: 600; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn.active { background: #FBE9B7; border-color: #9A5F1C; color: #2B2B2B; }
+.mc-gestures-on .mc-plan-board .mc-flyout { top: 0; grid-template-columns: repeat(3, 72px); gap: 6px; }
+.mc-gestures-on .mc-plan-board .mc-fsctl .mc-palette-btn { min-width: 56px; min-height: 56px; }
+.mc-gestures-on .mc-plan-board .mc-props .mc-props-step,
+.mc-gestures-on .mc-plan-board .mc-props .mc-props-actions button { min-width: 56px; min-height: 56px; font-size: 15px; }
+.mc-gestures-on .mc-plan-extra { min-height: 56px; }
+
+/* The mode banner: what the hand will do, and the live size in large type.
+   It lives in the plan's toolbar row, beside Check / 3D / DXF / Hand edit. */
+.mc-gestures-on .mc-plan-hand-banner:not([hidden]) {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 14px; flex: 1 1 300px; min-width: 0; min-height: 56px; box-sizing: border-box;
+  padding: 4px 14px; border-radius: 14px; background: rgb(43 43 43 / 0.92); color: #fff;
+  font: 600 16px/1.3 system-ui, sans-serif; pointer-events: none;
+}
+.mc-gestures-on .mc-plan-hand-banner.is-floating:not([hidden]) { position: absolute; top: 8px; left: 180px; right: 136px; z-index: 29; }
+.mc-plan-hand-banner.is-live { background: rgb(79 115 86 / 0.96); }
+.mc-plan-hand-text { flex: 1 1 220px; min-width: 0; font-size: 15px; line-height: 1.25; }
+.mc-plan-hand-readout { font: 800 26px/1.1 system-ui, sans-serif; color: #FFC83D; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-plan-hand-readout[hidden] { display: none; }
+
+/* The action bar for the selected element: real buttons, 56 px tall. */
+.mc-gestures-on .mc-plan-hand-on .mc-plan-hand-bar:not([hidden]) {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  position: absolute; left: 180px; right: 72px; bottom: 36px; z-index: 31;
+}
+.mc-plan-hand-btn {
+  min-width: 88px; min-height: 56px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+  border: 2px solid var(--border, #E4E0D8); background: var(--panel, #fff); color: var(--text, #2B2B2B);
+  font: 700 17px/1 system-ui, sans-serif; box-shadow: 0 2px 8px rgb(0 0 0 / 0.14);
+}
+.mc-plan-hand-btn:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 2px; }
+.mc-plan-remove { border-color: #B5453A; color: #8E2F26; }
+.mc-plan-size { display: flex; align-items: center; gap: 6px; padding: 4px; border-radius: 14px; background: rgb(255 255 255 / 0.94); border: 2px solid var(--border, #E4E0D8); }
+.mc-plan-size-value { min-width: 116px; text-align: center; font: 700 17px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; color: var(--text, #2B2B2B); }
+
+/* Element handles for the palm highlight: they never take the hit themselves
+   (pointer-events: none), so a mouse still clicks the drawing underneath. */
+.mc-gestures-on .mc-plan-hand-on .mc-plan-hot-layer { display: block; position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.mc-plan-hot {
+  position: absolute; box-sizing: border-box; padding: 0; margin: 0; pointer-events: none; background: transparent;
+  border: 2px solid transparent; border-radius: 50%; font-size: 0; color: transparent;
+}
+/* What you see is a small dot; the handle itself stays 32–60 px for the palm. */
+.mc-plan-hot::after { content: ''; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #F2C14E; border: 1.5px solid #9A5F1C; box-sizing: border-box; }
+.mc-plan-hot.hand-hover { border-style: solid; border-color: #E0A800; background: rgb(242 193 78 / 0.18); }
+@media (max-width: 600px) {
+  .mc-gestures-on .mc-plan-hand-banner:not([hidden]) { font-size: 14px; }
+  .mc-gestures-on .mc-plan-hand-on .mc-plan-hand-bar:not([hidden]) { left: 84px; right: 8px; }
+  .mc-plan-hand-readout { font-size: 20px; }
+}
+
+
+/* The AI monitor is a second-display tool: never offered on a phone. */
+.mc-phone [data-cmd="monitor"] { display: none; }
+
+/* Connected-device row for "connect devices": sits just above the arrangement strip. */
+.mc-paired-row { bottom: 60px; }
+.mc-canvas:has(.mc-engine-bar) .mc-paired-row { bottom: 140px; }
+.mc-paired-chip { padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); }
+.mc-paired-check { color: #1a7f37; font-weight: 700; }
+.mc-paired-wait { color: var(--text-dim, #777); }
+.mc-phone-simple .mc-paired-row { display: none !important; }
+/* Docked (past pairing, canvasApp dockPairedRow): a section of the engine
+   bar, in the bottom chrome row — no height of its own, never over a board.
+   Each phone's sub-state is a second, quieter line (ellipsis; the full text
+   is the row's title). Disconnect stays a full 44 px target. */
+.mc-engine-bar .mc-paired-row.is-docked {
+  position: static; transform: none; left: auto; bottom: auto; z-index: auto;
+  flex: 0 1 auto; min-width: 0; max-width: 340px;
+  display: grid; grid-template-columns: auto minmax(0, max-content) auto max-content; grid-auto-flow: row;
+  align-items: center; column-gap: 6px; row-gap: 0;
+  padding: 0 0 0 12px; border: 0; border-left: 1px solid var(--border); border-radius: 0;
+  background: transparent; box-shadow: none; font-size: 14px; line-height: 1.25;
+}
+.mc-engine-bar .mc-paired-row.is-docked[hidden] { display: none; }
+.mc-paired-row.is-docked .mc-paired-count { white-space: nowrap; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mc-paired-row.is-docked .mc-chip { justify-self: start; }
+/* In the bar "✓ 2 phones" is enough: the cards beside it keep their room. */
+.mc-paired-row.is-docked .mc-paired-connected { display: none; }
+.mc-paired-row.is-docked .mc-paired-phone {
+  grid-row: 2; grid-column: 1 / 4; width: 0; min-width: 100%; /* never widens the row */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-dim);
+}
+.mc-paired-row.is-docked .mc-paired-phone ~ .mc-paired-phone { display: none; }
+.mc-paired-row.is-docked .mc-paired-disconnect { grid-column: 4; grid-row: 1 / 3; min-height: 44px; padding: 0 14px; font-size: 14px; }
+/* Room for it: the bar may grow up to the corners (zoom HUD left, camera
+   preview right), and the "· on this device / cloud" captions give way. */
+@media (min-width: 1241px) {
+  /* Centred by margins, not left 50 % + translate: a left: 50 % box can only
+     shrink-to-fit into half the screen, which clipped the phones section. */
+  .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) {
+    left: 0; right: 0; margin-inline: auto; width: fit-content; transform: none;
+    max-width: max(760px, calc(100vw - 640px));
+  }
+}
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-where { display: none; }
+/* The cards never squeeze their state ("Nano  Working", "Gemini  Unavailable"):
+   they keep their own width and the phones section gives way (ellipsis). */
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-card { flex: 0 0 auto; width: auto; min-width: max-content; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-state { white-space: nowrap; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-link { width: 24px; }
+
+/* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
+   It is its own flex row under .mc-frame-body (which shrinks to make room),
+   so it never covers board content. ≥52px targets for dwell / touch. */
+.mc-next { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 20px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
+  border-radius: 0 0 18px 18px; }
+/* A board taller than the space above the engine bar would hide its own chip
+   row under the bar: the row is lifted (canvasApp keepChipsVisible) to sit
+   just above the bar, over the board's lower edge, still inside the board. */
+.mc-next.is-lifted { position: relative; z-index: 3; border: 1px solid var(--border); border-radius: 18px;
+  box-shadow: 0 8px 22px rgb(43 43 43 / 0.14); }
+.mc-next-src { font-size: 15px; letter-spacing: 0.02em; color: var(--text-dim); margin-right: 4px; white-space: nowrap; }
+.mc-next[data-source=nano] .mc-next-src { color: var(--accent-ink); }
+.mc-next-chip.mc-btn { min-height: 56px; padding: 0 20px; border-radius: 999px; background: var(--panel);
+  border-color: var(--border); font-size: 18px; }
+.mc-next-chip.mc-btn:hover { border-color: var(--accent); }
+.mc-next-chip.mc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Join laptop (phone shell): empty-state prompt, Laptop pill, join panel.
+   The phone shell hides the tools menu, so the pill is the persistent entry. */
+.mc-join-prompt, .mc-join-pill, .mc-join-panel { display: none; }
+.mc-phone-simple .mc-join-prompt:not([hidden]) {
+  display: flex; align-items: center; gap: 12px; position: fixed; z-index: 61;
+  left: 16px; right: 16px; top: calc(48px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  padding: 12px 14px; border-radius: 16px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+}
+.mc-join-prompt-text { margin: 0; flex: 1; font-size: 15px; font-weight: 600; }
+.mc-phone-simple .mc-join-pill:not([hidden]) {
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(var(--mc-phone-row1) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650; white-space: nowrap;
+  max-width: var(--mc-phone-side-w); overflow: hidden; text-overflow: ellipsis;
+}
+.mc-phone-simple .mc-join-panel:not([hidden]) {
+  display: flex; flex-direction: column; gap: 10px; position: fixed; z-index: 70;
+  left: 16px; right: 16px; bottom: calc(124px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  padding: 16px; border-radius: 18px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
+}
+.mc-join-status { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; }
+.mc-join-code summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--accent-2); font-weight: 600; }
+.mc-join-code-form { display: flex; gap: 8px; }
+.mc-join-code-in {
+  flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; font-size: 18px; letter-spacing: 0.08em;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text);
+}
+.mc-join-close { align-self: flex-end; min-height: 44px; }
+.mc-join-dismiss {
+  min-width: 44px; min-height: 44px; margin: -8px -8px -8px 0; border: 0; background: transparent;
+  color: var(--text-dim); font-size: 22px; line-height: 1; cursor: pointer;
+}
+
+/* ---- Hands on the phone (phoneHands.ts): a Hands pill bottom-right (the
+   Join laptop pill sits bottom-left, the mic bottom-centre), a small
+   "Camera" indicator just above it while the front camera is live, and the
+   glass-hand overlay only while hands are on. Every drawn layer stays
+   pointer-events: none — touch always works. */
+.mc-phone-simple:not(.is-phone-hands) .hand-overlay { display: none !important; }
+.mc-phone-hands-pill, .mc-cam-on { display: none; }
+.mc-phone-simple .mc-phone-hands-pill {
+  display: inline-flex; align-items: center; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(var(--mc-phone-row1) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650; justify-content: center;
+  /* Never reaches the centre mic. */
+  max-width: var(--mc-phone-side-w); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mc-phone-simple .mc-phone-hands-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
+/* iPhone: the Track pill (hand SENSING for the gimbal / pointing; never acts
+   on the UI) sits right of the mic, in the row above the Hands pill — side by
+   side they reached the mic on a 390–440 px phone. */
+.mc-phone-track-pill { display: none; }
+.mc-phone-simple .mc-phone-track-pill {
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(var(--mc-phone-row2) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px; font-weight: 650;
+  max-width: var(--mc-phone-side-w); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mc-phone-simple .mc-phone-track-pill[aria-pressed="true"] { background: var(--accent-ink); color: #fff; border-color: var(--accent-ink); }
+.mc-paired-sub { font-size: 15px; color: var(--text-dim, inherit); }
+/* The iPhone's Track pill owns that row: the indicator sits just above it
+   (the board's bottom reserve follows it while it shows — canvasApp.ts). */
+.mc-phone-simple:has(.mc-phone-track-pill) .mc-cam-on:not([hidden]) { bottom: calc(var(--mc-phone-row2) + var(--mc-phone-pill-h) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
+/* Facing gate has the hands locked ("Face phone"). */
+.mc-phone-simple .mc-phone-hands-pill.is-gated { background: #8a2c0d; border-color: #8a2c0d; }
+.mc-phone-simple .mc-cam-on:not([hidden]) {
+  /* Just above the Hands pill: the route badge owns the top centre and is
+     wide enough on a phone to collide with a top-right chip. */
+  display: inline-flex; align-items: center; gap: 6px; position: fixed; z-index: 61; right: 16px;
+  bottom: calc(var(--mc-phone-row2) + 9px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  padding: 4px 10px; border-radius: 999px; background: rgba(11, 15, 20, 0.78); color: #fff;
+  font-size: 15px; font-weight: 650; pointer-events: none;
+}
+.mc-cam-on-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; }
+/* The phone's own "Facing phone / Not facing" pill (phoneHands.ts): the
+   laptop Facing pill's look, in the LEFT column just above Read aloud, clear
+   of the mic and the home indicator. Only while Hands is on and the camera
+   is live — and then the bottom chrome band grows by one short row (the
+   board area ends above the pill and the Camera dot; it never covers the
+   board). */
+.mc-phone-simple:has(.mc-phone-facing:not([hidden])) { --mc-phone-chrome-h: 160px; }
+.mc-phone-facing { display: none; }
+.mc-phone-simple .mc-phone-facing:not([hidden]) {
+  display: inline-flex; align-items: center; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(var(--mc-phone-row2) + var(--mc-phone-pill-h) + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  /* Up to the Camera dot on the right (≈ 110 px + gaps): the longest
+     label, "Can't see you — hands on", fits on a 390 px phone. */
+  max-width: calc(100vw - 32px - 128px); box-sizing: border-box; padding: 4px 10px; border-radius: 999px;
+  background: rgba(11, 15, 20, 0.82); color: #fff; font-size: 15px; font-weight: 650;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.mc-phone-simple .mc-phone-facing.is-away { background: rgba(80, 60, 40, 0.88); }
+.mc-menu-open .mc-phone-facing { display: none !important; }
+
+/* ---- Button gestures (gestureControl.ts): amber 24px hand badges centred
+   — the hand at the bound button's TOP-RIGHT corner, its L / R / L+R tag
+   at the TOP-LEFT corner (neither covers the label) — only while Hands is on; the bound button fills while a
+   2 s hold runs; a small HUD names what the held shape will press. */
+.mc-gesture-layer { position: fixed; inset: 0; pointer-events: none; z-index: 80; }
+.mc-gesture-layer[hidden], .mc-gesture-badge[hidden], .mc-gesture-side[hidden], .mc-gesture-hud[hidden] { display: none; }
+.mc-gesture-badge { position: absolute; left: 0; top: 0; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%;
+  display: grid; place-items: center; background: #F2C14E; border: 1.5px solid #9A5F1C; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  animation: mc-badge-in 400ms ease-out both; }
+.mc-gesture-badge .mc-gi { display: block; width: 18px; height: 18px; }
+/* Which hand (L, R, L+R): a small dark tab on the button's top-left corner,
+   its own element in the layer (placed by gestureControl). */
+.mc-gesture-side { position: absolute; left: 0; top: 0; min-width: 16px; height: 16px; box-sizing: border-box; padding: 0 3px;
+  border-radius: 8px; background: #2B2B2B; color: #F2C14E; font: 700 11px/16px system-ui, sans-serif; text-align: center; white-space: nowrap; }
+.mc-gi-move { transform-box: fill-box; transform-origin: 50% 100%; }
+/* The mixed two-hand gesture (L thumbs up + R thumbs down): both hands in a pill. */
+.mc-gesture-badge.is-pair { width: 40px; border-radius: 12px; display: flex; justify-content: center; gap: 0; }
+.mc-gesture-badge.is-pair .mc-gi { width: 17px; height: 17px; }
+/* Holding its gesture: the badge darkens (the bound button fills, below). */
+.mc-gesture-badge.is-holding { background: #9A5F1C; box-shadow: 0 0 0 3px #F2C14E; }
+.mc-gesture-side.is-holding { background: #9A5F1C; color: #FFFFFF; }
+/* Appears once (scale 0.9 → 1 + fade, ≤ 600 ms), then stays still. The
+   placement transform is inline, so the entrance uses the separate scale. */
+@keyframes mc-badge-in { from { opacity: 0; scale: 0.9; } to { opacity: 1; scale: 1; } }
+@keyframes mc-badge-fade { from { opacity: 0; } to { opacity: 1; } }
+/* The bound button while its gesture is held: a yellow fill grows left to
+   right with the 2 s hold, inside a ring that tightens toward done. */
+.mc-gesture-target { outline: 3px solid #E0A800; outline-offset: calc(6px - 4px * var(--mc-gesture-progress, 0));
+  background-image: linear-gradient(90deg, rgb(255 200 61 / 0.6) calc(var(--mc-gesture-progress, 0) * 100%), transparent 0); }
+.mc-gesture-pressed { scale: 0.95; filter: brightness(0.9); transition: scale 80ms ease, filter 80ms ease; }
+.mc-gesture-hud { position: absolute; left: 50%; bottom: 172px; translate: -50% 0; display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px 8px 10px; border-radius: 999px; background: #2B2B2B; color: #FFFFFF; font: 600 17px/1.2 system-ui, sans-serif;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25); max-width: calc(100vw - 32px); }
+.mc-gesture-hud-icon .mc-gi { width: 28px; height: 28px; display: block; }
+.mc-gesture-hud-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-gesture-hud-bar { width: 64px; height: 6px; border-radius: 3px; background: rgb(255 255 255 / 0.2); overflow: hidden; flex: none; }
+.mc-gesture-hud-bar > span { display: block; height: 100%; width: 0; background: #FFC83D; }
+.mc-gesture-hud.is-none .mc-gesture-hud-bar { display: none; }
+@media (max-width: 600px) { .mc-gesture-hud { bottom: auto; top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))); font-size: 15px; } }
+@media (prefers-reduced-motion: reduce) {
+  .mc-gesture-badge { animation: mc-badge-fade 400ms ease-out both; }
+  .mc-gesture-pressed { scale: none; transition: none; }
+}
+/* "AI monitor" is the one named AI entry on the laptop bar: the in-app
+   drawer opens by itself while a model works, or from the engine bar. The
+   phone layout keeps its primary AI button (it lives in .mc-phone-actions). */
+.mc-bar-btns > [data-cmd=ai] { display: none; }
+
+/* Open-palm highlight (palmHighlight.ts): a thick yellow ring on the button
+   the palm is on, its name large above it, and, for a crowded group, a
+   spaced magnified row the palm moves across. Never takes pointer input. */
+.mc-highlight-layer { position: fixed; inset: 0; pointer-events: none; z-index: 79; }
+.mc-highlight-layer[hidden], .mc-highlight-row[hidden] { display: none; }
+.mc-highlight-ring { position: absolute; left: 0; top: 0; border: 4px solid #E0A800; border-radius: 16px;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.85), 0 0 18px rgb(224 168 0 / 0.55); transition: transform 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+/* The hovered button's name: a compact glass bubble placed BESIDE the button
+   (palmHighlight.placeBubble) so it never covers it or its neighbours. One
+   line, ≤ 220 px, the name ellipsized; the press hint trails it. */
+.mc-highlight-label, .mc-hand-tooltip {
+  --mc-glass-bg: rgb(255 255 255 / 0.55);
+  background: var(--mc-glass-bg); color: #2B2B2B;
+  -webkit-backdrop-filter: blur(12px) saturate(1.4); backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid rgb(43 43 43 / 0.14); border-radius: 12px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.12), 0 1px 2px rgb(0 0 0 / 0.06);
+}
+.mc-highlight-label { position: absolute; left: 0; top: 0; display: flex; flex-direction: row; align-items: center; gap: 8px;
+  box-sizing: border-box; max-width: 220px; padding: 6px 12px; font-size: 15px; white-space: nowrap; }
+.mc-highlight-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 650 15px/1.25 system-ui, sans-serif; }
+.mc-highlight-how { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; font: 600 15px/1.25 system-ui, sans-serif; color: #7A5200; }
+.mc-highlight-how .mc-gi { width: 16px; height: 16px; }
+@media (prefers-reduced-transparency: reduce) {
+  .mc-highlight-label, .mc-hand-tooltip { --mc-glass-bg: #FFFFFF; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+.mc-highlight-row::before { content: ""; position: absolute; left: var(--row-left); top: var(--row-top); width: var(--row-w); height: var(--row-h);
+  border-radius: 24px; background: rgb(43 43 43 / 0.88); box-shadow: 0 8px 28px rgb(0 0 0 / 0.3); }
+.mc-highlight-slot { position: absolute; left: 0; top: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 10px;
+  border-radius: 16px; background: #FFFFFF; color: #2B2B2B; font: 700 20px/1.15 system-ui, sans-serif; overflow: hidden; }
+.mc-highlight-slot.is-current { background: #FFC83D; }
+@media (prefers-reduced-motion: reduce) { .mc-highlight-ring { transition: none; } }
+
+/* Small always-visible Undo in the hand cluster (its left thumbs-down
+   gesture badge is then always on screen). Same data-cmd as the bar's Undo. */
+.mc-cluster-undo { display: flex; align-items: center; justify-content: center; min-height: 44px; min-width: 120px; padding: 0 18px;
+  border-radius: 999px; background: var(--panel); border: 2px solid var(--border); color: var(--text); font-size: 16px; font-weight: 600; cursor: pointer; }
+.mc-cluster-undo:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Phone shell: status toast + review sheet ------------------------------
+   Insets: Capacitor's Android SystemBars plugin sets --safe-area-inset-* on
+   <html> (Android WebViews can report the env() top inset as 0 under the
+   status bar); iOS and browsers fall back to env(). */
+.mc-phone-say { display: none; }
+.mc-phone-simple .mc-phone-say:not([hidden]) {
+  display: block; position: fixed; z-index: 62; margin: 0; box-sizing: border-box;
+  /* Just above the mic — never over the board's title. */
+  left: 16px; right: 16px; bottom: calc(124px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  padding: 12px 16px; border-radius: 16px; background: rgb(43 43 43 / 0.94); color: #FFFFFF;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.2); font-size: 17px; font-weight: 600; line-height: 1.4;
+  text-align: center; overflow-wrap: anywhere; pointer-events: none;
+  max-height: 46dvh; overflow: hidden;
+}
+/* While the mic's own caption shows (listening / heard), the toast sits above it. */
+.mc-phone-simple:has(.mc-talk-caption:not([hidden])) .mc-phone-say:not([hidden]) {
+  bottom: calc(196px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+/* "Laptop — reconnecting…" is longer than the pill: two short lines. */
+.mc-phone-simple .mc-join-pill.is-reconnecting:not([hidden]) {
+  white-space: normal; text-align: center; font-size: 13px; line-height: 1.15; padding: 4px 12px; text-overflow: clip;
+}
+/* The open review says its own lines; the toast would sit on its title. */
+.mc-phone-simple:has(.mc-review-dialog:not([hidden])) .mc-phone-say { display: none !important; }
+/* The review sheet on a phone: below the status bar, and its last button
+   ("Something else") clear of the mic and the pills under it. */
+.mc-phone-simple .mc-review-dialog,
+.mc-phone-simple .mc-review-dialog:not(.is-floating) {
+  top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  left: 12px; right: 12px; width: auto; max-width: none;
+  max-height: calc(100dvh - 12px - var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
+    - 116px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+}
+/* Approve and Reject share a row, so the plan keeps its room above them. */
+.mc-phone-simple .mc-review-actions { gap: 10px; }
+.mc-phone-simple .mc-review-approve, .mc-phone-simple .mc-review-reject { min-width: 0; padding: 0 12px; }
+.mc-phone-simple .mc-review-ask-else { min-height: 52px; }
+/* The receipt lines wrap in full — never an ellipsis over what left the phone. */
+.mc-phone-simple .mc-review-why { display: block; overflow: visible; -webkit-line-clamp: none; }
+.mc-phone-simple .mc-review-left { display: block; white-space: normal; overflow-wrap: anywhere; }
+.mc-phone-simple .mc-review-left-what { overflow: visible; text-overflow: clip; }
+.mc-phone-simple .mc-review-left-bytes { white-space: nowrap; }
+
+/* ---- Room dashboards: every tile visible, no scroll inside the board ----
+   The board is as tall as its tiles (canvasApp.ts sets height:auto with the
+   stored height as a floor) and the tiles reflow into as many columns as fit.
+   On a phone that is one column, and the CANVAS moves — never a nested scroll. */
+.mc-frame[data-kind="room"] .mc-frame-body { overflow: visible; flex: 1 0 auto; mask-image: none !important; }
+.mc-frame.focused { z-index: 1; }
+.mc-frame[data-kind="room"] .mc-surface a2ui-basic-column {
+  display: grid !important; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 16px !important; align-items: stretch; }
+/* Wide things (a floor plan, nested layouts, tables) take the whole row. */
+.mc-frame[data-kind="room"] .mc-surface a2ui-basic-column > :is(mc-plan-board, mc-row, mc-grid, mc-card, mc-tabs, mc-split, mc-table-tile, .mc-edit-canvas) { grid-column: 1 / -1; }
+.mc-phone-simple .mc-frame[data-kind="room"] .mc-frame-body { padding: 12px; }
+/* Laptop room board: a slimmer head, body and chip row so a lamp + music
+   board fits above the engine bar at 1550×700 with its chips under the tiles. */
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-head { padding-block: 10px; }
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-body { padding: 16px 20px 12px; }
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding: 8px 20px 10px; }
+/* …but never under 44 px ON SCREEN: at the 0.8 zoom floor that is 55 px. */
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: max(52px, calc(44px / var(--mc-z, 1))); }
+/* A short window: a slimmer chip row (the chips stay ≥ 44 px on screen). */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding-block: 5px; }
+}
+/* AI drawer terminals: newest line on top, so the working cursor sits there too. */
+.mc-term-body { display: flex; flex-direction: column; }
+.mc-term-cursor { order: -1; }
+/* Peace-and-move (gestureScroll.ts): a small "Scrolling" hint by the hand,
+   an outline on what scrolls, a big level readout ("Volume 60 %") over a
+   level control, and "move to scroll" hints on areas that overflow — only
+   while Hands is on. Never takes pointer input. */
+.mc-scroll-layer { position: fixed; inset: 0; pointer-events: none; z-index: 81; }
+.mc-scroll-layer[hidden], .mc-scroll-hint[hidden], .mc-level-readout[hidden], .mc-scroll-badge[hidden] { display: none; }
+.mc-scroll-hint { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 6px; padding: 5px 12px 5px 8px;
+  border-radius: 999px; background: #2B2B2B; color: #FFFFFF; font: 600 15px/1 system-ui, sans-serif; box-shadow: 0 3px 10px rgb(0 0 0 / 0.25); }
+.mc-scroll-hint .mc-gi, .mc-scroll-badge .mc-gi { width: 18px; height: 18px; }
+.mc-scroll-target { outline: 3px dashed #E0A800; outline-offset: -3px; }
+.mc-level-target { outline: 4px solid #E0A800; outline-offset: 3px; }
+.mc-level-readout { position: absolute; left: 0; top: 0; padding: 10px 18px; border-radius: 16px; background: #2B2B2B; color: #FFC83D;
+  font: 700 30px/1.1 system-ui, sans-serif; box-shadow: 0 6px 18px rgb(0 0 0 / 0.3); white-space: nowrap; }
+.mc-level-readout.is-pulse { animation: mc-level-pulse 180ms ease-out; }
+@keyframes mc-level-pulse { 0% { scale: 1.08; } 100% { scale: 1; } }
+.mc-scroll-badge { position: absolute; left: 0; top: 0; translate: -100% 0; display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 4px;
+  border-radius: 999px; background: #FFC83D; color: #2B2B2B; font: 700 12px/1 system-ui, sans-serif; box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .mc-level-readout.is-pulse { animation: none; } }
+
+/* An open menu (More, the phone menu sheet) is never covered by the camera
+   preview or the Facing pill: the bar lifts above them, and they step aside
+   (hidden) while the menu is open. */
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-bar { z-index: 72; }
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-face-preview,
+.mc-canvas:has(.mc-more-menu:not([hidden])) .mc-facing-banner,
+.mc-canvas:has(.mc-menu-sheet:not([hidden])) .mc-face-preview,
+.mc-canvas:has(.mc-menu-sheet:not([hidden])) .mc-facing-banner { visibility: hidden; }
+/* ---- Voice sheet (voiceSheet.ts): installed voices, nicest first, each with Test ---- */
+.mc-voice-sheet { position: fixed; z-index: 70; right: 24px; top: calc(var(--mc-bar-h, 0px) + 24px); width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px - var(--mc-bar-h, 0px)); overflow: auto; overscroll-behavior: contain; display: grid; gap: 12px; padding: 20px;
+  border-radius: 20px; background: var(--panel); border: 2px solid var(--border); box-shadow: 0 16px 40px rgb(0 0 0 / 0.16); color: var(--text); }
+.mc-voice-sheet[hidden] { display: none; }
+.mc-voice-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-voice-title { margin: 0; font-size: 24px; font-weight: 650; }
+.mc-voice-note { margin: 0; font-size: 16px; line-height: 1.4; color: var(--text-dim); }
+.mc-voice-hint { margin: 0; padding: 12px 14px; border-radius: 12px; background: rgb(154 95 28 / 0.10); border: 1px solid rgb(154 95 28 / 0.35);
+  font-size: 16px; line-height: 1.45; color: var(--text); }
+.mc-voice-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.mc-voice-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.mc-voice-sheet .mc-btn { min-height: 56px; }
+.mc-voice-pick { display: grid; gap: 2px; justify-items: start; text-align: left; padding: 8px 14px; border-radius: 14px; }
+.mc-voice-pick[aria-pressed="true"], .mc-voice-toggle[aria-pressed="true"] { border-color: var(--action-fill); background: rgb(154 95 28 / 0.10); box-shadow: inset 0 0 0 1px var(--action-fill); }
+.mc-voice-name { font-size: 18px; font-weight: 650; }
+.mc-voice-kind { font-size: 15px; font-weight: 500; color: var(--text-dim); }
+.mc-voice-test { min-width: 84px; border-radius: 14px; }
+.mc-voice-foot { display: grid; gap: 12px; padding-top: 4px; border-top: 1px solid var(--border); }
+.mc-voice-toggle { text-align: left; padding: 8px 14px; border-radius: 14px; }
+.mc-voice-toggle::before { content: 'Off · '; color: var(--text-dim); }
+.mc-voice-toggle[aria-pressed="true"]::before { content: 'On · '; color: var(--action-fill); }
+@media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); width: auto; max-height: 76vh; } }
+.mc-voice-sheet .mc-voice-pick { display: grid; justify-content: stretch; }
+.mc-voice-pick > span { justify-self: start; }
+
+/* Read aloud: On / Off — a big (56 px) toggle below Talk in the hand
+   cluster; on the phone shell it is part of the bottom chrome, left of the
+   mic in the row above the Join pill (never over the board: the board's
+   bottom reserve covers both rows). Same setting as More -> Voice -> Read
+   replies aloud. */
+.mc-read-aloud { min-height: 56px; font-weight: 650; white-space: nowrap; }
+.mc-hand-cluster .mc-read-aloud { position: relative; width: 100%; min-width: 120px; min-height: 56px; justify-content: center; box-sizing: border-box; border-radius: 999px; }
+.mc-phone-simple .mc-read-aloud {
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(var(--mc-phone-row2) + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: var(--mc-phone-pill-h); height: var(--mc-phone-pill-h); box-sizing: border-box; padding: 0 12px; border-radius: 999px; font-size: 15px;
+  max-width: var(--mc-phone-side-w); overflow: hidden; text-overflow: ellipsis;
+}
+.mc-menu-open .mc-read-aloud { display: none !important; }

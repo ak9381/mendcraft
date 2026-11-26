@@ -114,7 +114,13 @@ export const UI_CITATIONS = {
  *  BEFORE design-request routing ("make this house wheelchair friendly" would
  *  otherwise match the plan-generate path on "house"). */
 export function isAccessibilityRequest(utterance: string): boolean {
-  return /\b(accessib\w*|wheelchair|wheel\s*chair|barrier[- ]?free|ada|wcag)\b/i.test(utterance);
+  const t = utterance.trim().toLowerCase();
+  if (!/\b(accessib\w*|wheelchair|wheel\s*chair|barrier[- ]?free|ada|wcag)\b/i.test(t)) return false;
+  // A question ("does the door leave enough width for a wheelchair?") is for
+  // the copilot. "Check accessibility" / "make it wheelchair friendly" run the checker.
+  const asks = /\?$/.test(t) || /^(does|is|are|can|could|would|should|what|how|will)\b/.test(t);
+  if (asks && !/\b(check|audit|scan|run|test|make|fix)\b/.test(t)) return false;
+  return true;
 }
 
 // ─── Cloud explanation plumbing (schema + coercion, both pure) ─────────────
@@ -163,13 +169,16 @@ export function coerceA11yExplanations(
   knownIds: readonly string[],
   coerceOp: (raw: unknown) => object | null,
 ): A11yExplanation[] {
-  if (!isObj(raw) || !Array.isArray(raw.items)) return [];
+  if (!isObj(raw)) return [];
+  const list = Array.isArray(raw.items) ? raw.items : raw.items != null ? [raw.items] : [];
+  const known = new Map(knownIds.map((id) => [id.toLowerCase(), id]));
   const out: A11yExplanation[] = [];
-  for (const item of raw.items) {
+  for (const item of list) {
     if (!isObj(item)) continue;
-    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    const rawId = typeof item.id === 'string' ? item.id.trim() : '';
+    const id = known.get(rawId.toLowerCase()) ?? '';
     const explanation = typeof item.explanation === 'string' ? item.explanation.trim() : '';
-    if (!id || !explanation || !knownIds.includes(id)) continue;
+    if (!id || !explanation) continue;
     const entry: A11yExplanation = { id, explanation };
     if (isObj(item.fix)) {
       const coerced = coerceOp(item.fix);

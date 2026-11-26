@@ -34,6 +34,7 @@ export const DEFAULT_GESTURE_MAP: GestureMap = {
   'open-palm': 'pan',
   point: 'select',
   'thumbs-up': 'confirm',
+  scroll: 'pan',
   'two-hand-zoom': 'zoom',
   none: 'none',
 };

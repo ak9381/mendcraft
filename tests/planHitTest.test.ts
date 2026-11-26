@@ -121,12 +121,15 @@ describe('pinch detection with real-looking landmarks', () => {
     expect(pinchGapRatio(farPts)).toBeCloseTo(0.4, 2);
   });
 
-  it('registers a loose arthritis-style pinch that never fully closes (ratio 0.4)', () => {
+  // Live thresholds (0.20/0.30) are in the same units as trace pinchDistance
+  // (thumb–index / hand size). A real close is ~0.18–0.20, so a 0.03 fixture
+  // still counts as a pinch; an open hand at 0.8 does not.
+  it('registers a nearly-closed pinch (ratio ~0.03)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
     const open = rawHand(0.4, 0.6, 0.16); // ratio 0.8
-    const loose = rawHand(0.4, 0.6, 0.08); // ratio 0.4 < 0.50
-    expect(pinchGapRatio(loose)).toBeCloseTo(0.4, 2);
+    const loose = rawHand(0.4, 0.6, 0.006); // ratio 0.03 < 0.20
+    expect(pinchGapRatio(loose)).toBeCloseTo(0.03, 2);
     expect(pinchGapRatio(loose)).toBeLessThan(DEFAULT_PINCH_ON);
     p.process([{ landmarks: open, label: 'Right' }]);
     p.process([{ landmarks: loose, label: 'Right' }]);
@@ -143,17 +146,17 @@ describe('pinch detection with real-looking landmarks', () => {
   it('releases only after the off-threshold (hysteresis)', () => {
     const events: HandEvent[] = [];
     const p = createHandsProcessor((e) => events.push(e));
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.08), label: 'Right' }]); // 0.4, on
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.11), label: 'Right' }]); // 0.55, still held
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.006), label: 'Right' }]); // 0.03, on (< 0.20)
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.056), label: 'Right' }]); // 0.28, between on/off: still held
     expect(events.filter((e) => e.type === 'pinch-end')).toHaveLength(0);
-    p.process([{ landmarks: rawHand(0.4, 0.6, 0.14), label: 'Right' }]); // 0.70, off
+    p.process([{ landmarks: rawHand(0.4, 0.6, 0.08), label: 'Right' }]); // 0.40, off (> 0.30)
     expect(events.some((e) => e.type === 'pinch-end')).toBe(true);
   });
 
   it('exposes a pinch-strength reading that rises as the fingers close', () => {
     const open = pinchStrength(0.8, DEFAULT_PINCH_ON);
     const near = pinchStrength(DEFAULT_PINCH_ON, DEFAULT_PINCH_ON);
-    const shut = pinchStrength(0.1, DEFAULT_PINCH_ON);
+    const shut = pinchStrength(0.01, DEFAULT_PINCH_ON);
     expect(open).toBe(0);
     expect(near).toBeCloseTo(0.85, 5);
     expect(shut).toBe(1);
@@ -163,7 +166,7 @@ describe('pinch detection with real-looking landmarks', () => {
 
   it('aims at the index tip when open and eases toward the midpoint as the pinch closes', () => {
     const open = rawHand(0.4, 0.6, 0.16).map((p) => ({ x: 1 - p.x, y: p.y }));
-    const shut = rawHand(0.4, 0.6, 0.02).map((p) => ({ x: 1 - p.x, y: p.y }));
+    const shut = rawHand(0.4, 0.6, 0.002).map((p) => ({ x: 1 - p.x, y: p.y }));
     const aOpen = aimPoint(open, DEFAULT_PINCH_ON);
     const aShut = aimPoint(shut, DEFAULT_PINCH_ON);
     expect(aOpen.x).toBeCloseTo(open[8].x, 3);
@@ -218,7 +221,7 @@ describe('pinch → pick pipeline with jittered real-looking frames', () => {
     // A tight pinch (gap 0.02) plus landmark jitter of ±0.02 (~index tip wobble).
     const frames = [];
     for (let i = 0; i < 8; i++) {
-      frames.push(rawHand(targetRawX, targetRawY, i < 2 ? 0.16 : 0.04, 0.015, 100 + i * 17));
+      frames.push(rawHand(targetRawX, targetRawY, i < 2 ? 0.16 : 0.006, 0.015, 100 + i * 17));
     }
     let lastAim: Pt | null = null;
     for (const lm of frames) {
@@ -248,8 +251,8 @@ describe('pinch → pick pipeline with jittered real-looking frames', () => {
     const events: HandEvent[] = [];
     const proc = createHandsProcessor((e) => events.push(e));
     proc.process([{ landmarks: rawHand(0.4, 0.6, 0.16), label: 'Right' }]);
-    proc.process([{ landmarks: rawHand(0.4, 0.6, 0.04), label: 'Right' }]);
-    proc.process([{ landmarks: rawHand(0.55, 0.6, 0.04), label: 'Right' }]);
+    proc.process([{ landmarks: rawHand(0.4, 0.6, 0.006), label: 'Right' }]);
+    proc.process([{ landmarks: rawHand(0.55, 0.6, 0.006), label: 'Right' }]);
     proc.process([{ landmarks: rawHand(0.55, 0.6, 0.16), label: 'Right' }]);
     const types = events.filter((e) => e.type !== 'tracking').map((e) => e.type);
     expect(types[0]).toBe('pinch-start');

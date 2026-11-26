@@ -18,7 +18,7 @@ import {
   type FusionContext,
 } from '../src/ai/intentFusion';
 import { fuseIntent, setModelsForTest, type TextGenModel } from '../src/ai/hybrid';
-import { partMode, planMode, setActiveMode } from '../src/core/modes';
+import { planMode, setActiveMode } from '../src/core/modes';
 
 const model = (text: string, inferenceSource?: string): TextGenModel => ({
   generateContent: async () => ({ response: { text: () => text, inferenceSource } }),
@@ -53,6 +53,11 @@ describe('normalizeTranscript (disfluent speech)', () => {
 
   it('collapses stutters case-insensitively', () => {
     expect(normalizeTranscript('Move move it left')).toBe('Move it left');
+  });
+
+  it('keeps Kannada (and other non-Latin) words instead of stripping them as punctuation', () => {
+    expect(normalizeTranscript('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು')).toBe('ಬಾಗಿಲು ಇಲ್ಲಿ ಹಾಕು');
+    expect(normalizeTranscript('uh ಬಾಗಿಲು')).toBe('ಬಾಗಿಲು');
   });
 });
 
@@ -106,7 +111,7 @@ describe('buildFusionPrompt / buildFusionConstraint', () => {
 });
 
 describe('parseFusionResult', () => {
-  const coerce = partMode.coerce;
+  const coerce = planMode.coerce;
 
   it('splits confidence off a valid op and validates the rest', () => {
     const parsed = parseFusionResult({ op: 'select', target: 'p3', confidence: 0.8 }, coerce, 'select p3');

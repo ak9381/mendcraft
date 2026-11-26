@@ -52,7 +52,7 @@ export const MIN_DETECT_CONFIDENCE = 0.6;
 interface ScriptRow { re: RegExp; code: string; /** one script ↔ one language? */ sure: boolean }
 
 // Order matters only for kana vs Han: any kana at all means Japanese.
-const SCRIPTS: ScriptRow[] = [
+const SCRIPT_ROWS: ScriptRow[] = [
   { re: /[\u3040-\u30ff]/g, code: 'ja', sure: true },          // Hiragana + Katakana
   { re: /[\uac00-\ud7af\u1100-\u11ff]/g, code: 'ko', sure: true }, // Hangul
   { re: /[\u0c80-\u0cff]/g, code: 'kn', sure: true },          // Kannada
@@ -86,7 +86,7 @@ export function scriptDetect(text: string): Detection | null {
   const letters = (text.match(LETTER_RE) ?? []).length;
   if (letters === 0) return null;
   // Kana is decisive even when kanji dominate ("元に戻して").
-  for (const row of SCRIPTS) {
+  for (const row of SCRIPT_ROWS) {
     const n = (text.match(row.re) ?? []).length;
     if (n === 0) continue;
     if (row.code === 'ja' || n / letters >= 0.5) {

@@ -9,20 +9,24 @@
 // Static poses must be HELD (default 400 ms) so tremor and passing shapes don't
 // fire them. Clock is injected through each frame's `now`.
 
-import { classifyGesture, fingerStates, handSize, pinchRatio, PINCH_CLASSIFY, type Pt } from './gestures';
+import { classifyGesture, fingerStates, handSize, isTwoFingerScrollPose, pinchRatio, PINCH_CLASSIFY, type Pt } from './gestures';
 import { INDEX_TIP, THUMB_TIP, WRIST } from './handLogic';
 
 export type Pose = ReturnType<typeof classifyGesture> | 'v-sign' | 'three-fingers';
 
 /** classifyGesture plus the two extra counting poses (V, three fingers). */
 export function classifyPose(p: readonly Pt[]): Pose {
-  const base = classifyGesture(p as Pt[]);
-  if (base !== 'none') return base;
   if (!p || p.length < 21) return 'none';
   const s = fingerStates(p as Pt[]);
-  if (s.index && s.middle && !s.ring && !s.pinky && pinchRatio(p as Pt[]) >= PINCH_CLASSIFY) return 'v-sign';
+  // Named digit poses beat a relaxed open-palm (3 loosely extended fingers
+  // would otherwise swallow "three fingers" and a V as scroll/cancel).
+  // Thumb tucked + two fingers is SCROLL, not the V-sign undo hold.
+  if (s.index && s.middle && !s.ring && !s.pinky && pinchRatio(p as Pt[]) >= PINCH_CLASSIFY) {
+    if (isTwoFingerScrollPose(p as Pt[])) return classifyGesture(p as Pt[]);
+    return 'v-sign';
+  }
   if (s.index && s.middle && s.ring && !s.pinky) return 'three-fingers';
-  return 'none';
+  return classifyGesture(p as Pt[]);
 }
 
 export interface MotionEvent {
@@ -257,7 +261,7 @@ export function createMotionRecognizer(opts: MotionOptions = {}) {
       return out;
     }
 
-    // ---- held static poses: V, three fingers (400 ms), open palm (1 s) ----
+    // ---- held static poses: V, three fingers (400 ms), open palm (0.8 s) ----
     if (pose !== heldPose) {
       heldPose = pose; heldSince = now; heldFired = false; heldAnchor = sample.palm;
     } else if (heldAnchor && Math.hypot(sample.palm.x - heldAnchor.x, sample.palm.y - heldAnchor.y) > W(0.05)) {
@@ -266,7 +270,7 @@ export function createMotionRecognizer(opts: MotionOptions = {}) {
     if (!heldFired) {
       if ((pose === 'v-sign' || pose === 'three-fingers') && now - heldSince >= holdMs) {
         heldFired = true; fire(out, { id: pose }, now);
-      } else if (pose === 'open-palm' && now - heldSince >= 1000) {
+      } else if (pose === 'open-palm' && now - heldSince >= 800) {
         heldFired = true; fire(out, { id: 'palm-hold' }, now);
       }
     }

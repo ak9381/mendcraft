@@ -62,6 +62,9 @@ export interface Fixture {
   w: number;
   d: number;
   rotation: number;
+  /** Stairs only: number of risers (one drawn tread each) and rise per step, mm. */
+  steps?: number;
+  rise?: number;
 }
 
 /** A free-standing text annotation placed on the plan (mm position, mm font

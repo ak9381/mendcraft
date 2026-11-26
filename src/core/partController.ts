@@ -7,7 +7,7 @@ import { validateOp } from './ops';
 import { buildTemplate, isTemplateName } from './templates';
 import { buildScene } from './geometry';
 import { meshesToSTL, downloadSTL } from './stl';
-import { generateTemplate } from '../ai/hybrid';
+import { generateTemplate } from '../ai/hybridStudio';
 import type { ListItem, ModeController, StepResult } from './controller';
 
 export function createPartController(): ModeController {

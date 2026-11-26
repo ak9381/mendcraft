@@ -153,6 +153,27 @@ describe('plan engine — parametric edits', () => {
     expect(tooShort.ok).toBe(false);
   });
 
+  it('resolves "<side> wall of <room>" and a bare room name as wall targets', () => {
+    const e = new PlanEngine();
+    run(e, { op: 'add_room', nums: { x: 0, y: 0, w: 4000, h: 3000 }, name: 'Living Room' });
+    const room = e.getState().rooms[0];
+    // Spoken wall refs: room.wallIds are built in S,E,N,W corner order.
+    const door = run(e, { op: 'add_door', target: 'south wall of living room', nums: { width: 900 } });
+    expect(door.ok).toBe(true);
+    expect(e.getState().openings[0].wallId).toBe(room.wallIds[0]);
+    const win = run(e, { op: 'add_window', target: 'north wall of the living room', nums: { width: 1200 } });
+    expect(win.ok).toBe(true);
+    expect(e.getState().openings[1].wallId).toBe(room.wallIds[2]);
+    // A bare room name on a wall op lands deterministically on its south wall —
+    // and must never resolve to the ROOM id (that used to crash the reducer).
+    const bare = run(e, { op: 'add_door', target: 'living room' });
+    expect(bare.ok).toBe(true);
+    expect(e.getState().openings[2].wallId).toBe(room.wallIds[0]);
+    // 'select' by room name keeps returning the room itself.
+    run(e, { op: 'select', target: 'Living Room' });
+    expect(e.getState().selectedId).toBe(room.id);
+  });
+
   it('deleting a wall cleans up its openings, dims and room membership', () => {
     const e = new PlanEngine();
     run(e, { op: 'add_room', nums: { x: 0, y: 0, w: 4000, h: 3000 } });
@@ -258,6 +279,33 @@ describe('plan rule parser', () => {
 
   it('clarifies when it cannot parse', () => {
     expect(isPlanClarify(parsePlanCommand('asdfghjkl'))).toBe(true);
+  });
+
+  // Real-Nano remeasure bug (18 Nov): "add a door on the south wall of the
+  // living room" parsed as add_room named "door on south wall of living".
+  it('a door on a named wall is add_door with that wall as the target, never add_room', () => {
+    expect(parsePlanCommand('add a door on the south wall of the living room')).toMatchObject({
+      op: 'add_door',
+      target: 'south wall of living room',
+    });
+  });
+
+  it('a window on a named wall is add_window with that wall as the target', () => {
+    expect(parsePlanCommand('add a window on the north wall of the bedroom')).toMatchObject({
+      op: 'add_window',
+      target: 'north wall of bedroom',
+    });
+  });
+
+  it('a door in a named room targets that room; bedroom never becomes a template', () => {
+    expect(parsePlanCommand('add a door to the bedroom')).toMatchObject({ op: 'add_door', target: 'bedroom' });
+    expect(parsePlanCommand('add a window in the living room')).toMatchObject({ op: 'add_window', target: 'living room' });
+    // Width + swing still parse alongside a named target.
+    expect(parsePlanCommand('add a door 900 on the south wall of the living room')).toMatchObject({
+      op: 'add_door', target: 'south wall of living room', nums: { width: 900 },
+    });
+    // Delete / select of a door keep their own branches.
+    expect(parsePlanCommand('delete the door')).toMatchObject({ op: 'delete', target: 'door' });
   });
 
   it('the demo path parses + validates end to end', () => {

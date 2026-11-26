@@ -76,6 +76,13 @@ export interface ModeController {
    *  (ai/deixis.deixisToOp). Omitted by modes without deictic adjustments. */
   deixisInfo?(id: string): DeixisTargetInfo | null;
 
+  /** Replace the document with an earlier snapshot() (change-log revert), as
+   *  one undoable step. Omitted by modes without snapshots. */
+  restoreSnapshot?(snapshot: unknown): StepResult;
+  /** Drop the newest `n` redo entries (a live gesture's own rolled-back
+   *  frames) so Redo can't replay a cancelled edit. */
+  dropRedo?(n: number): void;
+
   /** Download the current document (STL for part; DXF + JSON for plan). */
   export(): void;
 
@@ -96,16 +103,62 @@ export interface ViewportHandle {
   /** Magnet-aim: snap a pointer onto the nearest object within `radiusPx`. */
   aim?(clientX: number, clientY: number, radiusPx?: number): { clientX: number; clientY: number; id: string | null };
   /** Begin a world-space drag of the current selection; true if it grabbed. */
-  beginDrag?(clientX: number, clientY: number): boolean;
+  beginDrag?(clientX: number, clientY: number, opts?: { additive?: boolean }): boolean;
   /** Continue a world-space drag (with snap); true if handled. */
   drag?(clientX: number, clientY: number): boolean;
   endDrag?(): void;
   /** A pinch-tap (click equivalent) routed to the mode's tool framework;
    *  true when a tool consumed it (then the shell skips its pick+select). */
   tap?(clientX: number, clientY: number): boolean;
+  /** Shift+click twin for hands/touch: with the Select tool, add/remove the
+   *  object under the point to/from the selection. True if it toggled. */
+  toggleSelectAt?(clientX: number, clientY: number): boolean;
   /** Pointer travelling with no pinch held — tools draw ghost previews. */
   hover?(clientX: number, clientY: number): void;
   /** Toggle a secondary view (plan: extrude walls to 3D). */
   toggle3D?(on: boolean): boolean;
+  /** Is the 3D view showing? */
+  is3D?(): boolean;
+  /** Zoom the 2D view: factor > 1 zooms in. */
+  zoom?(factor: number): void;
+  /** Anchored zoom about a client-space point (two-hand pinch midpoint). */
+  zoomAt?(factor: number, clientX: number, clientY: number): void;
+  /** Pan the 2D view by a screen-pixel delta (two-hand pinch translation). */
+  panByPx?(dx: number, dy: number): void;
+  /** Hold the auto-framing still while a live two-hand edit runs. */
+  setLiveGesture?(on: boolean): void;
+  /** Client (CSS px) → world coordinates, for the two-hand edit planner. */
+  toWorld?(clientX: number, clientY: number): { x: number; y: number };
+  /** Current px-per-world-unit of the 2D view (grab radius in mm = px/scale). */
+  screenScale?(): number;
+  /** Orbit the 3D view by a screen-px delta (two-hand pinch midpoint move). */
+  orbit3D?(dx: number, dy: number): void;
+  /** Orbit the 3D view by angles (radians): yaw about up, pitch. Eased. */
+  turn3D?(dYaw: number, dPitch: number): void;
+  /** Stop a 3D orbit at once (drop the easing still pending). */
+  orbitStop3D?(): void;
+  /** Dolly the 3D view: factor > 1 moves closer (two-hand pinch span ratio). */
+  dolly3D?(factor: number): void;
+  /** The 3D camera now (radians / mm), or null when 3D is not showing. */
+  camera3D?(): { azimuth: number; elevation: number; distance: number } | null;
+  /** Hide / show a drawing layer (view only; the plan is untouched). */
+  setLayerHidden?(layer: string, hidden: boolean): void;
+  hiddenLayers?(): string[];
+  /** 3D: apply a material/lighting plan (cad/materials MaterialPlan). */
+  setMaterials?(plan: unknown): Promise<void>;
+  /** The materials/lighting currently on the 3D view, if any. */
+  currentMaterials?(): unknown;
+  /** Hand edit is on: fit for a hand (60–80 px per metre, tight insets) and
+   *  stop re-framing after each edit. Off: the normal fit. */
+  setHandFit?(on: boolean): void;
+  /** The mode's own tool context + tool controller, for the hand editor
+   *  (plan/handEdit.ts) — the same objects mouse events drive. */
+  handHost?(): { ctx: import('./tools').ToolContext; tools: import('./tools').ToolController };
+  /** Brief status hint on the canvas (auto-hides unless used for errors). */
+  showHint?(text: string, opts?: { sticky?: boolean }): void;
+  /** 3D first-person walkthrough. Turns the 3D view on if needed. */
+  walk?(on: boolean, room?: string): Promise<boolean>;
+  walkStep?(step: string): void;
+  walking?(): boolean;
   dispose(): void;
 }

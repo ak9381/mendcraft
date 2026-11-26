@@ -33,6 +33,15 @@ import { DEFAULTS, PLAN_LIMITS } from './ops';
 
 const COINCIDENT_MM = 1;
 
+/** Spoken side → index into room.wallIds (built in S,E,N,W corner order; the
+ *  same mapping as SIDE_INDEX in ai.ts). Screen-space words included. */
+const SIDE_WALL_INDEX: Record<string, number> = {
+  south: 0, bottom: 0,
+  east: 1, right: 1,
+  north: 2, top: 2,
+  west: 3, left: 3,
+};
+
 export interface PlanApplyResult {
   ok: boolean;
   error?: string;
@@ -102,9 +111,9 @@ export class PlanEngine {
     return `${prefix}${this.idCounter}`;
   }
 
-  /** Resolve 'selected' / an explicit id / a room name to a concrete object id,
-   *  against the document currently being reduced (not necessarily this.state —
-   *  applyGenerated reduces a separate working doc). */
+  /** Resolve 'selected' / an explicit id / a spoken wall or room ref to a
+   *  concrete object id, against the document currently being reduced (not
+   *  necessarily this.state — applyGenerated reduces a separate working doc). */
   private resolveId(doc: PlanDoc, ref: string, kind?: 'wall'): string | undefined {
     if (ref === 'selected') {
       const id = doc.selectedId ?? undefined;
@@ -113,12 +122,47 @@ export class PlanEngine {
       return id;
     }
     const found = findObject(doc, ref);
-    if (found) return found.obj.id;
-    // Rooms are often addressed by name in speech.
+    if (found) {
+      // A wall op must never act on a non-wall id (it used to crash the reducer).
+      if (kind === 'wall' && found.kind !== 'wall') return undefined;
+      return found.obj.id;
+    }
     const want = ref.trim().toLowerCase();
-    const room = doc.rooms.find((rm) => rm.name.toLowerCase() === want);
-    if (room) return room.id;
+    // Spoken wall refs: "<side> wall [of] [the] <room>" — room.wallIds are
+    // built in S,E,N,W corner order (see add_room and ai.ts SIDE_INDEX).
+    const side = want.match(/^(north|south|east|west|top|bottom|left|right)\s+wall(?:\s+of)?(?:\s+the)?\s*(.*)$/);
+    if (side) {
+      const room = side[2]
+        ? this.roomByName(doc, side[2])
+        : doc.rooms.length === 1 ? doc.rooms[0] : undefined;
+      const id = room?.wallIds[SIDE_WALL_INDEX[side[1]]];
+      return id && doc.walls.some((w) => w.id === id) ? id : undefined;
+    }
+    // Rooms are often addressed by name in speech. A wall op on a bare room
+    // name lands deterministically on the room's south wall.
+    const room = this.roomByName(doc, want);
+    if (room) {
+      if (kind === 'wall') {
+        const id = room.wallIds[0];
+        return id && doc.walls.some((w) => w.id === id) ? id : undefined;
+      }
+      return room.id;
+    }
     return undefined;
+  }
+
+  /** Match a spoken room name forgivingly: exact, then with a trailing " room"
+   *  stripped from either side ("living" ↔ "Living Room"), then prefix. */
+  private roomByName(doc: PlanDoc, ref: string): Room | undefined {
+    const strip = (s: string) => s.trim().toLowerCase().replace(/\s+room$/, '').trim();
+    const exact = ref.trim().toLowerCase();
+    const want = strip(ref);
+    if (!want) return undefined;
+    return (
+      doc.rooms.find((rm) => rm.name.toLowerCase() === exact)
+      ?? doc.rooms.find((rm) => strip(rm.name) === want)
+      ?? doc.rooms.find((rm) => strip(rm.name).startsWith(want))
+    );
   }
 
   apply(op: PlanOp): PlanApplyResult {
@@ -144,6 +188,32 @@ export class PlanEngine {
     this.redoStack = [];
     this.state = normalizeSelection(result);
     this.bump(op);
+    return { ok: true, warnings: this.warnings() };
+  }
+
+  /** Replace the whole document with an earlier snapshot (change-log revert).
+   *  Itself one undoable step. Ids keep counting up, so nothing collides. */
+  /** Forget the newest `n` redo entries — the frames a live gesture undid
+   *  when it rolled itself back, which must never come back with Redo. */
+  dropRedo(n: number): void {
+    if (n > 0) this.redoStack.splice(Math.max(0, this.redoStack.length - n), n);
+  }
+
+  restore(doc: PlanDoc): PlanApplyResult {
+    // New ids must not collide with the restored ones (a saved drawing has
+    // w9; the counter may sit at 8 after the template was rebuilt).
+    let top = this.idCounter;
+    for (const group of [doc.walls, doc.openings, doc.rooms, doc.dims, doc.fixtures, doc.texts]) {
+      for (const o of group ?? []) {
+        const n = Number(/(\d+)$/.exec(String((o as { id?: unknown }).id ?? ''))?.[1]);
+        if (Number.isFinite(n) && n > top) top = n;
+      }
+    }
+    this.idCounter = top;
+    this.undoStack.push(this.state);
+    this.redoStack = [];
+    this.state = normalizeSelection(structuredClone(doc));
+    this.revision += 1;
     return { ok: true, warnings: this.warnings() };
   }
 
@@ -454,6 +524,8 @@ export class PlanEngine {
         const fixture: Fixture = {
           id, kind: op.kind, x: op.x, y: op.y, w: op.w, d: op.d,
           rotation: normalizeAngle(op.rotation),
+          ...(op.steps !== undefined ? { steps: op.steps } : {}),
+          ...(op.rise !== undefined ? { rise: op.rise } : {}),
         };
         return { ...state, fixtures: [...state.fixtures, fixture], selectedId: id, selectedIds: [id] };
       }
@@ -693,7 +765,7 @@ export class PlanEngine {
         lenMm: r1(wallLength(w)),
         thick: w.thickness,
       })),
-      openings: this.state.openings.map((o) => ({ id: o.id, kind: o.kind, wall: o.wallId })),
+      openings: this.state.openings.map((o) => ({ id: o.id, kind: o.kind, wall: o.wallId, width: o.width })),
       rooms: this.state.rooms.map((r) => ({
         id: r.id,
         name: r.name,

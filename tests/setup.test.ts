@@ -83,7 +83,7 @@ describe('calibration: pinch and tremor', () => {
   });
   it('coerceCalibration rejects junk', () => {
     expect(coerceCalibration(null)).toBeNull();
-    expect(coerceCalibration({ ...DEFAULT_CALIBRATION, pinchOff: 0.1 })).toBeNull();
+    expect(coerceCalibration({ ...DEFAULT_CALIBRATION, pinchOff: 0.01 })).toBeNull();
     expect(coerceCalibration({ ...DEFAULT_CALIBRATION, reach: { x0: 0.5, y0: 0, x1: 0.55, y1: 1 } })).toBeNull();
   });
 });

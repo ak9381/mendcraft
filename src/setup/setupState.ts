@@ -17,7 +17,7 @@ export const CAMERA_STEPS: readonly SetupStep[] = ['reach', 'pinch', 'still', 'f
 
 export const STEP_TITLES: Record<SetupStep, { en: string; kn: string }> = {
   welcome: { en: 'Set up Mendcraft for your hands', kn: 'ನಿಮ್ಮ ಕೈಗಳಿಗೆ ಹೊಂದಿಸೋಣ' },
-  reach: { en: 'Show your comfortable reach', kn: 'ಆರಾಮವಾಗಿ ಕೈ ಚಾಚಿ' },
+  reach: { en: 'Point at five spots', kn: 'ಐದು ಚುಕ್ಕೆಗಳನ್ನು ತೋರಿಸಿ' },
   pinch: { en: 'Pinch a few times, gently', kn: 'ಮೆತ್ತಗೆ ಕೆಲವು ಬಾರಿ ಚಿವುಟಿ' },
   still: { en: 'Point and hold still', kn: 'ಬೆರಳು ತೋರಿಸಿ, ಸ್ಥಿರವಾಗಿ ಇಡಿ' },
   gestures: { en: 'Your gestures', kn: 'ನಿಮ್ಮ ಸನ್ನೆಗಳು' },
@@ -46,7 +46,7 @@ export interface SetupData {
   faceCues: boolean;
   faceBaseline: FaceRatios | null;
   showHints: boolean;
-  /** Hover-and-wait clicks buttons (for days pinching hurts). */
+  /** Hover-and-wait clicks buttons. First-class with pinch and voice (pinch can hurt). */
   dwellClick: boolean;
 }
 
@@ -55,7 +55,7 @@ export const SETUP_KEY = 'mendcraft.setup';
 export function defaultSetup(): SetupData {
   return {
     version: 1, completed: false, step: 'welcome', calibration: null, templates: [],
-    bindings: [], faceCues: false, faceBaseline: null, showHints: true, dwellClick: false,
+    bindings: [], faceCues: false, faceBaseline: null, showHints: true, dwellClick: true,
   };
 }
 
@@ -142,7 +142,7 @@ export function coerceSetup(raw: unknown): SetupData {
   out.faceBaseline = fb && typeof fb.smile === 'number' && typeof fb.brow === 'number' && Number.isFinite(fb.smile) && Number.isFinite(fb.brow)
     ? { smile: fb.smile, brow: fb.brow } : null;
   out.showHints = r.showHints !== false;
-  out.dwellClick = r.dwellClick === true;
+  out.dwellClick = r.dwellClick !== false;
   return out;
 }
 

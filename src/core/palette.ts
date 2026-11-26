@@ -50,15 +50,28 @@ export function createPalette(
   }
   function onWinMove(e: PointerEvent): void {
     if (!press) return;
+    // B-009: a move with no button held means the press ended where we never
+    // saw it (hand left the frame, release outside the window) — drop the
+    // stale press instead of misreading this move as a drag-to-place.
+    // Synthetic hand events (isTrusted false) carry no buttons, so skip them.
+    if (e.buttons === 0 && e.isTrusted !== false) { press = null; return; }
     if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
       const item = press.item;
+      // B-023: a non-placeable tool (Wall) has no drag-to-place, so tremor
+      // drift past 6px must not swallow the tap — keep the press and arm on
+      // release, same as a clean tap.
+      // A deliberate slide well off the button (> 48px) still cancels, like
+      // releasing a mouse outside a button.
+      if (!item.placeable) { if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 48) press = null; return; }
       press = null;
-      if (item.placeable) {
-        closeFlyouts();
-        cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
-      }
+      closeFlyouts();
+      cb.onPlaceStart(item.toolId, e.clientX, e.clientY);
     }
   }
+  // Set by any real pointer press on a palette button. A click that follows a
+  // pointer press is that same press's tail and must not act twice.
+  let pointerPressAt = -Infinity;
+  const pressedRecently = () => performance.now() - pointerPressAt < 800;
   function onWinUp(): void {
     if (press) {
       cb.onArm(press.item.toolId);
@@ -66,8 +79,12 @@ export function createPalette(
     }
     press = null;
   }
+  /** B-009: pointercancel / window blur end a press without arming. */
+  function onWinCancel(): void { press = null; }
   window.addEventListener('pointermove', onWinMove);
   window.addEventListener('pointerup', onWinUp);
+  window.addEventListener('pointercancel', onWinCancel);
+  window.addEventListener('blur', onWinCancel);
 
   /** Build one armable button (press→arm, press+drag→place) into `parent`. */
   function makeButton(item: PaletteItemSpec, parent: HTMLElement, visible: () => boolean): HTMLButtonElement {
@@ -88,7 +105,16 @@ export function createPalette(
     btn.dataset.tool = item.toolId;
     btn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      pointerPressAt = performance.now();
       press = { item, x: e.clientX, y: e.clientY };
+    });
+    // A click with no pointer press before it — keyboard Enter/Space, or the
+    // canvas hand pointer's pinch (which dispatches a click) — arms the tool
+    // too, so a tool is never mouse-only.
+    btn.addEventListener('click', () => {
+      if (pressedRecently()) return;
+      cb.onArm(item.toolId);
+      closeFlyouts();
     });
     buttons.set(item.toolId, btn);
     flat.push({ item, btn, visible });
@@ -110,12 +136,18 @@ export function createPalette(
       flyout.className = 'mc-flyout';
       flyout.hidden = true;
       for (const sub of item.group) makeButton(sub, flyout, () => !flyout.hidden);
-      btn.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
+      const toggleFlyout = () => {
         const willOpen = flyout.hidden;
         closeFlyouts();
         flyout.hidden = !willOpen;
+      };
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        pointerPressAt = performance.now();
+        toggleFlyout();
       });
+      // Keyboard / hand-pinch click opens the flyout too (see makeButton).
+      btn.addEventListener('click', () => { if (!pressedRecently()) toggleFlyout(); });
       flyouts.push(flyout);
       root.appendChild(btn);
       root.appendChild(flyout);
@@ -130,7 +162,12 @@ export function createPalette(
       for (const [id, btn] of buttons) btn.classList.toggle('active', id === toolId);
     },
     itemAt(x, y) {
-      for (const { item, btn, visible } of flat) {
+      // C150: an open flyout sits visually ON TOP of the dock, so hit-test its
+      // items first — a pinch must reach what the user sees, not the covered
+      // dock button registered earlier.
+      const inFlyout = (b: HTMLButtonElement) => flyouts.some((f) => !f.hidden && b.parentElement === f);
+      const ordered = [...flat.filter((f) => inFlyout(f.btn)), ...flat.filter((f) => !inFlyout(f.btn))];
+      for (const { item, btn, visible } of ordered) {
         if (!visible()) continue;
         const r = btn.getBoundingClientRect();
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return item;
@@ -141,6 +178,8 @@ export function createPalette(
     dispose() {
       window.removeEventListener('pointermove', onWinMove);
       window.removeEventListener('pointerup', onWinUp);
+      window.removeEventListener('pointercancel', onWinCancel);
+      window.removeEventListener('blur', onWinCancel);
       root.remove();
     },
   };

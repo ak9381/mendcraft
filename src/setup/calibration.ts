@@ -11,6 +11,7 @@
 // browser's localStorage; no frame or landmark ever leaves the device.
 
 import { DEFAULT_PINCH_ON, DEFAULT_PINCH_OFF, INDEX_TIP, type Pt } from '../input/handLogic';
+import { thresholdsFromMinOpen } from '../input/pinchBaseline';
 import { pinchRatio, meanJerk } from '../input/handMetrics';
 
 export interface ReachBox { x0: number; y0: number; x1: number; y1: number }
@@ -87,18 +88,16 @@ export function isFullReach(r: ReachBox): boolean {
 
 /**
  * Pinch thresholds from the pinch step. `ratios` are per-frame pinch ratios.
- * Her firmest comfortable close is the 10th percentile; the on-threshold sits
- * 40% of the way from that to her open hand so she never has to squeeze fully,
- * clamped to sane bounds, with off = on + 0.12 hysteresis.
+ * Her firmest comfortable close is the 10th percentile, her open hand the
+ * 90th. enter = min + 0.35*(open-min) in the same units as the live trace.
  */
 export function pinchFromRatios(ratios: readonly number[]): { pinchOn: number; pinchOff: number } {
   const finite = ratios.filter((r) => Number.isFinite(r)).sort((a, b) => a - b);
   if (finite.length < 10) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
   const closed = finite[Math.floor(finite.length * 0.1)];
   const open = finite[Math.floor(finite.length * 0.9)];
-  if (open - closed < 0.08) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
-  const on = clamp(closed + (open - closed) * 0.4, 0.25, 0.6);
-  return { pinchOn: round3(on), pinchOff: round3(clamp(on + 0.12, on + 0.05, 0.8)) };
+  if (open - closed < 0.12) return { pinchOn: DEFAULT_PINCH_ON, pinchOff: DEFAULT_PINCH_OFF };
+  return thresholdsFromMinOpen(closed, open);
 }
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -130,7 +129,8 @@ export function coerceCalibration(raw: unknown): Calibration | null {
   const num = (v: unknown, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : null);
   const reach = r.reach as Record<string, unknown> | undefined;
   const x0 = num(reach?.x0, 0, 1), y0 = num(reach?.y0, 0, 1), x1 = num(reach?.x1, 0, 1), y1 = num(reach?.y1, 0, 1);
-  const pinchOn = num(r.pinchOn, 0.15, 0.8), pinchOff = num(r.pinchOff, 0.2, 0.9);
+  // Live tight band is 0.045 / 0.07; still accept older looser calibrations.
+  const pinchOn = num(r.pinchOn, 0.02, 0.8), pinchOff = num(r.pinchOff, 0.03, 0.9);
   const tremor = num(r.tremor, 0, 1), smoothing = num(r.smoothing, 0, 0.95), dwellMs = num(r.dwellMs, 300, 2500);
   if ([x0, y0, x1, y1, pinchOn, pinchOff, tremor, smoothing, dwellMs].some((v) => v === null)) return null;
   if (x1! - x0! < MIN_REACH_SPAN - 1e-6 || y1! - y0! < MIN_REACH_SPAN - 1e-6) return null;

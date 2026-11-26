@@ -6,7 +6,7 @@
 //
 // Scope is '/', but this SW only ever affects what the browser already fetches;
 // it adds offline resilience for the installed /phone remote and nothing else.
-const CACHE = 'mendcraft-rt-v1';
+const CACHE = 'mendcraft-rt-v2';
 
 self.addEventListener('install', (event) => {
   // Activate immediately so the newest SW controls pages without a double reload.
@@ -36,10 +36,22 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
+  // HTML must never be served from the HTTP cache: a stale canvas.html would
+  // carry the OLD response headers (e.g. a CSP without 'wasm-unsafe-eval') for
+  // up to an hour and silently break MediaPipe. Revalidate with the server.
+  const isNavigate = req.mode === 'navigate';
+  const isHtml = /\.html$/.test(url.pathname);
+
   event.respondWith(
     (async () => {
       try {
-        const res = await fetch(req);
+        // A navigate-mode Request cannot be reconstructed (mode 'navigate' is
+        // not constructible), so fetch by URL for navigations.
+        const res = isNavigate
+          ? await fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+          : isHtml
+          ? await fetch(new Request(req, { cache: 'no-cache' }))
+          : await fetch(req);
         // Cache a copy of OK responses for offline fallback. Never blocks the
         // response the page gets — the fresh network response is returned.
         if (res && res.ok && res.type === 'basic') {
