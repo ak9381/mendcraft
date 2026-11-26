@@ -1,6 +1,6 @@
 // The 2-second hold engine for the fixed button gestures (fake clock).
 import { describe, expect, it } from 'vitest';
-import { createHoldEngine, gestureKeyOf, GESTURE_HOLD, type GestureHand } from '../../src/canvas/gestureHold';
+import { createHoldEngine, createPairGrace, gestureKeyOf, GESTURE_HOLD, MIXED_KEY, PAIR_GRACE_MS, type GestureHand, type GestureKey } from '../../src/canvas/gestureHold';
 import type { HandShape, HandSide } from '../../src/canvas/handShape';
 
 const hand = (shape: HandShape, side: HandSide, x = side === 'R' ? 0.7 : 0.3, y = 0.6): GestureHand => ({
@@ -172,5 +172,96 @@ describe('createHoldEngine', () => {
     // The array order flips every frame; the hands themselves never move.
     const { fired } = hold(e, (t) => (Math.round(t / 33) % 2 ? [L, R] : [R, L]), 0, 2100);
     expect(fired).toEqual(['2:thumbsUp']);
+  });
+
+  it('mixed L thumbs up + R thumbs down is its own key; other mixes stay ambiguous', () => {
+    expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('thumbsDown', 'R')])).toBe(MIXED_KEY);
+    expect(gestureKeyOf([hand('thumbsDown', 'L'), hand('thumbsUp', 'R')])).toBeNull();
+    expect(gestureKeyOf([hand('thumbsUp', 'L'), hand('peace', 'R')])).toBeNull();
+    expect(hold(createHoldEngine(), () => [hand('thumbsUp', 'L'), hand('thumbsDown', 'R')], 0, 2100).fired).toEqual([MIXED_KEY]);
+  });
+
+  it('a deferred hold waits full (no fire) until the defer lifts', () => {
+    const e = createHoldEngine();
+    let deferring = true;
+    const fired: string[] = [];
+    for (let t = 0; t <= 3000; t += 33) {
+      if (t > 2500) deferring = false;
+      const s = e.update({ hands: [hand('thumbsUp', 'L')], facing: true, now: t, defer: () => deferring });
+      if (s.fired) fired.push(`${s.fired}@${t}`);
+      if (t > 2100 && t < 2500) expect(s.progress).toBe(1);
+    }
+    expect(fired).toHaveLength(1);
+    expect(Number(fired[0].split('@')[1])).toBeGreaterThan(2500);
+  });
+
+  describe('pair grace (one-hand halves of bound two-hand gestures)', () => {
+    const BOUND: GestureKey[] = ['R:thumbsUp', 'L:thumbsUp', 'L:thumbsDown', 'R:thumbsDown', '2:thumbsUp', '2:thumbsDown', MIXED_KEY];
+    /** Run frames through grace + engine; returns fired keys with times. */
+    function run(frames: (t: number) => GestureHand[], to: number, bound = BOUND) {
+      const e = createHoldEngine();
+      const g = createPairGrace(bound);
+      const fired: { key: string; t: number }[] = [];
+      for (let t = 0; t <= to; t += 33) {
+        const hands = frames(t);
+        g.observe(hands, t);
+        const s = e.update({ hands, facing: true, now: t, defer: (k) => g.defer(k, t) });
+        if (s.fired) fired.push({ key: s.fired, t });
+      }
+      return fired;
+    }
+
+    it('R thumbs up held ~2 s, the LEFT joins late for More: Approve never fires first', () => {
+      const fired = run((t) => {
+        const R = hand('thumbsUp', 'R');
+        if (t < 1900) return [R];
+        if (t < 2150) return [R, hand('other', 'L')]; // the left hand coming up
+        return [R, hand('thumbsUp', 'L')];
+      }, 4800);
+      expect(fired.map((f) => f.key)).toEqual(['2:thumbsUp']);
+    });
+
+    it('L thumbs down (Undo) waits the same way for both thumbs down', () => {
+      const fired = run((t) => {
+        const L = hand('thumbsDown', 'L');
+        if (t < 1950) return [L];
+        if (t < 2200) return [L, hand('open', 'R')];
+        return [L, hand('thumbsDown', 'R')];
+      }, 4800);
+      expect(fired.map((f) => f.key)).toEqual(['2:thumbsDown']);
+    });
+
+    it('alone (the other hand absent all along) it fires on time', () => {
+      const fired = run(() => [hand('thumbsUp', 'R')], 2400);
+      expect(fired).toHaveLength(1);
+      expect(fired[0]).toMatchObject({ key: 'R:thumbsUp' });
+      expect(fired[0].t).toBeLessThan(GESTURE_HOLD.holdMs + 40);
+    });
+
+    it('the other hand LEAVING counts as a change: no fire within the grace of it vanishing', () => {
+      // L thumbs up held; the right hand shows (loose) from 1.6 s and vanishes at 1.95 s.
+      const fired = run((t) => {
+        const L = hand('thumbsUp', 'L');
+        return t >= 1600 && t < 1950 ? [L, hand('other', 'R')] : [L];
+      }, 3200);
+      expect(fired).toHaveLength(1);
+      expect(fired[0].key).toBe('L:thumbsUp');
+      expect(fired[0].t).toBeGreaterThanOrEqual(1950 + PAIR_GRACE_MS - 40);
+    });
+
+    it('mid-pair the right hand disappears: Save cannot fire right away', () => {
+      const g = createPairGrace(BOUND);
+      g.observe([hand('thumbsUp', 'L'), hand('thumbsDown', 'R')], 0);
+      g.observe([hand('thumbsUp', 'L')], 1000); // R lost
+      expect(g.defer('L:thumbsUp', 1100)).toBe(true);
+      expect(g.defer('L:thumbsUp', 1000 + PAIR_GRACE_MS + 1)).toBe(false);
+    });
+
+    it('a key with no bound pair never waits', () => {
+      const g = createPairGrace(['R:thumbsUp', 'R:one']);
+      g.observe([hand('one', 'R'), hand('other', 'L')], 0);
+      expect(g.defer('R:thumbsUp', 10)).toBe(false);
+      expect(g.defer('R:one', 10)).toBe(false);
+    });
   });
 });

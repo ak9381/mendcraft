@@ -46,12 +46,13 @@ Shapes: thumbs up (TU), thumbs down (TD), 1 finger (index up), peace (index+midd
 | L 1 finger | New board | |
 | L peace | Tools | |
 | L 3 fingers | Talk (mic) | |
-| Both thumbs up | Open AI monitor | the hybrid story |
+| Both thumbs up | More menu (AI monitor lives there; also voice "open AI monitor" and the palm highlight) | the hybrid story |
+| L thumbs up + R thumbs down (together, 2 s) | Hover to click on/off | accessibility |
 | Both thumbs down | Simulate offline on/off | offline beat |
 | Both 1 finger | Point at a device | point-to-connect |
 | Both peace | Register / Re-register | opening |
 | Both 3 fingers | Edit / Done on the active board | |
-Badges: yellow, animated hand of the shape with an L/R/2-hand mark, on each of these buttons (and on chips 1–3). Everything else = open-palm highlight + R thumbs up.
+Badges: yellow, animated hand of the shape with an L/R/2-hand mark, on each of these buttons (and on chips 1–3), centred on the button's top-left corner so they never cover its label (26 Nov, from live screenshots). The mixed L-up + R-down badge shows both hands. L thumbs up alone (Save) and R thumbs down alone (Decline) wait while the other hand is still changing shape (400 ms grace), so forming the mixed gesture never fires them. Everything else = open-palm highlight + R thumbs up.
 
 ## AI activity vs AI monitor
 Two names for two views (in-app drawer vs second-display page) confuse. Ruling: remove the "AI activity" button from the bar; the drawer still opens by itself while a model works and from the Nano/Gemini engine bar; "AI monitor" is the one named entry.

@@ -37,6 +37,10 @@ Note anything off with its number.
 - [ ] E12 Scroll vs hold: a peace that MOVES deliberately never fires its button (right peace = next step 2, left peace = Tools), even if you then hold it still. A peace held still — or trembling / drifting a little — for 2 s still fires it and never scrolls. Drop the hand mid-scroll: it stops at once (no glide). Look away: no scroll. Make a fist mid-glide: the glide stops.
 - [ ] E13 Peace over empty canvas and move down: the canvas scrolls down (content moves up). Either hand works. Right hand scrolls, then add a left peace and hold both still: Register (never Tools).
 - [ ] E14 Levels: peace over a volume / brightness / colour-temperature control (or a slider): a deliberate move up starts it, then every ~30 px up is one step up (at most ~6 steps a second) with a big "Volume 80 %" readout by the hand; small wobbles at a step never flip it back and forth (watch the real WiZ lamp: no flicker of commands). It never scrolls the page or fires Tools/chip 2.
+- [ ] E16 Badges sit at each button's top-left corner (hand + L/R/L+R tag) and never cover a label — check Save, New board, AI monitor, Re-register, More.
+- [ ] E17 Both thumbs up 2 s: the More menu opens (with Tools). Inside it, AI monitor is reachable by the palm highlight + right thumbs up, or say "open AI monitor".
+- [ ] E18 Left thumbs up + right thumbs down together for 2 s: Hover to click toggles. Raise the left thumb first and then the right: Save never fires on the way; L thumbs up alone (other hand down or resting) still Saves, R thumbs down alone still Declines.
+- [ ] E19 Open More (and on a phone, the menu sheet) with the camera preview showing: the menu is on top; the preview and "Facing this device" pill step aside while it is open and come back when it closes. Check at 1440×900 and 1280×800.
 - [ ] E15 Voice: "scroll down", "scroll up", "page down", "page up" move the open review / drawer / focused board (else the canvas).
 
 ## R. Review window (the "plan")

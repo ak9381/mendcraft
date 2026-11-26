@@ -9,7 +9,7 @@
 //   - badges are only on screen while the gesture layer is on;
 //   - through the REAL camera path (canvasHands adapter → inputs → the shared
 //     shape read → hand pointer + gestures): a held thumbs-up approves with
-//     no pan / zoom / board move, both thumbs up open the AI monitor with no
+//     no pan / zoom / board move, both thumbs up open the More menu with no
 //     zoom, and a hand that leaves mid-hold cancels it (no fire on return)
 //     and clears the light-up, HUD and highlight;
 //   - while a review is open, Save (left thumbs-up) waits behind it;
@@ -106,6 +106,29 @@ async function main() {
     await page.evaluate(() => window.__mcGestures.show(true));
     await wait(400);
     const badgeCount = await page.evaluate(() => [...document.querySelectorAll('.mc-gesture-badge')].filter((b) => !b.hidden).length);
+    // Badges sit at each button's top-left corner: never over its label.
+    const placement = await page.evaluate(() => {
+      document.querySelector('.mc-tools-chip').click(); // open Tools so the bar's badges show
+      return new Promise((res) => setTimeout(() => {
+        const bad = [];
+        for (const b of document.querySelectorAll('.mc-gesture-badge')) {
+          if (b.hidden) continue;
+          const key = b.dataset.key;
+          const br = b.getBoundingClientRect();
+          // the bound button: nearest visible control whose top-left corner is the badge centre
+          const cx = br.left + 12, cy = br.top + 12;
+          const btn = [...document.querySelectorAll('button')].find((x) => { const r = x.getBoundingClientRect(); return r.width && Math.abs(r.left - cx) < 2 && Math.abs(r.top - cy) < 2; });
+          if (!btn) { bad.push(`${key}: no button at its corner`); continue; }
+          const range = document.createRange(); range.selectNodeContents(btn);
+          const tr = [...range.getClientRects()].filter((q) => q.width > 0);
+          const overlaps = tr.some((q) => br.left < q.right && br.right > q.left && br.top < q.bottom && br.bottom > q.top);
+          if (overlaps) bad.push(`${key}: covers "${btn.textContent.trim()}"`);
+        }
+        document.querySelector('.mc-tools-chip').click();
+        res(bad);
+      }, 1000)); // the bar settles and the badges re-place (every 300 ms)
+    });
+    check(placement.length === 0, `badges sit at the top-left corner and never cover a label${placement.length ? `: ${placement.join('; ')}` : ''}`);
     check(badgeCount >= 3, `badges on the bound buttons while Hands is on (${badgeCount})`);
     const undoBadge = await page.evaluate(() => {
       const u = document.querySelector('.mc-hand-cluster .mc-cluster-undo');
@@ -186,20 +209,53 @@ async function main() {
     const logged = await page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
     check(/Gesture\s*Right thumbs up → Approve/.test(logged), 'the activity log says the gesture approved it');
 
-    // C1 (two hands): both thumbs up = AI monitor, and never a two-fist zoom.
+    // C1 (two hands): both thumbs up = the More menu, and never a two-fist zoom.
     await presenceEmpty(t, 600);
     t += 700;
-    await page.evaluate(() => { window.__opened = []; window.open = (u) => { window.__opened.push(String(u)); return {}; }; });
     const camB = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
     const boardsB = await boards();
     let grabbedB = false;
     for (let k = 0; k < 8; k++) { const st = await presenceHold([['thumbsUp', 'L'], ['thumbsUp', 'R']], t + k * 330, 300); grabbedB = grabbedB || st.grab; }
-    const opened = await page.evaluate(() => window.__opened);
     const camB2 = await page.evaluate(() => JSON.stringify(window.__mcGestures.state().camera));
-    check(opened.some((u) => /monitor/.test(u)), `both thumbs up opened the AI monitor (${JSON.stringify(opened)})`);
+    check(await visible('.mc-more-menu') && await visible('[data-cmd=monitor]'), 'both thumbs up open the More menu (AI monitor inside it)');
     check(!grabbedB && camB === camB2 && await boards() === boardsB, 'both thumbs up never zoom, pan or move a board');
+    // The menu is never covered by the camera preview or the Facing pill.
+    const cover = await page.evaluate(() => {
+      const root = document.querySelector('.mc-canvas');
+      const pv = document.createElement('div'); pv.className = 'mc-face-preview'; root.append(pv);
+      const pill = document.createElement('div'); pill.className = 'mc-facing-banner'; pill.textContent = 'Facing this device'; root.append(pill);
+      const vis = (el) => getComputedStyle(el).visibility !== 'hidden';
+      const open = { preview: vis(pv), pill: vis(pill) };
+      document.querySelector('.mc-more-btn').click(); // close More
+      const closed = { preview: vis(pv), pill: vis(pill) };
+      pv.remove(); pill.remove();
+      return { open, closed };
+    });
+    check(!cover.open.preview && !cover.open.pill && cover.closed.preview && cover.closed.pill, `the preview + Facing pill step aside while More is open (${JSON.stringify(cover)})`);
+    await wait(600); // the Tools chip ignores a toggle within 450 ms of the last one
+    await page.evaluate(() => { if (document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded') === 'true') document.querySelector('.mc-tools-chip').click(); });
     await presenceEmpty(t + 2700, 600);
     t += 3500;
+    // Mixed: L thumbs up + R thumbs down together = Hover to click. L comes
+    // first (1.9 s alone), the right hand forms through a loose shape: Save
+    // must NOT fire on the way.
+    const dwell0 = await page.evaluate(() => document.querySelector('[data-cmd=dwell]').getAttribute('aria-pressed'));
+    const statusM0 = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const L = g.hand('thumbsUp', 'L');
+      let tt = from;
+      for (let k = 0; k <= 57; k++) g.presence([L], (tt += 33)); // 1.9 s alone
+      for (let k = 0; k <= 8; k++) g.presence([L, g.hand('relaxed', 'R')], (tt += 33)); // the right hand comes up…
+      for (let k = 0; k <= 70; k++) g.presence([L, g.hand('thumbsDown', 'R')], (tt += 33)); // …thumb down, held
+    }, t);
+    const dwell1 = await page.evaluate(() => document.querySelector('[data-cmd=dwell]').getAttribute('aria-pressed'));
+    const statusM1 = await page.evaluate(() => document.querySelector('.mc-canvas-status')?.textContent ?? '');
+    check(dwell0 !== dwell1, `L thumbs up + R thumbs down toggles Hover to click (${dwell0} → ${dwell1})`);
+    check(!/^Saved/.test(statusM1) || statusM1 === statusM0, `Save never fired while the mixed gesture formed ("${statusM1}")`);
+    await page.evaluate(() => document.querySelector('[data-cmd=dwell]').click()); // back as it was
+    await presenceEmpty(t + 4800, 600);
+    t += 5600;
 
     // 2) Left thumbs-up = Save (the button lives in the closed Tools palette).
     await release(t + 2200);
@@ -211,6 +267,8 @@ async function main() {
     // 3) Open palm → highlight → right thumbs-up presses it.
     await release(t + 2200);
     t += 3000;
+    // Save just closed the palette: the Tools chip ignores a toggle within 450 ms (wall clock).
+    await wait(600);
     const hi = await page.evaluate((from) => {
       const g = window.__mcGestures;
       // Aim the palm at the Tools chip: map its centre back into camera space.
