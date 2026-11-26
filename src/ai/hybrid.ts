@@ -433,6 +433,16 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 export const ON_DEVICE_MAX_WAIT_MS = 6000;
 /** The longest one SDK on-device call may hold the model's slot. */
 export const ON_DEVICE_MAX_RUN_MS = 20_000;
+/** The longest an on-device call may spend creating its session — which is
+ *  where an evicted model is loaded back (17.7 s measured). Its own ceiling:
+ *  loading is not the model being slow to answer. */
+export const ON_DEVICE_LOAD_MAX_MS = 45_000;
+/** How long a load may run before it is worth saying "loading the model". */
+export const ON_DEVICE_LOADING_NOTE_MS = 700;
+/** The reason given when the load ceiling ran out. */
+export const STILL_LOADING = 'was still loading the model';
+/** Where a slow model load stands, for the "loading the model" line. */
+export type NanoLoadState = 'loading' | 'loaded' | 'gave-up' | 'failed';
 
 /** Route a model's calls through the shared Nano queue: one on-device prompt
  *  at a time, and a call that waited too long is never started. A streamed
@@ -671,8 +681,15 @@ export interface OnDeviceStreamRequest {
   /** Stop: the wait ends at once and the session is destroyed. */
   signal?: AbortSignal;
   onChunk?: (full: string) => void;
-  /** The queue gave this call the model: the caller's deadline starts now. */
+  /** The queue gave this call the model (its session is not created yet). */
   onStart?: () => void;
+  /** The session exists — the model is loaded and the prompt is running: the
+   *  caller's reply deadline starts HERE, never while the model is loading. */
+  onReady?: () => void;
+  /** The model is taking a while to load ('loading'), then how that load
+   *  ended: 'loaded' (it is answering), 'gave-up' (the load ceiling ran
+   *  out) or 'failed' (stopped or broke while loading). Only after 'loading'. */
+  onLoading?: (state: NanoLoadState) => void;
   /** A short reply is wanted: once the text is this long the call ends (and
    *  the model is freed) instead of letting it write on. */
   maxChars?: number;
@@ -777,6 +794,44 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
     let sawChunk = false;
     let enough = false;
     let cutShort = false;
+    // Two clocks, one after the other. While the session is being created
+    // (the model may be loading back after an eviction) only the generous
+    // load ceiling runs. The reply's own 20 s starts when the session exists.
+    let ready = false;
+    let said = false;
+    // The call is over (answered, stopped, out of time): a session that
+    // turns up after this starts no clock and tells nobody.
+    let closed = false;
+    let gaveUp = false;
+    let loadCap: ReturnType<typeof setTimeout> | null = null;
+    let loadNote: ReturnType<typeof setTimeout> | null = null;
+    let runCap: ReturnType<typeof setTimeout> | null = null;
+    let readyPoll: ReturnType<typeof setInterval> | null = null;
+    let outOfTime: (e: Error) => void = () => undefined;
+    const clocks = new Promise<never>((_, reject) => { outOfTime = reject; });
+    clocks.catch(() => undefined);
+    const stopClocks = (): void => {
+      closed = true;
+      if (loadCap) clearTimeout(loadCap);
+      if (loadNote) clearTimeout(loadNote);
+      if (runCap) clearTimeout(runCap);
+      if (readyPoll) clearInterval(readyPoll);
+      loadCap = loadNote = runCap = null; readyPoll = null;
+    };
+    function markReady(): void {
+      if (ready || closed) return;
+      ready = true;
+      if (loadCap) { clearTimeout(loadCap); loadCap = null; }
+      if (loadNote) { clearTimeout(loadNote); loadNote = null; }
+      if (readyPoll) { clearInterval(readyPoll); readyPoll = null; }
+      nanoTrace(`on-device call: session ready ${Date.now() - t0} ms after it got the model`);
+      if (said) { try { req.onLoading?.('loaded'); } catch { /* a label only */ } }
+      try { req.onReady?.(); } catch { /* the caller's clock must not fail the call */ }
+      runCap = setTimeout(() => outOfTime(new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`)), ON_DEVICE_MAX_RUN_MS);
+    }
+    loadCap = setTimeout(() => { if (!ready) { gaveUp = true; outOfTime(new Error(STILL_LOADING)); } }, ON_DEVICE_LOAD_MAX_MS);
+    loadNote = setTimeout(() => { if (!ready) { said = true; nanoTrace('on-device call: the model is loading'); try { req.onLoading?.('loading'); } catch { /* a label only */ } } }, ON_DEVICE_LOADING_NOTE_MS);
+    readyPoll = setInterval(() => { if (sdkSessionReady(model)) markReady(); }, WARM_SESSION_POLL_MS);
     const work = (async (): Promise<string> => {
       let full = '';
       const take = (chunk: { text: () => string; inferenceSource?: string }): void => {
@@ -787,12 +842,14 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
         // Deltas (current Chrome) or the text so far (older builds). A delta
         // that repeats the tail ("ro" + "o") is still new text.
         full = full && piece.length > full.length && piece.startsWith(full) ? piece : full + piece;
-        if (!sawChunk) { sawChunk = true; releasePrevious(); nanoTrace(`on-device call: first chunk ${Date.now() - t0} ms after it got the model`); }
+        if (!sawChunk) { sawChunk = true; markReady(); releasePrevious(); nanoTrace(`on-device call: first chunk ${Date.now() - t0} ms after it got the model`); }
         if (req.maxChars && full.length >= req.maxChars) enough = true;
         try { req.onChunk?.(full); } catch (e) { if (e instanceof Error && e.name === 'MidStreamOffline') throw e; }
       };
       if (typeof model.generateContentStream === 'function') {
         const started = await model.generateContentStream(req.prompt);
+        // The SDK creates the session before its stream is handed back.
+        markReady();
         started.response?.catch(() => undefined);
         iterator = started.stream[Symbol.asyncIterator]();
         let lastYield = now();
@@ -818,11 +875,13 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
     work.catch(() => undefined);
     let finished = false;
     try {
-      // maxRun: a call Chrome never settles still gives the slot back.
-      const text = await withTimeout(Promise.race([work, aborted]), ON_DEVICE_MAX_RUN_MS, 'on-device call')
+      // A call Chrome never settles still gives the slot back: at the load
+      // ceiling while it is loading, at the max run once it is answering.
+      const text = await Promise.race([work, aborted, clocks])
         .catch((e) => {
           const msg = e instanceof Error ? e.message : '';
-          if (/timed out after/.test(msg)) throw new Error(`took longer than ${Math.round(ON_DEVICE_MAX_RUN_MS / 1000)} s`);
+          if (/^took longer than/.test(msg)) throw e;
+          if (msg === STILL_LOADING) { markOnDeviceUnloaded('it was still loading'); throw e; }
           // Not stopped by us and not a refused request: Chrome dropped the
           // session — the model was probably unloaded. Warm it again.
           if (msg !== 'stopped' && !/NotSupportedError|request is invalid|did not come from the on-device/i.test(`${e instanceof Error ? e.name : ''} ${msg}`)) markOnDeviceUnloaded(msg.slice(0, 60) || 'the call failed');
@@ -839,6 +898,8 @@ export async function streamOnDevice(req: OnDeviceStreamRequest): Promise<string
       return text;
     } finally {
       if (onAbort) req.signal?.removeEventListener('abort', onAbort);
+      stopClocks();
+      if (said && !ready) { try { req.onLoading?.(gaveUp ? 'gave-up' : 'failed'); } catch { /* a label only */ } }
       releasePrevious();
       if (!finished) { nanoTrace(`on-device call: stopped after ${Date.now() - t0} ms${cutShort ? ' (reply long enough)' : ''}`); stop(); }
     }

@@ -15,7 +15,7 @@ import { expandPlan, tileComponentId, type A2uiMessage, type DeviceState, type S
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
-import { createCanvasHistory, geminiFailLine, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
+import { createCanvasHistory, geminiFailLine, NANO_LOADING_LINE, NANO_STILL_LOADING, nanoLoadView, type NanoLoadState, parseModelPlan, parsePartialPlan, runSurfaceTurn, scriptedEngine, type DeviceHint, type EngineId, type PartialPlan, type SentInfo, type SurfaceEngine } from './aiTurn';
 import { byName, foundAfterScan, mergeTiles, pickPointChoice, pointConnectFromIdentity, pointFailureReceipt, roomScan, SIM_POINT_IDENTITY, type ConnectTurnResult, type PointIdentifyResult } from './connectTurns';
 import { createSteadyHold, cropAlongRay, cropAroundPoint, isIndexExtended, phoneCropFraction, pointerInCrop, rayOutOfFrame, rayTarget, type Pt as CropPt, type SteadyHold } from './pointCrop';
 import { createPhoneSensor, type PhoneSensor } from './phoneSensor';
@@ -2061,6 +2061,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  timed-out Nano call can still be finishing inside Chrome. */
   let lastTurnEndedAt = 0;
   const NEXT_PICK_COOLDOWN_MS = 10_000;
+  /** The on-device model is loading back (it was evicted, or this is its
+   *  first use): say so on the Nano card and in its terminal instead of
+   *  looking stuck. Loading is not counted against Nano's reply budget. */
+  function nanoLoading(load: NanoLoadState): void {
+    const view = nanoLoadView(load);
+    const state = aiPanel.querySelector('.mc-ai-state');
+    engineBar?.set('nano', 'working', view.bar);
+    if (view.note) {
+      panels.forEngine('nano').log('note', view.note);
+      if (state) state.textContent = view.note;
+    } else if (state?.textContent === NANO_LOADING_LINE) state.textContent = '';
+  }
   /** The last streamed turn's draft came from Gemini after an on-device failure. */
   let lastTurnHandedOff = false;
   /** A review title is computed from the plan the model really returned. */
@@ -2082,11 +2094,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       onFallback: aiFellBack,
       onCloudSend: cloudSent,
       onCloudRetract: cloudRetract,
+      onNanoLoading: nanoLoading,
       // Nano couldn't finish: Gemini takes over as a NEW send — the Nano
       // terminal says why, the Gemini terminal shows what left (if it did).
       onHandoff: (s, why) => {
-        panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
-        panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this board');
+        panels.forEngine('nano').fail(why === NANO_STILL_LOADING ? 'was still loading the model' : `couldn’t finish: ${why}`);
+        panels.showHandoff('nano', why === NANO_STILL_LOADING ? 'Nano was still loading, so Gemini makes this board' : 'Nano couldn’t finish, so Gemini makes this board');
         ghost(frameId, null);
         sentInfo = s;
         onSi?.(s);
@@ -2378,9 +2391,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           onFallback: aiFellBack,
           onCloudSend: cloudSent,
           onCloudRetract: cloudRetract,
+          onNanoLoading: nanoLoading,
           onHandoff: (s, why) => {
-            panels.forEngine('nano').fail(`couldn’t finish: ${why}`);
-            panels.showHandoff('nano', 'Nano couldn’t finish, so Gemini makes this tile');
+            panels.forEngine('nano').fail(why === NANO_STILL_LOADING ? 'was still loading the model' : `couldn’t finish: ${why}`);
+            panels.showHandoff('nano', why === NANO_STILL_LOADING ? 'Nano was still loading, so Gemini makes this tile' : 'Nano couldn’t finish, so Gemini makes this tile');
             ghost(frameId, null);
             current = s;
             aiSent(utterance, s, { task: 'dashboard', swarm: o.swarm, defer: true });

@@ -5,11 +5,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
-import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
-import { geminiFailLine, GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
+import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_LOAD_MAX_MS, ON_DEVICE_MAX_RUN_MS, STILL_LOADING, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
+import { geminiFailLine, GHOST_EVERY_MS, NANO_STILL_LOADING, nanoLoadView, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
-import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
+import { buildNanoPlanRequest, expandNanoPlan, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
 import { cloudFetchWatched, isGeminiRequestUrl, watchCloudFetch } from '../../src/ai/cloudFetchWatch';
 import { createWarmKeeper } from '../../src/ai/nanoWarm';
@@ -18,7 +18,7 @@ import { playingLine } from '../../src/canvas/spotifyConnector';
 import { previewHasFrames } from '../../src/ui/faceOverlay';
 import type { WizClient } from '../../src/devices/wizClient';
 import type { DeviceState } from '../../src/canvas/surfacePlan';
-import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
+import { betterSummary, CONNECT_LABEL, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
 import { resolveAppCheckDebugToken } from '../../src/firebase/debugToken';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
@@ -73,7 +73,7 @@ function fakeSdk(reply = NANO_OK, o: { delayMs?: number; chunks?: number; source
 const nanoVia = (queue = createNanoQueue(1)): OnDeviceStream => (prompt, onText, o) => streamOnDevice({
   system: o?.system && o.user ? o.system : undefined,
   prompt: o?.system && o.user ? o.user : prompt,
-  constraint: o?.constraint, signal: o?.signal, onChunk: onText, onStart: o?.onStart, queue,
+  constraint: o?.constraint, signal: o?.signal, onChunk: onText, onStart: o?.onStart, onReady: o?.onReady, onLoading: o?.onLoading, queue,
 });
 const LM = {}; // Chrome's LanguageModel global: only its presence matters
 
@@ -238,7 +238,7 @@ describe('A: on-device concurrency cap', () => {
     const seen: Array<{ at: number; tiles: number }> = [];
     let chars = 0;
     const nano: SurfaceEngine = { id: 'nano', sim: false, async stream(_p, onText, so) {
-      so?.onStart?.();
+      so?.onStart?.(); so?.onReady?.();
       for (let i = 1; i <= NANO_OK.length; i++) { chars = i; onText(NANO_OK.slice(0, i)); }
       return NANO_OK;
     } };
@@ -391,7 +391,7 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
 
   it('a Nano that takes too long is stopped and Gemini takes over', async () => {
     let signal: AbortSignal | undefined;
-    const nano: SurfaceEngine = { id: 'nano', sim: false, stream: (_p, _on, so?: StreamOptions) => { signal = so?.signal; so?.onStart?.(); return never<string>(); }, handoff: geminiOk() };
+    const nano: SurfaceEngine = { id: 'nano', sim: false, stream: (_p, _on, so?: StreamOptions) => { signal = so?.signal; so?.onStart?.(); so?.onReady?.(); return never<string>(); }, handoff: geminiOk() };
     // the turn's clock: the Nano budget elapses at once; nothing else does
     const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, sleep: (ms) => (ms === 20_000 ? Promise.resolve() : never<void>()) });
     expect((await p)?.title).toBe('Living room');
@@ -406,7 +406,7 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
     let start!: () => void;
     let finish!: (text: string) => void;
     // the model is busy for 30 s before this call gets its turn, then answers in 5 s
-    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => new Promise<string>((resolve) => { start = () => so?.onStart?.(); finish = resolve; }) };
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => new Promise<string>((resolve) => { start = () => { so?.onStart?.(); so?.onReady?.(); }; finish = resolve; }) };
     const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, nanoQueueWaitMs: 60_000 });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(log.handoff).toEqual([]); // 30 s in the queue did not use up the budget
@@ -420,7 +420,7 @@ describe('B: Nano fails → Gemini takes over, and says so', () => {
 
   it('I4: once the model has the call, 20 s is all it gets', async () => {
     vi.useFakeTimers();
-    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => { setTimeout(() => so?.onStart?.(), 10_000); return never<string>(); } };
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: geminiOk(), stream: (_p, _on, so?: StreamOptions) => { setTimeout(() => { so?.onStart?.(); so?.onReady?.(); }, 10_000); return never<string>(); } };
     const { p, log } = turn(nano, { nanoTimeoutMs: 20_000, nanoQueueWaitMs: 60_000 });
     await vi.advanceTimersByTimeAsync(29_000);
     expect(log.handoff).toEqual([]);
@@ -1775,5 +1775,178 @@ describe('one-review room title', () => {
     const plan = { kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] } as never;
     expect(betterSummary(plan)).toMatch(/^Better: /);
     expect(roomSummary(plan)).toMatch(/^This room: /);
+  });
+});
+
+describe('live trace: a model that loads back is not out of time', () => {
+  /** An on-device model whose session takes `loadMs` to create (an evicted
+   *  model loading back), then answers `answerMs` later. */
+  function slowLoadSdk(loadMs: number, answerMs = 1_000, reply = NANO_OK, sessionAt = loadMs) {
+    let aborted = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
+      (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
+      const model = {
+        chromeAdapter: {} as { oldSession?: unknown },
+        generateContent: () => never(),
+        generateContentStream: async () => {
+          if (!Number.isFinite(loadMs)) await never<void>();
+          if (sessionAt < loadMs) setTimeout(() => { model.chromeAdapter.oldSession = {}; }, sessionAt);
+          await tick(loadMs);
+          model.chromeAdapter.oldSession = {};
+          const stream = (async function* () { await tick(answerMs); yield { text: () => reply, inferenceSource: 'on_device' }; })();
+          return { stream, response: never<{ text: () => string }>() };
+        },
+      };
+      return model as unknown as TextGenModel;
+    } });
+    return { aborted: () => aborted };
+  }
+
+  it('a 17.7 s load then a 3 s answer stays on device: the 20 s starts once the session exists', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(17_737, 3_000);
+    const loading: string[] = [];
+    let readyAt = -1;
+    const t0 = Date.now();
+    const out = streamOnDevice({ prompt: 'p', queue: createNanoQueue(1), onLoading: (l) => loading.push(l), onReady: () => { readyAt = Date.now() - t0; } }).then((t) => t, (e: Error) => `ERR ${e.message}`);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loading).toEqual(['loading']); // "Nano is loading the model…"
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await out).toBe(NANO_OK);
+    expect(readyAt).toBeGreaterThanOrEqual(17_737);
+    expect(loading).toEqual(['loading', 'loaded']);
+  });
+
+  it('once the session exists the answer still has only 20 s', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(10_000, 60_000);
+    const out = streamOnDevice({ prompt: 'p', queue: createNanoQueue(1) }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(10_000 + ON_DEVICE_MAX_RUN_MS + 200);
+    expect(await out).toBe('took longer than 20 s');
+  });
+
+  it('a load past its own ceiling is given up and named honestly', async () => {
+    vi.useFakeTimers();
+    const sdk = slowLoadSdk(Infinity);
+    const loading: string[] = [];
+    const q = createNanoQueue(1);
+    const out = streamOnDevice({ prompt: 'p', queue: q, onLoading: (l) => loading.push(l) }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_LOAD_MAX_MS - 1_000);
+    expect(q.active()).toBe(1); // 44 s of loading: still waiting, not "took longer than 20 s"
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(await out).toBe(STILL_LOADING);
+    expect(STILL_LOADING).toBe(NANO_STILL_LOADING);
+    expect(ON_DEVICE_LOAD_MAX_MS).toBe(45_000);
+    expect(loading).toEqual(['loading', 'gave-up']); // never "loaded"
+    expect(sdk.aborted()).toBe(1);
+    expect(q.idle()).toBe(true);
+  });
+
+  it('a session that turns up after the call gave up starts no clock and tells nobody', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(50_000, 1_000);
+    const loading: string[] = [];
+    let readies = 0;
+    const q = createNanoQueue(1);
+    const out = streamOnDevice({ prompt: 'p', queue: q, onLoading: (l) => loading.push(l), onReady: () => { readies++; } }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_LOAD_MAX_MS + 100);
+    expect(await out).toBe(STILL_LOADING);
+    const timersAfterEnd = vi.getTimerCount();
+    // create() finally resolves 5 s later: no 20 s timer is armed, no late news
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(timersAfterEnd);
+    await vi.advanceTimersByTimeAsync(ON_DEVICE_MAX_RUN_MS + 1_000);
+    expect(readies).toBe(0);
+    expect(loading).toEqual(['loading', 'gave-up']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a call stopped while loading reports "failed", never "loaded", and a late session is ignored', async () => {
+    vi.useFakeTimers();
+    slowLoadSdk(10_000, 1_000);
+    const loading: string[] = [];
+    let readies = 0;
+    const ctl = new AbortController();
+    const out = streamOnDevice({ prompt: 'p', queue: createNanoQueue(1), signal: ctl.signal, onLoading: (l) => loading.push(l), onReady: () => { readies++; } }).then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(3_000);
+    ctl.abort();
+    expect(await out).toBe('stopped');
+    await vi.advanceTimersByTimeAsync(10_000 + ON_DEVICE_MAX_RUN_MS + 1_000);
+    expect(readies).toBe(0);
+    expect(loading).toEqual(['loading', 'failed']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the bar and terminal: only a real load says "loaded"; giving up just takes the line down', () => {
+    expect(nanoLoadView('loading')).toEqual({ note: 'Nano is loading the model…', bar: 'Nano is loading the model…' });
+    expect(nanoLoadView('loaded')).toEqual({ note: 'Nano has loaded the model.', bar: 'Nano is drafting…' });
+    expect(nanoLoadView('gave-up')).toEqual({ note: null, bar: '' });
+    expect(nanoLoadView('failed')).toEqual({ note: null, bar: '' });
+  });
+
+  it('an engine that never reports anything still gets its clock after 15 s in line', async () => {
+    vi.useFakeTimers();
+    let handoffs = 0;
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async (_p, onText) => { onText(GEMINI_OK); return GEMINI_OK; } }, stream: () => never<string>() };
+    const p = runSurfaceTurn(req, nano, { onHandoff: () => { handoffs++; } }, { nanoTimeoutMs: 20_000, deviceIdSession: createDeviceIdSession() });
+    await vi.advanceTimersByTimeAsync(34_000);
+    expect(handoffs).toBe(0);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await p)?.title).toBe('Living room');
+    expect(handoffs).toBe(1);
+  });
+
+  it('the turn: loading is not counted against the budget, and the bar is told', async () => {
+    vi.useFakeTimers();
+    const loadingSeen: string[] = [];
+    let handoffs = 0;
+    // onStart at once, 18 s of loading, then the session exists and Nano answers in 3 s
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async () => GEMINI_OK }, stream: (_p, onText, so) => new Promise<string>((resolve) => {
+      so?.onStart?.();
+      so?.onLoading?.('loading');
+      setTimeout(() => { so?.onLoading?.('loaded'); so?.onReady?.(); }, 18_000);
+      setTimeout(() => { onText(NANO_OK); resolve(NANO_OK); }, 21_000);
+    }) };
+    const p = runSurfaceTurn(req, nano, { onNanoLoading: (l) => loadingSeen.push(l), onHandoff: () => { handoffs++; } }, { nanoTimeoutMs: 20_000 });
+    await vi.advanceTimersByTimeAsync(22_000);
+    expect((await p)?.tiles).toHaveLength(2);
+    expect(handoffs).toBe(0);
+    expect(loadingSeen).toEqual(['loading', 'loaded']);
+  });
+
+  it('the turn: a model still loading at its ceiling hands off and says so', async () => {
+    const log: string[] = [];
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async (_p, onText) => { onText(GEMINI_OK); return GEMINI_OK; } }, stream: async () => { throw new Error(NANO_STILL_LOADING); } };
+    const plan = await runSurfaceTurn(req, nano, { onHandoff: (s) => log.push(s.routeLine ?? ''), onError: (e) => log.push(`error: ${e}`) }, { deviceIdSession: createDeviceIdSession() });
+    expect(plan?.title).toBe('Living room');
+    expect(log).toEqual(['Gemini · cloud — Nano was still loading, so Gemini made this']);
+  });
+});
+
+describe('live trace: her words are never a button', () => {
+  it('the local plan expansion labels the Connect button "Connect a device"', () => {
+    const empty = { ...req, devices: [] };
+    for (const raw of [{ t: req.utterance }, { t: 'x', d: [], label: req.utterance }, { t: 'x', tiles: [{ type: 'connect', label: req.utterance }] }]) {
+      const out = expandNanoPlan(raw, empty);
+      expect(JSON.stringify(out.raw)).not.toContain(req.utterance);
+      expect((out.raw as SurfacePlan).tiles).toEqual([{ type: 'connect', label: CONNECT_LABEL }]);
+    }
+    const parsed = parseNanoPlan(JSON.stringify({ t: req.utterance, d: [] }), empty);
+    expect(parsed.ok && parsed.value.tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
+  });
+
+  it('a model plan whose Connect button is labelled with her words is relabelled', () => {
+    const plan: SurfacePlan = { kind: 'room', title: 'This room', tiles: [{ type: 'connect', label: req.utterance }, { type: 'row', children: [{ type: 'connect', label: 'Add button' }] }] } as SurfacePlan;
+    const out = dropUnbackedClaims(plan).plan;
+    expect(JSON.stringify(out)).not.toContain(req.utterance);
+    expect(out.tiles[0]).toEqual({ type: 'connect', label: CONNECT_LABEL });
+    expect(dropUnbackedClaims({ kind: 'room', title: 'r', tiles: [{ type: 'connect', label: CONNECT_LABEL }] } as SurfacePlan).plan.tiles).toEqual([{ type: 'connect', label: CONNECT_LABEL }]);
+  });
+
+  it('the whole turn: Gemini titling the button with her words still shows "Connect a device"', async () => {
+    const reply = JSON.stringify({ kind: 'room', title: 'This room', tiles: [{ type: 'connect', label: 'connect everything in this room' }] });
+    const nano: SurfaceEngine = { id: 'nano', sim: false, handoff: { id: 'gemini', sim: false, stream: async (_p, onText) => { onText(reply); return reply; } }, stream: async () => { throw new Error('the model crashed'); } };
+    const plan = await runSurfaceTurn({ ...req, devices: [] }, nano, {});
+    expect(plan?.tiles).toEqual([{ type: 'connect', label: CONNECT_LABEL }]);
   });
 });
