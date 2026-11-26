@@ -82,3 +82,9 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 | Facing pill (dark room) | ✓ "Not facing" |
 
 **For Akash in the morning (needs you):** Follow my hands with the new native tracking (stand follows hand, holds still without one; watch "DockKit tracking: off · aiming at hands: yes"); look-away on laptop + each phone (pills, nothing acts when you look away, ~0.5 s resume); lamp tile press + colours; Spotify play to the Marshall.
+
+### Re-check after the overnight fixes (27 Nov ~05:00 IST)
+- ✓ "add a study next to bedroom 2" → Nano plan edit "Add Study (3 × 3 m) east of Bedroom 2" (the sentence that used to skip the song).
+- ✓ Edited floor plan sent to the Nothing phone arrives WITH the edit (Bedroom 1, Bedroom 2, Living room, Study). The phone still holds one older Studio board saved before the fix (a different plan, correctly kept).
+- ✓ Reload keeps both boards; `?fresh=1` strips itself from the URL and leaves a backup (mc.canvas.v1.beforeFresh).
+- ✓ Chat: Nano's "I will call your daughter right away" is now replaced by "I can't do that — I can only change things here on your boards and devices." (guard probe: 1/60 false positives, 3/32 misses).
