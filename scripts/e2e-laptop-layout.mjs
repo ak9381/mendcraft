@@ -58,6 +58,7 @@ const VIEWPORTS = [
   { name: 'laptop-1280x800', width: 1280, height: 800 },
   // The live window: 1550×656 at 80 % browser zoom.
   { name: 'laptop-1550x656-zoom80', width: 1938, height: 820 },
+  { name: 'laptop-1920x1080', width: 1920, height: 1080 },
 ];
 // With two (SIM) phones paired the "2 phones connected · … · Disconnect"
 // strip is on screen: it must never cover the focused board, and Disconnect
@@ -386,10 +387,20 @@ async function clusterHoldsStill(page, label) {
   await page.evaluate(() => document.querySelector('.mc-hand-cluster .mc-tools-chip')?.click()); await wait(1200);
   const opened = await toolsOpen();
   const uOpen = await undo(), rOpen = await rects();
+  // Every cluster button answers a hit-test at its centre: the open Tools bar
+  // (and, below, a wrapped status line) never lies over it.
+  const clusterHits = () => page.evaluate(() => [...document.querySelectorAll('.mc-hand-cluster > *')].filter((e) => e.getClientRects().length).filter((e) => {
+    const r = e.getBoundingClientRect(); const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !h || !(h === e || e.contains(h));
+  }).map((e) => `${e.textContent.trim().slice(0, 14)} → ${document.elementFromPoint(e.getBoundingClientRect().left + 20, e.getBoundingClientRect().top + 20)?.className ?? '?'}`));
+  const hidOpen = await clusterHits();
+  check(hidOpen.length === 0, `${label}: with Tools open every cluster button hit-tests to itself${hidOpen.length ? ` — ${hidOpen.join('; ')}` : ''}`);
   await page.evaluate(() => document.querySelector('.mc-hand-cluster .mc-tools-chip')?.click()); await wait(1200);
   const uClosed = await undo();
-  await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = 'Swapped: Nothing on the left, iPhone on the right. Say undo to put them back where they were before.'; }); await wait(400);
+  await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = 'Swapped: Nothing on the left, iPhone on the right. Say undo to put them back where they were before. '.repeat(4); }); await wait(400);
   const uToast = await undo(), rToast = await rects();
+  const hidToast = await clusterHits();
+  check(hidToast.length === 0, `${label}: with a wrapped status line every cluster button hit-tests to itself${hidToast.length ? ` — ${hidToast.join('; ')}` : ''}`);
   await page.evaluate(() => { const s = document.querySelector('.mc-canvas-status'); if (s) s.textContent = ''; }); await wait(200);
   check(opened && u0 !== 'none' && uOpen === u0 && uClosed === u0 && uToast === u0, `${label}: Undo holds still — Tools open, closed, toast (${u0} | ${uOpen} | ${uClosed} | ${uToast})`);
   check(rOpen === base && rToast === base, `${label}: no cluster button moves with the top bar`);
@@ -405,7 +416,9 @@ async function pairedRun(browser, vp, tiles) {
   // Both SIM phones in: press Continue, then at once press again where it
   // was and Disconnect itself (a double click / a tremor's repeated fist).
   // Disconnect is elsewhere, and ignores presses for a second after it appears.
-  const two = await page.waitForFunction(() => document.querySelectorAll('.mc-paired-row .mc-paired-chip').length >= 2 && !!document.querySelector('.mc-paired-continue:not([disabled])'), { timeout: 10_000 }).then(() => true, () => false);
+  // (Pressed as soon as Continue is live — the SIM script presses it itself
+  // at 4 s; the second phone still joins after.)
+  const two = await page.waitForFunction(() => document.querySelectorAll('.mc-paired-row .mc-paired-chip').length >= 1 && !!document.querySelector('.mc-paired-continue:not([disabled])'), { timeout: 10_000, polling: 50 }).then(() => true, () => false);
   if (two) {
     const tap = await page.evaluate(() => {
       const c = document.querySelector('.mc-paired-continue');
@@ -421,8 +434,8 @@ async function pairedRun(browser, vp, tiles) {
     });
     check(tap.shown && !tap.under, `${vp.name}: Disconnect never appears under the Continue just pressed`);
     await new Promise((r) => setTimeout(r, 200));
-    check(await page.evaluate(() => /2 phones connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? '')), `${vp.name}: a press on Disconnect right as it appears is ignored`);
-  } else check(false, `${vp.name}: Continue offered once two SIM phones joined`);
+    check(await page.evaluate(() => /phones? connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? '')), `${vp.name}: a press on Disconnect right as it appears is ignored`);
+  } else check(false, `${vp.name}: Continue offered once a SIM phone joined`);
   const joined = await page.waitForFunction(() => /2 phones connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? ''), { timeout: 12_000 }).then(() => true, () => false);
   check(joined, `${vp.name}: two SIM phones paired, connected strip shown`);
   // Back on the room board, Tools closed, camera on, status line cleared, as
@@ -516,7 +529,38 @@ async function pairedRun(browser, vp, tiles) {
   if (menu) {
     check(menu.covered.length === 0, `${vp.name}: nothing covers the open More menu${menu.covered.length ? ` — ${menu.covered.join(', ')}` : ''}`);
     if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-more.png`) });
+    await page.evaluate(() => { const b = document.querySelector('.mc-more-btn'); if (b?.getAttribute('aria-expanded') === 'true') b.click(); });
+    await new Promise((r) => setTimeout(r, 1200));
+    await page.evaluate(() => { if (document.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)')) document.querySelector('.mc-tools-chip')?.click(); });
+    await new Promise((r) => setTimeout(r, 300));
   }
+  // The docked engine cards stay readable with the phones in the bar: the
+  // longest states, no clipped name or state.
+  const clipped = await page.evaluate(() => {
+    const bar = document.querySelector('.mc-engine-bar');
+    for (const [i, c] of [...document.querySelectorAll('.mc-engine-card')].entries()) {
+      c.setAttribute('data-state', i ? 'unavailable' : 'working');
+      const st = c.querySelector('.mc-engine-state'); if (st) st.textContent = i ? 'Unavailable' : 'Working';
+    }
+    const b = bar.getBoundingClientRect();
+    const out = [];
+    for (const el of bar.querySelectorAll('.mc-engine-name, .mc-engine-state, .mc-paired-count, .mc-paired-disconnect')) {
+      if (!el.getClientRects().length) continue;
+      const r = el.getBoundingClientRect();
+      if (el.scrollWidth > el.clientWidth + 1 || r.right > b.right + 1 || r.left < b.left - 1) out.push(el.textContent.trim());
+    }
+    for (const c of bar.querySelectorAll('.mc-engine-card')) { const r = c.getBoundingClientRect(); const head = c.querySelector('.mc-engine-head').getBoundingClientRect(); const body = c.querySelector('.mc-engine-body').getBoundingClientRect(); if (head.right > r.right + 1 || body.right > r.right + 1) out.push(c.textContent.trim()); }
+    return { out, on: b.left >= 0 && b.right <= innerWidth };
+  });
+  check(clipped.out.length === 0 && clipped.on, `${vp.name}: engine cards and phones read in full in the bar ("Working", "Unavailable")${clipped.out.length ? ` — clipped: ${clipped.out.join(', ')}` : ''}`);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name}-engines.png`) });
+  // Disconnect, long armed (more than 1.1 s since it appeared), does disconnect.
+  const gone = await page.evaluate(async () => {
+    document.querySelector('.mc-paired-row .mc-paired-disconnect')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return !/phones? connected/.test(document.querySelector('.mc-paired-row:not([hidden])')?.textContent ?? '');
+  });
+  check(gone, `${vp.name}: Disconnect pressed after 1.1 s disconnects the phones`);
   check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`);
   await page.close();
 }
