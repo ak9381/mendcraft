@@ -254,6 +254,29 @@ export function createCueLimiter(minGapMs = GIMBAL_CUE_MIN_GAP_MS, now: () => nu
   };
 }
 
+/** Gimbal modes: at most one per `minGapMs` (default 1 s), and the same mode
+ *  again within `sameModeMs` (default 5 s) is a repeat, dropped. A different
+ *  mode after the gap always passes; the same mode passes again once the
+ *  window is over (the stand may have changed on its own meanwhile). */
+export const GIMBAL_MODE_MIN_GAP_MS = 1000;
+export const GIMBAL_MODE_REPEAT_MS = 5000;
+export interface ModeLimiter {
+  ready(mode: GimbalModeKind): boolean;
+  mark(mode: GimbalModeKind): void;
+  allow(mode: GimbalModeKind): boolean;
+}
+export function createModeLimiter(minGapMs = GIMBAL_MODE_MIN_GAP_MS, sameModeMs = GIMBAL_MODE_REPEAT_MS, now: () => number = () => Date.now()): ModeLimiter {
+  let last = -Infinity;
+  let lastMode: GimbalModeKind | null = null;
+  const ready = (mode: GimbalModeKind): boolean => {
+    const gap = now() - last;
+    if (gap < minGapMs) return false;
+    return !(mode === lastMode && gap < sameModeMs);
+  };
+  const mark = (mode: GimbalModeKind): void => { last = now(); lastMode = mode; };
+  return { ready, mark, allow(mode) { if (!ready(mode)) return false; mark(mode); return true; } };
+}
+
 export interface RelayCommand {
   kind: RelayCommandKind;
   /** For 'command': the typed utterance to run. For 'transfer'/'announce': the

@@ -6,6 +6,7 @@
 import {
   advancePair,
   createCueLimiter,
+  createModeLimiter,
   cryptoRandom,
   isSessionId,
   parsePing,
@@ -280,6 +281,8 @@ export async function createHostSession(
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
   const cueLimiter = createCueLimiter(undefined, opts.now);
   let cueInflight = false;
+  const modeLimiter = createModeLimiter(undefined, undefined, opts.now);
+  let modeInflight = false;
   // The most recent snapshot, re-sent whenever a /control dashboard announces itself,
   // so a dashboard that joins late sees current state without waiting for the
   // next change. Pairing state is unaffected by control presence.
@@ -412,7 +415,15 @@ export async function createHostSession(
     },
     sendGimbalMode: async (mode) => {
       if (!isGimbalMode(mode) || core.state !== 'paired') return false;
-      await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalMode', text: mode } });
+      // <= 1 per second, and the same mode again is a repeat: dropped.
+      if (modeInflight || !modeLimiter.ready(mode)) return false;
+      modeInflight = true;
+      try {
+        await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'gimbalMode', text: mode } });
+      } finally {
+        modeInflight = false;
+      }
+      modeLimiter.mark(mode);
       return true;
     },
     publishState,
@@ -441,6 +452,8 @@ export async function createGuestSession(
   let modeCb: ((mode: GimbalModeKind) => void) | null = null;
   // The receiver enforces its own gap (1.5 s, jitter-tolerant), whatever the sender does.
   const cueLimiter = createCueLimiter(GIMBAL_CUE_RECEIVE_GAP_MS, opts.now);
+  // The phone gates modes too (same 1 s gap, repeats dropped), whatever the sender does.
+  const modeLimiter = createModeLimiter(undefined, undefined, opts.now);
   // Buffer the newest snapshot so an onSnapshot() wired after the host's replay
   // still sees current state (same late-join contract as ControlSession).
   let lastSnapshot: ControlSnapshot | null = null;
@@ -483,7 +496,7 @@ export async function createGuestSession(
       if (isGimbalCue(kind) && cueCb && cueLimiter.allow(kind)) cueCb(kind);
     } else if (msg.type === 'cmd' && msg.from === 'host' && msg.cmd.kind === 'gimbalMode') {
       const mode = msg.cmd.text;
-      if (isGimbalMode(mode)) modeCb?.(mode);
+      if (isGimbalMode(mode) && modeCb && modeLimiter.allow(mode)) modeCb(mode);
     } else if (msg.type === 'privacyReply') {
       const wait = pending.get(msg.reply.jobId);
       if (wait) {
