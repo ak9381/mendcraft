@@ -1743,3 +1743,16 @@
 @media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); width: auto; max-height: 76vh; } }
 .mc-voice-sheet .mc-voice-pick { display: grid; justify-content: stretch; }
 .mc-voice-pick > span { justify-self: start; }
+
+/* Read aloud: On / Off — a big (56 px) toggle below Talk in the hand
+   cluster; on the phone shell it sits bottom-left above the Join pill, clear
+   of the centre mic. Same setting as More -> Voice -> Read replies aloud. */
+.mc-read-aloud { min-height: 56px; font-weight: 650; white-space: nowrap; }
+.mc-hand-cluster .mc-read-aloud { position: relative; width: 100%; min-width: 120px; min-height: 56px; justify-content: center; box-sizing: border-box; border-radius: 999px; }
+.mc-phone-simple .mc-read-aloud {
+  display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 61; left: 16px;
+  bottom: calc(92px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  min-height: 56px; padding: 0 16px; border-radius: 999px; font-size: 16px;
+  max-width: calc(50vw - 58px - 16px); overflow: hidden; text-overflow: ellipsis;
+}
+.mc-menu-open .mc-read-aloud { display: none !important; }

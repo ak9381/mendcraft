@@ -350,9 +350,14 @@ function setFlag(key: string, on: boolean, store?: Storage): void {
 /** Has she opted in to online voices (text leaves the device to be spoken)? Off unless '1'. */
 export const loadAllowCloud = (store?: Storage): boolean => flag(CLOUD_VOICE_KEY, store);
 export const saveAllowCloud = (on: boolean, store?: Storage): void => setFlag(CLOUD_VOICE_KEY, on, store);
-/** Canvas: read status replies aloud. Off unless '1'. */
-export const loadReadAloud = (store?: Storage): boolean => flag(READ_ALOUD_KEY, store);
-export const saveReadAloud = (on: boolean, store?: Storage): void => setFlag(READ_ALOUD_KEY, on, store);
+/** Canvas: read status replies aloud. ON by default (Akash, 26 Nov); her
+ *  choice is remembered: '1' on, '0' off, nothing stored = on. */
+export const loadReadAloud = (store?: Storage): boolean => {
+  try { return storageOf(store)?.getItem(READ_ALOUD_KEY) !== '0'; } catch { return true; }
+};
+export const saveReadAloud = (on: boolean, store?: Storage): void => {
+  try { storageOf(store)?.setItem(READ_ALOUD_KEY, on ? '1' : '0'); } catch { /* private mode: in-memory only */ }
+};
 
 export type SpeechPlatform = 'mac' | 'ios' | 'android' | 'other';
 /** Which OS's voices we are looking at (iPadOS reports itself as a Mac with touch). */
