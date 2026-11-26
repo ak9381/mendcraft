@@ -4022,6 +4022,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root,
     gimbalKeepAlive: opts.gimbalKeepAlive,
     sensing: () => !!phoneSensor?.running(),
+    // iPhone shell: "follow my hands" runs on the NATIVE hand tracker. The
+    // WebView camera is lent to it (all web camera uses paused, restored on
+    // leaving hands): DockKit follows the WebKit process's capture, so a
+    // running web camera kept the stand on her face. The web sensing layer
+    // is only the fallback tracker (older app builds).
+    gimbalNative: phoneShell && opts.phoneCamera?.setYield ? {
+      yieldCamera: async (on) => { await opts.phoneCamera?.setYield?.(on); },
+      fallbackTracker: async (on) => { await phoneSensor?.request('follow', on); },
+      onChange: () => { senseChanged(); },
+      nativeHandsOptions: () => {
+        // Live test switches (localStorage): mc.gimbalHandsRaw=1 → raw sensor
+        // buffers + device orientation; mc.gimbalHandsMirror=1 → mirrored rect.
+        try {
+          return { corrected: storage.getItem('mc.gimbalHandsRaw') !== '1', mirrored: storage.getItem('mc.gimbalHandsMirror') === '1' };
+        } catch { return undefined; }
+      },
+    } : undefined,
     hands: async (r, onEvent) => {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
@@ -4089,7 +4106,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // Sensing off from the pill: a waiting point ends, and a hands follow
           // with no frames left says so and holds still (never the face).
           if (pointWait?.phone) { endPointWait(); say('Hand tracking off — nothing was captured.'); }
-          if (inputs.gimbal.mode() === 'hands' && !handsOn) say(HANDS_PAUSED);
+          if (inputs.gimbal.mode() === 'hands' && !handsOn && !inputs.gimbal.nativeHands?.()) say(HANDS_PAUSED);
         },
       })
     : null;
@@ -4123,10 +4140,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // dropped is not claimed. 'hands' needs the read-back OFF too: hands with
     // DockKit still tracking would really be following the face.
     const trackingOn = diag?.systemTracking;
+    // Native hands: claimed only while the native tracker really runs.
+    const handsLive = diag?.nativeHands ? !!diag.handTracker : phoneSensor.running();
     const gimbal = !gimbalDocked ? 'none'
       : mode === 'face' ? (trackingOn === false ? 'ready' : 'tracking')
-      : mode === 'hands' && phoneSensor.running() && trackingOn !== true ? 'hands' : 'ready';
-    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+      : mode === 'hands' && handsLive && trackingOn !== true ? 'hands' : 'ready';
+    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running() || !!diag?.handTracker, hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
     if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
     if (diag) s.aimingAtHands = diag.aimingAtHands;
     if (diag?.signSuspect) s.aimSign = diag.signSuspect;
@@ -4207,8 +4226,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           if (t) say(t);
         }).catch(() => {}).finally(() => { senseChanged(); pushGimbal(); });
       };
-      if (phoneSensor && mode === 'hands') { void phoneSensor.request('follow', true).then(run); return; }
-      if (phoneSensor) void phoneSensor.request('follow', false);
+      // Native hand tracker (new builds): the controller hands the camera
+      // over and starts the web tracker itself only as the fallback.
+      const native = !!getGimbalPlugin()?.startHandTracking && !!opts.phoneCamera?.setYield;
+      if (phoneSensor && mode === 'hands' && !native) { void phoneSensor.request('follow', true).then(run); return; }
+      if (phoneSensor && !native) void phoneSensor.request('follow', false);
       run();
       return;
     }

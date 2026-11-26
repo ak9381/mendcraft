@@ -15,6 +15,7 @@ import {
   NO_GIMBAL_WHY,
   HANDS_PAUSED,
   type GimbalCanvasController,
+  type GimbalCanvasOptions,
 } from './gimbalCanvas';
 import { cameraHandsFromSelfie } from './handSpace';
 import type { Pt } from '../input/handLogic';
@@ -42,6 +43,9 @@ export interface CanvasInputsOptions {
   gimbalKeepAlive?: boolean;
   /** Another hand tracker is feeding the gimbal (the iPhone's sensing layer). */
   sensing?: () => boolean;
+  /** Passed to the gimbal controller (gimbalCanvas.ts): the native hand
+   *  tracker's camera hand-off, the fallback web tracker, change pings. */
+  gimbalNative?: Pick<GimbalCanvasOptions, 'yieldCamera' | 'fallbackTracker' | 'onChange' | 'nativeHandsOptions'>;
   on?: CanvasInputsCallbacks;
 }
 
@@ -61,6 +65,7 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     createGimbalCanvasController({
       handsRunning: () => activeHandsStop !== null || !!opts.sensing?.(),
       keepAlive: opts.gimbalKeepAlive,
+      ...opts.gimbalNative,
     });
   const handsMount = opts.hands ?? mountCanvasHands;
   const report = (p: Promise<{ ok: boolean; why?: string; status?: string }>): void => {
@@ -117,7 +122,7 @@ export function createCanvasInputs(opts: CanvasInputsOptions = {}): CanvasInputs
     // No hand frames any more: hands mode simply holds still (tracking stays
     // off) — it never falls back to the face — and follows again when frames
     // return. Other modes: restore the chosen tracking state.
-    if (gimbal.mode() === 'hands') { if (!opts.sensing?.()) on.status?.(HANDS_PAUSED); }
+    if (gimbal.mode() === 'hands') { if (!opts.sensing?.() && !gimbal.nativeHands?.()) on.status?.(HANDS_PAUSED); }
     else void gimbal.release().catch(() => {});
   }
 

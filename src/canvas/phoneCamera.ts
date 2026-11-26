@@ -116,6 +116,12 @@ export interface PhoneCamera {
   lastError(): unknown;
   /** Current minimum ms between tracking runs (the throttle). */
   intervalMs(): number;
+  /** Yield the lens to native code (the iPhone's own hand tracker for the
+   *  gimbal): while yielded the stream is stopped whatever the uses say;
+   *  un-yield restores exactly the uses still on. Resolves once stopped /
+   *  restarted. Optional for test doubles. */
+  setYield?(on: boolean): Promise<void>;
+  yielded?(): boolean;
   destroy(): void;
 }
 
@@ -149,9 +155,11 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
   let lastHandAt = -Infinity;
   let chain: Promise<void> = Promise.resolve();
   let destroyed = false;
+  /** The lens is lent to native code (setYield). */
+  let yielded = false;
 
   const visible = (): boolean => !suspended && (!doc || doc.visibilityState !== 'hidden');
-  const active = (): boolean => !destroyed && !failed && want.size > 0 && visible();
+  const active = (): boolean => !destroyed && !failed && !yielded && want.size > 0 && visible();
   const setStatus = (s: PhoneCameraStatus): void => {
     if (s === status) return;
     status = s;
@@ -277,6 +285,13 @@ export function createPhoneCamera(deps: PhoneCameraDeps = {}): PhoneCamera {
     status: () => status,
     lastError: () => error,
     intervalMs,
+    setYield(on) {
+      if (yielded === on) return chain;
+      yielded = on;
+      if (!on) lostTries = 0;
+      return run();
+    },
+    yielded: () => yielded,
     destroy() {
       destroyed = true;
       want.clear();
