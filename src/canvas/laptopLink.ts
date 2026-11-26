@@ -148,9 +148,13 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     // old messages, and a laptop whose listener went quiet still looks paired).
     let live = false;
     let proveNow: () => void = () => undefined;
+    let pauseProof: () => void = () => undefined;
     const onState = (st: PairState): void => {
       if (!live || current !== self || swapping) return;
-      if (st === 'gone' || st === 'disconnected') { stopProof(); linkUp = null; set('error', LINK_LINES.lost); }
+      // The laptop said bye (or the listener dropped): the link is lost, but
+      // this session stays in the room, so a laptop that comes back — a new
+      // host session after a reload — is followed without a new chime.
+      if (st === 'gone' || st === 'disconnected') { pauseProof(); linkUp = null; set('error', LINK_LINES.lost); }
       // The laptop said hello again: ask for proof right away.
       else if (st === 'paired' && state !== 'connected') proveNow();
     };
@@ -202,10 +206,12 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
     let next: unknown = null;
     let dead = false;
     let proved = false;
+    /** Lost: no pinging until the laptop is heard again (onState 'paired'). */
+    let paused = false;
     const mineLive = (): boolean => !dead && current === res;
     const sendPing = (): void => {
       next = null;
-      if (!mineLive() || wait) return;
+      if (!mineLive() || wait || paused) return;
       const nonce = `p${Date.now().toString(36)}-${++pingSeq}`;
       const timer = setTimer(() => {
         if (wait?.nonce !== nonce) return;
@@ -232,8 +238,14 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       next = setTimer(sendPing, PING_EVERY_MS);
     });
     proveNow = (): void => {
+      paused = false;
       if (next !== null) { clearTimer(next); next = null; }
       sendPing();
+    };
+    pauseProof = (): void => {
+      paused = true;
+      if (wait) { clearTimer(wait.timer); wait = null; }
+      if (next !== null) { clearTimer(next); next = null; }
     };
     stopProof = (): void => {
       dead = true;

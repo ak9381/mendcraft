@@ -134,7 +134,9 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
       gen++;
       const mine = gen;
       phase = 'pairing';
-      list = [];
+      // Running it again admits MORE phones: real phones already paired stay
+      // (their relay is kept); only the scripted SIM joins start over.
+      list = list.filter((p) => !p.sim);
       clearTimers();
       changed();
       if (d.sim()) {

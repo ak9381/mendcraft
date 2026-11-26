@@ -751,6 +751,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   root.appendChild(pairedRow);
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
+  /** The host session's short code was re-opened for more phones (pair-first). */
+  let admissionOpen = false;
   let flowOpening = false;
   let flowOwnsHost = false; // only the pair-first flow may auto-hide the pairing host
   /** iPhone sensing status per announced phone (phonePoint.ts), from its
@@ -789,6 +791,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
       if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }
+      // Pairing is over: the short code goes (it only admits phones while pairing).
+      if (admissionOpen && pairFirst.phase() !== 'pairing') { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); }
       nextChips?.refresh();
     },
   });
@@ -2802,8 +2806,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     phoneAi.clear();
     announceGate.clear();
   }
-  /** The relay is kept while the pair-first flow still has phones (live/asking). */
-  const relayKept = (): boolean => (pairFirst.phase() === 'live' || pairFirst.phase() === 'asking') && pairFirst.phones().length > 0;
+  /** The relay is kept while the pair-first flow still has phones (pairing
+   *  again for one more, asking, or live). */
+  const relayKept = (): boolean => pairFirst.phase() !== 'idle' && pairFirst.phones().length > 0;
   function closeConnectSheet(): void {
     if (pairingStop && !relayKept()) { void pairingStop(); pairingStop = null; pairFirst.cancel(); phoneAi.clear(); announceGate.clear(); }
     if (!sheetOpen) return;
@@ -2831,7 +2836,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   async function joinPhone(frameId: string): Promise<boolean> {
     const open = sheetOpen; if (!open || open.frameId !== frameId) return false;
-    if (pairingStop && relayKept()) { open.sheet.setStatus(`${pairFirst.phones().length} phone(s) already connected. Use Disconnect in the Connected row to end it.`); return true; }
+    if (pairingStop && hostSession && relayKept()) {
+      // Phones are already paired: keep THIS host session (same room, same
+      // session id, so their pings keep being answered) and just open the
+      // code again so the chime admits one more phone.
+      const session = hostSession;
+      livePairing?.stopChime();
+      admissionOpen = true;
+      try { await session.admitMore(); } catch {
+        if (sheetOpen === open) open.sheet.setStatus('Needs network: the Relay room is not reachable right now.');
+        return false;
+      }
+      if (sheetOpen !== open || hostSession !== session) return false;
+      void session.askWhoIsThere().catch(() => undefined);
+      republishCurrentBoard();
+      sheetOpen = null;
+      const n = pairFirst.phones().length;
+      livePairing = showPairing(open.host, {
+        code: session.code,
+        note: `${n} phone${n === 1 ? ' stays' : 's stay'} connected. Hold the next phone near the laptop.`,
+        onClose: () => { disconnectPhones(); open.host.hidden = true; },
+      });
+      pairingHost = open.host;
+      return true;
+    }
     if (simEnv() || !net.isOnline()) {
       open.sheet.setStatus('Joining a phone needs the network — this sim stays on this device.');
       return false;
@@ -2899,6 +2927,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     hostSession = res.session;
     // Phones already in the room (remembered pairs) learn this session's id.
     void res.session.askWhoIsThere().catch(() => undefined);
+    // Pair-first pairs phones one after another: the first phone's proof must
+    // not retire the code the next phone is about to hear.
+    if (pairFirst.phase() === 'pairing') { admissionOpen = true; void res.session.admitMore().catch(() => undefined); }
     showArrangeStrip(); // a phone is here: Swap sides becomes available
     saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a

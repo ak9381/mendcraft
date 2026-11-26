@@ -74,6 +74,14 @@ export interface HostSession extends SessionBase {
    *  limit or not paired, true once published. A failed publish rejects and
    *  does not start a gap. */
   sendGimbalCue(kind: GimbalCueKind): Promise<boolean>;
+  /** Open the short code again so MORE phones can join this same session
+   *  (re-running "connect devices"): phones already here keep their link and
+   *  this session id. The code stays open until endAdmission() or
+   *  ALIAS_TTL_MS, whichever is first; a ping from a paired phone does not
+   *  close it meanwhile. */
+  admitMore(): Promise<void>;
+  /** Close the short code now (pairing is over). */
+  endAdmission(): Promise<void>;
 }
 
 /** Read-only-ish /control dashboard view: it reads snapshots, and can REQUEST a run
@@ -259,12 +267,15 @@ export async function createHostSession(
   // replayed on a reload: at most UNSIGNED_PING_BURST answers per UNSIGNED_PING_GAP_MS.
   let unsignedPongs: number[] = [];
   let aliasCleared = false;
+  /** admitMore() is holding the code open for another phone. */
+  let admitting = false;
   async function clearAliasOnce(): Promise<void> {
     if (aliasCleared) return;
     aliasCleared = true;
+    admitting = false;
     await transport.clearAlias(code).catch(() => undefined);
   }
-  const aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
+  let aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
   let musicCb: ((music: MusicStatus) => void) | null = null;
@@ -332,9 +343,9 @@ export async function createHostSession(
         unsignedPongs = unsignedPongs.filter((at) => now() - at < UNSIGNED_PING_GAP_MS);
         if (unsignedPongs.length >= UNSIGNED_PING_BURST) return;
         unsignedPongs.push(now());
-      } else {
+      } else if (!admitting) {
         // Only a phone that heard THIS session can name it: the short-code
-        // alias has done its job.
+        // alias has done its job (unless it was re-opened for another phone).
         clearTimeout(aliasTimer);
         void clearAliasOnce();
       }
@@ -404,6 +415,18 @@ export async function createHostSession(
       return true;
     },
     publishState,
+    admitMore: async () => {
+      if (core.isClosed()) return;
+      clearTimeout(aliasTimer);
+      admitting = true;
+      aliasCleared = false;
+      aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
+      await transport.setAlias(code, token);
+    },
+    endAdmission: async () => {
+      clearTimeout(aliasTimer);
+      await clearAliasOnce();
+    },
     close: async () => {
       clearTimeout(aliasTimer);
       await clearAliasOnce();
