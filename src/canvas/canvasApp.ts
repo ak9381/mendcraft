@@ -3134,7 +3134,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     pairing = livePairing = showPairing(floatHost, {
       code: res.code,
       note: 'After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
-      onClose: () => { disconnectPhones(); floatHost.hidden = true; },
+      // A phone already joined: X only ends pairing (the card has just said
+      // it is connected). Nobody joined: X gives up the relay as before.
+      // Disconnecting phones is the Disconnect chip's job alone.
+      onClose: () => {
+        if (relayKept()) endExtraPairing(res.session); else disconnectPhones();
+        floatHost.hidden = true;
+      },
     });
     pairingHost = floatHost;
     return true;

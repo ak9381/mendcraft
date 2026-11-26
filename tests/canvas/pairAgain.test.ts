@@ -136,6 +136,12 @@ describe('review fixes', () => {
     expect(fn).not.toMatch(/disconnectPhones|pairingStop|pairFirst\.cancel/);
   });
 
+  it('closing the FIRST pairing card after a phone joined keeps the phones', () => {
+    const src = app();
+    const first = src.slice(src.indexOf('pairing = livePairing = showPairing(floatHost, {'), src.indexOf('pairingHost = floatHost;'));
+    expect(first).toContain('if (relayKept()) endExtraPairing(res.session); else disconnectPhones();');
+  });
+
   it('I2: the reopened code closes on pagehide and when pairing is done', () => {
     const src = app();
     expect(src).toContain("addEventListener('pagehide', onPageHide);");
