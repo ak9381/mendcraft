@@ -1339,7 +1339,9 @@ describe('UI fixes from the live run', () => {
   it('(c) with the preview showing, the hand cluster is laid out above it — nothing overlaps', async () => {
     const sheet = await css();
     const rule = sheet.match(/\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*\}/)?.[0] ?? '';
-    expect(rule).toContain('top: calc(var(--mc-bar-h, 64px) + 12px);');
+    // A fixed box: the top bar growing (Tools, a toast) never moves a button.
+    expect(rule).toContain('top: 76px;');
+    expect(rule).not.toContain('--mc-bar-h');
     // its box ends above the preview (216, or 144 in a short window) and the Facing pill
     expect(rule).toContain('bottom: calc(16px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));');
     expect(rule).toContain('flex-wrap: wrap;'); // too many buttons for the height: a second column (reading on), not a cut-off one

@@ -76,16 +76,23 @@ export const ROOM_MIN_Z = 0.8;
 /** Focus for a room dashboard: the WHOLE board in the space the chrome leaves,
  *  so every tile is visible without scrolling inside the board. 1:1 when it
  *  fits; a taller board zooms out, never below `minZ` — past that it is pinned
- *  to the top and the canvas itself scrolls (never a nested scroll). */
-export function focusWholeBoard(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number; bottom?: number }, margin = 16, minZ = ROOM_MIN_Z): Camera {
+ *  to the top and the canvas itself scrolls (never a nested scroll).
+ *  A board only a little too tall for the space between the insets (a short
+ *  window, where the top inset is mostly empty gap) is instead lifted so its
+ *  foot (the next-step chip row) sits on the bottom inset, never under the
+ *  bottom chrome; its head may use the top gap down to `topFloor` (where the
+ *  real top chrome ends). */
+export function focusWholeBoard(r: Rect, vp: Viewport, insets: { top?: number; left?: number; right?: number; bottom?: number; topFloor?: number }, margin = 16, minZ = ROOM_MIN_Z): Camera {
   const top = insets.top ?? 0, left = insets.left ?? 0, right = insets.right ?? 0, bottom = insets.bottom ?? 0;
+  const topFloor = Math.min(top + margin, insets.topFloor ?? top + margin);
   const availW = Math.max(1, vp.w - left - right);
   const availH = Math.max(1, vp.h - top - bottom);
   const z = Math.max(minZ, Math.min(1, (availW - 2 * margin) / r.w, (availH - 2 * margin) / r.h));
   const sw = r.w * z, sh = r.h * z;
-  // Screen = (world − camera) · z. Centre when it fits, else pin to the top-left.
+  // Screen = (world − camera) · z. Centre when it fits, else lift it (see above) or pin it to the top-left.
   const sx = sw <= availW ? left + (availW - sw) / 2 : left + margin;
-  const sy = sh <= availH ? top + (availH - sh) / 2 : top + margin;
+  const footUp = top + availH - sh; // foot on the bottom inset
+  const sy = sh <= availH ? top + (availH - sh) / 2 : footUp >= topFloor ? footUp : top + margin;
   return { x: r.x - sx / z, y: r.y - sy / z, z };
 }
 

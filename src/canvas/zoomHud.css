@@ -9,5 +9,11 @@
 .mc-zoom-fit { font-size: 16px; }
 .mc-phone-simple .mc-zoom-hud { display: none; }
 @media (max-width: 599px) { .mc-zoom-hud { display: none; } }
+/* A short window: level with the slimmer engine bar (bottom 8, 44 px
+   targets), so a pinned chip row just above that bar is never under it. */
+@media (max-height: 720px) and (min-width: 600px) {
+  .mc-canvas:not(.mc-phone-simple) .mc-zoom-hud { bottom: 8px; padding: 3px; }
+  .mc-canvas:not(.mc-phone-simple) .mc-zoom-btn { min-width: 44px; min-height: 44px; }
+}
 .mc-space-pan .mc-viewport, .mc-space-pan .mc-viewport * { cursor: grab !important; }
 .mc-viewport, body { overscroll-behavior: none; }

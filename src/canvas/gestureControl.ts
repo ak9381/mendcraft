@@ -70,6 +70,8 @@ export interface GestureControlOptions {
   /** Peace-and-move over nothing scrollable: pan the canvas (screen px). */
   onCanvasScroll?: (dx: number, dy: number) => void;
   onCanvasScrollEnd?: () => void;
+  /** Canvas-scrolled areas that run past the screen (see gestureScroll). */
+  canvasScrollAreas?: () => HTMLElement[];
   /** A level control stepped by the peace gesture. */
   onLevel?: (el: HTMLElement, dir: 1 | -1, readout: string) => void;
   /** Tick sound on level steps (off by default). */
@@ -148,7 +150,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   let twoPeaceSince: number | null = null;
   const pairGrace = createPairGrace(bindings.map((b) => b.key));
   const scroller = createScrollDriver({
-    root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd,
+    root, onCanvasScroll: opts.onCanvasScroll, onCanvasScrollEnd: opts.onCanvasScrollEnd, canvasScrollAreas: opts.canvasScrollAreas,
     onLevel: opts.onLevel, tickSound: opts.levelTick,
   });
   const byKey = new Map<GestureKey, GestureBinding>(bindings.map((b) => [b.key, b]));

@@ -60,7 +60,7 @@ describe('connect-devices row: iPhone sub-states', () => {
     expect(pairing).toContain(`data-phone-sub="ios">${GIMBAL_READY_ROW}`);
     expect(pairing).not.toContain('data-phone-sub="android"');
     const asking = pairedRowHtml([nothing, iphone], 'asking', sub);
-    expect(asking).toContain('2 phones connected');
+    expect(asking.replace(/<[^>]+>/g, '')).toContain('2 phones connected');
     expect(asking).toContain(GIMBAL_READY_ROW);
     // No sub-state function: the row is unchanged.
     expect(pairedRowHtml([iphone], 'asking')).not.toContain('mc-paired-sub');

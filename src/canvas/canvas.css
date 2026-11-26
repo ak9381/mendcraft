@@ -319,6 +319,9 @@
   /* Above the full-screen review dialog (z-index 50, see .mc-review-dialog) so Save/Tools/etc.
      stay reachable while a review (including the Gemini follow-up one) is open. */
   z-index: 51; }
+/* Laptop: the bar (open Tools, a wrapped status line) ends short of the
+   right-hand hand cluster (canvasApp syncClusterInset), never over it. */
+@media (min-width: 601px) { .mc-canvas:not(.mc-phone-simple):has(.mc-hand-cluster) .mc-bar { right: max(16px, var(--mc-cluster-in, 16px)); } }
 .mc-bar-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .mc-bar-btns { display: contents; }
 /* Open Tools = the say box first, then Show everything, New board, Save, a
@@ -1422,6 +1425,14 @@
 @media (min-width: 1241px) { .mc-engine-bar { max-width: max(680px, min(760px, calc(100vw - 600px))); } }
 @media (max-width: 860px) { .mc-engine-where { display: none; } .mc-engine-card { width: 150px; flex-basis: 150px; } }
 @media (max-width: 600px) { .mc-engine-bar { display: none; } }
+/* A short window (a 656 px laptop window): one line per engine card and a
+   lower bar, so a room board's chip row fits above it (bottomInset measures
+   the bar's real top). Cards stay 44 px targets. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-engine-bar { bottom: 8px; padding: 4px 12px 4px 4px; }
+  .mc-engine-card { min-height: 44px; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 4px 12px 4px 10px; }
+  .mc-engine-where { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mc-engine-card, .mc-engine-card[data-state="working"] .mc-engine-dot,
   .mc-engine-bar.is-handoff .mc-engine-link-line, .mc-engine-bar.is-handoff .mc-engine-link-head { animation: none; transition: none; }
@@ -1456,9 +1467,11 @@
    being centred on the whole screen, so its last button is never behind the
    preview. One column with tighter gaps; only a window too short for that
    wraps a second column (to the right, reading on in order) — buttons never
-   overlap and never shrink. */
+   overlap and never shrink. Its box is FIXED (not var(--mc-bar-h)): the top
+   bar growing for Tools or a status line must never move a button under a
+   pointing palm — the open Tools bar (z 51) may pass over it instead. */
 .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
-  top: calc(var(--mc-bar-h, 64px) + 12px);
+  top: 76px;
   bottom: calc(16px + var(--mc-cam-h, 216px) + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   transform: none;
   justify-content: center;
@@ -1475,6 +1488,16 @@
   .mc-canvas:not(.mc-phone-simple) .mc-face-preview { width: 192px; height: 144px; }
   .mc-canvas:not(.mc-phone-simple) .mc-facing-banner { bottom: calc(16px + 144px + 8px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); }
   .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 8px; }
+}
+/* A shorter window still (a 656 px laptop window): the six buttons come down
+   to the 44 px touch floor with 6 px gaps, so the column (6 × 44 + 5 × 6 =
+   294 px) still fits between the top bar and the camera preview instead of
+   wrapping Edit into a second column. */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster { row-gap: 6px; }
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster > *,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-fab-mic,
+  .mc-canvas:not(.mc-phone-simple):has(.mc-face-preview:not([hidden])) .mc-hand-cluster .mc-read-aloud { min-height: 44px; }
 }
 @media (max-width: 1240px) {
   .mc-canvas:has(.mc-face-preview:not([hidden])) .mc-hand-cluster {
@@ -1628,6 +1651,45 @@
 .mc-paired-check { color: #1a7f37; font-weight: 700; }
 .mc-paired-wait { color: var(--text-dim, #777); }
 .mc-phone-simple .mc-paired-row { display: none !important; }
+/* Docked (past pairing, canvasApp dockPairedRow): a section of the engine
+   bar, in the bottom chrome row — no height of its own, never over a board.
+   Each phone's sub-state is a second, quieter line (ellipsis; the full text
+   is the row's title). Disconnect stays a full 44 px target. */
+.mc-engine-bar .mc-paired-row.is-docked {
+  position: static; transform: none; left: auto; bottom: auto; z-index: auto;
+  flex: 0 1 auto; min-width: 0; max-width: 340px;
+  display: grid; grid-template-columns: auto minmax(0, max-content) auto max-content; grid-auto-flow: row;
+  align-items: center; column-gap: 6px; row-gap: 0;
+  padding: 0 0 0 12px; border: 0; border-left: 1px solid var(--border); border-radius: 0;
+  background: transparent; box-shadow: none; font-size: 14px; line-height: 1.25;
+}
+.mc-engine-bar .mc-paired-row.is-docked[hidden] { display: none; }
+.mc-paired-row.is-docked .mc-paired-count { white-space: nowrap; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mc-paired-row.is-docked .mc-chip { justify-self: start; }
+/* In the bar "✓ 2 phones" is enough: the cards beside it keep their room. */
+.mc-paired-row.is-docked .mc-paired-connected { display: none; }
+.mc-paired-row.is-docked .mc-paired-phone {
+  grid-row: 2; grid-column: 1 / 4; width: 0; min-width: 100%; /* never widens the row */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-dim);
+}
+.mc-paired-row.is-docked .mc-paired-phone ~ .mc-paired-phone { display: none; }
+.mc-paired-row.is-docked .mc-paired-disconnect { grid-column: 4; grid-row: 1 / 3; min-height: 44px; padding: 0 14px; font-size: 14px; }
+/* Room for it: the bar may grow up to the corners (zoom HUD left, camera
+   preview right), and the "· on this device / cloud" captions give way. */
+@media (min-width: 1241px) {
+  /* Centred by margins, not left 50 % + translate: a left: 50 % box can only
+     shrink-to-fit into half the screen, which clipped the phones section. */
+  .mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) {
+    left: 0; right: 0; margin-inline: auto; width: fit-content; transform: none;
+    max-width: max(760px, calc(100vw - 640px));
+  }
+}
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-where { display: none; }
+/* The cards never squeeze their state ("Nano  Working", "Gemini  Unavailable"):
+   they keep their own width and the phones section gives way (ellipsis). */
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-card { flex: 0 0 auto; width: auto; min-width: max-content; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-state { white-space: nowrap; }
+.mc-engine-bar:has(> .mc-paired-row.is-docked:not([hidden])) .mc-engine-link { width: 24px; }
 
 /* Next-step chips (nextSteps.ts): a slim row at the foot of the focused board.
    It is its own flex row under .mc-frame-body (which shrinks to make room),
@@ -1870,7 +1932,12 @@
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-head { padding-block: 10px; }
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-frame-body { padding: 16px 20px 12px; }
 .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding: 8px 20px 10px; }
-.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: 52px; }
+/* …but never under 44 px ON SCREEN: at the 0.8 zoom floor that is 55 px. */
+.mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next-chip.mc-btn { min-height: max(52px, calc(44px / var(--mc-z, 1))); }
+/* A short window: a slimmer chip row (the chips stay ≥ 44 px on screen). */
+@media (max-height: 720px) and (min-width: 601px) {
+  .mc-canvas:not(.mc-phone-simple) .mc-frame[data-kind="room"] .mc-next { padding-block: 5px; }
+}
 /* AI drawer terminals: newest line on top, so the working cursor sits there too. */
 .mc-term-body { display: flex; flex-direction: column; }
 .mc-term-cursor { order: -1; }

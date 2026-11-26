@@ -30,6 +30,9 @@ export interface ScrollDriverOptions {
   onCanvasScrollEnd?: () => void;
   /** A level stepped (activity line). */
   onLevel?: (el: HTMLElement, dir: 1 | -1, readout: string) => void;
+  /** Areas that scroll by panning the canvas (no scroller of their own) but
+   *  run past the screen: a tall focused room board. They get the hint too. */
+  canvasScrollAreas?: () => HTMLElement[];
   /** Tick sound on each level step (off by default). */
   tickSound?: () => boolean;
 }
@@ -202,6 +205,7 @@ export function createScrollDriver(opts: ScrollDriverOptions): ScrollDriver {
     const out: HTMLElement[] = [];
     const view = doc.defaultView;
     const scrolls = (o?: string) => o === 'auto' || o === 'scroll' || o === 'overlay';
+    for (const el of opts.canvasScrollAreas?.() ?? []) if (out.length < MAX_BADGES && !el.closest('[hidden]')) out.push(el);
     for (const el of Array.from(root.querySelectorAll<HTMLElement>(KNOWN_SCROLLERS))) {
       if (out.length >= MAX_BADGES) break;
       if (el.closest('[hidden]')) continue;

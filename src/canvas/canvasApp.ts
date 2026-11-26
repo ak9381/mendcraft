@@ -30,7 +30,8 @@ import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
 import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, scriptedReply, type Attempt } from './tryToBreak';
-import { createPairFirst, isBuildDashboard, pairedRowHtml } from './pairedRow';
+import { createPairFirst, DISCONNECT_ARM_MS, isBuildDashboard, pairedRowHtml } from './pairedRow';
+import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
@@ -793,6 +794,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   pairedRow.setAttribute('aria-label', 'Connected devices');
   pairedRow.hidden = true;
   root.appendChild(pairedRow);
+  /** Past the pairing step the "N phones connected · Disconnect" row lives
+   *  INSIDE the engine bar (the bottom chrome row), so it takes no height of
+   *  its own and never floats over a board. While pairing (the pairing card
+   *  is up) and wherever the bar is not shown, it floats above the bar. */
+  const barShown = (): boolean => !!engineBar && (typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 601px)').matches);
+  function dockPairedRow(): void {
+    const dock = barShown() && pairFirst.phase() !== 'pairing';
+    const host = dock && engineBar ? engineBar.el : root;
+    if (pairedRow.parentElement !== host) host.appendChild(pairedRow);
+    pairedRow.classList.toggle('is-docked', dock);
+  }
+  /** Disconnect ignores presses for DISCONNECT_ARM_MS after it appears. */
+  const disconnectArm = createClickCooldown(DISCONNECT_ARM_MS);
+  let hadDisconnect = false;
   let pairFrame: string | null = null;
   let pairingHost: HTMLElement | null = null;
   /** The host session's short code was re-opened for more phones (pair-first). */
@@ -843,12 +858,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }));
       const rowWasHidden = pairedRow.hidden;
       pairedRow.hidden = !html || phoneShell;
+      dockPairedRow();
       // The row changes the bottom inset: re-fit the focused board above it.
       if (rowWasHidden !== pairedRow.hidden && focusId) queueMicrotask(() => { const f = focusId ? reg.get(focusId) : undefined; if (f) void flyTo(focusCam(fitBoardWidth(f))); });
       pairedRow.innerHTML = html;
+      // Docked, a phone's sub-state may be cut short: the full row is its title.
+      pairedRow.title = pairedRow.classList.contains('is-docked') ? (pairedRow.querySelector('.mc-paired-phone') ? [...pairedRow.querySelectorAll('.mc-paired-phone')].map((e) => e.textContent?.trim()).join(' · ') : '') : '';
       showArrangeStrip(true);
       pairedRow.querySelector<HTMLButtonElement>('.mc-paired-continue')?.addEventListener('click', () => { pairFirst.continueNext(); });
-      pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect')?.addEventListener('click', () => { disconnectPhones(); say('Phones disconnected.'); });
+      // Just appeared (Continue was pressed a moment ago): not armed yet.
+      const disconnectBtn = pairedRow.querySelector<HTMLButtonElement>('.mc-paired-disconnect');
+      if (disconnectBtn && !hadDisconnect) disconnectArm.arm(performance.now());
+      hadDisconnect = !!disconnectBtn && !pairedRow.hidden;
+      disconnectBtn?.addEventListener('click', () => {
+        if (!disconnectArm.ready(performance.now())) return;
+        disconnectPhones(); say('Phones disconnected.');
+      });
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
       if (pairingHost && flowOwnsHost && pairFirst.phase() !== 'pairing') { pairingHost.hidden = true; flowOwnsHost = false; }
@@ -1453,14 +1478,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Height the bottom chrome takes: the engine bar, plus the phones arrange
    *  strip and the connected-device row when they float above it. */
   const bottomInset = () => {
-    let b = engineBar ? (engineBar.el.offsetHeight || 68) + 24 : 92;
     const h = viewport.getBoundingClientRect().bottom || vp().h;
+    // 8 px clear of the engine bar's real top (it sits lower and slimmer on
+    // a short window, see canvas.css).
+    const barTop = engineBar?.el.offsetHeight ? engineBar.el.getBoundingClientRect().top : 0;
+    let b = engineBar ? (barTop ? Math.round(h - barTop) + 8 : 68 + 24) : 92;
     for (const el of [arrangeStrip, pairedRow]) {
+      if (el.classList.contains('is-docked')) continue; // inside the engine bar: no height of its own
       if (!el.hidden && el.offsetHeight) b = Math.max(b, Math.round(h - el.getBoundingClientRect().top) + DOCK_GAP);
     }
     return b;
   };
-  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset() });
+  /** How high a room board's head may go when lifting it clears its chip
+   *  row of the bottom chrome: under the open Tools bar, else to the bar's
+   *  own top edge (a passing status line may sit over the head for a moment;
+   *  never chips under the bottom chrome). */
+  const topFloor = () => (root.querySelector('.mc-bar-tools:not([hidden]):not(.mc-bar-tools-peek)') ? barH() : 16);
+  const insets = () => phoneShell ? { top: 0, left: 0, right: 0 } : ({ top: barH(), left: dockInset(), right: clusterInset(), bottom: bottomInset(), topFloor: topFloor() });
 
   function clearDock(): void {
     // Delete the dock surface in the processor too: forgetting it only here made
@@ -1591,11 +1625,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** The focused board's next-step chips stay visible: when the board runs
    *  under the engine bar, its chip row is lifted to sit just above the bar
    *  (never above the board's own head). */
+  // A row or its board that changes height (Hands on adds the board's hand
+  // buttons and gesture badges, a chip is added) re-pins the row.
+  const chipRowRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => keepChipsVisible()) : null;
+  const chipRowsSeen = new WeakSet<HTMLElement>();
   function keepChipsVisible(): void {
     if (phoneShell) return;
     for (const row of world.querySelectorAll<HTMLElement>('.mc-next')) {
+      if (chipRowRo && !chipRowsSeen.has(row)) { chipRowsSeen.add(row); chipRowRo.observe(row); if (row.parentElement) chipRowRo.observe(row.parentElement); }
       row.style.transform = '';
       row.classList.remove('is-lifted');
+      delete row.dataset.pinned;
       const frameEl = row.parentElement;
       if (!frameEl) continue;
       const z = camera.z || 1;
@@ -1604,18 +1644,63 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const box = row.getBoundingClientRect();
       const over = box.bottom - limit;
       if (over <= 0) continue;
-      // No higher than just under the board's title bar — and never onto a
-      // tile: only the empty space under the board's content may be used.
+      // No higher than just under the board's title bar. The focused room
+      // board that runs under the bottom chrome (taller than the screen even
+      // at its lowest zoom) keeps its chip row PINNED just above that chrome:
+      // sticky, the tiles scroll under it, so the next steps never need a
+      // scroll. Any other board only uses the empty space under its content
+      // (never onto a tile).
       const room = box.top - (frameEl.getBoundingClientRect().top + 64 * z);
       const content = frameEl.querySelector<HTMLElement>('.mc-surface')?.getBoundingClientRect();
-      const free = content && content.height > 0 ? box.top - content.bottom - 4 : room;
+      const free = tallRoomEl() === frameEl ? room : content && content.height > 0 ? box.top - content.bottom - 4 : room;
       const lift = Math.min(over, Math.max(0, room), Math.max(0, free));
       if (lift <= 0) continue;
       row.style.transform = `translateY(${-(lift / z).toFixed(1)}px)`;
       row.classList.add('is-lifted');
+      row.dataset.pinned = 'bottom';
     }
   }
+  /** The focused room board's element, when it is taller than the space
+   *  between the top inset and the bottom chrome (so the canvas scrolls). */
+  function tallRoomEl(): HTMLElement | null {
+    if (phoneShell || !focusId || !isRoomBoard(focusId)) return null;
+    const el = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`);
+    if (!el) return null;
+    const h = el.getBoundingClientRect().height;
+    return h > vp().h - barH() - bottomInset() + 1 ? el : null;
+  }
+  /** A vertical canvas pan (hand scroll, voice, wheel) on a tall focused room
+   *  board scrolls THROUGH the board and stops at its ends: its head no lower
+   *  than its framed top, its foot no higher than the bottom chrome. */
+  function clampRoomPan(next: Camera): Camera {
+    const el = tallRoomEl();
+    if (!el || next.z !== camera.z) return next;
+    const view = viewport.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const top0 = r.top - view.top;
+    const hi = barH() + 16; // its framed top (focusWholeBoard's margin)
+    // At the end the chip row's own (unlifted) foot sits exactly where the
+    // pinned row does, so the row never moves while the board scrolls.
+    const row = el.querySelector<HTMLElement>('.mc-next');
+    const rowFoot = row && row.offsetParent === el ? (row.offsetTop + row.offsetHeight) * camera.z : r.height;
+    const lo = vp().h - bottomInset() - rowFoot; // chip row's foot on the bottom chrome
+    const top = top0 - (next.y - camera.y) * camera.z;
+    // Never pulled back from where it already is (a zoom or a drag left it there).
+    const want = Math.min(Math.max(top, Math.min(lo, top0)), Math.max(hi, top0));
+    return want === top ? next : { ...next, y: camera.y + (top0 - want) / camera.z };
+  }
+  /** The top bar stops short of the hand cluster (--mc-cluster-in), so an
+   *  open Tools bar or a wrapped status line never covers Register / Tools. */
+  let clusterIn = -1;
+  function syncClusterInset(): void {
+    if (phoneShell) return;
+    const v = Math.round(clusterInset());
+    if (v === clusterIn) return;
+    clusterIn = v;
+    root.style.setProperty('--mc-cluster-in', `${v}px`);
+  }
   function applyCamera(): void {
+    syncClusterInset();
     root.style.setProperty('--mc-bar-h', `${barH()}px`);
     world.style.transform = cameraTransform(camera);
     root.style.setProperty('--mc-z', camera.z.toFixed(3)); // hand targets keep their on-screen size in overview
@@ -3586,8 +3671,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // Peace-and-move over nothing scrollable pans the canvas (dx/dy are
         // content motion; scroll-wheel style: hand down = see what is below);
         // persisted when it ends.
-        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = panBy(camera, dx, dy); applyCamera(); },
+        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = clampRoomPan(panBy(camera, dx, dy)); applyCamera(); },
         onCanvasScrollEnd: () => persist(),
+        // The hint sits at the right end of the board's pinned chip row: on
+        // the board, never over its head buttons (Smaller / Bigger / Close).
+        canvasScrollAreas: () => { const el = tallRoomEl(); const row = el?.querySelector<HTMLElement>('.mc-next'); return row ? [row] : el ? [el] : []; },
         onLevel: (_el, _dir, readout) => activityLog.push({ kind: 'gesture', text: `Peace and move → ${readout}`, target: null }),
         levelTick: () => { try { return storage.getItem('mc.levelTick') === '1'; } catch { return false; } },
       })
@@ -4387,7 +4475,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     // Nothing scrolls: move the canvas (scroll down = see what is below).
     const amount = page ? vp().h * 0.85 : 120;
-    camera = panBy(camera, 0, -sign * amount);
+    const was = camera.y;
+    camera = clampRoomPan(panBy(camera, 0, -sign * amount));
+    // A tall room board already at that end: say so (nothing moved).
+    if (Math.abs(camera.y - was) < 0.5 && tallRoomEl()) { say(dir === 'down' ? "That's the end of the board." : "That's the top of the board."); return; }
     applyCamera(); persist();
   }
   function run(text: string): boolean {
@@ -4738,7 +4829,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const onWindowBlur = () => { spaceHeld = false; root.classList.remove('mc-space-pan'); };
   // A focused board is re-fitted at its SHOWN size (a room board is widened
   // or narrowed for the window), not its stored one.
-  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
+  const onWindowResize = () => { if (phoneShell) { fitPhone(); return; } syncClusterInset(); if (!pairedRow.hidden) dockPairedRow(); if (focusId) { const f = reg.get(focusId); if (f) { camera = focusCam(fitBoardWidth(f)); applyCamera(); } } else { root.style.setProperty('--mc-bar-h', `${barH()}px`); } };
   // Opening Tools, a status line, or a wrap at 1280px changes the bar's height
   // without a window resize — keep --mc-bar-h in sync so the dock, AI panel,
   // and review padding don't slide under the bar.
@@ -4747,6 +4838,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     ? new ResizeObserver(() => { root.style.setProperty('--mc-bar-h', `${barH()}px`); })
     : null;
   if (barEl && barRo) barRo.observe(barEl);
+  // The engine bar settling (its states, a docked phones row) moves the
+  // bottom limit: re-pin the focused board's chip row above it.
+  const engineRo = typeof ResizeObserver !== 'undefined' && engineBar ? new ResizeObserver(() => keepChipsVisible()) : null;
+  if (engineRo && engineBar) engineRo.observe(engineBar.el);
   const onWindowOnline = () => setOnline(true);
   const onWindowOffline = () => setOnline(false);
   addEventListener('pointermove', onWindowPointerMove);
@@ -4807,6 +4902,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('offline', onWindowOffline);
     removeEventListener('pagehide', onPageHide);
     barRo?.disconnect();
+    engineRo?.disconnect();
+    chipRowRo?.disconnect();
   }
   // ---- zoom + pan (wheel, pinch, keys, HUD, voice) ----
   // Every zoom path drops focus first: a focused board is 1:1 only.
@@ -4847,7 +4944,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (canScrollInside(target, intent.dx, intent.dy)) return;
       e.preventDefault();
       cancelAnimationFrame(flight); zoomGoal = null;
-      camera = panBy(camera, -intent.dx, -intent.dy);
+      camera = clampRoomPan(panBy(camera, -intent.dx, -intent.dy));
       applyCamera();
       clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
       return;
@@ -4914,6 +5011,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     for (const node of [registerBtn, toolsChip, talk, readBtn, undoBtn, editBtn, resetBtn]) {
       if (node) cluster.append(node);
     }
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => syncClusterInset()).observe(cluster);
   }
 
   function applyEditLock(): void {
