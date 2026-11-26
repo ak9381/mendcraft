@@ -12,7 +12,13 @@
 //     no pan / zoom / board move, both thumbs up open the AI monitor with no
 //     zoom, and a hand that leaves mid-hold cancels it (no fire on return)
 //     and clears the light-up, HUD and highlight;
-//   - while a review is open, Save (left thumbs-up) waits behind it.
+//   - while a review is open, Save (left thumbs-up) waits behind it;
+//   - peace-and-move (camera path, real hand scale): scrolls the element under
+//     the hand (content follows the hand) and never fires the peace hold; a
+//     still peace still fires its button after 2 s; a scroll stops dead when
+//     the hand is lost; nothing scrolls while not facing; over a level
+//     control it steps the level (90 px up = 3 steps) instead; over nothing
+//     scrollable it pans the canvas.
 //
 //   npx vite --port 5173 &
 //   E2E_URL=http://localhost:5173 node scripts/e2e-gestures.mjs
@@ -217,6 +223,122 @@ async function main() {
     const pressed = await holdShape([['thumbsUp', 'R', { at: { x: 0.68, y: 0.7 } }]], t + 1100, 2100);
     const toolsOpen = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
     check(pressed === 'R:thumbsUp' && toolsOpen === 'true', `right thumbs-up pressed the highlighted Tools (open: ${toolsOpen})`);
+
+    // 5) Peace-and-move: scroll, levels, canvas pan — all through the camera path.
+    t += 5000;
+    await presenceEmpty(t, 600);
+    t += 700;
+    await page.evaluate(() => {
+      const root = document.querySelector('.mc-canvas');
+      document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded') === 'true' && document.querySelector('.mc-tools-chip').click();
+      const sc = document.createElement('div');
+      sc.id = 'e2e-scroller';
+      sc.style.cssText = 'position:fixed;left:300px;top:200px;width:400px;height:300px;overflow:auto;z-index:45;background:#fff';
+      sc.innerHTML = '<div style="height:2400px;background:linear-gradient(#fff,#ccc)">long list</div>';
+      root.append(sc);
+      sc.scrollTop = 900;
+      const lv = document.createElement('div');
+      lv.id = 'e2e-level';
+      lv.setAttribute('data-level', 'volume');
+      lv.setAttribute('aria-valuenow', '50'); lv.setAttribute('aria-valuemin', '0'); lv.setAttribute('aria-valuemax', '100');
+      lv.style.cssText = 'position:fixed;left:300px;top:560px;width:300px;height:140px;z-index:45;background:#eee;display:flex;gap:20px;align-items:center;justify-content:center';
+      lv.innerHTML = '<button data-level-dec>−</button><span>Volume</span><button data-level-inc>+</button>';
+      const set = (d) => lv.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, Number(lv.getAttribute('aria-valuenow')) + d))));
+      lv.querySelector('[data-level-inc]').addEventListener('click', () => set(10));
+      lv.querySelector('[data-level-dec]').addEventListener('click', () => set(-10));
+      root.append(lv);
+    });
+    // Move a peace from screen (x, y0) to (x, y1) over `ms`, then hold it at y1 for `holdMs`.
+    const peaceMove = (side, x, y0, y1, from, ms, holdMs = 0) => page.evaluate((side, x, y0, y1, from, ms, holdMs) => {
+      const g = window.__mcGestures;
+      const n = Math.max(1, Math.round(ms / 33));
+      for (let k = 0; k <= n; k++) g.presence([g.hand('peace', side, { at: g.palmFor(x, y0 + ((y1 - y0) * k) / n) })], from + k * 33);
+      for (let tt = 33; tt <= holdMs; tt += 33) g.presence([g.hand('peace', side, { at: g.palmFor(x, y1) })], from + n * 33 + tt);
+      return { scrollTop: document.querySelector('#e2e-scroller').scrollTop, hint: !document.querySelector('.mc-scroll-hint')?.hidden };
+    }, side, x, y0, y1, from, ms, holdMs);
+    const openHand = (from, ms) => page.evaluate((from, ms) => {
+      const g = window.__mcGestures;
+      for (let tt = 0; tt <= ms; tt += 33) g.presence([g.hand('open', 'R', { at: { x: 0.68, y: 0.95 } })], from + tt);
+    }, from, ms);
+    const log = () => page.evaluate(() => document.querySelector('.mc-ai-live-log')?.textContent ?? '');
+    const log0 = await log();
+
+    // A. Peace over the scroller moving DOWN: the list follows the hand (scrollTop falls).
+    const scrolled = await peaceMove('R', 500, 260, 440, t, 600);
+    check(scrolled.scrollTop < 900 - 150 && scrolled.hint, `peace + downward motion scrolls the list under the hand (scrollTop 900 → ${Math.round(scrolled.scrollTop)}, hint ${scrolled.hint})`);
+    // …then held still for 2.3 s: the peace hold (R = next step 2) must NOT fire.
+    const held = await peaceMove('R', 500, 440, 440, t + 700, 0, 2300);
+    const log1 = await log();
+    check(!/Right peace/.test(log1.replace(log0, '')) && Math.abs(held.scrollTop - scrolled.scrollTop) < 30, 'after scrolling, the still peace never fires its hold (no "Next step 2")');
+    // B. Hand lost mid-scroll: stops dead, no glide.
+    await openHand(t + 3100, 400);
+    t += 4000;
+    await peaceMove('R', 500, 260, 400, t, 400);
+    await presenceEmpty(t + 450, 100);
+    const atLoss = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    await wait(400);
+    const after = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    check(Math.abs(after - atLoss) < 1, `scroll stops on hand loss (${Math.round(atLoss)} → ${Math.round(after)})`);
+    await presenceEmpty(t + 600, 400);
+    await openHand(t + 1100, 300);
+    t += 2000;
+    // C. Not facing: nothing scrolls.
+    await page.evaluate(() => window.__mcGestures.facing(false));
+    await wait(350);
+    const before = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const turned = await peaceMove('R', 500, 260, 440, t, 600);
+    check(Math.abs(turned.scrollTop - before) < 1, 'no scroll while not facing');
+    await page.evaluate(() => window.__mcGestures.facing(null));
+    await openHand(t + 700, 300);
+    t += 1500;
+    // D. A still LEFT peace for 2.2 s still fires its button (Tools).
+    const toolsBefore = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    await page.evaluate((from) => {
+      const g = window.__mcGestures;
+      const h = g.hand('peace', 'L', { at: { x: 0.3, y: 0.75 } });
+      for (let tt = 0; tt <= 2300; tt += 33) g.presence([h], from + tt);
+    }, t);
+    const toolsAfter = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    check(toolsBefore !== toolsAfter && /Left peace → Tools/.test(await log()), `a still peace still fires its button after 2 s (Tools ${toolsBefore} → ${toolsAfter})`);
+    if (toolsAfter === 'true') await page.evaluate(() => document.querySelector('.mc-tools-chip').click());
+    await openHand(t + 2400, 300);
+    t += 3000;
+    // E. Over a level control: 90 px up = 3 steps up, no scroll, no hold.
+    const log2 = await log();
+    const sc0 = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const tools0 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    await peaceMove('R', 450, 660, 660 - 90.5, t, 300, 2300);
+    const lv = await page.evaluate(() => ({
+      value: document.querySelector('#e2e-level').getAttribute('aria-valuenow'),
+      readout: document.querySelector('.mc-level-readout')?.textContent ?? '',
+    }));
+    const tools1 = await page.evaluate(() => document.querySelector('.mc-tools-chip')?.getAttribute('aria-expanded'));
+    const sc1 = await page.evaluate(() => document.querySelector('#e2e-scroller').scrollTop);
+    const newLog = (await log()).replace(log2, '');
+    check(lv.value === '80', `peace over a level control moving up 90 px → 3 steps (50 → ${lv.value})`);
+    check(/Volume 80 %/.test(lv.readout), `big level readout by the hand ("${lv.readout}")`);
+    check(sc1 === sc0 && tools1 === tools0 && !/Right peace/.test(newLog), 'stepping a level never scrolls and never fires the peace hold');
+    await openHand(t + 2700, 300);
+    t += 3200;
+    // F. Over nothing scrollable: the canvas pans (content follows the hand).
+    const spot = await page.evaluate(() => {
+      for (let y = 760; y > 120; y -= 40) for (let x = 1400; x > 80; x -= 40) {
+        const el = document.elementFromPoint(x, y);
+        if (el && el.matches('.mc-viewport, .mc-world, .mc-canvas') && document.elementFromPoint(x, y + 150)?.matches('.mc-viewport, .mc-world, .mc-canvas')) return { x, y };
+      }
+      return null;
+    });
+    if (spot) {
+      const cam0 = await page.evaluate(() => window.__mcGestures.state().camera);
+      await page.evaluate((spot, from) => {
+        const g = window.__mcGestures;
+        for (let k = 0; k <= 20; k++) g.presence([g.hand('peace', 'R', { at: g.palmFor(spot.x, spot.y + k * 7.5) })], from + k * 33);
+      }, spot, t);
+      const cam1 = await page.evaluate(() => window.__mcGestures.state().camera);
+      check(cam1.y < cam0.y - 50, `peace over bare canvas pans it (camera y ${Math.round(cam0.y)} → ${Math.round(cam1.y)})`);
+    } else check(false, 'found a bare-canvas spot for the pan check');
+    await openHand(t + 800, 300);
+    await page.evaluate(() => { document.querySelector('#e2e-scroller')?.remove(); document.querySelector('#e2e-level')?.remove(); });
 
     // 4) Badges go away with Hands.
     await page.evaluate(() => window.__mcGestures.show(false));

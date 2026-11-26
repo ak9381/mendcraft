@@ -33,6 +33,11 @@ Note anything off with its number.
 - [ ] E8 Repeat E2–E4 with the LEFT hand only, then RIGHT only.
 - [ ] E9 Hold a fist still for 3 s and wiggle it: no click.
 - [ ] E10 Point your index straight at the camera: must not count as a fist.
+- [ ] E11 Scroll: with a long list on screen (review plan, AI drawer log, a full board), make a PEACE sign (index + middle up) over it and move your hand down/up: the list follows your hand (like a trackpad), a small "Scrolling" hint sits by the hand and the list gets a dashed yellow outline. Areas that overflow show a yellow "move to scroll" hint while Hands is on.
+- [ ] E12 Scroll vs hold: a peace that MOVES never fires its button (right peace = next step 2, left peace = Tools), even if you then hold it still. A peace held STILL for 2 s still fires it. Drop the hand mid-scroll: it stops at once (no glide). Look away: no scroll.
+- [ ] E13 Peace over empty canvas and move: the canvas pans. Either hand works.
+- [ ] E14 Levels: peace over a volume / brightness / colour-temperature control, move up ~90 px: three steps up and a big "Volume 80 %" readout by the hand; move down: steps down. It never scrolls the page or fires Tools/chip 2.
+- [ ] E15 Voice: "scroll down", "scroll up", "page down", "page up" move the open review / drawer / focused board (else the canvas).
 
 ## R. Review window (the "plan")
 - [ ] R1 "connect everything in this room" → the review shows THE PLAN (+ add / ~ change / − remove), engine chip, "What left this device · N KB".

@@ -2774,6 +2774,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
         highlight: palmHighlight,
+        ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
+        // Peace-and-move over nothing scrollable pans the canvas (content
+        // follows the hand, like the fist pan); persisted when it ends.
+        onCanvasScroll: (dx, dy) => { if (phoneLocked()) return; camera = panBy(camera, dx, dy); applyCamera(); },
+        onCanvasScrollEnd: () => persist(),
+        onLevel: (_el, _dir, readout) => activityLog.push({ kind: 'gesture', text: `Peace and move → ${readout}`, target: null }),
+        levelTick: () => { try { return storage.getItem('mc.levelTick') === '1'; } catch { return false; } },
       })
     : null;
   /** Gestures are paused while something else owns the hands: a fist grab,
@@ -3232,6 +3239,40 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       pack, sim: !!opts.sim, spotifyConnected: !!loadTokens(),
     };
   }
+  /** "scroll / page up / down": the open review's plan, else an open sheet or
+   *  drawer, else the focused board's own scroller, else the canvas. */
+  function scrollByVoice(dir: 'up' | 'down', page: boolean): void {
+    const sign = dir === 'down' ? 1 : -1;
+    const overflows = (el: Element | null): el is HTMLElement => {
+      if (!el || (el as HTMLElement).closest('[hidden]')) return false;
+      const h = el as HTMLElement;
+      const cs = getComputedStyle(h);
+      return h.scrollHeight - h.clientHeight > 4 && /auto|scroll|overlay/.test(cs.overflowY) && h.getBoundingClientRect().height > 0;
+    };
+    const firstScroller = (scope: Element | null): HTMLElement | null => {
+      if (!scope || (scope as HTMLElement).closest('[hidden]')) return null;
+      if (overflows(scope)) return scope as HTMLElement;
+      return Array.from(scope.querySelectorAll('*')).find(overflows) as HTMLElement | undefined ?? null;
+    };
+    const scopes = [
+      root.querySelector('.mc-review-dialog:not([hidden])'),
+      root.querySelector('.mc-menu-sheet:not([hidden])'),
+      root.querySelector('.mc-ai:not([hidden])'),
+      focusId ? world.querySelector(`[data-frame="${focusId}"]`) : null,
+    ];
+    for (const scope of scopes) {
+      const el = firstScroller(scope);
+      if (!el) continue;
+      const amount = page ? el.clientHeight * 0.85 : 120;
+      if (typeof el.scrollBy === 'function') el.scrollBy({ top: sign * amount, behavior: reduced ? 'auto' : 'smooth' });
+      else el.scrollTop += sign * amount;
+      return;
+    }
+    // Nothing scrolls: move the canvas (scroll down = see what is below).
+    const amount = page ? vp().h * 0.85 : 120;
+    camera = panBy(camera, 0, -sign * amount);
+    applyCamera(); persist();
+  }
   function run(text: string): boolean {
     captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
@@ -3270,6 +3311,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       }
       case 'packIntent': return runIntent(r.intent);
+      case 'scroll': scrollByVoice(r.dir, r.page); return true;
       // On the web there is no gimbal — handleSpeech answers with the honest why.
       case 'pointConnect': {
         const id = focusId ?? lastFocus;
@@ -3781,6 +3823,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       presence: (hands: readonly (readonly { x: number; y: number }[])[], now: number) => {
         simAdapter.update({ hands: hands.map((h) => ({ points: h, label: (h as { label?: string }).label })) as never, now });
       },
+      /** The operator hand gate as presence would set it (false = not facing). */
+      facing: (v: boolean | null) => { gestureFacing = v; handPointer?.setFacing?.(v, typeof performance !== 'undefined' ? performance.now() : Date.now()); },
       /** For assertions: camera, any grab running, debug state. */
       state: () => ({ camera: { ...camera }, grab: !!handPointer?.isGrabActive(), ...gestures.debug() }),
       /** Selfie-space wrist position that puts the PALM at screen (x, y). */
