@@ -148,7 +148,8 @@ public class MendcraftGimbalPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["ok": false, "enabled": false])
     }
 
-    /// Body language: kind = "yes" | "no" | "wakeup" → DockAccessory.animate(motion:).
+    /// Body language: kind = "yes" | "no" | "wakeup" → DockAccessory.animate(motion:)
+    /// ("wakeup" then adds a small ±6° left-right wiggle, inside the same 3 s).
     /// Resolves {ok, reason}; ok only after DockKit ran it (3 s timeout).
     @objc func cue(_ call: CAPPluginCall) {
         let kind = call.getString("kind") ?? ""
@@ -285,6 +286,10 @@ final class ProgressBox: @unchecked Sendable {
     func cancel() {
         lock.lock(); cancelled = true; let p = progress; lock.unlock()
         p?.cancel()
+    }
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
     }
 }
 
@@ -451,8 +456,11 @@ actor DockWatcher {
                 try await withTaskCancellationHandler {
                     let progress = try await acc.animate(motion: motion)
                     box.set(progress)
-                    await DockWatcher.waitForMove(progress, maxMs: 2800)
-                    return !progress.isCancelled
+                    // Wake-up leaves room for the wiggle below (same 3 s budget).
+                    await DockWatcher.waitForMove(progress, maxMs: kind == "wakeup" ? 1700 : 2800)
+                    if progress.isCancelled { return false }
+                    if kind == "wakeup" { return try await DockWatcher.wiggle(acc, box: box) }
+                    return true
                 } onCancel: {
                     box.cancel()
                 }
@@ -492,6 +500,21 @@ actor DockWatcher {
     }
 
     /// Poll the move's Progress until it finishes, at most `maxMs`.
+    /// After .wakeup, a small friendly "hello" shake: ±6° yaw, twice (relative
+    /// moves, back to where it started), ~1 s in all. Tracking is already
+    /// paused by the caller, which restores it afterwards. False if cancelled.
+    static func wiggle(_ acc: DockAccessory, box: ProgressBox) async throws -> Bool {
+        let step = 6.0 * Double.pi / 180.0
+        for yaw in [step, -2 * step, 2 * step, -step] {
+            if Task.isCancelled || box.isCancelled { return false }
+            let p = try await acc.setOrientation(Vector3D(x: 0, y: yaw, z: 0), duration: .milliseconds(180), relative: true)
+            box.set(p)
+            await DockWatcher.waitForMove(p, maxMs: 260)
+            if p.isCancelled { return false }
+        }
+        return true
+    }
+
     static func waitForMove(_ progress: Progress, maxMs: Int64) async {
         let start = Date()
         while !progress.isFinished && !progress.isCancelled {
