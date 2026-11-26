@@ -158,7 +158,7 @@ export async function discoverRealLamps(client: WizClient, storage: IdStore = nu
     lamps.push({
       id: ids[f.ip], ip: f.ip, label: lampLabel(i),
       // The bulb's own state; one that would not answer is shown off, not guessed.
-      state: { on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false, unreachable: false },
+      state: { cls: 'lamp', on: pilot?.on ?? false, brightness: pilot?.dimming ?? (pilot?.on ? 100 : 0), sim: false, unreachable: false },
     });
   }
   return lamps;
@@ -258,5 +258,5 @@ export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[
 export function rememberedLamps(storage: IdStore = null): RealLamp[] | null {
   const ids = rememberedLampIds(storage);
   if (!ids.length) return null;
-  return ids.map((id, i) => ({ id, ip: '', label: lampLabel(i), state: { on: false, brightness: 50, sim: true, unreachable: true } }));
+  return ids.map((id, i) => ({ id, ip: '', label: lampLabel(i), state: { cls: 'lamp', on: false, brightness: 50, sim: true, unreachable: true } }));
 }

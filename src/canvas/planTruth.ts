@@ -2,7 +2,8 @@
 // line or a status tile may only say what the plan in front of her actually
 // holds: no fixed "2 lamps found" headline over a board with one light and a
 // speaker, no "Connected · 0" tile next to an "All connected" button.
-import type { SurfacePlan, TileSpec } from './surfacePlan';
+import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
+import { deviceClassOf } from './controlSpec';
 
 export interface TileCounts {
   /** Tiles at the top of the board. */
@@ -290,34 +291,43 @@ export function liftLegacyPlanTiles(
   return changed;
 }
 
-// ---- a proposal only binds devices that are here ----
+// ---- a proposal only binds devices that are here, as what they are ----
 
 /** The review line when a proposal named a device this canvas does not have. */
 export const ABSENT_DEVICE_LINE = "Left out a control for a device that isn't connected.";
+/** The review line when a tile's type is not what its device really is. */
+export const WRONG_CLASS_LINE = "Left out a tile that doesn't match its device.";
 
 /** Leave out every device tile (lamp, speaker, switch) whose device is not
- *  in the live store: a model may only bind what is really here. An emptied
- *  group goes with it; a board left with nothing offers "Connect a device".
- *  Same plan object when nothing was left out. Stored boards are NOT passed
- *  through this — they load as saved and show "Not connected". */
-export function dropAbsentDevices(plan: SurfacePlan, has: (deviceId: string) => boolean): { plan: SurfacePlan; dropped: number } {
-  let dropped = 0;
+ *  in the live store, or is not the class the tile claims (a "music" tile on
+ *  a WiZ bulb): a model may only bind what is really here, as what it is.
+ *  An emptied group goes with it; a board left with nothing offers "Connect
+ *  a device". Same plan object when nothing was left out. Stored boards are
+ *  NOT passed through this — they load as saved, show "Not connected", and
+ *  every press is checked again (bindingIntent). */
+export function dropAbsentDevices(plan: SurfacePlan, deviceOf: (deviceId: string) => DeviceState | undefined): { plan: SurfacePlan; dropped: number; mismatched: number } {
+  let dropped = 0, mismatched = 0;
   const walk = (tiles: TileSpec[]): TileSpec[] => {
     const out: TileSpec[] = [];
     for (const t of tiles) {
-      if ((t.type === 'lamp' || t.type === 'music' || t.type === 'switch') && !has(t.deviceId)) { dropped++; continue; }
+      if (t.type === 'lamp' || t.type === 'music' || t.type === 'switch') {
+        const d = deviceOf(t.deviceId);
+        if (!d) { dropped++; continue; }
+        if (deviceClassOf(t.deviceId, d) !== t.type) { mismatched++; continue; }
+        out.push(t);
+        continue;
+      }
+      const before = dropped + mismatched;
+      const same = () => dropped + mismatched === before;
       if (t.type === 'row' || t.type === 'grid' || t.type === 'card') {
-        const before = dropped;
         const children = walk(t.children);
-        if (children.length) out.push(dropped === before ? t : { ...t, children });
+        if (children.length) out.push(same() ? t : { ...t, children });
       } else if (t.type === 'tabs') {
-        const before = dropped;
         const tabs = t.tabs.map((tab) => ({ ...tab, children: walk(tab.children) })).filter((tab) => tab.children.length);
-        if (tabs.length) out.push(dropped === before ? t : { ...t, tabs });
+        if (tabs.length) out.push(same() ? t : { ...t, tabs });
       } else if (t.type === 'split') {
-        const before = dropped;
         const first = walk(t.first), second = walk(t.second);
-        if (dropped === before) out.push(t);
+        if (same()) out.push(t);
         else if (first.length && second.length) out.push({ ...t, first, second });
         else if (first.length + second.length) out.push({ type: 'row', children: [...first, ...second] });
       } else out.push(t);
@@ -325,6 +335,6 @@ export function dropAbsentDevices(plan: SurfacePlan, has: (deviceId: string) => 
     return out;
   };
   const tiles = walk(plan.tiles);
-  if (!dropped) return { plan, dropped };
-  return { plan: { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] }, dropped };
+  if (!dropped && !mismatched) return { plan, dropped, mismatched };
+  return { plan: { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] }, dropped, mismatched };
 }

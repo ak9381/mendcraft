@@ -3,6 +3,7 @@
 // coerced here and expanded deterministically into A2UI v0.9 messages.
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { coerceControls, standardControls, type ControlSpec } from './controlSpec';
+import type { DeviceClass } from './deviceGuard';
 
 export const PROTOCOL = 'v0.9' as const;
 export const ROOM_CATALOG_ID = 'https://mendcraft.web.app/catalogs/smart-canvas/v0.json';
@@ -62,6 +63,9 @@ export interface SurfacePlan {
 }
 
 export interface DeviceState {
+  /** What the device really is (set by discovery or the fixture list):
+   *  a tile of another class may not bind it. */
+  cls?: DeviceClass;
   on: boolean;
   brightness: number;
   playing?: boolean;

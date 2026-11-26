@@ -47,10 +47,16 @@ export function createUnreachableLampConnector(fallback: DeviceConnector): Devic
   };
 }
 
-/** The one WiZ command a device intent becomes. A scene, a colour and a white
- *  are separate bulb modes, so the most specific one asked for wins; then
- *  brightness; then plain power. */
-export function wizIntentFor(intent: DeviceIntent): LampIntent {
+/** A lamp was asked for something a lamp can't do (a volume, a track). */
+export const LAMP_CANT_DO_THAT = "A lamp can't do that. Nothing changed.";
+
+/** The one WiZ command a device intent becomes, or null when it holds
+ *  nothing a lamp does. A scene, a colour and a white are separate bulb
+ *  modes, so the most specific one asked for wins; then brightness; then
+ *  plain power. Never a default: an unknown intent does not turn the bulb on. */
+export function wizIntentFor(intent: DeviceIntent): LampIntent | null {
+  // Speaker fields on a lamp: refused, whatever else rides along.
+  if (intent.playing !== undefined || intent.volume !== undefined || intent.next !== undefined || intent.previous !== undefined || intent.query !== undefined) return null;
   // Off is off: "lamp to 0 %" must never reach the bulb as a dim (WiZ's floor
   // is 10 %, and a dim also turns the bulb ON).
   if (intent.on === false || intent.brightness === 0) return { kind: 'power', on: false };
@@ -58,7 +64,8 @@ export function wizIntentFor(intent: DeviceIntent): LampIntent {
   if (intent.rgb !== undefined) return { kind: 'color', rgb: intent.rgb };
   if (intent.temp !== undefined) return { kind: 'temp', temp: intent.temp };
   if (intent.brightness !== undefined) return { kind: 'dim', dimming: intent.brightness };
-  return { kind: 'power', on: intent.on ?? true };
+  if (intent.on === true) return { kind: 'power', on: true };
+  return null;
 }
 
 const hex = (c: { r: number; g: number; b: number }): string =>
@@ -77,9 +84,12 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
   const bulbIp = deps.bulbIp ?? (() => '');
   return {
     async run(intent: DeviceIntent): Promise<Partial<DeviceState>> {
-      if (isWizDevice(intent.deviceId) && deps.status.up) {
+      // Checked before the bridge or the fallback: nothing reaches a bulb, real or simulated.
+      const lamp = isWizDevice(intent.deviceId) ? wizIntentFor(intent) : null;
+      if (isWizDevice(intent.deviceId) && !lamp) throw new DeviceError(LAMP_CANT_DO_THAT);
+      if (lamp && deps.status.up) {
         try {
-          const state = await deps.client.setPilot(bulbIp(intent.deviceId), wizIntentFor(intent));
+          const state = await deps.client.setPilot(bulbIp(intent.deviceId), lamp);
           return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false, unreachable: false };
         } catch (err) {
           // The bridge is up and refused the value: the lamp did not change and

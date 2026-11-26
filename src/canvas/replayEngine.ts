@@ -72,8 +72,8 @@ export function fixtureDevices(raw: unknown): { devices: Record<string, DeviceSt
     if (typeof id !== 'string' || !FIXTURE_ID.test(id) || devices[id]) continue;
     if (cls !== 'lamp' && cls !== 'music') continue;
     devices[id] = cls === 'lamp'
-      ? { on: false, brightness: 50, sim: true, unreachable: false }
-      : { on: false, brightness: 0, playing: false, volume: 50, sim: true };
+      ? { cls: 'lamp', on: false, brightness: 50, sim: true, unreachable: false }
+      : { cls: 'music', on: false, brightness: 0, playing: false, volume: 50, sim: true };
     labels[id] = typeof label === 'string' && label.trim() && !/[<>]/.test(label) ? label.trim().slice(0, 40) : id;
   }
   return Object.keys(devices).length ? { devices, labels } : null;

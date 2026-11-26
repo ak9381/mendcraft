@@ -167,6 +167,9 @@ export interface ReviewDialogModel {
   extra?: HTMLElement | null;
   /** THE PLAN: what will change on the board (see planDiff.ts). */
   changes?: PlanChange[] | null;
+  /** Plain lines under the plan: what the checks left out of the reply,
+   *  and how the controls behave. */
+  notes?: string[] | null;
   facts?: ReviewFacts | null;
 }
 
@@ -291,12 +294,14 @@ export function mountReviewDialog(
   planSec.setAttribute('aria-label', 'The plan');
   const planHead = el(doc, 'h3', 'mc-review-plan-head', 'The plan');
   const planList = el(doc, 'ol', 'mc-review-plan-list');
+  const notesEl = el(doc, 'ul', 'mc-review-notes');
+  notesEl.hidden = true;
   const cardHost = el(doc, 'div', 'mc-review-card-host');
   const extraEl = el(doc, 'div', 'mc-review-extra');
   const moreEl = el(doc, 'details', 'mc-review-more');
   const moreSum = el(doc, 'summary', 'mc-review-more-sum', 'Show the work');
   moreEl.append(moreSum, extraEl);
-  planSec.append(planHead, planList, cardHost, moreEl);
+  planSec.append(planHead, planList, notesEl, cardHost, moreEl);
   const honesty = el(doc, 'footer', 'mc-review-honesty');
   const whyEl = el(doc, 'p', 'mc-review-why');
   const leftEl = el(doc, 'p', 'mc-review-left');
@@ -499,6 +504,9 @@ export function mountReviewDialog(
       // proposal card itself (old behaviour) stands in for it.
       planList.hidden = !changes;
       if (changes) renderPlan(changes); else planList.innerHTML = '';
+      notesEl.innerHTML = '';
+      for (const n of model.notes ?? []) notesEl.append(el(doc, 'li', 'mc-review-note', n));
+      notesEl.hidden = !model.notes?.length;
       cardHost.innerHTML = '';
       cardHost.append(model.card);
       cardHost.classList.toggle('is-proxy-only', !!changes);

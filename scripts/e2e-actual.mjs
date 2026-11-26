@@ -119,6 +119,9 @@ const tiles = () => [...document.querySelectorAll('.mc-world mc-device-tile, [da
 });
 const boardArtifacts = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'board')));
 
+const reviewNotes = () => [...document.querySelectorAll('.mc-review-dialog:not([hidden]) .mc-review-note')].map((n) => n.textContent.trim());
+const CONTROLS_NOTE = "Dropped 2 controls the lamp can't use.";
+
 async function dashboard(page) {
   const notes = [];
   page.on('console', (m) => notes.push(m.text()));
@@ -126,6 +129,30 @@ async function dashboard(page) {
   await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check(await page.evaluate((id) => !!window.__mcCanvas.store.get(id)?.sim, LAMP_ID), 'the fixture lamp is registered and marked SIM');
+
+  // The main demo path, online: Nano drafts, Gemini improves, ONE review.
+  // Gemini's reply holds a volume slider (foreign to a lamp) and a 500 %
+  // button: both are dropped at proposal time, said in the review, and the
+  // rest is proposed.
+  await page.evaluate(() => { window.__mcCanvas.run('make a dashboard for my lamp'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the combined review opens'))) return;
+  const combined = await page.evaluate(reviewText);
+  check(combined.includes('Replay'), `online: the review names the engine as "Replay" (got ${JSON.stringify(combined.slice(0, 600))})`);
+  const said = await page.evaluate(reviewNotes);
+  check(said.includes(CONTROLS_NOTE), `online: the review says what was dropped (got ${JSON.stringify(said)})`);
+  check(said.some((n) => /turns the lamp on/.test(n)), 'online: the review says how lamp controls behave');
+  check((await page.evaluate(tiles)).length === 0 && (await boardArtifacts(page)).length === 0, 'online: 0 boards until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'online: one tile with the model\'s chips'))) return;
+  const kept = await page.evaluate(() => { const r = document.querySelector('mc-device-tile').shadowRoot; return {
+    tiles: document.querySelectorAll('mc-device-tile').length, chips: r.querySelectorAll('[data-act=chip]').length,
+    volume: !!r.querySelector('[data-level=volume]'), brightness: !!r.querySelector('[data-level=brightness]'),
+    max: [...r.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Max'), standard: !!r.querySelector('[data-standard]') }; });
+  check(kept.tiles === 1 && kept.chips === 10 && kept.brightness && !kept.volume && !kept.max && !kept.standard,
+    `online: the rest is on the board, the two bad controls are not (got ${JSON.stringify(kept)})`);
+
+  // The offline path: Nano's board is reviewed on its own, Gemini's on reconnect.
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
 
   // Offline first: Nano's board is reviewed on its own, Gemini's better one on reconnect.
   await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
@@ -142,6 +169,7 @@ async function dashboard(page) {
   // Back online: the saved Deep pass runs and opens the better board for review.
   await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
   if (!(await waitFor(page, () => { const d = document.querySelector('.mc-review-dialog'); return !!d && !d.hidden && /Better/.test(d.innerText); }, 15_000, 'the second (better) review opens'))) return;
+  check((await page.evaluate(reviewNotes)).includes(CONTROLS_NOTE), 'offline → online: the better review says what was dropped');
   await page.evaluate(() => window.__mcCanvas.keep());
   if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'chips on the better board'))) return;
   const better = await page.evaluate(tiles);

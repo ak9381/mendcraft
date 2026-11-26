@@ -66,12 +66,12 @@ import {
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
 import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
-import { NOT_THIS_DEVICE_REFUSAL, pressIntent, type DevicePress } from './controlSpec';
+import { LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, hasLampTile, pressIntent, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { ABSENT_DEVICE_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
+import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -128,7 +128,7 @@ import { boardForJourney } from './journey';
 import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } from './nextSteps';
 import { nanoQueue } from '../ai/nanoQueue';
 import { routeLine, type RouteWorld } from './routeLine';
-import { NO_MODEL_LINE, type TurnKind } from './replayEngine';
+import { NO_MODEL_LINE, REPLAY_ROUTE, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import type { ArtifactBy } from '../artifacts/artifact';
 import { identifyDevice, onNanoBusyHandoff, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
@@ -1124,7 +1124,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const receipts = createReviewReceipts();
   /** The review's honesty footer for the turn that owns `si`. No token means
    *  no AI call made this change: say so, and claim no bytes. */
-  const reviewFacts = (si: SentInfo | null, youAsked?: string): ReviewFacts => receipts.facts(si, { youAsked, sim: opts.sim });
+  const reviewFacts = (si: SentInfo | null, youAsked?: string): ReviewFacts => {
+    const f = receipts.facts(si, { youAsked, sim: opts.sim });
+    // A recorded reply is never passed off as a live model: the engine chip
+    // says "Replay" (and stays on a combined draft + improve review).
+    return si?.routeLine.includes(REPLAY_ROUTE) ? { ...f, engineLabel: `${engineName(si.engine)} · ${REPLAY_ROUTE}` } : f;
+  };
   /** The teach turn's own ledger token, when a model (not the rules) parsed it. */
   let teachSent: SentInfo | null = null;
   /** Teach runs on rules/Nano/Gemini; its card already names which. */
@@ -1388,7 +1393,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // A generated device tile: only the tile and control indexes (and a
       // slider's level) are read from the event; the control itself comes
       // from the APPROVED plan of this board (the dock shows its pinned board).
-      if (a.name === 'device.act') { devicePress(sid.endsWith('-dock') ? sid.slice(0, -'-dock'.length) : sid, { ...a.context, ...ext(a) }); return; }
+      // `tile` comes only from the action's own context (set by expandPlan), never from per-click data.
+      if (a.name === 'device.act') { devicePress(sid.endsWith('-dock') ? sid.slice(0, -'-dock'.length) : sid, { ...ext(a), tile: a.context?.tile }); return; }
       // Gimbal tile: one press -> the same path as the spoken phrase.
       if (a.name === 'gimbal.mode' || a.name === 'gimbal.cue') {
         const press = gimbalPress(a.name, a.context?.value ?? ext(a)?.value);
@@ -2448,6 +2454,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return kept.plan;
   }
 
+  /** What the checks left out of this request's replies (a control the
+   *  device can't use, a made-up status tile): shown in its review. A
+   *  request's draft and its improvement share one list; the review takes it. */
+  let turnNotes: string[] = [];
+  const takeTurnNotes = (): string[] => { const n = turnNotes; turnNotes = []; return n; };
   /** Stream one model turn into the ghost; the plan and its ledger receipt
    *  (the SentInfo token live bookings — cloudSent / cloudRetract — are
    *  recorded against), or null (failed / cancelled; the reason was said).
@@ -2479,6 +2490,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       },
       onGhost: (g) => ghost(frameId, g),
       onNote: (note) => {
+        turnNotes.push(note);
         const state = aiPanel.querySelector('.mc-ai-state');
         if (state) state.textContent = note;
       },
@@ -2503,6 +2515,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function aiTurn(frameId: string, engineId: EngineId, utterance: string, kind: TurnKind, summary: PlanSummary, status: ProposalStatus, task: SwarmTask = 'dashboard', goal?: string, improve?: TurnDraft): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
     turnBusy = true;
+    if (!improve) turnNotes = [];
     try {
       if (!reg.get(frameId)) return false;
       let attempt: SentInfo | null = null;
@@ -2528,6 +2541,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function draftTurn(frameId: string, engineId: EngineId, utterance: string, kind: TurnKind, summary: PlanSummary, status: ProposalStatus): Promise<TurnDraft | null> {
     if (turnBusy) return null;
     turnBusy = true;
+    turnNotes = [];
     try {
       if (!reg.get(frameId)) return null;
       // No on-device model: this "draft" runs on Gemini and is the only call,
@@ -2563,9 +2577,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // left out, and the review says so.
     // (A connect turn proposes the device it just found: not checked here.)
     const fitted = fitPlan(planForBoard(frameId, proposed));
-    const present = onlyPresent ? dropAbsentDevices(fitted, (id) => !!store.get(id)) : { plan: fitted, dropped: 0 };
+    const present = onlyPresent ? dropAbsentDevices(fitted, (id) => store.get(id)) : { plan: fitted, dropped: 0, mismatched: 0 };
     const plan = present.plan;
-    if (present.dropped) panels.forEngine(si.engine).log('note', ABSENT_DEVICE_LINE);
+    // What the checks left out is listed in the review itself (and logged).
+    const leftOut = [...new Set([
+      ...takeTurnNotes(),
+      ...(present.dropped ? [ABSENT_DEVICE_LINE] : []),
+      ...(present.mismatched ? [WRONG_CLASS_LINE] : []),
+    ])];
+    for (const n of leftOut) panels.forEngine(si.engine).log('note', n);
+    const reviewNotes = [...leftOut, ...(hasLampTile(plan) ? [LIGHT_ON_RULES_LINE] : [])];
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -2630,8 +2651,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // plan says "Board 3 → This room" — or nothing when the name stays.
         changes: [
           ...diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
-          ...(present.dropped ? [{ op: 'remove' as const, label: ABSENT_DEVICE_LINE }] : []),
         ],
+        notes: reviewNotes,
         // A two-step change (draft + improvement, or a draft after a failed
         // improvement) names both steps and counts both steps' bytes.
         facts: planFacts(),

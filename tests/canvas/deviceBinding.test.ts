@@ -1,7 +1,9 @@
 // A press resolves against the store's current state and the approved plan;
 // a bad value, an off lamp or a missing device is refused, never clamped.
 import { describe, expect, it } from 'vitest';
-import { bindingIntent, controlAt, NOT_CONNECTED_REFUSAL } from '../../src/canvas/controlSpec';
+import { bindingIntent, controlAt, deviceClassOf, NOT_CONNECTED_REFUSAL, NOT_THIS_DEVICE_REFUSAL, pressIntent } from '../../src/canvas/controlSpec';
+import { dropAbsentDevices } from '../../src/canvas/planTruth';
+import { createWizAwareConnector, LAMP_CANT_DO_THAT, wizIntentFor } from '../../src/canvas/wizDevices';
 import { LAMP_RANGE_REFUSAL } from '../../src/canvas/deviceGuard';
 import { LAMP_OFF_REFUSAL } from '../../src/canvas/deviceActions';
 import { coerceSurfacePlan, type DeviceState, type SurfacePlan } from '../../src/canvas/surfacePlan';
@@ -57,8 +59,8 @@ describe('bindingIntent', () => {
   });
 
   it('music and gimbal resolve to their own paths', () => {
-    expect(bindingIntent('music', 'speaker-a', { playing: 'toggle' }, { on: false, brightness: 0, playing: true })).toEqual({ intent: { deviceId: 'speaker-a', playing: false } });
-    expect(bindingIntent('music', 'speaker-a', { volume: { step: 1 } }, { on: false, brightness: 0, volume: 95 })).toEqual({ intent: { deviceId: 'speaker-a', volume: 100 } });
+    expect(bindingIntent('music', 'speaker-a', { playing: 'toggle' }, { cls: 'music', on: false, brightness: 0, playing: true })).toEqual({ intent: { deviceId: 'speaker-a', playing: false } });
+    expect(bindingIntent('music', 'speaker-a', { volume: { step: 1 } }, { cls: 'music', on: false, brightness: 0, volume: 95 })).toEqual({ intent: { deviceId: 'speaker-a', volume: 100 } });
     expect(bindingIntent('gimbal', 'gimbal', { gimbalMode: 'face' }, undefined)).toEqual({ gimbal: { mode: 'face' } });
     expect(bindingIntent('gimbal', 'gimbal', { gimbalCue: 'yes' }, undefined)).toEqual({ gimbal: { cue: 'yes' } });
   });
@@ -135,5 +137,70 @@ describe('coerceSurfacePlan with controls', () => {
       { type: 'switch', deviceId: 'plug-a', label: 'Plug', controls: [{ kind: 'toggle', label: 'Power', intent: { on: 'toggle' } }] },
       { type: 'gimbal', label: 'Gimbal', controls: [{ kind: 'button', label: 'Nod', intent: { gimbalCue: 'yes' } }] },
     ]);
+  });
+});
+
+describe('a tile binds a device only as what it really is', () => {
+  const MUSIC_ON_BULB: SurfacePlan = { kind: 'room', title: 'r', tiles: [{
+    type: 'music', deviceId: ID, label: 'Speaker', controls: [{ kind: 'slider', label: 'Volume', key: 'volume' }, { kind: 'button', label: 'Next', intent: { next: true } }],
+  }] };
+
+  it('a music tile on a WiZ bulb is refused at press time, whatever control', () => {
+    const bulb = { cls: 'lamp' as const, on: false, brightness: 50 };
+    expect(pressIntent(MUSIC_ON_BULB, { tile: `music-${ID}`, control: 0, option: 1 }, () => bulb)).toEqual({ refusal: NOT_THIS_DEVICE_REFUSAL, deviceId: ID });
+    expect(pressIntent(MUSIC_ON_BULB, { tile: `music-${ID}`, control: 1 }, () => bulb)).toEqual({ refusal: NOT_THIS_DEVICE_REFUSAL, deviceId: ID });
+    // A wiz- id with no recorded class is still a lamp.
+    expect(bindingIntent('music', ID, { next: true }, { on: false, brightness: 50 })).toEqual({ refusal: NOT_THIS_DEVICE_REFUSAL });
+  });
+
+  it('a device whose class nothing recorded binds no tile', () => {
+    expect(bindingIntent('lamp', 'lamp-x', { on: 'toggle' }, { on: false, brightness: 50 })).toEqual({ refusal: NOT_THIS_DEVICE_REFUSAL });
+    expect(bindingIntent('lamp', 'lamp-x', { on: 'toggle' }, { cls: 'lamp', on: false, brightness: 50 })).toEqual({ intent: { deviceId: 'lamp-x', on: true } });
+    expect(deviceClassOf('speaker-a', { cls: 'music', on: false, brightness: 0 })).toBe('music');
+    expect(deviceClassOf('wiz-lamp-2', { on: false, brightness: 0 })).toBe('lamp');
+    expect(deviceClassOf('lamp-x', undefined)).toBeUndefined();
+  });
+
+  it('a proposal leaves out a tile whose device is another class, and one whose device is not here', () => {
+    const plan: SurfacePlan = { kind: 'room', title: 'r', tiles: [
+      { type: 'card', title: 'All', children: [
+        { type: 'music', deviceId: ID, label: 'Speaker' },
+        { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' },
+      ] },
+      { type: 'lamp', deviceId: ID, label: 'Lamp' },
+      { type: 'switch', deviceId: 'plug-9', label: 'Plug' },
+    ] };
+    const store: Record<string, DeviceState> = { [ID]: { cls: 'lamp', on: false, brightness: 50 } };
+    const r = dropAbsentDevices(plan, (id) => store[id]);
+    expect(r.mismatched).toBe(1);
+    expect(r.dropped).toBe(2);
+    expect(r.plan.tiles).toEqual([{ type: 'lamp', deviceId: ID, label: 'Lamp' }]);
+    const same = dropAbsentDevices({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: ID, label: 'Lamp' }] }, (id) => store[id]);
+    expect(same.mismatched + same.dropped).toBe(0);
+  });
+});
+
+describe('the WiZ connector never guesses', () => {
+  it('wizIntentFor refuses an intent that holds nothing a lamp does', () => {
+    expect(wizIntentFor({ deviceId: ID, volume: 40 })).toBeNull();
+    expect(wizIntentFor({ deviceId: ID, next: true })).toBeNull();
+    expect(wizIntentFor({ deviceId: ID, playing: true, on: true })).toBeNull();
+    expect(wizIntentFor({ deviceId: ID })).toBeNull();
+    expect(wizIntentFor({ deviceId: ID, on: true })).toEqual({ kind: 'power', on: true });
+    expect(wizIntentFor({ deviceId: ID, brightness: 0 })).toEqual({ kind: 'power', on: false });
+  });
+
+  it('the connector refuses it before the bridge or the fallback is called', async () => {
+    const calls: string[] = [];
+    const conn = createWizAwareConnector({
+      client: { setPilot: async () => { calls.push('bridge'); return null; } } as never,
+      fallback: { run: async () => { calls.push('fallback'); return {}; } },
+      status: { up: true },
+    });
+    await expect(conn.run({ deviceId: ID, volume: 40 })).rejects.toThrow(LAMP_CANT_DO_THAT);
+    await expect(conn.run({ deviceId: ID, next: true })).rejects.toThrow(LAMP_CANT_DO_THAT);
+    expect(calls).toEqual([]);
+    await conn.run({ deviceId: ID, on: true });
+    expect(calls).toEqual(['bridge']);
   });
 });

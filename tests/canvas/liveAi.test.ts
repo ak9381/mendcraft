@@ -1122,12 +1122,12 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
   it('one bulb on the bridge → one lamp, with the bulb’s real state; the seeded lamps are gone, the speaker stays', async () => {
     const { client } = fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 62 }] });
     const lamps = await discoverRealLamps(client, memory());
-    expect(lamps).toEqual([{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 62, sim: false, unreachable: false } }]);
+    expect(lamps).toEqual([{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { cls: 'lamp', on: true, brightness: 62, sim: false, unreachable: false } }]);
     const c = seededCanvas();
     const changed = applyRealLamps(c, lamps!);
     expect(Object.keys(c.state).sort()).toEqual(['speaker-a', 'wiz-lamp-1']);
     for (const id of SEEDED_LAMP_IDS) expect(c.state[id]).toBeUndefined();
-    expect(c.state['wiz-lamp-1']).toEqual({ on: true, brightness: 62, sim: false, unreachable: false }); // not SIM, not a guess
+    expect(c.state['wiz-lamp-1']).toEqual({ cls: 'lamp', on: true, brightness: 62, sim: false, unreachable: false }); // not SIM, not a guess
     expect(c.ips.get('wiz-lamp-1')).toBe('192.168.1.40'); // bulbIp for the connector
     // the board that showed two seeded lamps now shows the one real lamp
     expect(changed).toEqual(['room']);
@@ -1230,7 +1230,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     // reload, bridge down: the saved board holds wiz-lamp-1, the store starts with the seeded lamps
     expect(rememberedLampIds(storage)).toEqual(['wiz-lamp-1']);
     const start = rememberedLamps(storage)!;
-    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: false, brightness: 50, sim: true, unreachable: true } }]); // "Not reachable" until the bridge answers
+    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { cls: 'lamp', on: false, brightness: 50, sim: true, unreachable: true } }]); // "Not reachable" until the bridge answers
     const c = seededCanvas();
     c.surfaces.room = { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'music', deviceId: 'speaker-a', label: 'Speaker' }] };
     const changed = applyRealLamps(c, start);
@@ -1285,7 +1285,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const store = memory();
     const first = await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 80 }, { ip: '192.168.1.7', on: false, noState: true }, { ip: '192.168.1.40' }] }).client, store);
     expect(first!.map((l) => [l.id, l.ip, l.label])).toEqual([['wiz-lamp-1', '192.168.1.7', 'Lamp'], ['wiz-lamp-2', '192.168.1.40', 'Lamp 2']]);
-    expect(first![0].state).toEqual({ on: false, brightness: 0, sim: false, unreachable: false }); // read with getPilot when /discover had no state
+    expect(first![0].state).toEqual({ cls: 'lamp', on: false, brightness: 0, sim: false, unreachable: false }); // read with getPilot when /discover had no state
     // reload, and a third bulb with the lowest IP appears: the first two keep their ids
     const again = await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40' }, { ip: '192.168.1.7' }, { ip: '192.168.1.3' }] }).client, store);
     expect(Object.fromEntries(again!.map((l) => [l.ip, l.id]))).toEqual({ '192.168.1.7': 'wiz-lamp-1', '192.168.1.40': 'wiz-lamp-2', '192.168.1.3': 'wiz-lamp-3' });
@@ -1302,7 +1302,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
 
   it('bridge up but no bulb answers the broadcast: the bridge’s configured bulb if it replies, else no lamp at all', async () => {
     const one = await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: true, dimming: 30 } }).client, memory());
-    expect(one).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: true, brightness: 30, sim: false, unreachable: false } }]);
+    expect(one).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { cls: 'lamp', on: true, brightness: 30, sim: false, unreachable: false } }]);
     expect(await discoverRealLamps(fakeBridge({ discoverFails: true, defaultBulb: { on: false } }).client, memory())).toHaveLength(1);
     const none = await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: null }).client, memory());
     expect(none).toEqual([]);

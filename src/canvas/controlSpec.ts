@@ -204,6 +204,14 @@ export function standardControls(cls: DeviceClass): ControlSpec[] {
   }
 }
 
+/** The device's real class: what discovery or the fixture list said; a
+ *  `wiz-` device is a lamp (its only transport is the WiZ bridge).
+ *  Undefined when nothing says — such a device binds no tile. */
+export function deviceClassOf(id: string, s: DeviceState | undefined): DeviceClass | undefined {
+  if (!s) return undefined;
+  return s.cls ?? (id.startsWith('wiz-') ? 'lamp' : undefined);
+}
+
 export type BindingResult = { intent: DeviceIntent } | { gimbal: { mode: string } | { cue: string } } | { refusal: string };
 
 /** A level from a literal, a step or '$value', against the current state. */
@@ -228,6 +236,8 @@ export function bindingIntent(cls: DeviceClass, deviceId: string, spec: IntentSp
   if ('gimbalMode' in s) return { gimbal: { mode: s.gimbalMode } };
   if ('gimbalCue' in s) return { gimbal: { cue: s.gimbalCue } };
   if (!cur || cur.unreachable) return { refusal: NOT_CONNECTED_REFUSAL };
+  // A tile's type is only what the model wrote: the device must really be that class.
+  if (deviceClassOf(deviceId, cur) !== cls) return { refusal: NOT_THIS_DEVICE_REFUSAL };
   if ('on' in s) return { intent: { deviceId, on: s.on === 'toggle' ? !cur.on : s.on } };
   if ('playing' in s) return { intent: { deviceId, playing: s.playing === 'toggle' ? !cur.playing : s.playing } };
   if ('next' in s) return { intent: { deviceId, next: true } };
@@ -312,4 +322,16 @@ export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, g
   if (!spec) return { refusal: UNKNOWN_CONTROL_REFUSAL };
   const r = bindingIntent(hit.cls, hit.deviceId, spec, hit.cls === 'gimbal' ? undefined : get(hit.deviceId), slider ? press.value : undefined);
   return { ...r, deviceId: hit.deviceId };
+}
+
+/** The review's line on how lamp controls behave (said whenever a proposal has a lamp tile). */
+export const LIGHT_ON_RULES_LINE = 'A colour, a white or a scene turns the lamp on. Changing the brightness of a lamp that is off is refused: turn it on first.';
+
+/** Does this plan show a lamp tile anywhere? */
+export function hasLampTile(plan: SurfacePlan): boolean {
+  const walk = (tiles: TileSpec[]): boolean => tiles.some((t) => t.type === 'lamp'
+    || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && walk(t.children))
+    || (t.type === 'tabs' && t.tabs.some((tab) => walk(tab.children)))
+    || (t.type === 'split' && (walk(t.first) || walk(t.second))));
+  return walk(plan.tiles);
 }
