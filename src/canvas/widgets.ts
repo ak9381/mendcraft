@@ -10,7 +10,7 @@ import {
   GimbalTileApi,
   FormTileApi,
   GridApi,
-  LampTileApi,
+  DeviceTileApi,
   MusicTileApi,
   PlanBoardApi,
   RowApi,
@@ -37,10 +37,15 @@ import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
 import { sanitizeVisualMarkup } from './visualSanitize';
 import { buildVisualDom } from './visualMount';
-import { GimbalTileElement, LampTileElement, MusicTileElement } from './deviceTiles';
+import { GimbalTileElement, MusicTileElement } from './deviceTiles';
+import { DeviceTileElement } from './deviceTile';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 
-export { GimbalTileElement, LampTileElement, MusicTileElement };
+export { DeviceTileElement, GimbalTileElement, MusicTileElement };
+/** The shared look of every device tile (each control at least 56 px tall,
+ *  the hand-target size); kept in tileStyles.ts so the tile modules can use
+ *  it without importing this file back. */
+export { levelStyles } from './tileStyles';
 
 /** Wraps today's plan engine + SVG renderer as one catalog widget. */
 export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
@@ -651,7 +656,7 @@ export class VisualTileElement extends A2uiLitElement<typeof VisualTileApi> {
 }
 
 // Same shape as web_core's (internal) toWebComponentImplementation.
-export const LampTile = { ...LampTileApi, tagName: LampTileElement.tagName, element: LampTileElement as unknown as CustomElementConstructor };
+export const DeviceTile = { ...DeviceTileApi, tagName: DeviceTileElement.tagName, element: DeviceTileElement as unknown as CustomElementConstructor };
 export const PlanBoard = { ...PlanBoardApi, tagName: PlanBoardElement.tagName, element: PlanBoardElement as unknown as CustomElementConstructor };
 export const MusicTile = { ...MusicTileApi, tagName: MusicTileElement.tagName, element: MusicTileElement as unknown as CustomElementConstructor };
 export const SwitchTile = { ...SwitchTileApi, tagName: SwitchTileElement.tagName, element: SwitchTileElement as unknown as CustomElementConstructor };
@@ -672,7 +677,7 @@ export const VisualTile = { ...VisualTileApi, tagName: VisualTileElement.tagName
 export const smartCanvasCatalog = new Catalog(ROOM_CATALOG_ID, '0.9', [
   A2uiColumn,
   A2uiText,
-  LampTile,
+  DeviceTile,
   PlanBoard,
   MusicTile,
   SwitchTile,

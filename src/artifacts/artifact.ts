@@ -99,6 +99,8 @@ function coerceBoard(data: Record<string, unknown>): Coerced<BoardData> {
       frame: { kind: f.kind as FrameKind, title: cleanTitle(f.title), rect: { x: r.x, y: r.y, w: r.w, h: r.h }, pinned: f.pinned === true },
       plan: plan.value,
     },
+    // What the check left out (a control the device can't use) is said at boot.
+    ...(plan.notes?.length ? { notes: plan.notes } : {}),
   };
 }
 
@@ -133,7 +135,7 @@ function coerceSteps(data: Record<string, unknown>): Coerced<Record<string, unkn
 
 function coerceData(kind: ArtifactKind, data: Record<string, unknown>): Coerced<Record<string, unknown>> {
   switch (kind) {
-    case 'board': { const b = coerceBoard(data); return b.ok ? { ok: true, value: { ...b.value } } : b; }
+    case 'board': { const b = coerceBoard(data); return b.ok ? { ok: true, value: { ...b.value }, ...(b.notes ? { notes: b.notes } : {}) } : b; }
     case 'plan': { const p = coercePlanData(data); return p.ok ? { ok: true, value: { ...p.value } } : p; }
     case 'connector': return coerceConnectorData(data);
     case 'pack': {
@@ -165,5 +167,5 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   const d = coerceData(k, data);
   if (!d.ok) return d;
   if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
-  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' } };
+  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }

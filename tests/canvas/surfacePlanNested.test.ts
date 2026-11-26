@@ -63,7 +63,7 @@ describe('nested surface plan', () => {
     const gridComp = [...byId.values()].find((c) => c.component === 'Grid') as { children: string[]; columns: number };
     expect(gridComp.children).toHaveLength(3);
     expect(gridComp.columns).toBe(3);
-    const lampComp = [...byId.values()].find((c) => c.component === 'LampTile');
+    const lampComp = [...byId.values()].find((c) => c.component === 'DeviceTile');
     expect(lampComp).toBeTruthy();
 
     // deterministic

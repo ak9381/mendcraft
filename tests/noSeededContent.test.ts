@@ -7,7 +7,8 @@ import { expect, it } from 'vitest';
 
 export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRIPTED_[A-Z_]+\b/, /\bscriptedEngine\b/,
   /\bscriptedReply\b/, /\bsimPlanEdit\b/, /\bSIM_POINT_IDENTITY\b/, /\bSIM_SCAN_DEVICES\b/, /\bSEEDED_LAMP_IDS\b/,
-  /['"`]wiz-desk['"`]/, /['"`]wiz-ceiling['"`]/, /['"`]speaker-1['"`]/, /showcaseFixture/, /journeyReplay/, /__mcScripts/];
+  /['"`]wiz-desk['"`]/, /['"`]wiz-ceiling['"`]/, /['"`]speaker-1['"`]/, /showcaseFixture/, /journeyReplay/, /__mcScripts/,
+  /\bLampTileElement\b/, /\bBRIGHTNESS_PRESETS\b/];
 
 const SRC = path.resolve(__dirname, '../src');
 

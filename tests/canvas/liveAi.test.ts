@@ -1200,7 +1200,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     // every path a plan takes to a board goes through the fit
     const { readFileSync } = await import('node:fs');
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
-    expect(src).toContain('const plan = fitPlan(planForBoard(frameId, proposed));'); // what she reviews and applies
+    expect(src).toContain('const fitted = fitPlan(planForBoard(frameId, proposed));'); // what she reviews and applies
     expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
     expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));');
   });

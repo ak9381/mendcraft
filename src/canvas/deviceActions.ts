@@ -1,8 +1,8 @@
 // Tile action -> intent -> connector. The device store is the source of truth;
 // the tile only ever shows what the store projects. Optimistic pending state,
 // confirmed on ack, rolled back with an error on failure or timeout.
-import { lampStep, levelRefusal } from './deviceGuard';
-import { LAMP_TILE_STEP, VOLUME_TILE_STEP, colourIntent, sceneIntent, tempStep, whiteIntent } from './lampPresets';
+import { levelRefusal } from './deviceGuard';
+import { VOLUME_TILE_STEP } from './lampPresets';
 import { deviceUpdate, type A2uiMessage, type DeviceState } from './surfacePlan';
 
 export type LampIntent = { deviceId: string; on?: boolean; brightness?: number };
@@ -190,18 +190,9 @@ export function createDeviceStore(
  *  on as asked: the store refuses anything out of range. */
 export function tileIntent(name: string, deviceId: string, cur: DeviceState, value?: string | number): DeviceIntent | null {
   const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
-  const key = typeof value === 'string' ? value : '';
   switch (name) {
-    case 'lamp.toggle':
+    // Lamp presses are generated controls now: device.act → controlSpec.ts.
     case 'switch.toggle': return { deviceId, on: !cur.on };
-    case 'lamp.brighter': return { deviceId, on: true, brightness: lampStep(cur.brightness + LAMP_TILE_STEP) };
-    case 'lamp.dimmer': return { deviceId, brightness: lampStep(cur.brightness - LAMP_TILE_STEP) };
-    case 'lamp.level': return num === null ? null : { deviceId, on: true, brightness: num };
-    case 'lamp.color': return colourIntent(deviceId, key);
-    case 'lamp.scene': return sceneIntent(deviceId, key);
-    case 'lamp.white': return num !== null ? { deviceId, on: true, temp: num } : whiteIntent(deviceId, key);
-    case 'lamp.warmer': return { deviceId, on: true, temp: tempStep(cur.temp, -1) };
-    case 'lamp.cooler': return { deviceId, on: true, temp: tempStep(cur.temp, 1) };
     case 'music.playPause': return { deviceId, playing: !cur.playing };
     case 'music.next': return { deviceId, next: true };
     case 'music.previous': return { deviceId, previous: true };

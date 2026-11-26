@@ -99,6 +99,8 @@ export interface LoadedArtifacts {
   dropped: { id: string; why: string }[];
   /** Well-formed rows past ARTIFACT_MAX_COUNT: kept in the store, not loaded. */
   overCap: string[];
+  /** What the checks left out of rows that still loaded (a bad control), with its row id. */
+  notes: { id: string; note: string }[];
   /** The store could not be read at all (nothing was loaded). */
   readFailed?: boolean;
 }
@@ -107,9 +109,10 @@ export interface LoadedArtifacts {
  *  ARTIFACT_MAX_COUNT. A row that fails is dropped (with why); the rest load. */
 export async function loadArtifacts(store: ArtifactStore): Promise<LoadedArtifacts> {
   let rows: unknown[];
-  try { rows = await store.list(); } catch { return { ok: [], dropped: [], overCap: [], readFailed: true }; }
+  try { rows = await store.list(); } catch { return { ok: [], dropped: [], overCap: [], notes: [], readFailed: true }; }
   const ok: Artifact[] = [];
   const dropped: { id: string; why: string }[] = [];
+  const notes: { id: string; note: string }[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
     const r = coerceArtifact(row);
@@ -117,8 +120,9 @@ export async function loadArtifacts(store: ArtifactStore): Promise<LoadedArtifac
     if (seen.has(r.value.id)) continue;
     seen.add(r.value.id);
     ok.push(r.value);
+    for (const note of r.notes ?? []) notes.push({ id: r.value.id, note });
   }
   ok.sort((a, b) => b.at - a.at);
   const overCap = ok.splice(ARTIFACT_MAX_COUNT).map((a) => a.id);
-  return { ok, dropped, overCap };
+  return { ok, dropped, overCap, notes };
 }

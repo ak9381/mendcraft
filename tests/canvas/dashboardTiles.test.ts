@@ -9,7 +9,7 @@ import {
 import {
   CATALOG_SCHEMAS,
   ConnectTileApi,
-  LampTileApi,
+  DeviceTileApi,
   MusicTileApi,
   SceneTileApi,
   SwitchTileApi,
@@ -66,16 +66,19 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       expect(ConnectTileApi.schema.safeParse({ ...validConnect, unknown: true }).success).toBe(false);
     });
 
-    it('LampTile accepts an optional sim flag (real WiZ bridge vs the simulated lamp)', () => {
+    it('DeviceTile accepts an optional sim flag (real WiZ bridge vs the simulated lamp)', () => {
       const validLamp = {
+        cls: 'lamp',
         label: 'Desk lamp',
         on: true,
         brightness: 80,
-        onToggle: { event: { name: 'lamp.toggle' } },
+        controls: [{ kind: 'toggle', label: 'Power', intent: { on: 'toggle' } }],
+        standard: false,
+        onAct: { event: { name: 'device.act' } },
       };
-      expect(LampTileApi.schema.safeParse(validLamp).success).toBe(true);
-      expect(LampTileApi.schema.safeParse({ ...validLamp, sim: true }).success).toBe(true);
-      expect(LampTileApi.schema.safeParse({ ...validLamp, sim: 'nope' }).success).toBe(false);
+      expect(DeviceTileApi.schema.safeParse(validLamp).success).toBe(true);
+      expect(DeviceTileApi.schema.safeParse({ ...validLamp, sim: true }).success).toBe(true);
+      expect(DeviceTileApi.schema.safeParse({ ...validLamp, sim: 'nope' }).success).toBe(false);
     });
   });
 
@@ -188,7 +191,7 @@ describe('Part 1: Dashboard tiles in A2UI catalog', () => {
       const lampComponents = lampMsgs.find((m) => 'updateComponents' in m)?.updateComponents as {
         components: Array<{ id: string; component: string; [k: string]: unknown }>;
       };
-      expect(lampComponents.components.find((c) => c.component === 'LampTile')).toMatchObject({
+      expect(lampComponents.components.find((c) => c.component === 'DeviceTile')).toMatchObject({
         sim: { path: '/devices/lamp-a/sim' },
       });
       const lampData = lampMsgs.find((m) => 'updateDataModel' in m)?.updateDataModel as { value?: Record<string, { sim?: boolean }> };

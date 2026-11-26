@@ -6,6 +6,10 @@
 // button) is derived here from the device list. A full draft is ~60
 // characters instead of ~600.
 //
+// Nano never designs controls: expandNanoPlan leaves `controls` unset, so
+// each device tile it makes shows the standard controls (controlSpec.ts),
+// footnoted as such.
+//
 //   room:        {"t":"Living room","d":["lamp-a","speaker-a"]}
 //   floor plan:  {"p":"twoBedroom"}
 import { extractJson } from '../ai/cloudJson';

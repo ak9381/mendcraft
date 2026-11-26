@@ -11,6 +11,7 @@ import { OFFLINE_MID_LINE } from './failLines';
 import { CloudCallError, explainCloudFailure } from '../ai/cloudErrors';
 import { buildNanoPlanRequest, buildNanoRepairPrompt, buildNanoRepairUser, parseNanoPlan, partialNanoPlan } from './nanoPlan';
 import { dropUnbackedClaims } from './planTruth';
+import { CONTROLS_SCHEMA_LINE } from './controlSpec';
 
 export type EngineId = 'nano' | 'gemini';
 
@@ -75,7 +76,7 @@ const TEMPLATE_UNION = PLAN_TEMPLATES.map((t) => `"${t}"`).join('|');
 // children`/`first`+`second` — that recursion is what lets a reply compose
 // a whole dashboard instead of one flat row of device tiles.
 const LEAF_SCHEMA = [
-  `{"type":"lamp"|"music"|"switch","deviceId":string,"label":string}`,
+  `{"type":"lamp"|"music"|"switch","deviceId":string,"label":string,"controls":[Control]}`,
   `{"type":"scene","sceneId":string,"label":string}`,
   `{"type":"connect","label":string}`,
   `{"type":"plan","boardId":string,"template":${TEMPLATE_UNION}}`,
@@ -114,6 +115,8 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
   const prompt = [
     'You build one board on a smart canvas. Reply with JSON only, matching:',
     SCHEMA_LINE,
+    CONTROLS_SCHEMA_LINE,
+    'Use only devices from the list.',
     `At most ${MAX_TILES} top-level tiles (a row/grid/card/tabs/split counts as one of those, and can nest more tiles inside — up to ${MAX_DEPTH} levels deep, ${MAX_NODES} tiles total across the whole board). Only use device ids from the list.`,
     'For a simple request, keep it simple and flat, like before. For a richer dashboard or app, compose row/grid/card/tabs/split with stat/chart/table/form/visual tiles.',
     'Never invent a device, a device count or a connection status: you are not given live device state, so no tile may claim what is connected or online.',

@@ -23,7 +23,7 @@ import { nanoQueue } from '../ai/nanoQueue';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
-import { createReplayEngines } from './replayEngine';
+import { createReplayEngines, fixtureDevices } from './replayEngine';
 import { coerceLayout, joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
@@ -34,7 +34,7 @@ const params = new URLSearchParams(location.search);
 const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
 const replayOn = testBuild && params.get('sim') === '1';
-type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string> } };
+type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; devices?: unknown } };
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
@@ -173,6 +173,8 @@ const liveEngines = createEngines({
   sim: params.has('sim'),
 });
 const engines = replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}) : liveEngines;
+// Test build + ?sim=1 only: the devices a run registers (simulated, labelled SIM).
+const simDevices = replayOn ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
 
 // Phone shell: forward this phone's AI terminal activity to the paired
 // laptop's AI monitor (compact, redacted, ≤5/s; dropped with no session).
@@ -240,11 +242,14 @@ function persistDoc(doc: CanvasDoc): void {
 }
 
 handle = mountCanvas(root, {
-  voice, engines, fresh: params.has('fresh'), sim: params.has('sim'), gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
+  voice, engines, fresh: params.has('fresh'), sim: params.has('sim'),
+  ...(simDevices ? { devices: simDevices.devices, deviceLabels: simDevices.labels } : {}),
+  gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   doc: startDoc,
   onPersist: persistDoc,
   artifactBy: (frameId) => artifacts.find((a) => a.id === `board-${frameId}`)?.by,
   dropped: loaded.dropped,
+  loadNotes: loaded.notes,
   reservedFrameIds: reservedFrameIds(),
   storeNote: storeNotes.length ? storeNotes.join(' ') : undefined,
   phoneCamera,

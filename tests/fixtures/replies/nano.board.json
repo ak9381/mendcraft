@@ -1,0 +1,10 @@
+{
+  "engine": "nano",
+  "model": "none (hand-written)",
+  "turnKind": "board",
+  "recordedAt": "2026-11-27T02:45:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. Re-record from a live run.",
+  "reply": "{\"kind\": \"room\", \"title\": \"Lamp\", \"tiles\": [{\"type\": \"lamp\", \"deviceId\": \"wiz-lamp-1\", \"label\": \"Lamp\"}]}"
+}

@@ -6,6 +6,7 @@
 // with ?sim=1, and every turn it answers says "Replay · recorded reply".
 // A turn kind with no recorded reply fails loudly — nothing is made up.
 import type { EngineId, SurfaceEngine } from './aiTurn';
+import type { DeviceState } from './surfacePlan';
 
 /** What one model turn is for; a recorded reply is keyed by engine + kind. */
 export type TurnKind =
@@ -51,4 +52,29 @@ export function createReplayEngines(replies: Record<string, string>): Partial<Re
     },
   });
   return { nano: make('nano'), gemini: make('gemini') };
+}
+
+/** At most this many fixture devices in one run. */
+export const FIXTURE_DEVICES_MAX = 8;
+const FIXTURE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** The devices a test run registers (`window.__mcFixtures.devices =
+ *  [{ id, cls, label }]`): simulated, answered by simulatedAck, every one
+ *  labelled SIM. canvasMain reads them only in a test build with ?sim=1.
+ *  Lamps and speakers only; anything malformed is skipped. */
+export function fixtureDevices(raw: unknown): { devices: Record<string, DeviceState>; labels: Record<string, string> } | null {
+  if (!Array.isArray(raw)) return null;
+  const devices: Record<string, DeviceState> = {};
+  const labels: Record<string, string> = {};
+  for (const d of raw.slice(0, FIXTURE_DEVICES_MAX)) {
+    if (!d || typeof d !== 'object') continue;
+    const { id, cls, label } = d as Record<string, unknown>;
+    if (typeof id !== 'string' || !FIXTURE_ID.test(id) || devices[id]) continue;
+    if (cls !== 'lamp' && cls !== 'music') continue;
+    devices[id] = cls === 'lamp'
+      ? { on: false, brightness: 50, sim: true, unreachable: false }
+      : { on: false, brightness: 0, playing: false, volume: 50, sim: true };
+    labels[id] = typeof label === 'string' && label.trim() && !/[<>]/.test(label) ? label.trim().slice(0, 40) : id;
+  }
+  return Object.keys(devices).length ? { devices, labels } : null;
 }

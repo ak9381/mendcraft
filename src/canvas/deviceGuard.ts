@@ -34,3 +34,18 @@ export function levelRefusal(i: { brightness?: number; volume?: number; temp?: n
 /** Where a relative brighter/dimmer step lands: 10..100 (a dimmer at the floor
  *  stays at 10; off is only ever an explicit "off"). */
 export const lampStep = (n: number): number => Math.max(10, Math.min(100, Math.round(n)));
+
+// ---- the fixed tables a generated control is checked against (never generated) ----
+
+/** The device classes a board tile can bind to. */
+export type DeviceClass = 'lamp' | 'music' | 'switch' | 'gimbal';
+export const DEVICE_CLASSES: readonly DeviceClass[] = ['lamp', 'music', 'switch', 'gimbal'];
+/** The only intent keys a control on a tile of each class may carry. */
+export const CLASS_INTENTS: Record<DeviceClass, readonly string[]> = {
+  lamp: ['on', 'brightness', 'temp', 'rgb', 'sceneId'],
+  music: ['playing', 'volume', 'next', 'previous'],
+  switch: ['on'],
+  gimbal: ['gimbalMode', 'gimbalCue'],
+};
+/** A slider's range comes from here; a model never writes min or max. */
+export const RANGES = { brightness: [10, 100], volume: [0, 100], temp: [2200, 6500] } as const;

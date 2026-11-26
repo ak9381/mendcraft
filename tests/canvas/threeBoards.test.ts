@@ -158,7 +158,7 @@ describe('review fixes: saved boards from before the floor plan had its own boar
     expect(at).toBeLessThan(app.indexOf('const fitPlan ='));
   });
   it('a turn on the floor-plan board is a floor plan, whatever kind the model wrote', () => {
-    expect(app).toContain('const plan = fitPlan(planForBoard(frameId, proposed));');
+    expect(app).toContain('const fitted = fitPlan(planForBoard(frameId, proposed));');
     expect(app).toMatch(/reg\.get\(frameId\)\?\.kind === 'plan' && plan\.kind !== 'plan' \? \{ \.\.\.plan, kind: 'plan' \}/);
   });
 });

@@ -60,7 +60,7 @@ describe('ArtifactStore', () => {
 
   it('a store that cannot be read loads nothing and says so', async () => {
     const r = await loadArtifacts({ list: () => Promise.reject(new Error('gone')), put: async () => {}, remove: async () => {}, clear: async () => {} });
-    expect(r).toEqual({ ok: [], dropped: [], overCap: [], readFailed: true });
+    expect(r).toEqual({ ok: [], dropped: [], overCap: [], notes: [], readFailed: true });
   });
 
   it('falls back to memory when indexedDB.open throws', async () => {

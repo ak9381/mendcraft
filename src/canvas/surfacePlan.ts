@@ -2,6 +2,7 @@
 // upgrades. Models never write raw A2UI: they emit this small JSON, which is
 // coerced here and expanded deterministically into A2UI v0.9 messages.
 import { sanitizeVisualMarkup } from './visualSanitize';
+import { coerceControls, standardControls, type ControlSpec } from './controlSpec';
 
 export const PROTOCOL = 'v0.9' as const;
 export const ROOM_CATALOG_ID = 'https://mendcraft.web.app/catalogs/smart-canvas/v0.json';
@@ -25,17 +26,19 @@ export type FormField =
   | { kind: 'choice'; id: string; label: string; options: string[]; value?: string };
 
 export type LeafTileSpec =
-  | { type: 'lamp'; deviceId: string; label: string }
+  /** Device leaves carry the controls the model designed (checked by
+   *  coerceControls against the class tables); none = standard controls. */
+  | { type: 'lamp'; deviceId: string; label: string; controls?: ControlSpec[] }
   /** No drawing here, by design: a surface plan goes to models, morph edits
    *  and the relay. What is drawn lives beside it (planDocs.ts). */
   | { type: 'plan'; boardId: string; template: PlanTemplate }
-  | { type: 'music'; deviceId: string; label: string }
-  | { type: 'switch'; deviceId: string; label: string }
+  | { type: 'music'; deviceId: string; label: string; controls?: ControlSpec[] }
+  | { type: 'switch'; deviceId: string; label: string; controls?: ControlSpec[] }
   | { type: 'scene'; sceneId: string; label: string }
   | { type: 'connect'; label?: string }
   /** The docked iPhone's stand (DockKit). One per board; its status is what
    *  the iPhone really reports (see gimbalTile.ts). */
-  | { type: 'gimbal'; label?: string }
+  | { type: 'gimbal'; label?: string; controls?: ControlSpec[] }
   | { type: 'stat'; label: string; value: string; delta?: string; trend?: TrendKind; spark?: number[] }
   | { type: 'chart'; title: string; chartType: ChartType; series: { label: string; value: number }[] }
   | { type: 'table'; title: string; columns: string[]; rows: string[][]; sortable?: boolean; rowActionLabel?: string }
@@ -172,6 +175,15 @@ function aliasTileRaw(o: Record<string, unknown>): Record<string, unknown> {
   return { type: 'tabs', tabs: [{ label: o.label, children }] };
 }
 
+/** A device leaf's controls, checked against its class: dropped ones are
+ *  counted in a note; none left (or none written) = standard controls. */
+function leafControls(o: Record<string, unknown>, cls: 'lamp' | 'music' | 'switch' | 'gimbal', notes: string[]): ControlSpec[] | undefined {
+  if (o.controls === undefined) return undefined;
+  const r = coerceControls(o.controls, cls);
+  if (r.dropped) notes.push(`Dropped ${r.dropped} control${r.dropped === 1 ? '' : 's'} the ${cls} can't use.`);
+  return r.controls.length ? r.controls : undefined;
+}
+
 function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }, notes: string[]): TileResult {
   counter.n++;
   if (counter.n > MAX_NODES) return { ok: false, error: `too many nodes (> ${MAX_NODES})` };
@@ -200,7 +212,8 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     if (seen.has(deviceId)) return { ok: true, value: null };
     seen.add(deviceId);
     const fallbackLabel = o.type === 'lamp' ? 'Lamp' : o.type === 'music' ? 'Music' : 'Switch';
-    return { ok: true, value: { type: o.type, deviceId, label: cleanText(o.label, 40) ?? fallbackLabel } };
+    const controls = leafControls(o, o.type, notes);
+    return { ok: true, value: { type: o.type, deviceId, label: cleanText(o.label, 40) ?? fallbackLabel, ...(controls ? { controls } : {}) } };
   }
   if (o.type === 'plan') {
     const boardId = typeof o.boardId === 'string' && ID_RE.test(o.boardId) ? o.boardId : 'plan-1';
@@ -220,7 +233,8 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   if (o.type === 'gimbal') {
     if (seen.has('gimbal')) return { ok: true, value: null };
     seen.add('gimbal');
-    return { ok: true, value: { type: 'gimbal', label: cleanText(o.label, 40) ?? 'Gimbal' } };
+    const controls = leafControls(o, 'gimbal', notes);
+    return { ok: true, value: { type: 'gimbal', label: cleanText(o.label, 40) ?? 'Gimbal', ...(controls ? { controls } : {}) } };
   }
   if (o.type === 'stat') {
     const label = cleanText(o.label, 40);
@@ -403,34 +417,28 @@ export function expandPlan(
   function expandNode(t: TileSpec, path: number[]): string {
     const id = tileComponentId(t, path);
     if (t.type === 'lamp') {
+      // One schema for any device leaf: its controls (the model's, else the
+      // standard set, footnoted) and ONE event; a press carries only the
+      // tile and control indexes, and the handler reads the approved plan.
+      const p = (k: string) => ({ path: `/devices/${t.deviceId}/${k}` });
       components.push({
         id,
-        component: 'LampTile',
+        component: 'DeviceTile',
+        cls: 'lamp',
         label: t.label,
-        on: { path: `/devices/${t.deviceId}/on` },
-        brightness: { path: `/devices/${t.deviceId}/brightness` },
-        pending: { path: `/devices/${t.deviceId}/pending` },
-        error: { path: `/devices/${t.deviceId}/error` },
-        onToggle: { event: { name: 'lamp.toggle', context: { deviceId: t.deviceId } } },
-        onBrighter: { event: { name: 'lamp.brighter', context: { deviceId: t.deviceId } } },
-        onDimmer: { event: { name: 'lamp.dimmer', context: { deviceId: t.deviceId } } },
-        sim: { path: `/devices/${t.deviceId}/sim` },
-        unreachable: { path: `/devices/${t.deviceId}/unreachable` },
-        temp: { path: `/devices/${t.deviceId}/temp` },
-        color: { path: `/devices/${t.deviceId}/color` },
-        sceneId: { path: `/devices/${t.deviceId}/sceneId` },
-        // One press each; the chip's own value rides along with the click.
-        onLevel: { event: { name: 'lamp.level', context: { deviceId: t.deviceId } } },
-        onColor: { event: { name: 'lamp.color', context: { deviceId: t.deviceId } } },
-        onScene: { event: { name: 'lamp.scene', context: { deviceId: t.deviceId } } },
-        onWhite: { event: { name: 'lamp.white', context: { deviceId: t.deviceId } } },
-        onWarmer: { event: { name: 'lamp.warmer', context: { deviceId: t.deviceId } } },
-        onCooler: { event: { name: 'lamp.cooler', context: { deviceId: t.deviceId } } },
+        deviceId: t.deviceId,
+        controls: t.controls ?? standardControls('lamp'),
+        standard: !t.controls,
+        on: p('on'), brightness: p('brightness'), temp: p('temp'), color: p('color'), sceneId: p('sceneId'),
+        pending: p('pending'), error: p('error'), sim: p('sim'), unreachable: p('unreachable'),
+        onAct: { event: { name: 'device.act', context: { deviceId: t.deviceId, tile: id } } },
       });
-      const s = devices[t.deviceId] ?? { on: false, brightness: 50 };
+      const s = devices[t.deviceId];
       deviceData[t.deviceId] = {
-        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false, unreachable: s.unreachable ?? false,
-        temp: s.temp ?? 0, color: s.color ?? '', sceneId: s.sceneId ?? 0,
+        on: s?.on ?? false, brightness: s?.brightness ?? 50, pending: false, error: s?.error ?? '', sim: s?.sim ?? false,
+        // A lamp this canvas does not have (unplugged, another laptop) shows "Not connected".
+        unreachable: !s || !!s.unreachable,
+        temp: s?.temp ?? 0, color: s?.color ?? '', sceneId: s?.sceneId ?? 0,
       };
     } else if (t.type === 'plan') {
       components.push({ id, component: 'PlanBoard', boardId: t.boardId, template: t.template });

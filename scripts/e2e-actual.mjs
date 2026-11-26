@@ -102,6 +102,84 @@ const SECTIONS = {
   },
 };
 
+// ---- dashboard: a generated board drives a (simulated) lamp through the checked binding ----
+const LAMP_ID = 'wiz-lamp-1';
+const reviewOpen = () => { const d = document.querySelector('.mc-review-dialog'); return !!d && !d.hidden; };
+const reviewText = () => document.querySelector('.mc-review-dialog')?.innerText ?? '';
+/** What the device tiles show: count, controls, state line, standard note. */
+const tiles = () => [...document.querySelectorAll('.mc-world mc-device-tile, [data-frame] mc-device-tile')].map((t) => {
+  const r = t.shadowRoot;
+  return {
+    chips: [...(r?.querySelectorAll('[data-act=chip]') ?? [])].map((b) => b.textContent.trim()),
+    toggles: r?.querySelectorAll('[data-act=toggle]').length ?? 0,
+    state: r?.querySelector('[data-device-state]')?.textContent.trim() ?? '',
+    standard: !!r?.querySelector('[data-standard]'),
+    sim: !!r?.querySelector('.sim-badge'),
+  };
+});
+const boardArtifacts = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'board')));
+
+async function dashboard(page) {
+  const notes = [];
+  page.on('console', (m) => notes.push(m.text()));
+  // One simulated lamp (test build + ?sim=1 only), with an id like the ones the bridge gives.
+  await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check(await page.evaluate((id) => !!window.__mcCanvas.store.get(id)?.sim, LAMP_ID), 'the fixture lamp is registered and marked SIM');
+
+  // Offline first: Nano's board is reviewed on its own, Gemini's better one on reconnect.
+  await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
+  await page.evaluate(() => { window.__mcCanvas.run('make a dashboard for my lamp'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the first review opens'))) return;
+  const first = await page.evaluate(reviewText);
+  check(first.includes('Replay'), 'the review names the engine as "Replay"');
+  check((await page.evaluate(tiles)).length === 0 && (await boardArtifacts(page)).length === 0, '0 boards until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => document.querySelectorAll('mc-device-tile').length === 1, 10_000, 'one device tile after Approve'))) return;
+  const one = (await page.evaluate(tiles))[0];
+  check(one.standard && one.toggles === 1 && one.sim, `Nano's board: one SIM lamp tile with standard controls (got ${JSON.stringify(one)})`);
+
+  // Back online: the saved Deep pass runs and opens the better board for review.
+  await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
+  if (!(await waitFor(page, () => { const d = document.querySelector('.mc-review-dialog'); return !!d && !d.hidden && /Better/.test(d.innerText); }, 15_000, 'the second (better) review opens'))) return;
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'chips on the better board'))) return;
+  const better = await page.evaluate(tiles);
+  check(better.length === 1 && better[0].chips.includes('Relax') && !better[0].standard, `the better board has the model's chips (got ${JSON.stringify(better)})`);
+
+  // Press the power toggle: the tile follows the (simulated) lamp's answer.
+  await page.evaluate(() => document.querySelector('mc-device-tile').shadowRoot.querySelector('[data-act=toggle]').click());
+  await waitFor(page, () => /^On\b/.test(document.querySelector('mc-device-tile')?.shadowRoot?.querySelector('[data-device-state]')?.textContent ?? ''), 5_000, 'the tile shows on')
+    .then((ok) => ok && check(true, 'power toggle: the tile shows on'));
+  check(await page.evaluate((id) => window.__mcCanvas.store.get(id)?.on === true, LAMP_ID), 'the lamp is on in the store');
+  // A brightness chip: the level comes from the approved plan (Full = 100 %).
+  await page.evaluate(() => [...document.querySelector('mc-device-tile').shadowRoot.querySelectorAll('[data-act=chip]')].find((b) => b.textContent.trim() === 'Full').click());
+  await waitFor(page, (id) => window.__mcCanvas.store.get(id)?.brightness === 100 && !window.__mcCanvas.store.get(id)?.pending, 5_000, 'the Full chip sets 100 %', LAMP_ID)
+    .then((ok) => ok && check(true, 'a brightness chip sets the level from the approved plan'));
+
+  // Tamper with the stored board: a chip asking for brightness 500.
+  await sleep(1200); // past the save debounce
+  const stored = await boardArtifacts(page);
+  check(stored.length === 1 && stored[0].by === 'replay', `the board is stored, made by replay (got ${JSON.stringify(stored.map((a) => a.by))})`);
+  const tampered = JSON.parse(JSON.stringify(stored[0]));
+  const lamp = tampered.data.plan.tiles[0].children[0];
+  lamp.controls.find((c) => c.kind === 'chips').options.push({ label: 'Blast', intent: { brightness: 500 } });
+  await page.evaluate((a) => window.__mcArtifacts.put(a), tampered);
+
+  notes.length = 0;
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => document.querySelectorAll('mc-device-tile').length === 1, 10_000, 'the board is back after the reload'))) return;
+  const after = (await page.evaluate(tiles))[0];
+  check(!after.chips.includes('Blast') && after.chips.includes('Relax'), `the 500 % chip is left out, the rest load (got ${JSON.stringify(after.chips)})`);
+  check(notes.some((n) => /Dropped 1 control/.test(n)), 'the dropped-control note is logged');
+
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, () => document.querySelectorAll('mc-device-tile').length === 1, 10_000, 'the board is back again');
+  const again = await boardArtifacts(page);
+  check(again.length === 1 && again[0].by === 'replay' && (await frames(page)).length === 1, 'the board is back from IndexedDB with by: replay');
+}
+SECTIONS.dashboard = dashboard;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

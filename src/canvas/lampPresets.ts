@@ -5,8 +5,6 @@
 import type { DeviceIntent } from './deviceActions';
 import { TEMP_MAX, TEMP_MIN, WIZ_SCENES } from '../devices/wiz';
 
-/** Brightness chips, in percent (WiZ dims 10–100). */
-export const BRIGHTNESS_PRESETS: readonly number[] = [10, 25, 50, 75, 100];
 /** One − / + press on the lamp tile's brightness. */
 export const LAMP_TILE_STEP = 10;
 /** One − / + press on the speaker tile's volume. */
@@ -48,13 +46,6 @@ export const LAMP_SCENES: readonly ScenePreset[] = [
   { key: 'night-light', label: 'Night light', sceneId: 14 },
   { key: 'sunset', label: 'Sunset', sceneId: 3 },
   { key: 'party', label: 'Party', sceneId: 4 },
-];
-
-export interface WhitePreset { key: string; label: string; temp: number }
-export const WHITE_PRESETS: readonly WhitePreset[] = [
-  { key: 'warm', label: 'Warm', temp: 2700 },
-  { key: 'neutral', label: 'Neutral', temp: 4000 },
-  { key: 'cool', label: 'Cool', temp: 6500 },
 ];
 
 export interface VolumePreset { key: string; label: string; volume: number }
@@ -101,11 +92,6 @@ export function sceneIntent(deviceId: string, key: string): DeviceIntent | null 
   const s = LAMP_SCENES.find((x) => x.key === key);
   return s ? { deviceId, on: true, sceneId: s.sceneId } : null;
 }
-export function whiteIntent(deviceId: string, key: string): DeviceIntent | null {
-  const w = WHITE_PRESETS.find((x) => x.key === key);
-  return w ? { deviceId, on: true, temp: w.temp } : null;
-}
-
 /** Which colour swatch matches a lamp's current state ('' = none). */
 export function activeColourKey(s: { color?: string; temp?: number; sceneId?: number }): string {
   if (s.sceneId) return '';

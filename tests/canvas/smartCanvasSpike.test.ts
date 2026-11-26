@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MessageProcessor, Catalog } from '@a2ui/web_core/v0_9';
 import { coerceSurfacePlan, expandPlan, MAX_TILES, ROOM_CATALOG_ID, type A2uiMessage } from '../../src/canvas/surfacePlan';
 import { gateMessages } from '../../src/canvas/gate';
-import { CATALOG_SCHEMAS, LampTileApi, PlanBoardApi } from '../../src/canvas/catalogApi';
+import { CATALOG_SCHEMAS, DeviceTileApi, PlanBoardApi } from '../../src/canvas/catalogApi';
 import { createSurfaceProposal } from '../../src/canvas/proposalBuffer';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 
@@ -74,7 +74,7 @@ describe('gate', () => {
 
 describe('A2UI processor accepts gated messages (DOM-free)', () => {
   it('creates the surface and holds data', () => {
-    const cat = new Catalog(ROOM_CATALOG_ID, '0.9', [{ ...LampTileApi }, { ...PlanBoardApi }] as never);
+    const cat = new Catalog(ROOM_CATALOG_ID, '0.9', [{ ...DeviceTileApi }, { ...PlanBoardApi }] as never);
     const proc = new MessageProcessor([cat]);
     const created: string[] = [];
     proc.onSurfaceCreated((s: { id: string }) => created.push(s.id));

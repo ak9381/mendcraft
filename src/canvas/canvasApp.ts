@@ -61,16 +61,17 @@ import { createWizClient, resolveWizToken, type WizClient } from '../devices/wiz
 import { esc } from '../core/esc';
 import {
   CardTileElement, ChartTileElement, ConnectTileElement, FormTileElement, GridTileElement,
-  GimbalTileElement, LampTileElement, MusicTileElement, PlanBoardElement, RowTileElement, SceneTileElement,
+  GimbalTileElement, DeviceTileElement, MusicTileElement, PlanBoardElement, RowTileElement, SceneTileElement,
   SplitTileElement, StatTileElement, SwitchTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
 import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
+import { NOT_THIS_DEVICE_REFUSAL, pressIntent, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
+import { ABSENT_DEVICE_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -152,6 +153,10 @@ export interface CanvasOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   connector?: DeviceConnector;
   devices?: Record<string, DeviceState>;
+  /** Stored rows that loaded with something left out, said at boot (one line each). */
+  loadNotes?: { id: string; note: string }[];
+  /** Names for `devices` (shown on tiles and given to the models). */
+  deviceLabels?: Record<string, string>;
   reducedMotion?: boolean;
   /** Engine factories by step, asked for one turn kind at a time. Missing,
    *  or returning undefined: no model here, and the turn says so. */
@@ -230,7 +235,7 @@ export interface CanvasOptions {
 // (or Grid, Row, Tabs, Split) is the edit item and its children just move
 // with it.
 const LIVE_TILE_TAGS = [
-  'mc-lamp-tile', 'mc-music-tile', 'mc-switch-tile', 'mc-scene-tile', 'mc-connect-tile', 'mc-gimbal-tile', 'mc-plan-board',
+  'mc-device-tile', 'mc-music-tile', 'mc-switch-tile', 'mc-scene-tile', 'mc-connect-tile', 'mc-gimbal-tile', 'mc-plan-board',
   'mc-row', 'mc-grid', 'mc-card', 'mc-tabs', 'mc-split',
   'mc-stat-tile', 'mc-chart-tile', 'mc-table-tile', 'mc-form-tile', 'mc-visual-tile',
 ];
@@ -292,7 +297,7 @@ export function fitFocusedSize(rect: { w: number; h: number }, o: { free: number
 
 export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   for (const El of [
-    LampTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement, GimbalTileElement,
+    DeviceTileElement, PlanBoardElement, MusicTileElement, SwitchTileElement, SceneTileElement, ConnectTileElement, GimbalTileElement,
     RowTileElement, GridTileElement, CardTileElement, TabsTileElement, SplitTileElement,
     StatTileElement, ChartTileElement, TableTileElement, FormTileElement, VisualTileElement,
   ]) {
@@ -1208,7 +1213,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Which bulb each real lamp id is (filled when the bridge answers).
   const lampIps = new Map<string, string>();
   // Device id → the name shown and given to the models (filled by discovery).
-  const DEVICE_LABELS: Record<string, string> = {};
+  const DEVICE_LABELS: Record<string, string> = { ...(opts.deviceLabels ?? {}) };
   // Live mode (no ?sim=1): the lamps are the REAL lamps. Nothing is seeded,
   // and a real lamp the bridge can't reach is shown "Not reachable" and
   // refused — never simulated.
@@ -1380,6 +1385,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const ext = (a: WidgetAction) => (a.metadata?.extensions as Record<string, unknown> | undefined) ?? a.metadata;
     (s as { onAction: { subscribe(f: (a: WidgetAction) => void): void } }).onAction.subscribe((a) => {
       if (a.name === 'connect.start') { openConnectSheet(sid); return; }
+      // A generated device tile: only the tile and control indexes (and a
+      // slider's level) are read from the event; the control itself comes
+      // from the APPROVED plan of this board (the dock shows its pinned board).
+      if (a.name === 'device.act') { devicePress(sid.endsWith('-dock') ? sid.slice(0, -'-dock'.length) : sid, { ...a.context, ...ext(a) }); return; }
       // Gimbal tile: one press -> the same path as the spoken phrase.
       if (a.name === 'gimbal.mode' || a.name === 'gimbal.cue') {
         const press = gimbalPress(a.name, a.context?.value ?? ext(a)?.value);
@@ -1415,6 +1424,28 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (intent) actQueue.act(intent);
     });
   });
+
+  /** One press on a generated device tile → the device lane, or the refusal said. */
+  function devicePress(frameId: string, press: DevicePress): void {
+    const r = pressIntent(surfaces[frameId], press, (id) => store.get(id));
+    if ('refusal' in r) {
+      say(r.refusal);
+      // The tile shows why too; a lamp that isn't answering is looked for again.
+      if (r.deviceId && store.get(r.deviceId)) {
+        store.patch(r.deviceId, { error: r.refusal });
+        if (store.get(r.deviceId)?.unreachable) void rediscoverLamps();
+      }
+      return;
+    }
+    if ('gimbal' in r) {
+      const g = r.gimbal;
+      const p = 'mode' in g ? gimbalPress('gimbal.mode', g.mode) : gimbalPress('gimbal.cue', g.cue);
+      if (p) gimbalTilePress(p); else say(NOT_THIS_DEVICE_REFUSAL);
+      return;
+    }
+    // Same per-device lane as voice and gestures; the store checks the levels again.
+    void actQueue.act(r.intent);
+  }
 
   /** Every floor-plan tile on a board (they may sit inside rows / cards). */
   function planTilesOf(plan: SurfacePlan): Extract<SurfacePlan['tiles'][number], { type: 'plan' }>[] {
@@ -2525,10 +2556,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
-  async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink, madeBy = false): Promise<boolean> {
+  async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink, madeBy = false, onlyPresent = true): Promise<boolean> {
     // What she reviews is what will be applied: fitted to the lamps that
     // exist now (the swap may have happened while the model was writing).
-    const plan = fitPlan(planForBoard(frameId, proposed));
+    // A model may only bind devices that are here: any other device tile is
+    // left out, and the review says so.
+    // (A connect turn proposes the device it just found: not checked here.)
+    const fitted = fitPlan(planForBoard(frameId, proposed));
+    const present = onlyPresent ? dropAbsentDevices(fitted, (id) => !!store.get(id)) : { plan: fitted, dropped: 0 };
+    const plan = present.plan;
+    if (present.dropped) panels.forEngine(si.engine).log('note', ABSENT_DEVICE_LINE);
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -2591,7 +2628,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         title: summary, card, extra: buildReviewExtra(),
         // A blank board still has a name ("Board 3"): diff against it, so the
         // plan says "Board 3 → This room" — or nothing when the name stays.
-        changes: diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
+        changes: [
+          ...diffPlans(before ?? { kind: plan.kind, title: reg.get(frameId)?.title ?? plan.title, tiles: [] }, plan, { devices: store.all() }),
+          ...(present.dropped ? [{ op: 'remove' as const, label: ABSENT_DEVICE_LINE }] : []),
+        ],
         // A two-step change (draft + improvement, or a draft after a failed
         // improvement) names both steps and counts both steps' bytes.
         facts: planFacts(),
@@ -2900,7 +2940,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say('That device is already on this board.');
         return false;
       }
-      return await proposePlan(frameId, utterance, merged, reviewSent, summary, status);
+      return await proposePlan(frameId, utterance, merged, reviewSent, summary, status, undefined, false, false);
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); }
   }
 
@@ -5646,6 +5686,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   {
     const dropped = opts.dropped ?? [];
     for (const d of dropped) panels.forEngine('nano').log('note', `${droppedLogLine(d)}`);
+    // Rows that loaded with something left out (a control the device can't use).
+    for (const n of opts.loadNotes ?? []) {
+      panels.forEngine('nano').log('note', `${n.id}: ${n.note}`);
+      console.info(`[mendcraft] ${n.id}: ${n.note}`);
+    }
     const lines = [dropped.length ? droppedSayLine(dropped.length) : '', opts.storeNote ?? ''].filter(Boolean);
     if (opts.storeNote) panels.forEngine('nano').log('note', opts.storeNote);
     if (lines.length) say(lines.join(' '));
