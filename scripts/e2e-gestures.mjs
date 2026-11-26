@@ -108,30 +108,48 @@ async function main() {
     await page.evaluate(() => window.__mcGestures.show(true));
     await wait(400);
     const badgeCount = await page.evaluate(() => [...document.querySelectorAll('.mc-gesture-badge')].filter((b) => !b.hidden).length);
-    // Badges sit at each button's top-left corner: never over its label.
+    // The hand sits at each button's top-RIGHT corner, its L / R / L+R tag at
+    // the top-LEFT corner: neither ever covers the label (any button: the
+    // bar, the cluster, chips, More).
     const placement = await page.evaluate(() => {
-      document.querySelector('.mc-tools-chip').click(); // open Tools so the bar's badges show
+      document.querySelector('.mc-tools-chip').click(); // open Tools so the bar's badges show…
+      document.querySelector('.mc-more-btn')?.click(); // …and More, so its items' badges show too
       return new Promise((res) => setTimeout(() => {
         const bad = [];
+        const textRects = (btn) => { const range = document.createRange(); range.selectNodeContents(btn); return [...range.getClientRects()].filter((q) => q.width > 0); };
+        const hits = (a, q) => a.left < q.right && a.right > q.left && a.top < q.bottom && a.bottom > q.top;
+        const buttons = [...document.querySelectorAll('button')].filter((x) => x.getBoundingClientRect().width > 0);
+        let checked = 0;
         for (const b of document.querySelectorAll('.mc-gesture-badge')) {
           if (b.hidden) continue;
           const key = b.dataset.key;
           const br = b.getBoundingClientRect();
-          // the bound button: nearest visible control whose top-left corner is the badge centre
-          const cx = br.left + 12, cy = br.top + 12;
-          const btn = [...document.querySelectorAll('button')].find((x) => { const r = x.getBoundingClientRect(); return r.width && Math.abs(r.left - cx) < 2 && Math.abs(r.top - cy) < 2; });
-          if (!btn) { bad.push(`${key}: no button at its corner`); continue; }
-          const range = document.createRange(); range.selectNodeContents(btn);
-          const tr = [...range.getClientRects()].filter((q) => q.width > 0);
-          const overlaps = tr.some((q) => br.left < q.right && br.right > q.left && br.top < q.bottom && br.bottom > q.top);
-          if (overlaps) bad.push(`${key}: covers "${btn.textContent.trim()}"`);
+          const tag = document.querySelector(`.mc-gesture-side[data-key="${key}"]`);
+          const tgr = tag?.getBoundingClientRect();
+          // the bound button: its top-right corner is 8 px inside the hand's top-right
+          const btn = buttons.find((x) => { const r = x.getBoundingClientRect(); return Math.abs(r.right - (br.right - 8)) < 2 && Math.abs(r.top - (br.top + 8)) < 2; });
+          if (!btn) { bad.push(`${key}: no button at the hand's corner`); continue; }
+          const r = btn.getBoundingClientRect();
+          if (!tag || tag.hidden || Math.abs(tgr.left - (r.left + 4)) > 2 || Math.abs(tgr.top - (r.top - 8)) > 2) bad.push(`${key}: tag not at the top-left of "${btn.textContent.trim()}"`);
+          // …and never on another badge's hand (toolbar neighbours).
+          for (const other of document.querySelectorAll('.mc-gesture-badge')) {
+            if (other === b || other.hidden || !tgr) continue;
+            if (hits(tgr, other.getBoundingClientRect())) bad.push(`${key}: tag collides with the ${other.dataset.key} hand`);
+          }
+          for (const q of textRects(btn)) {
+            if (hits(br, q)) bad.push(`${key}: hand covers "${btn.textContent.trim()}"`);
+            if (tgr && hits(tgr, q)) bad.push(`${key}: tag covers "${btn.textContent.trim()}"`);
+          }
+          checked++;
         }
+        document.querySelector('.mc-more-btn')?.click();
         document.querySelector('.mc-tools-chip').click();
-        res(bad);
+        res(checked ? bad : ['no badges checked']);
       }, 1000)); // the bar settles and the badges re-place (every 300 ms)
     });
-    check(placement.length === 0, `badges sit at the top-left corner and never cover a label${placement.length ? `: ${placement.join('; ')}` : ''}`);
+    check(placement.length === 0, `hand at the top-right, tag at the top-left — neither covers a label${placement.length ? `: ${placement.join('; ')}` : ''}`);
     check(badgeCount >= 3, `badges on the bound buttons while Hands is on (${badgeCount})`);
+    await wait(500); // badges re-place every 300 ms after More / Tools close
     const undoBadge = await page.evaluate(() => {
       const u = document.querySelector('.mc-hand-cluster .mc-cluster-undo');
       const b = document.querySelector('.mc-gesture-badge[data-key="L:thumbsDown"]');

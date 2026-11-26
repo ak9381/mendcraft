@@ -167,6 +167,8 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
   layer.append(hud);
   root.append(layer);
   const badges = new Map<GestureKey, HTMLElement>();
+  /** The L / R / L+R tags: separate from the hand, at the button's top-left. */
+  const tags = new Map<GestureKey, HTMLElement>();
   for (const b of bindings) {
     if (!b.targets.length && !b.when?.length) continue;
     const side = keySide(b.key);
@@ -176,10 +178,16 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
     el.dataset.key = b.key;
     el.dataset.shape = shapes.join('+');
     el.title = `${gestureName(b.key)}: ${b.label}`;
-    el.innerHTML = `${shapes.map(handIconSvg).join('')}<span class="mc-gesture-side">${sideMark(side)}</span>`;
+    el.innerHTML = shapes.map(handIconSvg).join('');
     el.hidden = true;
-    layer.append(el);
+    const tag = doc.createElement('div');
+    tag.className = 'mc-gesture-side';
+    tag.dataset.key = b.key;
+    tag.textContent = sideMark(side);
+    tag.hidden = true;
+    layer.append(el, tag);
     badges.set(b.key, el);
+    tags.set(b.key, tag);
   }
 
   // ---- light-up on the bound button
@@ -203,12 +211,22 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       if (!badge) continue;
       let el: HTMLElement | null = null;
       for (const s of badgeSelectors(b)) { el = env.visible(s); if (el) break; }
-      if (!el || !onTop(el)) { badge.hidden = true; continue; }
+      const tag = tags.get(b.key);
+      if (!el || !onTop(el)) { badge.hidden = true; if (tag) tag.hidden = true; continue; }
       const r = el.getBoundingClientRect();
       badge.hidden = false;
-      // Centred on the button's TOP-LEFT corner, its side tag above-left:
-      // clear of the label (and the layer never takes clicks).
-      badge.style.transform = `translate(${Math.round(r.left - 12)}px, ${Math.round(r.top - 12)}px)`;
+      // The hand sits on the button's TOP-RIGHT corner (8 px outside it);
+      // its L / R / L+R tag on the TOP-LEFT corner. Neither covers the label
+      // (and the layer never takes clicks).
+      const w = badge.classList.contains('is-pair') ? 40 : 24;
+      badge.style.transform = `translate(${Math.round(r.right - w + 8)}px, ${Math.round(r.top - 8)}px)`;
+      if (tag) {
+        tag.hidden = false;
+        // 4 px in from the left edge, straddling the top edge: clear of the
+        // neighbour's hand in a toolbar (10 px gaps) and above the label.
+        tag.style.transform = `translate(${Math.round(r.left + 4)}px, ${Math.round(r.top - 8)}px)`;
+        tag.classList.toggle('is-holding', holding === b.key);
+      }
       badge.classList.toggle('is-holding', holding === b.key);
     }
   }
@@ -404,6 +422,7 @@ export function createGestureControl(opts: GestureControlOptions): GestureContro
       clearOverlays();
       if (staleTimer) { clearTimeout(staleTimer); staleTimer = null; }
       for (const b of badges.values()) b.hidden = true;
+      for (const tg of tags.values()) tg.hidden = true;
     }
   }
 
