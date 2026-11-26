@@ -64,9 +64,10 @@ import {
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
 import {
-  clearSavedVoice, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase,
-  resolveChangeVoice, saveVoice, toSynthVoice, type ChangeVoiceIntent, type SynthVoice,
+  clearSavedVoice, loadAllowCloud, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase, usableVoices,
+  resolveChangeVoice, saveVoice, type ChangeVoiceIntent, type SynthVoice,
 } from './ai/speechVoices';
+import { createSpeaker } from './ai/speaker';
 import { createVoicePanel } from './ui/voicePanel';
 import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
@@ -518,6 +519,8 @@ const queueListEl = el<HTMLUListElement>('queue-list');
 // here so say() can honour its voiceVerbosity; retuned by applyActiveProfile().
 let activeProfile: InteractionProfile = PROFILES.standard;
 
+const speaker = createSpeaker();
+
 function say(message: string): void {
   srLive.textContent = message; // screen-reader text always updates
   // The active hand profile's voiceVerbosity tunes spoken output: 'terse' keeps
@@ -531,17 +534,9 @@ function say(message: string): void {
  *  in her language passes that language (and only when a voice exists for it —
  *  pickReply already fell back to English otherwise). */
 function speakSynth(message: string, lang: Language = DEFAULT_LANGUAGE): void {
-  if (!('speechSynthesis' in window)) return;
-  const raw = window.speechSynthesis.getVoices();
-  const picked = pickSpokenVoice(raw.map(toSynthVoice), { lang: lang.speechLang, saved: loadSavedVoice() });
-  const voice = picked ? raw.find((v) => v.voiceURI === picked.voiceURI) ?? null : null;
-  if (!voice && !isEnglish(lang)) return;
-  const utter = new SpeechSynthesisUtterance(message);
-  utter.rate = 1.1;
-  utter.lang = lang.speechLang;
-  if (voice) utter.voice = voice;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utter);
+  // One speaker for the whole app (ai/speaker.ts): the chosen on-device voice,
+  // or silence — never the browser's own default, which can be a cloud voice.
+  speaker.speak(message, { lang: lang.speechLang });
 }
 
 /** Does speechSynthesis have a usable voice for this language? */
@@ -1060,33 +1055,25 @@ const btnVoice = el<HTMLButtonElement>('btn-voice');
 const btnDirectory = el<HTMLButtonElement>('btn-directory');
 
 function listSynthVoices(): SynthVoice[] {
-  if (!('speechSynthesis' in window)) return [];
-  return window.speechSynthesis.getVoices().map(toSynthVoice);
+  // Online voices are not offered (so cannot be picked or previewed) unless she turned them on.
+  return usableVoices(speaker.voices(), loadAllowCloud());
 }
 
 /** Speak with one specific voice, even when mute or a terse profile would
  *  silence ordinary replies — she asked to hear this voice. */
 function speakWithVoice(text: string, voice: SynthVoice | null): void {
-  if (!('speechSynthesis' in window)) {
+  if (!speaker.supported) {
     srLive.textContent = 'This browser cannot speak. Replies stay as text.';
     return;
   }
   srLive.textContent = text;
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 1.1;
-  if (voice) {
-    utter.lang = voice.lang;
-    const raw = window.speechSynthesis.getVoices().find((x) => x.voiceURI === voice.voiceURI);
-    if (raw) utter.voice = raw;
-  }
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utter);
+  speaker.speak(text, { voice, lang: voice?.lang ?? currentLanguage.speechLang });
 }
 
 const voicePanel = createVoicePanel({
   getVoices: listSynthVoices,
   onChange: (saved) => {
-    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved });
+    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved, allowCloud: loadAllowCloud() });
     const text = saved ? `Voice set to ${saved.name ?? 'your pick'}.` : 'Back to the usual voice.';
     if (muted) { srLive.textContent = text; return; } // mute still wins for the confirm
     speakWithVoice(text, voice);
