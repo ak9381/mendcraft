@@ -32,8 +32,17 @@ describe('coerceLanguagePack', () => {
     expect(coerceLanguagePack({ lang: 'kn', strings: { ...knStrings, keep: '<b>ಇಟ್ಟುಕೋ</b>' }, phrases: {} }).ok).toBe(false);
   });
 
-  it('rejects a phrase for an unknown intent', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { hack: ['ಆನ್'] } }).ok).toBe(false);
+  it('drops a phrase for an unknown intent instead of refusing the pack (live Gemini sent "ai")', () => {
+    const r = coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { hack: ['ಆನ್'], ai: ['ಎಐ'] } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(Object.keys(r.value.phrases)).toEqual([]);
+  });
+
+  it('drops a markup phrase but keeps the good ones', () => {
+    const intent = Object.keys(SCRIPTED_KN_PACK.phrases)[0];
+    const r = coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { [intent]: ['<b>x</b>', 'ಆನ್'] } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.value.phrases as Record<string, string[]>)[intent]).toEqual(['ಆನ್']);
   });
 
   it('rejects a string longer than 80 chars', () => {
