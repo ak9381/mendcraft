@@ -38,11 +38,14 @@ What to read off it:
   schema is not being enforced.
 - **Cold start.** The first on-device prompt after a page load is slow
   (about 14 s measured) because Chrome loads the model. The page pays that
-  itself right after load: look for `warm-up: started` and then
+  itself right after load: look for `warm-up: started`, then
+  `warm-up: session created after … ms`, then
   `warm-up: done — the model is loaded` before you ask for anything. If you
-  ask during the warm-up, a warm-up that already has its session finishes
-  first (your turn's queue wait shows the remainder); one still creating its
-  session steps aside.
+  ask during the warm-up, one that already has its session finishes first
+  (your turn's queue wait shows the remainder); one still creating its
+  session steps aside, and is tried once more 10 s later when the model is
+  idle. With the page open 20 s or more, the first request should never show
+  a cold-start-sized prompt time.
 - **Schema keywords.** Chrome rejects a constraint that uses `uniqueItems`
   (and, to be safe, `pattern`, `format`, `$ref`) with `NotSupportedError`.
   None are used; if the status ever reads `Nano couldn’t run this request`,
@@ -60,6 +63,23 @@ What to read off it:
 
   Use the hang/slow case in step 3 to see it. "did NOT stop" means Nano keeps
   the model busy after a handoff, and the next on-device call will wait.
+
+## 0. The lamps are the real ones
+
+1. Start the bridge (`npm run wiz-bridge`) and open the canvas with its
+   token: `…/canvas.html?fresh&nanoTrace=1&wizToken=<token>`.
+2. Wait for the status line `Found 1 lamp on this network.`
+
+Expect:
+
+- Exactly as many lamp devices as there are bulbs: one bulb → one lamp called
+  **Lamp** (two → “Lamp”, “Lamp 2”). No “Desk lamp” / “Ceiling light”.
+- The lamp tile shows the bulb's real on/off and brightness, with no SIM
+  mark, and switching it switches the bulb.
+- “connect everything in this room” drafts a board with that one lamp and the
+  speaker; its title counts one lamp. In the trace the reply names
+  `wiz-lamp-1`, never `wiz-desk`.
+- Stop the bridge and reload: the two seeded lamps are back, marked SIM.
 
 ## 1. Nano is fast and is one call
 
@@ -157,9 +177,10 @@ Expect:
 
 - One status line with both reasons, e.g.
   `Nano couldn’t finish (probe: forced failure). Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.`
-  (only a failure before the request is issued says "Nothing was sent." —
-  with the domain blocked the line is `… Gemini couldn’t be reached: no
-  connection`, and the bytes ARE booked, because the request was issued).
+  or, with the domain blocked, `… Gemini couldn’t be reached: no connection.
+  Nothing was sent.` (the request was never delivered, so its bytes are taken
+  back). A 403 answered by the Gemini endpoint itself reads `Gemini refused
+  the request (403)` and its bytes stay booked.
 - With the App Check 403 the byte total does **not** go up for that turn.
 - A **Retry** button. No review opens. No draft appears. Nothing says SIM.
 - Unblock the domain, press Retry: the turn succeeds.

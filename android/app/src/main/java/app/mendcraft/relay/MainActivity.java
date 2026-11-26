@@ -16,18 +16,18 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AssistBridgePlugin.class);
         registerPlugin(MendcraftNanoPlugin.class);
         super.onCreate(savedInstanceState);
-        darkSystemBarIcons();
+        useDarkSystemBarIcons();
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        darkSystemBarIcons();
+        useDarkSystemBarIcons();
     }
 
-    /** The canvas is light in both system themes, so the status-bar and
-     *  navigation-bar icons are always dark (white ones were invisible). */
-    private void darkSystemBarIcons() {
+    /** The canvas is light whatever the system theme: dark clock and icons in
+     *  the status bar (and dark navigation buttons), or they are invisible. */
+    private void useDarkSystemBarIcons() {
         WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         bars.setAppearanceLightStatusBars(true);
         bars.setAppearanceLightNavigationBars(true);

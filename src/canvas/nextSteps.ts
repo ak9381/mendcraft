@@ -174,6 +174,8 @@ export interface NextChipsHost {
    *  asked at once (tests). */
   idle?: { delayMs: number; ready(): boolean };
   run(say: string): void;
+  /** The chip row was (re)drawn — the host may need to place it. */
+  onRender?(): void;
   /** Nano picked the chips (on device): one line for its terminal / the AI feed. */
   onNano?(line: string): void;
 }
@@ -231,6 +233,7 @@ export function createNextStepChips(host: NextChipsHost): NextChips {
     }
     el.append(row);
     shown = r.steps;
+    host.onRender?.();
   }
 
   /** Wrap host.nano so a pick still running after its timeout blocks the next one. */

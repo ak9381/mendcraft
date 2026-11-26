@@ -5,12 +5,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
-import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, acceptCanvasReply, countingSends, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
+import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_MAX_RUN_MS, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
 import { geminiFailLine, GHOST_EVERY_MS, runSurfaceTurn, scriptedEngine, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
 import { buildNanoPlanRequest, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
+import { cloudFetchWatched, isGeminiRequestUrl, watchCloudFetch } from '../../src/ai/cloudFetchWatch';
+import { createWarmKeeper } from '../../src/ai/nanoWarm';
+import { applyRealLamps, assignLampIds, discoverRealLamps, fitLampTiles, LAMP_IDS_KEY, LAMP_MEMORY_MAX, lampKey, rememberedLampIds, rememberedLamps, remapSeededLamps, SEEDED_LAMP_IDS } from '../../src/canvas/realLamps';
+import { playingLine } from '../../src/canvas/spotifyConnector';
+import { previewHasFrames } from '../../src/ui/faceOverlay';
+import type { WizClient } from '../../src/devices/wizClient';
+import type { DeviceState } from '../../src/canvas/surfacePlan';
 import { betterSummary, draftSummary, dropUnbackedClaims, floorPlanSummary, isStatusClaim, tilesFilledLine } from '../../src/canvas/planTruth';
 import { createDeviceIdSession } from '../../src/privacy/deviceRedact';
 import { resolveAppCheckDebugToken } from '../../src/firebase/debugToken';
@@ -546,62 +553,191 @@ describe('I3: bytes are booked when a call really leaves', () => {
   const RUN1 = 'AI: Error fetching from https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse: AppCheck: Fetch server returned an HTTP error status. HTTP status: 403.';
   const ok = (text: string): TextGenModel => ({ generateContent: async () => ({ response: { text: () => text } }) });
 
-  it('a call counts once its request is out: when it resolves, or when its stream starts', async () => {
-    let sends = 0;
-    await countingSends(ok('{}'), () => { sends++; }).generateContent('p');
-    expect(sends).toBe(1);
-    const streamed: TextGenModel = {
-      generateContent: async () => ({ response: { text: () => '' } }),
-      generateContentStream: async () => ({ stream: (async function* () { yield { text: () => 'a' }; yield { text: () => 'b' }; })(), response: Promise.resolve({ text: () => 'ab' }) }),
-    };
-    sends = 0;
-    const started = await countingSends(streamed, () => { sends++; }).generateContentStream!('p');
-    for await (const chunk of started.stream) void chunk;
-    await started.response;
-    expect(sends).toBe(1); // a started stream, two chunks and a final response are still one send
+  const GEMINI_URL = 'https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse';
+  type FakeFetch = (url: string, init?: { body?: string }) => Promise<{ ok: boolean; status: number }>;
+  /** Swap the global fetch for a fake (the watcher wraps whatever is there). */
+  function fakeFetch(impl: FakeFetch): { calls: string[]; restore: () => void } {
+    const g = globalThis as unknown as { fetch: unknown };
+    const real = g.fetch;
+    const calls: string[] = [];
+    const fake = (url: string, init?: { body?: string }) => { calls.push(url); return impl(url, init); };
+    g.fetch = fake;
+    return { calls, restore: () => { expect(g.fetch).toBe(fake); g.fetch = real; } };
+  }
+  /** A model that, like the real SDK, sends its prompt with fetch(). */
+  const fetching = (reply: () => string): TextGenModel => ({
+    generateContent: async (prompt) => {
+      const r = await (globalThis as unknown as { fetch: FakeFetch }).fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+      if (!r.ok) throw new Error(`AI: Error fetching from ${GEMINI_URL}: [${r.status} ] refused (AI/fetch-error)`);
+      return { response: { text: reply } };
+    },
+  });
+  const quiet = (): (() => void) => {
+    const spies = [vi.spyOn(console, 'info').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+    return () => spies.forEach((x) => x.mockRestore());
+  };
+
+  it('the watcher counts real fetches to the Gemini endpoint that carry this call’s prompt — and only those', async () => {
+    expect(isGeminiRequestUrl(GEMINI_URL)).toBe(true);
+    expect(isGeminiRequestUrl('https://content-firebaseappcheck.googleapis.com/v1/x:exchangeDebugToken')).toBe(false);
+    expect(isGeminiRequestUrl('http://127.0.0.1:38888/discover')).toBe(false);
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    const g = globalThis as unknown as { fetch: FakeFetch };
+    const before = g.fetch;
+    let issuedA = 0, issuedB = 0;
+    const a = watchCloudFetch('build the room board', { onIssued: () => { issuedA++; } });
+    const b = watchCloudFetch('add a Kannada pack', { onIssued: () => { issuedB++; } });
+    expect(cloudFetchWatched()).toBe(true);
+    const body = (text: string): { body: string } => ({ body: JSON.stringify({ contents: [{ parts: [{ text }] }] }) });
+    await g.fetch(GEMINI_URL, body('build the room board'));
+    await g.fetch(GEMINI_URL, body('build the room board')); // the hedge
+    await g.fetch(GEMINI_URL, body('add a Kannada pack'));
+    await g.fetch('https://content-firebaseappcheck.googleapis.com/v1/x:exchangeDebugToken', body('build the room board'));
+    await g.fetch('https://example.com/', body('build the room board'));
+    expect([issuedA, issuedB]).toEqual([2, 1]); // each call sees its own requests
+    expect([a.issued(), a.delivered(), b.delivered()]).toEqual([2, 2, 1]);
+    expect(f.calls).toHaveLength(5); // every request still went through untouched
+    a.stop();
+    expect(cloudFetchWatched()).toBe(true);
+    b.stop();
+    expect(cloudFetchWatched()).toBe(false);
+    expect(g.fetch).toBe(before); // the original fetch is back
+    f.restore();
   });
 
-  it('F2: only a failure before the fetch is not a send — every error after it counts', async () => {
-    const failing = (msg: string): TextGenModel => ({ generateContent: async () => { throw new Error(msg); } });
-    const ENDPOINT_403 = 'AI: Error fetching from https://firebasevertexai.googleapis.com/v1beta/projects/p/models/m:streamGenerateContent?alt=sse: [403 ] Firebase App Check token is invalid. (AI/fetch-error)';
-    for (const [msg, expected] of [
-      [RUN1, 0],                                                   // no App Check token: the SDK never fetched
-      ['AppCheck: Fetch failed to connect to a network. (appCheck/fetch-network-error).', 0],
-      [ENDPOINT_403, 1],                                           // the Gemini endpoint itself refused: it got the request
-      ['Failed to fetch', 1],                                      // the request was issued; the network dropped it
-      ['429 RESOURCE_EXHAUSTED', 1], ['503 Service Unavailable', 1], ['400 Bad Request', 1], ['canvas plan timed out after 20000 ms', 1],
-    ] as const) {
-      let sends = 0;
-      await countingSends(failing(msg), () => { sends++; }).generateContent('p').catch(() => undefined);
-      expect(sends, msg).toBe(expected);
-    }
-    // and the words match: a 403 from the endpoint never says "Nothing was sent"
-    expect(geminiFailLine(new Error(ENDPOINT_403))).toBe('Gemini refused the request (403)');
-    expect(geminiFailLine(new Error(RUN1))).toBe('Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.');
-    expect(geminiFailLine(new Error('Failed to fetch'))).toBe('Gemini couldn’t be reached: no connection');
-    expect(explainCloudFailure(new Error(ENDPOINT_403))).toMatchObject({ kind: 'forbidden', nothingSent: false });
-  });
-
-  it('F2: a call still waiting counts as sent (a timeout, a cancelled hedge); a late pre-fetch failure takes it back', async () => {
-    vi.useFakeTimers();
+  it('a request the network never delivered is taken back; a stopped one is not', async () => {
+    let mode: 'offline' | 'abort' = 'offline';
+    const f = fakeFetch(async () => { throw mode === 'offline' ? new TypeError('Failed to fetch') : Object.assign(new Error('aborted'), { name: 'AbortError' }); });
+    const g = globalThis as unknown as { fetch: FakeFetch };
     let sends = 0, retracts = 0;
-    let fail!: (e: Error) => void;
-    const hanging: TextGenModel = { generateContent: () => new Promise((_, reject) => { fail = reject; }) };
-    const call = countingSends(hanging, () => { sends++; }, () => { retracts++; }, 2500).generateContent('p').catch(() => undefined);
-    await vi.advanceTimersByTimeAsync(2400);
-    expect(sends).toBe(0);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(sends).toBe(1); // nothing came back, no token failure: its request is out
-    fail(new Error(RUN1)); // …but then App Check says the token was refused after all
-    await call;
-    expect(retracts).toBe(1);
-    // a call that times out or errors after the request went out is never taken back
-    sends = 0; retracts = 0;
-    const call2 = countingSends(hanging, () => { sends++; }, () => { retracts++; }, 2500).generateContent('p').catch(() => undefined);
-    await vi.advanceTimersByTimeAsync(3000);
-    fail(new Error('503 Service Unavailable'));
-    await call2;
-    expect({ sends, retracts }).toEqual({ sends: 1, retracts: 0 });
+    const w = watchCloudFetch('p', { onIssued: () => { sends++; }, onUndelivered: () => { retracts++; } });
+    await g.fetch(GEMINI_URL, { body: '"p"' }).catch(() => undefined);
+    await tick();
+    expect({ sends, retracts, delivered: w.delivered() }).toEqual({ sends: 1, retracts: 1, delivered: 0 });
+    mode = 'abort'; // our own timeout / a cancelled hedge: it was issued and may have arrived
+    await g.fetch(GEMINI_URL, { body: '"p"' }).catch(() => undefined);
+    await tick();
+    expect({ sends, retracts, delivered: w.delivered() }).toEqual({ sends: 2, retracts: 1, delivered: 1 });
+    w.stop();
+    f.restore();
+  });
+
+  it('through the cloud seam: one fetch is one send; a retry after a bad reply is a second', async () => {
+    const unquiet = quiet();
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    let sends = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: fetching(() => GEMINI_OK) });
+    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    expect(sends).toBe(1);
+    const replies = ['sorry, no', GEMINI_OK];
+    sends = 0;
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: fetching(() => replies.shift()!) });
+    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    expect(sends).toBe(2);
+    expect(cloudFetchWatched()).toBe(false); // fetch is only wrapped while a cloud call runs
+    f.restore();
+    unquiet();
+  });
+
+  it('“Nothing was sent” is decided by the real fetch', async () => {
+    const unquiet = quiet();
+    const run = async (model: TextGenModel): Promise<{ line: string; sends: number; retracts: number }> => {
+      let sends = 0, retracts = 0;
+      setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: model });
+      const err = await streamCanvasPlanOrThrow('build a board', undefined, 'board', { onSend: () => { sends++; }, onRetract: () => { retracts++; } }).catch((e: unknown) => e);
+      return { line: geminiFailLine(err), sends, retracts };
+    };
+    // 1. No App Check token: the SDK throws before it ever calls fetch
+    let f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    expect(await run({ generateContent: async () => { throw new Error(RUN1); } })).toEqual({ line: 'Gemini blocked: App Check 403 (this address isn’t registered). Nothing was sent.', sends: 0, retracts: 0 });
+    expect(f.calls).toEqual([]);
+    f.restore();
+    // 2. The Gemini endpoint itself answers 403: it received the request
+    f = fakeFetch(async () => ({ ok: false, status: 403 }));
+    let got = await run(fetching(() => GEMINI_OK));
+    expect(got.line).toBe('Gemini refused the request (403)');
+    expect(got.sends).toBeGreaterThanOrEqual(1);
+    expect(got.retracts).toBe(0);
+    f.restore();
+    // 3. 429 / 5xx: sent
+    f = fakeFetch(async () => ({ ok: false, status: 503 }));
+    got = await run(fetching(() => GEMINI_OK));
+    expect(got.line).toBe('Gemini couldn’t answer: the service is busy (5xx)');
+    expect(got.sends).toBeGreaterThanOrEqual(1);
+    f.restore();
+    // 4. Offline: fetch was called but the network delivered nothing
+    f = fakeFetch(async () => { throw new TypeError('Failed to fetch'); });
+    got = await run({ generateContent: async (prompt) => { await (globalThis as unknown as { fetch: FakeFetch }).fetch(GEMINI_URL, { body: JSON.stringify(prompt) }); return { response: { text: () => '' } }; } });
+    expect(got.line).toBe('Gemini couldn’t be reached: no connection. Nothing was sent.');
+    expect(got.sends).toBe(got.retracts); // every byte booked was taken back
+    f.restore();
+    unquiet();
+  }, 20_000);
+
+  it('the 2.5 s “assume it was sent” heuristic is gone', async () => {
+    const { readFileSync } = await import('node:fs');
+    const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
+    expect(hybrid).not.toMatch(/SEND_ASSUMED_AFTER_MS|countingSends|assumeAfterMs/);
+    expect(hybrid).toContain('const watch = watchCloudFetch(sent.text, { onIssued: hooks.onSend, onUndelivered: hooks.onRetract });');
+    // the watch is handed to the hedge and stops when every leg has settled
+    expect(hybrid).toContain('(handedOver = true, () => watch.stop()),');
+    expect(hybrid).toMatch(/finally \{\s*if \(!handedOver\) watch\.stop\(\);/);
+  });
+
+  it('review 1: overlapping board turns are told apart by their whole prompt, not a shared opening', async () => {
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    const g = globalThis as unknown as { fetch: (url: string, init?: { body?: unknown }) => Promise<unknown> };
+    const opening = 'You build one board on a smart canvas. Reply with JSON only, matching: '.repeat(5); // > 160 shared characters
+    const promptA = `${opening}She said: "connect everything in this room"`;
+    const promptB = `${opening}She said: "draw the floor plan"`;
+    let a = 0, b = 0;
+    const wa = watchCloudFetch(promptA, { onIssued: () => { a++; } });
+    const wb = watchCloudFetch(promptB, { onIssued: () => { b++; } });
+    await g.fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: promptA }] }] }) });
+    expect([a, b]).toEqual([1, 0]); // B's turn is not charged for A's request
+    await g.fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: promptB }] }] }) });
+    expect([a, b]).toEqual([1, 1]);
+    // a body that cannot be read is nobody's while two calls are running…
+    await g.fetch(GEMINI_URL, { body: new Uint8Array([1, 2, 3]) });
+    await g.fetch(GEMINI_URL);
+    expect([a, b]).toEqual([1, 1]);
+    wb.stop();
+    // …and the one running call's when there is only one
+    await g.fetch(GEMINI_URL, { body: new Uint8Array([1, 2, 3]) });
+    expect([a, b]).toEqual([2, 1]);
+    wa.stop();
+    f.restore();
+  });
+
+  it('review 2: the hedge’s losing leg keeps being counted after the race is won', async () => {
+    vi.useFakeTimers();
+    const unquiet = quiet();
+    const f = fakeFetch(async () => ({ ok: true, status: 200 }));
+    const fetchIt = (prompt: string): Promise<unknown> => (globalThis as unknown as { fetch: FakeFetch }).fetch(GEMINI_URL, { body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+    // the primary is slow: its first reply (bad) only arrives after the backup has won, and then it retries
+    let releasePrimary!: () => void;
+    let primaryCalls = 0;
+    const primary: TextGenModel = { generateContent: async (prompt) => {
+      primaryCalls++;
+      await fetchIt(prompt);
+      if (primaryCalls === 1) await new Promise<void>((r) => { releasePrimary = r; });
+      return { response: { text: () => 'sorry, no' } };
+    } };
+    const backup: TextGenModel = { generateContent: async (prompt) => { await fetchIt(prompt); return { response: { text: () => GEMINI_OK } }; } };
+    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: primary, canvasCloudHedge: backup });
+    let sends = 0;
+    const call = streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
+    await vi.advanceTimersByTimeAsync(2100); // the hedge starts after 2 s and wins
+    expect(JSON.parse(await call).title).toBe('Living room');
+    expect(sends).toBe(2); // primary + backup
+    expect(cloudFetchWatched()).toBe(true); // the primary is still out: keep watching
+    releasePrimary(); // its bad reply arrives; it retries once — a third request
+    await vi.advanceTimersByTimeAsync(50);
+    expect(primaryCalls).toBe(2);
+    expect(sends).toBe(3);
+    expect(cloudFetchWatched()).toBe(false); // every leg has settled: fetch is restored
+    f.restore();
+    unquiet();
   });
 
   it('App Check 403 through the cloud seam: the line says nothing was sent, and nothing is counted', async () => {
@@ -621,21 +757,6 @@ describe('I3: bytes are booked when a call really leaves', () => {
     expect(geminiFailLine(await streamCanvasPlanOrThrow('p').catch((e: unknown) => e))).toMatch(/App Check.*Nothing was sent\.$/);
     // a failure after the request left makes no such claim
     expect(geminiFailLine(new Error('429 RESOURCE_EXHAUSTED'))).toBe('Gemini couldn’t answer: the quota is used up (429)');
-  });
-
-  it('a success is one send; a retry after a bad reply is a second send', async () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    let sends = 0;
-    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: ok(GEMINI_OK) });
-    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
-    expect(sends).toBe(1);
-    const replies = ['sorry, no', GEMINI_OK];
-    sends = 0;
-    setModelsForTest({ enabled: true, appCheck: 'ready', canvasCloud: { generateContent: async () => ({ response: { text: () => replies.shift()! } }) } });
-    await streamCanvasPlanOrThrow('p', undefined, 'board', { onSend: () => { sends++; } });
-    expect(sends).toBe(2);
-    info.mockRestore(); warn.mockRestore();
   });
 
   it('the ledger opens a cloud turn at 0 bytes and adds only what left', () => {
@@ -945,8 +1066,375 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
   it('the warm-up starts soon after load, with a deadline rather than "whenever idle"', async () => {
     const { readFileSync } = await import('node:fs');
     const main = readFileSync(new URL('../../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
-    expect(main).toContain('afterFirstPaint(() => { if (ric) ric(warm, { timeout: 1200 }); else setTimeout(warm, 600); });');
-    expect(main).toContain('if (await refreshNanoAvailable()) await warmBoardOnDevice();');
+    expect(main).toContain('const warmKeeper = createWarmKeeper({ warm: () => warmBoardOnDevice(), idle: () => nanoQueue.idle() });');
+    expect(main).toContain('if (nanoAvailable && !was) warmKeeper.kick();'); // every time the model becomes available
+    expect(main).toMatch(/setTimeout\(\(\) => \{\s*void refreshNanoAvailable\(\)[\s\S]*?\}, 600\);/);
+  });
+});
+
+describe('real devices: the lamps on the canvas are the bulbs in the room', () => {
+  /** A fake WiZ bridge. */
+  function fakeBridge(o: { up?: boolean; bulbs?: Array<{ ip: string; on?: boolean; dimming?: number; noState?: boolean }>; defaultBulb?: { on: boolean; dimming?: number } | null; discoverFails?: boolean } = {}) {
+    const calls: string[] = [];
+    const bulbs = o.bulbs ?? [];
+    const client: WizClient = {
+      baseUrl: 'http://127.0.0.1:38888',
+      async health() { calls.push('health'); return o.up ?? true; },
+      async discover() { calls.push('discover'); if (o.discoverFails) throw new Error('bridge error 500'); return bulbs.map((b) => ({ ip: b.ip, state: b.noState ? null : { on: b.on ?? false, dimming: b.dimming } })); },
+      async getPilot(ip) {
+        calls.push(`getPilot ${ip || '(default)'}`);
+        if (!ip) { if (!o.defaultBulb) throw new Error('bulb did not respond'); return o.defaultBulb; }
+        const b = bulbs.find((x) => x.ip === ip);
+        if (!b) throw new Error('bulb did not respond');
+        return { on: b.on ?? false, dimming: b.dimming };
+      },
+      async setPilot() { return null; },
+    };
+    return { client, calls };
+  }
+  const memory = (): Pick<Storage, 'getItem' | 'setItem'> & { data: Record<string, string> } => {
+    const data: Record<string, string> = {};
+    return { data, getItem: (k) => data[k] ?? null, setItem: (k, v) => { data[k] = String(v); } };
+  };
+  /** The canvas's seeded device list and one board showing all of it. */
+  function seededCanvas() {
+    const state: Record<string, DeviceState> = {
+      'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 },
+      'speaker-1': { on: false, brightness: 0, playing: false, trackTitle: 'Morning light', volume: 40 },
+    };
+    const store = { all: () => structuredClone(state), add: (id: string, s: DeviceState) => { state[id] = s; }, remove: (id: string) => { delete state[id]; } };
+    const labels: Record<string, string> = { 'wiz-desk': 'Desk lamp', 'wiz-ceiling': 'Ceiling light', 'speaker-1': 'Speaker' };
+    const surfaces: Record<string, SurfacePlan> = {
+      room: { kind: 'room', title: 'Living room', tiles: [
+        { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] },
+        { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+      ] },
+      plan: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'plan-cad', template: 'twoBedroom' }] },
+    };
+    const ips = new Map<string, string>();
+    // what canvasApp's deviceHints() hands the models
+    const hints = () => Object.keys(store.all()).map((id) => ({ id, label: labels[id] ?? id, kind: id.startsWith('speaker') ? 'music' : 'lamp' }));
+    return { state, store, labels, surfaces, ips, hints };
+  }
+
+  it('one bulb on the bridge → one lamp, with the bulb’s real state; the seeded lamps are gone, the speaker stays', async () => {
+    const { client } = fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 62 }] });
+    const lamps = await discoverRealLamps(client, memory());
+    expect(lamps).toEqual([{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 62, sim: false } }]);
+    const c = seededCanvas();
+    const changed = applyRealLamps(c, lamps!);
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
+    for (const id of SEEDED_LAMP_IDS) expect(c.state[id]).toBeUndefined();
+    expect(c.state['wiz-lamp-1']).toEqual({ on: true, brightness: 62, sim: false }); // not SIM, not a guess
+    expect(c.ips.get('wiz-lamp-1')).toBe('192.168.1.40'); // bulbIp for the connector
+    // the board that showed two seeded lamps now shows the one real lamp
+    expect(changed).toEqual(['room']);
+    expect(c.surfaces.room.tiles).toEqual([
+      { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] },
+      { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+    ]);
+    expect(draftSummary({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] })).toBe('Draft: 1 lamp found in this room');
+  });
+
+  it('the models are given the live list: Nano’s device enum and Gemini’s prompt name one lamp, never an IP', async () => {
+    const { client } = fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 62 }] });
+    const c = seededCanvas();
+    applyRealLamps(c, (await discoverRealLamps(client, memory()))!);
+    const live: SurfaceRequest = { ...req, devices: c.hints() };
+    const nano = buildNanoPlanRequest(live);
+    const enumIds = (nano.constraint as { properties: { d: { items: { enum: string[] }; maxItems: number } } }).properties.d;
+    expect(enumIds.items.enum.sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
+    expect(enumIds.maxItems).toBe(2);
+    expect(nano.prompt).toContain('wiz-lamp-1 = Lamp (lamp)');
+    expect(nano.prompt).not.toMatch(/wiz-desk|wiz-ceiling|Desk lamp|Ceiling light|192\.168/);
+    // a reply naming a seeded lamp is no longer a device in this room
+    expect(parseNanoPlan('{"t":"Room","d":["wiz-desk","wiz-lamp-1"]}', live)).toMatchObject({ ok: true, value: { tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] } });
+    const seen: string[] = [];
+    const gemini: SurfaceEngine = { id: 'gemini', sim: false, stream: async (prompt) => {
+      seen.push(prompt);
+      const token = /- (Device \d+): Lamp \(lamp\)/.exec(prompt)![1]; // the lamp's placeholder in this prompt
+      return `{"kind":"room","title":"Room","tiles":[{"type":"lamp","deviceId":"${token}","label":"Lamp"}]}`;
+    } };
+    const plan = await runSurfaceTurn(live, gemini, {}, { deviceIdSession: createDeviceIdSession() });
+    expect(seen[0]).toContain('Lamp (lamp)');
+    expect(seen[0]).not.toMatch(/wiz-desk|wiz-ceiling|Desk lamp|Ceiling light|192\.168|wiz-lamp-1/);
+    expect(plan?.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+  });
+
+  it('bridge down → the seeded lamps stay (SIM), nothing is discovered', async () => {
+    const { client, calls } = fakeBridge({ up: false, bulbs: [{ ip: '192.168.1.40' }] });
+    expect(await discoverRealLamps(client, memory())).toBeNull();
+    expect(calls).toEqual(['health']);
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    const wiring = src.slice(src.indexOf('void discoverRealLamps(wizClient, storage)'), src.indexOf('void discoverRealLamps(wizClient, storage)') + 900);
+    expect(wiring).toContain('bridgeStatus.up = lamps !== null;');
+    expect(wiring).toMatch(/if \(lamps === null \|\| opts\.devices\) \{\s*for \(const id of Object\.keys\(store\.all\(\)\)\) if \(isWizDevice\(id\)\) store\.setSim\(id, lamps === null\);\s*return;/);
+    expect(src).toContain('const lampSwap = { store, surfaces, labels: DEVICE_LABELS, ips: lampIps };');
+    expect(wiring).toContain('applyRealLamps(lampSwap, lamps)');
+    expect(src).toContain("bulbIp: (id) => lampIps.get(id) ?? ''");
+    // ?sim=1 never talks to the bridge at all
+    expect(src).toContain('const wizClient = opts.sim ? null :');
+  });
+
+  it('review 3: a plan accepted after the swap can never keep a seeded or stale lamp id', async () => {
+    const lamps = [{ id: 'wiz-lamp-1', label: 'Lamp' }];
+    // a SIM script / a plan from a prompt built before discovery
+    const script: SurfacePlan = JSON.parse('{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-ceiling","label":"Main light"},{"type":"lamp","deviceId":"wiz-desk","label":"Reading lamp"},{"type":"music","deviceId":"speaker-1","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}');
+    expect(fitLampTiles(script, lamps).tiles).toEqual([
+      { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' },
+      { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
+      { type: 'plan', boardId: 'room-plan', template: 'oneRoom' },
+      { type: 'connect', label: 'Connect a device' },
+    ]);
+    // the scan's seeded spec
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, lamps).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // a bulb that has gone
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-7', label: 'Lamp 7' }, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] }, lamps).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // ids this module does not manage are never touched (a device she named herself)
+    const own: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk-lamp', label: 'WiZ desk lamp' }, { type: 'lamp', deviceId: 'reading-lamp', label: 'Reading lamp' }] };
+    expect(fitLampTiles(own, lamps)).toBe(own);
+    // every path a plan takes to a board goes through the fit
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const plan = fitPlan(proposed);'); // what she reviews and applies
+    expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
+    expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => fitLampTiles(plan, lampSlots());');
+  });
+
+  it('review 5: a board keeps a lamp whenever there is one — the first real lamp it does not already show', () => {
+    const one = [{ id: 'wiz-lamp-1', label: 'Lamp' }];
+    const two = [...one, { id: 'wiz-lamp-2', label: 'Lamp 2' }];
+    // a board with ONLY "Ceiling light" (the second seeded lamp) and one bulb: it gets the bulb
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] }, one).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // per board, not globally: two boards each showing one seeded lamp both get the one bulb
+    const c = { ...(() => { const state: Record<string, DeviceState> = { 'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 } }; return { state, store: { all: () => ({ ...state }), add: (id: string, s: DeviceState) => { state[id] = s; }, remove: (id: string) => { delete state[id]; } } }; })(), labels: {} as Record<string, string>, ips: new Map<string, string>(),
+      surfaces: {
+        desk: { kind: 'room', title: 'Desk', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] },
+        hall: { kind: 'room', title: 'Hall', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] },
+      } as Record<string, SurfacePlan> };
+    applyRealLamps(c, [{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 60, sim: false } }]);
+    expect(c.surfaces.desk.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    expect(c.surfaces.hall.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // a lamp already on the board is not given out twice
+    expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, two).tiles)
+      .toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
+  });
+
+  it('review 4: after a session with the bridge up, a reload with it down still opens with working lamps', async () => {
+    const storage = memory();
+    await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 62 }] }).client, storage);
+    // reload, bridge down: the saved board holds wiz-lamp-1, the store starts with the seeded lamps
+    expect(rememberedLampIds(storage)).toEqual(['wiz-lamp-1']);
+    const start = rememberedLamps(storage)!;
+    expect(start).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: false, brightness: 50, sim: true } }]); // SIM until the bridge answers
+    const c = seededCanvas();
+    c.surfaces.room = { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };
+    const changed = applyRealLamps(c, start);
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']); // the board's lamp exists: no dead tile
+    expect(c.state['wiz-lamp-1'].sim).toBe(true);
+    expect(changed).toEqual([]); // the saved board is shown as it was
+    // a machine that never saw a bulb keeps the seeded lamps
+    expect(rememberedLamps(memory())).toBeNull();
+    // the bridge comes back with a different bulb only: the vanished lamp's tile is refitted, not left dead
+    const next = (await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.99', on: false }] }).client, storage))!;
+    expect(next[0].id).toBe('wiz-lamp-2');
+    applyRealLamps(c, next);
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-2']);
+    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp' });
+    const src = (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const remembered = rememberedLamps\(storage\);\s*if \(remembered\) applyRealLamps\(lampSwap, remembered\);/);
+  });
+
+  it('review 4: the bridge’s default bulb and the same bulb found later under its address keep one id', async () => {
+    const storage = memory();
+    const asDefault = (await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: true, dimming: 30 } }).client, storage))!;
+    expect(asDefault[0]).toMatchObject({ id: 'wiz-lamp-1', ip: '' });
+    const byAddress = (await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true }] }).client, storage))!;
+    expect(byAddress[0]).toMatchObject({ id: 'wiz-lamp-1', ip: '192.168.1.40' }); // same bulb, same id
+    const backToDefault = (await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: false } }).client, storage))!;
+    expect(backToDefault[0].id).toBe('wiz-lamp-1');
+  });
+
+  it('minor: no bulb address is stored — only a hash — and old entries are pruned', async () => {
+    const storage = memory();
+    await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40' }, { ip: '192.168.1.7' }] }).client, storage);
+    const raw = storage.data[LAMP_IDS_KEY];
+    expect(raw).not.toMatch(/192\.168|\d+\.\d+\.\d+\.\d+/);
+    expect(Object.keys((JSON.parse(raw) as { ids: Record<string, string> }).ids).every((k) => /^h[0-9a-f]{16}$/.test(k))).toBe(true);
+    expect(lampKey('192.168.1.40')).toBe(lampKey('192.168.1.40'));
+    expect(lampKey('192.168.1.40')).not.toBe(lampKey('192.168.1.41'));
+    expect(lampKey('')).toBe('default');
+    // an old map keyed by raw IP is dropped, not migrated
+    const old = memory();
+    old.data[LAMP_IDS_KEY] = JSON.stringify({ '192.168.1.40': 'wiz-lamp-1' });
+    expect(rememberedLampIds(old)).toEqual([]);
+    assignLampIds(['192.168.1.40'], old);
+    expect(old.data[LAMP_IDS_KEY]).not.toContain('192.168');
+    // pruning: many bulbs over time never grow the memory past the cap, and present bulbs are kept
+    for (let i = 1; i <= 20; i++) assignLampIds([`10.0.0.${i}`], storage);
+    const ids = (JSON.parse(storage.data[LAMP_IDS_KEY]) as { ids: Record<string, string> }).ids;
+    expect(Object.keys(ids).length).toBeLessThanOrEqual(LAMP_MEMORY_MAX);
+    expect(ids[lampKey('10.0.0.20')]).toBeDefined();
+  });
+
+  it('two bulbs → “Lamp” and “Lamp 2”, one id per IP, stable across reloads and when a bulb joins', async () => {
+    const store = memory();
+    const first = await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40', on: true, dimming: 80 }, { ip: '192.168.1.7', on: false, noState: true }, { ip: '192.168.1.40' }] }).client, store);
+    expect(first!.map((l) => [l.id, l.ip, l.label])).toEqual([['wiz-lamp-1', '192.168.1.7', 'Lamp'], ['wiz-lamp-2', '192.168.1.40', 'Lamp 2']]);
+    expect(first![0].state).toEqual({ on: false, brightness: 0, sim: false }); // read with getPilot when /discover had no state
+    // reload, and a third bulb with the lowest IP appears: the first two keep their ids
+    const again = await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40' }, { ip: '192.168.1.7' }, { ip: '192.168.1.3' }] }).client, store);
+    expect(Object.fromEntries(again!.map((l) => [l.ip, l.id]))).toEqual({ '192.168.1.7': 'wiz-lamp-1', '192.168.1.40': 'wiz-lamp-2', '192.168.1.3': 'wiz-lamp-3' });
+    expect(assignLampIds(['10.0.0.9'], null)).toEqual({ '10.0.0.9': 'wiz-lamp-1' });
+    // two bulbs take the two seeded lamps' places, in order
+    const c = seededCanvas();
+    applyRealLamps(c, first!);
+    expect((c.surfaces.room.tiles[0] as { children: Array<{ deviceId: string; label: string }> }).children).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
+    // a later look with one bulb gone removes it from the list
+    applyRealLamps(c, first!.slice(0, 1));
+    expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
+    expect(c.ips.has('wiz-lamp-2')).toBe(false);
+  });
+
+  it('bridge up but no bulb answers the broadcast: the bridge’s configured bulb if it replies, else no lamp at all', async () => {
+    const one = await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: { on: true, dimming: 30 } }).client, memory());
+    expect(one).toEqual([{ id: 'wiz-lamp-1', ip: '', label: 'Lamp', state: { on: true, brightness: 30, sim: false } }]);
+    expect(await discoverRealLamps(fakeBridge({ discoverFails: true, defaultBulb: { on: false } }).client, memory())).toHaveLength(1);
+    const none = await discoverRealLamps(fakeBridge({ bulbs: [], defaultBulb: null }).client, memory());
+    expect(none).toEqual([]);
+    const c = seededCanvas();
+    applyRealLamps(c, none!);
+    expect(Object.keys(c.state)).toEqual(['speaker-1']); // no invented lamp
+    expect(c.surfaces.room.tiles).toEqual([{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }]);
+    // a board that only had seeded lamps is left with the Connect button, not empty
+    expect(remapSeededLamps({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, []).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
+    const untouched: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };
+    expect(remapSeededLamps(untouched, one!)).toBe(untouched);
+  });
+});
+
+describe('UI fixes from the live run', () => {
+  const css = async (): Promise<string> => (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvas.css', import.meta.url), 'utf8');
+  const app = async (): Promise<string> => (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+
+  it('(a) the next-step chips are lifted above the engine bar when the board runs under it', async () => {
+    const src = await app();
+    const fn = src.slice(src.indexOf('function keepChipsVisible(): void {'), src.indexOf('function applyCamera(): void {'));
+    expect(fn).toContain('const limit = (view.bottom || vp().h) - bottomInset();'); // the bar's own height
+    expect(fn).toContain("row.classList.add('is-lifted');");
+    expect(fn).toMatch(/const room = box\.top - \(frameEl\.getBoundingClientRect\(\)\.top \+ 64 \* z\);/); // never above the board's head
+    expect(src).toMatch(/zoomHud\?\.setZoom\(camera\.z\);\s*keepChipsVisible\(\);/); // on every camera move
+    expect(src).toContain('onRender: keepChipsVisible,'); // and whenever the row is redrawn
+    expect(await css()).toMatch(/\.mc-next\.is-lifted \{ position: relative; z-index: 3;/);
+  });
+
+  it('(b) the camera preview stays hidden until the camera delivers a frame', async () => {
+    const live = { active: true, getVideoTracks: () => [{ readyState: 'live' }] };
+    expect(previewHasFrames({ srcObject: null, readyState: 0, videoWidth: 0 })).toBe(false); // camera off / denied
+    expect(previewHasFrames({ srcObject: live as never, readyState: 0, videoWidth: 0 })).toBe(false); // starting: no frame yet
+    expect(previewHasFrames({ srcObject: live as never, readyState: 4, videoWidth: 640 })).toBe(true);
+    expect(previewHasFrames({ srcObject: { active: false, getVideoTracks: () => [{ readyState: 'ended' }] } as never, readyState: 4, videoWidth: 640 })).toBe(false); // camera stopped
+    const overlay = (await import('node:fs')).readFileSync(new URL('../../src/ui/faceOverlay.ts', import.meta.url), 'utf8');
+    expect(overlay).toContain('host.hidden = true;');
+    expect(overlay).toContain("for (const ev of ['loadeddata', 'playing', 'resize', 'emptied', 'ended', 'pause']) v.addEventListener?.(ev, reveal);");
+    expect(await css()).toContain('.mc-canvas .mc-face-preview[hidden] { display: none; }');
+  });
+
+  it('(c) with the preview showing, the hand cluster is laid out above it — nothing overlaps', async () => {
+    const sheet = await css();
+    const rule = sheet.match(/\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('top: calc(var(--mc-bar-h, 64px) + 12px);');
+    // its box ends above the preview (216) and the Facing pill
+    expect(rule).toContain('bottom: calc(16px + 216px + 8px + 54px + 12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));');
+    expect(rule).toContain('flex-wrap: wrap-reverse;'); // too many buttons for the height: a second column, not a cut-off one
+    expect(sheet).toMatch(/@media \(max-width: 1240px\) \{\s*\.mc-canvas:has\(\.mc-face-preview:not\(\[hidden\]\)\) \.mc-hand-cluster \{\s*bottom: calc\(96px \+ 216px/);
+    // the base rule (camera off) is unchanged: centred on the right edge
+    expect(sheet).toMatch(/\.mc-hand-cluster \{[^}]*top:\s*50%/s);
+  });
+
+  it('(d) “play music” says what is playing and where', async () => {
+    expect(playingLine({ spotify: false, target: '' }, 'Morning light')).toBe('Playing Morning light on the built-in player.');
+    expect(playingLine({ spotify: true, target: 'iPhone' }, '')).toBe('Playing on iPhone via Spotify.');
+    expect(playingLine({ spotify: true, target: 'this browser' }, 'Blue in Green')).toBe('Playing Blue in Green on this browser via Spotify.');
+    expect(playingLine(null)).toBe('Playing on the built-in player.');
+    const src = await app();
+    expect(src).toContain("if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`);");
+    expect(src).toContain('status: musicWhere,');
+    // the connector keeps "where" current
+    const { createSpotifyAwareConnector } = await import('../../src/canvas/spotifyConnector');
+    const where = { spotify: false, target: '' };
+    const said: string[] = [];
+    const connector = createSpotifyAwareConnector({
+      inner: { run: async () => ({ playing: true }) }, isConnected: () => true,
+      listDevices: async () => [{ id: 'd1', name: 'Marshall Emberton' } as never], transferPlayback: async () => undefined,
+      searchAndPlay: async () => ({ hit: { name: 'Blue in Green', artist: 'Miles Davis' } as never, deviceNote: '' }),
+      browserDevice: async () => undefined, say: (t) => said.push(t), status: where,
+    });
+    await connector.run({ deviceId: 'speaker-1', playing: true, query: 'blue in green' });
+    expect(where.spotify).toBe(true);
+    expect(said.at(-1)).toMatch(/^Playing Blue in Green by Miles Davis on .+ via Spotify\.$/);
+    expect(playingLine(where, 'Blue in Green')).toMatch(/via Spotify\.$/);
+  });
+
+  it('(e) the review footer keeps “what left” and its size on one line', async () => {
+    const sheet = await css();
+    expect(sheet).toMatch(/\.mc-review-left \{ display: block;[^}]*white-space: nowrap;/);
+    expect(sheet).toMatch(/\.mc-review-left-what \{ display: inline-block; max-width: calc\(100% - 9ch\);/);
+    expect(sheet).toMatch(/\.mc-review-left-bytes \{ display: inline;/);
+    expect(sheet).not.toMatch(/\.mc-review-left \{ display: flex/); // flex items lay out, and copy, as separate lines
+  });
+});
+
+describe('demo-run glitches', () => {
+  const read = async (f: string): Promise<string> => (await import('node:fs')).readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8');
+
+  it('(g) the Kannada route line says Gemini, not the internal name', async () => {
+    const { ROUTE_LINES } = await import('../../src/ux/routeCatalog');
+    expect(ROUTE_LINES.kannada).toBe('Gemini handles Kannada better. Only your words were sent.');
+    const { honestyLines } = await import('../../src/canvas/reviewDialog');
+    expect(honestyLines({ engine: 'gemini', sim: false, why: ROUTE_LINES.kannada, sentWhat: 'the key list and your request.', bytes: 385 }).why).toBe('Why Gemini: Gemini handles Kannada better. Only your words were sent.');
+    for (const f of ['src/ux/routeCatalog.ts', 'src/canvas/canvasApp.ts']) expect(await read(f)).not.toContain('Deep understands');
+  });
+
+  it('(h) an open review follows the ledger: a hedge leg booked while it is open shows in its footer', async () => {
+    const { createReviewReceipts, honestyLines } = await import('../../src/canvas/reviewDialog');
+    const receipts = createReviewReceipts();
+    const kn = { engine: 'gemini', sent: 'the key list and your request.', routeLine: 'Gemini handles Kannada better. Only your words were sent.', sim: false };
+    receipts.record(kn, 385);
+    expect(honestyLines(receipts.facts(kn)).left).toBe('What left this device: the key list and your request · 385 B');
+    receipts.record(kn, 385); // the hedge's second request, booked while the review is open
+    expect(honestyLines(receipts.facts(kn)).left).toBe('What left this device: the key list and your request · 770 B');
+    const src = await read('src/canvas/canvasApp.ts');
+    expect(src).toContain('if (reviewLive && reviewDialog.isOpen() && reviewLive.tokens.includes(s)) reviewDialog.setFacts(reviewLive.facts());');
+    expect(src.match(/refreshReviewFor\(s\);/g)).toHaveLength(2); // on a send and on a take-back
+    expect(src).toContain('}, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });');
+    expect(src).toContain('}, { tokens: [si, link?.si], facts: planFacts });');
+    expect(await read('src/canvas/reviewDialog.ts')).toContain('setFacts(facts) { if (open && !honesty.hidden) renderFacts(facts); },');
+  });
+
+  it('(i) a try-to-break refusal calms the Nano card', async () => {
+    const src = await read('src/canvas/canvasApp.ts');
+    const turn = src.slice(src.indexOf('async function breakTurn('), src.indexOf('// ---- commands ----'));
+    expect(turn).toContain("engineBar?.calm('nano');");
+  });
+
+  it('(j) the pairing card’s title stays put while the card scrolls, and its note does not repeat the status', async () => {
+    const css = await read('src/canvas/canvas.css');
+    expect(css).toMatch(/\.mc-connect-head, \.mc-pairing-head \{\s*position: sticky;\s*top: -24px;/);
+    const src = await read('src/canvas/canvasApp.ts');
+    expect(src).toContain("note: 'After the first pair the phone is remembered");
+    expect(src).not.toMatch(/note: 'Playing a chime/);
+  });
+
+  it('(k) dark status-bar icons on the light canvas, Android and iOS', async () => {
+    const styles = await read('android/app/src/main/res/values/styles.xml');
+    expect(styles).toContain('<item name="android:windowLightStatusBar">true</item>');
+    const activity = await read('android/app/src/main/java/app/mendcraft/relay/MainActivity.java');
+    expect(activity).toContain('bars.setAppearanceLightStatusBars(true);');
+    for (const f of ['ios-src/MendcraftViewController.swift', 'ios/plugins/MendcraftViewController.swift']) {
+      expect(await read(f)).toMatch(/override var preferredStatusBarStyle: UIStatusBarStyle \{\s*return \.darkContent/);
+    }
   });
 });
 
@@ -982,19 +1470,103 @@ describe('re-review fixes', () => {
     expect(pick).toMatch(/createOptions: \{ \.\.\.ON_DEVICE_CREATE_OPTIONS, \.\.\.\(session \? \{ signal: session\.signal \}/);
     expect(pick).toMatch(/finally \{[\s\S]*session\?\.abort\(\); destroySdkSession\(own\);/);
     expect(pick).toContain('{ maxWaitMs: 0 }');
-    // the warm-up, behaviourally: a model that never answers is aborted at its timeout
+  });
+
+  it('warm-up: create() is never timed; the tiny prompt gets 5 s once the session exists', async () => {
     vi.useFakeTimers();
     let aborted = 0;
+    let model!: { chromeAdapter: { oldSession?: unknown }; generateContent: () => Promise<never> };
     setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: (params) => {
       (params.createOptions.signal as AbortSignal).addEventListener('abort', () => { aborted++; });
-      return { generateContent: () => never() };
+      model = { chromeAdapter: {}, generateContent: () => never() };
+      return model as unknown as TextGenModel;
     } });
     const q = createNanoQueue(1);
-    const warm = warmBoardOnDevice(q);
-    await vi.advanceTimersByTimeAsync(15_100);
-    expect(await warm).toBe(false);
-    expect(aborted).toBe(1);
+    let settled: boolean | null = null;
+    void warmBoardOnDevice(q).then((ok) => { settled = ok; });
+    // a 60 s cold create(): no timeout, the warm-up is still going (and pre-emptible)
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBeNull();
+    expect(aborted).toBe(0);
+    expect(q.active()).toBe(1);
+    // the session now exists: from here the prompt has WARM_PROMPT_TIMEOUT_MS
+    model.chromeAdapter.oldSession = {};
+    await vi.advanceTimersByTimeAsync(WARM_PROMPT_TIMEOUT_MS - 400);
+    expect(settled).toBeNull();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(settled).toBe(false);
+    expect(aborted).toBe(1); // its session was stopped
     expect(q.idle()).toBe(true);
+    expect(WARM_PROMPT_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('minor: a warm-up pushed aside ends at once and leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    setModelsForTest({ enabled: true, appCheck: 'ready', onDeviceModel: () => ({ chromeAdapter: {}, generateContent: () => never() }) as unknown as TextGenModel });
+    const q = createNanoQueue(1);
+    const warm = warmBoardOnDevice(q);
+    await vi.advanceTimersByTimeAsync(300); // it is polling for its session
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    expect(await q.run(async () => 'plan', { priority: 10 })).toBe('plan');
+    expect(await warm).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(vi.getTimerCount()).toBe(0); // the session poll stopped with it
+  });
+
+  it('warm-up: a real on-device call already loaded the model, so there is nothing to warm', async () => {
+    const { stats } = fakeSdk(NANO_OK);
+    const q = createNanoQueue(1);
+    await streamOnDevice({ prompt: 'p', queue: q });
+    expect(stats.prompts).toBe(1);
+    expect(await warmBoardOnDevice(q)).toBe(true);
+    expect(stats.prompts).toBe(1); // no extra prompt
+  });
+
+  it('the warm keeper warms when the model becomes available, and retries once, 10 s later, when idle', async () => {
+    vi.useFakeTimers();
+    const results = [false, true];
+    let attempts = 0;
+    let idle = false;
+    const keeper = createWarmKeeper({ warm: async () => { attempts++; return results.shift() ?? false; }, idle: () => idle });
+    keeper.kick(); // the page loaded with Nano available
+    await vi.advanceTimersByTimeAsync(1);
+    expect(attempts).toBe(1); // pushed aside by her first request
+    await vi.advanceTimersByTimeAsync(9_900);
+    expect(attempts).toBe(1); // not before 10 s
+    await vi.advanceTimersByTimeAsync(200);
+    expect(attempts).toBe(1); // 10 s passed, but the model is busy: wait for an idle moment
+    idle = true;
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(attempts).toBe(2);
+    expect(keeper.warmed()).toBe(true);
+    keeper.kick(); // already warm: nothing more
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(attempts).toBe(2);
+
+    // one retry only: two failures in a row stop until the next kick
+    let n = 0;
+    const failing = createWarmKeeper({ warm: async () => { n++; return false; }, idle: () => true });
+    failing.kick();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(n).toBe(2);
+    failing.kick(); // availability flipped again (a download finished)
+    await vi.advanceTimersByTimeAsync(1);
+    expect(n).toBe(3);
+    failing.stop();
+  });
+
+  it('the SDK internals the stop path and the warm-up read are still there (@firebase/ai)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const sdk = readFileSync(new URL('../../node_modules/@firebase/ai/dist/esm/index.esm.js', import.meta.url), 'utf8');
+    const version = (JSON.parse(readFileSync(new URL('../../node_modules/@firebase/ai/package.json', import.meta.url), 'utf8')) as { version: string }).version;
+    // hybrid.ts reads `model.chromeAdapter.oldSession` to destroy an on-device
+    // session and to tell whether the warm-up is past create(). If an SDK
+    // update renames either, this fails here instead of silently in Chrome.
+    expect(sdk, `@firebase/ai ${version}: GenerativeModel no longer keeps chromeAdapter`).toContain('this.chromeAdapter = chromeAdapter;');
+    expect(sdk, `@firebase/ai ${version}: the Chrome adapter no longer keeps oldSession`).toContain('this.oldSession = newSession;');
+    expect(sdk, `@firebase/ai ${version}: createSession no longer destroys the previous session`).toMatch(/if \(this\.oldSession\) \{\s*this\.oldSession\.destroy\(\);/);
+    const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
+    expect(hybrid.match(/chromeAdapter\?\.oldSession/g)!.length).toBeGreaterThanOrEqual(2);
   });
 
   it('F5: Nano is chosen for a turn only while Chrome reports it available', async () => {

@@ -108,7 +108,7 @@ describe('status bar icons are dark on the light canvas', () => {
 
   it('iOS: dark content status bar', () => {
     expect(read('ios-src/Info.plist.additions.xml')).toMatch(/<key>UIStatusBarStyle<\/key>\s*<string>UIStatusBarStyleDarkContent<\/string>/);
-    expect(read('ios-src/MendcraftViewController.swift')).toMatch(/setStatusBarStyle\(\.darkContent\)/);
+    expect(read('ios-src/MendcraftViewController.swift')).toMatch(/preferredStatusBarStyle: UIStatusBarStyle \{\s*return \.darkContent/);
     expect(read('ios/plugins/MendcraftViewController.swift')).toBe(read('ios-src/MendcraftViewController.swift'));
   });
 });

@@ -13,9 +13,12 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
-        <!-- The canvas is light: dark status-bar / navigation-bar icons. -->
+        <!-- The canvas is light in both system themes: the status bar's clock
+             and icons must be dark, or they are white on white. (minSdk 26, so
+             windowLightStatusBar is always available; MainActivity sets the
+             same through WindowInsetsControllerCompat for edge-to-edge.) -->
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">#F7F5F0</item>
     </style>
 
 

@@ -31,6 +31,7 @@ export type Route =
   | { name: 'teach' } | { name: 'teachList' }
   | { name: 'showAi' } | { name: 'monitor' } | { name: 'hideAi' }
   | { name: 'tool'; tool: ToolVoice }
+  | { name: 'scroll'; dir: 'up' | 'down'; page: boolean }
   | { name: 'packIntent'; intent: IntentKey }
   | { name: 'pointConnect' }
   | { name: 'gimbalScan' } | { name: 'gimbal' }
@@ -61,6 +62,14 @@ export function matchToolVoice(text: string): ToolVoice | null {
   return null;
 }
 
+/** "scroll down" / "scroll up" / "page down" / "page up" (on the focused
+ *  board or the open sheet — the same targets as the peace-and-move gesture). */
+export function matchScrollVoice(text: string): { dir: 'up' | 'down'; page: boolean } | null {
+  const t = text.trim().replace(/[.!?]+$/, '').toLowerCase();
+  const m = /^(?:please\s+)?(scroll|page)\s+(up|down)(?:\s+please)?$/.exec(t);
+  return m ? { dir: m[2] as 'up' | 'down', page: m[1] === 'page' } : null;
+}
+
 // "connect / add (to) what(ever) I'm pointing at", or a bare "connect this"
 // (not "connect this room", which is connectRoom).
 const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
@@ -84,6 +93,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (/^\s*(hide\s+models|hide\s+ai)\s*$/i.test(text)) return { name: 'hideAi' };
   const tool = matchToolVoice(text);
   if (tool) return { name: 'tool', tool };
+  const scroll = matchScrollVoice(text);
+  if (scroll) return { name: 'scroll', ...scroll };
   // Active language pack: a spoken phrase routes to the same intents first.
   if (world.pack) { const intent = routePackPhrase(text, world.pack); if (intent) return { name: 'packIntent', intent }; }
   // Point-to-connect: hold a point at a real device; a frame is cropped along

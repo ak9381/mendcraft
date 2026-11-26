@@ -72,6 +72,16 @@ export function drawHandSkeleton(
   ctx.restore();
 }
 
+/** The preview has a picture: a live stream that has decoded at least one frame. */
+export function previewHasFrames(video: Pick<HTMLVideoElement, 'srcObject' | 'readyState' | 'videoWidth'>): boolean {
+  const stream = video.srcObject as { active?: boolean; getVideoTracks?: () => Array<{ readyState?: string }> } | null;
+  if (!stream) return false;
+  if (stream.active === false) return false;
+  const tracks = stream.getVideoTracks?.() ?? [];
+  if (tracks.length && !tracks.some((t) => t.readyState !== 'ended')) return false;
+  return video.readyState >= 2 && video.videoWidth > 0;
+}
+
 function attachPreviewStream(video: HTMLVideoElement): void {
   try {
     const stream = findLiveCameraStream();
@@ -104,6 +114,12 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
     canvas.className = 'mc-face-preview-box';
     canvas.setAttribute('aria-hidden', 'true');
     host.append(video, canvas);
+    // Nothing to see until the camera delivers a frame: with the camera off,
+    // denied or still starting, an empty black box would sit on the canvas.
+    host.hidden = true;
+    const v = video;
+    const reveal = (): void => { host.hidden = !previewHasFrames(v); };
+    for (const ev of ['loadeddata', 'playing', 'resize', 'emptied', 'ended', 'pause']) v.addEventListener?.(ev, reveal);
     container.appendChild(host);
     attachPreviewStream(video);
   } else {
@@ -131,7 +147,7 @@ export function createFaceOverlay(container: HTMLElement, opts: FaceOverlayOptio
   }
 
   function draw(faces: FaceFrame[], hands?: readonly (readonly { x: number; y: number }[])[]): void {
-    if (compact && video) attachPreviewStream(video);
+    if (compact && video) { attachPreviewStream(video); host.hidden = !previewHasFrames(video); }
     const { w, h, dpr } = fit();
     ctx.clearRect(0, 0, w, h);
     if (compact) host.classList.toggle('is-live', faces.length > 0);

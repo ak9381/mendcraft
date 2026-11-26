@@ -172,6 +172,9 @@ export interface ReviewDialogModel {
 
 export interface ReviewDialog {
   open(model: ReviewDialogModel): void;
+  /** The open review's turn sent again (a hedge leg, a retry): show the new
+   *  facts, so the footer always matches the ledger. No-op when closed. */
+  setFacts(facts: ReviewFacts): void;
   close(): void;
   isOpen(): boolean;
   currentCard(): HTMLElement | null;
@@ -463,7 +466,19 @@ export function mountReviewDialog(
     }
   }
 
+  function renderFacts(facts: ReviewFacts): void {
+    const lines = honestyLines(facts);
+    whyEl.hidden = !lines.why;
+    whyEl.textContent = lines.why ?? '';
+    whyEl.setAttribute('title', lines.why ?? '');
+    leftEl.innerHTML = '';
+    leftEl.append(el(doc, 'span', 'mc-review-left-what', lines.leftWhat));
+    if (lines.leftBytes) leftEl.append(el(doc, 'span', 'mc-review-left-bytes', lines.leftBytes));
+    leftEl.setAttribute('title', lines.left);
+  }
+
   return {
+    setFacts(facts) { if (open && !honesty.hidden) renderFacts(facts); },
     open(model) {
       card = model.card;
       titleEl.textContent = model.title;
@@ -490,16 +505,7 @@ export function mountReviewDialog(
       planHead.textContent = 'The plan';
 
       honesty.hidden = !facts;
-      if (facts) {
-        const lines = honestyLines(facts);
-        whyEl.hidden = !lines.why;
-        whyEl.textContent = lines.why ?? '';
-        whyEl.setAttribute('title', lines.why ?? '');
-        leftEl.innerHTML = '';
-        leftEl.append(el(doc, 'span', 'mc-review-left-what', lines.leftWhat));
-        if (lines.leftBytes) leftEl.append(el(doc, 'span', 'mc-review-left-bytes', lines.leftBytes));
-        leftEl.setAttribute('title', lines.left);
-      }
+      if (facts) renderFacts(facts);
 
       extraEl.innerHTML = '';
       if (model.extra) extraEl.append(model.extra);

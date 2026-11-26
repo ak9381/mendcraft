@@ -10,11 +10,16 @@ import Capacitor
 
 class MendcraftViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
-        // The canvas is light in both system themes: dark status-bar content.
-        setStatusBarStyle(.darkContent)
         bridge?.registerPluginInstance(MendcraftLanPlugin())
         bridge?.registerPluginInstance(MendcraftGimbalPlugin())
         bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
+    }
+
+    // The canvas is light whatever the system appearance: dark clock and
+    // icons in the status bar (the default is white ones in Dark Mode, which
+    // are invisible on the light canvas).
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .darkContent
     }
 
     override func viewWillDisappear(_ animated: Bool) {
