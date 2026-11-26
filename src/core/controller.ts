@@ -142,6 +142,9 @@ export interface ViewportHandle {
   setMaterials?(plan: unknown): Promise<void>;
   /** The materials/lighting currently on the 3D view, if any. */
   currentMaterials?(): unknown;
+  /** The mode's own tool context + tool controller, for the hand editor
+   *  (plan/handEdit.ts) — the same objects mouse events drive. */
+  handHost?(): { ctx: import('./tools').ToolContext; tools: import('./tools').ToolController };
   /** Brief status hint on the canvas (auto-hides unless used for errors). */
   showHint?(text: string, opts?: { sticky?: boolean }): void;
   /** 3D first-person walkthrough. Turns the 3D view on if needed. */

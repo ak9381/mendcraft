@@ -79,7 +79,9 @@ import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
 import { createDeviceIdSession } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
-import { createHandPointer, mapToScreen, REACH, type HandPointer } from './handPointer';
+import { createHandPointer, deepElementFromPoint, handSurfaceAt, mapToScreen, REACH, type HandPointer } from './handPointer';
+import { PLAN_EDIT_EVENT, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
+import { createPlanPeace, peaceHandsOf } from './planPeace';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
 import { createPalmHighlight } from './palmHighlight';
@@ -2593,6 +2595,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!h) { say('Nothing to undo.'); return; }
     if (h.kind === 'lang') { applyPack(h.packBefore ?? null, { record: false }); historyRender(); say(`Undid: ${h.summary}.`); return; }
     if (h.kind === 'layout') { if (h.layoutBefore) editBoard.restoreLayout(h.frameId, h.layoutBefore); historyRender(); say(`Undid: ${h.summary}.`); return; }
+    if (h.kind === 'plan') {
+      // A floor-plan drawing edit (hand or mouse): the plan engine takes it
+      // back with its own undo steps — no copy of the plan lives here.
+      const pb = world.querySelector<HTMLElement & { undoPlanEdit?: (steps: number, epoch: number) => number }>(`[data-frame="${h.frameId}"] mc-plan-board`);
+      const n = pb?.undoPlanEdit?.(h.planSteps ?? 0, h.planEpoch ?? -1) ?? 0;
+      historyRender();
+      say(n ? `Undid: ${h.summary}.` : `Could not undo “${h.summary}” — that plan was redrawn since.`);
+      return;
+    }
     if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); deviceSurfaces.untrack(h.frameId); }
     const el = world.querySelector<HTMLElement>(`[data-frame="${h.frameId}"] .mc-surface`);
     if (el && !h.before) el.innerHTML = '';
@@ -2765,6 +2776,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         root,
         // The control under the hand that DRIVES the highlight (nearest pointer slot).
         directAt: (p) => handPointer?.directHit?.(p) ?? null,
+        // Over a floor plan in hand edit with a drawing / placing tool, a fist
+        // tap belongs to the plan: only a button next to the palm is picked.
+        captureLimit: (p) => (planEditAt(p)?.drawing() ? PLAN_DRAW_CAPTURE_PX : null),
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
       })
     : null;
@@ -2847,8 +2861,32 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say,
         onFire: (ev) => activityLog.push({ kind: 'gesture', text: `${ev.name} → ${ev.label}`, target: ev.target }),
         highlight: palmHighlight,
+        // Hands on / off: the plan boards show or hide their hand-edit UI.
+        onActive: () => refreshPlanHands(true),
       })
     : null;
+  // Floor-plan hand edit (docs/plan/2026-11-26-plan-hands-design.md). The
+  // fist strokes and taps reach the plan through the hand pointer's surface
+  // grab; here: the peace-and-move resize, and plan edits in the history.
+  const PLAN_DRAW_CAPTURE_PX = 24;
+  /** The armed plan hand-edit surface under a screen point (null: none). */
+  function planEditAt(p: { x: number; y: number }): PlanHandSurface | null {
+    if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') return null;
+    const edit = handSurfaceAt(deepElementFromPoint(document, p.x, p.y))?.handEdit as PlanHandSurface | undefined;
+    return edit && edit.armed(p.x, p.y) ? edit : null;
+  }
+  const planPeace = createPlanPeace();
+  if (typeof root.addEventListener === 'function') {
+    root.addEventListener(PLAN_EDIT_EVENT, (e) => {
+      const d = (e as CustomEvent<PlanEditDetail>).detail;
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+      const frameEl = path.find((n) => (n as HTMLElement).dataset?.frame) as HTMLElement | undefined;
+      const frameId = frameEl?.dataset.frame ?? (e.target as HTMLElement | null)?.closest?.<HTMLElement>('[data-frame]')?.dataset.frame;
+      if (!d || !frameId) return;
+      history.push({ frameId, before: null, after: null, by: 'her', summary: d.summary, kind: 'plan', planSteps: d.steps, planEpoch: d.epoch });
+      historyRender();
+    });
+  }
   /** Gestures are paused while something else owns the hands: a fist grab,
    *  the not-facing lock, or the point-to-connect capture step. */
   const gesturesBlocked = (): boolean => !!handPointer?.isGrabActive() || !!handPointer?.handsLocked?.() || !!pointWait;
@@ -2868,10 +2906,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // grab (board move / pan) and two-fist zoom.
     const cam = cameraHandsFromSelfie(hands);
     handPointer?.update(cam, now);
+    // Peace-and-move over a plan with a wall / room / dimension selected
+    // resizes it; that hand's peace is then no button gesture.
+    if (gestures?.isActive()) {
+      planPeace.update(peaceHandsOf(hands, undefined, handCameraAspect), now, {
+        blocked: gesturesBlocked() || gestureFacing === false,
+        targetAt: (p) => { const e = planEditAt(p); return e?.resizable() ? e : null; },
+      });
+    }
     gestures?.frame(hands, now, {
       facing: gestureFacing, faceX: gestureFaceX, blocked: gesturesBlocked(), cameraAspect: handCameraAspect,
       suppressCounts: countsSuppressed(),
+      claimedPeace: (side) => planPeace.claimed(side),
     });
+    refreshPlanHands();
     if (!hands.length) return;
     // Taught gestures obey the same guards as built-ins: never while the
     // hands are locked (not facing the screen) or a fist grab is running —

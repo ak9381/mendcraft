@@ -97,7 +97,29 @@ export interface HandSurface {
    *  (`raw`, un-smoothed, rotation kept) for edits that must follow each hand;
    *  'cancel' = a hand was lost mid-gesture (roll back, apply nothing). */
   pinch2?(phase: 'start' | 'move' | 'end' | 'cancel', a?: { x: number; y: number }, b?: { x: number; y: number }, raw?: { a: { x: number; y: number }; b: { x: number; y: number } }): void;
+  /** HAND EDIT (the live fist pipeline): while armed, a held fist over the
+   *  surface draws / moves on it instead of moving the board or panning, and
+   *  a fist tap acts on it. See docs/plan/2026-11-26-plan-hands-design.md. */
+  handEdit?: HandSurfaceEdit;
 }
+export interface HandSurfaceEdit {
+  /** Hand edit is on and (x, y) is on the drawing area itself. */
+  armed(x: number, y: number): boolean;
+  /** A drawing or placing tool is active: a fist tap belongs to the surface,
+   *  so only a button right next to the palm may take the highlight. */
+  drawing(): boolean;
+  tap(x: number, y: number): void;
+  /** A held fist closed here. False = nothing to grab (the fist is spent). */
+  fistStart(x: number, y: number): boolean;
+  fistMove(x: number, y: number): void;
+  /** The hand opened: commit. */
+  fistEnd(): void;
+  /** Hand lost, looked away, or a second fist took over: apply nothing. */
+  fistCancel(): void;
+}
+/** Marks a surface's element handle (a pointer-events:none proxy button the
+ *  palm highlight can snap to): it is exempt from the on-top-at-centre clip. */
+export const HAND_HOT = 'data-hand-hot';
 export function handSurfaceAt(el: Element | null): HandSurface | null {
   const host = (el as HTMLElement | null)?.closest?.('[data-hand-surface]') as (HTMLElement & { __mcHandSurface?: HandSurface }) | null;
   return host?.__mcHandSurface ?? null;
@@ -246,7 +268,14 @@ export function collectControls(doc: Document = document, opts?: CollectControls
   return scoped.filter((el) => {
     const r = el.getBoundingClientRect();
     const cx = clamp(r.left + r.width / 2, 0, innerWidth - 1), cy = clamp(r.top + r.height / 2, 0, innerHeight - 1);
-    const top = interactiveAncestor(deepElementFromPoint(doc, cx, cy));
+    const under = deepElementFromPoint(doc, cx, cy);
+    const top = interactiveAncestor(under);
+    // A surface's element handle never receives the hit itself: it counts
+    // when its own surface (and no real control) is on top at its centre.
+    if (el.hasAttribute?.(HAND_HOT)) {
+      const host = el.closest?.('[data-hand-surface]');
+      return !top && !!host && !!under && host.contains(under);
+    }
     return top === el || (!!top && el.contains(top)) || (!!top && top.contains(el));
   });
 }
@@ -403,8 +432,13 @@ interface SlotPointer extends HandPointer {
   fistTiming(): { fistStart: number; openSince: number; openRun: number };
   /** This frame's palm mapped to the screen, before smoothing. */
   mappedPalm(): P;
-  /** How long the current target has been the target (0 if none). */
+  /** How long the current target has been the target — or, with no target,
+   *  how long the palm has rested on an armed hand-edit surface (0 if none). */
   lockAge(t: number): number;
+  /** The armed hand-edit surface under a point (null: none, or a dry run). */
+  editSurfaceAt(p: P): HandSurfaceEdit | null;
+  /** A fist tap on a hand-edit surface (the edge guard can veto). */
+  surfaceTap(edit: HandSurfaceEdit, p: P, t: number): boolean;
   /** The drawn cursor point (magnet-eased), client px. */
   cursorPoint(): P;
   /** Click `el` as a tap (fist tap / face click). Confirm actions need a
@@ -539,6 +573,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let geoClosed = false;
   let looseSince = -1;
   let targetSince = 0;
+  // Since when the palm has rested on an armed hand-edit surface (-1: it isn't).
+  let surfaceSince = -1;
   let lastMapped: P = { x: -1, y: -1 };
   let lastHandedness: string | null = null;
   // The open-palm highlight owns the target this frame (opts.targetOverride).
@@ -611,6 +647,12 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     const raw = deepElementFromPoint(doc, p.x, p.y);
     const r = raw && handSurfaceAt(raw) ? Math.min(releasePx, SURFACE_SNAP_PX) : releasePx;
     return distToRect(p, el.getBoundingClientRect()) <= r;
+  }
+
+  function editSurfaceAt(p: P): HandSurfaceEdit | null {
+    if (p.x < 0 || dryRun) return null;
+    const edit = handSurfaceAt(deepElementFromPoint(doc, p.x, p.y))?.handEdit;
+    return edit && edit.armed(p.x, p.y) ? edit : null;
   }
 
   function paintConfirm(el: HTMLElement | null, on: boolean): void {
@@ -1004,6 +1046,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     // board drags under the cursor — across the right-side buttons, to the
     // edge, or onto another device.
     if (opts.isGrabActive?.() || opts.handsLocked?.()) {
+      surfaceSince = -1;
       if (target) setTarget(null);
       if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
       resetDwell();
@@ -1029,6 +1072,10 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     else if (live && target && !isDismiss(target) && lockHolds(target, p)) next = target;
     else next = snapNear(p);
     setTarget(next);
+    if (live) {
+      if (!target && editSurfaceAt(p)) { if (surfaceSince < 0) surfaceSince = clock; }
+      else surfaceSince = -1;
+    }
     if (!target && !pinched && !dryRun) handSurfaceAt(deepElementFromPoint(doc, p.x, p.y))?.hover?.(p.x, p.y);
     emitTooltip(target);
     if (dwellAt !== undefined) tickDwell(dwellAt, dwellOn);
@@ -1052,7 +1099,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       opts.onPinch?.({ phase: 'cancel', p: pt, now: now() });
       if (!dryRun) (doc as Document & { dispatchEvent?: (e: Event) => boolean }).dispatchEvent?.(new CustomEvent(HAND_RELEASE));
     }
-    setTarget(null); pt = { x: -1, y: -1 };
+    setTarget(null); pt = { x: -1, y: -1 }; surfaceSince = -1;
     resetDwell(); dwellFiredFor = null;
     fisted = false; fistRun = 0; openRun = 0; openSince = -1; fistStartT = -1; geoClosed = false; looseSince = -1; releasing = false;
     if (tipEl) { tipEl = null; opts.onTooltip?.(null, null); }
@@ -1182,7 +1229,14 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
     setGrabbing(on: boolean) { grabbing = on; if (!on) releasing = false; },
     fistTiming: () => ({ fistStart: fistStartT, openSince, openRun }),
     mappedPalm: () => ({ ...lastMapped }),
-    lockAge: (t: number) => (target ? t - targetSince : 0),
+    lockAge: (t: number) => (target ? t - targetSince : surfaceSince >= 0 ? t - surfaceSince : 0),
+    editSurfaceAt,
+    surfaceTap(edit: HandSurfaceEdit, p: P, t: number) {
+      if (edge.blockClicks(t)) return false;
+      edit.tap(p.x, p.y);
+      opts.onHandEvent?.({ type: 'click', target: 'plan' });
+      return true;
+    },
     isReleasing: () => releasing,
     tapClick,
     cancelPressWithoutClick,
@@ -1209,6 +1263,8 @@ type GrabMode =
    *  bar or corner, a terminal grip): forwarded as pointerdown/move/up, the
    *  same events a mouse drag fires, so dragPanel/reviewDialog need nothing new. */
   | { kind: 'handle'; slot: number; el: HTMLElement; last: P }
+  /** A held fist on an armed hand-edit surface (the floor plan): pen down. */
+  | { kind: 'surface'; slot: number; edit: HandSurfaceEdit; last: P }
   | { kind: 'zoom'; a: P; b: P };
 
 /** Per-slot fist bookkeeping for tap vs grab. */
@@ -1216,6 +1272,8 @@ interface FistState {
   closedAt: number | null;
   closeP: P;
   closeTarget: HTMLElement | null;
+  /** No target, but the fist closed on an armed hand-edit surface. */
+  closeSurface: HandSurfaceEdit | null;
   /** Closed ≥ fistTapMs or moved ≥ fistMovePx: no longer a tap; may grab. */
   holding: boolean;
   /** Started over a control / chrome: a one-fist grab never starts (a
@@ -1269,7 +1327,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
   const prevTips: (P | null)[] = [null, null];
   const lastSeen = [-Infinity, -Infinity];
   const freshFist = (): FistState => ({
-    closedAt: null, closeP: { x: -1, y: -1 }, closeTarget: null, holding: false, blocked: false, spent: false, wasFisted: false,
+    closedAt: null, closeP: { x: -1, y: -1 }, closeTarget: null, closeSurface: null, holding: false, blocked: false, spent: false, wasFisted: false,
     tapArmed: false, closeRaw: { x: -1, y: -1 }, openRun: 0, openSince: -1, startSpeed: Infinity, startLock: 0, prevMapped: null, prevT: 0, speed: 0, speeds: [], lastWasHold: false,
   });
   const fist: FistState[] = [freshFist(), freshFist()];
@@ -1361,11 +1419,14 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     slots[0].setGrabbing(on(0));
     slots[1].setGrabbing(on(1));
   }
-  function endGrab(): void {
+  /** `opened`: the grabbing hand opened (a hand-edit stroke commits). Any
+   *  other end — hand lost, looked away, a second fist — cancels a stroke. */
+  function endGrab(opened = false): void {
     const g = grab;
     if (!g) return;
     setGrab(null);
-    if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
+    if (g.kind === 'surface') { if (opened) g.edit.fistEnd(); else g.edit.fistCancel(); }
+    else if (g.kind === 'board') opts.onBoardMove?.({ phase: 'end', frameId: g.frameId, dx: 0, dy: 0, x: g.last.x, y: g.last.y });
     else if (g.kind === 'pan') opts.onWorldPan?.({ phase: 'end', dx: 0, dy: 0 });
     else if (g.kind === 'handle') fireHandle(g.el, 'pointerup', g.last);
     else opts.onWorldZoom?.({ phase: 'end', a: g.a, b: g.b });
@@ -1386,6 +1447,18 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       return;
     }
     if (control && !onHandle) { s.blocked = true; return; } // a fist on any other button never grabs
+    if (!control) {
+      // An armed hand-edit surface (the floor plan in hand edit) takes the
+      // fist before the board it sits on, or the canvas, can.
+      const edit = slots[i].editSurfaceAt(p);
+      if (edit) {
+        if (!edit.fistStart(p.x, p.y)) { s.blocked = true; return; }
+        setGrab({ kind: 'surface', slot: i, edit, last: p });
+        opts.onHandEvent?.({ type: 'grab', target: 'plan' });
+        stepGrab(slots[i].rawPoint());
+        return;
+      }
+    }
     let frameId: string | null = null;
     if (onHandle) {
       frameId = ((control!.closest?.('.mc-frame') as HTMLElement | null)?.dataset?.frame) ?? frameIdAt(p);
@@ -1417,6 +1490,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     if (!dx && !dy) return;
     if (g.kind === 'board') opts.onBoardMove?.({ phase: 'move', frameId: g.frameId, dx, dy, x: p.x, y: p.y });
     else if (g.kind === 'handle') fireHandle(g.el, 'pointermove', p);
+    else if (g.kind === 'surface') g.edit.fistMove(p.x, p.y);
     else opts.onWorldPan?.({ phase: 'move', dx, dy });
   }
   function updateFists(t: number): void {
@@ -1438,6 +1512,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
       if (fisted && !s.wasFisted) {
         const ft = slots[i].fistTiming();
         s.closedAt = t; s.closeP = slots[i].rawPoint(); s.closeRaw = slots[i].mappedPalm(); s.closeTarget = slots[i].target;
+        s.closeSurface = s.closeTarget ? null : slots[i].editSurfaceAt(s.closeP);
         s.holding = false; s.blocked = false; s.spent = false;
         // A tap only arms from a deliberately open, still hand on a target it
         // has rested on — a relaxed hand drifting through a fist shape never clicks.
@@ -1454,10 +1529,10 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
         const closedMs = ft.openSince - ft.fistStart;
         if (s.tapArmed && !locked && !s.holding && !s.spent && !grab && closedMs >= HAND_FEEL.tapMinClosedMs
           && closedMs <= HAND_FEEL.fistTapMs + 100 && t - lastTapAt >= HAND_FEEL.tapCooldownMs) {
-          if (slots[i].tapClick(s.closeTarget, t)) lastTapAt = t;
+          if (s.closeTarget ? slots[i].tapClick(s.closeTarget, t) : !!s.closeSurface && slots[i].surfaceTap(s.closeSurface, s.closeP, t)) lastTapAt = t;
         }
         s.lastWasHold = s.holding || s.spent;
-        s.closedAt = null; s.closeTarget = null; s.holding = false; s.blocked = false; s.spent = false; s.tapArmed = false;
+        s.closedAt = null; s.closeTarget = null; s.closeSurface = null; s.holding = false; s.blocked = false; s.spent = false; s.tapArmed = false;
       } else if (fisted && !s.holding && s.closedAt !== null) {
         const m = slots[i].mappedPalm();
         if (t - s.closedAt >= HAND_FEEL.fistTapMs || Math.hypot(m.x - s.closeRaw.x, m.y - s.closeRaw.y) >= HAND_FEEL.fistMovePx) s.holding = true;
@@ -1498,7 +1573,7 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
     }
     if (grab) {
       const g = grab;
-      if (!fisted[g.slot]) { endGrab(); return; }
+      if (!fisted[g.slot]) { endGrab(true); return; }
       if (ready[1 - g.slot]) {
         endGrab(); // a second fist takes over: finish the move/pan, then zoom below
       } else {

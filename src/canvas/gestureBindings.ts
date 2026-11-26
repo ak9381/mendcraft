@@ -23,6 +23,19 @@ export interface GestureBinding {
   context?: GestureContext;
   /** No button: send this line through the app's run() router instead. */
   say?: string;
+  /** Contextual buttons that take this gesture while they are VISIBLE (the
+   *  floor plan's hand action bar: Remove, Rotate). A review still wins. */
+  when?: readonly { selector: string; label: string }[];
+}
+
+/** The floor plan's hand action bar (planHandSurface.ts). */
+const PLAN_REMOVE = { selector: '.mc-plan-hand-on .mc-plan-remove', label: 'Remove' } as const;
+const PLAN_ROTATE = { selector: '.mc-plan-hand-on .mc-plan-rotate', label: 'Rotate' } as const;
+
+/** Where a binding's badge sits / what it presses first, in priority order. */
+export function badgeSelectors(b: GestureBinding): string[] {
+  const when = (b.when ?? []).map((w) => w.selector);
+  return b.context ? [...b.targets, ...when] : [...when, ...b.targets];
 }
 
 const chip = (n: number) => `.mc-next > button.mc-next-chip:nth-of-type(${n})`;
@@ -30,14 +43,14 @@ const chip = (n: number) => `.mc-next > button.mc-next-chip:nth-of-type(${n})`;
 /** Laptop / tablet canvas. */
 export const LAPTOP_GESTURES: readonly GestureBinding[] = [
   { key: 'R:thumbsUp', label: 'Approve', targets: ['.mc-review-approve', '.mc-proposal-keep'], context: 'approveOrPress' },
-  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose' },
+  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose', when: [PLAN_REMOVE] },
   { key: 'R:one', label: 'Next step 1', targets: [chip(1)] },
   { key: 'R:peace', label: 'Next step 2', targets: [chip(2)] },
   { key: 'R:three', label: 'Next step 3', targets: [chip(3)] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
   { key: 'L:thumbsDown', label: 'Undo', targets: ['.mc-cluster-undo', '[data-cmd=undo]'] },
   { key: 'L:one', label: 'New board', targets: ['[data-cmd=new]'] },
-  { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'] },
+  { key: 'L:peace', label: 'Tools', targets: ['.mc-tools-chip'], when: [PLAN_ROTATE] },
   { key: 'L:three', label: 'Talk', targets: ['.mc-fab-mic'] },
   { key: '2:thumbsUp', label: 'AI monitor', targets: ['[data-cmd=monitor]'] },
   { key: '2:thumbsDown', label: 'Simulate offline', targets: ['[data-cmd=offline]'] },
@@ -49,7 +62,7 @@ export const LAPTOP_GESTURES: readonly GestureBinding[] = [
 /** Phone shells (Android + the iPhone control layer), behind the Hands pill. */
 export const PHONE_GESTURES: readonly GestureBinding[] = [
   { key: 'R:thumbsUp', label: 'Approve', targets: ['.mc-review-approve', '.mc-proposal-keep'], context: 'approveOrPress' },
-  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose' },
+  { key: 'R:thumbsDown', label: 'Reject', targets: ['.mc-review-reject', '.mc-proposal-drop'], context: 'declineOrClose', when: [PLAN_REMOVE] },
   { key: 'L:thumbsDown', label: 'Undo', targets: ['[data-cmd=undo]'] },
   { key: 'L:thumbsUp', label: 'Save', targets: ['[data-cmd=save]'] },
 ];
@@ -90,12 +103,20 @@ export function resolveGesture<E>(binding: GestureBinding, env: GestureEnv<E>): 
       const el = env.visible(s);
       if (el) return { kind: 'click', el, label };
     }
+    for (const w of binding.when ?? []) {
+      const el = env.visible(w.selector);
+      if (el) return { kind: 'click', el, label: w.label };
+    }
     if (binding.context === 'approveOrPress') {
       const h = env.highlighted();
       return h ? { kind: 'click', el: h, label: 'Press' } : { kind: 'none', label: 'Press', why: 'Nothing is highlighted. Show an open palm to pick a button, then thumbs up.' };
     }
     const c = env.closer();
     return c ? { kind: 'click', el: c, label: 'Close' } : { kind: 'none', label: 'Close', why: 'Nothing open to close.' };
+  }
+  for (const w of binding.when ?? []) {
+    const el = env.visible(w.selector);
+    if (el) return { kind: 'click', el, label: w.label };
   }
   for (const s of binding.targets) {
     const el = env.visible(s) ?? env.any(s);

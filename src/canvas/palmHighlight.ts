@@ -232,6 +232,11 @@ export interface PalmHighlightOptions {
   /** The control directly under the pointer of the hand nearest this screen
    *  point (the hand driving the highlight). Wins over ctx.direct. */
   directAt?: (p: Pt) => HTMLElement | null;
+  /** A capture limit (px) for the palm at this screen point, or null for the
+   *  normal reach. The floor plan in hand edit with a drawing tool returns a
+   *  small one: there a fist tap belongs to the plan, so only a button right
+   *  next to the palm may take the highlight. */
+  captureLimit?: (p: Pt) => number | null;
 }
 
 /** Button-like controls only: no text fields, sliders or our own layers. */
@@ -357,7 +362,9 @@ export function createPalmHighlight(opts: PalmHighlightOptions): HighlightHook &
         smooth = smooth ? { x: smooth.x + (raw.x - smooth.x) * 0.5, y: smooth.y + (raw.y - smooth.y) * 0.5 } : raw;
         p = smooth;
       }
-      render(core.update(p, targets, now, { w: innerWidth, h: innerHeight }, ctx.open));
+      const limit = p ? opts.captureLimit?.(p) ?? null : null;
+      const cands = limit === null ? targets : targets.filter((t) => distToRect(p!, t.rect) <= limit);
+      render(core.update(p, cands, now, { w: innerWidth, h: innerHeight }, ctx.open));
     },
     current: () => (active ? core.view.current : null),
     forced: (now) => (active && now - lastPalmAt <= HIGHLIGHT_FORCE_MS ? core.view.current : null),

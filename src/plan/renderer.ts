@@ -973,6 +973,7 @@ export function createPlanRenderer(
     aim(clientX, clientY, radiusPx = DEFAULT_AIM_RADIUS_PX) {
       return aimAt(clientX, clientY, radiusPx);
     },
+    handHost: () => ({ ctx, tools: toolCtl }),
     toggle3D,
     is3D: () => !!view3d || !!loading3d,
     zoom(factor) {

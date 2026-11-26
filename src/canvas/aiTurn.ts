@@ -489,7 +489,11 @@ export interface HistoryEntry {
   at: number;
   undone: boolean;
   /** 'surface' (default) edits a board; 'lang' swaps the UI language pack. */
-  kind?: 'surface' | 'lang' | 'layout';
+  kind?: 'surface' | 'lang' | 'layout' | 'plan';
+  /** kind 'plan': a floor-plan drawing edit — the plan engine's own undo
+   *  steps it is made of, and the board mount it belongs to. */
+  planSteps?: number;
+  planEpoch?: number;
   packBefore?: LanguagePack | null;
   /** kind 'layout': the board's tile layout before / after a nudged move. */
   layoutBefore?: Record<string, { left: number; top: number; width: number; height: number }>;

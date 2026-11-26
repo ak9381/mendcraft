@@ -1459,6 +1459,67 @@
 .mc-plan-extra[aria-pressed="true"] { background: var(--accent-ink, #4F7356); color: #fff; border-color: var(--accent-ink, #4F7356); }
 .mc-plan-extra-status { flex: 1 1 200px; font: 500 16px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
 
+/* ---- floor plan: HAND EDIT (docs/plan/2026-11-26-plan-hands-design.md) ----
+   Everything here shows only while Hands is on (.mc-gestures-on on the root). */
+.mc-plan-hand-toggle { display: none; }
+.mc-gestures-on .mc-plan-hand-toggle { display: inline-block; }
+.mc-plan-hand-banner, .mc-plan-hand-bar, .mc-plan-hot-layer { display: none; }
+/* Big hit targets for a hand: every palette tool is at least 64 x 56. */
+.mc-gestures-on .mc-plan-board .mc-palette { grid-template-rows: repeat(auto-fill, 56px); gap: 6px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn { min-width: 64px; min-height: 56px; border-radius: 12px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn .mc-ico { font-size: 20px; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn .mc-lbl { font-size: 13px; font-weight: 600; }
+.mc-gestures-on .mc-plan-board .mc-palette-btn.active { background: #FBE9B7; border-color: #9A5F1C; color: #2B2B2B; }
+.mc-gestures-on .mc-plan-board .mc-flyout { top: 0; grid-template-columns: repeat(3, 72px); gap: 6px; }
+.mc-gestures-on .mc-plan-board .mc-fsctl .mc-palette-btn { min-width: 56px; min-height: 56px; }
+.mc-gestures-on .mc-plan-board .mc-props .mc-props-step,
+.mc-gestures-on .mc-plan-board .mc-props .mc-props-actions button { min-width: 56px; min-height: 56px; font-size: 15px; }
+.mc-gestures-on .mc-plan-extra { min-height: 56px; }
+
+/* The mode banner: what the hand will do, and the live size in large type. */
+.mc-gestures-on .mc-plan-hand-on .mc-plan-hand-banner:not([hidden]) {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+  position: absolute; top: 8px; left: 180px; right: 136px; z-index: 29;
+  padding: 8px 14px; border-radius: 14px; background: rgb(43 43 43 / 0.92); color: #fff;
+  font: 600 16px/1.3 system-ui, sans-serif; pointer-events: none; box-shadow: 0 4px 14px rgb(0 0 0 / 0.2);
+}
+.mc-plan-hand-banner.is-live { background: rgb(79 115 86 / 0.96); }
+.mc-plan-hand-text { flex: 1 1 220px; min-width: 0; }
+.mc-plan-hand-readout { font: 800 26px/1.1 system-ui, sans-serif; color: #FFC83D; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-plan-hand-readout[hidden] { display: none; }
+
+/* The action bar for the selected element: real buttons, 56 px tall. */
+.mc-gestures-on .mc-plan-hand-on .mc-plan-hand-bar:not([hidden]) {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  position: absolute; left: 180px; right: 72px; bottom: 44px; z-index: 31;
+}
+.mc-plan-hand-btn {
+  min-width: 88px; min-height: 56px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+  border: 2px solid var(--border, #E4E0D8); background: var(--panel, #fff); color: var(--text, #2B2B2B);
+  font: 700 17px/1 system-ui, sans-serif; box-shadow: 0 2px 8px rgb(0 0 0 / 0.14);
+}
+.mc-plan-hand-btn:focus-visible { outline: 3px solid var(--focus, #5A7BA6); outline-offset: 2px; }
+.mc-plan-remove { border-color: #B5453A; color: #8E2F26; }
+.mc-plan-size { display: flex; align-items: center; gap: 6px; padding: 4px; border-radius: 14px; background: rgb(255 255 255 / 0.94); border: 2px solid var(--border, #E4E0D8); }
+.mc-plan-size-value { min-width: 116px; text-align: center; font: 700 17px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; color: var(--text, #2B2B2B); }
+
+/* Element handles for the palm highlight: they never take the hit themselves
+   (pointer-events: none), so a mouse still clicks the drawing underneath. */
+.mc-gestures-on .mc-plan-hand-on .mc-plan-hot-layer { display: block; position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.mc-plan-hot {
+  position: absolute; box-sizing: border-box; padding: 0; margin: 0; pointer-events: none; background: transparent;
+  border: 2px solid transparent; border-radius: 50%; font-size: 0; color: transparent;
+}
+/* What you see is a small dot; the handle itself stays 32–60 px for the palm. */
+.mc-plan-hot::after { content: ''; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: #F2C14E; border: 1.5px solid #9A5F1C; box-sizing: border-box; }
+.mc-plan-hot.hand-hover { border-style: solid; border-color: #E0A800; background: rgb(242 193 78 / 0.18); }
+@media (max-width: 600px) {
+  .mc-gestures-on .mc-plan-hand-on .mc-plan-hand-banner:not([hidden]) { left: 84px; right: 8px; font-size: 14px; }
+  .mc-gestures-on .mc-plan-hand-on .mc-plan-hand-bar:not([hidden]) { left: 84px; right: 8px; }
+  .mc-plan-hand-readout { font-size: 20px; }
+}
+
+
 /* The AI monitor is a second-display tool: never offered on a phone. */
 .mc-phone [data-cmd="monitor"] { display: none; }
 

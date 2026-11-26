@@ -29,6 +29,7 @@ import type { PlanDoc } from '../plan/doc';
 import { createPlanRenderer } from '../plan/renderer';
 import { beginTwoHandDraw, beginTwoHandMeasure, beginTwoHandSession, TAPE_KEEP_MS, type TwoHandSession, type TwoHandTape } from '../plan/twoHandSession';
 import { snapToGrid } from '../plan/snap';
+import { mountPlanHandSurface, type PlanHandSurface } from './planHandSurface';
 import type { ViewportHandle } from '../core/controller';
 import type { HandSurface } from './handPointer';
 import { buildPlanTemplate } from '../plan/templates';
@@ -89,11 +90,29 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         <button type="button" class="mc-plan-extra" data-extra="check" @click=${() => this.runExtra('check')}>Check</button>
         <button type="button" class="mc-plan-extra" data-extra="3d" aria-pressed=${this.is3d ? 'true' : 'false'} @click=${() => this.runExtra('3d')}>3D</button>
         <button type="button" class="mc-plan-extra" data-extra="dxf" @click=${() => this.runExtra('dxf')}>DXF</button>
+        <button type="button" class="mc-plan-extra mc-plan-hand-toggle" data-extra="hands" aria-pressed="true" title="Hand edit: a fist on the plan draws and moves things. Off: a fist moves the board." @click=${() => this.toggleHandEdit()}>Hand edit</button>
         <span class="mc-plan-extra-status" role="status" aria-live="polite"></span>
       </div><div class="mc-plan-board" tabindex="0" aria-label="Floor plan drawing area" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
   }
   private is3d = false;
   private extraCtl: ReturnType<typeof createPlanController> | null = null;
+  private handSurface: PlanHandSurface | null = null;
+  /** Hand edit on/off for this board (the toolbar switch; a real button, so
+   *  the palm highlight + thumbs-up can press it). Returns the new state. */
+  toggleHandEdit(on?: boolean): boolean {
+    const hs = this.handSurface;
+    if (!hs) return false;
+    const next = on ?? !hs.enabled();
+    hs.setEnabled(next);
+    this.querySelector('.mc-plan-hand-toggle')?.setAttribute('aria-pressed', next ? 'true' : 'false');
+    const status = this.querySelector<HTMLElement>('.mc-plan-extra-status');
+    if (status) status.textContent = next ? 'Hand edit on: a fist on the plan draws and moves things.' : 'Hand edit off: a fist on the plan moves the board.';
+    return next;
+  }
+  /** Canvas Undo for one plan edit (an `mc-plan-edit` history entry). */
+  undoPlanEdit(steps: number, epoch: number): number {
+    return this.handSurface?.undo(steps, epoch) ?? 0;
+  }
   /** Accessibility check / 3D / DXF for this board. Returns the line shown (and
    *  spoken by the canvas). Local only: no model call. */
   runExtra(kind: PlanExtra): string {
@@ -115,6 +134,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     if (!this.view?.toggle3D) return set('3D is not available on this board.');
     this.is3d = this.view.toggle3D(!this.is3d);
     this.querySelector('[data-extra="3d"]')?.setAttribute('aria-pressed', this.is3d ? 'true' : 'false');
+    this.handSurface?.refresh(true);
     return set(localize(this.is3d ? 'view3d' : 'view2d', resolveLanguage('en')));
   }
   override updated() {
@@ -124,6 +144,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     const key = `${p.boardId}:${p.template}`;
     if (this.mounted === key) return;
     this.mounted = key;
+    this.handSurface?.dispose();
+    this.handSurface = null;
     this.view?.dispose();
     host.innerHTML = '';
     const controller = createPlanController();
@@ -132,6 +154,11 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     controller.applyGenerated?.({ ops: buildPlanTemplate(p.template) });
     const view = createPlanRenderer(host, controller, () => {});
     this.view = view;
+    // Hand edit (the live fist pipeline): banner, element handles, action bar
+    // and the edit journal behind the canvas Undo. See planHandSurface.ts.
+    const handEdit = mountPlanHandSurface({ host, board: this, controller, view });
+    this.handSurface = handEdit;
+    this.querySelector('.mc-plan-hand-toggle')?.setAttribute('aria-pressed', 'true');
     // Hand parity: the canvas hand pointer only clicks controls, so a pinch on
     // the drawing area itself did nothing (no walls, no select, no move). Expose
     // the plan's own pinch API (the one the old studio fed) as a hand surface.
@@ -146,7 +173,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     (host as HTMLElement & { __mcPlanDoc?: () => unknown }).__mcPlanDoc = () => controller.snapshot();
     (host as HTMLElement & { __mcPlanPick?: (x: number, y: number) => string | null }).__mcPlanPick = (x, y) => view.pick?.(x, y) ?? null;
     (host as HTMLElement & { __mcHandSurface?: HandSurface }).__mcHandSurface = {
-      hover: (x, y) => { additiveNext = false; view.hover?.(x, y); }, // hand open again: a stale hold never carries over
+      ...(handEdit ? { handEdit } : {}),
+      hover: (x, y) => { additiveNext = false; if (!handEdit?.hand.busy()) view.hover?.(x, y); }, // hand open again: a stale hold never carries over
       // Nothing grabbed (Select tool on empty floor) pans the plan, the same
       // as a mouse drag on empty floor.
       beginDrag: (x, y) => {
@@ -216,6 +244,8 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
   }
   override disconnectedCallback() {
     super.disconnectedCallback();
+    this.handSurface?.dispose();
+    this.handSurface = null;
     this.view?.dispose();
     this.view = null;
     this.mounted = null;
