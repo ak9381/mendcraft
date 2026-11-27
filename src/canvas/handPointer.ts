@@ -1230,7 +1230,7 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
       else { openRun += 1; fistRun = 0; if (openSince < 0) openSince = t; }
       releasing = false;
       if (!fisted) {
-        if (fistRun > 0 && heldFor(fistStartT, t, framesToMs(HAND_FEEL.fistCloseFrames), framePeriod)) fisted = true;
+        if (fistRun >= 2 && heldFor(fistStartT, t, framesToMs(HAND_FEEL.fistCloseFrames), framePeriod)) fisted = true;
       } else if (!rawFist) {
         const open = grabbing
           ? openRun >= HAND_FEEL.releaseGraceFrames && t - openSince >= HAND_FEEL.releaseGraceMs

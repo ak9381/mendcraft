@@ -152,14 +152,16 @@ export function heldFor(since: number, now: number, ms: number, periodMs: number
 }
 
 /** The camera's frame interval, measured from the pictures themselves
- *  (smoothed, 4–50 ms; 30 fps until two pictures have been seen). */
+ *  (smoothed, 4–250 ms so a dim-room 8 fps camera is measured too; 30 fps
+ *  until two pictures have been seen). */
 export interface FramePeriod { tick(now: number): number; readonly ms: number; reset(): void }
 export function createFramePeriod(initialMs = 1000 / 30): FramePeriod {
   let ms = initialMs;
   let last = Number.NaN;
   return {
     tick(now) {
-      if (Number.isFinite(last) && now > last) ms = ms * 0.7 + Math.min(50, Math.max(4, now - last)) * 0.3;
+      // A pause (hand gone, tab hidden) is not the camera's rate: it is skipped.
+      if (Number.isFinite(last) && now > last && now - last <= 250) ms = ms * 0.7 + Math.max(4, now - last) * 0.3;
       last = now;
       return ms;
     },
@@ -485,7 +487,9 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
   let lastBelowAt = -Infinity;
   let lastClickAt = -Infinity;
   const engageMs = cfg.engageMs ?? 80;
-  const gapMs = engageMs;
+  // A gap longer than the hold restarts it — or, on a slow camera (a dim
+  // room, 8–12 fps), longer than one and a half pictures (review sim-3 §6).
+  const gapMs = (p: number): number => Math.max(engageMs, 1.5 * p);
   // engageFrames is a time (framesToMs, see heldFor above). releaseFrames
   // stays a count of pictures: it is the debounce against one bad detection.
   const engageHold = Math.max(engageMs, framesToMs(cfg.engageFrames));
@@ -498,7 +502,7 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
       const p = period.tick(now);
       if (!pinched) {
         if (ratio < on) {
-          if (belowSince < 0 || now - lastBelowAt > gapMs) {
+          if (belowSince < 0 || now - lastBelowAt > gapMs(p)) {
             below = 0;
             belowSince = now;
           }

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // The hand-feel machines: everything that makes camera hands deliberate
 // instead of hair-trigger. Pure, clock-injected, no camera needed.
 import { describe, expect, it } from 'vitest';
@@ -77,6 +78,22 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
   // Review sim-2 §6: one detection per camera picture must not double the
   // engage wait. Engage latency at 30 / 60 / 120 fps stays the old feel
   // (~80 ms, the old 60 Hz loop engaged at ~83 ms), never ~100 ms.
+  // Review sim-3 §6: a dim room can drop the camera to 8–12 fps; a pinch
+  // still engages, on its second closed picture (never on one).
+  it.each([8, 10, 12])('at %i fps (after the camera has run a moment) a held pinch engages on the 2nd picture, never the 1st', (fps) => {
+    const m = createPinchMachine();
+    const dt = 1000 / fps;
+    let i = 0;
+    for (; i < 10; i++) m.update(OPEN, i * dt);
+    expect(m.update(CLOSED, i++ * dt).pinched).toBe(false);
+    expect(m.update(CLOSED, i++ * dt).justDown).toBe(true);
+  });
+
+  it('the fist closes on two pictures, never one (also at 29.97 fps)', () => {
+    const src = readFileSync(new URL('../../src/canvas/handPointer.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/if \(fistRun >= 2 && heldFor\(fistStartT, t, framesToMs\(HAND_FEEL\.fistCloseFrames\), framePeriod\)\) fisted = true;/);
+  });
+
   it.each([[30, 67, 70], [60, 80, 85], [120, 78, 85]])('at %i fps a held pinch engages in %i–%i ms', (fps, lo, hi) => {
     const m = createPinchMachine();
     const dt = 1000 / fps;
