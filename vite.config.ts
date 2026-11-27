@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { assertFirebaseBuildEnv } from './src/firebase/envGuard';
 import { NO_DEBUG_TOKEN_HINT, resolveAppCheckDebugToken } from './src/firebase/debugToken';
+import { buildId, injectServiceWorker, precacheList } from './src/offline/swBuild';
+import { TRACKING_ASSET_URLS, TRACKING_CACHE } from './src/input/trackingAssets';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,13 +225,48 @@ function firebaseEnvGuardPlugin(): Plugin {
   };
 }
 
+/** After `vite build`: fill dist/sw.js with every built file to keep for
+ *  offline, the MediaPipe tracking files and a build id (src/offline/swBuild.ts). */
+function serviceWorkerPrecachePlugin(): Plugin {
+  let outDir = '';
+  let command: 'build' | 'serve' = 'serve';
+  return {
+    name: 'mendcraft-sw-precache',
+    apply: 'build',
+    configResolved(config) {
+      command = config.command;
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      if (command !== 'build') return;
+      const swPath = path.join(outDir, 'sw.js');
+      if (!fs.existsSync(swPath)) return;
+      const files: string[] = [];
+      const walk = (dir: string) => {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) walk(full);
+          else files.push(path.relative(outDir, full).split(path.sep).join('/'));
+        }
+      };
+      walk(outDir);
+      const precache = precacheList(files.sort());
+      const src = fs.readFileSync(swPath, 'utf8');
+      if (!src.includes('__MC_BUILD__')) return; // already filled
+      fs.writeFileSync(swPath, injectServiceWorker(src, {
+        precache, tracking: TRACKING_ASSET_URLS, trackingCache: TRACKING_CACHE, build: buildId(precache, TRACKING_ASSET_URLS),
+      }));
+    },
+  };
+}
+
 export default defineConfig(({ mode, command }) => {
   // A debug token must never be inlined into a production bundle: Vite inlines
   // every VITE_* value it finds, and an already-set process value wins over
   // the .env files, so blank it for `vite build`.
   if (command === 'build') process.env.VITE_APPCHECK_DEBUG_TOKEN = '';
   return {
-  plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin(mode, command)],
+  plugins: [firebaseEnvGuardPlugin(), appCheckDebugLocalPlugin(mode, command), serviceWorkerPrecachePlugin()],
   build: {
     rollupOptions: {
       // The smart canvas ships as an extra page beside the legacy studio.
