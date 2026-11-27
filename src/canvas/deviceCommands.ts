@@ -92,7 +92,7 @@ const VERBS = new Set([
 ]);
 // (No bare "warm" / "cool": "cool", "ok cool", "warm welcome" are talk, not
 // orders. "warmer", "cooler" and "make it warm" still act.)
-const SHORT_HEADS = new Set(['lamp', 'lamps', 'light', 'lights', 'music', 'song', 'track', 'speaker', 'speakers', 'volume', 'everything', 'room']);
+const SHORT_HEADS = new Set(['lamp', 'lamps', 'light', 'lights', 'bulb', 'bulbs', 'music', 'song', 'track', 'speaker', 'speakers', 'volume', 'everything', 'room']);
 const DETERMINERS = new Set(['the', 'my', 'our', 'all', 'both', 'every']);
 /** Question, negation, claim and tense words: their presence means "not an order". */
 const REFUSE = new RegExp('\\b(?:' + [
@@ -260,6 +260,13 @@ function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?:
     }
   }
 
+  // Final review 5: a speaker named with no lamp word is never a lamp. With
+  // no speaker here, say so; with one, an order it has no verb for is chat.
+  if (/\bspeakers?\b/.test(t) && !/\b(?:lamps?|lights?|bulbs?)\b/.test(t)) {
+    if (musics.length) return null;
+    const q = unknownQualifier(t, devices);
+    return { intents: [], say: `There's no ${q ? `${q} ` : ''}speaker here.` };
+  }
   let matched = matchDevices(t, lamps);
   // "turn on the desk lamp" when the only lamp is called "Lamp": that lamp.
   // With several lamps and none called that: say so, never guess, never chat.
@@ -274,7 +281,7 @@ function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?:
   // A music word with no lamp named is about the speaker: never the lamps
   // (with no speaker connected, "volume 40 percent" does nothing here).
   if (!matched.length && /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t)) return null;
-  const hasAllWord = /\b(lights?|lamps?|everything|all|room)\b/.test(t);
+  const hasAllWord = /\b(lights?|lamps?|bulbs?|everything|all|room)\b/.test(t);
 
   // Percent is read from the raw text — norm() strips the "%" sign.
   const percentValue = percentOf(text);
