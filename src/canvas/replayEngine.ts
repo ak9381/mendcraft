@@ -147,6 +147,20 @@ export function recordingEngines(
           return reply;
         } finally { flight(-1); }
       },
+      // Nano handing a turn off to Gemini streams the handoff engine directly:
+      // that turn is in flight too (a recording waits for it), and it is a
+      // cloud reply, so it is never filed in Nano's slot.
+      ...(engine.handoff ? { handoff: {
+        ...engine.handoff,
+        async stream(prompt: string, onText: (t: string) => void, opts?: Parameters<NonNullable<typeof engine.handoff>['stream']>[2]) {
+          flight(1);
+          try {
+            const reply = await engine.handoff!.stream(prompt, onText, opts);
+            o.onSkip?.(`Not recorded: a ${kind} turn ${id} handed off to ${engine.handoff!.id}.`);
+            return reply;
+          } finally { flight(-1); }
+        },
+      } } : {}),
     };
   };
   const out: Partial<Record<EngineId, EngineFactory>> = {};

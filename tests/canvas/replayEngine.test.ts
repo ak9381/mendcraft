@@ -131,6 +131,26 @@ describe('recording engines', () => {
     expect(e.routeLine).toBe('nano live');
   });
 
+  it('a turn Nano hands off to Gemini counts in flight while it streams, and is never filed as Nano', async () => {
+    const { got, sink } = sinkOf();
+    const skipped: string[] = [];
+    const flights: number[] = [];
+    let release: (v: string) => void = () => {};
+    const handoff: SurfaceEngine = { id: 'gemini', sim: false, stream: () => new Promise<string>((r) => { release = r; }) };
+    const nanoWithHandoff = () => ({ id: 'nano' as const, sim: false, stream: async () => { throw new Error('too long'); }, handoff });
+    const rec = recordingEngines({ nano: nanoWithHandoff }, sink, { onSkip: (l) => skipped.push(l), onFlight: (n) => flights.push(n) });
+    const e = rec.nano!('board')!;
+    await expect(e.stream('p', () => {})).rejects.toThrow('too long');
+    expect(e.handoff).toBeDefined();
+    const handed = e.handoff!.stream('cloud p', () => {});
+    expect(flights.at(-1)).toBe(1); // the handed-off Gemini turn is in flight
+    release('{"kind":"room","tiles":[]}');
+    expect(await handed).toBe('{"kind":"room","tiles":[]}');
+    expect(flights.at(-1)).toBe(0);
+    expect(got).toEqual([]);
+    expect(skipped.at(-1)).toMatch(/handed off to gemini/);
+  });
+
   it('a step served by the other engine (no Nano: Gemini in the nano slot) is never filed as Nano', async () => {
     const { got, sink } = sinkOf();
     const skipped: string[] = [];
