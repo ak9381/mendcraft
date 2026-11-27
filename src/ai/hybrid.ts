@@ -651,8 +651,11 @@ export async function streamCanvasPlan(prompt: string, onChunk?: (text: string) 
  * words (App Check 403, no connection, quota, …) instead of a silent null —
  * the canvas shows that line and offers Retry; it never substitutes a draft.
  */
+/** The line a text-shaped (chat) cloud call adds to its prompt: those bytes
+ *  leave too, and the canvas books them (final review M6). */
+export const TEXT_REPLY_SUFFIX = '\nReply as JSON: {"reply": string}';
 export async function streamCanvasPlanOrThrow(prompt: string, onChunk?: (text: string) => void, shape: CanvasReplyShape = 'board', hooks: CanvasCloudHooks = {}): Promise<string> {
-  const got = await runCanvasCloud(shape === 'text' ? `${prompt}\nReply as JSON: {"reply": string}` : prompt, onChunk, shape, hooks);
+  const got = await runCanvasCloud(shape === 'text' ? `${prompt}${TEXT_REPLY_SUFFIX}` : prompt, onChunk, shape, hooks);
   if (got.ok) return got.text;
   const source = got.kind === 'parse' || got.kind === 'empty' ? 'parse' : got.why;
   throw await cloudCallError(source, testOverrides ? undefined : appCheckTokenError, got.nothingSent);

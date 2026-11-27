@@ -141,7 +141,7 @@ import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from 
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
-import { identifyDevice, onNanoBusyHandoff, type VisionTrace } from '../ai/hybrid';
+import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -5436,7 +5436,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         sent: cloud ? 'your words (names redacted). No board data, no device addresses.' : null,
         routeLine: eng.sim && !base.startsWith('SIM') ? `SIM · ${base}` : base,
       };
-      aiSent(text, si, { swarm: false, defer: true });
+      // The cloud adapter adds a reply-format line to a chat call: booked too.
+      aiSent(text, si, { swarm: false, defer: true, ...(cloud ? { extraBytes: utf8ByteLength(TEXT_REPLY_SUFFIX) } : {}) });
       return { prompt: cloud ? protectTurn(text, prompt).promptText : prompt, onCloudSend: () => cloudSent(si) };
     };
     let r: Awaited<ReturnType<typeof openEndedAsk>>;
