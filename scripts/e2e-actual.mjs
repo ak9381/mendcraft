@@ -991,7 +991,8 @@ async function persist(page) {
   const desk = () => { const s = window.__mcCanvas.snapshot(); const f = s.frames.find((x) => x.title === 'Desk'); return f ? (s.surfaces[f.id]?.tiles ?? []).length : -1; };
   check((await page.evaluate(desk)) === 1, 'the stored board opens with its content');
   await page.evaluate(() => window.__mcCanvas.run('new board'));
-  await sleep(1200); // past the save debounce
+  // Past the save debounce, however slow the machine is.
+  await waitFor(page, () => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1')).frames.length === 2; } catch { return false; } }, 10_000, 'the new board is saved');
   const saved = await page.evaluate(() => localStorage.getItem('mc.canvas.v1'));
   check(!!saved && JSON.parse(saved).frames.length === 2, 'both boards are in the saved layout');
   if (!(await open(page, 'sim=1&hands=0'))) return;
@@ -1001,7 +1002,12 @@ async function persist(page) {
   // ?fresh: blank, but the layout AND the stored board are copied aside first.
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check((await frames(page)).length === 0, 'a second ?fresh starts blank');
-  check(await page.evaluate((s) => localStorage.getItem('mc.canvas.v1.beforeFresh') === s, saved), 'the layout before it is kept under beforeFresh');
+  // The boards, not the bytes: the reload in between may write the layout
+  // again with a camera a pixel off (its fly-in is measured as the page
+  // settles, later on a loaded machine), so a byte compare was flaky.
+  const boardsOf = (raw) => { try { const d = JSON.parse(raw); return JSON.stringify({ frames: d.frames.map((f) => ({ id: f.id, kind: f.kind, title: f.title })).sort((x, y) => x.id.localeCompare(y.id)), surfaces: Object.keys(d.surfaces ?? {}).sort().map((k) => [k, (d.surfaces[k]?.tiles ?? []).length]) }); } catch { return null; } };
+  const keptLayout = await page.evaluate(() => localStorage.getItem('mc.canvas.v1.beforeFresh'));
+  check(!!keptLayout && boardsOf(keptLayout) !== null && boardsOf(keptLayout) === boardsOf(saved), 'the layout before it is kept under beforeFresh');
   const keptRows = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1.beforeFresh.artifacts') ?? 'null'); } catch { return null; } });
   check(Array.isArray(keptRows) && keptRows.some((a) => a.id === 'board-f1' && a.data?.plan?.tiles?.length === 1), 'the stored board, with its content, is kept under beforeFresh.artifacts');
   // A layout this build cannot read: copied aside, said once, never overwritten.

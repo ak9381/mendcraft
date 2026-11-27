@@ -2442,7 +2442,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function handsPlanBoard(id: string): boolean {
     return !phoneShell && !!gestures?.isActive() && !!world.querySelector(`[data-frame="${id}"] mc-plan-board`);
   }
-  async function focus(id: string): Promise<void> {
+  /** `quiet`: the hint is not said (the boot report must stay on screen). */
+  async function focus(id: string, o: { quiet?: boolean } = {}): Promise<void> {
     let f = reg.get(id); if (!f) return;
     focusId = id; lastFocus = id; phoneOverview = false;
     sync(); updateDock();
@@ -2450,7 +2451,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     refitPlans(id); // the drawing fits the board as shown now (it may have been fitted at another zoom)
-    say(`Editing ${f.title}. Say “show everything” to zoom out.`);
+    if (!o.quiet) say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
   async function overview(): Promise<void> {
     focusId = null; phoneOverview = phoneShell; sync(); clearDock();
@@ -6764,6 +6765,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // Boot report: stored items that failed their check (one terminal line
   // each; the rest loaded), and storage that can't keep anything — said once.
+  // It stays on the status line: the restored focus below says no hint over it.
+  let bootReported = false;
   {
     const dropped = opts.dropped ?? [];
     for (const d of dropped) panels.forEngine('nano').log('note', `${droppedLogLine(d)}`);
@@ -6774,7 +6777,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     const lines = [dropped.length ? droppedSayLine(dropped.length) : '', opts.storeNote ?? ''].filter(Boolean);
     if (opts.storeNote) panels.forEngine('nano').log('note', opts.storeNote);
-    if (lines.length) say(lines.join(' '));
+    if (lines.length) { say(lines.join(' ')); bootReported = true; }
   }
 
   sync();
@@ -6787,7 +6790,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     applyEditLock();
     fitPhone();
   } else if (focusId) {
-    void focus(focusId);
+    void focus(focusId, { quiet: bootReported });
   } else if (!stored) {
     void overview();
   }
