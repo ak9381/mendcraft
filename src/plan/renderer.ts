@@ -99,13 +99,25 @@ export function createPlanRenderer(
     return { left: pal && pal.width > 8 ? pal.right - host.left + 12 : 16, top: 16, right: 16, bottom: 44 };
   }
 
+  /** On-screen px per drawing px: the canvas camera scales the board (an
+   *  overview, a reload while zoomed out), the drawing is laid out at 1:1. */
+  function screenPerLayout(rect: DOMRect): number {
+    const w = svg.clientWidth;
+    const k = w > 0 && rect.width > 0 ? rect.width / w : 1;
+    return Number.isFinite(k) && k > 0.01 ? k : 1;
+  }
+
   function fitView(): void {
     fitSig = boundsSig();
     const b = planBounds(doc());
     const rect = svg.getBoundingClientRect();
-    const inset = handFit ? handInsets() : overlayInsets();
-    const W = Math.max(120, (rect.width || 800) - inset.left - inset.right);
-    const H = Math.max(120, (rect.height || 600) - inset.top - inset.bottom);
+    // Fit in the drawing's own px (not the camera-scaled screen px): a fit
+    // made while the canvas is zoomed out stays right once it is focused.
+    const k = screenPerLayout(rect);
+    const raw = handFit ? handInsets() : overlayInsets();
+    const inset = { left: raw.left / k, top: raw.top / k, right: raw.right / k, bottom: raw.bottom / k };
+    const W = Math.max(120, ((rect.width / k) || 800) - inset.left - inset.right);
+    const H = Math.max(120, ((rect.height / k) || 600) - inset.top - inset.bottom);
     if (!b) {
       scale = 0.08;
       originX = inset.left + W / 2;

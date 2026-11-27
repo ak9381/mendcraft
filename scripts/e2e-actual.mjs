@@ -805,6 +805,26 @@ async function floorplan(page) {
   check(!!back && back.rooms.includes('Study') && back.rooms.length === 6, `the drawing is back with the study (got ${JSON.stringify(back)})`);
   await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 10_000, 'the drawing is on screen after the reload')
     .then((ok) => ok && check(true, 'the drawing is on screen after the reload'));
+  // The drawing is fitted to its board after a reload, and again on focus (live finding: off-centre, clipped left).
+  const fitted = async (what) => {
+    await sleep(600);
+    const m = await page.evaluate(measurePlan);
+    const d = m.drawing, h = m.host;
+    const inside = !!d && !!h && d.left >= h.left - 1 && d.right <= h.right + 1 && d.top >= h.top - 1 && d.bottom <= h.bottom + 1;
+    const off = d && h ? Math.abs((d.left + d.right) / 2 - (h.left + h.right) / 2) / Math.max(1, h.width) : 1;
+    check(inside && off < 0.12, `${what}: the drawing fits inside its board, centred (drawing ${JSON.stringify(d && [Math.round(d.left), Math.round(d.right), Math.round(d.top), Math.round(d.bottom)])} in board ${JSON.stringify(h && [Math.round(h.left), Math.round(h.right), Math.round(h.top), Math.round(h.bottom)])}, off-centre ${(off * 100).toFixed(1)} %)`);
+  };
+  await fitted('after a reload');
+  await page.evaluate(async () => { const f = window.__mcCanvas.frames().find((x) => x.kind === 'plan'); await window.__mcCanvas.focus(f.id); });
+  await fitted('focused after a reload');
+  // Reloaded while zoomed out (the camera is kept): the drawing still fits, there and once focused.
+  await page.evaluate(() => window.__mcCanvas.overview());
+  await sleep(400); // the camera is saved
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg polygon'), 10_000, 'the drawing is on screen after a zoomed-out reload'))) return;
+  await fitted('reloaded zoomed out');
+  await page.evaluate(async () => { const f = window.__mcCanvas.frames().find((x) => x.kind === 'plan'); await window.__mcCanvas.focus(f.id); });
+  await fitted('focused after a zoomed-out reload');
   await sleep(1200); // past the save debounce: loading rewrites nothing
   const after = (await planArtifacts(page)).find((a) => a.kind === 'plan');
   check(after?.v === 2 && after.by === 'replay', `loading keeps the drawing's version and maker (got ${JSON.stringify(after && [after.v, after.by])})`);

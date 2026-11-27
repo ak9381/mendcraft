@@ -2308,11 +2308,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const ins = insets();
     return { w: Math.floor(vp().w - ins.left - ins.right - 32), h: Math.max(360, Math.floor(vp().h - ins.top - (ins.bottom ?? 0) - 32)) };
   }
+  /** Fit the drawings on board `id` (or every board) to how they show now. */
+  function refitPlans(id?: string): void {
+    const sel = id ? `[data-frame="${CSS.escape(id)}"] mc-plan-board` : 'mc-plan-board';
+    for (const pb of world.querySelectorAll<HTMLElement & { refitView?: () => void }>(sel)) pb.refitView?.();
+  }
   function refit(id: string): void {
     sync(); persist();
     const f = reg.get(id);
     if (!f || focusId !== id) return;
-    void flyTo(focusCam(fitBoardWidth(f))).then(() => window.dispatchEvent(new Event('resize')));
+    void flyTo(focusCam(fitBoardWidth(f))).then(() => { window.dispatchEvent(new Event('resize')); refitPlans(id); });
   }
   function resizeBoard(id: string, dir: 1 | -1): void {
     const f = reg.get(id); if (!f) return;
@@ -2360,6 +2365,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     f = fitBoardWidth(f);
     await flyTo(focusCam(f));
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
+    refitPlans(id); // the drawing fits the board as shown now (it may have been fitted at another zoom)
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
   async function overview(): Promise<void> {

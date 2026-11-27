@@ -93,6 +93,13 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.view?.render();
     return next;
   }
+  /** Fit the drawing to the board as it is shown now (the canvas calls this
+   *  once a board is focused or restored: a resize event never reached the
+   *  plan, so a fit made at another zoom stayed off-centre). Not in 3D. */
+  refitView(): void {
+    if (this.is3d) return;
+    this.view?.fit?.();
+  }
   /** This board's plan id and its drawing right now (for saving with the board). */
   planState(): { boardId: string; doc: unknown } | null {
     const p = this.controller?.props;
