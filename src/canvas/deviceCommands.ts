@@ -51,6 +51,19 @@ const curBright = (d: DeviceRef) => (typeof d.brightness === 'number' ? d.bright
 const curVol = (d: DeviceRef) => (typeof d.volume === 'number' ? d.volume : 50);
 const labelList = (ds: readonly DeviceRef[], all: boolean) => (all ? 'everything' : ds.map((d) => d.label).join(' and '));
 
+export const VOLUME_AT_MAX_LINE = 'The speaker is already at full volume.';
+export const VOLUME_AT_MIN_LINE = 'The speaker is already at the lowest volume.';
+
+/** A "louder" / "softer" that would change no speaker (every one is already
+ *  at the limit, by its real volume): the line to say instead of "Louder.".
+ *  Null when the step moves something, or a volume is not known yet. */
+export function volumeStepNoop(dc: DeviceCommandResult, volumeOf: (deviceId: string) => number | undefined): string | null {
+  if ((dc.statusKey !== 'louder' && dc.statusKey !== 'softer') || !dc.intents.length) return null;
+  const still = dc.intents.every((i) => { const v = volumeOf(i.deviceId); return typeof v === 'number' && i.volume === v; });
+  if (!still) return null;
+  return dc.statusKey === 'louder' ? VOLUME_AT_MAX_LINE : VOLUME_AT_MIN_LINE;
+}
+
 /** The volume words she may say, and the level each one sets. */
 const SPOKEN_VOLUMES: readonly { key: string; label: string; volume: number }[] = [
   { key: 'quiet', label: 'Quiet', volume: 20 },

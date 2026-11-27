@@ -74,7 +74,7 @@ import {
   SplitTileElement, StatTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
-import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
+import { resolvePointedDevice, volumeStepNoop, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, deviceClassOf, formIntents, hasLampTile, planHasBindings, pressIntent, visualPress, volumeReadNeeded, type BindingResult, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
@@ -5684,6 +5684,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (dc.statusKey === 'louder' || dc.statusKey === 'softer') {
           const unknown = dc.intents.map((i) => i.deviceId).filter((id) => { const d = store.get(id); return !!d && typeof d.volume !== 'number'; });
           if (unknown.length) { withVolumeRead(unknown, () => { run(text); }); return true; }
+          // Already at the limit: nothing is sent, and it is not called "Louder."
+          const noop = volumeStepNoop(dc, (id) => store.get(id)?.volume);
+          if (noop) { say(noop, { speak: true }); return true; }
         }
         const acts: Promise<DeviceState>[] = [];
         for (const i of dc.intents) {
