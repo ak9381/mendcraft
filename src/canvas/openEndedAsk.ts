@@ -257,8 +257,15 @@ const NOT_CLAIM_CLAUSE: RegExp[] = [
   /^\s*(?:(?:and|so|but)\s+)?you\s+(?:can|could|may|might|should|will\s+need\s+to)\b/i,
   /^\s*(?:and\s+|but\s+|so\s+)?(?:if|when|whenever|whether|once|unless|until|while|before|after)\b/i,
   /^\s*(?:(?:sorry|unfortunately|honestly|but|and|so|oh|hmm)[\s,!]+)*I\s*(?:can['’]?t|cannot|can\s+not|could\s*n['’]?t|could\s+not|am\s+not|['’]m\s+not|am\s+unable|['’]m\s+unable|don['’]?t|do\s+not|didn['’]?t|did\s+not|haven['’]?t|have\s+not|have\s+no|never)\b/i,
-  /\b(?:might|may|maybe|perhaps|possibly|not\s+sure|unsure|I\s+think|I\s+guess|I\s+believe|probably|no\s+idea)\b/i,
-  /\b(?:usually|typically|generally|normally|often|sometimes|in\s+most\s+homes|most\s+people|many\s+people|at\s+night)\b/i,
+  /\b(?:might|may|maybe|possibly|not\s+sure|unsure|no\s+idea)\b/i,
+  // A general truth — but "I usually keep the lamp on" is about her lamp.
+  /^(?![^]*\b(?:I|your)\b)[^]*\b(?:usually|typically|generally|normally|often|sometimes|in\s+most\s+homes|most\s+people|many\s+people)\b/i,
+  // Praise for what SHE made ("a lovely dashboard you've built", "your plan sounds well thought out").
+  /\byou(?:['’]ve|\s+have|['’]re|\s+are)?\s+(?:just\s+|really\s+|so\s+)?(?:built|made|designed|drawn|drew|done|did|created|set\s+up|put\s+together|planned|added|arranged)\b/i,
+  /\b(?:sounds?|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?(?:well|lovely|great|good|nice|wonderful|thoughtful|tidy|cosy|cozy|beautiful|clever|smart)\b|\bwell\s+(?:thought\s+out|done|made|planned)\b/i,
+  // A purpose ("To turn the lamp on, say …") and a definition ("A lamp is on when …").
+  /^\s*(?:in\s+order\s+)?to\s+[a-z]+\b/i,
+  /^(?![^]*\b(?:your|you|I|we|now|just)\b)\s*(?:a|an|any|every|each)\s+[a-z]/i,
   /^\s*(?:(?:great|good|nice|wonderful|oh|aw+|lovely)[\s,!]+)*(?:I\s*['’]m\s+|I\s+am\s+)?(?:so\s+|really\s+|very\s+)?(?:glad|happy|pleased|relieved)\b(?!\s+to\b(?!\s+hear))/i,
   /\bin\s+(?:my|your)\s+(?:imagination|head|mind|dreams?)\b|\bin\s+(?:the|a|this)\s+(?:story|song|poem|joke|game)\b/i,
   /\bready\s+when(?:ever)?\s+you(?:['’]re|\s+are)\b/i,
@@ -270,17 +277,23 @@ const NOT_CLAIM_CLAUSE: RegExp[] = [
 // names a thing of the app together with a state, action or result word is a
 // claim — chat can see and change none of them. And a pronoun that was
 // switched, dimmed or set ("I dimmed it a little", "Changed it to daylight").
-const APP_NOUN = /\b(?:lamps?|lights?|bulbs?|speakers?|music|songs?|tracks?|playlists?|volume|brightness|colou?rs?|gimbals?|stand|camera|boards?|tiles?|plans?|floor\s*plans?|rooms?|bed\s*rooms?|kitchens?|bath\s*rooms?|stud(?:y|ies)|dashboards?|language|kannada|phones?|scenes?|modes?|heat(?:er|ing)|fans?)\b/i;
-const RESULT_WORD = new RegExp(String.raw`\b(?:turned|switched|changed|added|moved|removed|deleted|saved|built|updated|connected|paired|opened|closed|dimmed|brightened|lowered|raised|muted|unmuted|paused|resumed|stopped|skipped|pointed|playing|following|tracking|glowing|went|came|rebuilt|now|ready|done(?!\s+(?:by|from|with)\b)|set\s+(?:to|up)|at\s+(?:full|max(?:imum)?|min(?:imum)?|\d+(?:\.\d+)?\s*(?:%|percent))|(?:has|have|had|was|were)\s+been\s+\w+ed|(?:up|down|back)\s+(?:a\s+(?:notch|bit|little)|again))\b|\b(?:is|are|['’]s|['’]re|now|made|got|turned|went|it)\s+(?:(?:a\s+)?(?:bit|little|lot|much)\s+)?(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|larger|smaller|wider)\b|\b(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|larger|smaller|wider)\s+(?:now|for\s+you)\b|:\s*\d+\s*(?:%|percent)|\b(?:volume|brightness|music|lights?|lamps?|it|them|back|way|all)\s+(?:up|down|back\s+on)(?=\s*(?:[.!…]|$))|\bback\s+(?:up|on)(?=\s*(?:[.!…]|$))|\b(?:brighter|dimmer|warmer|cooler|louder|quieter|softer)\s+(?:light|lights|lamp|music|volume|colou?r)\s*$|^\s*now\s+playing\b|(?:\b(?:is|are|['’]s|['’]re|now|to)\s+|:\s*)(?:open|set|blue|red|green|purple|orange|yellow|pink|white|warm\s+white|cool\s+white|daylight)\b|\b(?:on|off|out)(?=\s*(?:[.!…:]|$|now\b|for\s+you\b|again\b|already\b|in\s+a\s+(?:second|moment|minute)\b|and\b))`, 'i');
+const APP_NOUN = /\b(?:reminders?|orders?|bookings?|appointments?|messages?|taxis?|cabs?|walls?|doors?|windows?|sofas?|furniture|iphones?|lamps?|lights?|bulbs?|speakers?|music|songs?|tracks?|playlists?|volume|brightness|colou?rs?|gimbals?|stand|camera|boards?|tiles?|plans?|floor\s*plans?|rooms?|bed\s*rooms?|kitchens?|bath\s*rooms?|stud(?:y|ies)|dashboards?|language|kannada|phones?|scenes?|modes?|heat(?:er|ing)|fans?)\b/i;
+const RESULT_WORD = new RegExp(String.raw`\b(?:placed|booked|sent|scheduled|ordered|shining|gone|pointing|watching|enlarged|pinned|shared|turned|switched|changed|added|moved|removed|deleted|saved|built|updated|connected|paired|opened|closed|dimmed|brightened|lowered|raised|muted|unmuted|paused|resumed|stopped|skipped|pointed|playing|following|tracking|glowing|went|came|rebuilt|now|ready|done(?!\s+(?:by|from|with)\b)|set\s+(?:to|up)|at\s+(?:full|max(?:imum)?|min(?:imum)?|\d+(?:\.\d+)?\s*(?:%|percent))|(?:has|have|had|was|were)\s+been\s+\w+ed|(?:up|down|back)\s+(?:a\s+(?:notch|bit|little)|again))\b|\b(?:is|are|['’]s|['’]re|now|made|got|turned|went|it)\s+(?:(?:a\s+)?(?:bit|little|lot|much)\s+)?(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|larger|smaller|wider)\b|\b(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|larger|smaller|wider)\s+(?:now|for\s+you)\b|:\s*\d+\s*(?:%|percent)|\b(?:volume|brightness|music|lights?|lamps?|it|them|back|way|all)\s+(?:up|down|back\s+on)(?=\s*(?:[.!…]|$))|\bback\s+(?:up|on)(?=\s*(?:[.!…]|$))|\b(?:brighter|dimmer|warmer|cooler|louder|quieter|softer)\s+(?:light|lights|lamp|music|volume|colou?r)\s*$|^\s*now\s+playing\b|(?:\b(?:is|are|['’]s|['’]re|now|to)\s+|:\s*)(?:open|set|blue|red|green|purple|orange|yellow|pink|white|warm\s+white|cool\s+white|daylight)\b|\b(?:on|off|out)(?=\s*(?:[.!…:]|$|now\b|for\s+you\b|again\b|already\b|in\s+a\s+(?:second|moment|minute)\b|and\b))`, 'i');
 const PRONOUN_ACTED = /\b(?:turned|switched|dimmed|brightened|changed|set|paused|muted|played|stopped|lowered|raised|put)\s+(?:it|them|everything|both|all)\b(?!\s+(?:over|around|aside|badly|simply|clumsily|safe|right|straight|across|into\s+words|this\s+way|that\s+way|another\s+way))|\bmade\s+(?:it|them|everything)\s+(?:a\s+(?:bit|little)\s+)?(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|smaller|blue|red|green|purple)\b/i;
-const PRONOUN_STATE = new RegExp(String.raw`\b(?:it|they|everything|both|all)\s*(?:is|are|['’]s|['’]re|has\s+been|have\s+been)\s+(?:now\s+|all\s+|already\s+|still\s+|currently\s+)?(?:switched|turned|dimmed|paused|muted|playing|brighter|dimmer|warmer|cooler|louder|quieter|at\s+\d|(?:on|off)(?=\s*(?:[.!…]|$|now\b|for\s+you\b|right\s+now\b)))`, 'i');
+const PRONOUN_STATE = new RegExp(String.raw`\b(?:it|they|everything|both|all)\s*(?:is|are|['’]s|['’]re|has\s+been|have\s+been)\s+(?:now\s+|all\s+|already\s+|still\s+|currently\s+|probably\s+|definitely\s+|surely\s+)*(?:switched|turned|dimmed|paused|muted|playing|brighter|dimmer|warmer|cooler|louder|quieter|at\s+\d|(?:on|off)(?=\s*(?:[.!…]|$|now\b|for\s+you\b|right\s+now\b)))`, 'i');
 function assertsThingState(text: string): boolean {
   // "can be changed with…" says what is possible, not what happened.
   const t = text.replace(/\b(?:can|could|may|might)\s+(?:also\s+)?be\s+\w+/gi, ' ');
   for (const clause of t.split(/[.!?…;,—–]+/)) {
     if (APP_NOUN.test(clause) && RESULT_WORD.test(clause)) return true;
+    // "I've set a reminder", "I made you a new board", "I kept the lamp on".
+    if (APP_NOUN.test(clause) && /\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|also\s+)?(?:set|made|got|put|kept|left)\b/i.test(clause)) return true;
     if (PRONOUN_ACTED.test(clause) || PRONOUN_STATE.test(clause)) return true;
   }
+  // "Here's your new dashboard.", "Off it goes!", "Okay, quieter now."
+  if (/\bhere\s*(?:is|are|['’]s)\s+(?:your|the)\b/i.test(t) && APP_NOUN.test(t)) return true;
+  if (/\b(?:off|there|away)\s+(?:it|they|she)\s+go(?:es)?\b/i.test(t)) return true;
+  if (/(?:^|[.!?,;:—–]\s*)(?:brighter|dimmer|warmer|cooler|louder|quieter|softer)\s+now\s*(?:[.!…]|$)/i.test(t)) return true;
   return /(?:^|[.!?,;:—–]\s*)(?:finished|sorted|complete|all\s+good\s+to\s+go)\s*(?:[.!…]|$)/i.test(t);
 }
 
@@ -328,7 +341,7 @@ export function promiseGuard(reply: string, asked = ''): { reply: string; replac
 }
 
 /** A clause that could still turn into a promise once its sentence ends. */
-const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST}|made|got|left|kept|had)\b|\bthere\s*(?:['’]s|\s+is|\s+are)\s+now\b|(?:${THING})\s+(?:${STATE}|${APP_PAST})\b`, 'i');
+const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|no|nope|nah|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST}|made|got|left|kept|had)\b|\bthere\s*(?:['’]s|\s+is|\s+are)\s+now\b|(?:${THING})\s+(?:${STATE}|${APP_PAST})\b`, 'i');
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the
