@@ -26,6 +26,21 @@ export const BEFORE_REPAIR_KEY = 'mc.canvas.v1.beforeRepair';
 /** Unreadable docs kept at most (the first under UNREADABLE_KEY). */
 export const MAX_UNREADABLE = 3;
 export const UNREADABLE_LINE = 'Couldn’t open your saved boards — they’re kept safe.';
+/** Said once when the main save of her boards fails (storage full). */
+export const SAVE_FULL_LINE = 'Couldn’t save your boards — storage is full.';
+/** The main save's result → the line to say, once: on the first failure,
+ *  then not again until a save has worked. */
+export function createSaveFailNotice(): { after(ok: boolean): string | null } {
+  let said = false;
+  return {
+    after(ok) {
+      if (ok) { said = false; return null; }
+      if (said) return null;
+      said = true;
+      return SAVE_FULL_LINE;
+    },
+  };
+}
 export const UNSAVED_LINE = 'Couldn’t open your saved boards, and changes in this session won’t be saved.';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key'>> & { length?: number };
@@ -92,13 +107,32 @@ function keepBeforeRepair(storage: Store, raw: string): string | null {
   return i === null ? null : REPAIR_SLOTS[i];
 }
 
+/** About what one origin's localStorage holds (5 MB of UTF-16 ≈ 5M chars,
+ *  keys included). A guess: browsers don't report it. */
+export const STORAGE_QUOTA_CHARS = 5_000_000;
+
+/** Chars still free (a guess from what is stored), or Infinity when the
+ *  storage can't be listed. */
+export function freeChars(storage: Store, quota = STORAGE_QUOTA_CHARS): number {
+  if (typeof storage.length !== 'number' || typeof storage.key !== 'function') return Infinity;
+  let used = 0;
+  try {
+    for (let i = 0; i < storage.length; i++) { const k = storage.key(i); if (k) used += k.length + (read(storage, k)?.length ?? 0); }
+  } catch { return Infinity; }
+  return quota - used;
+}
+
 /** First slot never overwritten; slots 2–3 rotate (newest in slot 2). The
- *  index of the slot that holds `raw` afterwards, or null on a failed write. */
+ *  index of the slot that holds `raw` afterwards, or null on a failed write.
+ *  A rotating copy is skipped (null) when it would leave less than ~2× the
+ *  doc free: the main save of her boards matters more than another copy. */
 function keepInSlots(storage: Store, slots: readonly string[], raw: string): number | null {
   const there = slots.map((k) => read(storage, k));
   const at = there.indexOf(raw);
   if (at >= 0) return at;
   if (there[0] === null) return write(storage, slots[0], raw) ? 0 : null;
+  const grow = raw.length + (there[1] === null ? 0 : Math.max(0, there[1].length - (there[2]?.length ?? 0)));
+  if (freeChars(storage) - grow < 2 * raw.length) return null;
   if (there[1] !== null && !write(storage, slots[2], there[1])) return null;
   return write(storage, slots[1], raw) ? 1 : null;
 }

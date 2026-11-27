@@ -11,6 +11,7 @@ import { parseCanvasDoc, parseCanvasDocReport, type CanvasDoc } from '../../src/
 import {
   BEFORE_FRESH_KEY, BEFORE_REPAIR_KEY, CANVAS_STORAGE_KEY, FRESH_SLOTS, REPAIR_SLOTS, LEGACY_DEVICES_BOARD_KEY, MAX_UNREADABLE,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
+  SAVE_FULL_LINE, STORAGE_QUOTA_CHARS, createSaveFailNotice, freeChars,
   keepUnreadable, loadCanvasDoc, loadLine, openFresh, resolveDevicesBoard, startFresh, withoutFresh,
 } from '../../src/canvas/canvasStore';
 import { initialDoc } from '../../src/canvas/firstOpen';
@@ -119,6 +120,29 @@ describe('a repaired doc is copied aside first, and the repair is named', () => 
     loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
     expect(REPAIR_SLOTS.map((k) => s.getItem(k))).toEqual([slip, fourth, third]);
     expect([...s.m.keys()].filter((k) => k.startsWith(BEFORE_REPAIR_KEY))).toHaveLength(3);
+  });
+  it('a rotating copy is skipped when it would leave less than ~2x the doc free (the first copy is still made)', () => {
+    const logs: string[] = [];
+    const filler = 'x'.repeat(STORAGE_QUOTA_CHARS - slip.length * 4);
+    const s = memStorage({ [CANVAS_STORAGE_KEY]: slip, filler });
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
+    expect(s.getItem(BEFORE_REPAIR_KEY)).toBe(slip); // slot 1: always
+    const second = JSON.stringify({ ...doc, focusId: 'nope' });
+    s.setItem(CANVAS_STORAGE_KEY, second);
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, (l) => logs.push(l));
+    expect(s.getItem(REPAIR_SLOTS[1])).toBeNull();
+    expect(logs[0]).toMatch(/could not be kept/);
+    expect(freeChars(s)).toBeLessThan(3 * slip.length);
+    expect(freeChars({ getItem: () => null, setItem: () => undefined })).toBe(Infinity);
+  });
+  it('a failed main save is said once, and again only after a save worked', () => {
+    const n = createSaveFailNotice();
+    expect(n.after(true)).toBeNull();
+    expect(n.after(false)).toBe(SAVE_FULL_LINE);
+    expect(n.after(false)).toBeNull();
+    expect(n.after(true)).toBeNull();
+    expect(n.after(false)).toBe(SAVE_FULL_LINE);
+    expect(SAVE_FULL_LINE).toBe('Couldn’t save your boards — storage is full.');
   });
   it('never claims a copy it could not make', () => {
     const logs: string[] = [];

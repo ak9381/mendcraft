@@ -51,7 +51,7 @@ import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileInte
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
-import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
+import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, createSaveFailNotice, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
@@ -1941,12 +1941,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       ...(devices ? { devicesBoard: devices } : {}),
     };
   }
+  const saveFail = createSaveFailNotice();
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
       // Saved boards this build couldn't read AND couldn't copy aside: never
       // write over them (this session's changes just aren't saved).
       const ok = !saveBlocked && tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
+      // A save that failed (storage full) is said once, not silently lost.
+      // (A blocked save already said why at load: UNSAVED_LINE; an explicit
+      // "save" says its own QUOTA_SAVE_LINE, so `now` stays quiet here.)
+      if (!saveBlocked) { const line = saveFail.after(ok); if (line && !now) say(line); }
       // The doc now carries the devices-board id itself: the old key goes.
       if (ok) { try { storage.removeItem(LEGACY_DEVICES_BOARD_KEY); } catch { /* nothing to clear */ } }
       tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
@@ -5917,8 +5922,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   if (openLine) setTimeout(() => say(openLine, { speak: true }), 0);
   return {
     /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
-    loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),
-    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
+    loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
