@@ -9,9 +9,11 @@
 // Exit code 1 on any failed check, 2 when it cannot run (no Chrome, no server).
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pollUntil } from './e2eWait.lib.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -52,15 +54,33 @@ const failures = [];
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failures.push(what); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll fn in the page until it is truthy (or time runs out). */
+/** Poll fn in the page until it is truthy (or time runs out). Time the host
+ *  spent paused (asleep, browser stalled) is not counted (e2eWait.lib.mjs). */
 async function waitFor(page, fn, ms, what, ...args) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (await page.evaluate(fn, ...args).catch(() => false)) return true;
-    await sleep(200);
-  }
+  const r = await pollUntil(() => page.evaluate(fn, ...args), ms);
+  if (r.pausedMs) console.log(`     (the host was paused ~${Math.round(r.pausedMs / 1000)} s while waiting for: ${what})`);
+  if (r.ok) return true;
   check(false, `timed out: ${what}`);
   return false;
+}
+
+/** macOS: keep the Mac from idle/display sleep while this runs (a sleep
+ *  freezes the page mid-check). Ends with this process. */
+function stayAwake() {
+  if (process.platform !== 'darwin' || !existsSync('/usr/bin/caffeinate')) return;
+  try { spawn('/usr/bin/caffeinate', ['-dim', '-w', String(process.pid)], { stdio: 'ignore', detached: true }).unref(); } catch { /* best effort */ }
+}
+
+/** E2E_PAUSE_BROWSER=<ms>: stop the whole browser (SIGSTOP on its process
+ *  group) for that long right after "build the dashboard" in gimbal — what a
+ *  host sleep does to the page while this script's wall clock keeps running.
+ *  Reproduces the "review opens" timeouts seen when the Mac slept mid-run. */
+async function pauseBrowserIfAsked(page) {
+  const ms = Number(process.env.E2E_PAUSE_BROWSER || 0);
+  const pid = page.browser().process()?.pid;
+  if (!ms || !pid || process.platform === 'win32') return;
+  process.kill(-pid, 'SIGSTOP');
+  setTimeout(() => process.kill(-pid, 'SIGCONT'), ms);
 }
 
 async function open(page, query) {
@@ -602,8 +622,14 @@ async function gimbal(page) {
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
   if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join again'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on again');
+  const buildMark = await page.evaluate(() => window.__mcCanvas.statusMark());
   await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
-  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) return;
+  await pauseBrowserIfAsked(page);
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) {
+    console.log(`     said since "build the dashboard": ${JSON.stringify(await page.evaluate((m) => window.__mcCanvas.statusSince(m), buildMark))}`);
+    console.log(`     frames: ${JSON.stringify(await frames(page))}`);
+    return;
+  }
   const keptNotes = await page.evaluate(reviewNotes);
   check(keptNotes.some((n) => /added Gimbal \(it answers here\)/i.test(n)), `the review lists the gimbal tile the app added (got ${JSON.stringify(keptNotes)})`);
   check(!(await page.evaluate(gimbalTile)), 'no gimbal tile before Approve');
@@ -1143,6 +1169,7 @@ async function main() {
   try { puppeteer = require('puppeteer-core'); } catch { console.error('e2e-actual: puppeteer-core missing (npm ci).'); return 2; }
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`e2e-actual: no dev server at ${BASE} (start one: npx vite).`); return 2; }
   const { replies, recorded } = loadReplies();
+  stayAwake();
   const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check'] });
   try {
     for (const [name, run] of Object.entries(SECTIONS)) {
