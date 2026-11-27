@@ -277,6 +277,6 @@ describe('Proposal card', () => {
     expect(el.textContent).toContain('Waiting for you');
     expect(el.textContent).toContain('By: Deep · online');
     expect(el.textContent).toContain(ROUTE_LINES.escalation);
-    expect(el.textContent).toContain('PINCH  keep');
+    expect(el.textContent).toContain('FIST TAP  keep');
   });
 });

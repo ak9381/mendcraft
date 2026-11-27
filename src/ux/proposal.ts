@@ -114,11 +114,11 @@ export function renderProposalCard(
   actions.className = 'mc-proposal-actions';
 
   if (model.status === 'waiting' || model.status === 'guess' || model.status === 'changed') {
-    const keep = btn(doc, 'mc-proposal-keep', 'PINCH  keep', `Keep: ${model.title}`, handlers.onKeep);
+    const keep = btn(doc, 'mc-proposal-keep', 'FIST TAP  keep', `Keep: ${model.title}`, handlers.onKeep);
     const drop = btn(doc, 'mc-proposal-drop', 'BRUSH  drop', `Drop: ${model.title}`, handlers.onDrop);
     actions.append(keep, drop);
   } else if (model.status === 'leave') {
-    const hold = btn(doc, 'mc-proposal-hold', model.leaveAction || 'PINCH AND HOLD  send', `Hold to send: ${model.title}`, handlers.onKeep);
+    const hold = btn(doc, 'mc-proposal-hold', model.leaveAction || 'HOLD A FIST  send', `Hold to send: ${model.title}`, handlers.onKeep);
     hold.addEventListener('pointerdown', () => handlers.onHoldStart?.());
     hold.addEventListener('pointerup', () => handlers.onHoldEnd?.());
     hold.addEventListener('pointerleave', () => handlers.onHoldEnd?.());

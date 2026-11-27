@@ -333,7 +333,7 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     const t = target!;
     const fid = frameId!;
     const plan = deps.plan(fid);
-    if (!plan) { deps.card.showError("That board changed — pinch-hold again."); phase = 'idle'; clearOutline(); return; }
+    if (!plan) { deps.card.showError("That board changed — hold it again."); phase = 'idle'; clearOutline(); return; }
     const g = ++gen;
     phase = 'working';
     clearListenTimer();

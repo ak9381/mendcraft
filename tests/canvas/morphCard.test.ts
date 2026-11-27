@@ -215,7 +215,7 @@ describe('mountMorphCard — state transitions and timers', () => {
     card.open({ label: 'Desk lamp', rect: RECT, listening: true });
     card.showEmpty();
     const line = (card.el as unknown as El).querySelector('.mc-morph-card-line')!;
-    expect(line.textContent).toBe("Didn't hear anything — pinch-hold again, or press Talk.");
+    expect(line.textContent).toBe("Didn't hear anything — hold the board again, or press Talk.");
     timers.fireDueBy(5000);
     expect(autoClosed).toBe(1);
     expect(card.isOpen()).toBe(false);

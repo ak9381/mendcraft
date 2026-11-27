@@ -25,9 +25,9 @@ export const FILLED_ON_DEVICE_SUFFIX = '· names filled in on device';
 export const WHY_HERE = 'Why here';
 export const WHY_ONLINE = 'Why online';
 
-export const PINCH_KEEP = 'PINCH  keep';
+export const PINCH_KEEP = 'FIST TAP  keep';
 export const BRUSH_DROP = 'BRUSH  drop';
-export const PINCH_HOLD_SEND = 'PINCH AND HOLD  send';
+export const PINCH_HOLD_SEND = 'HOLD A FIST  send';
 
 export type HelperName = 'Quick' | 'Deep' | 'Browser';
 

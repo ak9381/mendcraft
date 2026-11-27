@@ -78,13 +78,13 @@ export function speechErrorMessage(code: string, lang = 'en-US'): string {
     case 'audio-capture':
       return 'Could not reach the microphone — another app may be using it, or the mic failed.';
     case 'network':
-      return 'Speech recognition needs the network and could not reach it. Pinch Talk and try again.';
+      return 'Speech recognition needs the network and could not reach it. Tap Talk with a fist to try again, or type it.';
     case 'language-not-supported':
       return `This browser cannot transcribe ${lang}. Try English, or type in the say box.`;
     case 'service-not-allowed':
       return 'Speech recognition is blocked in this browser. You can type in the say box.';
     case 'no-speech':
-      return 'Nothing was heard. Pinch Talk and speak again.';
+      return 'Nothing was heard. Tap Talk with a fist and speak again.';
     default:
       return `Talk could not start (${code || 'unknown'}). You can type in the say box.`;
   }

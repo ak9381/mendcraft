@@ -79,5 +79,5 @@ export function leaveCardCopy(state: LeaveState, now: number): { status: string;
   if (state.phase === 'undone') {
     return { status: 'Undone', action: 'Dropped' };
   }
-  return { status: 'Waiting for you', action: 'PINCH AND HOLD  send' };
+  return { status: 'Waiting for you', action: 'HOLD A FIST  send' };
 }
