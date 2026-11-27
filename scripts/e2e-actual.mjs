@@ -259,8 +259,8 @@ async function phones(page) {
 
   // Pair: the SIM branch stands in for the chime (no sound, no relay).
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  const rows = () => [...document.querySelectorAll('.mc-paired-chip')].map((c) => ({ text: c.textContent.trim(), tick: !!c.querySelector('.mc-paired-check'), sim: !!c.querySelector('.mc-chip') }));
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  const rows = () => window.__mcPairedSeen?.rows ?? [];
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'two phones join'))) return;
   const paired = await page.evaluate(rows);
   check(paired.length === 2 && paired.every((r) => r.tick && r.sim), `two paired rows, each with a tick and SIM (got ${JSON.stringify(paired)})`);
   check(paired.some((r) => /iPhone/.test(r.text)) && paired.some((r) => /Nothing phone/.test(r.text)), 'the rows name the iPhone and the Nothing phone');
@@ -407,7 +407,7 @@ async function phones(page) {
   // After the laptop reload the phones join again (the SIM stands in for the
   // relay; the real room is resumed from the remembered token, tests/canvas/relayFixWave.test.ts).
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'after a laptop reload the phones join again')
+  await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'after a laptop reload the phones join again')
     .then((ok) => ok && check(true, 'after a laptop reload the phones join again'));
   check(await page.evaluate(() => !localStorage.getItem('mc.relay.hostToken')) , 'SIM phones never store a relay room on the laptop');
 }
@@ -428,7 +428,7 @@ async function devices(page) {
   await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two SIM phones join'))) return;
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'two SIM phones join'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
   check(!(await frames(page)).some((f) => /Connected devices/.test(f.title)), 'pairing alone makes no devices board');
 
@@ -621,7 +621,7 @@ async function gimbal(page) {
 
   // Pair the SIM phones (the SIM branch stands in for the chime).
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'two phones join'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
   check(!(await page.evaluate(() => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector('[data-device-cls=gimbal]')))),
     'pairing a docked iPhone adds no gimbal tile by itself');
@@ -681,7 +681,7 @@ async function gimbal(page) {
   }, LAMP_ID);
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join again'))) return;
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'two phones join again'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on again');
   const buildMark = await page.evaluate(() => window.__mcCanvas.statusMark());
   await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
@@ -926,7 +926,7 @@ async function phonePlanChecks(p, vp) {
 async function phonelayout(page) {
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'two phones join'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
   await page.evaluate(() => { window.__mcCanvas.run('draw a two bedroom floor plan'); });
   if (!(await waitFor(page, reviewOpen, 15_000, 'the floor-plan review opens'))) return;
@@ -1308,7 +1308,7 @@ async function journey(page) {
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check((await frames(page)).length === 0, 'journey: an empty canvas to start');
   await say('pair');
-  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: two SIM phones join'))) return;
+  if (!(await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'journey: two SIM phones join'))) return;
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on');
 
   // ---- the devices board (generated around the live table), then next-step chips
@@ -1397,7 +1397,7 @@ async function journey(page) {
   check(await page.evaluate(() => navigator.onLine === false), 'journey: the reloaded page is offline');
   check(JSON.stringify((await frames(page)).map((f) => f.title).sort()) === JSON.stringify(titles), `journey: offline reload, every board is back (got ${JSON.stringify((await frames(page)).map((f) => f.title))})`);
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: the SIM phones join again');
+  await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'journey: the SIM phones join again');
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on again');
   const devicesId = await page.evaluate(() => window.__mcCanvas.frames().find((f) => JSON.stringify(window.__mcCanvas.snapshot().surfaces[f.id] ?? {}).includes('"source":"devices"'))?.id ?? null);
   if (devicesId) await focusBoard(page, devicesId);
@@ -1417,7 +1417,7 @@ async function journey(page) {
 
   // ---- try to break it: an impossible level, and a tampered stored row
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: the SIM phones join for the last beats');
+  await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'journey: the SIM phones join for the last beats');
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on');
   const lampBefore = await page.evaluate(lampState, LAMP_ID);
   const breakMark = await page.evaluate(() => window.__mcCanvas.statusMark());
@@ -1515,8 +1515,8 @@ async function recordmode(page) {
   check(JSON.stringify(devs.map(([id]) => id).sort()) === JSON.stringify(['speaker-sim', 'wiz-lamp-1']) && devs.every(([, sim]) => sim),
     `record mode: the devices are the journey fixtures, all SIM — no Spotify speaker, no discovered lamp (got ${JSON.stringify(devs)})`);
   await page.evaluate(() => window.__mcCanvas.run('connect devices'));
-  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'record mode: two SIM phones join');
-  const chips = await page.evaluate(() => [...document.querySelectorAll('.mc-paired-chip')].map((c) => !!c.querySelector('.mc-chip')));
+  await waitFor(page, () => (window.__mcPairedSeen?.rows.length ?? 0) >= 2, 10_000, 'record mode: two SIM phones join');
+  const chips = await page.evaluate(() => (window.__mcPairedSeen?.rows ?? []).map((r) => r.sim));
   check(chips.length === 2 && chips.every(Boolean), `record mode: the phones are SIM, no relay room is opened (got ${JSON.stringify(chips)})`);
   // A bridge probe, a Spotify read or a relay room would have gone out by now
   // (the live control below sees each within this time). Pause-safe wait.
@@ -1602,6 +1602,23 @@ async function main() {
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e?.message || e)));
       await page.evaluateOnNewDocument((r, rec, ls) => { window.__mcFixtures = { replies: r, recorded: rec, liveShape: ls }; }, replies, recorded, liveShape);
+      // The SIM phones' chips show only while pairing (1.2 s → about 4 s): a
+      // host that pauses for a few seconds missed them between two polls. The
+      // page itself records what its pairing row showed (reset on each
+      // "Waiting for a phone…"), so a pause can no longer hide it.
+      await page.evaluateOnNewDocument(() => {
+        const install = () => {
+          const seen = { rows: [] };
+          window.__mcPairedSeen = seen;
+          const scan = () => {
+            if (document.querySelector('.mc-paired-wait')) seen.rows = [];
+            const chips = [...document.querySelectorAll('.mc-paired-chip')];
+            if (chips.length && chips.length >= seen.rows.length) seen.rows = chips.map((c) => ({ text: c.textContent.trim(), tick: !!c.querySelector('.mc-paired-check'), sim: !!c.querySelector('.mc-chip') }));
+          };
+          new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install); else install();
+      });
       await run(page);
       check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
       await ctx.close();
