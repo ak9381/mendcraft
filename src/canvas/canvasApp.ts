@@ -55,7 +55,7 @@ import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, tileInte
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
-import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, createSaveFailNotice, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
+import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, createSaveFailNotice, loadCanvasDoc, loadLine, resolveDevicesBoard, UNREADABLE_LINE, UNSAVED_LINE } from './canvasStore';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
@@ -1165,7 +1165,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (statusEl.textContent !== t) return;
       // The phone toast never waits on a review (the sheet covers it anyway).
       if (reviewBusy()) showPhoneSay('');
-      if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS) { fadeStatus(t); return; }
+      // Her saved boards could not be opened: that line stays until another replaces it.
+      if (reviewBusy() || !retryBtn.hidden || t === LISTENING_STATUS || t === UNREADABLE_LINE || t === UNSAVED_LINE) { fadeStatus(t); return; }
       statusEl.textContent = '';
       showPhoneSay('');
     }, statusFadeMs(t));
@@ -2165,12 +2166,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     window.dispatchEvent(new Event('resize')); // let the plan engine re-measure at 1:1
     say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
-  async function overview(): Promise<void> {
+  /** quiet: say nothing at the end (boot, when a line she must read — her
+   *  saved boards could not be opened — is already on the status line). */
+  async function overview(o: { quiet?: boolean } = {}): Promise<void> {
     focusId = null; phoneOverview = phoneShell; sync(); clearDock();
     const list = reg.list();
     // Leave the hand cluster's lane on the right free (it sits on the edge).
     const v = vp();
     await flyTo(fitRects(list.map((f) => f.rect), { w: Math.max(320, v.w - clusterInset()), h: v.h }, Math.max(56, barH())));
+    if (o.quiet) return;
     say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
@@ -5985,7 +5989,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   } else if (focusId) {
     void focus(focusId);
   } else if (!stored) {
-    void overview();
+    // An unreadable saved doc has its own line (said below): the overview's
+    // hint must not write over it (review sim-2 §6).
+    void overview({ quiet: !!loadLine(loaded) });
   }
 
   // Hands + face are ON BY DEFAULT: the camera prompt appears right away and
