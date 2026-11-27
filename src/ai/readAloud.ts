@@ -10,10 +10,15 @@
 //   - the same line is never spoken twice within REPEAT_QUIET_MS;
 //   - a status line replaces whatever was being said (latest wins — at most
 //     one utterance waits behind it, never a backlog);
-//   - with the Kannada pack on, only Kannada lines are spoken, in kn-IN: no
-//     English fallback, no English button names. No kn-IN voice → silence
-//     (the speaker never reads a line in a voice of another language).
+//   - with a pack in a non-Latin script on (Kannada, Hindi, …), only lines in
+//     that script are spoken, in that language: no English fallback, no
+//     English button names. No voice for it → silence (the speaker never
+//     reads a line in a voice of another language). A Latin-script pack
+//     (Spanish, French, German) can't be told apart from English, so lines
+//     stay English as with no pack.
 import type { SpeakOptions, Speaker } from './speaker';
+import { LANG_SCRIPTS, LATIN_LANGS, scriptOf } from '../canvas/languagePack';
+import { resolveLanguage } from './language';
 
 export const REPEAT_QUIET_MS = 10_000;
 
@@ -36,7 +41,6 @@ export interface ReadAloud {
   stop(): void;
 }
 
-const KANNADA = /[ಀ-೿]/;
 
 /** The words to speak: never the "SIM ·" / "SIM:" prefix. */
 export function spokenText(t: string): string {
@@ -45,9 +49,14 @@ export function spokenText(t: string): string {
 
 /** The language a line is spoken in, or null for "not at all". */
 export function spokenLangFor(text: string, packLang: string | null | undefined): string | null {
-  const kn = KANNADA.test(text);
-  if (packLang === 'kn') return kn ? 'kn-IN' : null;
-  return kn ? 'kn-IN' : 'en-US';
+  const script = packLang && !LATIN_LANGS.has(packLang) ? scriptOf(packLang) : null;
+  if (packLang && script) return script.test(text) ? resolveLanguage(packLang).speechLang : null;
+  // No pack (or a Latin one): a line in an Indian script is spoken in its
+  // language (the first one in the table that writes it), else in English.
+  for (const [code, re] of Object.entries(LANG_SCRIPTS)) {
+    if (!LATIN_LANGS.has(code) && re.test(text)) return resolveLanguage(code).speechLang;
+  }
+  return 'en-US';
 }
 
 export function createReadAloud(d: ReadAloudDeps): ReadAloud {

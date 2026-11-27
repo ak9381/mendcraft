@@ -1400,7 +1400,7 @@ describe('demo-run glitches', () => {
     const src = await read('src/canvas/canvasApp.ts');
     expect(src).toContain('if (reviewLive && reviewDialog.isOpen() && reviewLive.tokens.includes(s)) reviewDialog.setFacts(reviewLive.facts());');
     expect(src.match(/refreshReviewFor\(s\);/g)).toHaveLength(2); // on a send and on a take-back
-    expect(src).toContain('}, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });');
+    expect(src).toContain('}, { tokens: [si], facts: () => reviewFacts(si, utterance) });'); // the language pack review
     expect(src).toContain('}, { tokens: [si, link?.si], facts: planFacts });');
     expect(await read('src/canvas/reviewDialog.ts')).toContain('setFacts(facts) { if (open && !honesty.hidden) renderFacts(facts); },');
   });

@@ -20,7 +20,9 @@ export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRI
   // Task 7: floor plans are generated; the only plan template is blank.
   /\btwoBedroom\b/, /\boneRoom\b/,
   // Task 8: the devices board and the next-step chips are generated.
-  /\bconnectedDevicesPlan\b/, /\bruleSuggestions\b/];
+  /\bconnectedDevicesPlan\b/, /\bruleSuggestions\b/,
+  // Task 9: one language turn for any script in LANG_SCRIPTS.
+  /\baddKannada\b/];
 
 /** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
 const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [

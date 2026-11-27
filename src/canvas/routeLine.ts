@@ -7,7 +7,8 @@ import { parseCanvasCommand, type CanvasCommand } from './canvasCommands';
 import { connectAsk } from './connectTurns';
 import { parseDeviceCommands, type DeviceCommandResult, type DeviceRef } from './deviceCommands';
 import { parseGimbalSpeech } from './gimbalCanvas';
-import { routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
+import { languageAskAny, routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
+import { LANGUAGES } from '../ai/language';
 import { parseConnectDevices } from './pairedRow';
 import { routePlanExtra, type PlanExtra } from './planExtras';
 import { isPlanEditAsk, isPlanEditOnPlanBoard } from './planEdit';
@@ -44,7 +45,9 @@ export type Route =
   | { name: 'packIntent'; intent: IntentKey }
   | { name: 'pointConnect' }
   | { name: 'gimbalScan' } | { name: 'gimbal' }
-  | { name: 'kannada' }
+  /** "add Kannada" / "switch to Hindi" / "in Tamil": a language pack for `code`
+   *  (a code outside LANG_SCRIPTS is refused; 'en' goes back to English). */
+  | { name: 'language'; code: string }
   | { name: 'history' }
   | { name: 'planExtra'; extra: PlanExtra }
   | { name: 'canvas'; cmd: CanvasCommand }
@@ -109,6 +112,9 @@ export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);
 }
 
+/** Every language name she might ask for (English names), code → name. */
+const ANY_LANGUAGE_NAMES: Record<string, string> = Object.fromEntries(LANGUAGES.map((l) => [l.code, l.englishName]));
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -140,7 +146,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   const gimbal = parseGimbalSpeech(text);
   if (gimbal === 'scan') return { name: 'gimbalScan' };
   if (gimbal) return { name: 'gimbal' };
-  if (/\badd kannada\b/i.test(text) || /ಕನ್ನಡ/.test(text)) return { name: 'kannada' };
+  const lang = languageAskAny(text, ANY_LANGUAGE_NAMES);
+  if (lang) return { name: 'language', code: lang };
   if (/^\s*(show\s+)?history\s*$/i.test(text)) return { name: 'history' };
   // CAD extras only when there is a plan board to run them on.
   const extra = routePlanExtra(text, world.hasPlanBoard);

@@ -5,7 +5,7 @@
 // tiles, never a cursor for an engine that was not called). The pill says
 // the same thing in words: "Nano · 1 call".
 export type SwarmKind = 'gemini' | 'nano';
-export type SwarmTask = 'dashboard' | 'floorplan' | 'kannada' | 'generic';
+export type SwarmTask = 'dashboard' | 'floorplan' | 'kannada' | 'language' | 'generic';
 
 export interface SwarmAgentSpec {
   id: string;
@@ -70,6 +70,7 @@ const TASK_REAL_LABEL: Record<SwarmTask, Record<SwarmKind, string>> = {
   dashboard: { gemini: 'Gemini · board plan', nano: 'Nano · board draft' },
   floorplan: { gemini: 'Gemini · floor plan', nano: 'Nano · floor plan' },
   kannada: { gemini: 'Gemini · Kannada pack', nano: 'Nano · Kannada pack' },
+  language: { gemini: 'Gemini · language pack', nano: 'Nano · language pack' },
   generic: { gemini: 'Gemini · reply', nano: 'Nano · reply' },
 };
 

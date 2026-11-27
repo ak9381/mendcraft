@@ -239,8 +239,12 @@ export function diffPlans(before: SurfacePlan | null, after: SurfacePlan, ctx: P
 }
 
 /** The Kannada (or any language) pack proposal, as one plan line. */
-export function languagePackChanges(language: string, labelCount: number): PlanChange[] {
-  return [{ op: 'change', label: `Switch the interface to ${language} (${plural(labelCount, 'label')})` }];
+export function languagePackChanges(language: string, labelCount: number, swaps: readonly { en: string; to: string }[] = []): PlanChange[] {
+  return [
+    { op: 'change', label: `Switch the interface to ${language} (${plural(labelCount, 'label')})` },
+    // Every label she'll see, English → the pack's words, so she approves what she reads.
+    ...swaps.map((w): PlanChange => ({ op: 'change', label: `${w.en} → ${w.to}` })),
+  ];
 }
 
 /** One tile swapped in place (self-check fix / morph): a whole-plan diff

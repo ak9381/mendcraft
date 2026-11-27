@@ -914,6 +914,84 @@ async function persist(page) {
 }
 SECTIONS.persist = persist;
 
+// ---- language: "add Kannada" → a reviewed Gemini pack → the bar in Kannada → still Kannada after an offline reload ----
+const KN_FIXTURE = JSON.parse(readFileSync(join(FIXTURES, 'gemini.pack.kn.json'), 'utf8'));
+const KN_PACK_REPLY = JSON.parse(KN_FIXTURE.reply.slice(KN_FIXTURE.reply.indexOf('{'), KN_FIXTURE.reply.lastIndexOf('}') + 1));
+const bar = () => ({
+  showEverything: document.querySelector('[data-i18n=showEverything]')?.textContent.trim(),
+  newBoard: document.querySelector('[data-i18n=newBoard]')?.textContent.trim(),
+  lang: document.documentElement.lang,
+});
+const packArtifacts = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'pack').map((a) => ({ id: a.id, by: a.by, v: a.v, lang: a.data.lang, show: a.data.strings.showEverything }))));
+const statusSays = (line) => (window.__mcCanvas.statusSince(0) ?? []).some((t) => t.includes(line));
+
+async function language(page) {
+  const kn = KN_PACK_REPLY.strings;
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  const before = await page.evaluate(bar);
+  check(before.showEverything === 'Show everything' && before.lang === 'en', `the bar starts in English (got ${JSON.stringify(before)})`);
+
+  await page.evaluate(() => { window.__mcCanvas.run('add Kannada'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the Kannada review opens'))) return;
+  const text = await page.evaluate(reviewText);
+  check(text.includes(`Show everything → ${kn.showEverything}`) && text.includes(`New board → ${kn.newBoard}`), `the review shows the strings (got ${JSON.stringify(text.slice(0, 500))})`);
+  check(/Gemini · Replay · written example/.test(text), 'the review names "Gemini" in the Replay label');
+  check((await packArtifacts(page)).length === 0, '0 pack artifacts until Approve');
+  check((await page.evaluate(bar)).showEverything === 'Show everything', 'the bar is still English until Approve');
+
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, (s) => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === s, 5_000, 'the bar reads the Kannada strings', kn.showEverything)
+    .then((ok) => ok && check(true, 'after Approve the bar reads the Kannada strings'));
+  const after = await page.evaluate(bar);
+  check(after.newBoard === kn.newBoard && after.lang === 'kn', `every bar string and <html lang> follow the pack (got ${JSON.stringify(after)})`);
+  await waitFor(page, () => window.__mcArtifacts.list().then((l) => l.some((a) => a.id === 'pack-kn')), 5_000, 'artifact pack-kn exists')
+    .then((ok) => ok && check(true, 'artifact pack-kn exists'));
+  const stored = await packArtifacts(page);
+  check(stored.length === 1 && stored[0].by === 'replay' && stored[0].show === kn.showEverything, `stored once, made by replay (got ${JSON.stringify(stored)})`);
+
+  // Reload offline: the browser says it is offline and nothing outside this server answers.
+  await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'onLine', { get: () => false, configurable: true }); });
+  await page.setRequestInterception(true);
+  const outside = [];
+  page.on('request', (r) => {
+    if (r.isInterceptResolutionHandled()) return;
+    if (r.url().startsWith(BASE) || r.url().startsWith('data:') || r.url().startsWith('blob:')) { void r.continue(); return; }
+    outside.push(r.url()); void r.abort();
+  });
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check(await page.evaluate(() => navigator.onLine === false), 'the reloaded page is offline');
+  await waitFor(page, (s) => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === s, 8_000, 'still Kannada after the offline reload', kn.showEverything)
+    .then((ok) => ok && check(true, 'reload offline → still Kannada'));
+  check((await page.evaluate(bar)).lang === 'kn', '<html lang> is still kn');
+
+  // Back to English and then Kannada again, offline: the approved pack comes from the store, no review.
+  await page.evaluate(() => { window.__mcCanvas.run('switch to English'); });
+  await waitFor(page, () => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === 'Show everything', 5_000, 'offline: "switch to English" goes back to English')
+    .then((ok) => ok && check(true, 'offline: "switch to English" goes back to English'));
+  await page.evaluate(() => { window.__mcCanvas.run('add Kannada'); });
+  await waitFor(page, (s) => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === s, 5_000, 'offline: "add Kannada" applies the stored pack', kn.showEverything)
+    .then((ok) => ok && check(true, 'offline: "add Kannada" applies the stored pack'));
+  check(!(await page.evaluate(reviewOpen)), 'offline: no review for a pack she already approved');
+  check(await page.evaluate(statusSays, 'from the pack you approved'), 'offline: it says the pack came from the store');
+  await page.evaluate(() => window.__mcCanvas.undo());
+  await waitFor(page, () => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === 'Show everything', 5_000, 'undo goes back to English')
+    .then((ok) => ok && check(true, 'undo goes back to English'));
+  await sleep(1200); // past the save debounce
+  const kept = await packArtifacts(page);
+  check(kept.length === 1 && kept[0].v === stored[0].v && kept[0].by === 'replay', `pack-kn is kept, unchanged, after undo (got ${JSON.stringify(kept)})`);
+
+  // A language it can't check, and one offline with no stored pack: refused, nothing written.
+  await page.evaluate(() => { window.__mcCanvas.run('add Japanese'); });
+  await waitFor(page, statusSays, 3_000, 'a language outside the table is refused', "I can't check that script yet. Nothing changed.")
+    .then((ok) => ok && check(true, 'a language outside the table is refused'));
+  await page.evaluate(() => { window.__mcCanvas.run('add Hindi'); });
+  await waitFor(page, statusSays, 3_000, 'offline Hindi says it needs Gemini', 'Writing a Hindi pack needs Gemini, and you are offline.')
+    .then((ok) => ok && check(true, 'offline: a new pack is not written; she is told why'));
+  check((await packArtifacts(page)).length === 1, 'still one pack artifact');
+  check(outside.length === 0, `offline: no request left this server (got ${JSON.stringify(outside.slice(0, 3))})`);
+}
+SECTIONS.language = language;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

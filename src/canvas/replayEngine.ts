@@ -41,21 +41,26 @@ export const missingReplyLine = (key: string): string => `No recorded reply for 
 
 /** Engine factories that answer from `replies` (key → reply text). The nth
  *  turn of one kind on one engine (counted as it streams) takes `<key>.<n>`
- *  when that is recorded, else `<key>`. `recorded` lists the keys captured
- *  from a live run; every other reply is labelled a written example. */
-export function createReplayEngines(replies: Record<string, string>, o: { recorded?: readonly string[] } = {}): Partial<Record<EngineId, (kind: TurnKind) => SurfaceEngine>> {
+ *  when that is recorded, else `<key>`. A turn asked with a `sub` (the
+ *  language of a pack turn: `gemini.pack.kn`) takes `<key>.<sub>.<n>`, then
+ *  `<key>.<sub>`, before those. `recorded` lists the keys captured from a
+ *  live run; every other reply is labelled a written example. */
+export function createReplayEngines(replies: Record<string, string>, o: { recorded?: readonly string[] } = {}): Partial<Record<EngineId, (kind: TurnKind, sub?: string) => SurfaceEngine>> {
   const book: Record<string, string> = {};
   for (const [k, v] of Object.entries(replies ?? {})) if (typeof v === 'string') book[k] = v;
   const recorded = new Set((Array.isArray(o.recorded) ? o.recorded : []).filter((k) => typeof k === 'string'));
   const turns = new Map<string, number>();
   /** The key the next (or this) turn of a kind answers from. */
-  const keyFor = (id: EngineId, kind: TurnKind, n: number): string =>
-    book[replayKey(id, kind, n)] !== undefined ? replayKey(id, kind, n) : replayKey(id, kind);
+  const keyFor = (id: EngineId, kind: TurnKind, n: number, sub?: string): string => {
+    const base = replayKey(id, kind);
+    const tries = [...(sub ? [`${base}.${sub}.${n}`, `${base}.${sub}`] : []), replayKey(id, kind, n)];
+    return tries.find((k) => book[k] !== undefined) ?? base;
+  };
   const routeOf = (key: string): string => (recorded.has(key) ? REPLAY_ROUTE : WRITTEN_ROUTE);
-  const make = (id: EngineId) => (kind: TurnKind): SurfaceEngine => {
+  const make = (id: EngineId) => (kind: TurnKind, sub?: string): SurfaceEngine => {
     const base = replayKey(id, kind);
     // Before it streams: the reply this turn will take; after: the one it took.
-    let key = keyFor(id, kind, (turns.get(base) ?? 0) + 1);
+    let key = keyFor(id, kind, (turns.get(base) ?? 0) + 1, sub);
     return {
       id, sim: true,
       get routeLine() { return routeOf(key); },
@@ -63,7 +68,7 @@ export function createReplayEngines(replies: Record<string, string>, o: { record
       async stream(_prompt, onText) {
         const n = (turns.get(base) ?? 0) + 1;
         turns.set(base, n);
-        key = keyFor(id, kind, n);
+        key = keyFor(id, kind, n, sub);
         const reply = book[key];
         if (reply === undefined) throw new Error(missingReplyLine(key));
         onText(reply);

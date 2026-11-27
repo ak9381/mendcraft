@@ -277,6 +277,8 @@ handle = mountCanvas(root, {
   artifactBy: boardMaker,
   // Lamp connectors she approved (each checked again at load, in loadArtifacts).
   connectors: artifacts.filter((a) => a.kind === 'connector'),
+  // Language packs she approved (each checked again at load).
+  packs: artifacts.filter((a) => a.kind === 'pack'),
   onConnector: (a) => {
     artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
     void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));

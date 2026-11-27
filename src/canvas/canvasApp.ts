@@ -75,7 +75,7 @@ import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceC
 import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, deviceClassOf, formIntents, hasLampTile, planHasBindings, pressIntent, visualPress, volumeReadNeeded, type BindingResult, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
-import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
+import { EN_PACK, SCRIPT_UNKNOWN, coerceLanguagePack, languageAsk, langName, packPrompt, packRouteLine, packSwaps, PACK_SENT_WORDS, routePackPhrase, scriptOf, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
 import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
@@ -87,7 +87,7 @@ import { mountScanPanel } from './scanPanel';
 import { computeSignature } from '../input/faceLogic';
 import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
-import { LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY } from '../ux/wording';
+import { OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
@@ -146,7 +146,7 @@ import { enumerateMorphTiles, resolveMorphTarget, type MorphDoc, type MorphTarge
 import { applyMorphPatch, parseMorphTile, tileAtPath } from '../ai/morphEdit';
 import { runSelfCheck, selectSelfCheckTargets, waitForLayout } from './selfCheck';
 import {
-  CAMERA_LOST_REGISTER, INCOMPLETE_KN_LINE, MORPH_UNVERIFIED_LINE,
+  CAMERA_LOST_REGISTER, MORPH_UNVERIFIED_LINE,
   phoneDropLine, saveSpokenLine, tryWriteStorage,
 } from './failLines';
 import { isPhoneCanvasShell } from './iphoneShell';
@@ -168,7 +168,7 @@ export interface CanvasOptions {
   reducedMotion?: boolean;
   /** Engine factories by step, asked for one turn kind at a time. Missing,
    *  or returning undefined: no model here, and the turn says so. */
-  engines?: Partial<Record<EngineId, (kind: TurnKind) => SurfaceEngine | undefined>>;
+  engines?: Partial<Record<EngineId, (kind: TurnKind, sub?: string) => SurfaceEngine | undefined>>;
   /** The starting document, joined by the caller from the stored layout and
    *  artifacts (canvasPersistence.joinCanvasDoc). Missing/null: blank canvas. */
   doc?: CanvasDoc | null;
@@ -183,6 +183,9 @@ export interface CanvasOptions {
   connectors?: readonly Artifact[];
   /** A connector she just approved, to be stored by the caller. */
   onConnector?: (a: Artifact) => void;
+  /** Language packs she approved before (checked at load): asking for one
+   *  again applies it from here, offline too. */
+  packs?: readonly Artifact[];
   /** Generated next-step suggestions kept from earlier (checked at load). */
   steps?: readonly Artifact[];
   /** Suggestions just generated, to be stored by the caller. */
@@ -2368,8 +2371,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   });
   /** The engine for one turn, or undefined: no model is here, and the turn
    *  ends with NO_MODEL_LINE. Never a scripted stand-in. */
-  const engineFor = (id: EngineId, kind: TurnKind): SurfaceEngine | undefined => {
-    const e = opts.engines?.[id]?.(kind);
+  const engineFor = (id: EngineId, kind: TurnKind, sub?: string): SurfaceEngine | undefined => {
+    const e = opts.engines?.[id]?.(kind, sub);
     return e ? counted(e) : undefined;
   };
   /** No engine for this turn: say so plainly, propose nothing. */
@@ -4028,92 +4031,133 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (o.record) {
       history.push({
         frameId: '', before: null, after: null, by: 'gemini',
-        summary: next ? `Added ${next.lang === 'kn' ? 'Kannada' : next.lang}` : 'Reverted to English',
+        summary: next ? `Added ${langName(next.lang)}` : 'Reverted to English',
         kind: 'lang', packBefore: before, packAfter: next,
       });
       if (focusId) approvedChange(focusId);
     }
     persist();
   }
-  function addKannada(): void {
+  /** Packs she approved, by language (checked at load, or approved this
+   *  session): asking for one again applies it from the store, offline too,
+   *  with no new model turn. */
+  const knownPacks = new Map<string, LanguagePack>();
+  for (const a of opts.packs ?? []) {
+    const c = coerceArtifact(a);
+    if (c.ok && c.value.kind === 'pack') knownPacks.set(String(c.value.data.lang), c.value.data as unknown as LanguagePack);
+  }
+  if (pack) knownPacks.set(pack.lang, pack);
+  /** Who made each pack approved this session (the artifact's maker). */
+  const packMakers = new Map<string, ArtifactBy>();
+  /** "add Kannada" / "switch to Hindi" / "in Tamil": one turn for any
+   *  language. A language whose script isn't in LANG_SCRIPTS is refused; one
+   *  she approved before comes back from the store; a new one is Gemini's
+   *  (Nano can't write packs), reviewed before it's applied. */
+  function languageAskTurn(code: string, utterance: string): void {
     // A review on screen (build, floor plan, morph, self-check fix or teach)
-    // owns the single full-screen slot; opening the Kannada review on top would
-    // overwrite its card and orphan that turn. Make the user finish it first.
-    if (reviewBusy()) { say('Finish the review first — keep or drop, then add Kannada.'); return; }
-    if (pack?.lang === 'kn') { say('Kannada is already on. Say “undo” for English.'); return; }
-    if (!net.isOnline()) {
-      net.queueLater('add kannada');
-      panels.show();
-      panels.forEngine('nano').setQueued(net.laterCount());
-      aiHold.add('gemini'); // the Kannada pack waits on Gemini; keep the reason on screen
-      say(`${LATER_LIST_PROMISE}.`);
+    // owns the single full-screen slot; opening the language review on top
+    // would overwrite its card and orphan that turn. Make the user finish it first.
+    if (reviewBusy()) { say('Finish the review first: keep or drop, then ask again.'); return; }
+    if (code === 'en') {
+      if (!pack) { say('The canvas is already in English.'); return; }
+      applyPack(null, { record: true }); historyRender();
+      say('Back to English. Say “undo” to undo.', { speak: true });
       return;
     }
-    void languageTurn('add kannada');
+    if (!scriptOf(code)) { say(SCRIPT_UNKNOWN, { speak: true }); return; }
+    const name = langName(code);
+    if (pack?.lang === code) { say(`${name} is already on. Say “undo” for English.`); return; }
+    const stored = knownPacks.get(code);
+    if (stored) {
+      applyPack(stored, { record: true }); historyRender();
+      say(`${name} is on, from the pack you approved. Say “undo” for English.`, { speak: true });
+      bodyLanguage('yes');
+      return;
+    }
+    if (!net.isOnline()) {
+      net.queueLater(utterance);
+      panels.show();
+      panels.forEngine('nano').setQueued(net.laterCount());
+      aiHold.add('gemini'); // the pack waits on Gemini; keep the reason on screen
+      say(`Writing a ${name} pack needs Gemini, and you are offline. I'll ask Gemini when you're back online. Nothing changed.`, { speak: true });
+      return;
+    }
+    void languageTurn(code, utterance);
   }
   // Like aiTurn: whatever way the turn ends, the cards stop saying Working
-  // (the Nano card was left on Working after the Kannada handoff).
-  async function languageTurn(utterance: string): Promise<void> {
-    try { await languageTurnRun(utterance); } finally { settleEngines(); }
+  // (the Nano card was left on Working after the language handoff).
+  async function languageTurn(code: string, utterance: string): Promise<void> {
+    try { await languageTurnRun(code, utterance); } finally { settleEngines(); }
   }
-  async function languageTurnRun(utterance: string): Promise<void> {
-    const engine = engineFor('gemini', 'pack');
+  async function languageTurnRun(code: string, utterance: string): Promise<void> {
+    const engine = engineFor('gemini', 'pack', code);
     if (!engine) { noModel('gemini'); return; }
-    const prompt = [
-      'Translate the smart-canvas UI into Kannada. Reply with JSON only:',
-      '{"lang":"kn","strings":{key:text},"phrases":{intent:[phrases]}}',
-      `UI string keys: ${Object.keys(EN_PACK.strings).join(', ')}.`,
-      'Kannada script only, each string ≤80 chars, no markup.',
-    ].join('\n');
-    const knSent: SentInfo = { engine: 'gemini', prompt, sent: 'the key list and your request. No board data, no device addresses.', routeLine: engine.sim ? `SIM · ${ROUTE_LINES.kannada}` : ROUTE_LINES.kannada, sim: engine.sim };
-    aiSent(utterance, knSent, { task: 'kannada', defer: true });
+    const name = langName(code);
+    const prompt = packPrompt(code);
+    const routeOf = (): string => {
+      const replay = replayRouteIn(engine.routeLine);
+      if (replay) return `SIM · Gemini · ${replay}`;
+      const base = packRouteLine(name);
+      return engine.sim ? `SIM · ${base}` : base;
+    };
+    const si: SentInfo = { engine: 'gemini', prompt, sent: PACK_SENT_WORDS, routeLine: routeOf(), sim: engine.sim };
+    aiSent(utterance, si, { task: code === 'kn' ? 'kannada' : 'language', defer: true });
     // The redact-before-handoff invariant: aiSent() above already logged any
     // Nano redaction, so it's safe to announce the handoff now.
-    panels.showHandoff('nano', 'plan the Kannada pack — too complex for on-device');
+    panels.showHandoff('nano', `write the ${name} pack (Gemini writes language packs)`);
     let full = '';
-    try { full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(knSent), onCloudRetract: () => cloudRetract(knSent) }); }
+    try { full = await engine.stream(prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(si), onCloudRetract: () => cloudRetract(si) }); }
     catch (e) {
-      if (!engine.fallback) {
-        settleSwarm();
-        const why = `Kannada draft didn’t arrive. ${geminiFailLine(e)}`;
-        panels.forEngine('gemini').fail(why);
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
-      }
-      panels.forEngine('gemini').log('note', 'SIM · the model didn’t answer, so a prepared Kannada pack is waiting');
-      try { full = await engine.fallback.stream(prompt, () => {}); }
-      catch (e2) {
-        settleSwarm();
-        const why = `Kannada draft didn’t arrive: ${e2 instanceof Error ? e2.message : String(e2)}`;
-        aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
-      }
-    }
-    let raw: unknown = null;
-    try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
-    const coerced = coerceLanguagePack(raw);
-    if (!coerced.ok) {
       settleSwarm();
-      const why = coerced.error.startsWith('incomplete') ? INCOMPLETE_KN_LINE : `Refused the pack: ${coerced.error}`;
+      const why = `The ${name} pack didn’t arrive. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true }); return;
     }
+    // A replay's label follows the reply it really took.
+    si.routeLine = routeOf();
+    let raw: unknown = null;
+    try { raw = JSON.parse(full.slice(full.indexOf('{'), full.lastIndexOf('}') + 1)); } catch { /* not JSON */ }
+    const coerced = coerceLanguagePack(raw);
+    const refuse = (why: string): void => {
+      settleSwarm();
+      panels.forEngine('gemini').fail(why);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
+    };
+    if (!coerced.ok) {
+      refuse(coerced.error === SCRIPT_UNKNOWN ? SCRIPT_UNKNOWN
+        : coerced.error.startsWith('incomplete') ? `The ${name} pack was incomplete. Still in English. Nothing changed.`
+          : `Refused the ${name} pack: ${coerced.error}. Nothing changed.`);
+      return;
+    }
+    if (coerced.value.lang !== code) { refuse(`The pack came back for another language, not ${name}. Nothing changed.`); return; }
     const next = coerced.value;
     await finishSwarm();
     const swapCount = Object.keys(next.strings).length;
-    panels.forEngine('gemini').log('replied', `Kannada pack ready · ${swapCount} swaps`);
+    panels.forEngine('gemini').log('replied', `${name} pack ready · ${swapCount} swaps`);
     panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
+    const title = `Add ${name}`;
     const card = renderProposalCard(document, {
-      id: 'p-lang', title: 'Add Kannada', youAsked: utterance, status: 'changed',
-      catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: ROUTE_LINES.kannada, lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'the UI key list and your request', technicalLine: ROUTE_LINES.kannada },
+      id: 'p-lang', title, youAsked: utterance, status: 'changed',
+      catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: si.routeLine, lineId: 'custom', whyLabel: 'Why online', whatWasSent: PACK_SENT_WORDS, technicalLine: si.routeLine },
     }, {
-      onKeep: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Kept. Kannada is on — say “undo” for English.'; applyPack(next, { record: true }); historyRender(); autoHideAi(); say('Kannada is on. Say “undo” (or “ರದ್ದುಮಾಡು”) for English.'); bodyLanguage('yes'); },
-      onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English.'); autoHideAi(); },
+      onKeep: () => {
+        reviewDialog.close();
+        knownPacks.set(code, next);
+        packMakers.set(code, replayRouteIn(si.routeLine) ? 'replay' : 'gemini');
+        aiPanel.querySelector('.mc-ai-state')!.textContent = `Kept. ${name} is on. Say “undo” for English.`;
+        applyPack(next, { record: true }); historyRender(); autoHideAi();
+        const undoWord = next.strings.undo && next.strings.undo !== EN_PACK.strings.undo ? ` (or “${next.strings.undo}”)` : '';
+        say(`${name} is on. Say “undo”${undoWord} for English.`);
+        bodyLanguage('yes');
+      },
+      onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English. Nothing changed.'); autoHideAi(); },
     });
     showReview({
-      title: 'Add Kannada', card, extra: buildReviewExtra(),
-      changes: languagePackChanges('Kannada', swapCount),
-      facts: reviewFacts(knSent, utterance),
-    }, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });
+      title, card, extra: buildReviewExtra(),
+      changes: languagePackChanges(name, swapCount, packSwaps(next)),
+      facts: reviewFacts(si, utterance),
+    }, { tokens: [si], facts: () => reviewFacts(si, utterance) });
   }
   // ---- the lamp connector turn: Gemini writes how to talk to the lamp, as data ----
   /** "connect the lamp" with a WiZ lamp here: a connector turn (else null). */
@@ -4613,7 +4657,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // would cover Approve/Reject. Keep the review the single gate (same guard the
   // morph flow uses) and tell the user to finish it first.
   // ---- Voice: pick the voice replies are spoken with (More → Voice, "change voice") ----
-  const voiceLang = (): string => (pack?.lang === 'kn' ? 'kn-IN' : 'en-US');
+  const voiceLang = (): string => resolveLanguage(pack?.lang ?? 'en').speechLang;
   const voiceSheet = mountVoiceSheet(root, {
     speaker, lang: voiceLang, storage: voiceStore, say,
     platform: speechPlatform(typeof navigator !== 'undefined' ? navigator.userAgent : '', typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0),
@@ -5125,7 +5169,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const later = net.drainLater();
       const n = later.length + deepLater.length;
       panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
-      if (n) { say(`Back online. Running ${n} saved request${n > 1 ? 's' : ''}.`); later.forEach((u) => { if (/kannada|ಕನ್ನಡ/i.test(u)) void languageTurn(u); }); void runDeepLater(); }
+      if (n) { say(`Back online. Running ${n} saved request${n > 1 ? 's' : ''}.`); later.forEach((u) => { const code = languageAsk(u); if (code) languageAskTurn(code, u); }); void runDeepLater(); }
       else if (announce) say('Back online.');
     } else if (announce) say(`${OFFLINE_QUICK_ONLY}.`);
   }
@@ -5353,7 +5397,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (phoneSensor && (g === 'face' || g === 'hold')) void phoneSensor.request('follow', false);
         return inputs.handleSpeech(text);
       }
-      case 'kannada': addKannada(); return true;
+      case 'language': languageAskTurn(r.code, text); return true;
       case 'history': openHistory(); return true;
       case 'planExtra': {
         const said = planBoard!.runExtra!(r.extra);
@@ -5873,6 +5917,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  change). A board's maker never counts edits to its drawing, and a
    *  drawing's maker is its own (planMakers). */
   function makerOf(id: string): ArtifactBy | undefined {
+    // A pack approved this session is the engine's; one applied from the
+    // store keeps its stored maker (undefined here).
+    if (id.startsWith('pack-')) return packMakers.get(id.slice('pack-'.length));
     const frameId = frameIdOfArtifactId(id);
     if (!frameId) return undefined;
     const asBy = (by: EngineId | 'her'): ArtifactBy => (by === 'her' ? 'person' : by);

@@ -33,7 +33,7 @@ describe('routeLine: the table run() switches on', () => {
     ['stop following', 'gimbal'],
     ['keep alive on', 'gimbal'],
     ['gimbal keep alive off', 'gimbal'],
-    ['add kannada', 'kannada'],
+    ['add kannada', 'language'],
     ['show history', 'history'],
     ['check accessibility', 'planExtra', { hasPlanBoard: true }],
     ['show 3d', 'planExtra', { hasPlanBoard: true }],

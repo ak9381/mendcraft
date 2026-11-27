@@ -190,5 +190,6 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
   if (k === 'connector' && id !== `connector-${slug((d.value.connector as { key: string }).key)}`) return bad('the connector id does not match its device');
   if (k === 'steps' && id !== `steps-${String(d.value.at)}`) return bad('the suggestions id does not match their step');
+  if (k === 'pack' && id !== artifactId('pack', String(d.value.lang))) return bad('the pack id does not match its language');
   return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: statusOf(k) }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }
