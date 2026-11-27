@@ -161,3 +161,11 @@ describe('neutral Latin in the script share', () => {
     expect(kept('gemini nano ಚಟುವಟಿಕೆ')).toBe(false); // lower case is ordinary English
   });
 });
+
+import { stringFault as sf } from '../../src/canvas/languagePack';
+describe('a direction override hidden behind a newline', () => {
+  it('is reported as hidden/direction characters, not as a multi-line slip', () => {
+    expect(sf('x\n‮ಅಆ', 'kn', /\p{Script=Kannada}/u)).toBe('hidden or direction characters');
+    expect(sf('ಅಆ\nಇಈ', 'kn', /\p{Script=Kannada}/u)).toBe('more than one line');
+  });
+});

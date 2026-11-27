@@ -175,8 +175,10 @@ export const SAFETY_FAULTS: ReadonlySet<string> = new Set(['hidden or direction 
  *  `lang`. Safety reasons (hidden characters, markup) are named as such. */
 export function stringFault(v: unknown, lang: string, script: RegExp): string | null {
   if (typeof v !== 'string') return 'not text';
+  // Hidden/direction characters first (a tampering sign refuses the pack),
+  // ignoring line breaks — only then the one-line rule (a slip, dropped).
+  if (BAD_CHARS.test(v.replace(/[\n\r\u2028\u2029]/g, ''))) return 'hidden or direction characters';
   if (/[\n\r\u2028\u2029]/.test(v)) return 'more than one line';
-  if (BAD_CHARS.test(v)) return 'hidden or direction characters';
   const t = v.trim();
   if (!t) return 'empty';
   if (/[<>]/.test(t)) return 'markup';
