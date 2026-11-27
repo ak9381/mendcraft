@@ -31,6 +31,10 @@ describe('chat guard, review sim-4 §2', () => {
     'No, I don\'t think so.', 'No worries at all.', 'No problem!', 'Well done!', 'Hmm, good question.',
     'Good night 🌙', 'Lovely 😊', 'Namaskara, hegiddira?', 'Oota aaytha?',
     'I hope it works out for you.', 'I think you will like it.', 'Perhaps a walk would help.',
+    // Opus review of simfix-4: talk that only shares a word with a completion
+    'All done with my coffee!', 'I handled it badly, sorry.', 'The weather has been changed by the storm.',
+    'Your garden is complete with roses.', 'The new movie is live on Netflix.', 'I added salt to the soup, it tastes better.',
+    'I created a poem for you, here it is.',
   ])('passes: %s', (r) => expect(promiseGuard(r, '').replaced).toBe(false));
 
   it.each([

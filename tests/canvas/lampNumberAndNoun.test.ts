@@ -34,6 +34,12 @@ describe('a lamp number', () => {
     expect(routeLine(line, { devices: two }).name).toBe('device');
   });
 
+  it.each(['turn on lamp 2 and lamp 3', 'turn on lamp 3 and lamp 2'])('%s: Lamp 2 acts and lamp 3 is said aloud', (line) => {
+    const r = parseDeviceCommands(line, two)!;
+    expect(r.intents).toEqual([{ deviceId: 'l2', on: true }]);
+    expect(r.say).toMatch(/Lamp 2\..*no lamp 3 here/);
+  });
+
   it('a level is not a lamp number', () => {
     expect(parseDeviceCommands('lamp 40 percent', two)?.intents).toEqual([{ deviceId: 'l1', on: true, brightness: 40 }]);
     expect(parseDeviceCommands('set lamp 2 to 40 percent', two)?.intents).toEqual([{ deviceId: 'l2', on: true, brightness: 40 }]);

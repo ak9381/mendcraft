@@ -205,23 +205,28 @@ const FOREIGN_CLAIMS = /\b(?:he|ha|hemos|has|j['’]ai|ai|avons|habe|hab|haben|h
 const HEDGE = String.raw`(?:(?:I\s+(?:think|believe|guess|suppose|reckon|hope)|perhaps|probably|hopefully|it\s+(?:seems|looks)(?:\s+like)?|looks\s+like|seems\s+like)\s+)?`;
 const DONE_TAIL = String.raw`(?:\s+(?:and\s+dusted|now|already|for\s+you|as\s+(?:you\s+)?(?:asked|requested|wished|wanted)))*\s*(?:[.!…,—–-]|$)`;
 const GENERIC_PARTICIPLE = 'made|done|changed|paired|saved|updated|set\\s+up|set|created|added|logged|handled|completed|finished|scheduled|reset|switched|turned|sent|configured|enabled|disabled|activated|connected|removed|deleted|fixed|applied|installed|cleared|booked|placed|started|locked|unlocked|sorted|taken\\s+care\\s+of';
+/** What these rules may be about: the app's things and an assistant's own
+ *  (a change, a setting, a request, a list…) — never the weather or a soup. */
+const NOUNS = String.raw`(?:${THING}|changes?|settings?|requests?|connectors?|lists?|notes?|reminders?|messages?|orders?|routines?|tasks?|appointments?|bookings?|devices?|cameras?|phones?|gimbals?|stands?|language|kannada)`;
+/** The clause ends after its object (optionally "for you", "now", "out"…): "I handled it badly" is talk. */
+const OBJ_END = String.raw`(?:\s+(?:out|for\s+you|now|already|just\s+now|as\s+(?:you\s+)?(?:asked|requested|wanted)))*\s*(?:[.!…,—–-]|$)`;
 const NO_NOUN_CLAIMS: RegExp[] = [
   // "Done and dusted.", "All finished.", "It's all done now.", "That's sorted.", "Perhaps it's done now —"
   new RegExp(String.raw`${S_START}${HEDGE}(?:(?:it|that|this|everything|all\s+that)\s*(?:['’]s|\s+is|\s+has|\s+was)\s+)?(?:all\s+|now\s+|already\s+)*(?:been\s+)?(?:done|finished|sorted(?:\s+out)?|complete(?:d)?|handled|taken\s+care\s+of)${DONE_TAIL}`, 'i'),
-  new RegExp(String.raw`${S_START}(?:job|mission|task|all)\s+(?:done|accomplished|complete(?:d)?)\b`, 'i'),
+  new RegExp(String.raw`${S_START}(?:job|mission|task|all)\s+(?:done|accomplished|complete(?:d)?)${DONE_TAIL}`, 'i'),
   // "I took care of it.", "I've handled it for you.", "I made the change.", "I sorted that out."
-  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have|['’]d|\s+had)?\s+(?:just\s+|already\s+|now\s+|gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:took\s+care\s+of|taken\s+care\s+of|take\s+care\s+of|handled|sorted|done|did|finished|completed|logged|applied|saved|updated)\s+(?:it|that|this|them|everything|all\s+of\s+(?:it|that)|the\s+changes?|your\s+(?:changes?|request|settings?)|those\s+changes|what\s+you\s+asked)\b`, 'i'),
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have|['’]d|\s+had)?\s+(?:just\s+|already\s+|now\s+|gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:took\s+care\s+of|taken\s+care\s+of|take\s+care\s+of|handled|sorted|done|did|finished|completed|logged|applied|saved|updated)\s+(?:it|that|this|them|everything|all\s+of\s+(?:it|that)|the\s+changes?|your\s+(?:changes?|request|settings?)|those\s+changes|what\s+you\s+asked)${OBJ_END}`, 'i'),
   new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+)?made\s+(?:the|those|these|your|all\s+the)\s+(?:changes?|update|edits?)\b`, 'i'),
   // "I just finished creating it."
   new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:finished|completed)\s+(?:${ACTING}|logging|pairing)\b`, 'i'),
   // "The change has been made.", "Your settings have been changed.", "That's been updated."
-  new RegExp(String.raw`(?:\b(?:the|your|my|all|those|these)\s+(?:[\w’'-]+\s+){0,2}?[\w’'-]+|\b(?:it|that|this|everything|they))\s*(?:\s(?:has|have)|['’]s|['’]ve)\s+(?:now\s+|just\s+|already\s+|all\s+)?been\s+(?:${GENERIC_PARTICIPLE})\b`, 'i'),
+  new RegExp(String.raw`(?:\b(?:the|your|my|all|those|these)\s+(?:[\w’'-]+\s+){0,2}?${NOUNS}|\b(?:it|that|this|everything|they))\s*(?:\s(?:has|have)|['’]s|['’]ve)\s+(?:now\s+|just\s+|already\s+|all\s+)?been\s+(?:${GENERIC_PARTICIPLE})\b(?!\s+by\b)`, 'i'),
   // "Your connector is set up and working.", "The new board is live.", "Your message is on its way."
-  new RegExp(String.raw`\b(?:the|your)\s+(?:[\w’'-]+\s+){0,2}?[\w’'-]+\s+(?:is|are|['’]s|['’]re)\s+(?:now\s+|all\s+)?(?:set\s+up|live|enabled|activated|configured|paired|scheduled|complete|completed|handled|on\s+(?:its|their)\s+way)\b`, 'i'),
+  new RegExp(String.raw`\b(?:the|your)\s+(?:[\w’'-]+\s+){0,2}?${NOUNS}\s+(?:is|are|['’]s|['’]re)\s+(?:now\s+|all\s+)?(?:(?:set\s+up|live|enabled|activated|configured|paired|scheduled|complete|completed|handled)(?:\s+and\s+\w+)?${OBJ_END}|on\s+(?:its|their)\s+way\b)`, 'i'),
   // "I created a connector…", "I've added milk to your list", "I've reset the camera."
-  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|now\s+|also\s+)?(?:created|added|set\s+up|reset|paired|connected|scheduled|logged|installed|configured|enabled|disabled|activated|deactivated|switched\s+(?:on|off)|turned\s+(?:on|off)|locked|unlocked|booked)\s+(?:(?:a|an|the|your|some|it|that|this|them)\b|[\w’'-]+\s+(?:to|for|on|in)\b)`, 'i'),
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|now\s+|also\s+)?(?:created|added|set\s+up|reset|paired|connected|scheduled|logged|installed|configured|enabled|disabled|activated|deactivated|switched\s+(?:on|off)|turned\s+(?:on|off)|locked|unlocked|booked)\s+(?:(?:it|that|this|them)${OBJ_END}|[^.!?;,]*?\b${NOUNS}\b)`, 'i'),
   // "Timer started, 10 minutes.", "Board created successfully."
-  new RegExp(String.raw`${S_START}(?:the\s+|your\s+)?(?:[\w’'-]+\s+)?[\w’'-]+\s+(?:started|paired|connected|saved|created|updated|added|scheduled|logged|reset|enabled|activated|sent|booked)(?:\s+(?:successfully|for\s+you|now|already|as\s+(?:you\s+)?asked))?\s*(?:[.!…,—–]|$)`, 'i'),
+  new RegExp(String.raw`${S_START}(?:the\s+|your\s+)?(?:[\w’'-]+\s+)?${NOUNS}\s+(?:started|paired|connected|saved|created|updated|added|scheduled|logged|reset|enabled|activated|sent|booked)(?:\s+(?:successfully|for\s+you|now|already|as\s+(?:you\s+)?asked))?\s*(?:[.!…,—–]|$)`, 'i'),
   // "Yes, saved.", "Sent!"
   new RegExp(String.raw`${S_START}(?:(?:yes|yep|yeah|okay|ok|sure|alright|there|and)[,!\s]+)?(?:all\s+)?(?:saved|sent|logged|updated|added|created|paired|connected|switched\s+(?:on|off)|turned\s+(?:on|off)|scheduled|booked|reset|changed|applied)(?:\s+(?:now|for\s+you|already|successfully))?\s*(?:[.!…]|$)`, 'i'),
   // "Looks like it worked!", "I think that worked —"

@@ -235,7 +235,34 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   return parseOne(text, t, devices, opts);
 }
 
+/** Each lamp number she said ("lamp 2 and lamp 3"), with the lamps it names
+ *  ("lamp 1" is the plain "Lamp" when no tile carries a 1). A level ("lamp 40
+ *  percent") is not a lamp number. */
+function lampNumbers(text: string, t: string, lamps: readonly DeviceRef[]): { noun: string; n: string; hit: DeviceRef[] }[] {
+  const out: { noun: string; n: string; hit: DeviceRef[] }[] = [];
+  for (const m of t.matchAll(/\b(lamp|light|bulb)s? (\d+)\b(?! percent| per cent)/g)) {
+    if (new RegExp(`(?<![\\d.])${m[2]}(?:\\.\\d+)?\\s*(?:%|percent|per cent)`, 'i').test(text)) continue;
+    let hit = lamps.filter((d) => norm(d.label).split(' ').includes(m[2]));
+    if (!hit.length && m[2] === '1') {
+      const plain = lamps.filter((d) => !/\d/.test(norm(d.label)));
+      if (plain.length === 1) hit = plain;
+    }
+    out.push({ noun: m[1], n: m[2], hit });
+  }
+  return out;
+}
+
 function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
+  const r = parseOneLine(text, t, devices, opts);
+  // "turn on lamp 2 and lamp 3": Lamp 2 acts, and lamp 3 is said aloud — never dropped silently.
+  const missing = lampNumbers(text, t, devices.filter((d) => d.kind !== 'music')).filter((x) => !x.hit.length);
+  if (r && r.intents.length && missing.length) {
+    return { ...r, say: `${r.say} There’s no ${missing.map((x) => `${x.noun} ${x.n}`).join(' or ')} here.`.trim() };
+  }
+  return r;
+}
+
+function parseOneLine(text: string, t: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
 
   // Music is a separate vocabulary (play / pause / next / louder / softer) and
   // targets the music devices; lamp verbs never touch a speaker.
@@ -289,13 +316,11 @@ function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?:
   // Review sim-4 §3: "lamp 3" is the tile that carries a 3 ("lamp 1" the plain
   // "Lamp" when none carries a 1); a number on no tile is refused aloud. A level
   // ("lamp 40 percent") is not a lamp number.
-  const num = /\b(lamp|light|bulb)s? (\d+)\b(?! percent| per cent)/.exec(t);
-  if (num && lamps.length && !new RegExp(`(?<![\\d.])${num[2]}(?:\\.\\d+)?\\s*(?:%|percent|per cent)`, 'i').test(text)) {
-    const hit = lamps.filter((d) => norm(d.label).split(' ').includes(num[2]));
-    const plain = num[2] === '1' && !hit.length ? lamps.filter((d) => !/\d/.test(norm(d.label))) : [];
+  const nums = lamps.length ? lampNumbers(text, t, lamps) : [];
+  if (nums.length) {
+    const hit = [...new Set(nums.flatMap((x) => x.hit))];
     if (hit.length) matched = hit;
-    else if (plain.length === 1) matched = plain;
-    else return { intents: [], say: `There’s no ${num[1]} ${num[2]} here — ${yourLamps(lamps)}.` };
+    else return { intents: [], say: `There’s no ${nums.map((x) => `${x.noun} ${x.n}`).join(' or ')} here — ${yourLamps(lamps)}.` };
   }
   // "the desk lamp" when no tile says desk: with one lamp it is that lamp;
   // with several it is refused aloud, naming them — never guessed, never chat.
