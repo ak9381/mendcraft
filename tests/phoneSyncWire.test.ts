@@ -3,7 +3,7 @@ import {
   validateCommand, validateMessage, fitsRoomMessageRules, CMD_JSON_MAX,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { createHostSession, createGuestSession } from '../src/relay/session';
+import { createHostSession, createGuestSession, createControlSession } from '../src/relay/session';
 import { buildControlSnapshot, type ControlSnapshot } from '../src/relay/controlSnapshot';
 import { serializeTransfer, validateTransfer } from '../src/canvas/tileTransfer';
 
@@ -122,5 +122,27 @@ describe('session: guests receive host state snapshots', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].rev).toBe(3);
     await Promise.all([guest.close(), host.close()]);
+  });
+
+  it('replays are marked: the buffered one (meta) and the host re-send on a phone OR dashboard hello', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, undefined, { token: TOKEN });
+    const board = { kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'lamp-1', label: 'Lamp' }] } as never;
+    const guest = await createGuestSession(t, TOKEN);
+    await flush();
+    await host.publishState(buildControlSnapshot({ rev: 4, board, boardSend: { id: 's1', at: 1000 } }));
+    await flush();
+    const metas: unknown[] = [];
+    guest.onSnapshot((s, meta) => metas.push([s.boardSend, meta ?? null]));
+    expect(metas).toEqual([[{ id: 's1', at: 1000 }, { replayed: true }]]);
+    // A dashboard's hello: the host re-sends, marked as a replay.
+    const dash = await createControlSession(t, TOKEN);
+    await flush(); await flush();
+    expect(metas.at(-1)).toEqual([{ id: 's1', at: 1000, replay: true }, null]);
+    // A second phone's hello too.
+    const other = await createGuestSession(t, TOKEN);
+    await flush(); await flush();
+    expect(metas.at(-1)).toEqual([{ id: 's1', at: 1000, replay: true }, null]);
+    await Promise.all([guest.close(), other.close(), dash.close(), host.close()]);
   });
 });

@@ -70,8 +70,8 @@ const PROMISES: RegExp[] = [
 // or one out in the world (call, text, order, book, remind…) — or when a
 // lighter verb (check, tell her, look into…) is aimed at now / for you.
 // Talk itself ("I'll do my best", "I'll keep you company", "I'll try") passes.
-const APP_ACT = 'add|make|create|build|draw|place|insert|change|move|remove|delete|turn|switch|set|open|close|update|connect|start|stop|play|pause|dim|brighten|widen|resize|rename|extend|enlarge|fix|save|undo|put|get|install|adjust|lower|raise|mute|unmute|record';
-const OUTSIDE = 'call|ring|phone|dial|text|message|email|e-mail|mail|send|forward|order|book|buy|purchase|pay|reserve|schedule|remind|alert|notify|contact|invite|arrange|cancel|transfer|post|deliver|fetch|drive|cook|clean|lock|unlock|remember';
+const APP_ACT = 'add|make|create|build|draw|place|insert|change|move|remove|delete|turn|switch|set|open|close|update|connect|start|stop|play|pause|dim|brighten|widen|resize|rename|extend|enlarge|fix|save|undo|put|get|install|adjust|lower|raise|mute|unmute|record|warm|cool';
+const OUTSIDE = 'call|ring|phone|dial|text|message|email|e-mail|mail|send|forward|order|book|buy|purchase|pay|reserve|schedule|remind|alert|notify|inform|ping|contact|invite|arrange|cancel|transfer|post|deliver|fetch|drive|cook|clean|lock|unlock|remember';
 const STRONG = new RegExp(String.raw`^(?:${APP_ACT}|${OUTSIDE})$`, 'i');
 const OUTSIDE_ONLY = new RegExp(String.raw`^(?:${OUTSIDE})$`, 'i');
 const ANY_ACT = new RegExp(String.raw`\b(?:${OUTSIDE}|${APP_ACT})\b`, 'i');
@@ -91,6 +91,8 @@ function strongExempt(verb: string, rest: string): boolean {
     case 'get': return /^\s+(?:back|to|you\s+(?:an?\s+)?(?:idea|answer|tip))\b|^\s+(?:it|that|what\s+you\s+mean)\s*(?:[.!,?]|$)|^\s+(?:this|that)\s+straight\b/i.test(rest);
     case 'set': return /^\s+(?:the\s+)?(?:record\s+straight|scene)\b/i.test(rest);
     case 'turn': return /^\s+(?:this|that|it)\s+around\b/i.test(rest);
+    // "I'll warm up to the idea", "I'll warm to it", "I'll cool off and rest" are talk; "warm up the room" is not.
+    case 'warm': case 'cool': return /^\s*(?:\s(?:up|down|off))?\s*(?:to\b|and\b|[.!?,;]|$)/i.test(rest);
     default: return false;
   }
 }
@@ -134,7 +136,7 @@ function strongGerund(ing: string): boolean {
   const forms = [stem, `${stem}e`, stem.replace(/(.)\1$/, '$1')];
   return forms.some((f) => f.length > 1 && STRONG.test(f));
 }
-const OUTSIDE_PAST = 'sent|called|rang|rung|phoned|dialled|dialed|texted|messaged|emailed|mailed|forwarded|ordered|booked|bought|purchased|paid|reserved|scheduled|reminded|alerted|notified|contacted|invited|arranged|cancell?ed|transferred|posted|delivered|informed';
+const OUTSIDE_PAST = 'sent|called|rang|rung|phoned|dialled|dialed|texted|messaged|emailed|mailed|forwarded|ordered|booked|bought|purchased|paid|reserved|scheduled|reminded|alerted|notified|contacted|invited|arranged|cancell?ed|transferred|posted|delivered|informed|pinged';
 const PAST_CLAIMS: RegExp[] = [
   new RegExp(String.raw`\bI\s*(?:'ve|\s+have|'d|\s+had)?\s+(?:just\s+|now\s+|already\s+)?(?:${OUTSIDE_PAST})\b`, 'i'),
   /\bI\s*(?:'ve|\s+have)\s+(?:just\s+|already\s+)?(?:told|let)\s+(?!you\b|me\b)\w+(?:\s+\w+)?(?:\s+know)?\b/i,

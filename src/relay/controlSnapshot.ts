@@ -209,7 +209,7 @@ export interface ControlSnapshot {
   boardFor?: 'ios' | 'android';
   /** Set only on a REAL board send (a whole-board edge drag), never on a
    *  republish: the phone lights the arrived board once per id. */
-  boardSend?: { id: string; at: number };
+  boardSend?: { id: string; at: number; replay?: true };
   /** What is drawn on `board`'s plan tiles right now (plan board id → plan
    *  doc), BESIDE the surface plan — never inside it. Each doc sanitized,
    *  only ids `board` has, size-capped (planDocs.coerceBoardDrawings). */
@@ -401,7 +401,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
   const bsIn = (input.boardSend ?? null) as { id?: unknown; at?: unknown } | null;
   const boardSend = board && bsIn && typeof bsIn.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(bsIn.id) && typeof bsIn.at === 'number' && Number.isFinite(bsIn.at)
-    ? { id: bsIn.id, at: Math.round(bsIn.at) } : null;
+    ? { id: bsIn.id, at: Math.round(bsIn.at), ...((bsIn as { replay?: unknown }).replay === true ? { replay: true as const } : {}) } : null;
   const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
   const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
 
@@ -639,6 +639,13 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
+}
+
+/** The host re-publishes its last snapshot when a phone says hello: a board
+ *  send in it is marked as a replay, so the phone age-checks it (a stale send
+ *  never lights "Moved from laptop" on a fresh phone; live sends always do). */
+export function markReplay(snap: ControlSnapshot): ControlSnapshot {
+  return snap.boardSend ? { ...snap, boardSend: { ...snap.boardSend, replay: true } } : snap;
 }
 
 // ---------------------------------------------------------------------------

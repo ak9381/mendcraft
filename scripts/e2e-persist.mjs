@@ -95,9 +95,13 @@ async function main() {
     await page.evaluate((u) => { localStorage.setItem('mc.canvas.v1', u); localStorage.removeItem('mc.canvas.v1.unreadable'); }, unreadable);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ready();
-    await waitFor(() => /Couldn’t open your saved boards — they’re kept safe\./.test(document.body.innerText), 8000, 'the "kept safe" line');
-    const said = await page.evaluate(() => (document.body.innerText.match(/Couldn’t open your saved boards/g) || []).length);
-    check(said >= 1, 'says once that the saved boards are kept safe');
+    // Asserted on the canvas's own state + status log, not the page text
+    // (the toast may already have faded by the time innerText is read).
+    const ls = await page.evaluate(() => window.__canvas.loadState());
+    check(ls.unreadable === true && ls.safe === true, 'the unreadable doc is reported as kept safe (loadState)');
+    await waitFor(() => window.__canvas.statusSince(0).some((l) => /Couldn’t open your saved boards — they’re kept safe\./.test(l)), 8000, 'the "kept safe" line');
+    const said = await page.evaluate(() => window.__canvas.statusSince(0).filter((l) => /Couldn’t open your saved boards/.test(l)).length);
+    check(said === 1, `says once that the saved boards are kept safe (${said})`);
     await run('new board'); await sleep(1200);
     const kept = await page.evaluate(() => localStorage.getItem('mc.canvas.v1.unreadable'));
     check(kept === unreadable, 'the unreadable doc is kept, byte for byte, after the canvas saved again');

@@ -43,6 +43,8 @@ export function applyGuestSnapshot(
   platform?: PhonePlatform,
   /** Phone: lights the board only for a real new send (boardGlow.ts). */
   arrival?: { gate: ArrivalGate; now: () => number },
+  /** The session handed us its buffered snapshot (age-checked; live is not). */
+  meta?: { replayed?: boolean },
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
@@ -50,7 +52,7 @@ export function applyGuestSnapshot(
   // The board's current plan drawings ride with it (the phone re-checks them).
   // A drawing left out (too big for the relay) is said on the phone.
   const omitted = snap.omitted?.drawings ?? 0;
-  const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now());
+  const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now(), { replayed: meta?.replayed === true });
   const info = { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), ...(arrived ? { arrived } : {}) };
   if (Object.keys(info).length) showBoard(snap.board, snap.boardDrawings ?? {}, info);
   else showBoard(snap.board, snap.boardDrawings ?? {});

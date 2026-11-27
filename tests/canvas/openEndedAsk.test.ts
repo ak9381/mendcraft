@@ -201,6 +201,10 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     "I can tell you about the floor plan board.",
     "Your daughter sounds lovely.",
     "I'll start by saying hello!",
+    "I'll warm up to the idea.",
+    "I'll warm to it.",
+    "I'll cool off and rest.",
+    "I'll warm up and stretch first.",
   ];
   const claims = [
     'Yes, I can. I will call your daughter right away.',
@@ -235,10 +239,14 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     "I'll play some jazz.",
     "Sure, I'll turn on the lights.",
     "I've booked it for Tuesday.",
+    "I'll warm up the room for you",
+    "I'll ping your daughter",
+    "I'll inform the doctor",
+    "I'll cool the bedroom down.",
   ];
   it('the sets are the agreed size', () => {
-    expect(smallTalk.length).toBe(60);
-    expect(claims.length).toBe(32);
+    expect(smallTalk.length).toBe(64);
+    expect(claims.length).toBe(36);
   });
   for (const c of smallTalk) it(`passes: ${c}`, () => expect(promisesAction(c)).toBe(false));
   for (const c of claims) it(`replaces: ${c}`, () => expect(promisesAction(c)).toBe(true));
@@ -246,6 +254,9 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     expect(CHAT_CANT_ACT_OUTSIDE).toBe('I can’t do that — I can only change things here on your boards and devices.');
     expect(promiseGuard('Yes, I can. I will call your daughter right away.', 'can you call my daughter').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
     expect(promiseGuard('I’ll order milk.', 'order some milk').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
+    expect(promiseGuard("I'll ping your daughter", 'ping my daughter').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
+    expect(promiseGuard("I'll inform the doctor", 'tell the doctor').reply).toBe(CHAT_CANT_ACT_OUTSIDE);
+    expect(promiseGuard("I'll warm up to the idea.", 'what about a nap').replaced).toBe(false);
   });
   it('streaming: the live Nano reply never shows a word of its promise', () => {
     const reply = 'Yes, I can. I will call your daughter right away.';

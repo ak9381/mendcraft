@@ -9,7 +9,8 @@
 //    unreadable doc gets a key of its own, at most MAX_UNREADABLE). If the
 //    copy can't be made, the canvas must not save over the original at all
 //    (`safe: false`);
-//  - a doc that loads only after a repair is copied aside once first;
+//  - a doc that loads only after a repair is copied aside first (the first
+//    copy is never overwritten; later ones rotate, at most 3);
 //  - ?fresh=1 starts blank only after the saved doc is copied aside (the
 //    first copy is never overwritten; later ones rotate).
 import { parseCanvasDocReport, type CanvasDoc } from './frames';
@@ -25,6 +26,21 @@ export const BEFORE_REPAIR_KEY = 'mc.canvas.v1.beforeRepair';
 /** Unreadable docs kept at most (the first under UNREADABLE_KEY). */
 export const MAX_UNREADABLE = 3;
 export const UNREADABLE_LINE = 'Couldn’t open your saved boards — they’re kept safe.';
+/** Said once when the main save of her boards fails (storage full). */
+export const SAVE_FULL_LINE = 'Couldn’t save your boards — storage is full.';
+/** The main save's result → the line to say, once: on the first failure,
+ *  then not again until a save has worked. */
+export function createSaveFailNotice(): { after(ok: boolean): string | null } {
+  let said = false;
+  return {
+    after(ok) {
+      if (ok) { said = false; return null; }
+      if (said) return null;
+      said = true;
+      return SAVE_FULL_LINE;
+    },
+  };
+}
 export const UNSAVED_LINE = 'Couldn’t open your saved boards, and changes in this session won’t be saved.';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key'>> & { length?: number };
@@ -74,10 +90,51 @@ export function loadCanvasDoc(storage: Store, key: string, log: (line: string) =
   try { report = parseCanvasDocReport(JSON.parse(raw)); } catch { /* not JSON */ }
   if (!report.doc) return { doc: null, unreadable: true, safe: keepUnreadable(storage, raw) };
   if (!report.repaired.length) return { doc: report.doc, unreadable: false, safe: true };
-  // Loaded after a repair: the raw text goes aside once, before any save.
-  if (read(storage, BEFORE_REPAIR_KEY) === null) write(storage, BEFORE_REPAIR_KEY, raw);
-  log(`[mendcraft] saved boards repaired on load: ${report.repaired.join(', ')} (the saved text is kept under ${BEFORE_REPAIR_KEY})`);
+  // Loaded after a repair: the raw text goes aside, before any save.
+  const kept = keepBeforeRepair(storage, raw);
+  log(`[mendcraft] saved boards repaired on load: ${report.repaired.join(', ')} (${kept ? `the saved text is kept under ${kept}` : 'the saved text could not be kept aside'})`);
   return { doc: report.doc, unreadable: false, safe: true, repaired: report.repaired };
+}
+
+/** The beforeRepair copies, like the ?fresh ones: the first is kept for
+ *  good; slots 2–3 hold the latest two other repaired docs (newest in 2). */
+export const REPAIR_SLOTS = [BEFORE_REPAIR_KEY, `${BEFORE_REPAIR_KEY}.2`, `${BEFORE_REPAIR_KEY}.3`] as const;
+
+/** Copy a repaired doc's raw text aside. The key that holds it, or null
+ *  when it could not be kept (never claims a slot holding other text). */
+function keepBeforeRepair(storage: Store, raw: string): string | null {
+  const i = keepInSlots(storage, REPAIR_SLOTS, raw);
+  return i === null ? null : REPAIR_SLOTS[i];
+}
+
+/** About what one origin's localStorage holds (5 MB of UTF-16 ≈ 5M chars,
+ *  keys included). A guess: browsers don't report it. */
+export const STORAGE_QUOTA_CHARS = 5_000_000;
+
+/** Chars still free (a guess from what is stored), or Infinity when the
+ *  storage can't be listed. */
+export function freeChars(storage: Store, quota = STORAGE_QUOTA_CHARS): number {
+  if (typeof storage.length !== 'number' || typeof storage.key !== 'function') return Infinity;
+  let used = 0;
+  try {
+    for (let i = 0; i < storage.length; i++) { const k = storage.key(i); if (k) used += k.length + (read(storage, k)?.length ?? 0); }
+  } catch { return Infinity; }
+  return quota - used;
+}
+
+/** First slot never overwritten; slots 2–3 rotate (newest in slot 2). The
+ *  index of the slot that holds `raw` afterwards, or null on a failed write.
+ *  A rotating copy is skipped (null) when it would leave less than ~2× the
+ *  doc free: the main save of her boards matters more than another copy. */
+function keepInSlots(storage: Store, slots: readonly string[], raw: string): number | null {
+  const there = slots.map((k) => read(storage, k));
+  const at = there.indexOf(raw);
+  if (at >= 0) return at;
+  if (there[0] === null) return write(storage, slots[0], raw) ? 0 : null;
+  const grow = raw.length + (there[1] === null ? 0 : Math.max(0, there[1].length - (there[2]?.length ?? 0)));
+  if (freeChars(storage) - grow < 2 * raw.length) return null;
+  if (there[1] !== null && !write(storage, slots[2], there[1])) return null;
+  return write(storage, slots[1], raw) ? 1 : null;
 }
 
 /** The one line said when the saved doc couldn't be opened (null: none). */
@@ -100,11 +157,7 @@ export const FRESH_SLOTS = [BEFORE_FRESH_KEY, `${BEFORE_FRESH_KEY}.2`, `${BEFORE
 /** Copy a doc aside before ?fresh. The first slot is never overwritten;
  *  slots 2–3 hold the latest two others (newest in slot 2). */
 function keepBeforeFresh(storage: Store, raw: string): boolean {
-  const there = FRESH_SLOTS.map((k) => read(storage, k));
-  if (there.includes(raw)) return true;
-  if (there[0] === null) return write(storage, FRESH_SLOTS[0], raw);
-  if (there[1] !== null && !write(storage, FRESH_SLOTS[2], there[1])) return false;
-  return write(storage, FRESH_SLOTS[1], raw);
+  return keepInSlots(storage, FRESH_SLOTS, raw) !== null;
 }
 
 /** ?fresh=1: copy the saved doc aside, then clear it (and the devices-board

@@ -33,7 +33,7 @@ import {
   type PrivacyAsk,
   type PrivacyReply,
 } from './protocol';
-import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
+import { coerceSnapshot, markReplay, type ControlSnapshot } from './controlSnapshot';
 import type { RelayMeta, RelayTransport } from './transport';
 
 export interface RelayFrame {
@@ -118,8 +118,9 @@ export interface GuestSession extends SessionBase {
   sendFrame(frame: RelayFrame): Promise<void>;
   sendMusic(music: MusicStatus): Promise<void>;
   /** Receive the host's privacy-safe state snapshots (board/layout/transfer live
-   *  here too). Coerced before the callback — the phone treats it as untrusted. */
-  onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
+   *  here too). Coerced before the callback — the phone treats it as untrusted.
+   *  `meta.replayed`: the buffered last snapshot handed to a late callback. */
+  onSnapshot(cb: (snapshot: ControlSnapshot, meta?: { replayed?: boolean }) => void): void;
   /** Send a raw prompt to the desktop hub; resolves with the filled reply. */
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
   /** The host asked phones to announce themselves again ('whoIsThere'). */
@@ -358,7 +359,7 @@ export async function createHostSession(
     if (msg.from === 'control') {
       // A read-only dashboard, not a remote: never changes pairing. Replay the
       // latest state so it populates immediately.
-      if (msg.type === 'hello' && lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (msg.type === 'hello' && lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
       return;
     }
     if (msg.type === 'hello') {
@@ -378,7 +379,7 @@ export async function createHostSession(
       // Replay the latest state so a phone (freshly joined or reloaded) populates
       // its board/layout immediately — today this only happened for a control
       // hello, which stranded a late-joining phone until the next change.
-      if (lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
     } else if (msg.type === 'cmd' && msg.cmd.kind === 'ping') {
@@ -511,7 +512,7 @@ export async function createGuestSession(
 ): Promise<GuestSession> {
   const core = makeCore('phone', transport, roomId);
 
-  let snapshotCb: ((s: ControlSnapshot) => void) | null = null;
+  let snapshotCb: ((s: ControlSnapshot, meta?: { replayed?: boolean }) => void) | null = null;
   let whoCb: (() => void) | null = null;
   let pongCb: ((nonce: string) => void) | null = null;
   let hostSid: string | null = null;
@@ -614,7 +615,7 @@ export async function createGuestSession(
       transport.publish(roomId, { v: 1, from: 'phone', type: 'music', music }),
     onSnapshot: (cb) => {
       snapshotCb = cb;
-      if (lastSnapshot) cb(lastSnapshot);
+      if (lastSnapshot) cb(lastSnapshot, { replayed: true });
     },
     onSensePoint: (cb) => {
       senseCb = cb;
