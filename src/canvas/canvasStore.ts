@@ -153,7 +153,7 @@ export function openFresh(storage: Store | null, href: string): { fresh: boolean
 
 /** Said once when the artifact store could not be read: nothing this session
  *  is written to it (or to the layout), so an unread board is never overwritten. */
-export const STORE_SAVE_OFF_LINE = 'Changes in this session won’t be saved.';
+export const STORE_SAVE_OFF_LINE = 'Changes in this session won’t be saved. Reload to try again.';
 
 export interface SaveTargets {
   layoutStorage: Pick<Storage, 'setItem'> | null;

@@ -192,7 +192,7 @@ describe('a store that could not be read is never written over', () => {
     const out = saveCanvasDoc(doc as never, [], () => 'person', 1, new Set(), x.t);
     expect(out).toEqual([]);
     expect([x.puts, x.removes, x.layoutWrites]).toEqual([[], [], []]);
-    expect(STORE_SAVE_OFF_LINE).toBe('Changes in this session won’t be saved.');
+    expect(STORE_SAVE_OFF_LINE).toBe('Changes in this session won’t be saved. Reload to try again.');
   });
   it('read fine: the same save writes the board and the layout', () => {
     const x = targets(false);
