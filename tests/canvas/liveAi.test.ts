@@ -1126,12 +1126,10 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     for (const id of SEEDED_LAMP_IDS) expect(c.state[id]).toBeUndefined();
     expect(c.state['wiz-lamp-1']).toEqual({ on: true, brightness: 62, sim: false, unreachable: false }); // not SIM, not a guess
     expect(c.ips.get('wiz-lamp-1')).toBe('192.168.1.40'); // bulbIp for the connector
-    // the board that showed two seeded lamps now shows the one real lamp
+    // final review I3: the stored board is re-rendered, never rewritten (its
+    // seeded lamps show "Not connected"; a new plan is fitted before review)
     expect(changed).toEqual(['room']);
-    expect(c.surfaces.room.tiles).toEqual([
-      { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] },
-      { type: 'music', deviceId: 'speaker-1', label: 'Speaker' },
-    ]);
+    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] });
     expect(draftSummary({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] })).toBe('Draft: 1 lamp found in this room');
   });
 
@@ -1198,7 +1196,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const { readFileSync } = await import('node:fs');
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toContain('const plan = fitPlan(planForBoard(frameId, proposed));'); // what she reviews and applies
-    expect(src).toContain('const plan = surfaces[id] = fitPlan(surfaces[id]);'); // and whatever is rendered
+    expect(src).toContain('const plan = roomWithoutPlanTiles(surfaces[id]);'); // a stored board renders as approved (I3)
     expect(src).toContain('const fitPlan = (plan: SurfacePlan): SurfacePlan => roomWithoutPlanTiles(fitLampTiles(plan, lampSlots()));');
   });
 
@@ -1213,9 +1211,11 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
         desk: { kind: 'room', title: 'Desk', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] },
         hall: { kind: 'room', title: 'Hall', tiles: [{ type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] },
       } as Record<string, SurfacePlan> };
-    applyRealLamps(c, [{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 60, sim: false } }]);
-    expect(c.surfaces.desk.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
-    expect(c.surfaces.hall.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    // stored boards are not refitted by discovery (final review I3); a new plan is
+    expect(applyRealLamps(c, [{ id: 'wiz-lamp-1', ip: '192.168.1.40', label: 'Lamp', state: { on: true, brightness: 60, sim: false } }])).toEqual(['desk', 'hall']);
+    expect(c.surfaces.desk.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }]);
+    expect(fitLampTiles(c.surfaces.desk, one).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
+    expect(fitLampTiles(c.surfaces.hall, one).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
     // a lamp already on the board is not given out twice
     expect(fitLampTiles({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, two).tiles)
       .toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
@@ -1233,7 +1233,8 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const changed = applyRealLamps(c, start);
     expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']); // the board's lamp exists: no dead tile
     expect(c.state['wiz-lamp-1'].sim).toBe(true);
-    expect(changed).toEqual([]); // the saved board is shown as it was
+    expect(changed).toEqual(['room']); // re-rendered; the saved board is shown as it was
+    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' });
     // a machine that never saw a bulb keeps the seeded lamps
     expect(rememberedLamps(memory())).toBeNull();
     // the bridge comes back with a different bulb only: the vanished lamp's tile is refitted, not left dead
@@ -1241,7 +1242,8 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     expect(next[0].id).toBe('wiz-lamp-2');
     applyRealLamps(c, next);
     expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-2']);
-    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp' });
+    // final review I3: the vanished lamp's tile stays ("Not connected"), never re-pointed without Approve
+    expect(c.surfaces.room.tiles[0]).toEqual({ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' });
     const src = (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/applyRealLamps\(lampSwap, rememberedLamps\(storage\) \?\? \[\]\);/);
   });
@@ -1287,10 +1289,10 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const again = await discoverRealLamps(fakeBridge({ bulbs: [{ ip: '192.168.1.40' }, { ip: '192.168.1.7' }, { ip: '192.168.1.3' }] }).client, store);
     expect(Object.fromEntries(again!.map((l) => [l.ip, l.id]))).toEqual({ '192.168.1.7': 'wiz-lamp-1', '192.168.1.40': 'wiz-lamp-2', '192.168.1.3': 'wiz-lamp-3' });
     expect(assignLampIds(['10.0.0.9'], null)).toEqual({ '10.0.0.9': 'wiz-lamp-1' });
-    // two bulbs take the two seeded lamps' places, in order
+    // two bulbs take the two seeded lamps' places, in order, in a NEW plan (stored boards are not refitted: I3)
     const c = seededCanvas();
     applyRealLamps(c, first!);
-    expect((c.surfaces.room.tiles[0] as { children: Array<{ deviceId: string; label: string }> }).children).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
+    expect((fitLampTiles(c.surfaces.room, first!).tiles[0] as { children: Array<{ deviceId: string; label: string }> }).children).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-2', label: 'Lamp 2' }]);
     // a later look with one bulb gone removes it from the list
     applyRealLamps(c, first!.slice(0, 1));
     expect(Object.keys(c.state).sort()).toEqual(['speaker-1', 'wiz-lamp-1']);
@@ -1306,7 +1308,8 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
     const c = seededCanvas();
     applyRealLamps(c, none!);
     expect(Object.keys(c.state)).toEqual(['speaker-1']); // no invented lamp
-    expect(c.surfaces.room.tiles).toEqual([{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }]);
+    expect(c.surfaces.room.tiles).toHaveLength(2); // final review I3: the stored board keeps its lamp tiles ("Not connected")
+    expect(fitLampTiles(c.surfaces.room, none!).tiles).toEqual([{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }]); // a new plan is fitted
     // a board that only had seeded lamps is left with the Connect button, not empty
     expect(remapSeededLamps({ kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }] }, []).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
     const untouched: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'music', deviceId: 'speaker-1', label: 'Speaker' }] };

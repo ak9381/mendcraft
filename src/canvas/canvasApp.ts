@@ -54,7 +54,7 @@ import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TI
 import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, createSaveFailNotice, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
@@ -1438,7 +1438,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!wizClient || opts.connector || discovering || Date.now() - lastDiscoverAt < REDISCOVER_MS) return;
     await discoverLamps(true);
   }
-  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)));
+  // A board's lamp tile whose bulb missed the last look ("Not connected")
+  // counts too: it is looked for again, so the tile is live when it answers.
+  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)))
+    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));
   if (wizClient && !opts.connector && liveLamps && typeof window !== 'undefined') {
     const t = setInterval(() => { if (!bridgeStatus.up || anyLampUnreachable()) void rediscoverLamps(); }, REDISCOVER_MS);
     addEventListener('pagehide', () => clearInterval(t), { once: true });
@@ -1467,7 +1470,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       const changed = applyRealLamps(lampSwap, lamps);
       for (const fid of changed) renderSurface(fid);
-      if (changed.length) { sync(); updateDock(); persist(); }
+      // Re-rendered only: discovery never changes or saves a board (I3).
+      if (changed.length) { sync(); updateDock(); }
       if (devicesWired) refreshDevicesBoard();
       // A quiet re-check that changed nothing says nothing.
       if (!again || !wasUp) say(lamps.length ? `${again ? 'The lamp bridge is back — found' : 'Found'} ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
@@ -1522,6 +1526,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
+      // A "Not connected" lamp (its bulb missed the last look): look again.
+      if (!cur && id && isManagedLampId(id) && liveLamps) { void rediscoverLamps(); return; }
       if (!cur || !id) return;
       // The pressed chip's own value (a preset key or a number).
       const value = (a.context?.value ?? ext(a)?.value) as string | number | undefined;
@@ -1565,9 +1571,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function renderSurface(id: string): boolean {
     if (!surfaces[id]) return false;
-    // Backstop: whatever reached this board (a saved board from another
-    // session, a script, a shared board) shows only lamps that exist.
-    const plan = surfaces[id] = fitPlan(surfaces[id]);
+    // The stored board is shown as approved (final review I3): a lamp tile
+    // whose bulb is not found shows "Not connected"; nothing here rewrites it.
+    const plan = roomWithoutPlanTiles(surfaces[id]);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.

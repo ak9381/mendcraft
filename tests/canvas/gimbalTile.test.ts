@@ -95,13 +95,13 @@ describe('honest lamps in live mode', () => {
     m.set('mendcraft.wizLamps', JSON.stringify({ v: 2, ids: Object.fromEntries(ids.map((id, i) => [`h${String(i).padStart(16, '0')}`, id])), last: ids }));
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } };
   };
-  it('remembered real lamps start "Not reachable"; none remembered → the placeholders leave and the board offers Connect', () => {
+  it('remembered real lamps start "Not reachable"; none remembered → the placeholders leave the device list, the board keeps its tiles (I3)', () => {
     expect(rememberedLamps(mem(['wiz-lamp-1']))![0].state).toMatchObject({ sim: true, unreachable: true });
     const state: Record<string, { on: boolean; brightness: number }> = { 'wiz-desk': { on: false, brightness: 40 }, 'wiz-ceiling': { on: true, brightness: 70 }, 'speaker-1': { on: false, brightness: 0 } };
     const surfaces: Record<string, SurfacePlan> = { room: { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-desk', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-ceiling', label: 'Ceiling light' }] } };
     applyRealLamps({ store: { all: () => ({ ...state }), add: () => {}, remove: (id) => { delete state[id]; } }, surfaces, labels: {}, ips: new Map() }, []);
     expect(Object.keys(state)).toEqual(['speaker-1']);
-    expect(surfaces.room.tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
+    expect(surfaces.room.tiles.map((t) => (t as { deviceId: string }).deviceId)).toEqual(['wiz-desk', 'wiz-ceiling']); // shown "Not reachable", never removed
     const app = src('canvas/canvasApp.ts');
     expect(app).toMatch(/if \(liveLamps\) \{[\s\S]{0,200}applyRealLamps\(lampSwap, rememberedLamps\(storage\) \?\? \[\]\);/);
     expect(app).toMatch(/const liveLamps = !opts\.sim && !opts\.devices && !opts\.connector;/);
