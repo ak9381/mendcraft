@@ -154,7 +154,14 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
     let state: LampState | null = null;
     for (const [i, c] of checked.entries()) {
       if (!c.ok) continue;
-      const r = await sendChecked(c.checked, { wiz: deps.client, native: deps.native });
+      let r: Awaited<ReturnType<typeof sendChecked>>;
+      try { r = await sendChecked(c.checked, { wiz: deps.client, native: deps.native }); }
+      catch (e) {
+        // The bridge said no to a later request of this press: the earlier
+        // ones already went out, so "the lamp did not change" is not true.
+        if (i > 0 && e instanceof BridgeRefusedError) throw new DeviceError(`The bridge refused a step (${e.message.replace(/[.\s]+$/, '')}). Part of this was already sent.`);
+        throw e;
+      }
       // Only an HTTP device can answer "no" after a send: when earlier
       // requests of this press already went out, the line says so.
       if (!r.ok) throw new DeviceError(i === 0 ? r.why : `${r.why.replace(/\s*Nothing changed\.$/, '')} Part of this was already sent.`);

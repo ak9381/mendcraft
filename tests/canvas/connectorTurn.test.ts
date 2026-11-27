@@ -5,7 +5,7 @@ import { buildConnectorPrompt, connectorArtifactId, lampConnectorKey, parseConne
 import { connectorState, createConnectorGate, createWizAwareConnector, NO_CONNECTOR_LINE, CONNECTOR_CANT_DO_THAT, type ApprovedConnector, type LampConnector } from '../../src/canvas/wizDevices';
 import { coerceArtifact } from '../../src/artifacts/artifact';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
-import type { WizClient } from '../../src/devices/wizClient';
+import { BridgeRefusedError, type WizClient } from '../../src/devices/wizClient';
 import { RAW_WIZ, WIZ_INTENTS, wizConnector } from '../devices/wizSample';
 import { coerceIntentMap } from '../../src/devices/intentMap';
 
@@ -101,6 +101,23 @@ describe('a lamp on a generated connector', () => {
     expect(res).toMatchObject({ on: true, brightness: 60, sim: false });
     expect(connectorState(approved())).toBe('generated');
     expect(connectorState('built-in')).toBe('built-in');
+  });
+
+  it('the bridge refusing the 2nd request of a press says part of it was already sent', async () => {
+    const client = fakeClient();
+    (client.setPilot as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(async () => ({ on: true, dimming: 60 }))
+      .mockImplementationOnce(async () => { throw new BridgeRefusedError('dimming out of range'); });
+    const conn = createWizAwareConnector({ client, fallback: fallback(), status: { up: true }, bulbIp: () => '192.168.1.40', connectorFor: approved });
+    const err = await conn.run({ deviceId: 'wiz-lamp-1', on: true, brightness: 60 }).catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/Part of this was already sent\.$/);
+    expect(err.message).not.toMatch(/Nothing changed/);
+    // A refusal of the FIRST request still means nothing changed: passed through as it was.
+    const c2 = fakeClient();
+    (c2.setPilot as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { throw new BridgeRefusedError('dimming out of range'); });
+    const conn2 = createWizAwareConnector({ client: c2, fallback: fallback(), status: { up: true }, bulbIp: () => '192.168.1.40', connectorFor: approved });
+    await expect(conn2.run({ deviceId: 'wiz-lamp-1', on: true, brightness: 60 })).rejects.toBeInstanceOf(BridgeRefusedError);
   });
 
   it('refuses what the map has no action for, and never reaches the bulb', async () => {

@@ -1494,10 +1494,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (d.connector !== want || (d.connectorBy ?? '') !== by) store.patch(id, { connector: want, connectorBy: by });
     }
   }
+  /** The replay route a connector turn answers on (looked up once: the
+   *  engines do not change in a session). */
+  let connectorReplayRoute: string | undefined | null = null;
+  const connectorRoute = (): string | undefined => {
+    if (connectorReplayRoute === null) connectorReplayRoute = replayRouteIn(opts.engines?.gemini?.('connector')?.routeLine) ?? undefined;
+    return connectorReplayRoute;
+  };
   /** "Connector by Gemini"; a test build's replayed one says which kind of reply it was. */
   function connectorMakerLine(by: ArtifactBy | undefined): string {
     if (!by) return '';
-    if (by === 'replay') return `Connector by ${replayRouteIn(opts.engines?.gemini?.('connector')?.routeLine) ?? 'Replay'}`;
+    if (by === 'replay') return `Connector by ${connectorRoute() ?? 'Replay'}`;
     return `Connector by ${by === 'person' ? 'you' : engineName(by)}`;
   }
   syncConnectorLabels();
