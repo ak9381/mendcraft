@@ -1411,8 +1411,54 @@ async function journey(page) {
 }
 SECTIONS.journey = journey;
 
+// ---- recordmode: ?record=1 is a SIM run — no WiZ discovery, no Spotify, no real relay ----
+// Recording keeps the live models on (scripts/record-fixtures.mjs), so the
+// page must have nothing real to offer them: here a bridge token and Spotify
+// tokens are stored on purpose, and no request may go to the bridge, Spotify
+// or the relay; the devices are the fixtures, all SIM. A control page without
+// ?sim=1 shows the same storage DOES reach the bridge, so the check can fail.
+const REAL_DEVICE_URL = /127\.0\.0\.1:38888|localhost:38888|spotify\.com|firestore\.googleapis\.com/;
+async function recordmode(page) {
+  const seen = [];
+  await page.evaluateOnNewDocument((devices) => {
+    try {
+      localStorage.setItem('mendcraft.wizToken', 'e2e-bridge-token');
+      localStorage.setItem('mendcraft.spotify.tokens', JSON.stringify({ accessToken: 'e2e-access', refreshToken: 'e2e-refresh', expiresAt: Date.now() + 3_600_000 }));
+    } catch { /* storage off */ }
+    window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices };
+  }, JOURNEY_DEVICES);
+  await page.setRequestInterception(true);
+  const onRequest = (r) => {
+    if (r.isInterceptResolutionHandled()) return;
+    if (REAL_DEVICE_URL.test(r.url())) { seen.push(r.url()); void r.abort(); return; }
+    void r.continue();
+  };
+  page.on('request', onRequest);
+  if (!(await open(page, 'fresh=1&record=1&sim=1&hands=0'))) return;
+  check(await page.evaluate(() => !!window.__mcRecording && window.__mcRecording.inFlight === 0), 'record mode: the page is recording (?record=1&sim=1, test build)');
+  const devs = await page.evaluate(() => Object.entries(window.__mcCanvas.store.all()).map(([id, d]) => [id, !!d.sim]));
+  check(JSON.stringify(devs.map(([id]) => id).sort()) === JSON.stringify(['speaker-sim', 'wiz-lamp-1']) && devs.every(([, sim]) => sim),
+    `record mode: the devices are the journey fixtures, all SIM — no Spotify speaker, no discovered lamp (got ${JSON.stringify(devs)})`);
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'record mode: two SIM phones join');
+  const chips = await page.evaluate(() => [...document.querySelectorAll('.mc-paired-chip')].map((c) => !!c.querySelector('.mc-chip')));
+  check(chips.length === 2 && chips.every(Boolean), `record mode: the phones are SIM, no relay room is opened (got ${JSON.stringify(chips)})`);
+  await sleep(3_000); // a bridge probe or rediscovery would have gone out by now
+  check(seen.length === 0, `record mode: nothing went to the WiZ bridge, Spotify or the relay (got ${JSON.stringify(seen.slice(0, 3))})`);
+
+  // ?record=1 without ?sim=1 does not record (and is an ordinary live page).
+  seen.length = 0;
+  if (!(await open(page, 'fresh=1&record=1&hands=0'))) return;
+  check(!(await page.evaluate(() => !!window.__mcRecording)), 'record mode: ?record=1 without ?sim=1 does not record');
+  await pollUntil(() => seen.some((u) => /38888/.test(u)), 8_000);
+  check(seen.some((u) => /38888/.test(u)), `control: a live page with the same storage does reach for the bridge, so the check above can fail (got ${JSON.stringify(seen.slice(0, 3))})`);
+  page.off('request', onRequest);
+  await page.setRequestInterception(false);
+}
+SECTIONS.recordmode = recordmode;
+
 /** Journey order (spec §10); the whole journey, on one page, last. */
-const ORDER = ['boot', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'journey'];
+const ORDER = ['boot', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'recordmode', 'journey'];
 
 async function main() {
   const unordered = Object.keys(SECTIONS).filter((n) => !ORDER.includes(n));

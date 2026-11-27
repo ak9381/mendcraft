@@ -36,21 +36,22 @@ import { coerceSnapshot } from '../relay/controlSnapshot';
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */
 const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
-/** Recording (scripts/record-fixtures.mjs): a test build with ?record=1 runs
- *  the LIVE models and keeps each reply in window.__mcRecorded. With ?sim=1
- *  too, the devices and phones are the SIM fixtures the replay uses, so no
- *  real device id can reach a reply. Never on in a production build. */
-const recordOn = testBuild && params.get('record') === '1';
+/** Recording (scripts/record-fixtures.mjs): a test build with ?record=1&sim=1
+ *  runs the LIVE models and keeps each reply in window.__mcRecorded. ?sim=1 is
+ *  required (not added here) so every module that reads it from the address
+ *  sees a SIM run: the devices and phones are the SIM fixtures the replay
+ *  uses, so nothing real can reach a prompt or a reply. Never on in a
+ *  production build. */
+const recordOn = testBuild && params.get('record') === '1' && params.get('sim') === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
 const replayOn = testBuild && params.get('sim') === '1' && !recordOn;
 /** ?sim=1 means no live model — except while recording. */
 const noLiveModel = params.has('sim') && !recordOn;
 /** A SIM run: simulated devices and phones, no WiZ discovery, no Spotify, no
- *  real relay. Recording is always one (with or without ?sim=1 in the URL),
- *  so nothing real can reach a prompt or a recorded reply. */
+ *  real relay (canvasApp's `sim`). Recording always is one. */
 const simRun = params.has('sim') || recordOn;
 type Recorded = RecordedMeta & { recordedAt: string; source: 'recorded'; reply: string };
-type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; liveShape?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded> };
+type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; liveShape?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded>; __mcRecording?: { inFlight: number; skipped: string[] } };
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
@@ -214,8 +215,13 @@ function recordReply(key: string, reply: string, meta: RecordedMeta): void {
   const book = (mcWindow.__mcRecorded ??= {});
   book[key] = { ...meta, recordedAt: new Date().toISOString(), source: 'recorded', reply: redactForCloud(reply, [], { phones: false }).text };
 }
+if (recordOn) mcWindow.__mcRecording = { inFlight: 0, skipped: [] };
 const engines = recordOn
-  ? recordingEngines(liveEngines, recordReply, { modelOf: (id) => (id === 'nano' ? 'gemini-nano (Chrome built-in)' : remoteSettings().cloudModel) })
+  ? recordingEngines(liveEngines, recordReply, {
+      modelOf: (id) => (id === 'nano' ? 'gemini-nano (Chrome built-in)' : remoteSettings().cloudModel),
+      onSkip: (line) => { (mcWindow.__mcRecording ??= { inFlight: 0, skipped: [] }).skipped.push(line); console.warn(`[mendcraft] record: ${line}`); },
+      onFlight: (n) => { (mcWindow.__mcRecording ??= { inFlight: 0, skipped: [] }).inFlight = n; },
+    })
   : replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded, liveShape: mcWindow.__mcFixtures?.liveShape }) : liveEngines;
 // Test build + ?sim=1 only: the devices a run registers (simulated, labelled SIM).
 const simDevices = replayOn || recordOn ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;

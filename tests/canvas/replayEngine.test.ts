@@ -131,6 +131,20 @@ describe('recording engines', () => {
     expect(e.routeLine).toBe('nano live');
   });
 
+  it('a step served by the other engine (no Nano: Gemini in the nano slot) is never filed as Nano', async () => {
+    const { got, sink } = sinkOf();
+    const skipped: string[] = [];
+    const flights: number[] = [];
+    const cloudInNanoSlot = () => ({ id: 'gemini' as const, sim: false, stream: async () => '{"kind":"room","tiles":[]}' });
+    const rec = recordingEngines({ nano: cloudInNanoSlot, gemini: live('gemini', ['g']) }, sink, { onSkip: (l) => skipped.push(l), onFlight: (n) => flights.push(n) });
+    expect(await rec.nano!('board')!.stream('p', () => {})).toBe('{"kind":"room","tiles":[]}');
+    await rec.nano!('board')!.stream('p', () => {});
+    await rec.gemini!('board')!.stream('p', () => {});
+    expect(got.map((g) => [g.key, g.meta.engine])).toEqual([['gemini.board', 'gemini']]);
+    expect(skipped).toEqual(['Not recorded: nano.board was answered by gemini, not nano.', 'Not recorded: nano.board.2 was answered by gemini, not nano.']);
+    expect(flights).toEqual([1, 0, 1, 0, 1, 0]);
+  });
+
   it('a failed turn still counts toward n: the next one is <key>.2, and a replay meets the same gap', async () => {
     const { got, sink } = sinkOf();
     let calls = 0;

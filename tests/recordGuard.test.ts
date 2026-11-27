@@ -10,7 +10,7 @@ const opts = { devices: JOURNEY_DEVICES };
 
 describe('what the recorder refuses to write', () => {
   it('a reply on the journey fixtures passes, its sha-256 included', () => {
-    expect(unsafeFixture(file('{"kind":"room","tiles":[{"type":"lamp","deviceId":"wiz-lamp-1","label":"Desk lamp"},{"type":"music","deviceId":"Device 2","label":"Speaker"}]}'), opts)).toBeNull();
+    expect(unsafeFixture(file('{"kind":"room","tiles":[{"type":"lamp","deviceId":"wiz-lamp-1","label":"Lamp"},{"type":"music","deviceId":"Device 2","label":"Speaker"},{"type":"gimbal","label":"Camera stand"}]}'), opts)).toBeNull();
     expect(unsafeFixture(file('{"t":"Home","d":["wiz-lamp-1","speaker-sim","gimbal"]}'), opts)).toBeNull();
     expect(unsafeFixture(file('{"rooms":[{"name":"Bedroom 1","x":0,"y":3000,"w":4000,"h":3000}]}'), opts)).toBeNull();
   });
@@ -20,6 +20,10 @@ describe('what the recorder refuses to write', () => {
     expect(unsafeFixture(file('{"tiles":[{"type":"lamp","deviceId":"bedroom-wiz","label":"Lamp"}]}'), opts)).toMatch(/a device the journey did not set up/);
     expect(unsafeFixture(file('{"tiles":[{"type":"music","deviceId":"speaker-sim","label":"Akash\'s Echo"}]}'), opts)).toMatch(/a device the journey did not set up/);
     expect(unsafeFixture(file('prose "deviceId": "real-plug-7" then'), opts)).toMatch(/a device/);
+    // A device word plus any other word must be a fixture's own label exactly.
+    expect(foreignDevices('{"tiles":[{"type":"lamp","deviceId":"wiz-lamp-1","label":"Desk lamp"}]}', JOURNEY_DEVICES)).toEqual(['Desk lamp']);
+    expect(foreignDevices('{"tiles":[{"type":"lamp","deviceId":"wiz-lamp-1","label":"Bedroom light"}]}', JOURNEY_DEVICES)).toEqual(['Bedroom light']);
+    expect(foreignDevices('{"tiles":[{"type":"lamp","deviceId":"wiz-lamp-1","label":" lamp "}]}', JOURNEY_DEVICES)).toEqual([]);
   });
 
   it('keys, tokens, emails, addresses and hardware ids', () => {

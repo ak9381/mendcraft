@@ -63,7 +63,7 @@ It needs real Gemini (Firebase AI Logic; App Check must pass on that address —
 a registered debug token in `.env.local` for the dev server, or a hosted test
 build) and real Nano (Chrome with the model downloaded in `RECORD_PROFILE`,
 default `~/.mendcraft-record-chrome`, or `CHROME_CDP` to drive a running
-Chrome). `?record=1` is always a SIM run, so its devices are the SIM fixtures
+Chrome). `?record=1` records only with `?sim=1`, so its devices are the SIM fixtures
 (no WiZ discovery, no Spotify, no real phones). The recorder refuses to write a
 reply naming any other device, or holding a key, token, email, address,
 hardware id or a value from `.env.local` (`scripts/recordGuard.lib.mjs`).

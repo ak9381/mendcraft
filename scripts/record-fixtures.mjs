@@ -19,7 +19,7 @@
 //     visit chrome://on-device-internals and let the model download), or
 //     CHROME_CDP=http://127.0.0.1:9222 to drive a Chrome already running with
 //     --remote-debugging-port.
-// ?record=1 is always a SIM run (canvasMain forces it): the devices and phones
+// ?record=1 records only with ?sim=1 (canvasMain requires it): the devices and phones
 // are the SIM fixtures the replay uses — no WiZ discovery, no Spotify, no real
 // relay — while every turn runs the live production path (real prompt,
 // constraint, retries, checks). Replies are kept as the model wrote them, with
@@ -29,7 +29,8 @@
 // Review `git diff tests/fixtures/replies/` by eye after.
 //
 // Exit 0: every reply the journey needs was recorded. 1: some were not (the
-// ones that were are still written). 2: it could not run.
+// ones that were are still written). 2: it could not run (no server, no test
+// build, or Gemini Nano not "available" in that Chrome).
 
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -62,19 +63,27 @@ function findChrome() {
 }
 
 const reviewOpen = () => { const d = document.querySelector('.mc-review-dialog'); return !!d && !d.hidden; };
-const recordedCount = (page) => page.evaluate(() => Object.keys(window.__mcRecorded ?? {}).length);
+/** How the recording stands: replies kept, model turns still streaming, and
+ *  what the canvas has said so far (a new line means a turn moved on). */
+const recordingState = (page) => page.evaluate(() => ({
+  n: Object.keys(window.__mcRecorded ?? {}).length,
+  inFlight: window.__mcRecording?.inFlight ?? 0,
+  said: window.__mcCanvas.statusMark(),
+}));
 
-/** Wait (sleep-aware) until the recordings stop growing: no new reply for
- *  QUIET_MS, or `ms` in all. The next-step turn that follows an approval
- *  lands here. */
-async function settleRecordings(page, ms = 30_000) {
-  let last = await recordedCount(page);
+/** Wait (sleep-aware) until no model turn is streaming and nothing new — no
+ *  reply, no status line — has happened for QUIET_MS (a next-step turn that
+ *  follows an approval starts in that window), or `ms` in all. */
+async function settleRecordings(page, ms = TURN_MS) {
+  let last = JSON.stringify(await recordingState(page));
   let since = Date.now();
-  await pollUntil(async () => {
-    const n = await recordedCount(page);
-    if (n !== last) { last = n; since = Date.now(); return false; }
+  const r = await pollUntil(async () => {
+    const st = await recordingState(page);
+    const now = JSON.stringify(st);
+    if (now !== last || st.inFlight > 0) { last = now; since = Date.now(); return false; }
     return Date.now() - since >= QUIET_MS;
   }, ms, { everyMs: 500 });
+  if (!r.ok) console.log('  (a model turn was still running when the wait ran out)');
 }
 
 async function main() {
@@ -96,8 +105,14 @@ async function main() {
     await page.goto(`${BASE}/canvas.html?fresh=1&record=1&sim=1&hands=0`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     const ready = await pollUntil(() => page.evaluate(() => !!window.__mcCanvas), 30_000);
     if (!ready.ok) { console.error('record: the canvas did not open with test hooks (is this a dev or VITE_E2E=1 build?).'); return 2; }
-    const live = await page.evaluate(() => typeof LanguageModel !== 'undefined' ? LanguageModel.availability().catch(() => 'error') : 'missing');
+    // Nano must really be here: otherwise the "nano" steps are run by Gemini
+    // and there is nothing on-device to record (the page would skip them).
+    const live = await page.evaluate(() => (typeof LanguageModel !== 'undefined'
+      ? LanguageModel.availability({ expectedInputs: [{ type: 'text', languages: ['en'] }], expectedOutputs: [{ type: 'text', languages: ['en'] }] }).catch(() => 'error')
+      : 'missing'));
     console.log(`Nano in this Chrome: ${live}`);
+    if (live !== 'available') { console.error('record: Gemini Nano is not available in this Chrome profile (see RECORD_PROFILE). Nothing was recorded.'); return 2; }
+    if (!(await page.evaluate(() => !!window.__mcRecording))) { console.error('record: this page is not recording (?record=1&sim=1 needs a dev or VITE_E2E=1 build).'); return 2; }
 
     for (const l of JOURNEY_LINES) {
       if (l.offline) await page.evaluate(() => { const b = document.querySelector('[data-cmd=offline]'); if (b?.getAttribute('aria-pressed') !== 'true') b?.click(); });
@@ -124,6 +139,7 @@ async function main() {
     }
     await settleRecordings(page);
     const got = await page.evaluate(() => window.__mcRecorded ?? {});
+    for (const line of await page.evaluate(() => window.__mcRecording?.skipped ?? [])) console.log(`  ${line}`);
     const expected = new Set(readdirSync(OUT).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
     let wrote = 0;
     for (const [key, rec] of Object.entries(got)) {

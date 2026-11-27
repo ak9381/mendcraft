@@ -27,8 +27,15 @@ export function envSecrets(path) {
 }
 
 const DEVICE_TILES = new Set(['lamp', 'music', 'switch', 'gimbal']);
-/** Words a model may use to name a fixture device on its tile. */
-const DEVICE_WORDS = /\b(lamp|light|bulb|speaker|music|player|gimbal|stand|camera)\b/i;
+/** Words a model may use to name a fixture device on its tile. A label made
+ *  only of these ("Light", "Camera stand") is generic; any other word in it
+ *  ("Desk lamp", "Asha's speaker") could come from a real device, so such a
+ *  label must be one of the fixtures' own labels exactly. */
+const DEVICE_WORD = /^(lamp|light|bulb|speaker|music|player|gimbal|stand|camera)$/i;
+const genericLabel = (label) => {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => DEVICE_WORD.test(w));
+};
 const TOKEN = /^Device \d+$/; // a cloud prompt's redacted id (deviceRedact.ts)
 
 /** The reply's JSON (inside prose or a fence), or null. */
@@ -60,7 +67,7 @@ export function foreignDevices(reply, devices) {
     }
     if (!v || typeof v !== 'object') return;
     if ('deviceId' in v && !idOk(v.deviceId)) out.push(String(v.deviceId));
-    if (DEVICE_TILES.has(v.type) && typeof v.label === 'string' && !labels.has(v.label.toLowerCase()) && !DEVICE_WORDS.test(v.label)) out.push(v.label);
+    if (DEVICE_TILES.has(v.type) && typeof v.label === 'string' && !labels.has(v.label.trim().toLowerCase()) && !genericLabel(v.label)) out.push(v.label);
     for (const [k, x] of Object.entries(v)) walk(x, k);
   };
   walk(json);

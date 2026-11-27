@@ -108,15 +108,22 @@ async function sha256Hex(text: string): Promise<string> {
  *  reply is passed through unchanged; a turn that fails reports nothing.
  *  The engine stays live (`sim: false`): a recorded turn runs the production
  *  path — its prompt, responseConstraint, retries, ledger and checks — and a
- *  replay of it runs that path again (`liveShape`). canvasMain wires this
- *  only in a test build with ?record=1 — never in production. */
+ *  replay of it runs that path again (`liveShape`). A reply is kept under
+ *  the engine that really answered: when a step's slot is served by the
+ *  other engine (no Nano here, so the "nano" step is Gemini in the cloud)
+ *  nothing is recorded for it — a cloud reply is never filed as Nano's —
+ *  and `onSkip` says so. `onFlight` hears how many turns are streaming.
+ *  canvasMain wires this only in a test build with ?record=1&sim=1 — never
+ *  in production. */
 export function recordingEngines(
   live: Partial<Record<EngineId, EngineFactory>>,
   sink: RecordSink,
-  o: { modelOf?: (id: EngineId) => string } = {},
+  o: { modelOf?: (id: EngineId) => string; onSkip?: (line: string) => void; onFlight?: (n: number) => void } = {},
 ): Partial<Record<EngineId, EngineFactory>> {
   const modelOf = o.modelOf ?? ((id: EngineId) => (id === 'nano' ? 'gemini-nano' : 'gemini'));
   const turns = new Map<string, number>();
+  let flying = 0;
+  const flight = (d: number): void => { flying += d; o.onFlight?.(flying); };
   const keyFor = (base: string, n: number, sub?: string): string => {
     const first = sub ? `${base}.${sub}` : base;
     return n === 1 ? first : `${first}.${n}`;
@@ -128,12 +135,17 @@ export function recordingEngines(
     return {
       ...engine,
       async stream(prompt, onText, opts) {
+        // Counted for the slot either way: a replay asks this slot this turn.
         const n = (turns.get(base) ?? 0) + 1;
         turns.set(base, n);
-        const reply = await engine.stream(prompt, onText, opts);
         const key = keyFor(base, n, sub);
-        sink(key, reply, { engine: id, model: modelOf(id), turnKind: kind, promptSha: await sha256Hex(prompt) });
-        return reply;
+        flight(1);
+        try {
+          const reply = await engine.stream(prompt, onText, opts);
+          if (engine.id !== id) o.onSkip?.(`Not recorded: ${key} was answered by ${engine.id}, not ${id}.`);
+          else sink(key, reply, { engine: engine.id, model: modelOf(engine.id), turnKind: kind, promptSha: await sha256Hex(prompt) });
+          return reply;
+        } finally { flight(-1); }
       },
     };
   };
