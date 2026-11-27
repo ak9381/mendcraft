@@ -38,15 +38,16 @@ const ROOM_LABELS = new Set([
 /** Swap personal details for neutral tokens in a payload bound for the cloud.
  *  `planNames` are the plan's text labels; only person-like ones (a single
  *  capitalised word that is not a room word) are treated as names.
- *  Idempotent: "[name]" / "[phone]" / "[email]" never match again. */
-export function redactForCloud(text: string, planNames: string[] = []): RedactResult {
+ *  Idempotent: "[name]" / "[phone]" / "[email]" never match again.
+ *  `phones: false` keeps digit runs (a model reply's JSON numbers). */
+export function redactForCloud(text: string, planNames: string[] = [], o: { phones?: boolean } = {}): RedactResult {
   let names = 0;
   let details = 0;
   let out = text;
 
   // Phone numbers: a digit run (with spaces/dashes/brackets) of 10+ digits.
   // Plan measurements ("4000 by 3000", "200 thick") never reach 10 in one run.
-  out = out.replace(/\+?\d[\d\s()-]*\d/g, (m) => {
+  if (o.phones !== false) out = out.replace(/\+?\d[\d\s()-]*\d/g, (m) => {
     if ((m.match(/\d/g) ?? []).length < 10) return m;
     details += 1;
     return '[phone]';

@@ -15,12 +15,15 @@ import { describe, expect, it } from 'vitest';
 import { extractJson } from '../../src/ai/cloudJson';
 import { parseModelPlan } from '../../src/canvas/aiTurn';
 import { devicesPlanFromNano } from '../../src/canvas/devicesTurn';
+import { parseNanoPlan } from '../../src/canvas/nanoPlan';
 import { planFromReply } from '../../src/canvas/planGenerate';
 import { parsePlanEdit, type RoomBox } from '../../src/canvas/planEdit';
 import { coerceLanguagePack } from '../../src/canvas/languagePack';
 import { parseConnectorReply } from '../../src/canvas/connectorTurn';
 import { coerceNextSteps } from '../../src/canvas/nextSteps';
 import { TURN_KINDS, type TurnKind } from '../../src/canvas/replayEngine';
+import { FORBIDDEN, foreignDevices } from '../../scripts/recordGuard.lib.mjs';
+import { JOURNEY_DEVICES } from '../../scripts/journey.lib.mjs';
 
 const ROOT = join(__dirname);
 type Fixture = { file: string; dir: string; key: string; rec: Record<string, unknown> };
@@ -44,6 +47,14 @@ function roomsBeside(dir: string): RoomBox[] {
   return raw.map((x, i) => ({ id: `r${i}`, name: x.name, x: x.x, y: x.y, w: x.w, h: x.h }));
 }
 
+/** Recorded on the live path (or written to match it: `shape: "live"`). */
+const liveShaped = (f: Fixture): boolean => f.rec.source === 'recorded' || f.rec.shape === 'live';
+/** The board request the journey makes, for checking a Nano decision. */
+const JOURNEY_REQ = {
+  utterance: 'build the dashboard', frameTitle: 'Board 2',
+  devices: (JOURNEY_DEVICES as { id: string; cls: string; label: string }[]).map((d) => ({ id: d.id, label: d.label, kind: d.cls })),
+};
+
 /** The check the app runs on a reply of this kind; null = accepted. */
 function refusal(f: Fixture): string | null {
   const reply = String(f.rec.reply);
@@ -51,7 +62,11 @@ function refusal(f: Fixture): string | null {
   const engine = f.rec.engine;
   const obj = (): Record<string, unknown> | null => { const j = extractJson(reply); return j && typeof j === 'object' && !Array.isArray(j) ? j as Record<string, unknown> : null; };
   switch (kind) {
-    case 'board': case 'boardBetter': { const r = parseModelPlan(reply); return r.ok ? null : r.error; }
+    case 'board': case 'boardBetter': {
+      // Nano's board on the live path is a decision, {t, d}, expanded in code.
+      const r = engine === 'nano' && liveShaped(f) ? parseNanoPlan(reply, JOURNEY_REQ) : parseModelPlan(reply);
+      return r.ok ? null : r.error;
+    }
     case 'devices': {
       const r = engine === 'nano' ? devicesPlanFromNano(reply) : parseModelPlan(reply);
       return r.ok ? null : r.error;
@@ -69,15 +84,8 @@ function refusal(f: Fixture): string | null {
   }
 }
 
-/** Things that must never be written into a fixture. */
-const PERSONAL: [string, RegExp][] = [
-  ['an API key', /AIza[0-9A-Za-z_-]{20,}/],
-  ['a bearer or access token', /\b(?:Bearer\s+[A-Za-z0-9._-]{16,}|ya29\.[A-Za-z0-9._-]+|access_token|refresh_token)/i],
-  ['an email address', /\b[A-Za-z0-9][\w.+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b/],
-  ['an IP address', /\b(?:\d{1,3}\.){3}\d{1,3}\b/],
-  ['a MAC address', /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b/i],
-  ['a long hex secret', /\b[0-9a-f]{32,}\b/i],
-];
+/** Things that must never be written into a fixture (the recorder's own list). */
+const PERSONAL = FORBIDDEN as [string, RegExp][];
 
 describe('recorded-reply fixtures', () => {
   it('there are fixtures in both folders', () => {
@@ -106,9 +114,18 @@ describe('recorded-reply fixtures', () => {
 
   it('no fixture holds a key, a token, an address or an email', () => {
     for (const { file, rec } of all) {
-      const text = JSON.stringify(rec);
+      const text = JSON.stringify({ ...rec, promptSha: '' }); // a sha-256 by design
       for (const [what, re] of PERSONAL) expect(re.test(text), `${file} holds ${what}`).toBe(false);
     }
+  });
+
+  it('nano.board in replies/ is in the live {t, d} shape, so its replay runs the production Nano path', () => {
+    const nano = replies.find((f) => f.key === 'nano.board');
+    expect(nano && liveShaped(nano)).toBe(true);
+  });
+
+  it('no reply in replies/ names a device the journey did not set up', () => {
+    for (const { file, rec } of replies) expect(foreignDevices(String(rec.reply), JOURNEY_DEVICES), file).toEqual([]);
   });
 
   it('a hand-written fixture says so and asks to be re-recorded', () => {

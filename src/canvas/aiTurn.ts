@@ -23,6 +23,10 @@ export interface SurfaceEngine {
   /** Honest route-line override (e.g. a phone with no Nano: "Gemini · cloud —
    *  Nano isn't on this phone, so Deep drafted it"). Replaces the default line. */
   routeLine?: string;
+  /** A replayed reply recorded on the live path (replayEngine.ts): the turn
+   *  runs the live path (Nano's {t,d} board turn, the cloud checks) though
+   *  the engine is a replay. */
+  liveShape?: boolean;
   /** Stream text; call onText with the full text so far. Resolve with the final text. */
   stream(prompt: string, onText: (full: string) => void, opts?: StreamOptions): Promise<string>;
   /** The other REAL engine (Gemini in the cloud) that takes over when this
@@ -373,7 +377,7 @@ export interface SurfaceTurnOptions {
 export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine, ui: TurnUi = {}, opts: SurfaceTurnOptions = {}): Promise<SurfacePlan | null> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = opts.now ?? (() => Date.now());
-  const liveNano = engine.id === 'nano' && !engine.sim;
+  const liveNano = engine.id === 'nano' && (!engine.sim || !!engine.liveShape);
   const nanoReq = liveNano ? buildNanoPlanRequest(req) : null;
   // A prepared receipt is only true for the engine it was written for. When
   // the step is really run by the other engine (a "Nano" step drafted by
@@ -455,7 +459,8 @@ export async function runSurfaceTurn(req: SurfaceRequest, engine: SurfaceEngine,
       ui.onError?.(`${prefix}${live && eng.id === 'gemini' ? why.replace(/^The reply/, 'Gemini’s reply') : why}`, eng.id);
       return null;
     }
-    return settle(plan, live && !info.sim);
+    // A replay of a live recording is checked as the live reply was.
+    return settle(plan, live ? !info.sim : !!eng.liveShape);
   };
 
   if (!nanoReq) return runPlain(engine, sent);

@@ -36,9 +36,14 @@ Each file is:
   "promptSha": "sha-256 of the prompt that was sent",
   "source": "recorded",
   "note": "where it came from",
-  "reply": "the reply text as the model wrote it (redacted like a cloud prompt)"
+  "reply": "the reply text as the model wrote it (names and emails redacted)"
 }
 ```
+
+A recording runs the live production path, so a recorded `nano.board` is
+Nano's decision `{"t": title, "d": [device ids]}`, not a whole board. Its
+replay runs that path too (`liveShape` in `createReplayEngines`). A
+hand-written file in that shape says `"shape": "live"`.
 
 `tests/fixtures/fixtureShape.test.ts` checks every file: the fields, that the
 reply passes the check its kind passes in the app, and that it holds no key,
@@ -58,5 +63,7 @@ It needs real Gemini (Firebase AI Logic; App Check must pass on that address —
 a registered debug token in `.env.local` for the dev server, or a hosted test
 build) and real Nano (Chrome with the model downloaded in `RECORD_PROFILE`,
 default `~/.mendcraft-record-chrome`, or `CHROME_CDP` to drive a running
-Chrome). The journey runs with `?sim=1`, so its devices are the SIM fixtures
-and a reply can only name a fixture id.
+Chrome). `?record=1` is always a SIM run, so its devices are the SIM fixtures
+(no WiZ discovery, no Spotify, no real phones). The recorder refuses to write a
+reply naming any other device, or holding a key, token, email, address,
+hardware id or a value from `.env.local` (`scripts/recordGuard.lib.mjs`).

@@ -45,8 +45,12 @@ const recordOn = testBuild && params.get('record') === '1';
 const replayOn = testBuild && params.get('sim') === '1' && !recordOn;
 /** ?sim=1 means no live model — except while recording. */
 const noLiveModel = params.has('sim') && !recordOn;
+/** A SIM run: simulated devices and phones, no WiZ discovery, no Spotify, no
+ *  real relay. Recording is always one (with or without ?sim=1 in the URL),
+ *  so nothing real can reach a prompt or a recorded reply. */
+const simRun = params.has('sim') || recordOn;
 type Recorded = RecordedMeta & { recordedAt: string; source: 'recorded'; reply: string };
-type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded> };
+type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; liveShape?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded> };
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
@@ -93,7 +97,7 @@ if (testBuild) mcWindow.__mcArtifacts = artifactStore;
 
 // People directory: tokens in cloud prompts, real names filled back on device.
 // ?sim=1 keeps it in memory for the run; nobody is seeded.
-const directoryStore = params.has('sim') ? createMemoryDirectoryStore([]) : createIndexedDbDirectoryStore();
+const directoryStore = simRun ? createMemoryDirectoryStore([]) : createIndexedDbDirectoryStore();
 bindDirectory(createDirectory(directoryStore));
 
 // Honest engine selection: real Nano needs Chrome's Prompt API (and not a phone);
@@ -201,18 +205,20 @@ const liveEngines = createEngines({
   },
   sim: noLiveModel,
 });
-/** A recording keeps each live reply as its fixture file will hold it. The
- *  reply gets the same redaction a cloud prompt gets (names, phone numbers,
- *  emails), so nothing personal is written down. */
+/** A recording keeps each live reply as its fixture file will hold it,
+ *  with names and emails redacted as in a cloud prompt. The digit-run
+ *  (phone number) rule is left out: it would rewrite numbers inside the
+ *  reply's JSON (plan sizes, levels). scripts/record-fixtures.mjs refuses
+ *  to write a reply holding anything else personal. */
 function recordReply(key: string, reply: string, meta: RecordedMeta): void {
   const book = (mcWindow.__mcRecorded ??= {});
-  book[key] = { ...meta, recordedAt: new Date().toISOString(), source: 'recorded', reply: redactForCloud(reply).text };
+  book[key] = { ...meta, recordedAt: new Date().toISOString(), source: 'recorded', reply: redactForCloud(reply, [], { phones: false }).text };
 }
 const engines = recordOn
   ? recordingEngines(liveEngines, recordReply, { modelOf: (id) => (id === 'nano' ? 'gemini-nano (Chrome built-in)' : remoteSettings().cloudModel) })
-  : replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded }) : liveEngines;
+  : replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded, liveShape: mcWindow.__mcFixtures?.liveShape }) : liveEngines;
 // Test build + ?sim=1 only: the devices a run registers (simulated, labelled SIM).
-const simDevices = replayOn || (recordOn && params.get('sim') === '1') ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
+const simDevices = replayOn || recordOn ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
 
 // Phone shell: forward this phone's AI terminal activity to the paired
 // laptop's AI monitor (compact, redacted, ≤5/s; dropped with no session).
@@ -297,7 +303,7 @@ function persistDoc(doc: CanvasDoc): void {
 }
 
 handle = mountCanvas(root, {
-  voice, engines, fresh: freshOpen.fresh, sim: params.has('sim'),
+  voice, engines, fresh: freshOpen.fresh, sim: simRun,
   ...(simDevices && Object.keys(simDevices.devices).length ? { devices: simDevices.devices, deviceLabels: simDevices.labels } : {}),
   ...(simDevices?.stand ? { simStand: true } : {}),
   gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
@@ -346,7 +352,7 @@ handle = mountCanvas(root, {
     ? phoneRouteBadge({
         appleReady: !!apple.plugin,
         ios: capacitor?.getPlatform?.() === 'ios',
-        sim: params.has('sim'),
+        sim: simRun,
         cloud: !!cloud,
       })
     : undefined,
@@ -364,7 +370,7 @@ function applyNano(nano: NanoCheck): void {
     handle.setRouteBadge(phoneRouteBadge({
       appleReady: apple.ready,
       ios: capacitor?.getPlatform?.() === 'ios',
-      sim: params.has('sim'),
+      sim: simRun,
       cloud: !!cloud,
       appleReason: nano.appleStatus,
     }));
@@ -396,13 +402,13 @@ function afterFirstPaint(fn: () => void): void {
 }
 afterFirstPaint(() => {
   if (phoneShell && handle) {
-    startPhoneLookToEdit(handle, { sim: params.has('sim'), camera: phoneCamera });
+    startPhoneLookToEdit(handle, { sim: simRun, camera: phoneCamera });
     // Join laptop: a remembered pair rejoins silently (no mic); otherwise the
     // phone shows "Join laptop", which opens the mic only when tapped and
     // joins by the laptop's chime (or a typed code). Every join binds the AI
     // feed forwarder and the re-announce (joinPhoneSession).
     const h = handle;
-    const sim = params.has('sim');
+    const sim = simRun;
     let ui: { update(): void } | null = null;
     const link = createLaptopLink({
       storage: (() => { try { return localStorage; } catch { return null; } })(),

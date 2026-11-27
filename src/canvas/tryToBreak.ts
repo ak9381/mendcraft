@@ -111,7 +111,8 @@ export const BREAK_RULES_ROUTE = 'Rules · on this device — checked by fixed l
  *  the rules already decide — so it returns null and the rules decide alone. */
 export function breakEngine(engine: SurfaceEngine | undefined, sim: boolean): SurfaceEngine | null {
   if (!engine) return null;
-  if (sim) return engine.sim ? engine : null;
+  if (sim && engine.sim) return engine;
+  // A real on-device Nano — also in a ?sim=1 run that records live replies.
   return engine.id === 'nano' && !engine.sim ? engine : null;
 }
 

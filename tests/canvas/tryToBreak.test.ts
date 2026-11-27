@@ -124,6 +124,13 @@ describe('runBreakTurn', () => {
     const cloudNano = { id: 'gemini' as const, sim: false, stream: vi.fn(async () => '{}') };
     expect(breakEngine(undefined, false)).toBeNull();
     expect(breakEngine(cloudNano, false)).toBeNull();
+    // A ?sim=1 run: a replay engine, or (recording) a live on-device Nano; never the cloud.
+    const replayNano = { id: 'nano' as const, sim: true, stream: vi.fn(async () => '{}') };
+    const liveNano = { id: 'nano' as const, sim: false, stream: vi.fn(async () => '{}') };
+    expect(breakEngine(replayNano, true)).toBe(replayNano);
+    expect(breakEngine(liveNano, true)).toBe(liveNano);
+    expect(breakEngine(cloudNano, true)).toBeNull();
+    expect(breakEngine(replayNano, false)).toBeNull();
     const r = await runBreakTurn(text, t.attempt, { engine: null, devices, panel: t.panel, say: (s) => t.said.push(s) });
     expect(r).toEqual({ refused: true, reason: LAMP_RANGE_REFUSAL });
     expect(t.panel.lines[0]).toEqual(['note', BREAK_RULES_ROUTE]);

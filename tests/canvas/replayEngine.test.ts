@@ -123,11 +123,31 @@ describe('recording engines', () => {
     expect(rec.gemini).toBeUndefined();
   });
 
-  it('a recorded turn runs down the replay path (sim), so its reply answers the prompt a replay sends', () => {
+  it('a recorded turn stays live: the production path runs, with its route line', () => {
     const { sink } = sinkOf();
     const rec = recordingEngines({ nano: live('nano', ['x']) }, sink);
     const e = rec.nano!('board')!;
-    expect(e.sim).toBe(true);
+    expect(e.sim).toBe(false);
     expect(e.routeLine).toBe('nano live');
+  });
+
+  it('a failed turn still counts toward n: the next one is <key>.2, and a replay meets the same gap', async () => {
+    const { got, sink } = sinkOf();
+    let calls = 0;
+    const flaky = () => ({ id: 'nano' as const, sim: false, stream: async () => { calls += 1; if (calls === 1) throw new Error('took too long'); return '{"t":"Lamp","d":["wiz-lamp-1"]}'; } });
+    const rec = recordingEngines({ nano: flaky }, sink);
+    await expect(rec.nano!('board')!.stream('p', () => {})).rejects.toThrow('took too long');
+    await rec.nano!('board')!.stream('p', () => {});
+    expect(got.map((g) => g.key)).toEqual(['nano.board.2']);
+    const replay = createReplayEngines(Object.fromEntries(got.map((g) => [g.key, g.reply])), { recorded: ['nano.board.2'] });
+    await expect(replay.nano!('board').stream('p', () => {})).rejects.toThrow('No recorded reply for nano.board');
+    expect(await replay.nano!('board').stream('p', () => {})).toBe('{"t":"Lamp","d":["wiz-lamp-1"]}');
+  });
+
+  it('a replay of a live recording runs the live path (liveShape); a written example does not unless it says so', () => {
+    const f = createReplayEngines({ 'nano.board': '{"t":"L","d":[]}', 'gemini.board': '{}', 'nano.devices': '{}' }, { recorded: ['nano.board'], liveShape: ['nano.devices'] });
+    expect(f.nano!('board').liveShape).toBe(true);
+    expect(f.gemini!('board').liveShape).toBe(false);
+    expect(f.nano!('devices').liveShape).toBe(true);
   });
 });

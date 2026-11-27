@@ -4,6 +4,7 @@ import { buildSurfacePrompt, createCanvasHistory, GEMINI_TIMEOUT_MS, parseModelP
 import { OFFLINE_MID_LINE } from '../../src/canvas/failLines';
 import { focusOnInset } from '../../src/canvas/camera';
 import { parseCanvasCommand } from '../../src/canvas/canvasCommands';
+import { createReplayEngines } from '../../src/canvas/replayEngine';
 
 const req = {
   utterance: 'connect everything in this room',
@@ -282,5 +283,25 @@ describe('Gemini tile-agent timeout and retry', () => {
     }, { timeoutMs: 5, retries: 1, sleep: instant });
     expect(v).toBe(7);
     expect(n).toBe(2);
+  });
+});
+
+describe('a replay of a live Nano recording', () => {
+  it('runs the live Nano path: the {t,d} prompt with its constraint, and the reply parsed as a decision', async () => {
+    const prompts: { prompt: string; constraint?: unknown }[] = [];
+    const f = createReplayEngines({ 'nano.board': '{"t":"Desk","d":["lamp-a"]}' }, { recorded: ['nano.board'] });
+    const e = f.nano!('board');
+    const inner = e.stream.bind(e);
+    const spy: SurfaceEngine = { ...e, stream: (p, on, o) => { prompts.push({ prompt: p, constraint: o?.constraint }); return inner(p, on, o); } };
+    const plan = await runSurfaceTurn(req, spy, {}, { nanoQueueWaitMs: 0 });
+    expect(plan?.title).toBe('Desk');
+    expect(plan?.tiles).toEqual([expect.objectContaining({ type: 'lamp', deviceId: 'lamp-a' })]);
+    expect(prompts[0].prompt).toContain('"t": title');
+    expect(prompts[0].constraint).toBeTruthy();
+  });
+  it('a written example in the board shape still runs the replay path', async () => {
+    const f = createReplayEngines({ 'nano.board': PLAN });
+    const plan = await runSurfaceTurn(req, f.nano!('board'));
+    expect(plan?.tiles).toHaveLength(2);
   });
 });

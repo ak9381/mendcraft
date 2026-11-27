@@ -45,10 +45,13 @@ export const missingReplyLine = (key: string): string => `No recorded reply for 
  *  language of a pack turn: `gemini.pack.kn`) takes `<key>.<sub>.<n>`, then
  *  `<key>.<sub>`, before those. `recorded` lists the keys captured from a
  *  live run; every other reply is labelled a written example. */
-export function createReplayEngines(replies: Record<string, string>, o: { recorded?: readonly string[] } = {}): Partial<Record<EngineId, (kind: TurnKind, sub?: string) => SurfaceEngine>> {
+export function createReplayEngines(replies: Record<string, string>, o: { recorded?: readonly string[]; liveShape?: readonly string[] } = {}): Partial<Record<EngineId, (kind: TurnKind, sub?: string) => SurfaceEngine>> {
   const book: Record<string, string> = {};
   for (const [k, v] of Object.entries(replies ?? {})) if (typeof v === 'string') book[k] = v;
   const recorded = new Set((Array.isArray(o.recorded) ? o.recorded : []).filter((k) => typeof k === 'string'));
+  // A recorded reply is what the live model wrote on the production path;
+  // a hand-written one may say so too (`shape: "live"` in its file).
+  const liveShaped = new Set([...recorded, ...(Array.isArray(o.liveShape) ? o.liveShape : []).filter((k) => typeof k === 'string')]);
   const turns = new Map<string, number>();
   /** The key the next (or this) turn of a kind answers from. */
   const keyFor = (id: EngineId, kind: TurnKind, n: number, sub?: string): string => {
@@ -64,6 +67,9 @@ export function createReplayEngines(replies: Record<string, string>, o: { record
     return {
       id, sim: true,
       get routeLine() { return routeOf(key); },
+      // The reply this turn takes was written on the live path: the turn
+      // runs that path too (a Nano board turn asks for and parses {t,d}).
+      get liveShape() { return liveShaped.has(key); },
       // Counted when a turn really streams, not when an engine is looked up.
       async stream(_prompt, onText) {
         const n = (turns.get(base) ?? 0) + 1;
@@ -97,10 +103,12 @@ async function sha256Hex(text: string): Promise<string> {
 /** The live engines, wrapped so every reply a turn really got is reported to
  *  `sink` once, under the key a replay of the same run looks it up by: the
  *  first turn of a kind is `<key>` (or `<key>.<sub>`), a later one
- *  `<key>.<n>` (n counted per engine and kind, as the replay counts). The
+ *  `<key>.<n>` (n counted per engine and kind, as the replay counts — a
+ *  turn that failed still counts, so a replay meets the same gap). The
  *  reply is passed through unchanged; a turn that fails reports nothing.
- *  A recorded turn runs down the replay path (`sim: true`), so the reply
- *  answers the very prompt a replay of it will send. canvasMain wires this
+ *  The engine stays live (`sim: false`): a recorded turn runs the production
+ *  path — its prompt, responseConstraint, retries, ledger and checks — and a
+ *  replay of it runs that path again (`liveShape`). canvasMain wires this
  *  only in a test build with ?record=1 — never in production. */
 export function recordingEngines(
   live: Partial<Record<EngineId, EngineFactory>>,
@@ -109,10 +117,9 @@ export function recordingEngines(
 ): Partial<Record<EngineId, EngineFactory>> {
   const modelOf = o.modelOf ?? ((id: EngineId) => (id === 'nano' ? 'gemini-nano' : 'gemini'));
   const turns = new Map<string, number>();
-  const written = new Set<string>();
   const keyFor = (base: string, n: number, sub?: string): string => {
     const first = sub ? `${base}.${sub}` : base;
-    return written.has(first) ? `${first}.${n}` : first;
+    return n === 1 ? first : `${first}.${n}`;
   };
   const wrap = (id: EngineId, make: EngineFactory): EngineFactory => (kind, sub) => {
     const engine = make(kind, sub);
@@ -120,13 +127,11 @@ export function recordingEngines(
     const base = replayKey(id, kind);
     return {
       ...engine,
-      sim: true,
       async stream(prompt, onText, opts) {
         const n = (turns.get(base) ?? 0) + 1;
         turns.set(base, n);
         const reply = await engine.stream(prompt, onText, opts);
         const key = keyFor(base, n, sub);
-        written.add(key);
         sink(key, reply, { engine: id, model: modelOf(id), turnKind: kind, promptSha: await sha256Hex(prompt) });
         return reply;
       },

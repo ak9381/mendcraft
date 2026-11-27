@@ -19,11 +19,14 @@
 //     visit chrome://on-device-internals and let the model download), or
 //     CHROME_CDP=http://127.0.0.1:9222 to drive a Chrome already running with
 //     --remote-debugging-port.
-// With ?sim=1 the devices and phones are the SIM fixtures the replay uses, so a
-// reply can only name fixture ids; replies are redacted in the page like cloud
-// prompts (names, numbers, emails) and checked again here: nothing that looks
-// like a key, a token, an address or an email is ever written, and nothing
-// from .env.local. Review `git diff tests/fixtures/replies/` by eye after.
+// ?record=1 is always a SIM run (canvasMain forces it): the devices and phones
+// are the SIM fixtures the replay uses — no WiZ discovery, no Spotify, no real
+// relay — while every turn runs the live production path (real prompt,
+// constraint, retries, checks). Replies are kept as the model wrote them, with
+// names and emails redacted in the page; here a reply is refused if it holds
+// a key, token, email, address or hardware id, any value from .env.local, or
+// a device the journey did not set up (scripts/recordGuard.lib.mjs).
+// Review `git diff tests/fixtures/replies/` by eye after.
 //
 // Exit 0: every reply the journey needs was recorded. 1: some were not (the
 // ones that were are still written). 2: it could not run.
@@ -36,6 +39,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pollUntil } from './e2eWait.lib.mjs';
 import { JOURNEY_DEVICES, JOURNEY_LINES } from './journey.lib.mjs';
+import { envSecrets, unsafeFixture } from './recordGuard.lib.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,26 +50,8 @@ const PROFILE = process.env.RECORD_PROFILE || join(homedir(), '.mendcraft-record
 /** Live turns are slow (a cold Nano load is up to ~45 s). */
 const TURN_MS = 120_000;
 
-const FORBIDDEN = [
-  ['an API key', /AIza[0-9A-Za-z_-]{20,}/],
-  ['a bearer or access token', /\b(?:Bearer\s+[A-Za-z0-9._-]{16,}|ya29\.[A-Za-z0-9._-]+|access_token|refresh_token)/i],
-  ['an email address', /\b[A-Za-z0-9][\w.+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b/],
-  ['an IP address', /\b(?:\d{1,3}\.){3}\d{1,3}\b/],
-  ['a MAC address', /\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b/i],
-  ['a long hex secret', /\b[0-9a-f]{32,}\b/i],
-];
-/** Every value in .env.local (keys, ids, tokens): none may reach a fixture. */
-function envSecrets() {
-  const p = join(ROOT, '.env.local');
-  if (!existsSync(p)) return [];
-  return readFileSync(p, 'utf8').split('\n').map((l) => l.replace(/^[^=]*=/, '').trim().replace(/^["']|["']$/g, '')).filter((v) => v.length >= 8);
-}
-/** Why this text must not be written, or null. */
-function unsafe(text, secrets) {
-  for (const [what, re] of FORBIDDEN) if (re.test(text)) return what;
-  if (secrets.some((s) => text.includes(s))) return 'a value from .env.local';
-  return null;
-}
+/** A reply is in once no new one has arrived for this long. */
+const QUIET_MS = 4_000;
 
 function findChrome() {
   return [
@@ -76,12 +62,26 @@ function findChrome() {
 }
 
 const reviewOpen = () => { const d = document.querySelector('.mc-review-dialog'); return !!d && !d.hidden; };
+const recordedCount = (page) => page.evaluate(() => Object.keys(window.__mcRecorded ?? {}).length);
+
+/** Wait (sleep-aware) until the recordings stop growing: no new reply for
+ *  QUIET_MS, or `ms` in all. The next-step turn that follows an approval
+ *  lands here. */
+async function settleRecordings(page, ms = 30_000) {
+  let last = await recordedCount(page);
+  let since = Date.now();
+  await pollUntil(async () => {
+    const n = await recordedCount(page);
+    if (n !== last) { last = n; since = Date.now(); return false; }
+    return Date.now() - since >= QUIET_MS;
+  }, ms, { everyMs: 500 });
+}
 
 async function main() {
   let puppeteer;
   try { puppeteer = require('puppeteer-core'); } catch { console.error('record: puppeteer-core missing (npm ci).'); return 2; }
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`record: nothing at ${BASE} (start npx vite, or set E2E_URL).`); return 2; }
-  const secrets = envSecrets();
+  const secrets = envSecrets(join(ROOT, '.env.local'));
   let browser;
   if (process.env.CHROME_CDP) browser = await puppeteer.connect({ browserURL: process.env.CHROME_CDP, defaultViewport: null });
   else {
@@ -110,14 +110,19 @@ async function main() {
         await pollUntil(() => page.evaluate(() => document.querySelectorAll('.mc-paired-chip').length === 2 && !document.querySelector('.mc-paired-continue')), 20_000);
         continue;
       }
-      if (!l.review) { await new Promise((r) => setTimeout(r, 8_000)); continue; }
+      if (!l.review) {
+        // A line with no review is done when the canvas has said something back.
+        await pollUntil(() => page.evaluate((m) => window.__mcCanvas.statusSince(m).length > 0, mark), TURN_MS);
+        await settleRecordings(page);
+        continue;
+      }
       const r = await pollUntil(() => page.evaluate(reviewOpen), TURN_MS);
       if (!r.ok) { console.log(`  no review: ${JSON.stringify(await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark))}`); continue; }
       await page.evaluate(() => window.__mcCanvas.keep());
-      await new Promise((res) => setTimeout(res, 4_000)); // the next-step turn that follows an approval
+      await settleRecordings(page);
       if (l.offline) await page.evaluate(() => { const b = document.querySelector('[data-cmd=offline]'); if (b?.getAttribute('aria-pressed') === 'true') b.click(); });
     }
-    await new Promise((res) => setTimeout(res, 10_000));
+    await settleRecordings(page);
     const got = await page.evaluate(() => window.__mcRecorded ?? {});
     const expected = new Set(readdirSync(OUT).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)));
     let wrote = 0;
@@ -129,7 +134,7 @@ async function main() {
         note: `Recorded from a live run of the journey (scripts/record-fixtures.mjs, ${BASE.startsWith('http://localhost') || BASE.startsWith('http://127.') ? 'dev server' : 'test build'}).`,
         reply: rec.reply,
       };
-      const why = unsafe(JSON.stringify(file), secrets);
+      const why = unsafeFixture(file, { devices: JOURNEY_DEVICES, secrets });
       if (why) { console.log(`  NOT written ${key}: it holds ${why}`); continue; }
       writeFileSync(join(OUT, `${key}.json`), `${JSON.stringify(file, null, 1)}\n`);
       expected.delete(key);

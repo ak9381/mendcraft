@@ -47,7 +47,8 @@ function findChrome() {
 function loadReplies(dir) {
   const replies = {};
   const recorded = [];
-  if (!existsSync(dir)) return { replies, recorded };
+  const liveShape = [];
+  if (!existsSync(dir)) return { replies, recorded, liveShape };
   for (const f of readdirSync(dir)) {
     if (!f.endsWith('.json')) continue;
     const rec = JSON.parse(readFileSync(join(dir, f), 'utf8'));
@@ -55,8 +56,10 @@ function loadReplies(dir) {
     const key = f.slice(0, -'.json'.length);
     replies[key] = rec.reply;
     if (rec.source === 'recorded') recorded.push(key);
+    // Written on the live path: its replay runs that path (Nano's {t,d} board turn).
+    if (rec.source === 'recorded' || rec.shape === 'live') liveShape.push(key);
   }
-  return { replies, recorded };
+  return { replies, recorded, liveShape };
 }
 
 const failures = [];
@@ -1247,7 +1250,10 @@ async function journey(page) {
 
   // ---- the dashboard: lamp, speaker and stand, driven through the checked binding
   await page.evaluate(() => window.__mcCanvas.run('new board'));
+  const dashMark = await page.evaluate(() => window.__mcCanvas.statusMark());
   if (!(await say('dashboard', { review: true }))) return;
+  const dashSaid = await page.evaluate((m) => window.__mcCanvas.statusSince(m), dashMark);
+  check(!dashSaid.some((t) => /Nano (couldn|didn)|refused|No recorded reply/i.test(t)), `journey: Nano's draft (replayed on the live {t,d} path) was taken (said ${JSON.stringify(dashSaid.slice(0, 4))})`);
   await waitFor(page, (want) => want.every((c) => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector(`[data-device-cls=${c}]`))), 10_000, 'journey: lamp, speaker and stand tiles', ['lamp', 'music', 'gimbal'])
     .then((ok) => ok && check(true, 'journey: the dashboard has a lamp, a speaker and a stand tile'));
   await page.evaluate(pressIn, 'lamp', '[data-act=toggle]');
@@ -1424,14 +1430,14 @@ async function main() {
     for (const name of ORDER) {
       const run = SECTIONS[name];
       if (ONLY && name !== ONLY) continue;
-      const { replies, recorded } = name === 'journey' ? fixtures.replies : fixtures.written;
+      const { replies, recorded, liveShape } = name === 'journey' ? fixtures.replies : fixtures.written;
       console.log(`--- ${name}`);
       const ctx = await browser.createBrowserContext();
       const page = await ctx.newPage();
       await page.setViewport({ width: 1440, height: 900 });
       const errors = [];
       page.on('pageerror', (e) => errors.push(String(e?.message || e)));
-      await page.evaluateOnNewDocument((r, rec) => { window.__mcFixtures = { replies: r, recorded: rec }; }, replies, recorded);
+      await page.evaluateOnNewDocument((r, rec, ls) => { window.__mcFixtures = { replies: r, recorded: rec, liveShape: ls }; }, replies, recorded, liveShape);
       await run(page);
       check(errors.length === 0, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
       await ctx.close();

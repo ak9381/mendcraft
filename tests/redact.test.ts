@@ -47,4 +47,13 @@ describe('redactForCloud (deterministic, rules only)', () => {
     expect(twice.names).toBe(0);
     expect(twice.details).toBe(0);
   });
+
+  it('phones: false keeps digit runs (a recorded reply\'s JSON numbers) and still redacts names and emails', () => {
+    const reply = '{"rooms":[{"x":4000,"y":3000,"w":4000,"h":3000}],"sizes":[1000 2000 3000 4000],"by":"my mother Lakshmi","mail":"a.b@example.com"}';
+    const kept = redactForCloud(reply, [], { phones: false }).text;
+    expect(kept).toContain('[1000 2000 3000 4000]');
+    expect(kept).toContain('my mother [name]');
+    expect(kept).toContain('[email]');
+    expect(redactForCloud(reply).text).toContain('[phone]');
+  });
 });
