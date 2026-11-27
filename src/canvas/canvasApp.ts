@@ -56,6 +56,8 @@ import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR
 import { isPrivateIPv4 } from '../devices/connector';
 import { getLanPlugin } from '../devices/native';
 import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
+import { createMemoryArtifactStore, type ArtifactStore } from '../artifacts/store';
+import { ENGINE_LABEL, approvalDate, mountArtifactsSheet } from './artifactsSheet';
 import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
@@ -195,6 +197,20 @@ export interface CanvasOptions {
   reservedFrameIds?: readonly string[];
   /** Stored artifacts that failed their check at boot and were not loaded. */
   dropped?: readonly { id: string; why: string }[];
+  /** The artifact store, for the Artifacts sheet (list, Remove, Export,
+   *  Import). Missing: the sheet shows an empty memory store. */
+  artifactStore?: ArtifactStore;
+  /** The store could not be read at boot: the sheet changes nothing in it. */
+  artifactsReadOnly?: boolean;
+  /** The sheet removed these artifacts from the store (the canvas already
+   *  took what they showed off the screen). */
+  onArtifactsRemoved?: (ids: string[]) => void;
+  /** The sheet imported artifacts into the store: they open as a load opens
+   *  them (canvasMain reloads). Missing: they open on the next load. */
+  onArtifactsImported?: () => void;
+  /** The stored board artifact on a frame (who made it, when it was
+   *  approved), shown on the board's head. */
+  artifactInfo?: (frameId: string) => { by: ArtifactBy; at: number } | undefined;
   /** One line to say once at boot about storage (e.g. the memory fallback). */
   storeNote?: string;
   voice?: { supported: boolean; pushToTalkStart(): void; pushToTalkStop(): void; setLang?(lang: string): void } | null;
@@ -436,6 +452,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
             <button data-cmd="swap" class="mc-btn" hidden>Swap phone sides</button></section>
           <section class="mc-more-group" aria-label="Sound"><h3 class="mc-more-title">Sound</h3>
             <button data-cmd="voice" class="mc-btn">Voice</button></section>
+          <section class="mc-more-group" aria-label="Stored"><h3 class="mc-more-title">Stored</h3>
+            <button data-cmd="artifacts" class="mc-btn">Artifacts</button></section>
           <section class="mc-more-group" aria-label="Demo"><h3 class="mc-more-title">Demo</h3>
             <button data-cmd="offline" class="mc-btn" aria-pressed="false" data-i18n="simulateOffline">Simulate offline</button></section>
         </div>
@@ -1884,7 +1902,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       el = document.createElement('section');
       el.className = 'mc-frame';
       el.dataset.frame = f.id;
-      el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span>
+      el.innerHTML = `<div class="mc-frame-head"><button class="mc-frame-title" data-focus="${f.id}"></button><span class="mc-chip"></span><span class="mc-frame-by" hidden></span>
           <span class="mc-frame-hand-acts"><button type="button" class="mc-btn mc-frame-smaller" data-frame-act="smaller" aria-label="Make this board smaller">Smaller</button><button type="button" class="mc-btn mc-frame-bigger" data-frame-act="bigger" aria-label="Make this board bigger">Bigger</button><button type="button" class="mc-btn mc-frame-close" data-frame-act="close" aria-label="Close this board">Close board</button></span></div>
         <div class="mc-frame-body"><div class="mc-connect-host" hidden></div><div class="mc-ghost" hidden aria-hidden="true"></div><div class="mc-surface"></div><div class="mc-empty" hidden></div></div>`;
       world.append(el);
@@ -1914,6 +1932,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return el;
   }
 
+  /** A stored board's head says who made it and when it was approved. */
+  function paintFrameMaker(el: HTMLElement, frameId: string): void {
+    const byEl = el.querySelector<HTMLElement>('.mc-frame-by');
+    if (!byEl) return;
+    const info = surfaces[frameId] ? opts.artifactInfo?.(frameId) : undefined;
+    const text = info ? `${ENGINE_LABEL[info.by]} · ${approvalDate(info.at)}` : '';
+    if (byEl.textContent !== text) byEl.textContent = text;
+    byEl.hidden = !text;
+    if (info) byEl.dataset.by = info.by; else delete byEl.dataset.by;
+  }
+  function paintFrameMakers(): void {
+    for (const el of world.querySelectorAll<HTMLElement>('.mc-frame')) paintFrameMaker(el, el.dataset.frame ?? '');
+  }
   function sync(): void {
     const frames = reg.list();
     blankEl.hidden = frames.length > 0;
@@ -1938,6 +1969,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const kindLabel = labelFor(f);
       chip.textContent = f.pinned ? `${kindLabel} · pinned` : kindLabel;
       chip.hidden = !f.pinned && kindLabel.trim().toLowerCase() === f.title.trim().toLowerCase();
+      paintFrameMaker(el, f.id);
       const focused = focusId === f.id;
       el.classList.toggle('focused', focused);
       el.classList.toggle('dim', focusId !== null && !focused);
@@ -2151,6 +2183,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // lives in memory for this page only.
       let ok = true;
       if (opts.onPersist) { try { opts.onPersist(snapshot()); } catch { ok = false; } }
+      if (opts.artifactInfo) paintFrameMakers();
       tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
       return ok;
     };
@@ -2979,9 +3012,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Boards whose Deep (Gemini) pass was skipped offline; run on reconnect. */
   const deepLater: Array<{ frameId: string; utterance: string }> = [];
+  /** Saved requests waiting on a review (or a running turn): look again shortly. */
+  let laterTimer: ReturnType<typeof setTimeout> | undefined;
+  function laterRetry(): void {
+    clearTimeout(laterTimer);
+    laterTimer = setTimeout(() => { laterTimer = undefined; if (langLater.length) runLangLater(); else void runDeepLater(); }, 500);
+  }
   async function runDeepLater(): Promise<void> {
     while (deepLater.length && net.isOnline()) {
-      if (reviewBusy()) return; // retried after the waiting proposal is decided
+      // Saved language asks go first; then each board waits for the review before it.
+      if (langRunning || langLater.length || reviewBusy()) { laterRetry(); return; } // retried after the waiting proposal is decided
       const next = deepLater.shift()!;
       if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue; // board deleted meanwhile
       panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
@@ -4061,6 +4101,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  (Nano can't write packs), reviewed before it's applied. */
   /** Languages waiting for Gemini while offline (one queued ask each). */
   const queuedLangs = new Set<string>();
+  /** The language the canvas is in right now ("English" with no pack). */
+  const currentLangName = (): string => (pack ? langName(pack.lang) : 'English');
   function languageAskTurn(code: string, utterance: string, fresh = false): void {
     // A review on screen (build, floor plan, morph, self-check fix or teach)
     // owns the single full-screen slot; opening the language review on top
@@ -4097,7 +4139,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Like aiTurn: whatever way the turn ends, the cards stop saying Working
   // (the Nano card was left on Working after the language handoff).
   async function languageTurn(code: string, utterance: string): Promise<void> {
-    try { await languageTurnRun(code, utterance); } finally { settleEngines(); }
+    langRunning = true;
+    try { await languageTurnRun(code, utterance); } finally { langRunning = false; settleEngines(); }
+  }
+  /** Language asks saved offline, asked of Gemini one at a time once back
+   *  online: each waits until the review before it is decided. */
+  const langLater: Array<{ code: string; utterance: string; fresh: boolean }> = [];
+  /** A language turn is between its ask and its review (not yet reviewBusy). */
+  let langRunning = false;
+  function runLangLater(): void {
+    if (!langLater.length || !net.isOnline()) return;
+    if (langRunning || reviewBusy()) { laterRetry(); return; }
+    const next = langLater.shift()!;
+    panels.forEngine('nano').setQueued(net.laterCount() + langLater.length + deepLater.length);
+    languageAskTurn(next.code, next.utterance, next.fresh);
+    laterRetry();
   }
   async function languageTurnRun(code: string, utterance: string): Promise<void> {
     const engine = engineFor('gemini', 'pack', code);
@@ -4138,7 +4194,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     const coerced = coerceLanguagePack(raw);
     if (!coerced.ok) {
-      refuse(coerced.error.startsWith('incomplete') ? `The ${name} pack was incomplete. Still in English. Nothing was generated.`
+      refuse(coerced.error.startsWith('incomplete') ? `The ${name} pack was incomplete. Still in ${currentLangName()}. Nothing was generated.`
         : `Refused the ${name} pack: ${coerced.error === SCRIPT_UNKNOWN ? 'its script can’t be checked' : coerced.error}. Nothing was generated.`);
       return;
     }
@@ -4148,7 +4204,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const swapCount = Object.keys(next.strings).length;
     panels.forEngine('gemini').log('replied', `${name} pack ready · ${swapCount} swaps`);
     panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
-    aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. English until you keep it.';
+    aiPanel.querySelector('.mc-ai-state')!.textContent = `Waiting for you. ${currentLangName()} until you keep it.`;
     const title = `Add ${name}`;
     const card = renderProposalCard(document, {
       id: 'p-lang', title, youAsked: utterance, status: 'changed',
@@ -4163,7 +4219,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say(`${name} is on. Say “undo”${undoWord} for English.`);
         bodyLanguage('yes');
       },
-      onDrop: () => { reviewDialog.close(); aiPanel.querySelector('.mc-ai-state')!.textContent = 'Dropped. Still English.'; say('Kept English. Nothing changed.'); autoHideAi(); },
+      onDrop: () => {
+        reviewDialog.close();
+        // The language on screen now (another pack may be on), not always English.
+        const cur = currentLangName();
+        aiPanel.querySelector('.mc-ai-state')!.textContent = `Dropped. Still in ${cur}.`;
+        say(`Kept ${cur}. Nothing changed.`); autoHideAi();
+      },
     });
     showReview({
       title, card, extra: buildReviewExtra(),
@@ -4701,6 +4763,83 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   paintReadAloud();
   // Browsers fill their voice list late: repaint an open sheet when it lands.
   try { (globalThis as { speechSynthesis?: { addEventListener?(t: string, f: () => void): void } }).speechSynthesis?.addEventListener?.('voiceschanged', () => voiceSheet.refresh()); } catch { /* no speech here */ }
+  // ---- Artifacts: every stored artifact, Remove, Export, Import (More → Artifacts, "show artifacts") ----
+  const artifactBase: ArtifactStore = opts.artifactStore ?? createMemoryArtifactStore();
+  /** What the sheet changed since the canvas last caught up. */
+  const sheetRemoved: string[] = [];
+  let sheetImported = false;
+  const writeRefusal = (): string | null => {
+    if (opts.artifactsReadOnly) return 'Stored boards couldn’t be read this session, so the store is left as it is. Nothing changed.';
+    if (reviewBusy()) return 'Finish the review first: keep or drop. Nothing changed.';
+    return null;
+  };
+  // The sheet writes through here: a store that couldn't be read is never
+  // written, and nothing is taken out from under a review that is waiting.
+  const sheetStore: ArtifactStore = {
+    list: () => artifactBase.list(),
+    async put(a) { const no = writeRefusal(); if (no) throw new Error(no); await artifactBase.put(a); sheetImported = true; },
+    async remove(id) { const no = writeRefusal(); if (no) throw new Error(no); await artifactBase.remove(id); sheetRemoved.push(id); },
+    async clear() { throw new Error('The sheet removes one artifact at a time. Nothing changed.'); },
+  };
+  const artifactsSheet = mountArtifactsSheet(root, { store: sheetStore, say, onChange: () => artifactsChanged() });
+  function openArtifacts(): void {
+    if (phoneShell) { say('Artifacts open on the laptop.'); return; }
+    voiceSheet.close();
+    artifactsSheet.open();
+  }
+  /** The sheet changed the store: take what a removed artifact showed off the
+   *  canvas (so no save writes it back), and open what was imported. */
+  function artifactsChanged(): void {
+    const removed = sheetRemoved.splice(0);
+    let framesGone = false;
+    let focusGone = false;
+    for (const id of removed) {
+      const frameId = frameIdOfArtifactId(id);
+      if (id.startsWith('board-') && frameId && reg.get(frameId)) {
+        if (live.has(frameId)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: frameId } }] as never); } catch { /* already gone */ } }
+        live.delete(frameId); deviceSurfaces.untrack(frameId);
+        reg.remove(frameId);
+        delete surfaces[frameId];
+        delete drawings[frameId];
+        for (const k of [...planMakers.keys()]) if (k.startsWith(`${frameId}\n`)) { planMakers.delete(k); planGeneratedBy.delete(k); }
+        history.forgetFrame(frameId);
+        if (focusId === frameId) { focusId = null; focusGone = true; }
+        framesGone = true;
+      } else if (id.startsWith('plan-') && frameId && drawings[frameId]) {
+        for (const boardId of Object.keys(drawings[frameId])) {
+          if (artifactId('plan', frameId, boardId) !== id) continue;
+          delete drawings[frameId][boardId];
+          setSavedPlanDoc(frameId, boardId, null);
+          planMakers.delete(planKey(frameId, boardId)); planGeneratedBy.delete(planKey(frameId, boardId));
+        }
+        if (!Object.keys(drawings[frameId]).length) delete drawings[frameId];
+        if (surfaces[frameId]) renderSurface(frameId);
+      } else if (id.startsWith('pack-')) {
+        for (const lang of [...knownPacks.keys()]) {
+          if (artifactId('pack', lang) !== id) continue;
+          knownPacks.delete(lang);
+          if (pack?.lang === lang) applyPack(null);
+        }
+      } else if (id.startsWith('connector-')) {
+        for (const [key, a] of [...connectorArtifacts]) if (a.id === id) connectorArtifacts.delete(key);
+        syncConnectorLabels();
+      } else if (id.startsWith('steps-')) {
+        for (const [at, a] of [...stepArtifacts]) if (a.id === id) stepArtifacts.delete(at);
+        nextChips?.refresh();
+      }
+    }
+    if (removed.length) {
+      opts.onArtifactsRemoved?.(removed);
+      // The board she was on is gone: show the rest (overview says how many).
+      if (framesGone) { if (focusGone) void overview(); else sync(); updateDock(); historyRender(); }
+      persist();
+    }
+    if (sheetImported) {
+      sheetImported = false;
+      if (opts.onArtifactsImported) { clearTimeout(persistTimer); opts.onArtifactsImported(); }
+      else say('They open the next time the canvas opens.');
+    }
+  }
   /** "change voice" / "use the Ava voice" / "preview voice" / "default voice". */
   function changeVoice(intent: ChangeVoiceIntent): void {
     const out = resolveChangeVoice(intent, speaker.voices().filter((v) => loadAllowCloud(voiceStore) || !isCloudVoice(v)), loadSavedVoice(voiceStore), voiceLang());
@@ -5179,9 +5318,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
     if (on) {
       const later = net.drainLater();
-      const n = later.length + deepLater.length;
-      panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
-      if (n) { say(`Back online. Running ${n} saved request${n > 1 ? 's' : ''}.`); queuedLangs.clear(); later.forEach((u) => { const ask = parseLanguageAsk(u, {}); if (ask) languageAskTurn(ask.code, u, ask.fresh); }); void runDeepLater(); }
+      // Language asks still waiting from an earlier reconnect count too.
+      const n = langLater.length + later.length + deepLater.length;
+      queuedLangs.clear();
+      // One at a time: each language waits for the review before it.
+      for (const u of later) { const ask = parseLanguageAsk(u, {}); if (ask && !langLater.some((l) => l.code === ask.code)) langLater.push({ code: ask.code, utterance: u, fresh: ask.fresh }); }
+      panels.forEngine('nano').setQueued(net.laterCount() + langLater.length + deepLater.length);
+      if (n) {
+        say(`Back online. Running ${n} saved request${n > 1 ? 's' : ''}.`);
+        runLangLater();
+        void runDeepLater();
+      }
       else if (announce) say('Back online.');
     } else if (announce) say(`${OFFLINE_QUICK_ONLY}.`);
   }
@@ -5366,6 +5513,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'teach': openTeach(); return true;
       case 'teachList': openTeachList(); return true;
       case 'voice': changeVoice(r.intent); return true;
+      case 'artifacts': openArtifacts(); return true;
       case 'showAi': showAi(true, true); return true;
       case 'monitor': openMonitor(); return true;
       case 'activityTab': openActivity(); return true;
@@ -5532,7 +5680,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), handsalways: () => setHandsAlways(!handsAlways), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), handsalways: () => setHandsAlways(!handsAlways), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), artifacts: openArtifacts, swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
@@ -5733,6 +5881,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // edit must survive).
     if (persistTimer) persist(true);
     clearTimeout(wheelPersistTimer);
+    clearTimeout(laterTimer);
     if (statusTimer) clearTimeout(statusTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }
@@ -6428,7 +6577,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.
   applyStrings();
   if (pack) opts.voice?.setLang?.(resolveLanguage(pack.lang).speechLang);
-  if (!net.isOnline()) { const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!; btn.setAttribute('aria-pressed', 'true'); btn.dataset.i18n = 'offlineOn'; btn.textContent = str('offlineOn'); }
+  // Opened offline: the Gemini card says Offline from the start, as the toggle does.
+  if (!net.isOnline()) { const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!; btn.setAttribute('aria-pressed', 'true'); btn.dataset.i18n = 'offlineOn'; btn.textContent = str('offlineOn'); engineBar?.setOffline(true); }
 
   // Boot report: stored items that failed their check (one terminal line
   // each; the rest loaded), and storage that can't keep anything — said once.

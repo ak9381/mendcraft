@@ -4,8 +4,9 @@ import { PHONE_GROUPS, PHONE_PRIMARY, sheetStyle } from '../../src/canvas/phoneM
 
 const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
 const barMarkup = app.slice(app.indexOf('<div class="mc-bar-btns">'), app.indexOf('<form class="mc-say">'));
-// Desktop-only tools (a second window; laptop-side phone arrangement) are deliberately absent on phones.
-const DESKTOP_ONLY = new Set(['monitor', 'activity', 'swap']);
+// Desktop-only tools (a second window; laptop-side phone arrangement; the
+// stored-artifacts sheet, kept on the laptop) are deliberately absent on phones.
+const DESKTOP_ONLY = new Set(['monitor', 'activity', 'swap', 'artifacts']);
 const toolbarCmds = [...barMarkup.matchAll(/data-cmd="([a-z]+)"/g)].map((m) => m[1]).filter((c) => !DESKTOP_ONLY.has(c!));
 
 describe('phone tools menu', () => {

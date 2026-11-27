@@ -993,6 +993,135 @@ async function language(page) {
 }
 SECTIONS.language = language;
 
+// ---- break: offline reload, "500 percent" refused by rules, a tampered store, the Artifacts sheet ----
+const BREAK_LAMP_BOARD = {
+  id: 'board-f1', kind: 'board', v: 1, title: 'Lamp', by: 'replay', at: Date.now(), status: 'approved',
+  data: {
+    frame: { kind: 'room', title: 'Lamp', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false },
+    plan: { kind: 'room', title: 'Lamp', tiles: [{ type: 'lamp', deviceId: LAMP_ID, label: 'Lamp', controls: [{ kind: 'chips', label: 'Level', options: [{ label: 'Half', intent: { brightness: 50 } }, { label: 'Full', intent: { brightness: 100 } }] }] }] },
+  },
+};
+const NOTES_BOARD = { ...VALID_BOARD, id: 'board-f2', title: 'Notes', data: { ...VALID_BOARD.data, frame: { ...VALID_BOARD.data.frame, title: 'Notes' } } };
+const LAMP_REFUSAL = 'Lamps go from 10 to 100 %. Nothing changed.';
+const geminiCard = () => document.querySelector('.mc-engine-card[data-engine=gemini] .mc-engine-state')?.textContent.trim();
+const sheetRows = () => [...document.querySelectorAll('.mc-artifacts-sheet:not([hidden]) .mc-artifacts-row')].map((r) => ({
+  id: r.dataset.artifact, kind: r.querySelector('.mc-artifacts-kind')?.textContent, title: r.querySelector('.mc-artifacts-name')?.textContent, made: r.querySelector('.mc-artifacts-made')?.textContent,
+}));
+const lampState = (id) => { const d = window.__mcCanvas.store.get(id); return d ? JSON.stringify({ on: d.on, brightness: d.brightness }) : null; };
+
+async function breakIt(page) {
+  const notes = [];
+  page.on('console', (m) => notes.push(m.text()));
+  await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate((a, b) => Promise.all([window.__mcArtifacts.put(a), window.__mcArtifacts.put(b)]), BREAK_LAMP_BOARD, NOTES_BOARD);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is on the canvas'))) return;
+  // A connector she approves (so there is one stored to tamper with).
+  await page.evaluate(() => { window.__mcCanvas.run('connect the lamp'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the connector review opens'))) return;
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, (id) => window.__mcArtifacts.list().then((l) => l.some((a) => a.id === id)), 5_000, 'the connector is stored', CONNECTOR_ID))) return;
+  const head = await page.evaluate(() => document.querySelector('[data-frame=f1] .mc-frame-by')?.textContent.trim() ?? '');
+  check(/^Replay · recorded reply · \d{1,2} [A-Z][a-z]{2} \d{4}$/.test(head), `the board head names its maker and approval date (got ${JSON.stringify(head)})`);
+
+  // Simulated offline: Gemini says Offline; a reload offline brings every board back.
+  await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
+  await waitFor(page, () => document.querySelector('.mc-engine-card[data-engine=gemini] .mc-engine-state')?.textContent.trim() === 'Offline', 3_000, 'the Gemini card says Offline')
+    .then((ok) => ok && check(true, 'simulated offline: the Gemini card says Offline'));
+  await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'onLine', { get: () => false, configurable: true }); });
+  await page.setRequestInterception(true);
+  const outside = [];
+  const onRequest = (r) => {
+    if (r.isInterceptResolutionHandled()) return;
+    if (r.url().startsWith(BASE) || r.url().startsWith('data:') || r.url().startsWith('blob:')) { void r.continue(); return; }
+    outside.push(r.url()); void r.abort();
+  };
+  page.on('request', onRequest);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check(await page.evaluate(() => navigator.onLine === false), 'the reloaded page is offline');
+  const back = await frames(page);
+  check(back.length === 2 && back.some((f) => f.title === 'Lamp') && back.some((f) => f.title === 'Notes'), `offline reload: both boards are back (got ${JSON.stringify(back)})`);
+  check((await page.evaluate(geminiCard)) === 'Offline', 'offline reload: the Gemini card says Offline');
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'offline: the lamp tile is back'))) return;
+
+  // "Set the lamp to 500 percent": refused by the fixed limits, the lamp unchanged.
+  const before = await page.evaluate(lampState, LAMP_ID);
+  // What the AI monitor hears (the same channel monitor.html listens on).
+  await page.evaluate(() => { window.__feed = []; const ch = new BroadcastChannel('mendcraft-ai'); ch.onmessage = (e) => window.__feed.push(e.data); });
+  const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  await page.evaluate(() => { window.__mcCanvas.run('set the lamp to 500 percent'); });
+  await waitFor(page, (m, line) => window.__mcCanvas.statusSince(m).some((t) => t.includes(line)), 10_000, 'the refusal line is said', mark, LAMP_REFUSAL)
+    .then((ok) => ok && check(true, `"set the lamp to 500 percent" → "${LAMP_REFUSAL}"`));
+  check(await page.evaluate((line) => document.body.innerText.includes(line), LAMP_REFUSAL), 'the refusal line is on screen');
+  await sleep(300);
+  check((await page.evaluate(lampState, LAMP_ID)) === before, `the lamp state is unchanged (got ${await page.evaluate(lampState, LAMP_ID)} vs ${before})`);
+  check(!(await page.evaluate(reviewOpen)), 'no review opens for the refused request');
+  const feed = await page.evaluate(() => window.__feed.filter((m) => m.kind === 'log').map((m) => ({ engine: m.engine, text: m.text })));
+  // A test build's Nano is the replay (nano.break.json): it proposes the 500 %
+  // the request asked for, and the fixed limits refuse it. Nothing reaches Gemini.
+  // (With no on-device Nano the rules decide alone, under "Rules · on this
+  // device" — tests/canvas/tryToBreak.test.ts.)
+  check(feed.some((m) => m.engine === 'nano' && /^SIM · proposed Lamp to 500%/.test(m.text)), `the monitor shows Nano's proposal, labelled SIM (got ${JSON.stringify(feed.slice(0, 4))})`);
+  check(feed.some((m) => m.engine === 'nano' && m.text === LAMP_REFUSAL), 'the monitor shows the refusal on the Nano terminal');
+  check(!feed.some((m) => m.engine === 'gemini'), 'nothing went to Gemini');
+
+  // Tamper with the store: a board control asking for brightness 500, a connector on port 22.
+  const rows = await page.evaluate(() => window.__mcArtifacts.list());
+  const lampBoard = JSON.parse(JSON.stringify(rows.find((a) => a.id === 'board-f1')));
+  lampBoard.data.plan.tiles[0].controls[0].options[0].intent = { brightness: 500 };
+  const conn = JSON.parse(JSON.stringify(rows.find((a) => a.id === CONNECTOR_ID)));
+  conn.data.connector.actions[0].request.port = 22;
+  await page.evaluate((a, b) => Promise.all([window.__mcArtifacts.put(a), window.__mcArtifacts.put(b)]), lampBoard, conn);
+  notes.length = 0;
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is back after the tamper'))) return;
+  await waitFor(page, (line) => document.body.innerText.includes(line), 5_000, 'the dropped line is visible', DROPPED_LINE)
+    .then((ok) => ok && check(true, 'the tampered connector is dropped and the dropped line shows'));
+  const chips = await page.evaluate(() => [...(document.querySelector('mc-device-tile')?.shadowRoot?.querySelectorAll('[data-act=chip]') ?? [])].map((b) => b.textContent.trim()));
+  check(chips.includes('Full') && !chips.includes('Half'), `the 500 % control is cleaned out, the rest load (got ${JSON.stringify(chips)})`);
+  check(notes.some((n) => /Dropped 1 control/.test(n)), 'the dropped-control note is logged');
+  check((await page.evaluate(lampTile))?.footnote === 'Built-in WiZ connector', 'with the tampered connector dropped, the lamp is on the built-in connector');
+
+  // The Artifacts sheet lists what remains (each checked again), and Remove takes a board off.
+  await page.evaluate(() => { window.__mcCanvas.run('show artifacts'); });
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-artifacts-sheet:not([hidden]) .mc-artifacts-row').length >= 2, 5_000, 'the Artifacts sheet lists the boards'))) return;
+  const listed = await page.evaluate(sheetRows);
+  check(listed.map((r) => r.id).sort().join(',') === 'board-f1,board-f2', `the sheet lists what remains, not the dropped connector (got ${JSON.stringify(listed.map((r) => r.id))})`);
+  check(listed.every((r) => /^(Board) /.test(`${r.kind} `) && / · approved \d{1,2} [A-Z][a-z]{2} \d{4}$/.test(r.made)), `each row has kind, maker and date (got ${JSON.stringify(listed)})`);
+  check(await page.evaluate(() => document.querySelector('.mc-artifacts-sheet').innerText.includes('1 stored item failed its check')), 'the sheet says one stored item failed its check');
+  const small = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-sheet button')].filter((b) => b.getBoundingClientRect().height < 56).map((b) => b.textContent.trim()));
+  check(small.length === 0, `every sheet button is at least 56 px tall (smaller: ${JSON.stringify(small)})`);
+  await page.evaluate(() => document.querySelector('[data-artifact="board-f2"] .mc-artifacts-remove').click());
+  await page.evaluate(() => document.querySelector('[data-artifact="board-f2"] .mc-artifacts-remove').click());
+  await waitFor(page, () => window.__mcCanvas.frames().length === 1, 5_000, 'Remove takes the Notes board off the canvas')
+    .then((ok) => ok && check(true, 'Remove takes the Notes board off the canvas'));
+  await sleep(1200); // past the save debounce: nothing writes it back
+  const ids = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.map((a) => a.id).sort()));
+  check(!ids.includes('board-f2') && ids.includes('board-f1'), `the Notes board is gone from the store and stays gone (got ${JSON.stringify(ids)})`);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check((await frames(page)).map((f) => f.title).join() === 'Lamp', 'after a reload the removed board stays gone');
+
+  // Import a file: the valid board loads, the bad entries are counted and left out.
+  const bad = [{ ...NOTES_BOARD, id: 'script-x', kind: 'script' }, { ...conn, id: CONNECTOR_ID }, { ...NOTES_BOARD, id: 'board-f9', data: { ...NOTES_BOARD.data, pad: 'x'.repeat(500_000) } }];
+  const file = JSON.stringify({ format: 'mendcraft-artifacts', version: 1, artifacts: [...bad, NOTES_BOARD] });
+  const tmp = join(require('node:os').tmpdir(), `mendcraft-import-${process.pid}.json`);
+  require('node:fs').writeFileSync(tmp, file);
+  await page.evaluate(() => { window.__mcCanvas.run('show artifacts'); });
+  await waitFor(page, () => !document.querySelector('.mc-artifacts-sheet')?.hidden, 3_000, 'the sheet opens again');
+  const input = await page.$('.mc-artifacts-file');
+  await input.uploadFile(tmp);
+  await waitFor(page, () => document.body.innerText.includes('Imported 1 artifact. 3 entries failed their check and were left out.'), 3_000, 'the import line counts what was left out')
+    .then((ok) => ok && check(true, 'import: 1 kept, 3 left out, said'));
+  await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10_000 }).catch(() => undefined);
+  await waitFor(page, () => !!window.__mcCanvas && window.__mcCanvas.frames().length === 2, 10_000, 'after the import the Notes board opens');
+  check((await frames(page)).some((f) => f.title === 'Notes'), 'the imported board is on the canvas');
+  require('node:fs').rmSync(tmp, { force: true });
+  check(outside.length === 0, `offline: no request left this server (got ${JSON.stringify(outside.slice(0, 3))})`);
+  page.off('request', onRequest);
+}
+SECTIONS.break = breakIt;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

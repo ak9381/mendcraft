@@ -47,6 +47,9 @@
 .mc-frame-title { all: unset; font-size: 26px; font-weight: 650; color: var(--text); cursor: grab; }
 .mc-frame-title:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; border-radius: 6px; }
 .mc-chip { font-size: 15px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+/* A stored board's maker and approval date (artifactsSheet ENGINE_LABEL). */
+.mc-frame-by { font-size: 15px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.mc-frame-by[hidden] { display: none; }
 .mc-frame-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 /* More below the fold: the last 24px fade out instead of a hard cut, so a
    clipped tile reads as "scroll for more". */
@@ -1267,7 +1270,7 @@
 .mc-phone-simple .mc-tool-palette,
 .mc-phone-simple .mc-arrange,
 .mc-phone-simple .mc-engine-bar,
-.mc-phone-simple .mc-frame-head .mc-chip { display: none !important; }
+.mc-phone-simple .mc-frame-head .mc-chip, .mc-phone-simple .mc-frame-head .mc-frame-by { display: none !important; }
 /* Bottom chrome geometry: two 44 px pill rows each side of the 84 px mic,
    the mic centred on them, so the whole block is 112 px + the home-indicator
    inset tall. Each side keeps 10 px clear of the mic. */
@@ -2026,6 +2029,26 @@
 @media (max-width: 600px) { .mc-voice-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); width: auto; max-height: 76vh; } }
 .mc-voice-sheet .mc-voice-pick { display: grid; justify-content: stretch; }
 .mc-voice-pick > span { justify-self: start; }
+
+/* ---- Artifacts sheet (artifactsSheet.ts): stored artifacts, Remove, Export, Import ---- */
+.mc-artifacts-sheet { position: fixed; z-index: 70; right: 24px; top: calc(var(--mc-bar-h, 0px) + 24px); width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px - var(--mc-bar-h, 0px)); overflow: auto; overscroll-behavior: contain; display: grid; gap: 12px; padding: 20px;
+  border-radius: 20px; background: var(--panel); border: 2px solid var(--border); box-shadow: 0 16px 40px rgb(0 0 0 / 0.16); color: var(--text); }
+.mc-artifacts-sheet[hidden] { display: none; }
+.mc-artifacts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-artifacts-title { margin: 0; font-size: 24px; font-weight: 650; }
+.mc-artifacts-note { margin: 0; font-size: 16px; line-height: 1.4; color: var(--text-dim); }
+.mc-artifacts-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.mc-artifacts-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 14px; }
+.mc-artifacts-text { display: grid; gap: 2px; min-width: 0; }
+.mc-artifacts-kind { font-size: 14px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.mc-artifacts-name { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.mc-artifacts-made { font-size: 15px; color: var(--text-dim); }
+.mc-artifacts-sheet .mc-btn { min-height: 56px; border-radius: 14px; }
+.mc-artifacts-remove { min-width: 112px; }
+.mc-artifacts-remove[data-confirm] { border-color: var(--action-fill); box-shadow: inset 0 0 0 1px var(--action-fill); }
+.mc-artifacts-foot { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-top: 4px; border-top: 1px solid var(--border); }
+@media (max-width: 600px) { .mc-artifacts-sheet { left: 16px; right: 16px; top: auto; bottom: calc(16px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))); width: auto; max-height: 76vh; } }
 
 /* Read aloud: On / Off — a big (56 px) toggle below Talk in the hand
    cluster; on the phone shell it is part of the bottom chrome, left of the

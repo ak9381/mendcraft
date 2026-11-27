@@ -581,6 +581,8 @@ export function createCanvasHistory() {
     },
     undo(): HistoryEntry | null { for (let i = entries.length - 1; i >= 0; i--) if (!entries[i].undone) { entries[i].undone = true; return entries[i]; } return null; },
     list: () => entries.map((e) => ({ ...e })),
+    /** A board removed from the store for good: its changes can't be undone onto nothing. */
+    forgetFrame(frameId: string): void { for (let i = entries.length - 1; i >= 0; i--) if (entries[i].frameId === frameId) entries.splice(i, 1); },
   };
 }
 export type CanvasHistory = ReturnType<typeof createCanvasHistory>;

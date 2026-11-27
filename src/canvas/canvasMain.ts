@@ -261,7 +261,11 @@ function boardMaker(frameId: string): ArtifactBy | undefined {
 /** Every save: the layout now, the changed artifacts without waiting.
  *  Nothing is written when the store couldn't be read (an unread board must
  *  never be overwritten), nor the layout when it couldn't be kept safe. */
+/** Set once an import is about to reload the page: nothing more is saved
+ *  (a save now could write the old board over the one just imported). */
+let reloading = false;
 function persistDoc(doc: CanvasDoc): void {
+  if (reloading) return;
   artifacts = saveCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds, {
     layoutStorage, store: artifactStore, layoutBlocked: layoutSaveBlocked, storeBlocked: !!loaded.readFailed,
   });
@@ -293,6 +297,13 @@ handle = mountCanvas(root, {
   },
   dropped: loaded.dropped,
   loadNotes: loaded.notes,
+  // The Artifacts sheet: list, Remove, Export, Import (an import reloads, so
+  // every imported artifact is checked and opened exactly as a load does).
+  artifactStore,
+  artifactsReadOnly: !!loaded.readFailed,
+  onArtifactsRemoved: (ids) => { const gone = new Set(ids); artifacts = artifacts.filter((a) => !gone.has(a.id)); },
+  onArtifactsImported: () => { reloading = true; setTimeout(() => location.reload(), 1200); },
+  artifactInfo: (frameId) => { const a = artifacts.find((x) => x.id === `board-${frameId}`); return a ? { by: a.by, at: a.at } : undefined; },
   reservedFrameIds: reservedFrameIds(),
   storeNote: storeNotes.length ? storeNotes.join(' ') : undefined,
   phoneCamera,

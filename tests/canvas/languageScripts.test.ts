@@ -292,6 +292,19 @@ describe('the language turn, more', () => {
     await vi.waitFor(() => expect(nope.h.statusSince(0).some((t) => t.startsWith('The Kannada pack didn’t arrive.') && t.endsWith('Nothing was generated.'))).toBe(true));
   });
 
+  it('dropping a new pack while another shows says "Still in" that language, not English', async () => {
+    const { h, root } = mount({ engines: stub(FIXTURE.reply), packs: [packArtifact()] });
+    h.run('add Kannada'); // the stored pack, no review
+    await vi.waitFor(() => expect(barText(root)).toBe(KN_PACK.strings.showEverything));
+    h.run('make a new Kannada pack');
+    await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Kannada'), { timeout: 8000 });
+    h.drop();
+    await vi.waitFor(() => expect(h.statusSince(0)).toContain('Kept Kannada. Nothing changed.'));
+    expect(root.querySelector('.mc-ai-state')?.textContent).toBe('Dropped. Still in Kannada.');
+    expect(h.statusSince(0).some((t) => /Still English|Kept English/.test(t))).toBe(false);
+    expect(barText(root)).toBe(KN_PACK.strings.showEverything);
+  });
+
   it('"make a new Kannada pack" asks Gemini again through review, even with one stored', async () => {
     const { h, root } = mount({ engines: stub(FIXTURE.reply), packs: [packArtifact()] });
     h.run('make a new Kannada pack');

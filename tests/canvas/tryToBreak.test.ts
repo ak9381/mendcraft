@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 import type { DeviceRef } from '../../src/canvas/deviceCommands';
 import { routeLine } from '../../src/canvas/routeLine';
-import { VOLUME_RANGE_REFUSAL, detectAttempt, impossibleAttempt, runBreakTurn, validateAttempt, type Attempt, LAMP_RANGE_REFUSAL } from '../../src/canvas/tryToBreak';
+import { BREAK_RULES_ROUTE, VOLUME_RANGE_REFUSAL, breakEngine, detectAttempt, impossibleAttempt, runBreakTurn, validateAttempt, type Attempt, LAMP_RANGE_REFUSAL } from '../../src/canvas/tryToBreak';
 
 const devices: DeviceRef[] = [
   { id: 'lamp-a', label: 'Desk lamp', kind: 'lamp', on: true, brightness: 60 },
@@ -113,6 +113,26 @@ describe('runBreakTurn', () => {
     const r = await runBreakTurn('add a control for the oven', attempt, { engine: recordedEngine('nano', replyFor(attempt), { delayMs: 0 }), devices, panel, say: () => {} });
     expect(r).toEqual({ refused: true, reason: "There's no oven connected. Nothing changed." });
     expect(panel.lines.at(-1)).toEqual(['fail', "There's no oven connected. Nothing changed."]);
+  });
+
+  it('try to break: "set the lamp to 500 percent" is refused by rules with BREAK_RULES_ROUTE and no model', async () => {
+    const text = 'set the lamp to 500 percent';
+    const t = setup(text);
+    expect(t.attempt).toMatchObject({ kind: 'brightness', level: 500 });
+    expect(impossibleAttempt(text, devices)).toMatchObject({ kind: 'brightness', level: 500 });
+    // No on-device Nano here (and a "Nano" step that is really Gemini in the cloud is never asked).
+    const cloudNano = { id: 'gemini' as const, sim: false, stream: vi.fn(async () => '{}') };
+    expect(breakEngine(undefined, false)).toBeNull();
+    expect(breakEngine(cloudNano, false)).toBeNull();
+    const r = await runBreakTurn(text, t.attempt, { engine: null, devices, panel: t.panel, say: (s) => t.said.push(s) });
+    expect(r).toEqual({ refused: true, reason: LAMP_RANGE_REFUSAL });
+    expect(t.panel.lines[0]).toEqual(['note', BREAK_RULES_ROUTE]);
+    expect(BREAK_RULES_ROUTE).toBe('Rules · on this device — checked by fixed limits, no model. Nothing sent.');
+    expect(t.said).toEqual([LAMP_RANGE_REFUSAL]);
+    expect(LAMP_RANGE_REFUSAL.endsWith('Nothing changed.')).toBe(true);
+    expect(cloudNano.stream).not.toHaveBeenCalled();
+    expect(JSON.stringify(t.store.all())).toBe(t.before);
+    expect(t.run).not.toHaveBeenCalled();
   });
 
   it('a valid 70% passes validation and is not refused', async () => {

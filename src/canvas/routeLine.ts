@@ -39,6 +39,8 @@ export type Route =
   | { name: 'paletteOpen' } | { name: 'paletteClose' }
   | { name: 'teach' } | { name: 'teachList' }
   | { name: 'voice'; intent: ChangeVoiceIntent }
+  /** "show artifacts": the stored artifacts sheet (list, Remove, Export, Import). */
+  | { name: 'artifacts' }
   | { name: 'showAi' } | { name: 'monitor' } | { name: 'activityTab' } | { name: 'hideAi' }
   | { name: 'tool'; tool: ToolVoice }
   | { name: 'scroll'; dir: 'up' | 'down'; page: boolean }
@@ -116,6 +118,10 @@ export function isBuildBoardAsk(text: string): boolean {
 /** Every language name she might ask for (English names), code → name. */
 const ANY_LANGUAGE_NAMES: Record<string, string> = Object.fromEntries(LANGUAGES.map((l) => [l.code, l.englishName]));
 
+/** "show artifacts", "open my artifacts", "list the stored artifacts", "artifacts". */
+const ARTIFACTS_RE = /^\s*(?:please\s+)?(?:(?:show|open|list)\s+(?:me\s+)?(?:(?:my|the|all)\s+)?(?:stored\s+|saved\s+)?)?artifacts(?:\s+please)?\s*[.!?]*\s*$/i;
+export const isArtifactsAsk = (text: string): boolean => ARTIFACTS_RE.test(text);
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -125,6 +131,7 @@ export function routeLine(text: string, world: RouteWorld): Route {
   // "change voice" / "use the Ava voice" / "preview voice": the spoken voice picker.
   const voice = parseChangeVoice(text);
   if (voice) return { name: 'voice', intent: voice };
+  if (ARTIFACTS_RE.test(text)) return { name: 'artifacts' };
   if (/^\s*(show\s+models|ai activity|show\s+ai)\s*$/i.test(text)) return { name: 'showAi' };
   // "open AI activity" (optionally "in a new tab"): the log on its own page.
   if (/^\s*open\s+(the\s+)?ai\s+activity(\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab)?\s*[.!]?\s*$/i.test(text) || /^\s*(show\s+)?ai\s+activity\s+(in|on)\s+(a\s+)?(new\s+|its\s+own\s+)?tab\s*[.!]?\s*$/i.test(text)) return { name: 'activityTab' };
