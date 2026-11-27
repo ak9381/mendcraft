@@ -44,9 +44,11 @@ describe('destroy() clears what it owns (C9)', () => {
   it('persist timers, the edge controller, the relay session and the next-step chips', () => {
     const d = body('  function destroy(): void {', '  // ---- zoom + pan');
     // A pending board write is flushed (persist(true) clears its timer), not dropped.
-    expect(d).toContain('if (persistTimer) persist(true)');
+    // (flushSave: the wheel's camera save and the debounced save, D1)
+    expect(d).toContain('flushSave();');
+    expect(src).toMatch(/const flushSave = \(\): void => \{\s*if \(wheelPersistTimer\) \{ clearTimeout\(wheelPersistTimer\);[^}]*\}\s*else if \(persistTimer\) persist\(true\);/);
     expect(d).not.toContain('clearTimeout(persistTimer)');
-    for (const k of [ 'clearTimeout(wheelPersistTimer)', 'boardEdge.reset()', 'pairingStop()', 'hostSession = null', 'nextChips?.destroy()', 'takePointChoice()']) {
+    for (const k of [ 'boardEdge.reset()', 'pairingStop()', 'hostSession = null', 'nextChips?.destroy()', 'takePointChoice()']) {
       expect(d).toContain(k);
     }
   });

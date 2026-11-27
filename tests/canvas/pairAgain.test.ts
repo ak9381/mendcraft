@@ -145,7 +145,7 @@ describe('review fixes', () => {
   it('I2: the reopened code closes on pagehide and when pairing is done', () => {
     const src = app();
     expect(src).toContain("addEventListener('pagehide', onPageHide);");
-    expect(src).toMatch(/const onPageHide = \(\): void => \{ if \(admissionOpen\) \{ admissionOpen = false; void hostSession\?\.endAdmission\(\)/);
+    expect(src).toMatch(/const onPageHide = \(\): void => \{\s*flushSave\(\);\s*if \(admissionOpen\) \{ admissionOpen = false; void hostSession\?\.endAdmission\(\)/);
     expect(src).toMatch(/if \(admissionOpen && pairFirst\.phase\(\) !== 'pairing'\) \{ admissionOpen = false; void hostSession\?\.endAdmission\(\)/);
   });
 
