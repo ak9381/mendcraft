@@ -404,6 +404,12 @@ async function phones(page) {
   await sleep(1200);
   const pinnedL = (await boardArtifacts(page)).find((a) => a.id === dash.id);
   check(!!pinnedL && pinnedL.v > dash.v && pinnedL.data.frame.pinned && pinnedL.by === 'replay', `laptop: pinned after a reload, still by replay (got ${JSON.stringify(pinnedL && [pinnedL.v, pinnedL.data.frame.pinned, pinnedL.by])})`);
+  // After the laptop reload the phones join again (the SIM stands in for the
+  // relay; the real room is resumed from the remembered token, tests/canvas/relayFixWave.test.ts).
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'after a laptop reload the phones join again')
+    .then((ok) => ok && check(true, 'after a laptop reload the phones join again'));
+  check(await page.evaluate(() => !localStorage.getItem('mc.relay.hostToken')) , 'SIM phones never store a relay room on the laptop');
 }
 SECTIONS.phones = phones;
 

@@ -8,15 +8,99 @@ import { startPhoneJoin } from '../../src/canvas/phoneJoin';
 import { tileFromPhone } from '../../src/canvas/tileTransfer';
 import { createAskOrigins } from '../../src/canvas/askOrigin';
 import { MAX_TILES, type SurfacePlan, type TileSpec } from '../../src/canvas/surfacePlan';
+import { clearHostToken, loadHostToken, saveHostToken, type StorageLike } from '../../src/relay/pairingStore';
+import { createLaptopLink, LINK_LINES, PING_EVERY_MS, PING_TIMEOUT_MS } from '../../src/canvas/laptopLink';
+import type { RelayTransport } from '../../src/relay/transport';
+
+const flush = async (n = 12) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+function memoryStorage(): StorageLike {
+  const m = new Map<string, string>();
+  return { getItem: (k) => (m.has(k) ? m.get(k)! : null), setItem: (k, v) => { m.set(k, v); }, removeItem: (k) => { m.delete(k); } };
+}
+function manualTimers() {
+  const list = new Map<number, { fn: () => void; ms: number }>();
+  let id = 0;
+  return {
+    setTimer: (fn: () => void, ms: number) => { list.set(++id, { fn, ms }); return id; },
+    clearTimer: (i: unknown) => { list.delete(i as number); },
+    fire: (ms: number) => { for (const [k, t] of [...list]) if (t.ms === ms) { list.delete(k); t.fn(); } },
+  };
+}
+function phone(t: RelayTransport, platform: 'android' | 'ios') {
+  const timers = manualTimers();
+  const link = createLaptopLink({
+    storage: memoryStorage(), platform, native: true,
+    onSnapshot: () => undefined,
+    joinExtras: { transport: t, keepAliveTimers: { setInterval: () => 0, clearInterval: () => undefined } },
+    setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+  });
+  return { link, timers };
+}
 
 const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
 const joinPhoneSrc = app.slice(app.indexOf('async function joinPhone('), app.indexOf('// Keep / drop act on the waiting board Proposal'));
 
-describe('C2: a new pairing opens a new room', () => {
-  it('a fresh pairing never resumes the stored room token, and forgets it', () => {
-    expect(joinPhoneSrc).not.toContain('loadHostToken(');
-    expect(joinPhoneSrc).toContain('clearHostToken(storage)');
-    expect(app).not.toContain('saveHostToken(');
+describe('C2 follow-up: a laptop reload keeps the room for remembered phones', () => {
+  it('a new pairing resumes the remembered room; only with none remembered is a new room minted', () => {
+    expect(joinPhoneSrc).toContain('token: loadHostToken(storage) ?? undefined');
+    expect(joinPhoneSrc).not.toContain('clearHostToken(');
+  });
+
+  it('the room is remembered once a phone is really here (its first live announce), never before', () => {
+    const announce = app.slice(app.indexOf('function handlePhoneDeviceCommand('), app.indexOf("bodyLanguage('wakeup');"));
+    expect(announce).toMatch(/if \(live === 'first'\) \{[\s\S]*?if \(hostSession\) saveHostToken\(storage, hostSession\.token\);/);
+    expect(app.match(/saveHostToken\(/g)?.length).toBe(1);
+  });
+
+  it('only the explicit Disconnect forgets the room; closing the sheet or the card keeps it', () => {
+    const disc = app.slice(app.indexOf('function disconnectPhones('), app.indexOf('function forgetPhoneSense('));
+    expect(disc).toContain('if (forget) clearHostToken(storage);');
+    expect(app).toContain("disconnectPhones({ forget: true }); say('Phones disconnected.');");
+    expect(app.match(/clearHostToken\(/g)?.length).toBe(1);
+    const close = app.slice(app.indexOf('function closeConnectSheet('), app.indexOf('function openConnectSheet('));
+    expect(close).not.toContain('clearHostToken');
+  });
+
+  it('reload: a phone paired in the room rejoins the new laptop session on its own, no chime code', async () => {
+    const t = createFakeTransport();
+    const storage = memoryStorage();
+    const first = await startPhoneJoin({ transport: t, chime: () => undefined, token: loadHostToken(storage) ?? undefined });
+    if ('error' in first) throw new Error('host');
+    const a = phone(t, 'android');
+    await a.link.joinWithCode(first.code, true);
+    await flush();
+    expect(a.link.state()).toBe('connected');
+    saveHostToken(storage, first.token); // its first live announce
+    // The laptop reloads: the page is gone (no bye), a new page, a new session.
+    a.timers.fire(PING_EVERY_MS); await flush();
+    const joins: string[] = [];
+    const second = await startPhoneJoin({ transport: t, chime: () => joins.push('chime'), token: loadHostToken(storage) ?? undefined });
+    if ('error' in second) throw new Error('host');
+    expect(second.token).toBe(first.token);
+    expect(second.rawCode).not.toBe(first.rawCode); // the chime code is still new each window
+    expect(second.token.startsWith(second.rawCode)).toBe(false);
+    a.timers.fire(PING_TIMEOUT_MS); await flush();
+    a.timers.fire(PING_EVERY_MS); await flush();
+    expect(a.link.state()).toBe('connected');
+    expect(a.link.message()).toBe(LINK_LINES.connected);
+    await a.link.stop(); await first.stop(); await second.stop();
+  });
+
+  it('with no phone remembered, a new pairing mints a new room', async () => {
+    const t = createFakeTransport();
+    const storage = memoryStorage();
+    const a = await startPhoneJoin({ transport: t, chime: () => undefined, token: loadHostToken(storage) ?? undefined });
+    if ('error' in a) throw new Error('host');
+    // Nobody joined: nothing remembered, the next pairing is a new room.
+    const b = await startPhoneJoin({ transport: t, chime: () => undefined, token: loadHostToken(storage) ?? undefined });
+    if ('error' in b) throw new Error('host');
+    expect(b.token).not.toBe(a.token);
+    saveHostToken(storage, b.token);
+    clearHostToken(storage); // Disconnect
+    const c = await startPhoneJoin({ transport: t, chime: () => undefined, token: loadHostToken(storage) ?? undefined });
+    if ('error' in c) throw new Error('host');
+    expect(c.token).not.toBe(b.token);
+    await a.stop(); await b.stop(); await c.stop();
   });
 
   it('phones already paired in the open room keep it: one more phone re-opens a window on the same session', () => {
