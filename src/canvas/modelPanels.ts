@@ -111,6 +111,8 @@ export type LogVerb = 'received' | 'redact' | 'handoff' | 'plan' | 'build' | 'fi
 
 const VERB_MARK: Partial<Record<LogVerb, string>> = { received: '›', done: '✓', replied: '✓', fail: '!' };
 const DONE_VERBS: ReadonlySet<LogVerb> = new Set(['done', 'replied', 'fail']);
+/** Lines kept per terminal: a tab open for hours must not grow its DOM forever. */
+export const TERM_LINES_KEEP = 200;
 
 function nowHHMMSS(d: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -241,7 +243,14 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       line.innerHTML = `<span class="mc-term-mark">${mark}</span><span class="mc-term-time">${nowHHMMSS()}</span>` +
         `<span class="mc-term-verb">${verb}</span><span class="mc-term-detail">${esc(detail)}</span>`;
       // Newest on top: the line just written is always the first one in view.
-      if (typeof lines.prepend === 'function') lines.prepend(line); else lines.append(line);
+      const prepended = typeof lines.prepend === 'function';
+      if (prepended) lines.prepend(line); else lines.append(line);
+      // Bounded: the oldest line goes once the terminal holds TERM_LINES_KEEP.
+      while (lines.childElementCount > TERM_LINES_KEEP) {
+        const old = prepended ? lines.lastElementChild : lines.firstElementChild;
+        if (!old) break;
+        lines.removeChild(old);
+      }
       syncEmpty();
       body.scrollTop = 0;
       api.setWorking(!DONE_VERBS.has(verb));

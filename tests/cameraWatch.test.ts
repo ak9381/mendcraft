@@ -54,6 +54,16 @@ describe('watchTracksForEnd: a muted track (WebKit, camera taken by another capt
   });
 });
 
+describe('watchTracksForEnd: bounded long session', () => {
+  it('a track watched again (tab hidden and shown, same stream) gets no second set of listeners', () => {
+    const adds: string[] = [];
+    const t = { addEventListener: (type: 'ended' | 'mute' | 'unmute') => { adds.push(type); } };
+    const seen = new WeakSet<object>();
+    for (let i = 0; i < 50; i++) watchTracksForEnd({ getTracks: () => [t] }, () => undefined, () => true, undefined, seen);
+    expect(adds).toEqual(['ended', 'mute', 'unmute']);
+  });
+});
+
 describe('camera-lost copy', () => {
   it('does not claim a re-registration or a saved gesture', () => {
     expect(CAMERA_LOST_REGISTER).toMatch(/aren.t re-registered/);

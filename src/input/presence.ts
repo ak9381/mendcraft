@@ -149,10 +149,14 @@ export function watchTracksForEnd(
     set: (fn, ms) => setTimeout(fn, ms),
     clear: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
   },
+  /** Tracks this tracker already watches: a restart on the same shared
+   *  stream (tab hidden, then shown) adds no second set of listeners. */
+  seen?: WeakSet<object>,
 ): void {
   let fired = false;
   const lost = (): void => { if (!fired && stillLive()) { fired = true; onLost(); } };
   for (const t of stream.getTracks()) {
+    if (seen) { if (seen.has(t)) continue; seen.add(t); }
     let muteTimer: unknown = null;
     t.addEventListener('ended', lost);
     t.addEventListener('mute', () => {
@@ -238,6 +242,7 @@ export function createPresenceTracker(
   const operator = createOperatorTracker();
   const gate = createPresenceGate(LOST_TIMEOUT_MS);
   const binder = createHandBinder();
+  const watchedTracks = new WeakSet<object>();
 
   // Cached last face detection (face runs less often than hands).
   let candidates: Candidate[] = [];
@@ -497,7 +502,7 @@ export function createPresenceTracker(
     if (stopped) { stop(); return; }
 
     running = true;
-    if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running);
+    if (opts?.onCameraLost) watchTracksForEnd(stream, opts.onCameraLost, () => running, undefined, watchedTracks);
     rafId = requestAnimationFrame(loop);
   }
 

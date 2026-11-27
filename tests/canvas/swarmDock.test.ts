@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mountSwarmDock, shortAgentName } from '../../src/canvas/swarmDock';
+import { mountSwarmDock, shortAgentName, DOCK_HISTORY_KEEP } from '../../src/canvas/swarmDock';
 import type { SwarmAgentSpec } from '../../src/canvas/swarmAgents';
 
 /** Minimal hand-rolled fake DOM, in the same style the rest of this suite
@@ -394,5 +394,23 @@ describe('mountSwarmDock — mini terminal', () => {
     expect(root.children.some((c) => c.classSet.has('mc-mini-terminal'))).toBe(true);
     dock.destroy();
     expect(root.children.some((c) => c.classSet.has('mc-mini-terminal'))).toBe(false);
+  });
+});
+
+describe('mountSwarmDock — bounded long session', () => {
+  it('the folded history keeps at most DOCK_HISTORY_KEEP chips per engine', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div') as unknown as HTMLElement;
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root, { doc: fakeDoc, ...immediateTimers() });
+    for (let turn = 0; turn < 400; turn++) {
+      dock.start([agent(`t${turn}-a`, 'nano', 'Nano · labels'), agent(`t${turn}-b`, 'nano', 'Nano · words')], { reducedMotion: true });
+      dock.settle();
+    }
+    dock.start([], { reducedMotion: true });
+    const hist = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-history-chips')!;
+    expect(DOCK_HISTORY_KEEP).toBe(200);
+    expect(hist.children.length).toBe(DOCK_HISTORY_KEEP);
+    expect(hist.children[hist.children.length - 1].getAttribute('data-agent-id')).toBe('t399-b');
+    expect(aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-history-count')!.textContent).toBe(String(DOCK_HISTORY_KEEP));
   });
 });

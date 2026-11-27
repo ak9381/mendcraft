@@ -10,6 +10,8 @@ import type { SwarmAgentSpec, SwarmKind } from './swarmAgents';
 const STAGGER_MS = 70;
 const MAX_STAGGER_MS = 900;
 const MAX_VISIBLE = 6;
+/** Folded history chips kept per engine (and their logs): bounded for long sessions. */
+export const DOCK_HISTORY_KEEP = 200;
 
 type ChipState = 'pending' | 'working' | 'done';
 interface AgentLine { time: string; text: string }
@@ -275,6 +277,13 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
         chip.querySelector<HTMLElement>('.mc-dock-chip-mark')!.textContent = '✓';
         historyChips.append(chip);
       });
+      // Bounded: the oldest folded agents (chip and log) go past DOCK_HISTORY_KEEP.
+      while (historyChips.children.length > DOCK_HISTORY_KEEP) {
+        const old = historyChips.children[0] as HTMLElement;
+        const oldId = old.getAttribute('data-agent-id');
+        if (oldId && records.get(oldId)?.chip === old) { if (openId === oldId) closeMini(); records.delete(oldId); }
+        old.remove();
+      }
       chips.innerHTML = '';
       historyCount.textContent = String(historyChips.children.length);
       history.hidden = false;

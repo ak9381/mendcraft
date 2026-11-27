@@ -2610,7 +2610,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root.querySelector('[data-cmd=ai]')?.setAttribute('aria-expanded', String(on));
     // Only a layout-changing (user-pinned) toggle re-flies; an overlay never moves the camera.
     const insetAfter = on && !aiAuto;
-    if (insetBefore !== insetAfter && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
+    // An overlay still moves the hand cluster left of the panel (canvas.css):
+    // if it now lands on the focused board, re-fit the board (L1) — the dock
+    // must never cover a board's buttons.
+    if ((insetBefore !== insetAfter || (on && clusterCoversFocus())) && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
+  }
+  /** Some visible hand-cluster control overlaps the focused board on screen. */
+  function clusterCoversFocus(): boolean {
+    if (phoneShell || !focusId) return false;
+    const fr = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`)?.getBoundingClientRect();
+    const cluster = root.querySelector<HTMLElement>('.mc-hand-cluster');
+    if (!fr || !cluster) return false;
+    return [...cluster.children].some((k) => {
+      const r = (k as HTMLElement).getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && r.left < fr.right && r.right > fr.left && r.top < fr.bottom && r.bottom > fr.top;
+    });
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).

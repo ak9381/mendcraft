@@ -71,9 +71,61 @@ const SPOKEN_VOLUMES: readonly { key: string; label: string; volume: number }[] 
   { key: 'loud', label: 'Loud', volume: 80 },
 ];
 
+// ---- Command shape (N1). The parser below is a bag of words, so it only runs
+// on a line that IS a device command: never a question ("is the lamp on?"), a
+// negation ("don't turn it off"), a report or claim ("I turned it on", "tell me
+// the lamp is on", "already", "right?") or a line about a board ("put a lamp
+// tile on the board"). Refused lines fall through to chat.
+const POLITE = /^(?:(?:please|pls|hey|hi|ok|okay|so|and|then|just|now|mendcraft|can you|could you|would you|will you)\s+)+/;
+const REQUEST = /^(?:(?:please|hey|ok|okay|so|now)\s+)*(?:can|could|would|will) you\s/;
+const VERBS = new Set([
+  'turn', 'switch', 'put', 'set', 'make', 'dim', 'brighten', 'lower', 'raise', 'increase', 'decrease', 'reduce', 'boost', 'cut',
+  'play', 'pause', 'stop', 'resume', 'next', 'skip', 'previous', 'go', 'change', 'bring',
+  'louder', 'softer', 'quieter', 'brighter', 'dimmer', 'darker', 'lighter', 'warmer', 'cooler', 'warm', 'cool',
+]);
+const SHORT_HEADS = new Set(['lamp', 'lamps', 'light', 'lights', 'music', 'song', 'track', 'speaker', 'speakers', 'volume', 'everything', 'room']);
+const DETERMINERS = new Set(['the', 'my', 'our', 'all', 'both', 'every']);
+/** Question, negation, claim and tense words: their presence means "not an order". */
+const REFUSE = new RegExp('\\b(?:' + [
+  'is', 'are', 'was', 'were', 'isnt', 'arent', 'wasnt', 'werent', 'did', 'didnt', 'does', 'doesnt', 'do', 'dont',
+  'not', 'never', 'cant', 'cannot', 'wont', 'shouldnt', 'shouldn', 'wouldnt', 'couldnt', 'should', 'has', 'have', 'had', 'been',
+  'how', 'why', 'what', 'whats', 'which', 'who', 'whos', 'when', 'where', 'wheres', 'whether', 'if',
+  'tell me', 'say', 'already', 'think', 'remind', 'later', 'tomorrow', 'tonight',
+  'turned', 'switched', 'dimmed', 'brightened', 'played', 'paused', 'stopped', 'went', 'got',
+  'tile', 'tiles', 'board', 'boards', 'card', 'cards', 'widget', 'widgets', 'button', 'buttons', 'control', 'controls',
+  'slider', 'toggle', 'dashboard', 'canvas', 'note', 'notes', 'icon', 'chart', 'panel', 'page', 'story', 'picture', 'photo', 'image', 'label',
+].join('|') + ')\\b');
+
+/** True when the line has the shape of a device order: a leading command verb,
+ *  or a short device phrase ("lamp on", "desk lamp 40 percent", "volume up"). */
+export function isDeviceCommandShape(text: string, devices: readonly DeviceRef[]): boolean {
+  const raw = text.trim().toLowerCase();
+  const t = norm(text);
+  if (!t) return false;
+  // A question mark is a question — unless it is a polite request with a verb
+  // ("could you turn on the lamp?").
+  const request = REQUEST.test(t);
+  if (/\?\s*$/.test(raw) && !request) return false;
+  // "the lamp's on", "it's off": a claim, not an order.
+  if (/\b\w+['’]s\s+(?:on|off|out)\b/.test(raw)) return false;
+  if (REFUSE.test(t)) return false;
+  if (/\bright\s*$/.test(t)) return false; // "…, right"
+  if (/\bstop \w+ing\b/.test(t)) return false; // "stop turning the lamp off"
+  const words = t.replace(POLITE, '').replace(/\s+please$/, '').split(' ').filter(Boolean);
+  if (!words.length) return false;
+  if (VERBS.has(words[0])) return true;
+  if (request) return false;
+  // A short device phrase: its first content word is a device word or a word of a device's label.
+  if (words.length > 6) return false;
+  const labelWords = new Set(devices.flatMap((d) => norm(d.label).split(' ')).filter((w) => w && !COMMON.has(w)));
+  const head = words.find((w) => !DETERMINERS.has(w));
+  return !!head && (SHORT_HEADS.has(head) || labelWords.has(head));
+}
+
 export function parseDeviceCommands(text: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
+  if (!isDeviceCommandShape(text, devices)) return null;
 
   // Music is a separate vocabulary (play / pause / next / louder / softer) and
   // targets the music devices; lamp verbs never touch a speaker.
