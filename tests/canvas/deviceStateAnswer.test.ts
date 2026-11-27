@@ -30,4 +30,19 @@ describe('a state question is answered from the device store', () => {
     const r = routeLine('is the lamp on?', { devices: one, hasPlanBoard: false });
     expect(r).toEqual({ name: 'deviceState', line: 'The desk lamp is on.' });
   });
+  // Final review 4: never a guess.
+  it('a speaker whose playing was never read: "I don\'t know"', () => {
+    expect(deviceStateAnswer('is the music playing?', [{ id: 'spk', label: 'Speaker', kind: 'music', playing: false, unknown: true }]))
+      .toBe("I don't know whether the speaker is playing.");
+  });
+  it('a lamp with no known state is not "off"', () => {
+    expect(deviceStateAnswer('is the lamp on?', [{ id: 'l', label: 'Desk lamp', kind: 'lamp' }])).toBe("I don't know whether the desk lamp is on.");
+  });
+  it('before the first look for lamps: still looking', () => {
+    expect(deviceStateAnswer('is the lamp on?', [{ ...one[0], looking: true }])).toBe("I'm still looking for the desk lamp.");
+  });
+  it('names keep their casing', () => {
+    expect(deviceStateAnswer('is the lamp on?', [{ id: 'w', label: 'WiZ lamp', kind: 'lamp', on: false }])).toBe('The WiZ lamp is off.');
+    expect(deviceStateAnswer('is the music playing?', [{ id: 'm', label: 'Marshall', kind: 'music', playing: true }])).toBe('The Marshall is playing.');
+  });
 });

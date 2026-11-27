@@ -22,6 +22,10 @@ export interface DeviceRef {
   temp?: number;
   /** A real device this machine knows but cannot reach right now. */
   unreachable?: boolean;
+  /** Its on / playing state was never reported (never guessed as "off"). */
+  unknown?: boolean;
+  /** The first look for real lamps has not finished yet. */
+  looking?: boolean;
 }
 export interface DeviceCommandResult { intents: DeviceIntent[]; say: string; statusKey?: StatusKey }
 

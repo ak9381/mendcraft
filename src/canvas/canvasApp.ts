@@ -41,6 +41,7 @@ import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } f
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
+import { deviceStateAnswer } from './deviceStateAnswer';
 import { clearHostToken, loadHostToken, loadLayout, openCodeStore, saveHostToken, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
@@ -1447,6 +1448,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // probe localhost at all: no console noise for visitors without a lamp.
   const wizClient = opts.sim ? null : (opts.wizClient ?? (resolveWizToken() ? createWizClient() : null));
   const bridgeStatus: BridgeStatus = { up: false };
+  /** The first look for real lamps has finished (answered or not). */
+  let lampsLookedFor = false;
+  /** Speakers whose playing state was really reported (a read or a command). */
+  const playingRead = new Set<string>();
   // Which bulb each real lamp id is (filled when the bridge answers).
   const lampIps = new Map<string, string>();
   // Device id → the name shown and given to the models (filled by discovery).
@@ -1631,6 +1636,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!spotifyConnected() || !isSpeakerDevice(id) || !store.get(id)) return false;
     try {
       const pb = await spotifyApi.getPlayback(spOpts());
+      if (pb) { store.patch(id, { playing: !!pb.playing }); playingRead.add(id); }
       if (pb && typeof pb.volume === 'number') { store.patch(id, { volume: Math.round(pb.volume * 100) }); return true; }
     } catch { /* not read: the volume stays unknown */ }
     return false;
@@ -1745,6 +1751,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     lastDiscoverAt = Date.now();
     try {
       const lamps = await discoverRealLamps(wizClient, storage);
+      lampsLookedFor = true;
       const wasUp = bridgeStatus.up;
       bridgeStatus.up = lamps !== null;
       if (lamps === null || opts.devices) {
@@ -2560,7 +2567,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  at the moment of the turn (a lamp found after the bridge was allowed
    *  mid-session is in it; a remembered "Not reachable" bulb is not). */
   const roomDeviceHints = (): DeviceHint[] => answeringDevices(store.all(), { label: labelOf, kind: kindOf, live: liveLamps });
-  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp, unreachable: !!s.unreachable }));
+  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => {
+    const realLamp = liveLamps && !!wizClient && isManagedLampId(id);
+    return {
+      id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp,
+      // As the devices table counts it: a real lamp the bridge does not answer for.
+      unreachable: !!s.unreachable || (realLamp && lampsLookedFor && (!bridgeStatus.up || !!s.sim)),
+      looking: realLamp && !lampsLookedFor,
+      // The Spotify speaker's playing starts as a seeded false: unknown until read.
+      unknown: kindOf(id) === 'music' && isSpeakerDevice(id) && !opts.sim && !playingRead.has(id),
+    };
+  });
+  /** "is the music playing?": read the speaker first (Spotify), then answer. */
+  async function answerDeviceState(text: string, line: string): Promise<void> {
+    const speakers = Object.keys(store.all()).filter((id) => kindOf(id) === 'music' && isSpeakerDevice(id) && !opts.sim);
+    if (speakers.length && spotifyConnected() && /\b(music|song|speakers?|player|playing|paused)\b/i.test(text)) {
+      try {
+        const pb = await spotifyApi.getPlayback(spOpts());
+        for (const id of speakers) { store.patch(id, { playing: !!pb?.playing }); playingRead.add(id); }
+      } catch { /* not read: stays "I don't know" */ }
+      line = deviceStateAnswer(text, deviceRefs()) ?? line;
+    }
+    say(line, { speak: true });
+  }
   /** `from: 'phone'`: a phone asked for it (its words, or a tile it sent back). */
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement; from?: 'phone' } | null = null;
   /** Words a phone sent to run, so its review can be told from hers. */
@@ -5787,6 +5816,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           acts.push(acted);
           // "play music": once the player has really started, say what is
           // playing and where — not just "Playing."
+          if (typeof i.playing === 'boolean') void acted.then((s) => { if (!s.error && typeof s.playing === 'boolean') playingRead.add(i.deviceId); }).catch(() => undefined);
           if (i.playing === true && !pack?.status?.playing) {
             void acted.then((s) => { if (s.playing && !s.error) say(`${opts.sim ? 'SIM · ' : ''}${playingLine(musicWhere, s.trackTitle)}`, { speak: true }); }).catch(() => undefined);
           }
@@ -5808,7 +5838,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return true;
       }
       // "is the lamp on?": from the device store, never a chat guess.
-      case 'deviceState': say(r.line, { speak: true }); return true;
+      case 'deviceState': void answerDeviceState(text, r.line); return true;
       case 'connectDevices': {
         // Phones first (pairing is fixed code); the dashboard review waits
         // for "build the dashboard", and "show my devices" generates the
