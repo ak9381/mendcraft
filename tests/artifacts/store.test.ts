@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import {
-  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore,
+  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore, STORE_OPEN_TIMEOUT_MS,
 } from '../../src/artifacts/store';
 import { ARTIFACT_MAX_COUNT } from '../../src/artifacts/artifact';
 import { board } from './sample';
@@ -70,6 +70,30 @@ describe('ArtifactStore', () => {
     await r.store.put(board('f1'));
     expect(await r.store.list()).toHaveLength(1);
     expect(STORE_FALLBACK_LINE).toBe("This browser can't keep boards. They last until you close the tab.");
+  });
+
+  it('falls back to memory (with the honest note) when indexedDB.open never answers (final review I13)', async () => {
+    vi.useFakeTimers();
+    try {
+      g.indexedDB = { open: () => ({}) }; // a request that never fires onsuccess / onerror
+      const p = openArtifactStore();
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
+      const r = await p;
+      expect(r.persistent).toBe(false);
+      await r.store.put(board('f1'));
+      expect(await r.store.list()).toHaveLength(1);
+      expect(STORE_OPEN_TIMEOUT_MS).toBe(3000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a store whose read never answers loads as unreadable, not forever (final review I13)', async () => {
+    vi.useFakeTimers();
+    try {
+      const stuck = { ...createMemoryArtifactStore(), list: () => new Promise<never>(() => {}) };
+      const p = loadArtifacts(stuck);
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
+      expect((await p).readFailed).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it('opens the IndexedDB store when it works', async () => {

@@ -71,13 +71,25 @@ export function createIdbArtifactStore(
   };
 }
 
-/** IndexedDB when it opens and answers; else memory (`persistent: false`). */
+/** How long boot waits for IndexedDB to open or answer a read. Some iOS
+ *  webviews never answer `indexedDB.open`: the canvas then opens on the
+ *  memory store and says so, instead of never mounting (final review I13). */
+export const STORE_OPEN_TIMEOUT_MS = 3000;
+/** `p`, or a rejection once `ms` has passed with no answer. */
+function withinTime<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('IndexedDB did not answer')), ms);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e: unknown) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+/** IndexedDB when it opens and answers in time; else memory (`persistent: false`). */
 export async function openArtifactStore(): Promise<{ store: ArtifactStore; persistent: boolean }> {
   try {
     const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
     if (!idb) throw new Error('no IndexedDB');
     const store = createIdbArtifactStore(idb);
-    await store.list();
+    await withinTime(store.list(), STORE_OPEN_TIMEOUT_MS);
     return { store, persistent: true };
   } catch {
     return { store: createMemoryArtifactStore(), persistent: false };
@@ -109,7 +121,7 @@ export interface LoadedArtifacts {
  *  ARTIFACT_MAX_COUNT. A row that fails is dropped (with why); the rest load. */
 export async function loadArtifacts(store: ArtifactStore): Promise<LoadedArtifacts> {
   let rows: unknown[];
-  try { rows = await store.list(); } catch { return { ok: [], dropped: [], overCap: [], notes: [], readFailed: true }; }
+  try { rows = await withinTime(store.list(), STORE_OPEN_TIMEOUT_MS); } catch { return { ok: [], dropped: [], overCap: [], notes: [], readFailed: true }; }
   const ok: Artifact[] = [];
   const dropped: { id: string; why: string }[] = [];
   const notes: { id: string; note: string }[] = [];
