@@ -88,3 +88,7 @@ Preview: https://mendcraft--sim-main-o8jrlskh.web.app/canvas.html?fresh=1
 - ✓ Edited floor plan sent to the Nothing phone arrives WITH the edit (Bedroom 1, Bedroom 2, Living room, Study). The phone still holds one older Studio board saved before the fix (a different plan, correctly kept).
 - ✓ Reload keeps both boards; `?fresh=1` strips itself from the URL and leaves a backup (mc.canvas.v1.beforeFresh).
 - ✓ Chat: Nano's "I will call your daughter right away" is now replaced by "I can't do that — I can only change things here on your boards and devices." (guard probe: 1/60 false positives, 3/32 misses).
+
+### Akash live test, 27 Nov ~11:15 IST (sim-main preview)
+- ✓ Board → Nothing phone and board → iPhone by HAND (held fist on the board title to each edge).
+- ✗ No visible green edge glow while holding at the edge (the class is set in code; likely too faint/short) — to fix on sim-main and main.
