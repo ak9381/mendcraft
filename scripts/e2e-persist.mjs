@@ -90,6 +90,27 @@ async function main() {
     const planText = await page.evaluate(() => document.querySelector('mc-plan-board') ? 'ok' : '');
     check(planText === 'ok', 'the floor plan board renders after the reload');
 
+    // 1b. Closing the tab right after an edit (final review D1): the
+    //     debounced save is flushed on pagehide / visibilitychange, so the
+    //     last edit survives. The debounce timers are held back here so the
+    //     flush is the only thing that can write.
+    for (const ev of ['pagehide', 'visibilitychange']) {
+      const flushed = await page.evaluate(async (ev) => {
+        const count = () => (JSON.parse(localStorage.getItem('mc.canvas.v1') || 'null')?.frames?.length ?? 0);
+        const realSet = window.setTimeout;
+        window.setTimeout = ((fn, ms, ...a) => ((ms === 200 || ms === 250) ? 0x3fffffff : realSet(fn, ms, ...a)));
+        try {
+          const n0 = count();
+          await window.__canvas.run('new board');
+          const held = count();
+          if (ev === 'pagehide') dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+          else { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); delete document.visibilityState; }
+          return { n0, held, after: count() };
+        } finally { window.setTimeout = realSet; }
+      }, ev);
+      check(flushed.held === flushed.n0 && flushed.after === flushed.n0 + 1, `${ev} flushes the pending save: the last edit survives closing the tab (${JSON.stringify(flushed)})`);
+    }
+
     // 2. A saved doc this build can't read.
     const unreadable = JSON.stringify({ ...before, version: 99 });
     await page.evaluate((u) => { localStorage.setItem('mc.canvas.v1', u); localStorage.removeItem('mc.canvas.v1.unreadable'); }, unreadable);

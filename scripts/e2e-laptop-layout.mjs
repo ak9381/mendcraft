@@ -721,6 +721,32 @@ async function main() {
       }
       checkCluster(m, vp.name, { allowWrap: false });
       if (SHOTS) await page.screenshot({ path: join(SHOTS, `${vp.name.replace(' ', '-')}.png`) });
+      // Final review L1: the AI drawer opening by itself (a failure) moves the
+      // cluster left of it; the board is re-fitted so the cluster never
+      // covers its buttons — and again when the drawer folds away.
+      for (const [step, open] of [['AI drawer open (overlay)', true], ['AI drawer closed again', false]]) {
+        await page.evaluate((o) => window.__canvas.aiOverlay(o), open);
+        for (let i = 0, last = '', same = 0; i < 40 && same < 3; i++) {
+          const now = await page.evaluate(() => { const f = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame'); const r = f?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') : ''; });
+          same = now === last ? same + 1 : 0; last = now;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        const a = await page.evaluate(measure);
+        const hitCluster = a.frame && a.items.filter((i) => overlap(i.box, a.frame)).map((i) => i.kind);
+        check(a.items.length > 0 && hitCluster.length === 0, `${vp.name} ${step}: cluster never covers the board${hitCluster.length ? ` — ${hitCluster.join(', ')}` : ''}`);
+        const covered = await page.evaluate(() => {
+          const deepHit = (x, y) => { let el = document.elementFromPoint(x, y); while (el?.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner; } return el; };
+          const f = document.querySelector('.mc-frame.focused') ?? document.querySelector('.mc-frame');
+          const out = [];
+          for (const b of f ? f.querySelectorAll('.mc-frame-head button, .mc-frame-actions button') : []) {
+            const r = b.getBoundingClientRect(); if (!r.width) continue;
+            const hit = deepHit(r.left + r.width / 2, r.top + r.height / 2);
+            if (hit && hit.closest?.('.mc-hand-cluster')) out.push(b.getAttribute('aria-label') || b.textContent.trim());
+          }
+          return out;
+        });
+        check(covered.length === 0, `${vp.name} ${step}: no board button under the cluster${covered.length ? ` — ${covered.join(', ')}` : ''}`);
+      }
       if (!board.extras) { check(errors.length === 0, `${vp.name}: no page errors${errors.length ? ` — ${errors[0]}` : ''}`); await page.close(); continue; }
 
       await clusterHoldsStill(page, `${vp.name} camera off`);

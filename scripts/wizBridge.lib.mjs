@@ -27,6 +27,51 @@ export function isIPv4(s) {
   return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
 }
 
+// A bulb address the bridge may send to (final review D4): a private LAN
+// host only (10/8, 172.16/12, 192.168/16, link-local 169.254/16), never a
+// broadcast, network, loopback, multicast or public address.
+export function isBulbAddress(s) {
+  if (!isIPv4(s)) return false;
+  const [a, b, , d] = s.split('.').map(Number);
+  if (d === 0 || d === 255) return false;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
+// One broadcast discovery at a time (final review D2). A /discover that
+// arrives while one is in flight gets the same answer instead of starting a
+// second window (two tabs at boot used to replace the shared map, and the
+// second timer then crashed the bridge on a null map). `send` broadcasts one
+// getPilot datagram; a send that throws is a pulse lost, never a crash.
+export function createDiscovery({ send, setTimeout: st = setTimeout, windowMs = 900 }) {
+  let found = null;
+  let inFlight = null;
+  const pulse = () => { try { send(); } catch { /* a lost pulse: the window still answers */ } };
+  return {
+    /** A UDP reply: kept only while a window is open. */
+    onMessage(ip, msg) { if (found) found.set(ip, msg); },
+    discover() {
+      if (inFlight) return inFlight;
+      const map = found = new Map();
+      inFlight = new Promise((resolve) => {
+        pulse();
+        // A couple of pulses in case the first datagram is dropped.
+        st(pulse, 250);
+        st(() => {
+          if (found === map) found = null;
+          inFlight = null;
+          const bulbs = [];
+          for (const [ip, reply] of map) {
+            const result = reply && typeof reply === 'object' ? reply.result ?? reply : null;
+            bulbs.push({ ip, mac: result?.mac, state: result });
+          }
+          resolve(bulbs);
+        }, windowMs);
+      });
+      return inFlight;
+    },
+  };
+}
+
 // The scenes a WiZ bulb knows (same ids as src/devices/wiz.ts WIZ_SCENES).
 export const SCENE_ID_MIN = 1;
 export const SCENE_ID_MAX = 32;

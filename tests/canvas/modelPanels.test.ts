@@ -86,8 +86,13 @@ class FakeEl {
   constructor(tag: string) { this.tag = tag; }
   set innerHTML(v: string) { this.html = v; this.children = []; }
   get innerHTML() { return this.html; }
-  append(...nodes: FakeEl[]) { this.children.push(...nodes); }
-  appendChild(node: FakeEl) { this.children.push(node); return node; }
+  parent: FakeEl | null = null;
+  append(...nodes: FakeEl[]) { nodes.forEach((n) => { n.parent = this; }); this.children.push(...nodes); }
+  prepend(...nodes: FakeEl[]) { nodes.forEach((n) => { n.parent = this; }); this.children.unshift(...nodes); }
+  appendChild(node: FakeEl) { node.parent = this; this.children.push(node); return node; }
+  get lastElementChild() { return this.children[this.children.length - 1] ?? null; }
+  get firstElementChild() { return this.children[0] ?? null; }
+  remove() { if (this.parent) { this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; } }
   classList = {
     add: (...cs: string[]) => {
       const cur = new Set(this.className.split(/\s+/).filter(Boolean));
@@ -308,11 +313,12 @@ describe('logTurnReceipt — privacy order invariant', () => {
     });
     const nanoLines = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-nano')!.querySelector('.mc-term-lines')!;
     const geminiLines = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-gemini')!.querySelector('.mc-term-lines')!;
-    expect(nanoLines.children.map((c) => c.className)).toEqual([
+    // Newest on top (prepend): read bottom-up for the order they were written.
+    expect([...nanoLines.children].reverse().map((c) => c.className)).toEqual([
       'mc-term-line mc-term-line--received',
       'mc-term-line mc-term-line--redact',
     ]);
-    expect(nanoLines.children[1].innerHTML).toContain('Sharma → [Client A]');
+    expect(nanoLines.children[0].innerHTML).toContain('Sharma → [Client A]');
     expect(geminiLines.children.length).toBe(1);
     expect(geminiLines.children[0].innerHTML).toContain('[Client A]');
     expect(geminiLines.children[0].innerHTML).not.toMatch(/Sharma/);
@@ -365,5 +371,22 @@ describe('mountModelPanels — settle() tells the AI feed', () => {
     expect(sent).toEqual([{ kind: 'state', engine: 'nano', state: 'done' }]);
     panels.settle();
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe('long session (final review M13): the terminals never grow without limit', () => {
+  it('50 000 log lines keep at most TERM_LINES_CAP lines per terminal, the newest on top', async () => {
+    const { TERM_LINES_CAP } = await import('../../src/canvas/modelPanels');
+    expect(TERM_LINES_CAP).toBeLessThanOrEqual(200);
+    const aiPanel = fakePanel();
+    const panels = mountModelPanels(aiPanel, fakeDoc);
+    const nano = panels.forEngine('nano');
+    for (let i = 0; i < 50_000; i++) nano.log(i % 7 ? 'note' : 'done', `line ${i}`);
+    for (let i = 0; i < 1_000; i++) panels.showHandoff('nano', `h ${i}`);
+    const lines = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-nano')!.querySelector('.mc-term-lines')!;
+    expect(lines.children.length).toBe(TERM_LINES_CAP);
+    expect(lines.children[0].innerHTML).toContain('h 999');
+    const gem = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-gemini')!.querySelector('.mc-term-lines')!;
+    expect(gem.children.length).toBe(TERM_LINES_CAP);
   });
 });

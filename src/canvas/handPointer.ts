@@ -1682,8 +1682,9 @@ export function createHandPointer(doc: Document = document, opts: HandPointerOpt
           active[i] = true;
           prevTips[i] = tipOf(h);
           lastSeen[i] = t;
-          const snap = slots[i].snapshot();
-          getGestureTrace().push({ t, hand: i, ...snap });
+          // A snapshot per frame only while the debug trace is on.
+          const trace = getGestureTrace();
+          if (trace.enabled) trace.push({ t, hand: i, ...slots[i].snapshot() });
         } else if (active[i] && t - lastSeen[i] >= SLOT_LOST_MS) {
           slots[i].lost();
         }

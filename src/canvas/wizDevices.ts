@@ -5,7 +5,7 @@
 // `sim: true` so the tile shows it's not the real bulb.
 import { DeviceError, lampLook, type DeviceConnector, type DeviceIntent } from './deviceActions';
 import type { DeviceState } from './surfacePlan';
-import { BridgeRefusedError, type WizClient } from '../devices/wizClient';
+import { BridgeOfflineError, BridgeRefusedError, type WizClient } from '../devices/wizClient';
 import type { LampIntent, LampState } from '../devices/wiz';
 
 export function isWizDevice(deviceId: string): boolean {
@@ -35,6 +35,8 @@ export interface WizConnectorDeps {
 
 /** A real lamp the bridge can't reach right now (live mode only). */
 export const LAMP_NOT_REACHABLE = 'Not reachable — the lamp bridge isn’t answering. Nothing changed.';
+/** The bridge answered, but this one bulb did not (M8): only this lamp. */
+export const LAMP_DID_NOT_ANSWER = 'Not reachable — this lamp didn’t answer. Nothing changed.';
 
 /** Live mode without a bridge at all: lamps are refused, never simulated;
  *  every other device goes to `fallback`. */
@@ -85,6 +87,10 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
           // The bridge is up and refused the value: the lamp did not change and
           // nothing is simulated in its place — the store shows the refusal.
           if (err instanceof BridgeRefusedError) throw err;
+          // The bridge answered but this bulb did not (a 502, no reply): this
+          // lamp only — the bridge and every other lamp stay up (M8).
+          if (!(err instanceof BridgeOfflineError) && deps.honest) { deps.onRefusedUnreachable?.(); throw new DeviceError(LAMP_DID_NOT_ANSWER); }
+          if (!(err instanceof BridgeOfflineError)) { const ack = await deps.fallback.run(intent); return { ...ack, sim: true }; }
           deps.status.up = false; // bridge dropped mid-session — fall through below.
           deps.onDown?.();
         }

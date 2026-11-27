@@ -180,6 +180,9 @@ export function formatFooterBytes(bytes: number, simBytes = 0): string {
   return simBytes > 0 ? `${real} · ${formatSimBytes(simBytes)}` : real;
 }
 
+/** Lines one terminal keeps (newest first); older ones leave the DOM. */
+export const TERM_LINES_CAP = 200;
+
 export interface EnginePanelUi {
   /** Appends one timestamped log line; 'done'/'replied' hide the blinking
    *  cursor, every other verb shows it (this engine is working). */
@@ -241,7 +244,15 @@ function enginePanel(container: HTMLElement, engine: ModelEngine, doc: Document,
       line.innerHTML = `<span class="mc-term-mark">${mark}</span><span class="mc-term-time">${nowHHMMSS()}</span>` +
         `<span class="mc-term-verb">${verb}</span><span class="mc-term-detail">${esc(detail)}</span>`;
       // Newest on top: the line just written is always the first one in view.
-      if (typeof lines.prepend === 'function') lines.prepend(line); else lines.append(line);
+      // Capped (a tab open for hours must not grow its DOM without limit):
+      // the oldest line leaves as a new one arrives.
+      if (typeof lines.prepend === 'function') {
+        lines.prepend(line);
+        while (lines.childElementCount > TERM_LINES_CAP) lines.lastElementChild?.remove();
+      } else {
+        lines.append(line);
+        while (lines.childElementCount > TERM_LINES_CAP) lines.firstElementChild?.remove();
+      }
       syncEmpty();
       body.scrollTop = 0;
       api.setWorking(!DONE_VERBS.has(verb));

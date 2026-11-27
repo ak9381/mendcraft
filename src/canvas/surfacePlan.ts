@@ -427,9 +427,12 @@ export function expandPlan(
         onWarmer: { event: { name: 'lamp.warmer', context: { deviceId: t.deviceId } } },
         onCooler: { event: { name: 'lamp.cooler', context: { deviceId: t.deviceId } } },
       });
-      const s = devices[t.deviceId] ?? { on: false, brightness: 50 };
+      const known = devices[t.deviceId];
+      const s = known ?? { on: false, brightness: 50 };
       deviceData[t.deviceId] = {
-        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false, unreachable: s.unreachable ?? false,
+        // A lamp this canvas does not have right now (its bulb missed the
+        // last look) shows "Not reachable"; the tile itself stays (I3).
+        on: s.on ?? false, brightness: s.brightness ?? 50, pending: false, error: s.error ?? '', sim: s.sim ?? false, unreachable: !known || !!s.unreachable,
         temp: s.temp ?? 0, color: s.color ?? '', sceneId: s.sceneId ?? 0,
       };
     } else if (t.type === 'plan') {

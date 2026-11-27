@@ -28,6 +28,7 @@ import { coerceSnapshot } from '../relay/controlSnapshot';
 import { createReplayPlayer, DEMO_JOURNEY, type ReplayResult } from './journeyReplay';
 import { mountReplayBanner } from './replayBanner';
 import { openFresh } from './canvasStore';
+import { wizTokenFreeUrl } from '../devices/wizClient';
 
 function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   const m = new Map<string, string>();
@@ -51,6 +52,9 @@ const params = new URLSearchParams(location.search);
 // A failed copy means this open is NOT fresh (nothing is reset).
 const freshOpen = openFresh((() => { try { return localStorage; } catch { return null; } })(), location.href);
 if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
+// ?wizToken= is stored, then leaves the address bar (it would show on camera).
+const tokenFree = wizTokenFreeUrl(location.href, (() => { try { return localStorage; } catch { return null; } })());
+if (tokenFree) { try { history.replaceState(history.state, '', tokenFree); } catch { /* keep the address */ } }
 
 // People directory: tokens in cloud prompts, real names filled back on device.
 // ?sim=1: seed one example person (Sharma / client / [Client A]) in a fresh,

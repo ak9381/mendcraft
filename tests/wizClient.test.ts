@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWizClient, resolveWizToken } from '../src/devices/wizClient';
+import { createWizClient, resolveWizToken, wizTokenFreeUrl } from '../src/devices/wizClient';
 
 function fakeStorage(initial: Record<string, string> = {}) {
   const store = { ...initial };
@@ -25,6 +25,27 @@ describe('resolveWizToken', () => {
   });
 });
 
+describe('final review M3: ?wizToken= leaves the address bar once stored', () => {
+  it('stores the token and returns the address without it (other params and the hash kept)', () => {
+    const storage = fakeStorage();
+    expect(wizTokenFreeUrl('https://x.test/canvas?sim=0&wizToken=abc123&a=1#b', storage)).toBe('https://x.test/canvas?sim=0&a=1#b');
+    expect(storage.store['mendcraft.wizToken']).toBe('abc123');
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', fakeStorage())).toBe('https://x.test/canvas');
+  });
+  it('no token in the address: null (nothing to change)', () => {
+    expect(wizTokenFreeUrl('https://x.test/canvas?sim=1', fakeStorage())).toBeNull();
+  });
+  it('storage that will not keep it: the address keeps the token (the bridge still works this session)', () => {
+    const broken = { getItem: () => null, setItem: () => { throw new Error('quota'); } };
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', broken)).toBeNull();
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', null)).toBeNull();
+  });
+  it('the canvas strips it at boot', async () => {
+    const src = (await import('node:fs')).readFileSync(new URL('../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const tokenFree = wizTokenFreeUrl\(location\.href, [^\n]*\);\s*if \(tokenFree\) \{ try \{ history\.replaceState\(history\.state, '', tokenFree\);/);
+  });
+});
+
 describe('createWizClient token header', () => {
   it('sends x-wiz-token on every call, GET and POST alike', async () => {
     const calls: { input: string; init?: RequestInit }[] = [];
@@ -40,5 +61,25 @@ describe('createWizClient token header', () => {
       const headers = call.init?.headers as Record<string, string> | undefined;
       expect(headers?.['x-wiz-token']).toBe('my-token');
     }
+  });
+});
+
+describe('final review M7: a bridge that never answers is offline after a time limit', () => {
+  it('health() says false and discover() throws BridgeOfflineError instead of hanging (re-discovery keeps going)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { BridgeOfflineError } = await import('../src/devices/wizClient');
+      const aborted: boolean[] = [];
+      const hang = (_i: string, init?: RequestInit) => new Promise<never>((_r, rej) => {
+        init?.signal?.addEventListener('abort', () => { aborted.push(true); rej(new Error('aborted')); });
+      });
+      const c = createWizClient('http://127.0.0.1:38888', hang as never, 't', 5000);
+      const h = c.health();
+      const d = c.discover().then(() => 'answered', (e) => e);
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(await h).toBe(false);
+      expect(await d).toBeInstanceOf(BridgeOfflineError);
+      expect(aborted.length).toBe(2); // the hung requests are cancelled, not left open
+    } finally { vi.useRealTimers(); }
   });
 });

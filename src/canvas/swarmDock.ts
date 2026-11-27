@@ -103,8 +103,15 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     if (!openId) return;
     const rec = records.get(openId);
     if (!rec) return;
-    miniLines.innerHTML = rec.lines.map((l) =>
-      `<p class="mc-term-line"><span class="mc-term-time">${l.time}</span><span class="mc-term-detail">${l.text}</span></p>`).join('');
+    // Her words reach these lines (the payload): text only, never markup (I11).
+    miniLines.textContent = '';
+    for (const l of rec.lines) {
+      const p = doc.createElement('p'); p.className = 'mc-term-line';
+      const time = doc.createElement('span'); time.className = 'mc-term-time'; time.textContent = l.time;
+      const detail = doc.createElement('span'); detail.className = 'mc-term-detail'; detail.textContent = l.text;
+      p.append(time, detail);
+      miniLines.append(p);
+    }
   }
 
   function setMiniCursor(working: boolean): void {
@@ -188,7 +195,8 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     chip.setAttribute('aria-pressed', 'false');
     chip.setAttribute('data-agent-id', agent.id);
     chip.style.setProperty('--chip-color', agent.color);
-    chip.innerHTML = `<span class="mc-dock-chip-cursor"></span><span class="mc-dock-chip-name">${shortAgentName(agent.label)}</span><span class="mc-dock-chip-mark"></span>`;
+    chip.innerHTML = `<span class="mc-dock-chip-cursor"></span><span class="mc-dock-chip-name"></span><span class="mc-dock-chip-mark"></span>`;
+    chip.querySelector<HTMLElement>('.mc-dock-chip-name')!.textContent = shortAgentName(agent.label);
     chip.addEventListener('click', () => openMini(agent.id));
     return chip;
   }

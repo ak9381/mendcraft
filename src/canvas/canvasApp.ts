@@ -58,7 +58,7 @@ import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TI
 import { CANVAS_STORAGE_KEY, LEGACY_DEVICES_BOARD_KEY, createSaveFailNotice, loadCanvasDoc, loadLine, resolveDevicesBoard } from './canvasStore';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
-import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { createSpotifyAwareConnector, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
@@ -1497,7 +1497,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!wizClient || opts.connector || discovering || Date.now() - lastDiscoverAt < REDISCOVER_MS) return;
     await discoverLamps(true);
   }
-  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)));
+  // A board's lamp tile whose bulb missed the last look ("Not connected")
+  // counts too: it is looked for again, so the tile is live when it answers.
+  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)))
+    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));
   if (wizClient && !opts.connector && liveLamps && typeof window !== 'undefined') {
     const t = setInterval(() => { if (!bridgeStatus.up || anyLampUnreachable()) void rediscoverLamps(); }, REDISCOVER_MS);
     addEventListener('pagehide', () => clearInterval(t), { once: true });
@@ -1526,7 +1529,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       const changed = applyRealLamps(lampSwap, lamps);
       for (const fid of changed) renderSurface(fid);
-      if (changed.length) { sync(); updateDock(); persist(); }
+      // Re-rendered only: discovery never changes or saves a board (I3).
+      if (changed.length) { sync(); updateDock(); }
       if (devicesWired) refreshDevicesBoard();
       // A quiet re-check that changed nothing says nothing.
       if (!again || !wasUp) say(lamps.length ? `${again ? 'The lamp bridge is back — found' : 'Found'} ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
@@ -1581,6 +1585,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       const id = a.context?.deviceId as string | undefined; const cur = id ? store.get(id) : undefined;
+      // A "Not connected" lamp (its bulb missed the last look): look again.
+      if (!cur && id && isManagedLampId(id) && liveLamps) { void rediscoverLamps(); return; }
       if (!cur || !id) return;
       // The pressed chip's own value (a preset key or a number).
       const value = (a.context?.value ?? ext(a)?.value) as string | number | undefined;
@@ -1624,9 +1630,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function renderSurface(id: string): boolean {
     if (!surfaces[id]) return false;
-    // Backstop: whatever reached this board (a saved board from another
-    // session, a script, a shared board) shows only lamps that exist.
-    const plan = surfaces[id] = fitPlan(surfaces[id]);
+    // The stored board is shown as approved (final review I3): a lamp tile
+    // whose bulb is not found shows "Not connected"; nothing here rewrites it.
+    const plan = roomWithoutPlanTiles(surfaces[id]);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.
@@ -2004,6 +2010,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
+      persistTimer = 0;
       // Saved boards this build couldn't read AND couldn't copy aside: never
       // write over them (this session's changes just aren't saved).
       const ok = !saveBlocked && tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
@@ -2304,16 +2311,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function showAi(on = true, pin = false): void {
     clearTimeout(aiHideTimer);
     if (AI_PANEL_ALWAYS_OPEN) { on = true; pin = true; }
-    const insetBefore = !aiPanel.hidden && !aiAuto;
+    const shownBefore = !aiPanel.hidden;
     aiAuto = on && !pin && (!!aiPanel.hidden || aiAuto);
     aiPanel.hidden = !on;
-    // Only a user-pinned panel shifts the cluster/swarm; an auto-open is a pure overlay.
+    // Only a user-pinned panel shifts the swarm; an auto-open overlays the boards.
     root.classList.toggle('is-ai-pinned', on && !aiAuto);
     if (aiScrim) aiScrim.hidden = true;
     root.querySelector('[data-cmd=ai]')?.setAttribute('aria-expanded', String(on));
-    // Only a layout-changing (user-pinned) toggle re-flies; an overlay never moves the camera.
-    const insetAfter = on && !aiAuto;
-    if (insetBefore !== insetAfter && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
+    // The hand cluster moves left of the drawer whenever it shows (canvas.css),
+    // pinned or not, so the focused board is re-fitted on every open/close:
+    // the cluster never covers a board's buttons (final review L1).
+    if (shownBefore !== on && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).
@@ -5262,14 +5270,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   // Leaving the page: the short code must not outlive the pairing (best effort).
-  const onPageHide = (): void => { if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); } };
+  // Leaving or hiding the page flushes a pending save (debounced 250 ms, a
+  // wheel's camera 200 ms more): the last edit survives closing the tab.
+  const flushSave = (): void => {
+    if (wheelPersistTimer) { clearTimeout(wheelPersistTimer); wheelPersistTimer = 0; persist(true); }
+    else if (persistTimer) persist(true);
+  };
+  const onPageHide = (): void => {
+    flushSave();
+    if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); }
+  };
+  const onVisibility = (): void => { if (document.visibilityState === 'hidden') flushSave(); };
   addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onVisibility);
   function destroy(): void {
     // Pending writes and timers go first, so nothing fires into a torn-down
     // canvas — but a pending board write is flushed, not dropped (the last
     // edit must survive).
-    if (persistTimer) persist(true);
-    clearTimeout(wheelPersistTimer);
+    flushSave();
     if (statusTimer) clearTimeout(statusTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }
@@ -5309,6 +5327,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
     removeEventListener('pagehide', onPageHide);
+    document.removeEventListener('visibilitychange', onVisibility);
     barRo?.disconnect();
     engineRo?.disconnect();
     chipRowRo?.disconnect();
@@ -5354,7 +5373,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       cancelAnimationFrame(flight); zoomGoal = null;
       camera = clampRoomPan(panBy(camera, -intent.dx, -intent.dy));
       applyCamera();
-      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
+      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(() => { wheelPersistTimer = 0; persist(); }, 200);
       return;
     }
     e.preventDefault();
@@ -6027,6 +6046,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   return {
     /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
     loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),
+    /** e2e: the AI drawer opening by itself (as on a failure) / folding away. */
+    aiOverlay: (on: boolean) => showAi(on),
     /** Status lines said since `mark` (0: all kept), for e2e. */
     statusSince: (mark: number) => statusLog.slice(Math.max(0, mark - statusBase)),    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */

@@ -142,6 +142,10 @@ function findAll(root: El, selector: string): El[] {
 /** swarmDock.ts also attaches a capture-phase pointerdown listener to `doc`
  *  itself (to close the mini terminal on an outside tap), so the fake
  *  document needs to be a dispatchable El too, not just a createElement stub. */
+function descendantsOf(el: El): El[] { return el.children.flatMap((c) => [c, ...descendantsOf(c)]); }
+/** Every text the mini terminal's lines show (set with textContent). */
+function linesText(el: El): string { return [el, ...descendantsOf(el)].map((e) => e.textContent).join(' '); }
+
 class FakeDoc extends El {
   createElement(tag: string) { return new El(tag); }
 }
@@ -299,8 +303,25 @@ describe('mountSwarmDock — mini terminal', () => {
     chip.dispatch('click', chip);
     const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
     const lines = mini.querySelector('.mc-term-lines')!;
-    expect(lines.innerHTML).toContain('Dashboard for [Client A]: bulb, plug');
-    expect(lines.innerHTML).not.toMatch(/Sharma/);
+    expect(linesText(lines)).toContain('Dashboard for [Client A]: bulb, plug');
+    expect(linesText(lines)).not.toMatch(/Sharma/);
+  });
+
+  it('final review I11: her words in the payload are shown as text, never parsed as markup', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div');
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root as unknown as HTMLElement, { doc: fakeDoc, ...immediateTimers() });
+    const evil = 'Build <img src=x onerror=alert(1)> and <script>x()</script><b>bold</b>';
+    dock.start([agent('real-0', 'gemini', 'Gemini · <i>planner</i>')], { reducedMotion: true, payloads: { gemini: evil } });
+    const chip = aiPanel.querySelector('.mc-term-dock[data-engine="gemini"] .mc-term-dock-chips')!.children[0];
+    chip.dispatch('click', chip);
+    const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
+    const lines = mini.querySelector('.mc-term-lines')!;
+    expect(lines.innerHTML).toBe(''); // never written as HTML
+    expect(descendantsOf(lines).some((e) => ['img', 'script', 'b', 'i'].includes(e.tag))).toBe(false);
+    expect(linesText(lines)).toContain(evil);
+    expect(linesText(lines)).toContain('<i>planner</i>');
+    expect(chip.innerHTML).not.toContain('<i>');
   });
 
   it('omits the payload line for an engine that made no real call this turn', () => {
@@ -311,7 +332,7 @@ describe('mountSwarmDock — mini terminal', () => {
     const chip = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-chips')!.children[0];
     chip.dispatch('click', chip);
     const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
-    expect(mini.querySelector('.mc-term-lines')!.innerHTML).not.toContain('received');
+    expect(linesText(mini.querySelector('.mc-term-lines')!)).not.toContain('received');
   });
 
   it('tapping the same chip again closes it; tapping another switches', () => {

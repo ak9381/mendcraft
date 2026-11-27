@@ -175,7 +175,11 @@ export async function followWhileBuilding<T>(
   } finally {
     // She chose a mode while it built ("follow my hands"): her choice wins,
     // the build never puts the old mode back over it (D3).
-    if (controller.choiceSeq?.() === choices) void controller.setMode(prevMode).catch(() => {});
+    // With a choice counter, restore only if she chose nothing; without one,
+    // restore only what the build changed (still 'face', or already prevMode).
+    const now = controller.mode();
+    const untouched = controller.choiceSeq ? controller.choiceSeq() === choices : now === 'face' || now === prevMode;
+    if (untouched) void controller.setMode(prevMode).catch(() => {});
   }
 }
 
