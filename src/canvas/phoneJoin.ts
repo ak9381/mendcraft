@@ -15,6 +15,7 @@ import {
   type RelayCommand,
 } from '../relay/protocol';
 import type { RelayTransport } from '../relay/transport';
+import type { CreateHostOptions } from '../relay/session';
 import { probeFirestore, type FirestoreProbe } from '../relay/firestoreTransport';
 import { playDeepChime } from '../ux/deepWait';
 
@@ -27,6 +28,9 @@ export interface PhoneJoinDeps {
   /** Resume an existing room token (from pairingStore) so remembered phones stay
    *  paired across a laptop reload instead of being stranded on a stale code. */
   token?: string;
+  /** Where the room's open short code is remembered beside the token
+   *  (pairingStore.openCodeStore): a resumed room clears it first. */
+  openCode?: CreateHostOptions['openCode'];
   onState?: (state: PairState) => void;
   onCommand?: (cmd: RelayCommand) => void;
   onFrame?: (frame: RelayFrame) => void;
@@ -67,7 +71,7 @@ export async function startPhoneJoin(deps: PhoneJoinDeps = {}): Promise<PhoneJoi
     }
 
     const hostFactory = deps.createHostSession ?? createHostSession;
-    const session = await hostFactory(transport, undefined, deps.token ? { token: deps.token } : undefined);
+    const session = await hostFactory(transport, undefined, deps.token || deps.openCode ? { token: deps.token, openCode: deps.openCode } : undefined);
 
     const origin =
       deps.origin ??

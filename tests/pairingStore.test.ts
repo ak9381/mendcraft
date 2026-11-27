@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   loadPhonePair, savePhonePair, clearPhonePair, rememberPhoneSide,
-  loadHostToken, saveHostToken, clearHostToken, rememberHostPhone, hostRoomToResume,
+  loadHostToken, saveHostToken, clearHostToken, rememberHostPhone, hostRoomToResume, forgetHostRoom, saveOpenCode, loadOpenCode,
   ensureDeviceId, loadPhonePin, savePhonePin, clearPhonePin,
   type StorageLike,
 } from '../src/relay/pairingStore';
@@ -80,6 +80,17 @@ describe('C2: which room a new pairing opens', () => {
     saveHostToken(s, TOKEN);
     expect(hostRoomToResume(s)).toBeUndefined();
     expect(loadHostToken(s)).toBeNull();
+  });
+  it('Disconnect forgets the room: token, remembered phone and open code all go (review sim-2 §4)', () => {
+    const s = memStore();
+    saveHostToken(s, TOKEN);
+    rememberHostPhone(s, TOKEN);
+    saveOpenCode(s, 'AB12CD');
+    forgetHostRoom(s);
+    expect(loadHostToken(s)).toBeNull();
+    expect(loadOpenCode(s)).toBeNull();
+    saveHostToken(s, TOKEN); // even the same token saved again is not resumed: no phone is remembered in it
+    expect(hostRoomToResume(s)).toBeUndefined();
   });
   it('a phone is remembered in it: the same room, so remembered phones rejoin and a reload keeps it', () => {
     const s = memStore();

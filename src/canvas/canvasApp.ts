@@ -42,7 +42,7 @@ import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } f
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
-import { hostRoomToResume, rememberHostPhone, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
+import { forgetHostRoom, hostRoomToResume, openCodeStore, rememberHostPhone, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
 import { phoneDecision, phoneMic } from './phoneGate';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
@@ -3447,6 +3447,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Explicit Disconnect: stop the relay and reset the pair-first flow. */
   function disconnectPhones(): void {
     if (pairingStop) { void pairingStop(); pairingStop = null; }
+    // Disconnect forgets the room (C2): the next pairing opens a new one, so
+    // no remembered phone and no code heard earlier reaches this laptop.
+    forgetHostRoom(storage);
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
     phoneAi.clear();
@@ -3536,6 +3539,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // ever proved itself in is dropped and a new one opens. The chime code
       // is its own short-lived secret either way, never part of the token.
       token: hostRoomToResume(storage),
+      // The code a reload left open in that room is cleared first, so it
+      // never resolves again once the room is resumed.
+      openCode: openCodeStore(storage),
       onState: (st) => {
         if (st === 'paired') {
           // A hello proves little (the room replays old ones on a reload):

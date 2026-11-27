@@ -145,6 +145,36 @@ export function hostRoomToResume(storage: StorageLike | null | undefined): strin
   return undefined;
 }
 
+const K_OPEN_CODE = 'mc.relay.openCode';
+const CODE_RE = /^[0-9A-Z]{4,16}$/;
+
+/** The short code this laptop last opened in its room and has not cleared
+ *  yet — kept beside the host token, so a reload that resumes the room can
+ *  delete that code's alias doc first (a code left open by a reload or a
+ *  crash never comes back to life in the resumed room). */
+export function loadOpenCode(storage: StorageLike | null | undefined): string | null {
+  const raw = (read(storage, K_OPEN_CODE) ?? '').trim();
+  return CODE_RE.test(raw) ? raw : null;
+}
+
+export function saveOpenCode(storage: StorageLike | null | undefined, code: string | null): void {
+  if (code && CODE_RE.test(code)) write(storage, K_OPEN_CODE, code);
+  else remove(storage, K_OPEN_CODE);
+}
+
+/** The load/save pair createHostSession takes (opts.openCode). */
+export function openCodeStore(storage: StorageLike | null | undefined): { load: () => string | null; save: (code: string | null) => void } {
+  return { load: () => loadOpenCode(storage), save: (code) => saveOpenCode(storage, code) };
+}
+
+/** Disconnect: this laptop forgets its room (C2). The next pairing mints a
+ *  new room, so no remembered phone and no earlier code reaches it again. */
+export function forgetHostRoom(storage: StorageLike | null | undefined): void {
+  clearHostToken(storage);
+  remove(storage, K_HOST_PHONE);
+  remove(storage, K_OPEN_CODE);
+}
+
 const K_LAYOUT = 'mc.relay.layout';
 
 /** The laptop's remembered screen arrangement (which phone is on which side).
