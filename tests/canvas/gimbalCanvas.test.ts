@@ -573,6 +573,14 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       expect(controller.setMode).toHaveBeenNthCalledWith(2, 'point');
     });
 
+    it('final review D3: a mode she picks during the build is kept (the build does not put the stand back)', async () => {
+      let mode = 'hold';
+      const controller = fakeController('hold', { mode: vi.fn(() => mode as never), setMode: vi.fn(async (m: string) => { mode = m; return { ok: true }; }) });
+      await followWhileBuilding(controller, async () => { await controller.setMode('hands', { explicit: true }); return 1; });
+      expect(mode).toBe('hands');
+      expect(controller.setMode).toHaveBeenCalledTimes(2); // face (build), hands (her) — no restore to hold
+    });
+
     it('leaves an already-following gimbal alone (no bridge churn)', async () => {
       for (const m of ['face', 'hands']) {
         const controller = fakeController(m);

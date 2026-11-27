@@ -169,7 +169,10 @@ export async function followWhileBuilding<T>(
   try {
     return await run();
   } finally {
-    void controller.setMode(prevMode).catch(() => {});
+    // Only put back what the build changed: a mode she picked meanwhile
+    // ("follow my hands" while it built) stays, and so does the tile (D3).
+    const now = controller.mode();
+    if (now === 'face' || now === prevMode) void controller.setMode(prevMode).catch(() => {});
   }
 }
 
