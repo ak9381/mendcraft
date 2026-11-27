@@ -376,10 +376,21 @@ export function routePackPhrase(text: string, pack: LanguagePack): IntentKey | n
   while (words.length && POLITE_WORDS.has(words[words.length - 1])) words.pop();
   const t = words.join(' ');
   if (!t) return null;
+  const said = imperativeForm(t);
   for (const intent of INTENT_KEYS) {
     for (const phrase of pack.phrases[intent] ?? []) {
-      if (normMulti(phrase) === t) return intent;
+      if (imperativeForm(normMulti(phrase)) === said) return intent;
     }
   }
   return null;
+}
+
+/** Kannada orders end in a plain or a polite imperative ("ಮಾಡು" / "ಮಾಡಿ" /
+ *  "ಮಾಡಿರಿ", "ತೋರಿಸು" / "ತೋರಿಸಿ"): the same order, so the last word's ending
+ *  is compared as one form. Nothing else is loosened (still the whole line). */
+function imperativeForm(t: string): string {
+  const words = t.split(' ');
+  const last = words[words.length - 1] ?? '';
+  if (/[\u0C80-\u0CFF]/.test(last)) words[words.length - 1] = last.replace(/(?:\u0CBF\u0CB0\u0CBF|\u0CBF|\u0CC1)$/u, '\u0CC1');
+  return words.join(' ');
 }

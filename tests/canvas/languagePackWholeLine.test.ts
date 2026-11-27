@@ -16,6 +16,7 @@ describe('pack phrases match the whole line', () => {
     ['ಲೈಟ್ ಆನ್ ಇದೆಯಾ?', kn], // is it on?
     ['ಲೈಟ್ ಆಫ್ ಮಾಡಬೇಡ', kn], // don't turn it off
     ['ಲೈಟ್ ಆನ್?', kn],
+    ['ದೀಪ ಆನ್ ಮಾಡು?', kn],
     ['ನನಗೆ ಇದು ಬೇಡ ಅಂತ ಅನಿಸುತ್ತಿಲ್ಲ', kn],
     ['¿por qué no enciende la luz?', es],
     ['¿enciende la luz?', es],
@@ -32,6 +33,10 @@ describe('pack phrases match the whole line', () => {
     ['ಇಟ್ಟುಕೋ', kn, 'keep'],
     ['ಬೇಡ', kn, 'drop'],
     ['Enciende la luz, por favor', es, 'lampOn'],
+    // plain and polite imperatives are the same order (review 4)
+    ['ದೀಪ ಆನ್ ಮಾಡು', kn, 'lampOn'],
+    ['ದೀಪ ಆನ್ ಮಾಡಿರಿ', kn, 'lampOn'],
+    ['ದಯವಿಟ್ಟು ದೀಪ ಆನ್ ಮಾಡು', kn, 'lampOn'],
   ])('acts on %j', (line, pack, intent) => {
     expect(routePackPhrase(line, pack)).toBe(intent);
   });
