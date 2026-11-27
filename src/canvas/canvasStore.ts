@@ -185,12 +185,29 @@ export function reservedIds(o: { keepIds: Iterable<string>; loaded: readonly Art
 
 /** Where a test build's ?fresh keeps the stored artifacts it clears. */
 export const BEFORE_FRESH_ARTIFACTS_KEY = `${LAYOUT_KEY}.beforeFresh.artifacts`;
-/** Test build ?fresh: copy every stored artifact aside (first copy kept for
- *  good, later ones rotate), then clear the store. A failed read or copy
- *  clears nothing (false). An empty store needs no copy. */
-export async function clearStoreForFresh(store: { list(): Promise<unknown[]>; clear(): Promise<void> }, storage: Store | null): Promise<boolean> {
+/** A store bigger than this (JSON characters, ~1 MB) is not copied into
+ *  localStorage: it would crowd out the layout itself. */
+export const BEFORE_FRESH_MAX_CHARS = 1_000_000;
+/** Test build ?fresh: copy every stored artifact aside — ONE copy, the
+ *  newest (older rotation slots are removed) — then clear the store. A store
+ *  over BEFORE_FRESH_MAX_CHARS is not copied (the last copy stays) and `log`
+ *  says so. A failed read or copy clears nothing (false). An empty store
+ *  needs no copy. */
+export async function clearStoreForFresh(
+  store: { list(): Promise<unknown[]>; clear(): Promise<void> },
+  storage: Store | null,
+  log: (line: string) => void = (l) => console.warn(l),
+): Promise<boolean> {
   let rows: unknown[];
   try { rows = await store.list(); } catch { return false; }
-  if (rows.length && (!storage || !keepRotating(storage, BEFORE_FRESH_ARTIFACTS_KEY, JSON.stringify(rows)))) return false;
+  if (rows.length) {
+    const raw = JSON.stringify(rows);
+    if (raw.length > BEFORE_FRESH_MAX_CHARS) {
+      log(`[mendcraft] ?fresh: the stored artifacts (${(raw.length / 1e6).toFixed(1)} MB) are too big to copy aside; the last copy under ${BEFORE_FRESH_ARTIFACTS_KEY} stays.`);
+    } else {
+      if (!storage || !write(storage, BEFORE_FRESH_ARTIFACTS_KEY, raw)) return false;
+      for (const old of slotsOf(BEFORE_FRESH_ARTIFACTS_KEY).slice(1)) { try { storage.removeItem?.(old); } catch { /* kept */ } }
+    }
+  }
   try { await store.clear(); return true; } catch { return false; }
 }

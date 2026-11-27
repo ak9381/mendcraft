@@ -11,7 +11,7 @@ import { coerceLayout } from '../../src/canvas/canvasPersistence';
 import {
   BEFORE_FRESH_KEY, CANVAS_STORAGE_KEY, DEVICES_BOARD_KEY, FRESH_SLOTS, MAX_UNREADABLE, REPAIR_SLOTS,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
-  BEFORE_FRESH_ARTIFACTS_KEY, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
+  BEFORE_FRESH_ARTIFACTS_KEY, BEFORE_FRESH_MAX_CHARS, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
 } from '../../src/canvas/canvasStore';
 
 function memStorage(init: Record<string, string> = {}) {
@@ -196,16 +196,30 @@ describe('a store that could not be read is never written over', () => {
 describe('a test build’s ?fresh copies the stored artifacts aside before clearing them', () => {
   const rows = [{ id: 'board-f1', kind: 'board' }];
   const store = (list: () => Promise<unknown[]>) => { const s = { cleared: false, list, clear: async () => { s.cleared = true; } }; return s; };
-  it('copies, then clears; the first copy is kept for good', async () => {
-    const st = memStorage();
+  it('copies, then clears; ONE copy is kept (the newest), and older rotation slots go', async () => {
+    const st = memStorage({ [`${BEFORE_FRESH_ARTIFACTS_KEY}.2`]: '[{"id":"old"}]', [`${BEFORE_FRESH_ARTIFACTS_KEY}.3`]: '[{"id":"older"}]' });
     const a = store(async () => rows);
     expect(await clearStoreForFresh(a, st)).toBe(true);
     expect(a.cleared).toBe(true);
     expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual(rows);
     const b = store(async () => [{ id: 'board-f2' }]);
     await clearStoreForFresh(b, st);
+    expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual([{ id: 'board-f2' }]);
+    expect(st.getItem(`${BEFORE_FRESH_ARTIFACTS_KEY}.2`)).toBeNull();
+    expect(st.getItem(`${BEFORE_FRESH_ARTIFACTS_KEY}.3`)).toBeNull();
+    // An empty store needs no copy: the last one stays.
+    await clearStoreForFresh(store(async () => []), st);
+    expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual([{ id: 'board-f2' }]);
+  });
+  it('a store over ~1 MB is not copied (the last copy stays), and says so', async () => {
+    const st = memStorage({ [BEFORE_FRESH_ARTIFACTS_KEY]: JSON.stringify(rows) });
+    const big = store(async () => [{ id: 'board-big', data: 'x'.repeat(BEFORE_FRESH_MAX_CHARS) }]);
+    const said: string[] = [];
+    expect(await clearStoreForFresh(big, st, (l) => said.push(l))).toBe(true);
+    expect(big.cleared).toBe(true);
     expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual(rows);
-    expect(JSON.parse(st.getItem(`${BEFORE_FRESH_ARTIFACTS_KEY}.2`)!)).toEqual([{ id: 'board-f2' }]);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatch(/too big to copy aside/);
   });
   it('a failed read or copy clears nothing', async () => {
     const a = store(async () => { throw new Error('blocked'); });
