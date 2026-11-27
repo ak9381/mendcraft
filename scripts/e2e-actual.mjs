@@ -504,6 +504,25 @@ async function gimbal(page) {
   const lines = await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark);
   check(lines.includes(NO_PHONE_REFUSAL), `a press is refused: "${NO_PHONE_REFUSAL}" (got ${JSON.stringify(lines)})`);
   check((await page.evaluate(modeMessages)).length === 0, 'and no mode message is sent');
+
+  // A room turn whose reply leaves the docked stand out: the app adds the
+  // gimbal tile, and the review says so before anything is kept.
+  await page.evaluateOnNewDocument((lamp) => {
+    const f = window.__mcFixtures ?? {};
+    const replies = { ...(f.replies ?? {}), 'gemini.boardBetter': f.replies?.['nano.board'] };
+    window.__mcFixtures = { ...f, replies, devices: [{ id: lamp, cls: 'lamp', label: 'Lamp' }, { id: 'gimbal', cls: 'gimbal', label: 'Gimbal' }] };
+  }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join again'))) return;
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on again');
+  await page.evaluate(() => window.__mcCanvas.run('build the dashboard'));
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the dashboard review opens'))) return;
+  const keptNotes = await page.evaluate(reviewNotes);
+  check(keptNotes.some((n) => /added Gimbal \(it answers here\)/i.test(n)), `the review lists the gimbal tile the app added (got ${JSON.stringify(keptNotes)})`);
+  check(!(await page.evaluate(gimbalTile)), 'no gimbal tile before Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, gimbalTile, 10_000, 'the added gimbal tile is on the board after Approve').then((ok) => ok && check(true, 'the added gimbal tile is on the board after Approve'));
 }
 SECTIONS.gimbal = gimbal;
 

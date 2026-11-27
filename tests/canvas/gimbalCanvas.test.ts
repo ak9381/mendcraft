@@ -4,7 +4,9 @@ import {
   FACE_ON_KEEPALIVE_STATUS,
   FACE_ON_STATUS,
   followWhileBuilding,
+  HANDS_FALLBACK_STATUS,
   HANDS_NEED_TRACKER,
+  HANDS_PAUSED,
   HANDS_ON_STATUS,
   HOLD_STATUS,
   parseGimbalSpeech,
@@ -371,6 +373,165 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       now += 6000;
       await c.onHandsFrame([{ points: OPEN_AT(0.5, 0.5) }], now);
       expect(fakePlugin.isAvailable).toHaveBeenCalledTimes(2);
+    });
+
+    it('fallback aim is yaw-only (the stand refuses pitch)', async () => {
+      const c = createGimbalCanvasController({ plugin: fakePlugin, handsRunning: () => true });
+      await c.setMode('hands');
+      await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.9) }], 10_000);
+      await c.onHandsFrame([{ points: OPEN_AT(0.85, 0.9) }], 10_050);
+      await Promise.resolve();
+      expect(aimCalls).toHaveLength(1);
+      expect(aimCalls[0].pitch).toBe(0);
+    });
+
+    describe('native hand tracker', () => {
+      let order: string[];
+      let listener: ((e: { running: boolean; aimingAtHands: boolean }) => void) | null;
+      let startResult: { ok: boolean; running?: boolean; error?: string };
+      beforeEach(() => {
+        order = [];
+        listener = null;
+        startResult = { ok: true, running: true };
+        fakePlugin.startHandTracking = vi.fn(async () => { order.push('native:start'); return startResult; });
+        fakePlugin.stopHandTracking = vi.fn(async (o?: { reason?: string }) => { order.push(`native:stop:${o?.reason ?? ''}`); return { ok: true, running: false }; });
+        fakePlugin.handTrackingStatus = vi.fn(async () => ({ handTracking: true, aimingAtHands: true, lastHandMs: 100 }));
+        fakePlugin.addListener = vi.fn((_e, fn) => { listener = fn; return { remove: () => {} }; });
+      });
+      const make = (extra: Record<string, unknown> = {}) => createGimbalCanvasController({
+        plugin: fakePlugin,
+        handsRunning: () => false,
+        yieldCamera: async (on) => { order.push(`camera:${on ? 'off' : 'restore'}`); },
+        fallbackTracker: async (on) => { order.push(`fallback:${on}`); },
+        ...extra,
+      });
+      const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+
+      it('hands: tracking off, the WebView camera OFF before the native start; claimed only while it runs', async () => {
+        let now = 10_000;
+        const c = make({ now: () => now });
+        await settle();
+        order.length = 0; // drop the page-load stop
+        const r = await c.setMode('hands');
+        expect(r.ok).toBe(true);
+        expect(r.status).toMatch(/^Following your hands/);
+        expect(trackingCalls).toEqual([{ enabled: false, keepAlive: false }]);
+        expect(order).toEqual(['camera:off', 'native:start']);
+        expect(c.nativeHands!()).toBe(true);
+        // No web aim loop while native runs.
+        await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now);
+        await c.onHandsFrame([{ points: OPEN_AT(0.9, 0.5) }], now + 50);
+        expect(aimCalls).toEqual([]);
+        // Aiming only once a hand observation was sent recently.
+        expect(c.diag!(now)).toMatchObject({ nativeHands: true, handTracker: true, aimingAtHands: false });
+        listener!({ running: true, aimingAtHands: true });
+        expect(c.diag!(now).aimingAtHands).toBe(true);
+        listener!({ running: true, aimingAtHands: false });
+        expect(c.diag!(now).aimingAtHands).toBe(false);
+        listener!({ running: false, aimingAtHands: false });
+        expect(c.diag!(now).handTracker).toBe(false);
+      });
+
+      it('polling without events: aiming = an observation sent in the last 0.5 s', async () => {
+        fakePlugin.addListener = undefined;
+        let now = 10_000;
+        const c = make({ now: () => now });
+        await c.setMode('hands');
+        await c.refresh!();
+        expect(c.diag!(now).aimingAtHands).toBe(true); // sent 100 ms ago
+        now += 450;
+        expect(c.diag!(now).aimingAtHands).toBe(false);
+      });
+
+      it('leaving hands: native stops FIRST, then the camera is restored; face / hold alike', async () => {
+        const c = make();
+        await c.setMode('hands');
+        order.length = 0;
+        await c.setMode('face');
+        expect(order).toEqual(['native:stop:mode change', 'camera:restore']);
+        expect(c.nativeHands!()).toBe(false);
+        await c.setMode('hands');
+        order.length = 0;
+        await c.setMode('hold');
+        expect(order).toEqual(['native:stop:mode change', 'camera:restore']);
+      });
+
+      it('native start fails → camera restored, web fallback tracker started, never the face', async () => {
+        startResult = { ok: false, running: false, error: 'Camera permission denied' };
+        const c = make();
+        await settle();
+        order.length = 0;
+        const r = await c.setMode('hands');
+        expect(order).toEqual(['camera:off', 'native:start', 'native:stop:start failed', 'camera:restore', 'fallback:true']);
+        expect(r.ok).toBe(false);
+        expect(r.why).toContain('Camera permission denied');
+        expect(trackingCalls.every((t) => t.enabled === false)).toBe(true);
+        expect(c.nativeHands!()).toBe(false);
+        order.length = 0;
+        await c.setMode('hold');
+        expect(order).toEqual(['fallback:false']);
+      });
+
+      it('"hands" then "face" while the native start is pending → native stopped, camera restored, face wins', async () => {
+        let finish!: (v: { ok: boolean; running: boolean }) => void;
+        fakePlugin.startHandTracking = vi.fn(() => { order.push('native:start'); return new Promise((res) => { finish = res; }); });
+        const c = make();
+        await settle();
+        order.length = 0;
+        const hands = c.setMode('hands');
+        await settle();
+        expect(order).toEqual(['camera:off', 'native:start']);
+        const face = await c.setMode('face');
+        expect(face.ok).toBe(true);
+        expect(c.mode()).toBe('face');
+        finish({ ok: true, running: true });
+        const r = await hands;
+        expect(r.status).toBeUndefined();
+        expect(order.slice(2)).toEqual(['native:stop:superseded', 'camera:restore']);
+        expect(c.mode()).toBe('face');
+        expect(c.nativeHands!()).toBe(false);
+        expect(order).not.toContain('fallback:true');
+      });
+
+      it('native dies in hands mode → says paused; not back in time → stops native, yaw-only fallback, honest status', async () => {
+        vi.useFakeTimers();
+        try {
+          const said: string[] = [];
+          fakePlugin.handTrackingStatus = vi.fn(async () => ({ handTracking: false, aimingAtHands: false }));
+          const c = make({ say: (t: string) => said.push(t), nativeLostMs: 3000 });
+          await c.setMode('hands');
+          order.length = 0;
+          listener!({ running: false, aimingAtHands: false });
+          expect(said).toEqual([HANDS_PAUSED]);
+          await vi.advanceTimersByTimeAsync(3100);
+          expect(order).toEqual(['native:stop:mode change', 'camera:restore', 'fallback:true']);
+          expect(said[1]).toBe(HANDS_FALLBACK_STATUS);
+          expect(c.nativeHands!()).toBe(false);
+          expect(c.mode()).toBe('hands');
+        } finally { vi.useRealTimers(); }
+      });
+
+      it('native comes back within the grace time → no fallback', async () => {
+        vi.useFakeTimers();
+        try {
+          const c = make({ say: () => {}, nativeLostMs: 3000 });
+          await c.setMode('hands');
+          order.length = 0;
+          listener!({ running: false, aimingAtHands: false });
+          listener!({ running: true, aimingAtHands: false });
+          await vi.advanceTimersByTimeAsync(4000);
+          expect(order).toEqual([]);
+          expect(c.nativeHands!()).toBe(true);
+        } finally { vi.useRealTimers(); }
+      });
+
+      it('old build (no startHandTracking): the web fallback, as before', async () => {
+        fakePlugin.startHandTracking = undefined;
+        const c = make({ handsRunning: () => true });
+        const r = await c.setMode('hands');
+        expect(r).toEqual({ ok: true, status: HANDS_ON_STATUS });
+        expect(order).not.toContain('camera:off');
+      });
     });
   });
 

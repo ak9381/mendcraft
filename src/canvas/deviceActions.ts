@@ -182,19 +182,6 @@ export function createDeviceStore(
   };
 }
 
-/** A tile press -> the one intent it means, or null (unknown action, or a
- *  preset key the tile never offered). Pure: both render paths and the tests
- *  go through it. `value` is the pressed chip's own value — a preset key, or
- *  a number for a level set directly (keyboard fine steps). Values are passed
- *  on as asked: the store refuses anything out of range. */
-export function tileIntent(name: string, deviceId: string, cur: DeviceState, _value?: string | number): DeviceIntent | null {
-  switch (name) {
-    // Lamp and speaker presses are generated controls now: device.act → controlSpec.ts.
-    case 'switch.toggle': return { deviceId, on: !cur.on };
-    default: return null;
-  }
-}
-
 /** Intents that set a level outright (a chip, or a keyboard fine step). */
 export const isLevelSet = (i: DeviceIntent): boolean => i.brightness !== undefined || i.temp !== undefined || i.volume !== undefined;
 /** Intents that change a lamp's power or look: anything still waiting to set a level is stale after one. */

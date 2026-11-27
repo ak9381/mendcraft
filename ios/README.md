@@ -53,7 +53,10 @@ the `App` target and set the Main storyboard's view controller class to
   `com.apple.developer.networking.multicast` entitlement (Apple must approve it)
   for the broadcast.
 - `MendcraftGimbalPlugin.swift` — **optional** DockKit aiming (Insta360 Flow 2
-  Pro). Manual pan/tilt with `setOrientation(relative:)`, system face tracking
-  off. iOS 18+, behind `#if canImport(DockKit)`; reports `available:false`
-  otherwise. Nothing in the flow requires it.
+  Pro). Follow me uses DockKit's own system tracking; Hold still turns it off;
+  "Follow my hands" runs a native front-camera Vision hand tracker that drives
+  `DockAccessory.track()` (the WebView camera is off meanwhile). Nod, shake
+  and wake-up cues; manual pan/tilt with `setOrientation(relative:)`. iOS 18+,
+  behind `#if canImport(DockKit)`; reports `available:false` otherwise.
+  Nothing in the flow requires it.
 - `MendcraftViewController.swift` — registers both plugins.

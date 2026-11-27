@@ -6,7 +6,9 @@
 //                   WiZ broadcast discovery, Bonjour browse (the web can't).
 //   MendcraftGimbal ios-src/MendcraftGimbalPlugin.swift — Apple DockKit:
 //                   the web layer picks face (DockKit's own tracking), hands
-//                   (our aim, only with a hand tracker) or hold; see gimbalCanvas.ts.
+//                   (the native hand tracker → DockAccessory.track(); older
+//                   builds: our yaw-only aim from the web hand tracker) or
+//                   hold; see gimbalCanvas.ts.
 
 import type { JsonTemplate } from './connector';
 import type { FoundDevice } from './addDeviceFlow';
@@ -44,6 +46,28 @@ export interface GimbalPlugin {
    *  otherwise reason says why (no stand docked, timeout, DockKit error).
    *  Optional: older app builds don't have it. */
   cue?(opts: { kind: 'yes' | 'no' | 'wakeup' }): Promise<{ ok: boolean; reason?: string }>;
+  /** Follow my hands NATIVELY (iOS 18+): system tracking off, an app-process
+   *  front-camera session + Vision hand pose drive DockAccessory.track().
+   *  The WKWebView camera must be off first (DockKit follows the WebKit
+   *  process's capture). `running` = the native session really runs.
+   *  corrected / mirrored are live-test options (defaults true / false).
+   *  Optional: older app builds don't have it (the web aim loop is the fallback). */
+  startHandTracking?(opts?: { corrected?: boolean; mirrored?: boolean }): Promise<{ ok: boolean; running?: boolean; enabled?: boolean; error?: string }>;
+  stopHandTracking?(opts?: { reason?: string }): Promise<{ ok: boolean; running?: boolean }>;
+  /** handTracking = the native session runs; aimingAtHands = a hand
+   *  observation sent in the last 0.5 s; lastHandMs = age of that send. */
+  handTrackingStatus?(): Promise<NativeHandStatus>;
+  /** Capacitor plugin events: 'handTracking' fires when running / aiming flips. */
+  addListener?(event: 'handTracking', fn: (e: { running: boolean; aimingAtHands: boolean }) => void): Promise<{ remove(): unknown }> | { remove(): unknown };
+}
+
+export interface NativeHandStatus {
+  handTracking?: boolean;
+  aimingAtHands?: boolean;
+  lastHandMs?: number;
+  handObservations?: number;
+  handTrackFailures?: number;
+  handError?: string;
 }
 
 interface CapacitorGlobal {

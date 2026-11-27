@@ -42,7 +42,7 @@ import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/p
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import type { GimbalCueKind, GimbalModeKind } from '../relay/protocol';
-import { GIMBAL_MODE_WORDS, GIMBAL_NO_PHONE, GIMBAL_NO_STAND, GIMBAL_TILE_LABEL, gimbalPress, gimbalTileState, planHasGimbal } from './gimbalTile';
+import { GIMBAL_MODE_WORDS, GIMBAL_NO_PHONE, GIMBAL_TILE_LABEL, gimbalPress, gimbalTileState, planHasGimbal } from './gimbalTile';
 import { createCanvasInputs } from './canvasInputs';
 import { followWhileBuilding, HANDS_PAUSED, NO_GIMBAL_WHY, parseGimbalSpeech, POINT_NEEDS_LAPTOP, SCAN_LIVE_WHY } from './gimbalCanvas';
 import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
@@ -2572,9 +2572,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       fit: fitPlan,
     });
     const line = keptRoomLine(kept);
-    if (line) panels.forEngine(si.engine).log('note', line);
+    if (line) { panels.forEngine(si.engine).log('note', line); keptLines.set(kept.plan, line); }
     return kept.plan;
   }
+  /** What roomPlan put back or added to a plan the model wrote (a tile the
+   *  reply left out, a device that answers, the docked stand): the review of
+   *  THAT plan says so, so no tile reaches the board unannounced. */
+  const keptLines = new WeakMap<SurfacePlan, string>();
 
   /** What the checks left out of this request's replies (a control the
    *  device can't use, a made-up status tile): shown in its review. A
@@ -2708,7 +2712,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       ...(present.mismatched ? [WRONG_CLASS_LINE] : []),
     ])];
     for (const n of leftOut) panels.forEngine(si.engine).log('note', n);
-    const reviewNotes = [...leftOut, ...(hasLampTile(plan) ? [LIGHT_ON_RULES_LINE] : [])];
+    const keptLine = keptLines.get(proposed);
+    const reviewNotes = [...(keptLine ? [keptLine] : []), ...leftOut, ...(hasLampTile(plan) ? [LIGHT_ON_RULES_LINE] : [])];
     // The proposal/review is ready — the swarm settles now (after a minimum
     // hold in sim so it's never decoration flashing by unseen), not left
     // running past the real work it stood for.
@@ -4311,6 +4316,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root,
     gimbalKeepAlive: opts.gimbalKeepAlive,
     sensing: () => !!phoneSensor?.running(),
+    // iPhone shell: "follow my hands" runs on the NATIVE hand tracker. The
+    // WebView camera is lent to it (all web camera uses paused, restored on
+    // leaving hands): DockKit follows the WebKit process's capture, so a
+    // running web camera kept the stand on her face. The web sensing layer
+    // is only the fallback tracker (older app builds).
+    gimbalNative: phoneShell && opts.phoneCamera?.setYield ? {
+      yieldCamera: async (on) => { await opts.phoneCamera?.setYield?.(on); },
+      fallbackTracker: async (on) => { await phoneSensor?.request('follow', on); },
+      onChange: () => { senseChanged(); },
+      say,
+      nativeHandsOptions: () => {
+        // Live test switches (localStorage): mc.gimbalHandsRaw=1 → raw sensor
+        // buffers + device orientation; mc.gimbalHandsMirror=1 → mirrored rect.
+        try {
+          return { corrected: storage.getItem('mc.gimbalHandsRaw') !== '1', mirrored: storage.getItem('mc.gimbalHandsMirror') === '1' };
+        } catch { return undefined; }
+      },
+    } : undefined,
     hands: async (r, onEvent) => {
       const s = await mountCanvasHands(r, onEvent, {
         onError: (reason) => { lastHandsError = reason; },
@@ -4379,7 +4402,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           // Sensing off from the pill: a waiting point ends, and a hands follow
           // with no frames left says so and holds still (never the face).
           if (pointWait?.phone) { endPointWait(); say('Hand tracking off — nothing was captured.'); }
-          if (inputs.gimbal.mode() === 'hands' && !handsOn) say(HANDS_PAUSED);
+          if (inputs.gimbal.mode() === 'hands' && !handsOn && !inputs.gimbal.nativeHands?.()) say(HANDS_PAUSED);
         },
       })
     : null;
@@ -4416,10 +4439,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // dropped is not claimed. 'hands' needs the read-back OFF too: hands with
     // DockKit still tracking would really be following the face.
     const trackingOn = diag?.systemTracking;
+    // Native hands: claimed only while the native tracker really runs.
+    const handsLive = diag?.nativeHands ? !!diag.handTracker : phoneSensor.running();
     const gimbal = !gimbalDocked ? 'none'
       : mode === 'face' ? (trackingOn === false ? 'ready' : 'tracking')
-      : mode === 'hands' && phoneSensor.running() && trackingOn !== true ? 'hands' : 'ready';
-    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running(), hands: !!phoneHands?.isOn(), canPoint: opts.phoneCamera?.status() !== 'error' };
+      : mode === 'hands' && handsLive && trackingOn !== true ? 'hands' : 'ready';
+    const s: PhoneSenseStatus = { gimbal, sensor: phoneSensor.running() || !!diag?.handTracker, hands: !!phoneHands?.isOn() && !opts.phoneCamera?.yielded?.(), canPoint: opts.phoneCamera?.status() !== 'error' };
     if (diag && typeof diag.systemTracking === 'boolean') s.systemTracking = diag.systemTracking;
     if (diag) s.aimingAtHands = diag.aimingAtHands;
     if (diag?.signSuspect) s.aimSign = diag.signSuspect;
@@ -4489,8 +4514,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           if (t) say(t);
         }).catch(() => {}).finally(() => { senseChanged(); pushGimbal(); });
       };
-      if (phoneSensor && mode === 'hands') { void phoneSensor.request('follow', true).then(run); return; }
-      if (phoneSensor) void phoneSensor.request('follow', false);
+      // Native hand tracker (new builds): the controller hands the camera
+      // over and starts the web tracker itself only as the fallback.
+      const native = !!getGimbalPlugin()?.startHandTracking && !!opts.phoneCamera?.setYield;
+      if (phoneSensor && mode === 'hands' && !native) { void phoneSensor.request('follow', true).then(run); return; }
+      if (phoneSensor && !native) void phoneSensor.request('follow', false);
       run();
       return;
     }
@@ -4511,11 +4539,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       else say(`Asked the iPhone: ${GIMBAL_MODE_WORDS[mode] ?? mode}.`);
     }).catch(() => gimbalFail('Couldn’t reach the iPhone — check the pairing.'));
   }
+  /** A tile press the binding already resolved: bindingIntent has checked
+   *  that an iPhone is paired and reports a stand (controlSpec.ts). */
   function gimbalTilePress(press: NonNullable<ReturnType<typeof gimbalPress>>): void {
     if ('mode' in press) { gimbalMode(press.mode); return; }
-    if (!getGimbalPlugin() && !iphonePaired() && !simIphone()) { gimbalFail(GIMBAL_NO_PHONE); return; }
-    if (!getGimbalPlugin() && phoneSense.has('ios') && phoneSense.get('ios')!.gimbal === 'none') { gimbalFail(GIMBAL_NO_STAND); return; }
-    if (!getGimbalPlugin() && !iphonePaired() && simIphone() && !opts.simStand) { gimbalFail(GIMBAL_NO_STAND); return; }
     gimbalError = '';
     bodyLanguage(press.cue);
     pushGimbal();
@@ -5931,8 +5958,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, receivedBy, sharedBoards: () => boardEdge.sharedBoards(), destroy,
     /** Status lines said so far (a mark, then the lines said since it). */
     statusMark: () => statusBase + statusLog.length,
-    /** ?sim=1 only: the gimbal relay messages a SIM run would have sent. */
-    simRelayLog: () => simRelaySent.map((m) => ({ ...m })),
+    /** Dev / test builds with ?sim=1 only: the gimbal relay messages a SIM run would have sent. */
+    ...(import.meta.env.DEV || import.meta.env.VITE_E2E === '1' ? { simRelayLog: () => simRelaySent.map((m) => ({ ...m })) } : {}),
     statusSince: (mark: number) => statusLog.slice(Math.max(0, mark - statusBase)),
     /** Which phone is on which edge now (only phones that can take a board). */
     edgeLayout: () => edgeLayout(),
