@@ -152,6 +152,9 @@ const APP_GERUND = 'turning|switching|setting|playing|adding|dimming|brightening
 /** The board's things, without bare pronouns ("Playing it safe" is talk). */
 const THING = OBJ.replace(/^it\|that\|them\|/, '');
 const STATE = 'on|off|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|warmer|cooler|locked|unlocked|connected|disconnected|stopped|added|removed|set|ready';
+/** The states any named thing may claim ("the heater is on now"): no
+ *  comparatives ("the weather is warmer now" is talk). */
+const STATE_ONOFF = 'on|off|playing|paused|muted|unmuted|locked|unlocked|connected|disconnected|stopped|added|removed|set|ready';
 /** A state that ends its clause ("on now.", "on for you", "off!"). */
 const STATE_END = String.raw`(?:\s+(?:now|already|for\s+you|again))*\s*(?:[.!,;—–]|$)`;
 const STATE_CLAIMS: RegExp[] = [
@@ -162,7 +165,7 @@ const STATE_CLAIMS: RegExp[] = [
   // "The lamp is on (now)", "Your lights are off now", "The lamp's on now", "Lamp is on."
   new RegExp(String.raw`(?:\b(?:the|your|my)\s+(?:[\w’'-]+\s+){0,2}|(?:^|[.!?,;:—]\s*))(?:${THING})\s*(?:is|are|['’]s|['’]re)\s+(?:now\s+|already\s+)?(?:${STATE})\b(?!\s*\?)`, 'i'),
   // Any named thing that is "now" in a changed state: "The heater is on now", "The music is now playing".
-  new RegExp(String.raw`\b(?:the|your|my)\s+(?:[\w’'-]+\s+){1,3}?(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE})|(?:${STATE})\s+now)\b`, 'i'),
+  new RegExp(String.raw`\b(?:the|your|my)\s+(?:[\w’'-]+\s+){1,3}?(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE_ONOFF})|(?:${STATE_ONOFF})\s+now)\b`, 'i'),
   // "Done — …", "Done, the lamp is on", "Done: …"
   /(?:^|[.!?]\s*)(?:all\s+)?done\s*[—–:,-]/i,
   // Final review 2. A pronoun in a changed state, ending its clause: "It's on
@@ -183,6 +186,66 @@ const STATE_CLAIMS: RegExp[] = [
   // "There's now a study next to bedroom 2." — not "There's now a chance of rain".
   new RegExp(String.raw`\bthere\s*(?:'s|\s+is|\s+are|'re)\s+now\s+(?:(?:${DET})\s+)*(?:[\w'-]+\s+)?(?:${THING})\b`, 'i'),
 ];
+// ── State assertions (final review 3) ─────────────────────────────────────
+// One rule instead of a phrase list: a sentence that ASSERTS a current or
+// changed state of a device, board, tile, plan, room, music, volume,
+// brightness, colour or mode is a claim — chat changed nothing and cannot see
+// the devices. Only declaratives count: a question, a condition ("if the lamp
+// is off, tap its tile"), a wish or feeling ("I'm glad it's brighter"), an
+// instruction and a quoted example are not claims.
+const THING2 = `${THING}|volume|brightness|colou?r|modes?|timer|alarm|reminder|message|text|e-?mail|playlist|status|state|everything`;
+const COLOUR = 'red|orange|yellow|green|blue|purple|violet|pink|white|warm\\s+white|cool\\s+white|daylight|teal|cyan|magenta|amber';
+const SCENE = 'sunset|party|relax|focus|cozy|cosy|night\\s+light|reading|ocean|romance|fireplace|forest|candlelight|movie|bedtime';
+const PRED_DEV = String.raw`on|off|out|up|down|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|softer|warmer|cooler|bigger|smaller|wider|ready|updated|saved|added|created|set|connected|done|at\s+(?:full|max(?:imum)?|half|\d+)\S*(?:\s+(?:brightness|volume|percent|%))?|\d+\s*%|\d+|${COLOUR}|in\s+(?:[\w-]+\s+){1,2}mode|(?:${SCENE})(?:\s+(?:scene|mode))?|on\s+(?:the|your)\s+(?:board|dashboard|plan|canvas)`;
+const PRED_PRON = 'on|off|out|brighter|dimmer|louder|quieter|softer|warmer|cooler|playing|paused|muted|done|set|ready|both\\s+on|both\\s+off|all\\s+(?:on|off)';
+const BE = String.raw`(?:is|are|'s|'re|was|were)(?:\s+(?:now|already|both|all|still|just))*`;
+const CHANGE = String.raw`(?:now\s+|just\s+)?(?:came|went|switched|turned|glows|is\s+glowing|looks|got|has\s+gone|has\s+come)`;
+const END = String.raw`(?:\s+(?:now|already|again|for\s+you|both|too|successfully|here|right\s+now))*\s*(?:[.!,;—–]|$)`;
+const PAST1 = `${APP_PAST}|made|changed|dimmed|started|sent|saved|updated|added|created|set`;
+const NP = String.raw`(?:(?:the|your|my|both|all|all\s+the|every|each|a|new)\s+)*(?:[\w'-]+\s+){0,2}?(?:${THING2})`;
+const ASSERT_RULES: RegExp[] = [
+  // "Both lamps are on.", "The lamp came on.", "Volume's at 70 now.", "The lamp now glows blue."
+  new RegExp(String.raw`(?:^|[,;—–:]\s*)(?:and\s+|now\s+)?${NP}\s*(?:${BE}|${CHANGE}|now)\s+(?:now\s+|to\s+)?(?:${PRED_DEV})${END}`, 'i'),
+  // "They're on now.", "It's blue now.", "Everything is off."
+  new RegExp(String.raw`(?:^|[,;—–]\s*)(?:and\s+|now\s+)?(?:they|it|everything|all\s+of\s+them|both\s+of\s+them)\s*${BE}\s+(?:(?:${PRED_PRON})${END}|(?:${COLOUR})\s+now\b)`, 'i'),
+  // "Now it is blue." / "Now playing jazz." / "Now the lamp is on."
+  /^now\s+(?:playing|it\s+is|it's|the\s+\w+)/i,
+  // Verbless: "Lights out!", "✅ Lamp on", "lamp → on", "Lamp status: on", "Party mode on!", "All on!"
+  new RegExp(String.raw`^[^\p{L}]*(?:the\s+|your\s+)?(?:[\w'-]+\s+)?(?:${THING2}|all)(?:\s+(?:status|state))?\s*(?::|→|->|=)?\s*(?:on|off|out|up|down|paused|playing)(?:\s+for\s+you)?\s*[.!]*\s*$`, 'iu'),
+  // "Board saved.", "Timer set for 5 minutes.", "Colour changed to purple.", "Brightness set to 40%."
+  new RegExp(String.raw`^(?:the\s+|your\s+|a\s+)?(?:new\s+)?(?:[\w'-]+\s+)?(?:${THING2}|board|plan|dashboard)\s+(?:${PAST1})(?:\s+(?:on|off|up|down))?(?:\s+(?:for|to|at|successfully)\b[^.!?]*)?\s*[.!]*$`, 'i'),
+  // "Just turned it on.", "Made it brighter.", "Turning them off.", "Changed it to blue."
+  new RegExp(String.raw`^(?:just\s+|now\s+|successfully\s+)?(?:${PAST1}|${APP_GERUND})\s+(?:(?:on|off|up|down)\s+)?(?:it|that|them|this|those|these|everything|both)\s+(?:on|off|up|down|out|brighter|dimmer|louder|softer|quieter|warmer|cooler|to\b|${COLOUR})`, 'i'),
+  // "Turned the volume up.", "Switching the lights off."
+  new RegExp(String.raw`^(?:just\s+)?(?:${PAST1}|${APP_GERUND})\s+(?:the|your|my|both)\s+(?:[\w'-]+\s+)?(?:${THING2})\s+(?:up|down|on|off|out)\b`, 'i'),
+  // "I've set a reminder.", "I have sent the message."
+  /\bI\s*(?:'ve|\s+have)\s+(?:just\s+|now\s+|already\s+)?(?:set|sent|saved|started|scheduled|created|made)\s+(?:a|an|the|your)\s+(?:timer|alarm|reminder|message|text|e-?mail|note)\b/i,
+  // "Dimmed to 20%.", "Set to 40%.", "Switched to relax mode."
+  new RegExp(String.raw`^(?:just\s+)?(?:${PAST1})\s+to\s+(?:\d+|(?:[\w-]+\s+){0,2}(?:mode|scene)|${COLOUR}|${SCENE})`, 'i'),
+  // "Just switched off the lamp.", "Successfully dimmed the lamp."
+  new RegExp(String.raw`^(?:just|successfully)\s+(?:${PAST1})\b`, 'i'),
+  /\bsuccessful(?:ly)?\b/i,
+  // "We turned the lamp off.", "Mendcraft has turned it on."
+  new RegExp(String.raw`\b(?:we|mendcraft)\s*(?:'ve|\s+have|\s+has|\s+just)?\s+(?:${PAST1})\b(?!\s+(?:out|to\s+(?:be|go|see)|our\s+minds?|it\s+(?:through|work|happen|home))\b)`, 'i'),
+  // Done-words said as the whole sentence.
+  /^(?:you\s+got\s+it|will\s+do|sure\s+thing|(?:you'?re\s+|we'?re\s+|there,?\s+)?all\s+set|(?:that'?s\s+|it'?s\s+|all\s+)?taken\s+care\s+of|(?:it|that)\s*(?:'s|\s+is)\s+(?:all\s+)?(?:done|set|handled|sorted)|all\s+done(?:\s+here)?|done\s+and\s+done|consider\s+it\s+(?:handled|sorted)|saved|sent|updated|added)\s*[.!]*$/i,
+  // "Blue it is.", "Warm white it is!"
+  /^(?!(?:that|this|so|there|here|what|how|true|such|yes|indeed)\b)(?:[\w'-]+\s+){1,2}it\s+is\s*[.!]*$/i,
+];
+/** A sentence that is a question, a condition, a wish or feeling, or only
+ *  says what she could say or tap: not a claim about a state. */
+const NOT_ASSERTED = /\?\s*$|\b(?:favou?rite|if|when|whether|unless|once|until|glad|hope|hopefully|wish|imagin\w*|pretend|dream\w*|can'?t\s+(?:tell|see|know)|don'?t\s+know|not\s+sure)\b|^(?:tap|say|try|check|press|use|ask|you\s+can|to\s+\w+)\b/i;
+function sentencesOf(t: string): string[] {
+  return t.replace(/["“][^"”]*["”]/g, '"…"').split(/(?<=[.!?;])\s+/).map((x) => x.trim()).filter(Boolean);
+}
+const LEAD_IN = /^(?:(?:okay|ok|sure(?!\s+thing)|yes|yeah|great|alright|absolutely|perfect|no\s+problem|got\s+it|and|so|well)\b[,!.—–\s]*)+/i;
+/** True when a sentence asserts a device / board state (see above). */
+function assertsState(sentence: string): boolean {
+  const s = sentence.replace(LEAD_IN, '').trim();
+  if (!s || NOT_ASSERTED.test(s)) return false;
+  return ASSERT_RULES.some((re) => re.test(s));
+}
+
 /** A sentence that only shows her how to ask ("…if you say 'turn on the lamp'"). */
 const HOW_TO_ASK = /\bif\s+you\s+(?:say|ask|tell\s+me)\s*[,:]?\s*["“'‘]/i;
 /** The extra checks: true when any first-person claim of an action is in the text. */
@@ -210,7 +273,9 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
     if (i >= 0 && !/\byou\b/i.test(s.slice(0, i))) return true;
   }
   if (PAST_CLAIMS.some((re) => re.test(t))) return true;
-  if (STATE_CLAIMS.some((re) => re.test(t))) return true;
+  // State claims are judged per sentence, never inside a question, a
+  // condition or a wish ("If the lamp is off, tap its tile.").
+  if (sentencesOf(t).some((sen) => !NOT_ASSERTED.test(sen.replace(LEAD_IN, '').trim()) && (STATE_CLAIMS.some((re) => re.test(sen)) || assertsState(sen)))) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
@@ -242,8 +307,10 @@ export function looksEnglish(text: string): boolean {
   const t = String(text ?? '').replace(/[’‘]/g, "'");
   const letters = t.match(/\p{L}/gu) ?? [];
   if (!letters.length) return true;
-  const ascii = letters.filter((c) => /[A-Za-z]/.test(c)).length;
-  const words = t.toLowerCase().match(/[\p{L}]+(?:'[\p{L}]+)?/gu) ?? [];
+  // Accented letters are Latin too ("Déjà vu!"): only another script counts against it.
+  const ascii = letters.filter((c) => /\p{Script=Latin}/u.test(c)).length;
+  // "Los Angeles", "Las Vegas", "El Niño", "San José": a place name, not Spanish.
+  const words = t.replace(/\b(?:Los|Las|El|La|San|Santa|Del|De|Le|Les)\s+\p{Lu}[\p{L}'-]*/gu, ' ').toLowerCase().match(/[\p{L}]+(?:'[\p{L}]+)?/gu) ?? [];
   const latinWords = words.filter((w) => /[a-z]/.test(w));
   const en = latinWords.filter((w) => EN_WORDS.has(w)).length;
   if (ascii / letters.length < 0.75) {
