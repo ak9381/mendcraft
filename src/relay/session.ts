@@ -33,7 +33,7 @@ import {
   type PrivacyAsk,
   type PrivacyReply,
 } from './protocol';
-import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
+import { coerceSnapshot, markReplay, type ControlSnapshot } from './controlSnapshot';
 import type { RelayMeta, RelayTransport } from './transport';
 
 export interface RelayFrame {
@@ -360,7 +360,7 @@ export async function createHostSession(
     if (msg.from === 'control') {
       // A read-only dashboard, not a remote: never changes pairing. Replay the
       // latest state so it populates immediately.
-      if (msg.type === 'hello' && lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (msg.type === 'hello' && lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
       return;
     }
     if (msg.type === 'hello') {
@@ -380,7 +380,7 @@ export async function createHostSession(
       // Replay the latest state so a phone (freshly joined or reloaded) populates
       // its board/layout immediately — today this only happened for a control
       // hello, which stranded a late-joining phone until the next change.
-      if (lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
     } else if (msg.type === 'cmd' && msg.cmd.kind === 'ping') {

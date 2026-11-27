@@ -3,7 +3,7 @@ import {
   validateCommand, validateMessage, fitsRoomMessageRules, CMD_JSON_MAX,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { createHostSession, createGuestSession } from '../src/relay/session';
+import { createHostSession, createGuestSession, createControlSession } from '../src/relay/session';
 import { buildControlSnapshot, type ControlSnapshot } from '../src/relay/controlSnapshot';
 import { serializeTransfer, validateTransfer } from '../src/canvas/tileTransfer';
 
@@ -128,5 +128,25 @@ describe('session: guests receive host state snapshots', () => {
     expect(seen.map((s) => s.rev)).toEqual([3, 4]);
     expect(metas).toEqual([{ buffered: true }, null]);
     await Promise.all([guest.close(), host.close()]);
+  });
+
+  it('replays are marked: the host re-send on a phone OR dashboard hello carries boardSend.replay', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, undefined, { token: TOKEN });
+    const board = { kind: 'room', title: 'Room', tiles: [{ type: 'lamp', deviceId: 'lamp-1', label: 'Lamp' }] } as never;
+    const guest = await createGuestSession(t, TOKEN);
+    await flush();
+    await host.publishState(buildControlSnapshot({ rev: 4, board, boardBy: 'gemini', boardSend: { id: 's1', at: 1000 } }));
+    await flush();
+    const seen: unknown[] = [];
+    guest.onSnapshot((s, meta) => seen.push([s.boardSend, meta ?? null]));
+    expect(seen).toEqual([[{ id: 's1', at: 1000 }, { buffered: true }]]);
+    const dash = await createControlSession(t, TOKEN);
+    await flush(); await flush();
+    expect(seen.at(-1)).toEqual([{ id: 's1', at: 1000, replay: true }, null]);
+    const other = await createGuestSession(t, TOKEN);
+    await flush(); await flush();
+    expect(seen.at(-1)).toEqual([{ id: 's1', at: 1000, replay: true }, null]);
+    await Promise.all([guest.close(), other.close(), dash.close(), host.close()]);
   });
 });

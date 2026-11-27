@@ -5,7 +5,7 @@ import {
 } from '../../src/canvas/boardGlow';
 import { createBoardEdgeTransferController, type EdgeGlow } from '../../src/canvas/edgeTransfer';
 import { applyGuestSnapshot } from '../../src/canvas/phoneCanvasRuntime';
-import { buildControlSnapshot, coerceSnapshot } from '../../src/relay/controlSnapshot';
+import { buildControlSnapshot, coerceSnapshot, markReplay } from '../../src/relay/controlSnapshot';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
 
 // Minimal fake frame (the suite runs in node, no jsdom).
@@ -187,5 +187,17 @@ describe('arrival gate (phone: "Moved from laptop" only for a real new send)', (
     expect(buildControlSnapshot({ rev: 8, board: BOARD, boardFor: 'ios' }).boardSend).toBeUndefined();
     expect(buildControlSnapshot({ rev: 8, board: BOARD, boardSend: { id: '<script>', at: NOW } }).boardSend).toBeUndefined();
     expect(buildControlSnapshot({ rev: 8, boardSend: { id: 'x', at: NOW } }).boardSend).toBeUndefined();
+  });
+
+  it('a host replay (boardSend.replay) is age-checked even when it arrives live', () => {
+    const g = createArrivalGate(null);
+    expect(g.isNew({ board: BOARD, boardSend: { id: 'r1', at: NOW - 60 * 60_000, replay: true } }, 'ios', NOW, { live: true })).toBe(false);
+    expect(g.isNew({ board: BOARD, boardSend: { id: 'r2', at: NOW - 1000, replay: true } }, 'ios', NOW, { live: true })).toBe(true);
+    const wire = JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 1, board: BOARD, boardSend: { id: 'w1', at: NOW, replay: true } })));
+    expect(coerceSnapshot(wire)!.boardSend).toEqual({ id: 'w1', at: NOW, replay: true });
+    expect(buildControlSnapshot({ rev: 1, board: BOARD, boardSend: { id: 'w2', at: NOW, replay: 'yes' } as never }).boardSend).toEqual({ id: 'w2', at: NOW });
+    expect(markReplay({ board: BOARD, boardSend: { id: 'm1', at: NOW } } as never)).toMatchObject({ boardSend: { id: 'm1', at: NOW, replay: true } });
+    const plain = { rev: 2 } as never;
+    expect(markReplay(plain)).toBe(plain);
   });
 });
