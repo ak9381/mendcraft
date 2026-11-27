@@ -24,11 +24,12 @@ describe('review 4 regressions', () => {
     expect(routeLine(line, { devices: withSpeaker, hasPlanBoard: false }).name).not.toBe('device');
   });
   // Final review 5: the not-music list applies to the Spotify search too.
-  it.each(['play a game', 'play chess with me', 'play cards', 'play football', 'play with me', 'can you play hide and seek'])('Spotify connected: %j is talk, not a search', (line) => {
+  it.each(['play a game', 'play chess with me', 'play cards', 'play football', 'play with me', 'can you play hide and seek with me', 'play catch'])('Spotify connected: %j is talk, not a search', (line) => {
     const r = routeLine(line, { devices: withSpeaker, hasPlanBoard: false, spotifyConnected: true });
     expect(r.name).toBe('openEnded');
   });
-  it.each(['play some jazz', 'play Take Five'])('Spotify connected: %j is still a search', (line) => {
+  // Song titles with words a game list might hold are still searched.
+  it.each(['play some jazz', 'play Take Five', 'play Safe and Sound', 'play Part of Your World', 'play Hide and Seek', 'play Play Dead', 'play Fair Game'])('Spotify connected: %j is still a search', (line) => {
     expect(routeLine(line, { devices: withSpeaker, hasPlanBoard: false, spotifyConnected: true }).name).toBe('musicSearch');
   });
   it.each([['desk lamp on now', true], ['lights on for me', true], ['lamp off again', false]] as [string, boolean][])('%j acts', (line, on) => {

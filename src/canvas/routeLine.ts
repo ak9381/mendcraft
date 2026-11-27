@@ -128,6 +128,12 @@ export const isArtifactsAsk = (text: string): boolean => ARTIFACTS_RE.test(text)
 /** "play …" that is a game or a figure of speech, not music. */
 const PLAY_NOT_MUSIC = /\b(?:games?|chess|cards?|carrom|football|cricket|tennis|ball|catch|tag|hide|pretend|tricks?|role|along|outside|dead|safe|fair|part|board|tile|video|demo|with\s+(?:me|you|us|him|her|them))\b/i;
 
+/** For a Spotify search, only a clear game or activity is talk ("play chess",
+ *  "play a game", "play hide and seek with me"); a title that merely holds
+ *  such a word ("Safe and Sound", "Part of Your World", "Hide and Seek",
+ *  "Fair Game") is still searched. */
+const PLAY_GAME = /^(?:(?:a|an|some|the)\s+)?(?:(?:board|video|card)\s+)?(?:games?|chess|cards|carrom|ludo|football|cricket|tennis|catch)\b|^with\b|\bwith\s+(?:me|us|you|him|her|them)\s*[.!?]*$/i;
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -174,7 +180,7 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (cmd) return { name: 'canvas', cmd };
   // "play <something>" on a speaker: a search for the speaker connector.
   const mi = parseMusicIntent(text);
-  const query = mi?.type === 'searchPlay' && !world.sim && !PLAY_NOT_MUSIC.test(mi.query) ? spotifySearchQuery(mi.query, !!world.spotifyConnected) : null;
+  const query = mi?.type === 'searchPlay' && !world.sim && !PLAY_GAME.test(mi.query.trim()) ? spotifySearchQuery(mi.query, !!world.spotifyConnected) : null;
   const speaker = query ? world.devices.find((d) => d.kind === 'music') : undefined;
   if (query && speaker) return { name: 'musicSearch', query, deviceId: speaker.id };
   const result = parseDeviceCommands(text, world.devices, { pointed: world.pointed ?? null });
