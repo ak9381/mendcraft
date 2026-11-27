@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   loadPhonePair, savePhonePair, clearPhonePair, rememberPhoneSide,
-  loadHostToken, saveHostToken, clearHostToken,
+  loadHostToken, saveHostToken, clearHostToken, rememberHostPhone, hostRoomToResume,
   ensureDeviceId, loadPhonePin, savePhonePin, clearPhonePin,
   type StorageLike,
 } from '../src/relay/pairingStore';
@@ -70,6 +70,32 @@ describe('pairingStore host token (resume)', () => {
     saveHostToken(s, 'short');
     expect(loadHostToken(s)).toBeNull();
     clearHostToken(s);
+  });
+});
+
+describe('C2: which room a new pairing opens', () => {
+  const OTHER = 'ZYXWVTSRQPNMKJHGFEDCBA98';
+  it('no phone ever proved itself in the stored room: a new room (the stored token is forgotten)', () => {
+    const s = memStore();
+    saveHostToken(s, TOKEN);
+    expect(hostRoomToResume(s)).toBeUndefined();
+    expect(loadHostToken(s)).toBeNull();
+  });
+  it('a phone is remembered in it: the same room, so remembered phones rejoin and a reload keeps it', () => {
+    const s = memStore();
+    saveHostToken(s, TOKEN);
+    rememberHostPhone(s, TOKEN);
+    expect(hostRoomToResume(s)).toBe(TOKEN);
+    expect(hostRoomToResume(s)).toBe(TOKEN); // asked again (a reload): still the same room
+  });
+  it('a phone remembered in an OLDER room does not keep the new one', () => {
+    const s = memStore();
+    rememberHostPhone(s, OTHER);
+    saveHostToken(s, TOKEN);
+    expect(hostRoomToResume(s)).toBeUndefined();
+  });
+  it('nothing stored: a new room', () => {
+    expect(hostRoomToResume(memStore())).toBeUndefined();
   });
 });
 

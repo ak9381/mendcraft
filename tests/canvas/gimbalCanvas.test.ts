@@ -581,6 +581,29 @@ describe('Part 3: src/canvas/gimbalCanvas.ts', () => {
       }
     });
 
+    it('her choice during the build wins: the end of the build never puts the old mode back (D3)', async () => {
+      let seq = 0;
+      const controller = fakeController('hold', {
+        setMode: vi.fn(async (_m: string, o?: { explicit?: boolean }) => { if (o?.explicit) seq++; return { ok: true }; }) as never,
+        choiceSeq: () => seq,
+      });
+      await followWhileBuilding(controller, async () => {
+        await controller.setMode('hands', { explicit: true }); // "follow my hands" mid-build
+        return 1;
+      });
+      expect(controller.setMode).toHaveBeenCalledTimes(2); // face (build), hands (her) — no restore to hold
+      expect(vi.mocked(controller.setMode).mock.calls.map((c) => c[0])).toEqual(['face', 'hands']);
+    });
+
+    it('the real controller counts only her explicit choices', async () => {
+      const c = createGimbalCanvasController({ plugin: null } as never);
+      const before = c.choiceSeq!();
+      await c.setMode('face');
+      expect(c.choiceSeq!()).toBe(before);
+      await c.setMode('hold', { explicit: true });
+      expect(c.choiceSeq!()).toBe(before + 1);
+    });
+
     it('never throws even when the gimbal is unavailable (web soft-fail)', async () => {
       const controller = fakeController('hold', {
         setMode: vi.fn(async () => ({ ok: false, why: 'The gimbal works in the iPhone app' })),

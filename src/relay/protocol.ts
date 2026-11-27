@@ -18,7 +18,9 @@ export type { PrivacyAsk, PrivacyReply } from '../ai/privacyRouter';
 export const TOKEN_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** 24 chars × 5 bits = 120 bits of entropy — the room id is the capability. */
 export const TOKEN_LENGTH = 24;
-/** Typable short code: the first 8 token chars (40 bits), shown grouped. */
+/** Typable short code: 8 chars (40 bits), shown grouped. It is its own random
+ *  secret, never derived from the room token, and lives for one admission
+ *  window only (see session.ts ALIAS_TTL_MS). */
 export const CODE_LENGTH = 8;
 
 export type RandomBytes = (n: number) => Uint8Array;
@@ -38,9 +40,14 @@ export function generateRoomToken(random: RandomBytes = cryptoRandom): string {
   return out;
 }
 
-/** The typable short code for a token (its first 8 chars, un-grouped). */
-export function shortCodeOf(token: string): string {
-  return token.slice(0, CODE_LENGTH);
+/** A fresh typable short code (un-grouped) for one admission window. It is
+ *  drawn on its own, so hearing it says nothing about the room token, and a
+ *  code heard once is dead after its window. */
+export function generatePairCode(random: RandomBytes = cryptoRandom): string {
+  const bytes = random(CODE_LENGTH);
+  let out = '';
+  for (let i = 0; i < CODE_LENGTH; i++) out += TOKEN_ALPHABET[bytes[i] % 32];
+  return out;
 }
 
 /** "ABCD-EFGH" — how the short code is displayed and read aloud. */

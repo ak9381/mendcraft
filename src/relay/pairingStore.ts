@@ -125,6 +125,26 @@ export function clearHostToken(storage: StorageLike | null | undefined): void {
   remove(storage, K_HOST_TOKEN);
 }
 
+const K_HOST_PHONE = 'mc.relay.hostPhoneRoom';
+
+/** A phone proved itself live in this room (its announce named this laptop's
+ *  session), so that phone remembers the room and rejoins it on its own. */
+export function rememberHostPhone(storage: StorageLike | null | undefined, token: string): void {
+  if (TOKEN_RE.test(token) && read(storage, K_HOST_PHONE) !== token) write(storage, K_HOST_PHONE, token);
+}
+
+/** The room a NEW pairing opens (C2). A stored room that a phone remembers is
+ *  resumed, so remembered phones rejoin silently and a laptop reload keeps the
+ *  room. A stored room no phone ever proved itself in is forgotten: the new
+ *  pairing mints a new room, so whoever heard an earlier code holds nothing. */
+export function hostRoomToResume(storage: StorageLike | null | undefined): string | undefined {
+  const token = loadHostToken(storage);
+  if (!token) return undefined;
+  if (read(storage, K_HOST_PHONE) === token) return token;
+  clearHostToken(storage);
+  return undefined;
+}
+
 const K_LAYOUT = 'mc.relay.layout';
 
 /** The laptop's remembered screen arrangement (which phone is on which side).

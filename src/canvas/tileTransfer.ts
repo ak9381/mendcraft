@@ -6,6 +6,8 @@
 // tileComponentId the renderer uses.
 
 import {
+  MAX_TILES,
+  coerceSurfacePlan,
   coerceTileSpec,
   tileComponentId,
   type SurfacePlan,
@@ -101,6 +103,19 @@ export function applyTileToPlan(plan: SurfacePlan, tile: TileSpec): SurfacePlan 
   const exists = plan.tiles.some((t, i) => tileComponentId(t, [i]) === id);
   if (exists) return plan;
   return { ...plan, tiles: [...plan.tiles, tile] };
+}
+
+/** A tile a phone sent back to the laptop, as the plan it WOULD make (it goes
+ *  through the normal review — nothing is applied here). Refused when the
+ *  board already holds MAX_TILES (a 7th tile makes a board that no longer
+ *  loads), when it is already there, or when the result fails the plan check. */
+export type TileFromPhone = { ok: true; plan: SurfacePlan } | { ok: false; why: 'full' | 'same' | 'invalid' };
+export function tileFromPhone(plan: SurfacePlan, tile: TileSpec): TileFromPhone {
+  const next = applyTileToPlan(plan, tile);
+  if (next === plan) return { ok: false, why: 'same' };
+  if (plan.tiles.length >= MAX_TILES) return { ok: false, why: 'full' };
+  const checked = coerceSurfacePlan(next);
+  return checked.ok ? { ok: true, plan: checked.value } : { ok: false, why: 'invalid' };
 }
 
 /** Remove the top-level tile whose stable component id matches. Returns a NEW
