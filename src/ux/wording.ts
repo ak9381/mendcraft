@@ -16,6 +16,10 @@ export const LATER_LIST_PROMISE = "I'll do these when you're back online";
 export const GETTING_QUICK_READY = 'Getting Quick ready';
 export const QUICK_READY = 'Quick ready';
 export const OFFLINE_QUICK_ONLY = 'Offline · Quick only';
+/** The Demo toggle's label while the network is really off (never "simulated"). */
+export const REAL_OFFLINE_LABEL = 'Offline · network off';
+/** Said when she asks to simulate offline / come back online while the network is really off. */
+export const REAL_OFFLINE_LINE = 'Already offline: the network is off. It comes back when the connection does.';
 export const STAYS_ON_THIS_DEVICE = 'Stays on this device';
 export const ESCALATION_LINE = "Quick wasn't sure, so Deep checked";
 export const ESCALATION_ROUTE = "Quick wasn't sure, so Deep double-checked.";
