@@ -94,7 +94,7 @@ import { OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
-import { createDeviceIdSession } from '../privacy/deviceRedact';
+import { boardDeviceIds, createDeviceIdSession, redactDeviceIds } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { armedSurfaceAt, collectControls, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
@@ -6432,9 +6432,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           spec: target.spec,
           tileId: target.id,
           log: tileSelfCheckLog,
-          requestFix: async (prompt) => {
+          requestFix: async (raw) => {
             const eng = engineFor('gemini', 'selfCheck');
             if (!eng) throw new Error(NO_MODEL_LINE);
+            // The tile's real device ids never reach the cloud (final review I7);
+            // parseMorphTile puts them back from the same session.
+            const prompt = eng.id === 'gemini' ? redactDeviceIds(raw, boardDeviceIds(target.spec), deviceIdSession) : raw;
             const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
             const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
             if (!eng.sim && eng.id === 'gemini') openCloudTurn(si, prompt);

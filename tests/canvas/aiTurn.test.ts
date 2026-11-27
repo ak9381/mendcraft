@@ -209,6 +209,26 @@ describe('redaction covers nested surface plans', () => {
     expect(r.prompt).toContain('Device 1');
   });
 
+  it('a devices turn (no device list) still redacts every device id on the current board, bindings too (final review I7)', async () => {
+    const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
+    const session = createDeviceIdSession();
+    const r = buildSurfacePrompt({
+      utterance: 'show my devices', frameTitle: 'Devices', devices: [], want: 'devices', deviceRows: [],
+      current: {
+        kind: 'room' as const, title: 'Home',
+        tiles: [
+          { type: 'lamp' as const, deviceId: 'wiz-a8bb50e1f2c3', label: 'Desk lamp' },
+          { type: 'tabs' as const, tabs: [{ label: 'Music', children: [{ type: 'music' as const, deviceId: 'spotify-3f9a', label: 'Speaker' }] }] },
+          { type: 'form' as const, title: 'Quick', fields: [{ kind: 'toggle' as const, id: 'fan', label: 'Fan', bind: { deviceId: 'plug-77', key: 'on' as const } }] },
+        ],
+      } as never,
+    }, 'gemini', { deviceIdSession: session });
+    for (const id of ['wiz-a8bb50e1f2c3', 'spotify-3f9a', 'plug-77']) expect(r.prompt).not.toContain(id);
+    expect(r.prompt).toMatch(/Device 1/);
+    // Nano never leaves the device: it keeps the real ids.
+    expect(buildSurfacePrompt({ utterance: 'x', frameTitle: 'D', devices: [], current: { kind: 'room', title: 'H', tiles: [{ type: 'lamp', deviceId: 'wiz-a8bb50e1f2c3', label: 'L' }] } }, 'nano', { deviceIdSession: session }).prompt).toContain('wiz-a8bb50e1f2c3');
+  });
+
   it('round-trips a nested plan with a redacted device id back to the real id', async () => {
     const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
     const session = createDeviceIdSession();

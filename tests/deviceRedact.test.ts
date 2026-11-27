@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createDeviceIdSession, redactDeviceIds, restoreDeviceIds } from '../src/privacy/deviceRedact';
+import { readFileSync } from 'node:fs';
+import { boardDeviceIds, createDeviceIdSession, redactDeviceIds, restoreDeviceIds } from '../src/privacy/deviceRedact';
 
 describe('device id session', () => {
   it('assigns stable, first-seen-order placeholders', () => {
@@ -40,5 +41,18 @@ describe('redactDeviceIds / restoreDeviceIds round trip', () => {
     const s = createDeviceIdSession();
     redactDeviceIds('no ids mentioned', ['lamp-a'], s);
     expect(s.idFor('Device 1')).toBeNull();
+  });
+});
+
+describe('boardDeviceIds (final review I7)', () => {
+  it('finds every deviceId at any depth: tiles, form bindings, visual actions', () => {
+    expect(boardDeviceIds({ tiles: [{ type: 'lamp', deviceId: 'a' }, { type: 'card', children: [{ type: 'music', deviceId: 'b' }] }, { type: 'form', fields: [{ bind: { deviceId: 'c' } }] }, { type: 'visual', actions: { go: { deviceId: 'd', intent: {} } } }, { type: 'lamp', deviceId: 'a' }] })).toEqual(['a', 'b', 'c', 'd']);
+    expect(boardDeviceIds(null)).toEqual([]);
+  });
+  it('the self-check fix prompt is redacted before it can reach Gemini', () => {
+    const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    const fix = src.slice(src.indexOf('requestFix: async'), src.indexOf('applyFix: session.applyFix'));
+    expect(fix).toMatch(/const prompt = eng\.id === 'gemini' \? redactDeviceIds\(raw, boardDeviceIds\(target\.spec\), deviceIdSession\) : raw;/);
+    expect(fix.indexOf('const prompt =')).toBeLessThan(fix.indexOf('openCloudTurn('));
   });
 });

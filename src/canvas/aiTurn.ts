@@ -4,7 +4,7 @@
 // change goes on a history she can undo.
 import { extractJson } from '../ai/cloudJson';
 import { fillVisible } from '../privacy/directory';
-import { redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
+import { boardDeviceIds, redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
 import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
 import { OFFLINE_MID_LINE } from './failLines';
@@ -131,8 +131,11 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
     : `- ${d.id}: ${d.label} (${d.kind})`)).join('\n') || '- none found yet';
   let current = req.current ? `\nCurrent board: ${JSON.stringify(req.current)}` : '';
   if (session) {
-    devices = redactDeviceIds(devices, ids, session);
-    if (current) current = `\nCurrent board: ${redactDeviceIds(JSON.stringify(req.current), ids, session)}`;
+    // The listed devices plus every id already on the board (a devices turn
+    // lists none; a room turn lists only those answering) — final review I7.
+    const all = [...ids, ...boardDeviceIds(req.current).filter((id) => !ids.includes(id))];
+    devices = redactDeviceIds(devices, all, session);
+    if (current) current = `\nCurrent board: ${redactDeviceIds(JSON.stringify(req.current), all, session)}`;
   }
   // A devices turn: the rows as words (names and status only), redacted for the cloud.
   const rows = req.want === 'devices'
