@@ -36,10 +36,8 @@ describe('coerceLanguagePack', () => {
     expect(r.ok && r.notes).toContain('dropped, kept English: keep (not Kannada script)');
   });
 
-  it('drops markup in a string', () => {
-    const r = dropKeep('<b>ಇಟ್ಟುಕೋ</b>');
-    expect(r.ok && r.value.strings.keep).toBeUndefined();
-    expect(r.ok && r.notes).toContain('dropped, kept English: keep (markup)');
+  it('refuses the whole pack for markup in a string (tampering, not a slip)', () => {
+    expect(dropKeep('<b>ಇಟ್ಟುಕೋ</b>')).toEqual({ ok: false, error: 'unsafe text in the pack: string keep (markup)' });
   });
 
   it('drops a phrase for an unknown intent instead of refusing the pack (live Gemini sent "ai")', () => {
@@ -48,9 +46,11 @@ describe('coerceLanguagePack', () => {
     if (r.ok) expect(Object.keys(r.value.phrases)).toEqual([]);
   });
 
-  it('drops a markup phrase but keeps the good ones', () => {
+  it('refuses the pack for a markup phrase; drops a Latin phrase but keeps the good ones', () => {
     const intent = Object.keys(KN_PACK.phrases)[0];
-    const r = coerceLanguagePack({ lang: 'kn', strings: { ...KN_PACK.strings }, phrases: { [intent]: ['<b>x</b>', 'ಆನ್'] } });
+    const bad = coerceLanguagePack({ lang: 'kn', strings: { ...KN_PACK.strings }, phrases: { [intent]: ['<b>x</b>', 'ಆನ್'] } });
+    expect(bad).toEqual({ ok: false, error: `unsafe text in the pack: phrase for ${intent} (markup)` });
+    const r = coerceLanguagePack({ lang: 'kn', strings: { ...KN_PACK.strings }, phrases: { [intent]: ['lamp on', 'ಆನ್'] } });
     expect(r.ok).toBe(true);
     if (r.ok) expect((r.value.phrases as Record<string, string[]>)[intent]).toEqual(['ಆನ್']);
   });

@@ -239,9 +239,11 @@ export function diffPlans(before: SurfacePlan | null, after: SurfacePlan, ctx: P
 }
 
 /** The Kannada (or any language) pack proposal, as one plan line. */
-export function languagePackChanges(language: string, labelCount: number, swaps: readonly { en: string; to: string }[] = []): PlanChange[] {
+export function languagePackChanges(language: string, labelCount: number, swaps: readonly { en: string; to: string }[] = [], keptEnglish: readonly string[] = []): PlanChange[] {
   return [
     { op: 'change', label: `Switch the interface to ${language} (${plural(labelCount, 'label')})` },
+    // What the pack check left in English, so she knows before she approves.
+    ...(keptEnglish.length ? [{ op: 'change' as const, label: `Stays English: ${keptEnglish.join(', ')}` }] : []),
     // Every label she'll see, English → the pack's words, so she approves what she reads.
     ...swaps.map((w): PlanChange => ({ op: 'change', label: `${w.en} → ${w.to}` })),
   ];

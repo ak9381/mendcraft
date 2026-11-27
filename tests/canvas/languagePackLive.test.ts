@@ -98,6 +98,9 @@ describe('a live-like Gemini Kannada pack', () => {
     h.run('add kannada');
     await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Kannada'), { timeout: 8000 });
     const log = document.body.textContent ?? '';
+    // The review says which labels stay English before she approves.
+    const review = root.querySelector('.mc-review-dialog')?.textContent ?? '';
+    expect(review).toContain('Stays English: What would you like to build on this board?, Go, Something else, 1 status line');
     expect(log).toContain('pack check: missing, kept English: go');
     expect(log).toContain('emptyLead (longer than 80 characters)');
     h.keep();
@@ -128,9 +131,33 @@ describe('a live-like Gemini Kannada pack', () => {
     expect(coerceLanguagePack({ ...KN_PACK, strings: { ...KN_PACK.strings, keep: 'Keep' } }, { stored: true }).ok).toBe(false);
     expect(coerceLanguagePack(KN_PACK, { stored: true }).ok).toBe(true);
 
+    // One markup string in an otherwise good live pack is tampering: refused whole.
+    const marked = coerceLanguagePack({ ...pack, strings: { ...pack.strings, save: 'ಉಳಿಸಿ <img src=x>' } });
+    expect(marked).toEqual({ ok: false, error: 'unsafe text in the pack: string save (markup)' });
+    const hiddenStatus = coerceLanguagePack({ ...pack, status: { lightsOn: `ದೀಪ${String.fromCharCode(0x200B)}ಆನ್` } });
+    expect(hiddenStatus).toEqual({ ok: false, error: 'unsafe text in the pack: status lightsOn (hidden or direction characters)' });
+
     const { h } = mount(JSON.stringify(english));
     h.run('add kannada');
     await vi.waitFor(() => expect(h.statusSince(0).some((t) => /^Refused the Kannada pack: most core strings failed/.test(t) && t.endsWith('Nothing was generated.'))).toBe(true));
     expect(document.body.textContent).toContain('pack check: most core strings failed the Kannada script check');
+  });
+});
+
+describe('neutral Latin in the script share', () => {
+  const withAi = (ai: string) => coerceLanguagePack({ ...KN_PACK, strings: { ...KN_PACK.strings, ai } });
+  const kept = (ai: string): boolean => { const r = withAi(ai); return r.ok && r.value.strings.ai === ai; };
+
+  it('only real numbers with units are neutral, not digits hidden in a Latin word', () => {
+    expect(kept('Delete0all0your0files ಅ')).toBe(false);
+    expect(kept('Send1to1Google ಅ')).toBe(false);
+    for (const s of ['ಬೆಳಕು 60%', '3D ನೆಲ ನಕ್ಷೆ', 'ವೇಗ 2.4GHz ವೈಫೈ', 'ದೀಪ 100W ಬೆಳಕು', 'ತಾಪ 21°C ಇದೆ']) expect(kept(s), s).toBe(true);
+  });
+
+  it('brand names are neutral only in their exact casing, and never carry a label alone', () => {
+    expect(kept('AI ಚಟುವಟಿಕೆ (Gemini, Nano)')).toBe(true);
+    expect(kept('AI Gemini Nano ಅ')).toBe(false);
+    expect(kept('OK ಅ')).toBe(false);
+    expect(kept('gemini nano ಚಟುವಟಿಕೆ')).toBe(false); // lower case is ordinary English
   });
 });

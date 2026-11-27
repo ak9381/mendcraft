@@ -77,7 +77,7 @@ import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceC
 import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, deviceClassOf, formIntents, hasLampTile, planHasBindings, pressIntent, visualPress, volumeReadNeeded, type BindingResult, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
-import { EN_PACK, SCRIPT_UNKNOWN, coerceLanguagePack, parseLanguageAsk, langName, packPrompt, packRouteLine, packSwaps, PACK_SENT_WORDS, routePackPhrase, scriptOf, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
+import { EN_PACK, SCRIPT_UNKNOWN, coerceLanguagePack, parseLanguageAsk, langName, packPrompt, packRouteLine, packSwaps, PACK_SENT_WORDS, packKeptEnglish, routePackPhrase, scriptOf, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
 import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
@@ -4252,7 +4252,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     showReview({
       title, card, extra: buildReviewExtra(),
-      changes: languagePackChanges(name, swapCount, packSwaps(next)),
+      changes: languagePackChanges(name, swapCount, packSwaps(next), coerced.notes?.length ? packKeptEnglish(next) : []),
       facts: reviewFacts(si, utterance),
     }, { tokens: [si], facts: () => reviewFacts(si, utterance) });
   }

@@ -69,8 +69,14 @@ describe('the script check (LANG_SCRIPTS)', () => {
       expect(r.ok && r.notes, escape(keep)).toContain(`dropped, kept English: keep (${why})`);
     };
     dropped('Show everything ಅ', 'mostly not Kannada script'); // English with one Kannada letter
-    dropped('\u202Eಇಟ್ಟುಕೋ', 'hidden or direction characters'); // right-to-left override
-    for (const c of ['\u200B', '\u200E', '\u200F', '\u202A', '\u2066', '\u2069', '\uFEFF', '\u0007']) dropped(`ಇಟ್ಟು${c}ಕೋ`, 'hidden or direction characters');
+    // Hidden or direction characters are tampering: the whole pack is refused.
+    const refused = (keep: string): void => {
+      const r = withKeep(keep);
+      expect(r.ok, escape(keep)).toBe(false);
+      if (!r.ok) expect(r.error, escape(keep)).toBe('unsafe text in the pack: string keep (hidden or direction characters)');
+    };
+    refused('\u202Eಇಟ್ಟುಕೋ'); // right-to-left override
+    for (const c of ['\u200B', '\u200E', '\u200F', '\u202A', '\u2066', '\u2069', '\uFEFF', '\u0007']) refused(`ಇಟ್ಟು${c}ಕೋ`);
     dropped('ಇಟ್ಟು\nಕೋ', 'more than one line');
     const zwj = withKeep('ನೆಲ ನಕ್ಷೆ\u200Dಗಳು\u200C');
     expect(zwj.ok).toBe(true); // ZWJ / ZWNJ join Kannada letters

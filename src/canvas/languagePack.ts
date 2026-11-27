@@ -162,9 +162,15 @@ export const NEUTRAL_LATIN = [
   'AI', 'Nano', 'Gemini', 'Google', 'Chrome', 'Spotify', 'WiZ', 'DXF', 'SVG', 'PDF', 'STL', 'CAD',
   'Wi-Fi', 'WiFi', 'Bluetooth', 'USB', 'OK', 'UI', 'Mendcraft',
 ] as const;
-const NEUTRAL_RE = new RegExp(`\\b(?:${NEUTRAL_LATIN.map((w) => w.replace('-', '\\-')).join('|')})\\b`, 'gi');
-/** A Latin token with a digit in it: a number with its unit, "3D", "5W". */
-const UNIT_RE = /[A-Za-z0-9.,%°]*[0-9][A-Za-z0-9.,%°]*/g;
+// Exact casing: "ai" or "ok" inside an English sentence is not a brand.
+const NEUTRAL_RE = new RegExp(`(?<![A-Za-z0-9])(?:${NEUTRAL_LATIN.map((w) => w.replace('-', '\\-')).join('|')})(?![A-Za-z0-9])`, 'g');
+/** A real number with an optional unit of at most three letters: "60%",
+ *  "3D", "2.4GHz", "100W", "21°C". A digit inside a Latin word
+ *  ("Delete0all0your0files") is not one, so those letters still count. */
+const UNIT_RE = /(?<![A-Za-z0-9])\d+(?:[.,]\d+)*\s?(?:%|°[CF]?|[A-Za-z]{1,3})?(?![A-Za-z0-9])/g;
+/** Whether the string carries a fault that is tampering, not a slip: the
+ *  whole live pack is refused for it. */
+export const SAFETY_FAULTS: ReadonlySet<string> = new Set(['hidden or direction characters', 'markup']);
 /** Why one pack string is refused, or null when it passes every check for
  *  `lang`. Safety reasons (hidden characters, markup) are named as such. */
 export function stringFault(v: unknown, lang: string, script: RegExp): string | null {
@@ -178,10 +184,14 @@ export function stringFault(v: unknown, lang: string, script: RegExp): string | 
   if (!script.test(t)) return `not ${langName(lang)} script`;
   if (!LATIN_LANGS.has(lang)) {
     // "Show everything ಅ" is English with one letter of Kannada in it.
-    const rest = t.replace(NEUTRAL_RE, ' ').replace(UNIT_RE, ' ');
+    let neutral = 0;
+    const rest = t.replace(NEUTRAL_RE, () => { neutral++; return ' '; }).replace(UNIT_RE, (m) => { if (/[A-Za-z]/.test(m)) neutral++; return ' '; });
     const letters = [...rest].filter((c) => /\p{L}/u.test(c));
     const inScript = letters.filter((c) => script.test(c)).length;
     if (letters.length && inScript / letters.length < MIN_SCRIPT_SHARE) return `mostly not ${langName(lang)} script`;
+    // Neutral words don't carry a label: "AI Gemini Nano ಅ" or "OK ಅ" is not
+    // Kannada. With any, at least two own-script letters and no fewer than them.
+    if (neutral && (inScript < 2 || inScript < neutral)) return `mostly not ${langName(lang)} script`;
   }
   return null;
 }
@@ -204,6 +214,15 @@ export function packPrompt(lang: string): string {
     `Phrases are what she might say for an intent; intents: ${INTENT_KEYS.join(', ')}.`,
     `${name} in its own script, each string at most ${MAX_STRING} characters, no markup.`,
   ].join('\n');
+}
+
+/** The labels this pack leaves in English (missing, or dropped by the check),
+ *  for the review: "Stays English: Go, 1 status line". */
+export function packKeptEnglish(pack: LanguagePack): string[] {
+  const out = [...LANG_STRING_KEYS, ...LANG_OPTIONAL_KEYS].filter((k) => !pack.strings[k]).map((k) => EN_PACK.strings[k] ?? k);
+  const status = STATUS_KEYS.filter((k) => !pack.status?.[k]).length;
+  if (status) out.push(`${status} status line${status === 1 ? '' : 's'}`);
+  return out;
 }
 
 /** Each English label and what the pack puts in its place, for the review. */
@@ -245,12 +264,16 @@ export function coerceLanguagePack(raw: unknown, o: { stored?: boolean } = {}): 
   const strings: Partial<Record<LangStringKey, string>> = {};
   const faults: string[] = [];
   const unknown: string[] = [];
+  const tampered: string[] = [];
   for (const [k, v] of Object.entries(r.strings as Record<string, unknown>)) {
     if (!STRING_KEY_SET.has(k)) { unknown.push(k); continue; }
     const why = stringFault(v, lang, script);
-    if (why) { faults.push(`${k} (${why})`); continue; }
+    if (why) { faults.push(`${k} (${why})`); if (SAFETY_FAULTS.has(why)) tampered.push(`string ${k} (${why})`); continue; }
     strings[k as LangStringKey] = (v as string).trim();
   }
+  // Hidden or direction characters, or markup, are tampering, not a slip:
+  // a pack with any of them is refused whole (a stored one is too).
+  if (tampered.length) return { ok: false, error: `unsafe text in the pack: ${tampered.join(', ')}` };
   if (!Object.keys(strings).length) {
     return { ok: false, error: faults.length ? `no string passed the ${name} script check: ${faults.join(', ')}` : 'no strings' };
   }
@@ -286,6 +309,7 @@ export function coerceLanguagePack(raw: unknown, o: { stored?: boolean } = {}): 
       const good: string[] = [];
       for (const p of list) {
         const why = stringFault(p, lang, script);
+        if (why && SAFETY_FAULTS.has(why)) tampered.push(`phrase for ${intent} (${why})`);
         if (why) badPhrases.push(`${intent} “${typeof p === 'string' ? p.slice(0, 24) : typeof p}” (${why})`);
         else good.push((p as string).trim());
       }
@@ -304,6 +328,7 @@ export function coerceLanguagePack(raw: unknown, o: { stored?: boolean } = {}): 
     for (const [k, v] of Object.entries(given)) {
       if (!STATUS_KEY_SET.has(k)) { unknownStatus.push(k); continue; }
       const why = stringFault(v, lang, script);
+      if (why && SAFETY_FAULTS.has(why)) tampered.push(`status ${k} (${why})`);
       if (why) badStatus.push(`${k} (${why})`);
       else status[k as StatusKey] = (v as string).trim();
     }
@@ -312,6 +337,7 @@ export function coerceLanguagePack(raw: unknown, o: { stored?: boolean } = {}): 
     if (badStatus.length) notes.push(`status lines dropped, kept English: ${badStatus.join(', ')}`);
     if (unknownStatus.length) notes.push(`unknown status keys ignored: ${unknownStatus.join(', ')}`);
   } else if (r.status !== undefined) notes.push('status was not an object; status lines kept English');
+  if (tampered.length) return { ok: false, error: `unsafe text in the pack: ${tampered.join(', ')}` };
   const value: LanguagePack = { lang, strings, phrases, ...(Object.keys(status).length ? { status } : {}) };
   if (o.stored) {
     const changed = notes.filter((n) => !/missing, kept English/.test(n));
