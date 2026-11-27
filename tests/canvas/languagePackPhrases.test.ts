@@ -21,6 +21,15 @@ describe('pack phrases: exact, never a fragment', () => {
     expect(routePackPhrase('ರದ್ದುಮಾಡು', builtin)).toBe('undo');
   });
 
+  it('a trailing "?" is a question: no action (review sim-2 §5)', () => {
+    const model = pack({ lampOn: ['ದೀಪ ಆನ್ ಮಾಡಿ', 'ಲೈಟ್ ಆನ್', 'ದೀಪ ಆನ್ ಮಾಡಿದ್ದೀಯಾ?'] });
+    expect(routePackPhrase('ಲೈಟ್ ಆನ್?', model)).toBeNull();
+    expect(routePackPhrase('ದೀಪ ಆನ್ ಮಾಡಿ?', model)).toBeNull();
+    expect(routePackPhrase('ದೀಪ ಆನ್ ಮಾಡು ?', builtin)).toBeNull();
+    expect(routePackPhrase('ದೀಪ ಆನ್ ಮಾಡಿದ್ದೀಯಾ', model)).toBeNull(); // a model phrase that is a question is dropped
+    expect(routePackPhrase('ಲೈಟ್ ಆನ್', model)).toBe('lampOn');
+  });
+
   it('a polite word around a phrase is fine', () => {
     expect(routePackPhrase('ದಯವಿಟ್ಟು ದೀಪ ಆನ್ ಮಾಡು', builtin)).toBe('lampOn');
     expect(routePackPhrase('please ಇಟ್ಟುಕೋ', builtin)).toBe('keep');

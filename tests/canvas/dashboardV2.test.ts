@@ -271,7 +271,9 @@ describe('voice routes to the new controls', () => {
   it('a colour or scene word alone, or next to "off", is not a lamp command', () => {
     expect(parseDeviceCommands('blue', devices)).toBeNull();
     expect(parseDeviceCommands('sunset', devices)).toBeNull();
-    expect(intents('turn the lights off after the party')).toEqual([{ deviceId: 'wiz-desk', on: false }, { deviceId: 'wiz-ceiling', on: false }]);
+    // "after the party" is a time (refused, never done now); a scene word next to off is not a scene.
+    expect(parseDeviceCommands('turn the lights off after the party', devices)).toBeNull();
+    expect(intents('turn the party lights off')).toEqual([{ deviceId: 'wiz-desk', on: false }, { deviceId: 'wiz-ceiling', on: false }]);
     expect(intents('set the desk lamp to 50%')).toEqual([{ deviceId: 'wiz-desk', on: true, brightness: 50 }]);
   });
 

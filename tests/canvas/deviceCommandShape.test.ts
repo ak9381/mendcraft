@@ -147,3 +147,62 @@ describe('device parser: short commands still act', () => {
     expect(MUST_ACT.length).toBeGreaterThanOrEqual(40);
   });
 });
+
+// Review sim-2 (N1 leftovers): two lamps and a speaker, as the review ran it.
+const two: DeviceRef[] = [
+  { id: 'desk', label: 'Desk lamp', kind: 'lamp', on: true, brightness: 60, temp: 4000 },
+  { id: 'bed', label: 'Bedroom lamp', kind: 'lamp', on: true, brightness: 60, temp: 4000 },
+  { id: 'spk', label: 'Speaker', kind: 'music', playing: true, volume: 40 },
+];
+const lampsOnly = two.filter((d) => d.kind === 'lamp');
+
+describe('device parser: review sim-2 leftovers never act', () => {
+  const TALK = [
+    'cool', 'Cool!', 'ok cool', 'cool, thanks', 'so cool', 'cool idea', 'pretty cool', 'very cool', 'cool cool',
+    'stay cool', 'cool it', 'cool down', 'warm welcome', 'warm regards', 'nice and warm', 'keep warm', 'warm up the room',
+    'the lamps on', 'lamp on fire', 'lamp on means yes', 'room on the left', 'everything on the list',
+    'make the text lighter', 'lighter text', 'make the background darker', 'darker theme', 'make the plan brighter',
+    'make the kitchen lighter', 'lower your voice', 'lower the blinds', 'dim sum', 'bright idea',
+    'put the lights on the plan', 'set the lights on the east wall',
+    'turn off the lamp no wait', 'turn the lamp on or off', 'turn on the lamp in an hour', 'turn on the lamp at 9',
+    'lamp off maadi beda', 'lights off beda', 'turn the desk lamp on then off',
+    'next step', 'skip this step', 'play a game', 'play chess with me', 'louder voice please',
+  ];
+  it.each(TALK)('%s → nothing (with and without a speaker)', (line) => {
+    expect(parseDeviceCommands(line, two)).toBeNull();
+    expect(parseDeviceCommands(line, lampsOnly)).toBeNull();
+  });
+});
+
+describe('device parser: review sim-2 orders', () => {
+  it.each(['set the volume to 40 percent', 'volume 40 percent', 'volume to 40%', 'speaker 30 percent', 'music at 20 percent'])(
+    '%s → a volume, never a lamp', (line) => {
+      const r = parseDeviceCommands(line, two)!;
+      expect(r.intents.length).toBeGreaterThan(0);
+      expect(r.intents.every((i) => i.deviceId === 'spk' && typeof i.volume === 'number')).toBe(true);
+      expect(parseDeviceCommands(line, lampsOnly)).toBeNull();
+    });
+
+  it('one clause per lamp: desk on, bedroom off (never both off)', () => {
+    const r = parseDeviceCommands('turn the desk lamp on and the bedroom lamp off', two)!;
+    expect(r.intents).toEqual([{ deviceId: 'desk', on: true }, { deviceId: 'bed', on: false }]);
+  });
+
+  it.each([
+    ['make it warmer', 'desk:temp'], ['warmer light', 'desk:temp'], ['make the lights warmer', 'desk:temp'],
+    ['make the desk lamp warm', 'desk:temp'], ['cooler', 'desk:temp'], ['turn on the desk lamp', 'desk:on'],
+    ['desk lamp 40 percent', 'desk:b40'], ['lights out', 'desk:off'], ['all off', 'desk:off'],
+    ['hey mendcraft lamp on', 'desk:on'], ['lamp off please', 'desk:off'], ['set the desk lamp to sunset', 'desk:other'],
+    ['turn on the lamp and play music', 'desk:on'],
+  ])('%s still acts', (line, want) => {
+    const r = parseDeviceCommands(line, two);
+    const i = r?.intents[0];
+    const got = !i ? 'none' : i.temp !== undefined ? `${i.deviceId}:temp` : i.brightness !== undefined ? `${i.deviceId}:b${i.brightness}` : i.sceneId !== undefined ? `${i.deviceId}:other` : i.on !== undefined ? `${i.deviceId}:${i.on ? 'on' : 'off'}` : 'other';
+    expect(got).toBe(want);
+  });
+
+  it('percent is read whole', () => {
+    expect(parseDeviceCommands('desk lamp to 1000 percent', two)!.intents[0].brightness).toBe(1000);
+    expect(parseDeviceCommands('desk lamp 12.5 percent', two)!.intents[0].brightness).toBe(12.5);
+  });
+});

@@ -13,6 +13,7 @@ import { parseConnectDevices } from './pairedRow';
 import { routePlanExtra, type PlanExtra } from './planExtras';
 import { isPlanEditAsk, isPlanEditOnPlanBoard } from './planEdit';
 import { spotifySearchQuery } from './spotifyConnector';
+import { impossibleAttempt } from './tryToBreak';
 import { matchPaletteCommand } from './toolPalette';
 import { parseMusicIntent } from '../music/musicIntent';
 import { parseChangeVoice, type ChangeVoiceIntent } from '../ai/speechVoices';
@@ -146,6 +147,10 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (query && speaker) return { name: 'musicSearch', query, deviceId: speaker.id };
   const result = parseDeviceCommands(text, world.devices, { pointed: world.pointed ?? null });
   if (result) return { name: 'device', result };
+  // A level past a device's limit is still a device line: the device route
+  // refuses it by validation (it never reaches chat).
+  const attempt = impossibleAttempt(text, world.devices);
+  if (attempt && attempt.kind !== 'control') return { name: 'device', result: { intents: [], say: '' } };
   const cd = parseConnectDevices(text);
   if (cd) return { name: 'connectDevices', dashboard: cd.dashboard };
   if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) return { name: 'connectRoom' };

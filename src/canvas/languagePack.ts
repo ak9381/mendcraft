@@ -137,7 +137,7 @@ export function coerceLanguagePack(raw: unknown): Coerced<LanguagePack> {
       // phrase must be long enough not to be a fragment of her words.
       const good = BUILTIN_ONLY.has(key)
         ? arr.filter((v): v is string => typeof v === 'string' && builtin.includes(v))
-        : arr.filter((v): v is string => okString(v) && (builtin.includes(v) || phraseLength(v) >= MIN_PHRASE));
+        : arr.filter((v): v is string => okString(v) && !isQuestionPhrase(v) && (builtin.includes(v) || phraseLength(v) >= MIN_PHRASE));
       if (good.length) phrases[key] = good;
     }
   }
@@ -175,6 +175,12 @@ export function statusText(k: StatusKey, pack: LanguagePack | null): string {
   return pack?.lang === 'kn' ? KN_STATUS[k] : EN_STATUS[k];
 }
 
+/** A phrase that is itself a question: a "?", or the Kannada yes/no ending
+ *  "-ಯಾ" / "-ತಾ" ("ದೀಪ ಆನ್ ಮಾಡಿದ್ದೀಯಾ", did you turn it on). Never an order. */
+function isQuestionPhrase(v: string): boolean {
+  return /[?？]/.test(v) || /(?:ಯಾ|ತಾ)$/.test(v.trim().replace(/[.!]+$/, ''));
+}
+
 /** Script-aware normalize: keep letters, marks (Kannada vowel signs) and
  *  digits of any script, drop punctuation. */
 function normMulti(text: string): string {
@@ -188,6 +194,8 @@ const POLITE_WORDS = new Set(['please', 'ದಯವಿಟ್ಟು', 'ದಯಮ�
  *  the phrase (a polite word around it is fine): a phrase inside a longer
  *  sentence never fires (final review A1). */
 export function routePackPhrase(text: string, pack: LanguagePack): IntentKey | null {
+  // "ಲೈಟ್ ಆನ್?" asks whether it is on: a question never acts (review sim-2 §5).
+  if (/[?？]/.test(text)) return null;
   const words = normMulti(text).split(' ').filter(Boolean);
   while (words.length && POLITE_WORDS.has(words[0])) words.shift();
   while (words.length && POLITE_WORDS.has(words[words.length - 1])) words.pop();
