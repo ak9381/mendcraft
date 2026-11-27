@@ -39,8 +39,9 @@ const okText = (v: unknown, max: number): v is string => typeof v === 'string' &
  *  step. Nothing is trimmed silently: a step with a bad id, a label over 32
  *  characters, a `say` over 80, markup or a repeat is dropped and counted in
  *  `notes`, and so is every step past the third. None left is a refusal. */
-export function coerceNextSteps(raw: unknown): Coerced<{ at: string; steps: NextStep[] }> {
+export function coerceNextSteps(raw: unknown): Coerced<{ at: string; steps: NextStep[]; sig?: string }> {
   if (!isObj(raw)) return { ok: false, error: 'not an object' };
+  if (raw.sig !== undefined && (typeof raw.sig !== 'string' || !SIG_RE.test(raw.sig))) return { ok: false, error: 'bad facts signature' };
   if (!(JOURNEY_STEPS as readonly unknown[]).includes(raw.at)) return { ok: false, error: 'unknown journey step' };
   if (!Array.isArray(raw.steps)) return { ok: false, error: 'steps must be a list' };
   const steps: NextStep[] = [];
@@ -57,13 +58,13 @@ export function coerceNextSteps(raw: unknown): Coerced<{ at: string; steps: Next
     ...(bad ? [`Dropped ${bad} suggestion${bad === 1 ? '' : 's'} that failed the check.`] : []),
     ...(over ? [`Kept the first ${MAX_NEXT_STEPS} suggestions; dropped ${over} more.`] : []),
   ];
-  const value = { at: raw.at as string, steps };
+  const value = { at: raw.at as string, steps, ...(typeof raw.sig === 'string' ? { sig: raw.sig } : {}) };
   return notes.length ? { ok: true, value, notes } : { ok: true, value };
 }
 
 /** The steps prompt: the journey step and three counts. No board content,
  *  no device names, no words of hers. */
-export function stepsPrompt(at: JourneyStep, facts: { devices: number; boards: number; phones: number }): string {
+export function stepsPrompt(at: JourneyStep, facts: StepFacts): string {
   return [
     'You suggest what a person could do next on a smart home canvas she controls by voice.',
     'The canvas can: connect devices and phones, show her devices, build a dashboard for her lamps, speaker and gimbal, play music,'
@@ -78,8 +79,23 @@ export function stepsPrompt(at: JourneyStep, facts: { devices: number; boards: n
 /** Which engine writes the steps: Nano on this device; Gemini only when no
  *  Nano is here and she is online; otherwise none (and no chips). */
 export function stepsEngine<E extends { id: string }>(nano: E | undefined, gemini: E | undefined, online: boolean): E | undefined {
-  if (nano && (nano.id !== 'gemini' || online)) return nano;
-  return online ? gemini : undefined;
+  const e = nano ?? gemini;
+  // A cloud engine (Gemini, or a phone's "Nano" step that is Gemini) needs the network.
+  return e?.id === 'gemini' && !online ? undefined : e;
+}
+
+export interface StepFacts { devices: number; boards: number; phones: number }
+/** A coarse view of the facts the steps were written for (none / one / two /
+ *  more of each): kept steps are asked for again when it changes, not on
+ *  every small change. */
+export function stepsFactsSig(f: StepFacts): string {
+  const b = (n: number) => (n <= 0 ? 0 : n >= 3 ? 3 : Math.floor(n));
+  return `d${b(f.devices)}-b${b(f.boards)}-p${b(f.phones)}`;
+}
+const SIG_RE = /^d[0-3]-b[0-3]-p[0-3]$/;
+/** Kept steps still fit when they were written for the same coarse facts. */
+export function stepsStillFit(kept: { data: Record<string, unknown> } | undefined, sig: string): boolean {
+  return !!kept && kept.data.sig === sig;
 }
 
 /** A CAD extra's reply line that means it actually ran (not "Nothing to …"). */

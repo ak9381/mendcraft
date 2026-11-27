@@ -50,7 +50,7 @@ import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, type Dev
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
-import { presentDeviceRows, PHONE_FRESH_MS, DASHBOARD_TITLE, type ConnectedInput, type DeviceRow } from './connectedDevices';
+import { connectedDeviceRows, PHONE_FRESH_MS, DASHBOARD_TITLE, type ConnectedInput, type DeviceRow } from './connectedDevices';
 import { connectorState, createConnectorGate, createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type ApprovedConnector, type BridgeStatus, type LampConnector } from './wizDevices';
 import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR_SENT_WORDS, connectorArtifactId, lampConnectorKey, parseConnectorReply, WIZ_LAMP_IDENTITY } from './connectorTurn';
 import { isPrivateIPv4 } from '../devices/connector';
@@ -131,8 +131,9 @@ import { createWarmBar } from './warmBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney, isDevicesBoard, journeyStepOf, type JourneyStep } from './journey';
-import { coerceNextSteps, createNextStepChips, planExtraRan, STEPS_CONSTRAINT, stepsEngine, stepsPrompt, type NextChips, type ShownSteps } from './nextSteps';
+import { coerceNextSteps, createNextStepChips, planExtraRan, STEPS_CONSTRAINT, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type NextChips, type ShownSteps } from './nextSteps';
 import { extractJson } from '../ai/cloudJson';
+import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from './devicesTurn';
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
@@ -293,8 +294,8 @@ export const ROOM_MAX_W = 1280;
 export const ROOM_WIDE_MAX_W = 1680;
 /** Re-opening the code for one more phone failed; the paired phones are fine. */
 export const REPAIR_FAILED_LINE = 'Couldn’t reopen pairing — your phones are still connected.';
-/** The devices board is laid out by Gemini: offline there is no such turn. */
-export const DEVICES_OFFLINE_LINE = 'Showing your devices on a board needs Gemini, and you are offline. Nothing was generated.';
+/** The Nano devices draft's route line (nothing leaves this device). */
+export const NANO_DEVICES_ROUTE = 'Nano · on device — nothing left this device';
 /** A devices reply without the live table (it may not write rows itself). */
 export const NO_LIVE_TABLE_LINE = 'The reply had no live devices table. Nothing was generated.';
 /** A new board for "show my devices" until the model names it. */
@@ -1375,31 +1376,39 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Plan boards whose accessibility check really ran (the journey's "checked"). */
   const checkedBoards = new Set<string>();
   let stepsAsking = false;
+  /** An approved change that came while steps were being written: asked once more after. */
+  let stepsAgain: string | null = null;
   /** After an approved change: the suggestions for the step that board is now
    *  at — kept ones if this step has them, else written once by Nano (Gemini
    *  only with no Nano here, online). No engine: no chips. A bad reply is
    *  refused and logged; nothing is made up in its place. */
   function approvedChange(frameId: string): void { setTimeout(() => { void requestSteps(frameId); }, 0); }
   async function requestSteps(frameId: string): Promise<void> {
-    if (phoneShell || stepsAsking) return;
+    if (phoneShell) return;
+    if (stepsAsking) { stepsAgain = frameId; return; }
     const at = journeyAt(frameId);
     if (!at) return;
-    if (stepArtifacts.has(at)) { nextChips?.refresh(); return; }
+    const facts = { devices: Object.keys(store.all()).length, boards: reg.list().length, phones: pairFirst.phones().length };
+    const sig = stepsFactsSig(facts);
+    // Kept steps written for the same coarse facts stand; otherwise they
+    // show until fresh ones arrive.
+    nextChips?.refresh();
+    if (stepsStillFit(stepArtifacts.get(at), sig)) return;
     const engine = stepsEngine(engineFor('nano', 'steps'), engineFor('gemini', 'steps'), net.isOnline());
     if (!engine) return;
     stepsAsking = true;
     const log = (line: string) => panels.forEngine(engine.id).log('note', line);
     try {
-      const prompt = stepsPrompt(at, { devices: Object.keys(store.all()).length, boards: reg.list().length, phones: pairFirst.phones().length });
+      const prompt = stepsPrompt(at, facts);
       const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200 });
       const raw = extractJson(full);
       // The step is ours, not the reply's: what she is at decides where they show.
-      const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at } : raw);
+      const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at, sig } : raw);
       if (!r.ok) { log(`Next steps refused: ${r.error}. Nothing was generated.`); return; }
       for (const n of r.notes ?? []) log(n);
       const by: ArtifactBy = replayRouteIn(engine.routeLine) ? 'replay' : engine.id;
       const prev = stepArtifacts.get(at);
-      const art = coerceArtifact({ id: artifactId('steps', at), kind: 'steps', v: (prev?.v ?? 0) + 1, title: `Next steps: ${at}`, data: r.value, by, at: Date.now(), status: 'approved' });
+      const art = coerceArtifact({ id: artifactId('steps', at), kind: 'steps', v: (prev?.v ?? 0) + 1, title: `Next steps: ${at}`, data: r.value, by, at: Date.now(), status: 'suggested' });
       if (!art.ok) { log(`Next steps refused: ${art.error}. Nothing was generated.`); return; }
       stepArtifacts.set(at, art.value);
       opts.onSteps?.(art.value);
@@ -1407,7 +1416,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       nextChips?.refresh();
     } catch (e) {
       log(`Next steps didn’t arrive: ${e instanceof Error ? e.message : String(e)}`);
-    } finally { stepsAsking = false; }
+    } finally {
+      stepsAsking = false;
+      const again = stepsAgain;
+      stepsAgain = null;
+      if (again) void requestSteps(again);
+    }
   }
   /** The kept suggestions for a journey step, with who wrote them. */
   function stepsFor(at: JourneyStep): ShownSteps | null {
@@ -1675,9 +1689,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (a.name === 'form.submit') {
         const r = formIntents(surfaces[fid], a.context?.formId, a.context?.values ?? ext(a)?.values, deviceOrStand);
         if (!r) { say('Form submitted.'); return; }
-        if ('refusal' in r) { say(r.refusal); return; }
-        for (const i of r.intents) void actQueue.act(i);
-        say('Sent.');
+        // The same path as a tile press: a refusal is said and shown on the
+        // device's tile; each intent goes down that device's lane.
+        if ('refusal' in r) { applyPress(r); return; }
+        for (const i of r.intents) applyPress({ intent: i, deviceId: i.deviceId });
         return;
       }
       // A visual tile's data-action: only a key the approved plan binds runs
@@ -2974,19 +2989,21 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** "show my devices": Gemini lays out a board around a live devices table
    *  (rows come from what each device reports, never from the reply), and
-   *  she reviews it like any board. Offline there is no such turn: Nano only
-   *  picks devices for a dashboard (nanoPlan.ts). */
+   *  she reviews it like any board. Offline (or with no Gemini) Nano names
+   *  the board and picks the columns in one tiny constrained reply
+   *  (devicesTurn.ts), reviewed the same way. */
   async function devicesTurn(utterance: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     if (turnBusy) return;
-    if (!net.isOnline()) { say(DEVICES_OFFLINE_LINE, { speak: true }); return; }
-    if (!engineFor('gemini', 'devices')) { noModel('gemini'); return; }
+    const cloud = net.isOnline() && !!engineFor('gemini', 'devices');
+    const nano = cloud ? undefined : engineFor('nano', 'devices');
+    if (!cloud && (!nano || (nano.id === 'gemini' && !net.isOnline()))) { noModel('nano'); return; }
     const frameId = devicesTarget(focusId ?? lastFocus);
     if (focusId !== frameId) { sync(); void focus(frameId); }
     turnBusy = true;
     turnNotes = [];
     try {
-      const out = await streamTurn(frameId, 'gemini', utterance, 'devices', 'dashboard', undefined, surfaces[frameId] ?? null,
+      const out = nano ? await nanoDevicesTurn(utterance, nano) : await streamTurn(frameId, 'gemini', utterance, 'devices', 'dashboard', undefined, surfaces[frameId] ?? null,
         () => { void devicesTurn(utterance); });
       if (!out) { settleSwarm(); ghost(frameId, null); return; }
       if (!isDevicesBoard(out.plan)) {
@@ -2997,6 +3014,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       await proposePlan(frameId, utterance, out.plan, out.si, `Show your devices: ${out.plan.title}`, 'guess');
     } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
+  }
+
+  /** The Nano devices draft: title and columns only; the board is built in code. */
+  async function nanoDevicesTurn(utterance: string, engine: SurfaceEngine): Promise<{ plan: SurfacePlan; si: SentInfo } | null> {
+    const routeOf = (): string => engine.routeLine ?? NANO_DEVICES_ROUTE;
+    const si: SentInfo = { engine: engine.id, prompt: nanoDevicesPrompt(utterance, liveDeviceRows()), sent: engine.id === 'gemini' ? 'your words, device names with their status' : null, routeLine: routeOf(), sim: engine.sim };
+    aiSent(utterance, si, { task: 'dashboard', defer: true, swarm: false });
+    let full = '';
+    try { full = await engine.stream(si.prompt, () => {}, { shape: 'json', constraint: NANO_DEVICES_CONSTRAINT, maxChars: 400, onCloudSend: () => cloudSent(si), onCloudRetract: () => cloudRetract(si) }); }
+    catch (e) {
+      settleSwarm();
+      const why = `The devices board didn’t arrive. ${e instanceof Error ? e.message : String(e)}`;
+      panels.forEngine(engine.id).fail(why);
+      say(why, { speak: true });
+      return null;
+    }
+    si.routeLine = routeOf(); // a replay's label follows the reply it really took
+    const r = devicesPlanFromNano(full);
+    if (!r.ok) {
+      settleSwarm();
+      const why = `Refused the devices board: ${r.error} Nothing was generated.`;
+      panels.forEngine(engine.id).fail(why);
+      say(why, { speak: true });
+      return null;
+    }
+    for (const n of r.notes ?? []) turnNotes.push(n);
+    return { plan: r.value, si };
   }
 
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
@@ -3278,7 +3322,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         try { ok = !!live.applyPlanDoc?.(value.doc, summary); } finally { planEditBy = null; }
         if (!ok) panels.forEngine(ranId).fail('the plan board refused the edit after Approve');
         finish(true, ok);
-        if (ok) { nextChips?.refresh(); bodyLanguage('yes'); }
+        if (ok) { nextChips?.refresh(); approvedChange(frameId); bodyLanguage('yes'); }
       };
       const card = renderProposalCard(document, {
         id: `p-${frameId}`, title: summary, youAsked: text, status: 'changed',
@@ -4977,8 +5021,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
   }
   const phoneAnswering = (platform: string): boolean => Date.now() - (phoneSeenAt.get(platform) ?? -Infinity) <= PHONE_FRESH_MS;
-  /** The rows a live devices table shows now (only devices that are here). */
-  const liveDeviceRows = (): DeviceRow[] => presentDeviceRows(connectedInput());
+  /** The rows a live devices table shows now: every row connectedDeviceRows gives. */
+  const liveDeviceRows = (): DeviceRow[] => connectedDeviceRows(connectedInput());
   /** What each live table last showed, per board: a change re-renders it. */
   const liveShown = new Map<string, string>();
   /** Rows changed (a phone joined or left, a lamp answered, a speaker came):
@@ -6231,7 +6275,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         id: `p-morph-${Date.now()}`, title: summary, youAsked: summary, status: 'changed',
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: 'Gemini · one tile', lineId: 'custom', whyLabel: 'Why online', whatWasSent: 'your redacted words and one tile', technicalLine: 'Gemini · one tile' },
       }, {
-        onKeep: () => { reviewDialog.close(); const ok = applyMorph(fid, patched, summary, path); done(ok); if (ok) bodyLanguage('yes'); },
+        onKeep: () => { reviewDialog.close(); const ok = applyMorph(fid, patched, summary, path); done(ok); if (ok) { approvedChange(fid); bodyLanguage('yes'); } },
         onDrop: () => { reviewDialog.close(); done(false); },
       });
       showReview({

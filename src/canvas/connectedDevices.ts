@@ -79,15 +79,6 @@ export function connectedDeviceRows(i: ConnectedInput): DeviceRow[] {
   return rows;
 }
 
-/** The rows a live devices table shows: only devices that are here (a paired
- *  phone, a lamp this canvas knows, the speaker), never this laptop (it is the
- *  canvas itself) and never a "Not paired" / "None found yet" stand-in. The
- *  ticks and words are connectedDeviceRows' own. */
-export function presentDeviceRows(i: ConnectedInput): DeviceRow[] {
-  const rows = connectedDeviceRows(i).filter((r) => r.kind !== 'Laptop');
-  return rows.filter((r) => !(r.kind === 'Phone' && r.status === 'Not paired') && !(r.kind === 'Lamp' && !i.lamps.length));
-}
-
 /** A table's fields from untrusted data: only device/status/kind, each once;
  *  none (or none left) means device and status. */
 export function coerceDeviceFields(raw: unknown): { fields: DeviceField[]; dropped: number } {

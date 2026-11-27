@@ -216,8 +216,6 @@ interface Models {
   handAdapt?: TextGenModel | null;
   /** Ramble condenser (ONLY_ON_DEVICE; the raw ramble never rides to the cloud). */
   condense?: TextGenModel | null;
-  /** Next-step chips: Nano picks ids from a fixed list (ONLY_ON_DEVICE; never cloud). */
-  nextSteps?: TextGenModel | null;
   /** Server prompt-template model for the big cloud jobs (may be null). */
   promptTemplate?: TemplateGenModel | null;
   /** Cloud TTS model (spoken replies in her language); null if unsupported. */
@@ -264,7 +262,6 @@ export interface ModelOverrides {
   a11yExplainHedge?: TextGenModel | null;
   handAdapt?: TextGenModel | null;
   condense?: TextGenModel | null;
-  nextSteps?: TextGenModel | null;
   promptTemplate?: TemplateGenModel | null;
   tts?: AudioGenModel | null;
   deviceSee?: MultimodalGenModel | null;
@@ -1234,7 +1231,6 @@ async function ensureModels(): Promise<Models | null> {
       a11yExplainHedge: testOverrides.a11yExplainHedge ?? null,
       handAdapt: testOverrides.handAdapt ?? null,
       condense: testOverrides.condense ?? null,
-      nextSteps: testOverrides.nextSteps ?? null,
       promptTemplate: testOverrides.promptTemplate ?? null,
       tts: testOverrides.tts ?? null,
       deviceSee: testOverrides.deviceSee ?? null,
@@ -1453,16 +1449,6 @@ async function initFirebase(): Promise<Models | null> {
         promptOptions: { responseConstraint: CONDENSE_CONSTRAINT },
       },
     });
-    // Next-step chips: ONLY_ON_DEVICE with no cloud params — the pick is a
-    // convenience, so a missing Nano means the rule list, never a cloud call.
-    const nextSteps = getGenerativeModel(ai, { // queued per call in pickNextStepsOnDevice, with its own short max run
-      mode: InferenceMode.ONLY_ON_DEVICE,
-      onDeviceParams: {
-        createOptions: ON_DEVICE_CREATE_OPTIONS,
-        promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
-      },
-    });
-
     // Server prompt-template model (@beta on the web SDK). Only used when a
     // template ID is set in Remote Config; otherwise the big jobs use the inline
     // prompt above. Guarded so an SDK without it never breaks init.
@@ -1589,7 +1575,7 @@ async function initFirebase(): Promise<Models | null> {
     cached = {
       cadTool, cadToolCloud, copilotAnswer, copilotAnswerHedge, copilotEmail, copilotEmailHedge, copilotMaterials, copilotMaterialsHedge,
       canvasCloud, canvasCloudHedge,
-      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, nextSteps, promptTemplate, tts,
+      intent, template, verify, fusion, fusionLang, langDetect, deixis, deixisCloud, intentCloud, verifyCloud, fusionCloud, a11yExplain, a11yExplainHedge, handAdapt, condense, promptTemplate, tts,
       deviceSee, deviceSeeCloud, effectCheck, effectCheckCloud, connectorWriter, refGenerate,
     };
     return cached;
@@ -1625,7 +1611,6 @@ function blankModels(): Models {
     a11yExplainHedge: null,
     handAdapt: null,
     condense: null,
-    nextSteps: null,
     promptTemplate: null,
     tts: null,
     deviceSee: null,
@@ -1666,7 +1651,6 @@ async function withAppleModels(base: Models | null): Promise<Models | null> {
     fusionLang: appleTextModel(fusionConstraint, plugin),
     handAdapt: appleTextModel(PROFILE_CONSTRAINT, plugin),
     condense: appleTextModel(CONDENSE_CONSTRAINT, plugin),
-    nextSteps: appleTextModel(NEXT_STEPS_CONSTRAINT, plugin),
     cadTool: appleTextModel(CAD_TOOL_CONSTRAINT, plugin),
   };
   return { ...(base ?? blankModels()), ...overlay };
@@ -2557,71 +2541,6 @@ export async function condenseUtterance(
   } catch (err) {
     noteError('condense', err);
     return null;
-  }
-}
-
-/** Prompt API responseConstraint for the next-step pick. */
-export const NEXT_STEPS_CONSTRAINT: Record<string, unknown> = {
-  type: 'object',
-  properties: { ids: { type: 'array', items: { type: 'string' } } },
-  required: ['ids'],
-};
-/** A pick is a convenience that runs while the page is idle, so it gets a
- *  generous budget — the rule chips are already on screen meanwhile. */
-export const NEXT_STEPS_TIMEOUT_MS = 8000;
-
-/**
- * NEXT-STEP CHIPS (on-device only). Nano reorders a fixed list of step ids;
- * the caller (canvas/nextSteps) parses the reply strictly. Same posture as
- * condenseUtterance: ONLY_ON_DEVICE model, gated on Nano being ready, source
- * re-checked. Null on any miss — the caller shows the rule list, labelled so.
- */
-export async function pickNextStepsOnDevice(prompt: string, opts?: { timeoutMs?: number }): Promise<string | null> {
-  const t0 = Date.now();
-  const models = await ensureModels();
-  if (!models?.nextSteps) return null;
-  if (deviceModelStatus === 'idle') await checkDeviceAvailability();
-  if (deviceModelStatus !== 'ready') return null;
-  // Never compete with a board turn (or anything else) for the one model.
-  if (!testOverrides && !nanoQueue.idle()) return null;
-  const budget = opts?.timeoutMs ?? NEXT_STEPS_TIMEOUT_MS;
-  // A per-call model with its own session: when the pick runs out of time (or
-  // fails) that session is destroyed, so Nano is not left generating a reply
-  // nobody will read while the next real request waits behind it.
-  const session = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  let own: TextGenModel | null = null;
-  let done = false;
-  try {
-    let response: ModelResponse;
-    if (testOverrides) {
-      ({ response } = await withTimeout(models.nextSteps.generateContent(prompt), budget, 'next steps'));
-    } else {
-      // Never waits in line, and holds the model's slot for its budget at most.
-      ({ response } = await nanoQueue.run(() => {
-        own = onDeviceModelFor({
-          createOptions: { ...ON_DEVICE_CREATE_OPTIONS, ...(session ? { signal: session.signal } : {}) },
-          promptOptions: { responseConstraint: NEXT_STEPS_CONSTRAINT },
-        });
-        return withTimeout(own.generateContent(prompt), budget, 'next steps');
-      }, { maxWaitMs: 0 }));
-    }
-    done = true;
-    if (sourceOf(response) !== 'on-device') {
-      noteError('next steps', new Error('resolved off-device; using the rule list'));
-      return null;
-    }
-    recordInference('on-device', 'next-steps', Date.now() - t0);
-    return response.text();
-  } catch (err) {
-    // A slow or busy model is expected here and the rule chips already show:
-    // not an error worth a console warning on every load.
-    if (err instanceof NanoQueueSkipped || /timed out/i.test(err instanceof Error ? err.message : '')) return null;
-    noteError('next steps', err);
-    return null;
-  } finally {
-    // Timed out or failed: stop the session. A finished pick's session is
-    // dropped too — a chip pick is not worth keeping a session alive for.
-    if (own) { if (!done) nanoTrace('next steps: stopped (timed out or failed)'); session?.abort(); destroySdkSession(own); }
   }
 }
 

@@ -16,6 +16,10 @@ export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
 export const ARTIFACT_BY = ['nano', 'gemini', 'apple', 'person', 'replay'] as const;
 export type ArtifactBy = (typeof ARTIFACT_BY)[number];
 
+export type ArtifactStatus = 'approved' | 'suggested';
+/** The one status each kind is stored with. */
+export const statusOf = (kind: ArtifactKind): ArtifactStatus => (kind === 'steps' ? 'suggested' : 'approved');
+
 export interface Artifact {
   /** /^[a-z0-9][a-z0-9-]{0,63}$/, starting with `<kind>-`. */
   id: string;
@@ -28,8 +32,10 @@ export interface Artifact {
   by: ArtifactBy;
   /** ms since the epoch. */
   at: number;
-  /** 'proposed' exists only in the (undeployed) Firestore draft. */
-  status: 'approved';
+  /** 'proposed' exists only in the (undeployed) Firestore draft.
+   *  'suggested' is the next-step chips' own status (and theirs only): they
+   *  are never approved, because a chip only says her words to run(). */
+  status: ArtifactStatus;
 }
 
 /** Same cap as PLAN_DOC_MAX_CHARS. */
@@ -145,7 +151,7 @@ function coerceSteps(data: Record<string, unknown>): Coerced<Record<string, unkn
   if (!r.ok) return bad(`the suggestions failed their check: ${r.error}`);
   // A stored set is the one she was shown: a step that no longer passes is not quietly dropped.
   if (r.notes?.length) return bad('a suggestion failed its check');
-  return { ok: true, value: { at: r.value.at, steps: r.value.steps } };
+  return { ok: true, value: { at: r.value.at, steps: r.value.steps, ...(r.value.sig ? { sig: r.value.sig } : {}) } };
 }
 
 function coerceData(kind: ArtifactKind, data: Record<string, unknown>): Coerced<Record<string, unknown>> {
@@ -176,7 +182,7 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (typeof title !== 'string' || title.length > ARTIFACT_TITLE_MAX || /[<>]/.test(title)) return bad('bad title');
   if (!ARTIFACT_BY.includes(by as ArtifactBy)) return bad('unknown maker');
   if (!fin(at) || at < 0) return bad('bad time');
-  if (status !== 'approved') return bad('not approved');
+  if (status !== statusOf(kind as ArtifactKind)) return bad(kind === 'steps' ? 'suggestions are stored as suggested' : 'not approved');
   if (!isObj(data)) return bad('no data');
   if (k === 'board' && !FRAME_ID_RE.test(id.slice('board-'.length))) return bad('bad board id');
   const d = coerceData(k, data);
@@ -184,5 +190,5 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
   if (k === 'connector' && id !== `connector-${slug((d.value.connector as { key: string }).key)}`) return bad('the connector id does not match its device');
   if (k === 'steps' && id !== `steps-${String(d.value.at)}`) return bad('the suggestions id does not match their step');
-  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' }, ...(d.notes?.length ? { notes: d.notes } : {}) };
+  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: statusOf(k) }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }

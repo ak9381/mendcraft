@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordedEngine } from '../helpers/recordedEngine';
 import { createNanoQueue, NanoQueueSkipped } from '../../src/ai/nanoQueue';
 import { APP_CHECK_403_LINE, CloudCallError, cloudCallError, explainCloudFailure } from '../../src/ai/cloudErrors';
-import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_LOAD_MAX_MS, ON_DEVICE_MAX_RUN_MS, STILL_LOADING, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
+import { STEPS_CONSTRAINT } from '../../src/canvas/nextSteps';
+import { WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptCanvasReply, ON_DEVICE_LOAD_MAX_MS, ON_DEVICE_MAX_RUN_MS, STILL_LOADING, onNanoBusyHandoff, queueOnDevice, setModelsForTest, streamCanvasPlanOrThrow, streamOnDevice, warmBoardOnDevice, type OnDeviceModelParams, type TextGenModel } from '../../src/ai/hybrid';
 import { geminiFailLine, GHOST_EVERY_MS, NANO_STILL_LOADING, nanoLoadView, runSurfaceTurn, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
@@ -964,7 +965,7 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
       'board (room, no devices)': nanoPlanConstraint([]),
       'board as built for a turn': buildNanoPlanRequest(req).constraint,
       'warm-up': WARM_CONSTRAINT,
-      'next steps': NEXT_STEPS_CONSTRAINT,
+      'next steps': STEPS_CONSTRAINT,
       intent: PLAN_OP_CONSTRAINT,
       verify: PLAN_VERIFY_CONSTRAINT,
       fusion: buildFusionConstraint(PLAN_OP_CONSTRAINT),
@@ -980,7 +981,7 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
     const { readFileSync } = await import('node:fs');
     const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
     const used = new Set([...hybrid.matchAll(/responseConstraint: ([A-Za-z_.]+)/g)].map((m) => m[1]));
-    expect([...used].sort()).toEqual(['CAD_TOOL_CONSTRAINT', 'CONDENSE_CONSTRAINT', 'DEIXIS_CONSTRAINT', 'EFFECT_CONSTRAINT', 'IDENTIFY_CONSTRAINT', 'NEXT_STEPS_CONSTRAINT', 'PROFILE_CONSTRAINT', 'WARM_CONSTRAINT', 'fusionConstraint', 'modeAi.opConstraint', 'modeAi.verifyConstraint', 'req.constraint'].sort());
+    expect([...used].sort()).toEqual(['CAD_TOOL_CONSTRAINT', 'CONDENSE_CONSTRAINT', 'DEIXIS_CONSTRAINT', 'EFFECT_CONSTRAINT', 'IDENTIFY_CONSTRAINT', 'PROFILE_CONSTRAINT', 'WARM_CONSTRAINT', 'fusionConstraint', 'modeAi.opConstraint', 'modeAi.verifyConstraint', 'req.constraint'].sort());
   });
 
   it('the checker finds a keyword at any depth, but not a field that merely has that name', () => {
@@ -1449,16 +1450,6 @@ describe('re-review fixes', () => {
     await runSurfaceTurn(req, { ...gemini, stream: async (prompt) => { seen.push(prompt); return GEMINI_OK; } }, { onSent: (s) => opened.push(s) }, { sent: mine, deviceIdSession: createDeviceIdSession() });
     expect(opened.at(-1)).toBe(mine);
     expect(seen).toEqual(['custom prompt']);
-  });
-
-  it('F3/F4: a next-step pick and a warm-up that run out of time stop their own sessions', async () => {
-    const { readFileSync } = await import('node:fs');
-    const hybrid = readFileSync(new URL('../../src/ai/hybrid.ts', import.meta.url), 'utf8');
-    const pick = hybrid.slice(hybrid.indexOf('export async function pickNextStepsOnDevice('), hybrid.indexOf('// ADD A DEVICE'));
-    expect(pick).toContain('own = onDeviceModelFor({'); // a per-call model, not the shared one
-    expect(pick).toMatch(/createOptions: \{ \.\.\.ON_DEVICE_CREATE_OPTIONS, \.\.\.\(session \? \{ signal: session\.signal \}/);
-    expect(pick).toMatch(/finally \{[\s\S]*session\?\.abort\(\); destroySdkSession\(own\);/);
-    expect(pick).toContain('{ maxWaitMs: 0 }');
   });
 
   it('warm-up: create() gets a long ceiling of its own; the tiny prompt gets 5 s once the session exists', async () => {

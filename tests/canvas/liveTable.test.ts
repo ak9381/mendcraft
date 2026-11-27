@@ -7,7 +7,9 @@ import { readFileSync } from 'node:fs';
 import { mountCanvas, type CanvasHandle } from '../../src/canvas/canvasApp';
 import { joinCanvasDoc } from '../../src/canvas/canvasPersistence';
 import { coerceSurfacePlan, expandPlan, type SurfacePlan } from '../../src/canvas/surfacePlan';
-import { coerceDeviceFields, liveRows, presentDeviceRows, TICK, type DeviceRow } from '../../src/canvas/connectedDevices';
+import { coerceDeviceFields, liveRows, TICK, type DeviceRow } from '../../src/canvas/connectedDevices';
+import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from '../../src/canvas/devicesTurn';
+import { unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { gateMessages } from '../../src/canvas/gate';
 import { CATALOG_SCHEMAS } from '../../src/canvas/catalogApi';
 import { isDevicesBoard } from '../../src/canvas/journey';
@@ -59,10 +61,21 @@ describe('a live devices table', () => {
     expect(liveRows('devices', ['kind', 'device'], ROWS)).toEqual([['Phone', `${TICK} iPhone`], ['Lamp', 'Lamp']]);
   });
 
-  it('only devices that are here: no laptop row, no "Not paired" or "None found yet" stand-ins, SIM never ticked', () => {
-    const rows = presentDeviceRows({ laptop: true, iphone: { sim: true, gimbal: null }, android: null, lamps: [], speaker: null });
-    expect(rows).toEqual([{ device: 'iPhone', status: 'SIM · paired · Gimbal: no stand', ok: false, kind: 'Phone' }]);
-    expect(presentDeviceRows({ lamps: [{ label: 'Lamp', state: 'answering' }] })).toEqual([{ device: 'Lamp', status: 'WiZ · answering', ok: true, kind: 'Lamp' }]);
+  it('offline, Nano names the board and picks the columns; the board is built in code around the live table', () => {
+    expect(unsupportedConstraintKeywords(NANO_DEVICES_CONSTRAINT)).toEqual([]);
+    const rec = JSON.parse(readFileSync('tests/fixtures/replies/nano.devices.json', 'utf8')) as { reply: string };
+    const r = devicesPlanFromNano(rec.reply);
+    expect(r.ok && r.value).toEqual({ kind: 'room', title: 'My devices', tiles: [{ type: 'table', title: 'Devices', columns: ['Device', 'Kind', 'Status'], rows: [], sortable: false, source: 'devices', fields: ['device', 'kind', 'status'] }] });
+    expect(r.ok && isDevicesBoard(r.value)).toBe(true);
+    expect(devicesPlanFromNano('{"fields":["device"]}').ok).toBe(false);
+    expect(devicesPlanFromNano('{"title":"A very long board title here","fields":[]}').ok).toBe(false);
+    expect(devicesPlanFromNano('not json').ok).toBe(false);
+    const p = nanoDevicesPrompt('show my devices', ROWS);
+    expect(p).toContain('- iPhone (Phone): Paired · Gimbal: docked');
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toMatch(/const out = nano \? await nanoDevicesTurn\(utterance, nano\) :/);
+    // Either way the reply goes through the same gate and the same review.
+    expect(app).toMatch(/if \(!isDevicesBoard\(out\.plan\)\) \{[\s\S]{0,300}await proposePlan\(frameId, utterance, out\.plan, out\.si/);
   });
 
   it('the devices reply fixture parses to a live board; its made-up rows and its ip field never survive', () => {
@@ -92,7 +105,9 @@ describe('a live devices table', () => {
     const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     expect(app).toContain("case 'showDevices': void devicesTurn(text); return true;");
     expect(app).toMatch(/streamTurn\(frameId, 'gemini', utterance, 'devices'/);
-    expect(app).not.toMatch(/connectedDevicesPlan|ensureDevicesBoard|refreshDevicesBoard|storedDoc\(/);
+    expect(app).not.toMatch(/connectedDevicesPlan|ensureDevicesBoard|refreshDevicesBoard|storedDoc\(|presentDeviceRows/);
+    // The live table shows every row connectedDeviceRows gives (laptop, "Not paired", "None found yet").
+    expect(app).toContain('const liveDeviceRows = (): DeviceRow[] => connectedDeviceRows(connectedInput());');
   });
 });
 
@@ -113,10 +128,11 @@ describe('the live table on the canvas', () => {
       devices: { 'wiz-lamp-1': { cls: 'lamp', on: false, brightness: 50, sim: true } }, deviceLabels: { 'wiz-lamp-1': 'Lamp' },
     });
     const rows = (): string[] => [...root.querySelectorAll('mc-table-tile')].flatMap((t) => [...(t.shadowRoot?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent?.trim()).join(' | ')));
-    await vi.waitFor(() => expect(rows()).toEqual(['Lamp | SIM lamp']), { timeout: 4000 });
+    const before = [`${TICK} Laptop | This canvas`, 'iPhone | Not paired', 'Nothing phone | Not paired', 'Lamp | SIM lamp'];
+    await vi.waitFor(() => expect(rows()).toEqual(before), { timeout: 4000 });
     // A speaker joins: no turn, no review — the table follows what the devices report.
     handle.store.add('speaker-sim', { cls: 'music', on: false, brightness: 0, playing: false, sim: true });
-    await vi.waitFor(() => expect(rows()).toEqual(['Lamp | SIM lamp', 'Speaker | SIM · simulated speaker']), { timeout: 4000 });
+    await vi.waitFor(() => expect(rows()).toEqual([...before, 'Speaker | SIM · simulated speaker']), { timeout: 4000 });
     // The rows are never stored with the board.
     handle.save();
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));

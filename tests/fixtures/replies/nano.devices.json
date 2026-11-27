@@ -1,0 +1,10 @@
+{
+  "engine": "nano",
+  "model": "none (hand-written)",
+  "turnKind": "devices",
+  "recordedAt": "2026-11-27T09:30:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. Nano's constrained devices reply: a title and the table's columns. Re-record from a live run.",
+  "reply": "{\"title\": \"My devices\", \"fields\": [\"device\", \"kind\", \"status\"]}"
+}

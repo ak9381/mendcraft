@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  coerceNextSteps, createNextStepChips, MAX_NEXT_STEPS, stepsEngine, stepsPrompt, type ShownSteps,
+  coerceNextSteps, createNextStepChips, MAX_NEXT_STEPS, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type ShownSteps,
 } from '../../src/canvas/nextSteps';
 import { coerceArtifact } from '../../src/artifacts/artifact';
 import type { JourneyStep } from '../../src/canvas/journey';
@@ -31,9 +31,19 @@ describe('coerceNextSteps', () => {
     expect(coerceNextSteps({ at: 'devices', steps: [step('Bad Id')] }).ok).toBe(false);
     expect(coerceNextSteps('{"steps":[]}').ok).toBe(false);
   });
-  it('is the steps artifact validator, and the id must name the step', () => {
-    const art = { id: 'steps-devices', kind: 'steps', v: 1, title: 'Next steps: devices', by: 'replay', at: 1, status: 'approved', data: { at: 'devices', steps: [step('a')] } };
-    expect(coerceArtifact(art).ok).toBe(true);
+  it('is the steps artifact validator: stored as suggested (never approved), and the id must name the step', () => {
+    const art = { id: 'steps-devices', kind: 'steps', v: 1, title: 'Next steps: devices', by: 'replay', at: 1, status: 'suggested', data: { at: 'devices', steps: [step('a')], sig: 'd1-b1-p0' } };
+    const ok = coerceArtifact(art);
+    expect(ok.ok && ok.value.status).toBe('suggested');
+    expect(ok.ok && ok.value.data.sig).toBe('d1-b1-p0');
+    expect(coerceArtifact({ ...art, status: 'approved' }).ok).toBe(false);
+    expect(coerceArtifact({ ...art, data: { ...art.data, sig: 'anything' } }).ok).toBe(false);
+    // Every other kind is still approved only.
+    const board = { id: 'board-f1', kind: 'board', v: 1, title: 'Desk', by: 'gemini', at: 1, status: 'suggested', data: { frame: { kind: 'room', title: 'Desk', rect: { x: 0, y: 0, w: 10, h: 10 }, pinned: false }, plan: { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'T', value: '1' }] } } };
+    expect(coerceArtifact(board).ok).toBe(false);
+    expect(coerceArtifact({ ...board, status: 'approved' }).ok).toBe(true);
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toMatch(/kind: 'steps', v: \(prev\?\.v \?\? 0\) \+ 1, title: `Next steps: \$\{at\}`, data: r\.value, by, at: Date\.now\(\), status: 'suggested' \}/);
     expect(coerceArtifact({ ...art, id: 'steps-dashboard' }).ok).toBe(false);
     expect(coerceArtifact({ ...art, data: { at: 'devices', steps: [step('a', 'x'.repeat(33))] } }).ok).toBe(false);
   });
@@ -42,6 +52,28 @@ describe('coerceNextSteps', () => {
     expect(p).toContain('"devices" step');
     expect(p).toContain('Devices here: 3. Boards: 2. Paired phones: 2.');
     expect(p).toMatch(/\{"steps":\[\{"id":string,"label":string,"say":string\}\]\}/);
+  });
+});
+
+describe('when kept steps are asked for again', () => {
+  it('the cache key holds a coarse view of the facts: a new phone or device re-asks, a fourth board does not', () => {
+    const sig = stepsFactsSig({ devices: 1, boards: 1, phones: 0 });
+    expect(sig).toBe('d1-b1-p0');
+    expect(stepsFactsSig({ devices: 2, boards: 1, phones: 0 })).not.toBe(sig);
+    expect(stepsFactsSig({ devices: 1, boards: 1, phones: 2 })).not.toBe(sig);
+    expect(stepsFactsSig({ devices: 9, boards: 4, phones: 3 })).toBe(stepsFactsSig({ devices: 3, boards: 7, phones: 5 }));
+    expect(stepsStillFit({ data: { at: 'devices', steps: [], sig } }, sig)).toBe(true);
+    expect(stepsStillFit({ data: { at: 'devices', steps: [], sig } }, 'd2-b1-p0')).toBe(false);
+    expect(stepsStillFit({ data: { at: 'devices', steps: [] } }, sig)).toBe(false); // older steps without facts: asked again
+    expect(stepsStillFit(undefined, sig)).toBe(false);
+  });
+  it('a change approved while steps are being written is asked once more after; voice plan edits and morphs count', () => {
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    expect(app).toContain('if (stepsAsking) { stepsAgain = frameId; return; }');
+    expect(app).toMatch(/stepsAsking = false;\s*const again = stepsAgain;\s*stepsAgain = null;\s*if \(again\) void requestSteps\(again\);/);
+    expect(app).toContain("if (ok) { nextChips?.refresh(); approvedChange(frameId); bodyLanguage('yes'); }");
+    expect(app).toContain("if (ok) { approvedChange(fid); bodyLanguage('yes'); }");
+    expect(app).toContain('if (stepsStillFit(stepArtifacts.get(at), sig)) return;');
   });
 });
 
@@ -125,6 +157,8 @@ describe('no scripted chip lists', () => {
     expect(src).not.toMatch(/ruleSuggestions|ONE_SHOT|CATALOG|RULES|FILLERS/);
     const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     expect(app).not.toMatch(/ruleSuggestions|pickNextStepsOnDevice|markDone/);
+    const hybrid = readFileSync('src/ai/hybrid.ts', 'utf8');
+    expect(hybrid).not.toMatch(/pickNextStepsOnDevice|NEXT_STEPS_CONSTRAINT/);
   });
   it('the recorded steps fixture passes the check', () => {
     const files = readdirSync('tests/fixtures/replies');
