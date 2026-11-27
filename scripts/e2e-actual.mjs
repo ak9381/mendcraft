@@ -1002,12 +1002,12 @@ async function persist(page) {
   // ?fresh: blank, but the layout AND the stored board are copied aside first.
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check((await frames(page)).length === 0, 'a second ?fresh starts blank');
-  // The boards, not the bytes: the reload in between may write the layout
+  // Everything but the camera: the reload in between may write the layout
   // again with a camera a pixel off (its fly-in is measured as the page
   // settles, later on a loaded machine), so a byte compare was flaky.
-  const boardsOf = (raw) => { try { const d = JSON.parse(raw); return JSON.stringify({ frames: d.frames.map((f) => ({ id: f.id, kind: f.kind, title: f.title })).sort((x, y) => x.id.localeCompare(y.id)), surfaces: Object.keys(d.surfaces ?? {}).sort().map((k) => [k, (d.surfaces[k]?.tiles ?? []).length]) }); } catch { return null; } };
+  const noCamera = (raw) => { try { const d = JSON.parse(raw); delete d.camera; return JSON.stringify(d); } catch { return null; } };
   const keptLayout = await page.evaluate(() => localStorage.getItem('mc.canvas.v1.beforeFresh'));
-  check(!!keptLayout && boardsOf(keptLayout) !== null && boardsOf(keptLayout) === boardsOf(saved), 'the layout before it is kept under beforeFresh');
+  check(!!keptLayout && noCamera(keptLayout) !== null && noCamera(keptLayout) === noCamera(saved), 'the layout before it is kept under beforeFresh (all but the camera)');
   const keptRows = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1.beforeFresh.artifacts') ?? 'null'); } catch { return null; } });
   check(Array.isArray(keptRows) && keptRows.some((a) => a.id === 'board-f1' && a.data?.plan?.tiles?.length === 1), 'the stored board, with its content, is kept under beforeFresh.artifacts');
   // A layout this build cannot read: copied aside, said once, never overwritten.
