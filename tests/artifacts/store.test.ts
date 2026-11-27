@@ -86,13 +86,17 @@ describe('ArtifactStore', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('a store whose read never answers loads as unreadable, not forever (final review I13)', async () => {
+  it('a slow read after a good open is waited for, not marked unreadable (saves stay on)', async () => {
     vi.useFakeTimers();
     try {
-      const stuck = { ...createMemoryArtifactStore(), list: () => new Promise<never>(() => {}) };
-      const p = loadArtifacts(stuck);
-      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
-      expect((await p).readFailed).toBe(true);
+      const slow = { ...createMemoryArtifactStore([board('f1')]) };
+      const list = slow.list;
+      slow.list = () => new Promise((r) => setTimeout(() => { void list().then(r); }, STORE_OPEN_TIMEOUT_MS * 2));
+      const p = loadArtifacts(slow);
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS * 2);
+      const r = await p;
+      expect(r.readFailed).toBeUndefined();
+      expect(r.ok).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
 

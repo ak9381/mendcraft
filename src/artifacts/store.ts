@@ -121,7 +121,7 @@ export interface LoadedArtifacts {
  *  ARTIFACT_MAX_COUNT. A row that fails is dropped (with why); the rest load. */
 export async function loadArtifacts(store: ArtifactStore): Promise<LoadedArtifacts> {
   let rows: unknown[];
-  try { rows = await withinTime(store.list(), STORE_OPEN_TIMEOUT_MS); } catch { return { ok: [], dropped: [], overCap: [], notes: [], readFailed: true }; }
+  try { rows = await store.list(); } catch { return { ok: [], dropped: [], overCap: [], notes: [], readFailed: true }; }
   const ok: Artifact[] = [];
   const dropped: { id: string; why: string }[] = [];
   const notes: { id: string; note: string }[] = [];
