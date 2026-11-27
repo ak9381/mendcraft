@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coerceLayout, joinCanvasDoc, splitCanvasDoc, tooManyBoardsWhy, unjoinedIds, type CanvasLayout } from '../../src/canvas/canvasPersistence';
+import { coerceLayout, coerceLayoutReport, joinCanvasDoc, splitCanvasDoc, tooManyBoardsWhy, unjoinedIds, type CanvasLayout } from '../../src/canvas/canvasPersistence';
 import { emptyDoc } from '../../src/canvas/firstOpen';
 import { createFrameRegistry } from '../../src/canvas/frames';
 import { frameIdOfArtifactId } from '../../src/artifacts/artifact';
@@ -127,8 +127,11 @@ describe('canvasPersistence', () => {
     expect(out.put.map((a) => a.id)).not.toContain('board-f1');
   });
 
-  it('coerceLayout refuses a layout with a bad camera and keeps only layout fields', () => {
-    expect(coerceLayout({ version: 1, camera: { x: 0, y: 0, z: 99 }, focusId: null, frames: [] })).toBeNull();
+  it('coerceLayout repairs a bad camera (and names it), refuses a foreign layout, keeps only layout fields', () => {
+    expect(coerceLayout({ version: 1, camera: { x: 0, y: 0, z: 99 }, focusId: null, frames: [] })!.camera).toEqual({ x: 0, y: 0, z: 2 });
+    expect(coerceLayoutReport({ version: 1, camera: { x: 0, y: 0, z: 99 }, focusId: 'ghost', frames: [] }).repaired).toEqual(['camera', 'focus']);
+    expect(coerceLayoutReport({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [] }).repaired).toEqual([]);
+    expect(coerceLayout({ version: 2, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [] })).toBeNull();
     expect(coerceLayout('nope')).toBeNull();
     const l = coerceLayout({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [], surfaces: { x: 1 }, lang: 'kn' });
     expect(l).toEqual({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [], lang: 'kn' });

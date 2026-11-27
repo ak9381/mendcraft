@@ -47,9 +47,12 @@ describe('frame registry', () => {
   it('refuses a corrupt or foreign document instead of half-loading it', () => {
     expect(parseCanvasDoc(null)).toBeNull();
     expect(parseCanvasDoc({ version: 99, camera: { x: 0, y: 0, z: 1 }, frames: [], focusId: null })).toBeNull();
-    expect(parseCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 'big' }, frames: [], focusId: null })).toBeNull();
     expect(parseCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 1 }, frames: [{ id: 'a', kind: 'evil', title: 't', rect: { x: 0, y: 0, w: 1, h: 1 } }], focusId: null })).toBeNull();
-    expect(parseCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 1 }, frames: [], focusId: 'ghost' })).toBeNull();
+  });
+  it('repairs a harmless slip instead of refusing her boards (camera, focus)', () => {
+    expect(parseCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 'big' }, frames: [], focusId: null })!.camera).toEqual({ x: 0, y: 0, z: 1 });
+    expect(parseCanvasDoc({ version: 1, camera: { x: 5, y: 6, z: 9 }, frames: [], focusId: null })!.camera).toEqual({ x: 5, y: 6, z: 2 });
+    expect(parseCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 1 }, frames: [], focusId: 'ghost' })!.focusId).toBeNull();
   });
 });
 
@@ -60,8 +63,8 @@ describe('canvas doc surfaces', () => {
     const plan = { kind: 'room', title: 'Den', tiles: [{ type: 'lamp', deviceId: 'lamp-a', label: 'Desk lamp' }] };
     expect(parseCanvasDoc({ ...base, surfaces: { f1: plan } })!.surfaces.f1).toEqual(plan);
   });
-  it('refuses a surface for a missing frame or a forged tile', () => {
-    expect(parseCanvasDoc({ ...base, surfaces: { ghost: { kind: 'room', title: 'x', tiles: [] } } })).toBeNull();
+  it('leaves out a plan whose board is gone; refuses a forged tile', () => {
+    expect(parseCanvasDoc({ ...base, surfaces: { ghost: { kind: 'room', title: 'x', tiles: [] } } })!.surfaces).toEqual({});
     expect(parseCanvasDoc({ ...base, surfaces: { f1: { kind: 'room', title: 'x', tiles: [{ type: 'EvilScript' }] } } })).toBeNull();
   });
 });

@@ -49,6 +49,8 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
+import { DEVICES_BOARD_KEY, resolveDevicesBoard } from './canvasStore';
+import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
 import { connectorState, createConnectorGate, createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type ApprovedConnector, type BridgeStatus, type LampConnector } from './wizDevices';
 import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR_SENT_WORDS, connectorArtifactId, lampConnectorKey, parseConnectorReply, WIZ_LAMP_IDENTITY } from './connectorTurn';
@@ -155,6 +157,8 @@ export const STORAGE_KEY = 'mc.canvas.v1';
 
 export interface CanvasOptions {
   storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+  /** Running in the native phone app (Capacitor iOS/Android). Default: detected. */
+  nativePhone?: boolean;
   connector?: DeviceConnector;
   devices?: Record<string, DeviceState>;
   /** Stored rows that loaded with something left out, said at boot (one line each). */
@@ -174,9 +178,6 @@ export interface CanvasOptions {
   /** Who made the board on a frame (what its stored artifact says, or would
    *  say on the next save), if known. Sent with a board to a phone. */
   artifactBy?: (frameId: string) => ArtifactBy | undefined;
-  /** Frame id → the maker of its stored board (as loaded). A phone treats a
-   *  stored board as the laptop's unless it was stored as her own. */
-  storedMakers?: Readonly<Record<string, ArtifactBy>>;
   /** Approved connector artifacts (checked at load): a lamp whose connector
    *  is here runs on it, through the fixed bridge client only. */
   connectors?: readonly Artifact[];
@@ -325,11 +326,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // checked again here, so a bad document opens a blank canvas, never half.
   const stored: CanvasDoc | null = opts.doc ? parseCanvasDoc(opts.doc) : null;
   // The Connected devices board is marked by its frame id (kept beside the
-  // saved doc), never by its title: a board she renames stays what it is,
-  // and one she names "Connected devices" never becomes it.
-  const DEVICES_BOARD_KEY = 'mendcraft.devicesBoard';
+  // saved layout), never by its title: a board she renames stays what it is,
+  // and one she names "Connected devices" never becomes it. The marker is
+  // trusted only when that frame really holds the devices list — a stale one
+  // (or one whose id a new board took) never turns her board into it.
   let devicesFrame: string | null = null;
-  try { devicesFrame = stored ? storage.getItem(DEVICES_BOARD_KEY) : null; } catch { devicesFrame = null; }
+  if (stored) {
+    let legacy: string | null = null;
+    try { legacy = storage.getItem(DEVICES_BOARD_KEY); } catch { legacy = null; }
+    devicesFrame = resolveDevicesBoard(stored.surfaces, legacy);
+  }
   const doc = initialDoc(stored);
   const reg: FrameRegistry = createFrameRegistry(doc.frames, opts.reservedFrameIds ?? []);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
@@ -363,10 +369,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
     viewportWidth: window.innerWidth,
   }));
-  /** Phone shell: frames holding a board from the laptop (received now, or
-   *  stored from before and made by a model — a board she made here herself,
-   *  stored as 'person', is not one). */
-  const receivedFrames = new Set<string>(phoneShell ? Object.keys(doc.surfaces ?? {}).filter((id) => opts.storedMakers?.[id] !== 'person') : []);
+  // The phone app shows each board once: copies an older build saved (or
+  // the lift above just made) of a board it already shows go, before render.
+  // Only in the native app (never a narrow laptop window), and only boards
+  // received from the laptop or the same plan board — never her own boards.
+  const nativePhone = opts.nativePhone ?? (typeof window !== 'undefined' && isNativePhoneApp(
+    (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null));
+  if (nativePhone) {
+    for (const dup of duplicateBoards(reg.list(), surfaces, focusId)) {
+      console.info(`[mendcraft] phone: a second copy of “${reg.get(dup)?.title ?? dup}” was taken off`);
+      reg.remove(dup); delete surfaces[dup]; delete drawings[dup];
+      if (focusId === dup) focusId = null;
+      if (lastFocus === dup) lastFocus = focusId;
+    }
+  }
+  /** Phone shell: frames holding a board from the laptop — received now, or
+   *  stored from before with the received mark (Frame.from = 'laptop', set
+   *  on receive and saved). A board she made here herself is never one,
+   *  whoever its maker is recorded as. */
+  const receivedFrames = new Set<string>(phoneShell ? reg.list().filter((f) => f.from === 'laptop' && surfaces[f.id]).map((f) => f.id) : []);
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -5686,14 +5707,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** A board from the laptop (already re-checked by coerceSnapshot). Shown on
    *  the focused frame and saved like any board, under its maker's name. */
+  /** A phone: take a board off quietly (a duplicate of one it shows). */
+  function dropDuplicateBoard(id: string): void {
+    if (live.has(id)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: id } }] as never); } catch { /* already gone */ } }
+    live.delete(id); deviceSurfaces.untrack(id);
+    reg.remove(id);
+    delete surfaces[id];
+    delete drawings[id];
+    receivedFrames.delete(id); receivedMakers.delete(id);
+    if (focusId === id) focusId = null;
+    if (lastFocus === id) lastFocus = null;
+  }
   function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; by?: ArtifactBy } = {}): void {
-    let id = focusId ?? lastFocus ?? reg.list()[0]?.id;
+    // Each board once: a board that arrives again (replay on re-pair, a
+    // republish) goes to the frame already showing it; other copies go.
+    const preferred = [focusId, lastFocus].find((x): x is string => !!x && !!reg.get(x)) ?? reg.list()[0]?.id ?? null;
+    const target = remoteBoardTarget(reg.list(), surfaces, plan, preferred);
+    for (const dup of target.duplicates) dropDuplicateBoard(dup);
+    let id = target.id;
     if (!id) {
       const f = reg.add('note', plan.title || 'Board');
       id = f.id;
     } else if (plan.title) {
       reg.rename(id, plan.title);
     }
+    reg.markFromLaptop(id); // only received boards are ever seen as copies (and carried back)
     surfaces[id] = plan;
     if (info.by) receivedMakers.set(id, { by: info.by, entries: entriesOn(id) });
     else receivedMakers.delete(id);

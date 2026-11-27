@@ -4,7 +4,7 @@
 //     `plan` per floor-plan drawing, one `pack` per language pack
 // Joining checks the result with parseCanvasDoc: a document that fails opens
 // an empty canvas, never a half-loaded one. Pure: no storage, no DOM.
-import { CANVAS_DOC_VERSION, FRAME_GAP, MAX_FRAMES, parseCanvasDoc, type CanvasDoc, type Frame } from './frames';
+import { CANVAS_DOC_VERSION, FRAME_GAP, MAX_FRAMES, parseCanvasDoc, parseCanvasDocReport, type CanvasDoc, type Frame } from './frames';
 import type { Camera } from './camera';
 import type { SurfacePlan } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
@@ -21,14 +21,20 @@ export interface CanvasLayout { version: number; camera: Camera; focusId: string
 
 const LANG_RE = /^[a-z]{2,3}$/;
 
-/** A stored layout, checked like a canvas document with no content. */
-export function coerceLayout(raw: unknown): CanvasLayout | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+/** A stored layout, checked like a canvas document with no content.
+ *  Harmless slips (camera, focus, a board's title or pin) are repaired and
+ *  named in `repaired`; anything that would lose a board refuses it (null). */
+export function coerceLayoutReport(raw: unknown): { layout: CanvasLayout | null; repaired: string[] } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { layout: null, repaired: [] };
   const r = raw as Record<string, unknown>;
-  const d = parseCanvasDoc({ version: r.version, camera: r.camera, focusId: r.focusId, frames: r.frames });
-  if (!d) return null;
+  const { doc: d, repaired } = parseCanvasDocReport({ version: r.version, camera: r.camera, focusId: r.focusId, frames: r.frames });
+  if (!d) return { layout: null, repaired: [] };
   const lang = typeof r.lang === 'string' && LANG_RE.test(r.lang) ? r.lang : undefined;
-  return { version: d.version, camera: d.camera, focusId: d.focusId, frames: d.frames, ...(lang ? { lang } : {}) };
+  if (r.lang !== undefined && !lang) repaired.push('language');
+  return { layout: { version: d.version, camera: d.camera, focusId: d.focusId, frames: d.frames, ...(lang ? { lang } : {}) }, repaired };
+}
+export function coerceLayout(raw: unknown): CanvasLayout | null {
+  return coerceLayoutReport(raw).layout;
 }
 
 const boardFrameId = (a: Artifact): string => a.id.slice('board-'.length);

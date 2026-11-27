@@ -81,3 +81,11 @@ export function connectedDevicesPlan(rows: readonly DeviceRow[]): SurfacePlan {
     }],
   };
 }
+
+/** True when a board plan is the devices list (connectedDevicesPlan's
+ *  shape). Only used to trust the devices-board marker kept beside the layout. */
+export function isDevicesPlan(plan: SurfacePlan | undefined): boolean {
+  const t = plan?.tiles;
+  return !!plan && plan.title === DEVICES_BOARD_TITLE && t?.length === 1 && t[0].type === 'table'
+    && t[0].title === 'Devices' && t[0].columns.join('|') === 'Device|Status';
+}

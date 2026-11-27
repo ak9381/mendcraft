@@ -152,3 +152,52 @@ describe('the laptop sends only a board that says who made it', () => {
     expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1']);
   }, 15000);
 });
+
+describe('a phone shows each board once (ported from sim-main remote-dedup)', () => {
+  const FP = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'fx-cad', template: 'blank' }] };
+  const rect = { x: 0, y: 0, w: 1000, h: 680 };
+  it('a received board carries the received mark into the saved layout', async () => {
+    const saved: CanvasDoc[] = [];
+    const { h } = phone(saved);
+    expect(receive(h, wire(BOARD))).toBe(true);
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1));
+    expect(saved.at(-1)!.frames[0].from).toBe('laptop');
+    expect(splitCanvasDoc(saved.at(-1)!, [], () => 'person', 1).layout.frames[0].from).toBe('laptop');
+  });
+  it('the same board received again goes to the frame already showing it, and a copy goes', async () => {
+    const saved: CanvasDoc[] = [];
+    const layout = { version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1', frames: [
+      { id: 'f1', kind: 'note' as const, title: 'Notes', rect, pinned: false },
+      { id: 'f2', kind: 'plan' as const, title: 'Floor plan', rect: { ...rect, x: 1100 }, pinned: false, from: 'laptop' as const },
+      { id: 'f3', kind: 'plan' as const, title: 'Floor plan', rect: { ...rect, x: 2200 }, pinned: false, from: 'laptop' as const },
+    ] };
+    const art = (id: string, plan: unknown, kind: string) => ({ id: `board-${id}`, kind: 'board' as const, v: 1, title: 'x', by: 'gemini' as const, at: 1, status: 'approved' as const,
+      data: { frame: { kind, title: 'x', rect, pinned: false }, plan } });
+    const notes = { kind: 'room', title: 'Notes', tiles: [{ type: 'stat', label: 'T', value: '1' }] };
+    const doc = joinCanvasDoc(layout, [art('f1', notes, 'note'), art('f2', FP, 'plan'), art('f3', FP, 'plan')]) as CanvasDoc;
+    expect(doc?.frames.length).toBe(3);
+    const root = document.createElement('div');
+    document.body.append(root);
+    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, connector: { run: async () => ({}) }, phoneShell: true, nativePhone: false, doc, onPersist: (d) => saved.push(d) });
+    expect(handle.frames().map((f) => f.id)).toEqual(['f1', 'f2', 'f3']); // not the native app: nothing collapses on load
+    expect(receive(handle, wire(FP))).toBe(true);
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1', 'f2']));
+    expect(saved.at(-1)!.surfaces.f1).toEqual(notes); // her board was never taken for a copy
+  });
+  it('the native phone app collapses copies an older build saved, on load — never her own boards', () => {
+    const layout = { version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [
+      { id: 'f1', kind: 'room' as const, title: 'Desk', rect, pinned: false, from: 'laptop' as const },
+      { id: 'f2', kind: 'room' as const, title: 'Desk', rect: { ...rect, x: 1100 }, pinned: false, from: 'laptop' as const },
+      { id: 'f3', kind: 'room' as const, title: 'Desk', rect: { ...rect, x: 2200 }, pinned: false },
+      { id: 'f4', kind: 'room' as const, title: 'Desk', rect: { ...rect, x: 3300 }, pinned: false },
+    ] };
+    const desk = { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'T', value: '1' }] };
+    const art = (id: string) => ({ id: `board-${id}`, kind: 'board' as const, v: 1, title: 'Desk', by: 'gemini' as const, at: 1, status: 'approved' as const,
+      data: { frame: { kind: 'room', title: 'Desk', rect, pinned: false }, plan: desk } });
+    const doc = joinCanvasDoc(layout, ['f1', 'f2', 'f3', 'f4'].map(art)) as CanvasDoc;
+    const root = document.createElement('div');
+    document.body.append(root);
+    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, connector: { run: async () => ({}) }, phoneShell: true, nativePhone: true, doc, onPersist: () => undefined });
+    expect(handle.frames().map((f) => f.id)).toEqual(['f1', 'f3', 'f4']);
+  });
+});

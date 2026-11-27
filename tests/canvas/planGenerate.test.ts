@@ -223,12 +223,18 @@ describe('a generated floor plan on its own board', () => {
     expect(h.makerOf('board-f1')).toBeUndefined();
   });
 
-  it('a phone treats a stored board as the laptop\'s only when it was not stored as hers', () => {
+  it('a phone treats a stored board as the laptop\'s only when its frame carries the received mark (Frame.from), whoever made it', () => {
     const plan = { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'T', value: '1' }] };
+    const rect = { x: 0, y: 0, w: 1000, h: 680 };
     const art = (id: string, by: ArtifactBy) => ({ id: `board-${id}`, kind: 'board' as const, v: 1, title: 'Desk', by, at: 1, status: 'approved' as const,
-      data: { frame: { kind: 'room', title: 'Desk', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }, plan } });
-    const doc = joinCanvasDoc(null, [art('f1', 'gemini'), art('f2', 'person')]) as CanvasDoc;
-    const { h } = mount({ doc, phoneShell: true, storedMakers: { f1: 'gemini', f2: 'person' } });
+      data: { frame: { kind: 'room', title: 'Desk', rect, pinned: false }, plan } });
+    // f1: received from the laptop, made there by her ('person'); f2: a model's board she made on the phone.
+    const layout = { version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: null, frames: [
+      { id: 'f1', kind: 'room' as const, title: 'Desk', rect, pinned: false, from: 'laptop' as const },
+      { id: 'f2', kind: 'room' as const, title: 'Desk', rect: { ...rect, x: 1100 }, pinned: false },
+    ] };
+    const doc = joinCanvasDoc(layout, [art('f1', 'person'), art('f2', 'gemini')]) as CanvasDoc;
+    const { h } = mount({ doc, phoneShell: true });
     expect(h.isReceivedFrame('f1')).toBe(true);
     expect(h.isReceivedFrame('f2')).toBe(false);
   });

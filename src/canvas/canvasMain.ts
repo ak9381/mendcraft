@@ -24,10 +24,11 @@ import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
 import { createReplayEngines, fixtureDevices } from './replayEngine';
-import { coerceLayout, joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
+import { joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
+import { loadLayout, loadLine, openFresh } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 
 const params = new URLSearchParams(location.search);
@@ -39,14 +40,23 @@ type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFi
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
-// ?fresh=1 clears the layout and, in a test build, the stored artifacts.
+// ?fresh=1 starts with no layout (and, in a test build, no stored artifacts)
+// — but the saved layout is copied aside first (never just deleted), and
+// `fresh` leaves the address bar so a later reload of this tab (a redeploy,
+// F5) opens what she built here instead of wiping it again. A failed copy
+// means this open is NOT fresh (nothing is reset).
 const layoutStorage = (() => { try { return localStorage; } catch { return null; } })();
-if (params.has('fresh')) { try { layoutStorage?.removeItem(LAYOUT_KEY); } catch { /* nothing kept */ } }
+const freshOpen = openFresh(layoutStorage, location.href);
+if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
 const { store: artifactStore, persistent } = await openArtifactStore();
-if (params.has('fresh') && testBuild) await artifactStore.clear().catch(() => undefined);
+if (freshOpen.fresh && testBuild) await artifactStore.clear().catch(() => undefined);
 const loaded = await loadArtifacts(artifactStore);
 let artifacts: Artifact[] = loaded.ok;
-const layout = (() => { try { return coerceLayout(JSON.parse(layoutStorage?.getItem(LAYOUT_KEY) ?? 'null')); } catch { return null; } })();
+// A layout this build can't read is copied aside before anything can write;
+// if even that fails, the layout is not saved this session (canvasStore.ts).
+const layoutLoad = loadLayout(layoutStorage, LAYOUT_KEY);
+const layout = layoutLoad.layout;
+const layoutSaveBlocked = !layoutLoad.safe;
 const joinDropped: { id: string; why: string }[] = [];
 const startDoc = joinCanvasDoc(layout, artifacts, (d) => joinDropped.push(d));
 // What the canvas does not show is never removed or overwritten by a save:
@@ -55,6 +65,7 @@ const keepIds = new Set([...unjoinedIds(startDoc, artifacts), ...loaded.overCap]
 artifacts = artifacts.filter((a) => !keepIds.has(a.id));
 if (keepIds.size) console.warn(`[mendcraft] ${keepIds.size} stored item(s) not on the canvas are kept as they are.`);
 const storeNotes = [
+  loadLine(layoutLoad) ?? '',
   persistent ? '' : STORE_FALLBACK_LINE,
   loaded.readFailed ? STORE_READ_FAILED_LINE : '',
   loaded.overCap.length ? overCapLine(loaded.overCap.length) : '',
@@ -254,7 +265,9 @@ function boardMaker(frameId: string): ArtifactBy | undefined {
 function persistDoc(doc: CanvasDoc): void {
   const out = splitCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds);
   // A full localStorage (quota) must not stop the artifacts being kept.
-  try { layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
+  // A saved layout this build couldn't read AND couldn't copy aside is never
+  // written over (this session's layout just isn't saved).
+  try { if (!layoutSaveBlocked) layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
   const gone = new Set(out.remove);
   const put = new Map(out.put.map((a) => [a.id, a]));
   artifacts = [...artifacts.filter((a) => !gone.has(a.id) && !put.has(a.id)), ...put.values()];
@@ -263,14 +276,13 @@ function persistDoc(doc: CanvasDoc): void {
 }
 
 handle = mountCanvas(root, {
-  voice, engines, fresh: params.has('fresh'), sim: params.has('sim'),
+  voice, engines, fresh: freshOpen.fresh, sim: params.has('sim'),
   ...(simDevices && Object.keys(simDevices.devices).length ? { devices: simDevices.devices, deviceLabels: simDevices.labels } : {}),
   ...(simDevices?.stand ? { simStand: true } : {}),
   gimbalKeepAlive: params.get('gimbalKeepAlive') === '1',
   doc: startDoc,
   onPersist: persistDoc,
   artifactBy: boardMaker,
-  storedMakers: Object.fromEntries(artifacts.filter((a) => a.kind === 'board').map((a) => [a.id.slice('board-'.length), a.by])),
   // Lamp connectors she approved (each checked again at load, in loadArtifacts).
   connectors: artifacts.filter((a) => a.kind === 'connector'),
   onConnector: (a) => {
