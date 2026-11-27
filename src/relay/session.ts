@@ -118,8 +118,10 @@ export interface GuestSession extends SessionBase {
   sendFrame(frame: RelayFrame): Promise<void>;
   sendMusic(music: MusicStatus): Promise<void>;
   /** Receive the host's privacy-safe state snapshots (board/layout/transfer live
-   *  here too). Coerced before the callback — the phone treats it as untrusted. */
-  onSnapshot(cb: (snapshot: ControlSnapshot) => void): void;
+   *  here too). Coerced before the callback — the phone treats it as untrusted.
+   *  `buffered`: the newest snapshot replayed to a callback wired late (not
+   *  one that just arrived). */
+  onSnapshot(cb: (snapshot: ControlSnapshot, meta?: { buffered?: boolean }) => void): void;
   /** Send a raw prompt to the desktop hub; resolves with the filled reply. */
   sendPrivacyAsk(ask: PrivacyAsk, timeoutMs?: number): Promise<PrivacyReply>;
   /** The host asked phones to announce themselves again ('whoIsThere'). */
@@ -614,7 +616,7 @@ export async function createGuestSession(
       transport.publish(roomId, { v: 1, from: 'phone', type: 'music', music }),
     onSnapshot: (cb) => {
       snapshotCb = cb;
-      if (lastSnapshot) cb(lastSnapshot);
+      if (lastSnapshot) cb(lastSnapshot, { buffered: true });
     },
     onSensePoint: (cb) => {
       senseCb = cb;

@@ -10,6 +10,7 @@ import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
 import type { PhoneCamera } from './phoneCamera';
+import type { ArrivalGate } from './boardGlow';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -41,10 +42,14 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 export const BOARD_NO_MAKER_LINE = "Couldn't take the board — it doesn't say who made it. Nothing changed.";
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy'> & { omitted?: { drawings?: number } },
-  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy'] }) => void,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy' | 'boardSend'> & { omitted?: { drawings?: number } },
+  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy']; arrived?: boolean }) => void,
   platform?: PhonePlatform,
   onRefuse?: (line: string) => void,
+  /** Phone: lights the board only for a real new send (boardGlow.ts). A
+   *  buffered snapshot (replayed to a late listener: `buffered`) is
+   *  age-checked; a live one is not, so a skewed clock never misses a send. */
+  arrival?: { gate: ArrivalGate; now: () => number; buffered?: boolean },
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
@@ -55,7 +60,8 @@ export function applyGuestSnapshot(
   // A drawing left out (too big for the relay) is said on the phone. Who made
   // the board on the laptop rides with it too: the phone keeps it under that name.
   const omitted = snap.omitted?.drawings ?? 0;
-  showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy });
+  const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now(), { live: !arrival.buffered });
+  showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy, ...(arrived ? { arrived } : {}) });
   return true;
 }
 

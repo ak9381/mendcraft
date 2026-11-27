@@ -292,13 +292,36 @@ async function phones(page) {
   const right = await page.evaluate(() => window.__mcCanvas.edgeLayout().right);
   check(right === 'ios' || right === 'android', `a phone is on the right edge (got ${right})`);
   const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  // The held board ITSELF lights up green with "Hold to send to …", then flashes once on send.
+  await page.evaluate(() => {
+    const g = { lit: false, maxGlow: 0, pill: '', flashed: false };
+    window.__e2eGlow = g;
+    const mo = new MutationObserver(() => {
+      for (const f of document.querySelectorAll('.mc-frame')) {
+        if (f.classList.contains('mc-frame-sending')) {
+          g.lit = true;
+          g.maxGlow = Math.max(g.maxGlow, Number(f.style.getPropertyValue('--mc-send-glow')) || 0);
+          const p = f.querySelector('.mc-frame-pill[data-pill="send"]:not([hidden])');
+          if (p) g.pill = p.textContent;
+        }
+        if (f.classList.contains('mc-frame-sent')) g.flashed = true;
+      }
+    });
+    mo.observe(document.querySelector('.mc-viewport'), { attributes: true, attributeFilter: ['class', 'style'], subtree: true, childList: true });
+    g.stop = () => mo.disconnect();
+  });
   const sent = await page.evaluate((to) => window.__mcCanvas.sendBoard(to), right);
   check(sent, 'the board is sent at the right edge');
   const name = right === 'ios' ? 'iPhone' : 'Nothing phone';
+  const glow = await page.evaluate(() => { const g = window.__e2eGlow; g.stop(); return { lit: g.lit, maxGlow: g.maxGlow, pill: g.pill, flashed: g.flashed, stillLit: !!document.querySelector('.mc-frame.mc-frame-sending') }; });
+  check(glow.lit && glow.maxGlow > 0.5, `held at the edge, the board itself lights up (glow ${glow.maxGlow})`);
+  check(glow.pill === `Hold to send to ${name}`, `the held board says "Hold to send to ${name}" (got ${JSON.stringify(glow.pill)})`);
+  check(glow.flashed && !glow.stillLit, 'the board flashes on send, then the glow clears');
   const lines = await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark);
-  check(lines.includes(`Sent to ${name} (SIM).`), `__mcCanvas reports the send line (got ${JSON.stringify(lines)})`);
+  check(lines.includes(`Sent to the ${name} (SIM).`), `__mcCanvas reports the send line (got ${JSON.stringify(lines)})`);
   const snap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
   check(snap?.boardFor === right && snap?.boardBy === 'replay' && !!snap?.board, `the snapshot targets that phone and names the maker (got ${JSON.stringify({ boardFor: snap?.boardFor, boardBy: snap?.boardBy })})`);
+  check(typeof snap?.boardSend?.id === 'string' && Number.isFinite(snap?.boardSend?.at), `a real send is stamped (got ${JSON.stringify(snap?.boardSend)})`);
   if (!snap) return;
   const laptopControls = JSON.stringify(snap.board.tiles[0].children?.[0]?.controls ?? snap.board.tiles[0].controls ?? []);
 
@@ -312,6 +335,16 @@ async function phones(page) {
     if (!target.ok || !other.ok) return;
     check(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), snap), `the ${name} takes the board`);
     check(!(await other.p.evaluate((s) => window.__mcGuestSnapshot(s), snap)), 'the other phone ignores a board sent to the first');
+    // The phone shows the arrived board lit, with "Moved from laptop" (once per real send).
+    const arrived = () => { const f = document.querySelector('.mc-frame.mc-frame-arrived'); const p = f?.querySelector('.mc-frame-pill[data-pill="arrived"]:not([hidden])'); return f ? (p?.textContent ?? '') : null; };
+    await waitFor(target.p, () => document.querySelector('.mc-frame.mc-frame-arrived .mc-frame-pill[data-pill="arrived"]:not([hidden])')?.textContent === 'Moved from laptop', 3_000, 'the arrived board lights up with "Moved from laptop"')
+      .then((ok) => ok && check(true, `the ${name} lights the arrived board with "Moved from laptop"`));
+    check(await other.p.evaluate(arrived) === null, 'the other phone lights nothing');
+    await waitFor(target.p, () => !document.querySelector('.mc-frame.mc-frame-arrived'), 8_000, 'the arrived glow fades').then((ok) => ok && check(true, 'the arrived glow fades after a few seconds'));
+    // A republish of the same send (same stamp, newer rev) does not light it again.
+    const republish = { ...JSON.parse(JSON.stringify(snap)), rev: snap.rev + 10 };
+    check(await target.p.evaluate((s) => window.__mcGuestSnapshot(s), republish), 'the phone takes a republish of the same send');
+    check(await target.p.evaluate(arrived) === null, 'a republish of the same send does not light the board again');
     await waitFor(target.p, () => /Not connected/.test([...document.querySelectorAll('mc-device-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' ')), 10_000, 'the lamp it cannot reach shows "Not connected"')
       .then((ok) => ok && check(true, 'on the phone the lamp shows "Not connected"'));
     await sleep(1200);
@@ -350,6 +383,7 @@ async function phones(page) {
     if (!(await open(target.p, 'sim=1&hands=0'))) return;
     await waitFor(target.p, () => document.querySelectorAll('mc-device-tile').length === 1, 10_000, 'the kept board is back on the phone after a reload')
       .then((ok) => ok && check(true, 'the phone opens with the board it kept'));
+    check(await target.p.evaluate(() => !document.querySelector('.mc-frame.mc-frame-arrived')), 'a reload does not light the kept board as arrived');
     const again = await boardArtifacts(target.p);
     check(again.length === 1 && again[0].by === 'replay', 'still made by replay after the reload');
     // Pinning it after the reload (a change that is not its content) keeps its maker.

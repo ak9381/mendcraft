@@ -5,6 +5,7 @@ import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
 import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
+import { createArrivalGate } from './boardGlow';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
 import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS, phoneHandsAllowed, phoneSensingAllowed } from './phoneCamera';
 import { announcePhone } from './phoneGuestJoin';
@@ -415,6 +416,9 @@ afterFirstPaint(() => {
     // feed forwarder and the re-announce (joinPhoneSession).
     const h = handle;
     const sim = simRun;
+    // A board the laptop really sent lights up once ("Moved from laptop");
+    // the gate remembers the last send, so replays and reloads stay quiet.
+    const arrival = { gate: createArrivalGate((() => { try { return localStorage; } catch { return null; } })()), now: () => Date.now() };
     let ui: { update(): void } | null = null;
     const link = createLaptopLink({
       storage: (() => { try { return localStorage; } catch { return null; } })(),
@@ -422,7 +426,8 @@ afterFirstPaint(() => {
       native: isPhone,
       sim,
       aiForwarder: phoneAiFeed,
-      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say); },
+      // A snapshot buffered for a late listener is age-checked; a live one is not.
+      onSnapshot: (snap, meta) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, { ...arrival, buffered: !!meta?.buffered }); },
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;
@@ -455,7 +460,7 @@ afterFirstPaint(() => {
     if (sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1')) {
       (window as unknown as { __mcGuestSnapshot?: (raw: unknown) => boolean }).__mcGuestSnapshot = (raw) => {
         const snap = coerceSnapshot(raw);
-        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say);
+        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, arrival);
       };
     }
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });

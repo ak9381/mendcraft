@@ -273,7 +273,7 @@ describe('createSentBoardMemo', () => {
 
 describe('boardSendLine', () => {
   it('labels the SIM send and names the phone', () => {
-    expect(boardSendLine('ios', 'Living room', false)).toBe('Sent to iPhone (SIM).');
+    expect(boardSendLine('ios', 'Living room', false)).toBe('Sent to the iPhone (SIM).');
     expect(boardSendLine('android', 'Living room', true)).toBe('Sent Living room to the Nothing phone.');
   });
 });

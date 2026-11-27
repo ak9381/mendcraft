@@ -60,7 +60,7 @@ export interface LaptopLinkDeps {
   sim?: boolean;
   aiForwarder?: Pick<PhoneAiForwarder, 'bind'>;
   /** A board the laptop sent to this phone. */
-  onSnapshot(snap: ControlSnapshot): void;
+  onSnapshot(snap: ControlSnapshot, meta?: { buffered?: boolean }): void;
   /** The live guest session (null when it closes) — iPhone sensing uses it to
    *  answer the laptop's point request and to re-announce its status. */
   onSession?(session: PhoneGuestSessionLike | null): void;
@@ -191,7 +191,7 @@ export function createLaptopLink(deps: LaptopLinkDeps): LaptopLink {
       linkUp = null;
       void prev.stop({ silent: (prev as { roomId?: string }).roomId === res.roomId });
     }
-    res.session.onSnapshot((snap) => deps.onSnapshot(snap));
+    res.session.onSnapshot((snap, meta) => deps.onSnapshot(snap, meta));
     current = res;
     self = res;
     deps.onSession?.(res.session);

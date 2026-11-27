@@ -118,9 +118,15 @@ describe('session: guests receive host state snapshots', () => {
     await host.publishState(snap(3));
     await flush();
     const seen: ControlSnapshot[] = [];
-    guest.onSnapshot((s) => seen.push(s)); // registered AFTER the publish
+    const metas: unknown[] = [];
+    guest.onSnapshot((s, meta) => { seen.push(s); metas.push(meta ?? null); }); // registered AFTER the publish
     expect(seen).toHaveLength(1);
     expect(seen[0].rev).toBe(3);
+    // The buffered one says so (the phone age-checks only those); a live one does not.
+    await host.publishState(snap(4));
+    await flush();
+    expect(seen.map((s) => s.rev)).toEqual([3, 4]);
+    expect(metas).toEqual([{ buffered: true }, null]);
     await Promise.all([guest.close(), host.close()]);
   });
 });

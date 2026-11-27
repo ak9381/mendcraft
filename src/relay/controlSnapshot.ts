@@ -211,6 +211,9 @@ export interface ControlSnapshot {
   /** Who made `board` on the laptop (its stored artifact's maker): the phone
    *  keeps the board under the same name. One of ARTIFACT_BY, else dropped. */
   boardBy?: ArtifactBy;
+  /** Set only on a REAL board send (a whole-board edge drag), never on a
+   *  republish: the phone lights the arrived board once per id. */
+  boardSend?: { id: string; at: number };
   /** What is drawn on `board`'s plan tiles right now (plan board id → plan
    *  doc), BESIDE the surface plan — never inside it. Each doc sanitized,
    *  only ids `board` has, size-capped (planDocs.coerceBoardDrawings). */
@@ -257,6 +260,8 @@ export interface ControlSnapshotInput {
   boardFor?: unknown;
   /** Who made `board` (validated against ARTIFACT_BY; anything else is dropped). */
   boardBy?: unknown;
+  /** Stamp of a real board send (validated; dropped without a board). */
+  boardSend?: unknown;
   /** Drawings for `board`'s plan tiles (re-sanitized; dropped if invalid). */
   boardDrawings?: unknown;
   /** Drawings the SENDER already left out (a rebuilt wire snapshot keeps
@@ -401,6 +406,9 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   const transfer = coerceTransferMarker(input.transfer);
   const boardFor = board && (input.boardFor === 'ios' || input.boardFor === 'android') ? input.boardFor : null;
   const boardBy = board && (ARTIFACT_BY as readonly unknown[]).includes(input.boardBy) ? input.boardBy as ArtifactBy : null;
+  const bsIn = (input.boardSend ?? null) as { id?: unknown; at?: unknown } | null;
+  const boardSend = board && bsIn && typeof bsIn.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(bsIn.id) && typeof bsIn.at === 'number' && Number.isFinite(bsIn.at)
+    ? { id: bsIn.id, at: Math.round(bsIn.at) } : null;
   const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
   const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
 
@@ -421,6 +429,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(board ? { board } : {}),
     ...(boardFor ? { boardFor } : {}),
     ...(boardBy ? { boardBy } : {}),
+    ...(boardSend ? { boardSend } : {}),
     ...(boardDrawings ? { boardDrawings } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
@@ -634,6 +643,7 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     board: r.board,
     boardFor: r.boardFor,
     boardBy: r.boardBy,
+    boardSend: r.boardSend,
     boardDrawings: r.boardDrawings,
     omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
