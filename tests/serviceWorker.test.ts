@@ -94,7 +94,7 @@ function world(opts: { online: () => boolean; serve: (url: string) => Response }
     skipWaiting: () => Promise.resolve(),
     clients: { claim: () => Promise.resolve() },
   };
-  const ctx = vm.createContext({ self, caches, fetch: fetchFn, Request, Response, URL, Headers, Promise, console, setTimeout, clearTimeout });
+  const ctx = vm.createContext({ self, caches, fetch: fetchFn, Request, Response, URL, Headers, Promise, console, setTimeout, clearTimeout, AbortSignal });
   const src = injectServiceWorker(SW_SRC, { precache: [...SHELL_URLS, '/assets/canvas-1.js'], tracking: TRACKING_ASSET_URLS, trackingCache: TRACKING_CACHE, build: 'test1' });
   vm.runInContext(src, ctx);
   const lifecycle = async (type: 'install' | 'activate') => {
@@ -119,10 +119,10 @@ describe('sw.js', () => {
     let online = true;
     const w = world({ online: () => online, serve: (u) => ok(`body of ${new URL(u).pathname}`, u.endsWith('.wasm') ? 'application/wasm' : 'text/plain') });
     await w.lifecycle('install');
-    await w.lifecycle('activate');
-    // The tracking files were fetched once while online (precached at activate).
+    // The tracking files were fetched once while online, at install (no page waits on it).
     for (const u of TRACKING_ASSET_URLS) expect(w.fetched).toContain(u);
     expect(w.stores.has(TRACKING_CACHE)).toBe(true);
+    await w.lifecycle('activate');
 
     online = false;
     const nav = await w.request('/canvas?sim=0', { mode: 'navigate' });
@@ -133,6 +133,33 @@ describe('sw.js', () => {
     const wasm = await w.request(`${WASM_BASE}/vision_wasm_internal.wasm`);
     expect(wasm!.headers.get('Content-Type')).toBe('application/wasm');
     expect(await (await w.request(HAND_MODEL_URL))!.text()).toContain('hand_landmarker.task');
+  });
+
+  it('activate never touches the network (claimed pages must not wait on a download)', async () => {
+    const w = world({ online: () => true, serve: (u) => ok(u) });
+    await w.lifecycle('install');
+    const n = w.fetched.length;
+    await w.lifecycle('activate');
+    expect(w.fetched.length).toBe(n);
+  });
+
+  it('a slow or failing CDN never rejects the install', async () => {
+    const w = world({ online: () => true, serve: (u) => { if (/mediapipe/.test(u)) throw new TypeError('timeout'); return ok(u); } });
+    await expect(w.lifecycle('install')).resolves.toBeUndefined();
+    expect(await (await w.request('/canvas.html'))!.text()).toContain('canvas.html');
+  });
+
+  it('pages are cached under their path only; a query (tokens, OAuth codes) never becomes a key', async () => {
+    let online = true;
+    const w = world({ online: () => online, serve: (u) => ok(`page ${new URL(u).pathname}`) });
+    await w.lifecycle('install');
+    await w.lifecycle('activate');
+    await w.request('/canvas.html?wizToken=SECRET&code=abc&state=xyz', { mode: 'navigate' });
+    await new Promise((r) => setTimeout(r, 0));
+    for (const m of w.stores.values()) for (const k of m.keys()) expect(k).not.toMatch(/wizToken|code=|state=|SECRET/);
+    online = false;
+    const back = await w.request('/canvas.html?sim=1&hands=0', { mode: 'navigate' });
+    expect(await back!.text()).toBe('page /canvas.html');
   });
 
   it('tracking files are cache-first: a second load does not refetch them', async () => {

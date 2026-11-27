@@ -33,38 +33,47 @@ async function putIfOk(cacheName, key, res) {
   await c.put(key, res);
 }
 
+/** Fetch with a deadline, so a slow CDN can never hold the install open for long. */
+function fetchWithin(input, init, ms) {
+  const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
+  return fetch(input, signal ? { ...init, signal } : init);
+}
+
 self.addEventListener('install', (event) => {
-  // Activate immediately so the newest SW controls pages without a double reload.
+  // Activate as soon as install finishes, so the newest SW controls pages without a double reload.
   self.skipWaiting();
-  // Keep the whole app for an offline reload. Best effort, one file at a time:
-  // a missing file never fails the install.
+  // Everything is fetched HERE, while no page waits on this worker: the
+  // whole app for an offline reload, then the MediaPipe files so hands start
+  // offline even if they were never turned on online. Best effort, each fetch
+  // bounded; a failure never rejects the install.
   event.waitUntil((async () => {
     await Promise.all(PRECACHE.map(async (u) => {
       try {
-        const res = await fetch(new Request(abs(u), { cache: 'reload', credentials: 'same-origin' }));
+        const res = await fetchWithin(new Request(abs(u), { cache: 'reload', credentials: 'same-origin' }), {}, 20000);
         if (res && res.ok && (res.type === 'basic' || res.type === 'default' || !res.type)) await putIfOk(SHELL_CACHE, abs(u), res);
-      } catch { /* offline at install: the runtime cache fills it later */ }
+      } catch { /* offline or slow: the runtime cache fills it later */ }
     }));
+    try {
+      const c = await caches.open(TRACKING_CACHE);
+      await Promise.all([...TRACKING_SET].map(async (u) => {
+        try {
+          if (await c.match(u)) return;
+          const res = await fetchWithin(u, { mode: 'cors', credentials: 'omit' }, 20000);
+          if (res && res.ok) await c.put(u, res);
+        } catch { /* slow or offline CDN: the page's own load fills it later */ }
+      }));
+    } catch { /* never reject the install */ }
   })());
 });
 
 self.addEventListener('activate', (event) => {
+  // Only claim + drop older Mendcraft caches (earlier builds, older
+  // MediaPipe); anything not ours stays. No network here: once claimed,
+  // the page's fetches go through this worker and must not wait on a download.
   event.waitUntil((async () => {
-    // Drop older Mendcraft caches (earlier builds, older MediaPipe); keep
-    // anything that is not ours.
     const keys = await caches.keys();
     await Promise.all(keys.filter((k) => OURS.test(k) && k !== SHELL_CACHE && k !== TRACKING_CACHE).map((k) => caches.delete(k)));
     await self.clients.claim();
-    // Then fetch the tracking files once, so hands start offline even if the
-    // page never turned them on while online.
-    const c = await caches.open(TRACKING_CACHE);
-    for (const u of TRACKING_SET) {
-      try {
-        if (await c.match(u)) continue;
-        const res = await fetch(u, { mode: 'cors', credentials: 'omit' });
-        if (res && res.ok) await c.put(u, res);
-      } catch { /* offline: the page's own load fills it later */ }
-    }
   })());
 });
 
@@ -77,18 +86,22 @@ async function trackingFile(url) {
   return res;
 }
 
+/** A page's cache key: origin + path, never the query. */
+const pathKey = (url) => `${url.origin}${url.pathname}`;
+
 async function offlineCopy(req, isNavigate) {
   const shell = await caches.open(SHELL_CACHE);
-  const exact = (await shell.match(req)) || (await caches.match(req));
+  const url = new URL(req.url);
+  const exact = isNavigate || /\.html$/.test(url.pathname)
+    ? (await shell.match(pathKey(url))) || (await shell.match(req, { ignoreSearch: true }))
+    : (await shell.match(req)) || (await caches.match(req));
   if (exact) return exact;
   if (!isNavigate) return undefined;
-  const path = new URL(req.url).pathname;
+  const path = url.pathname;
   const fallbacks = [
     ...(/^\/canvas(\.html)?\/?$/.test(path) ? ['/canvas.html', '/canvas'] : []),
     '/', '/phone',
   ];
-  const loose = await shell.match(req, { ignoreSearch: true });
-  if (loose) return loose;
   for (const f of fallbacks) {
     const hit = await shell.match(abs(f));
     if (hit) return hit;
@@ -127,7 +140,9 @@ self.addEventListener('fetch', (event) => {
         : await fetch(req);
       // Keep a copy of OK responses for offline. Never blocks the response.
       if (res && res.ok && (res.type === 'basic' || res.type === 'default' || !res.type)) {
-        putIfOk(SHELL_CACHE, req, res.clone()).catch(() => undefined);
+        // Pages are kept under their path only: a query (?wizToken=, Spotify's
+        // ?code=&state=) never becomes a Cache Storage key.
+        putIfOk(SHELL_CACHE, isNavigate || isHtml ? pathKey(url) : req, res.clone()).catch(() => undefined);
       }
       return res;
     } catch (err) {
