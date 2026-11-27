@@ -18,19 +18,28 @@ describe('coerceLanguagePack', () => {
   it('rejects a partial pack that would leave some chrome in English', () => {
     const r = coerceLanguagePack({ lang: 'kn', strings: knStrings, phrases: { lampOn: ['ದೀಪ ಆನ್ ಮಾಡು'] } });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/incomplete pack: missing string/);
+    if (!r.ok) expect(r.error).toMatch(/incomplete pack: missing 11 of 15 core strings \(save, undo/);
   });
 
-  it('rejects an unknown string key', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...knStrings, hack: 'ಆನ್' }, phrases: {} }).ok).toBe(false);
+  // One bad string drops that string (it stays English) and is named in the
+  // notes; it never sinks a pack whose core strings pass.
+  const dropKeep = (keep: unknown, extra: Record<string, unknown> = {}) => coerceLanguagePack({ lang: 'kn', strings: { ...KN_PACK.strings, keep, ...extra }, phrases: {} });
+  it('ignores an unknown string key, and says so', () => {
+    const r = coerceLanguagePack({ lang: 'kn', strings: { ...KN_PACK.strings, hack: 'ಆನ್' }, phrases: {} });
+    expect(r.ok && (r.value.strings as Record<string, string>).hack).toBeUndefined();
+    expect(r.ok && r.notes).toContain('unknown keys ignored: hack');
   });
 
-  it('rejects a Latin-only string (strings must be Kannada script)', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...knStrings, keep: 'Keep' }, phrases: {} }).ok).toBe(false);
+  it('drops a Latin-only string (strings must be Kannada script)', () => {
+    const r = dropKeep('Keep');
+    expect(r.ok && r.value.strings.keep).toBeUndefined();
+    expect(r.ok && r.notes).toContain('dropped, kept English: keep (not Kannada script)');
   });
 
-  it('rejects markup in a string', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...knStrings, keep: '<b>ಇಟ್ಟುಕೋ</b>' }, phrases: {} }).ok).toBe(false);
+  it('drops markup in a string', () => {
+    const r = dropKeep('<b>ಇಟ್ಟುಕೋ</b>');
+    expect(r.ok && r.value.strings.keep).toBeUndefined();
+    expect(r.ok && r.notes).toContain('dropped, kept English: keep (markup)');
   });
 
   it('drops a phrase for an unknown intent instead of refusing the pack (live Gemini sent "ai")', () => {
@@ -46,8 +55,10 @@ describe('coerceLanguagePack', () => {
     if (r.ok) expect((r.value.phrases as Record<string, string[]>)[intent]).toEqual(['ಆನ್']);
   });
 
-  it('rejects a string longer than 80 chars', () => {
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...knStrings, keep: 'ಇ'.repeat(81) }, phrases: {} }).ok).toBe(false);
+  it('drops a string longer than 80 chars', () => {
+    const r = dropKeep('ಇ'.repeat(81));
+    expect(r.ok && r.value.strings.keep).toBeUndefined();
+    expect(r.ok && r.notes).toContain('dropped, kept English: keep (longer than 80 characters)');
   });
 });
 

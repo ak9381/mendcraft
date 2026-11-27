@@ -124,7 +124,7 @@ export function parseCanvasDocReport(raw: unknown): { doc: CanvasDoc | null; rep
   let lang: string | undefined;
   let pack: LanguagePack | undefined;
   if (d.pack !== undefined) {
-    const p = coerceLanguagePack(d.pack);
+    const p = coerceLanguagePack(d.pack, { stored: true });
     if (p.ok) { pack = p.value; lang = p.value.lang; } else repaired.push('language pack');
   }
   const drawings = coerceDrawings(d.drawings, seen);

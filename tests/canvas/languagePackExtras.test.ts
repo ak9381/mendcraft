@@ -44,10 +44,12 @@ describe('optional keys: Tools chip and review buttons', () => {
     expect(coerceLanguagePack({ lang: 'kn', strings }).ok).toBe(true);
   });
 
-  it('a pack that supplies optional keys keeps them; a bad optional value is refused', () => {
+  it('a pack that supplies optional keys keeps them; a bad optional value is dropped', () => {
     const ok = coerceLanguagePack({ lang: 'kn', strings: full() });
     expect(ok.ok && ok.value.strings.tools).toBe(KN_PACK.strings.tools);
-    expect(coerceLanguagePack({ lang: 'kn', strings: { ...full(), tools: 'Tools' } }).ok).toBe(false);
+    const bad = coerceLanguagePack({ lang: 'kn', strings: { ...full(), tools: 'Tools' } });
+    expect(bad.ok && bad.value.strings.tools).toBeUndefined();
+    expect(bad.ok && bad.notes).toContain('dropped, kept English: tools (not Kannada script)');
   });
 
   it('the scripted pack has all four optional keys in Kannada script', () => {

@@ -62,10 +62,16 @@ describe('the script check (LANG_SCRIPTS)', () => {
 
   it('a string must be mostly in its script, one line, with no hidden or direction characters', () => {
     const withKeep = (keep: string) => coerceLanguagePack({ ...KN_PACK, strings: { ...KN_PACK.strings, keep } });
-    expect(withKeep('Show everything ಅ').ok).toBe(false); // English with one Kannada letter
-    expect(withKeep('\u202Eಇಟ್ಟುಕೋ').ok).toBe(false); // right-to-left override
-    for (const c of ['\u200B', '\u200E', '\u200F', '\u202A', '\u2066', '\u2069', '\uFEFF', '\u0007']) expect(withKeep(`ಇಟ್ಟು${c}ಕೋ`).ok, escape(c)).toBe(false);
-    expect(withKeep('ಇಟ್ಟು\nಕೋ').ok).toBe(false);
+    // A failing string is dropped (it stays English) and named; the pack lives.
+    const dropped = (keep: string, why: string): void => {
+      const r = withKeep(keep);
+      expect(r.ok && r.value.strings.keep, escape(keep)).toBeUndefined();
+      expect(r.ok && r.notes, escape(keep)).toContain(`dropped, kept English: keep (${why})`);
+    };
+    dropped('Show everything ಅ', 'mostly not Kannada script'); // English with one Kannada letter
+    dropped('\u202Eಇಟ್ಟುಕೋ', 'hidden or direction characters'); // right-to-left override
+    for (const c of ['\u200B', '\u200E', '\u200F', '\u202A', '\u2066', '\u2069', '\uFEFF', '\u0007']) dropped(`ಇಟ್ಟು${c}ಕೋ`, 'hidden or direction characters');
+    dropped('ಇಟ್ಟು\nಕೋ', 'more than one line');
     const zwj = withKeep('ನೆಲ ನಕ್ಷೆ\u200Dಗಳು\u200C');
     expect(zwj.ok).toBe(true); // ZWJ / ZWNJ join Kannada letters
     const trimmed = withKeep('  ಇಟ್ಟುಕೋ  ');

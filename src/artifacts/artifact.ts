@@ -163,7 +163,7 @@ function coerceData(kind: ArtifactKind, data: Record<string, unknown>): Coerced<
     case 'plan': { const p = coercePlanData(data); return p.ok ? { ok: true, value: { ...p.value } } : p; }
     case 'connector': return coerceConnectorData(data);
     case 'pack': {
-      const p = coerceLanguagePack(data);
+      const p = coerceLanguagePack(data, { stored: true });
       return p.ok ? { ok: true, value: { ...p.value } as Record<string, unknown> } : bad(`the language pack failed its check: ${p.error}`);
     }
     case 'steps': return coerceSteps(data);

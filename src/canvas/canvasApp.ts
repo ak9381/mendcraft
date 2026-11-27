@@ -4213,6 +4213,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     const coerced = coerceLanguagePack(raw);
     if (!coerced.ok) {
+      // The AI activity log names the exact rule and keys, not just "incomplete".
+      panels.forEngine('gemini').log('note', `pack check: ${coerced.error}`);
       refuse(coerced.error.startsWith('incomplete') ? `The ${name} pack was incomplete. Still in ${currentLangName()}. Nothing was generated.`
         : `Refused the ${name} pack: ${coerced.error === SCRIPT_UNKNOWN ? 'its script can’t be checked' : coerced.error}. Nothing was generated.`);
       return;
@@ -4221,6 +4223,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const next = coerced.value;
     await finishSwarm();
     const swapCount = Object.keys(next.strings).length;
+    // What the check dropped (each stays English), so the log says why.
+    for (const n of coerced.notes ?? []) panels.forEngine('gemini').log('note', `pack check: ${n}`);
     panels.forEngine('gemini').log('replied', `${name} pack ready · ${swapCount} swaps`);
     panels.showHandoff('gemini', `apply ${swapCount} label swaps locally`);
     aiPanel.querySelector('.mc-ai-state')!.textContent = `Waiting for you. ${currentLangName()} until you keep it.`;
