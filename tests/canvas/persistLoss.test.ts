@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseCanvasDoc, parseCanvasDocReport, type CanvasDoc } from '../../src/canvas/frames';
 import {
-  BEFORE_FRESH_KEY, BEFORE_REPAIR_KEY, CANVAS_STORAGE_KEY, FRESH_SLOTS, LEGACY_DEVICES_BOARD_KEY, MAX_UNREADABLE,
+  BEFORE_FRESH_KEY, BEFORE_REPAIR_KEY, CANVAS_STORAGE_KEY, FRESH_SLOTS, REPAIR_SLOTS, LEGACY_DEVICES_BOARD_KEY, MAX_UNREADABLE,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
   keepUnreadable, loadCanvasDoc, loadLine, openFresh, resolveDevicesBoard, startFresh, withoutFresh,
 } from '../../src/canvas/canvasStore';
@@ -98,6 +98,45 @@ describe('a repaired doc is copied aside first, and the repair is named', () => 
     s.setItem(CANVAS_STORAGE_KEY, JSON.stringify({ ...doc, focusId: 'nope' }));
     loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
     expect(s.getItem(BEFORE_REPAIR_KEY)).toBe(slip);
+  });
+  it('a second, different repaired doc gets its own slot (cap 3, the first kept for good)', () => {
+    const logs: string[] = [];
+    const s = memStorage({ [CANVAS_STORAGE_KEY]: slip });
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
+    const second = JSON.stringify({ ...doc, focusId: 'nope' });
+    s.setItem(CANVAS_STORAGE_KEY, second);
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, (l) => logs.push(l));
+    expect(s.getItem(BEFORE_REPAIR_KEY)).toBe(slip);
+    expect(s.getItem(REPAIR_SLOTS[1])).toBe(second);
+    expect(logs[0]).toContain(REPAIR_SLOTS[1]);
+    expect(logs[0]).not.toContain(`under ${BEFORE_REPAIR_KEY})`);
+    const third = JSON.stringify({ ...doc, focusId: 'nope2' });
+    s.setItem(CANVAS_STORAGE_KEY, third);
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
+    const fourth = JSON.stringify({ ...doc, focusId: 'nope3' });
+    s.setItem(CANVAS_STORAGE_KEY, fourth);
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
+    expect(REPAIR_SLOTS.map((k) => s.getItem(k))).toEqual([slip, fourth, third]);
+    expect([...s.m.keys()].filter((k) => k.startsWith(BEFORE_REPAIR_KEY))).toHaveLength(3);
+  });
+  it('never claims a copy it could not make', () => {
+    const logs: string[] = [];
+    const s = memStorage({ [CANVAS_STORAGE_KEY]: slip, [BEFORE_REPAIR_KEY]: 'older text' });
+    const ro = { ...s, getItem: s.getItem, setItem: (k: string, v: string) => { if (k === CANVAS_STORAGE_KEY) s.setItem(k, v); else throw new Error('quota'); } };
+    loadCanvasDoc(ro, CANVAS_STORAGE_KEY, (l) => logs.push(l));
+    expect(logs[0]).toMatch(/repaired on load/);
+    expect(logs[0]).not.toMatch(/kept under/);
+    expect(logs[0]).toMatch(/could not be kept/);
+  });
+  it('a drawing coerceDrawings drops is listed among the repairs (and the raw text kept)', () => {
+    const d = JSON.parse(ALL_BOARDS);
+    d.drawings = { ...d.drawings, f9: { 'plan-1': { walls: [] } }, f3: { ...(d.drawings?.f3 ?? {}), 'BAD ID': { walls: [] } } };
+    const raw = JSON.stringify(d);
+    const r = parseCanvasDocReport(JSON.parse(raw));
+    expect(r.repaired).toEqual(expect.arrayContaining(['drawings for missing board f9', 'drawing BAD ID on f3']));
+    const s = memStorage({ [CANVAS_STORAGE_KEY]: raw });
+    loadCanvasDoc(s, CANVAS_STORAGE_KEY, quiet);
+    expect(s.getItem(BEFORE_REPAIR_KEY)).toBe(raw);
   });
 });
 

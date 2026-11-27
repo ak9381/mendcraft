@@ -123,7 +123,8 @@ export function parseCanvasDocReport(raw: unknown): { doc: CanvasDoc | null; rep
     const p = coerceLanguagePack(d.pack);
     if (p.ok) { pack = p.value; lang = p.value.lang; } else repaired.push('language pack');
   }
-  const drawings = coerceDrawings(d.drawings, seen);
+  // A drawing that is dropped here would be gone on the next save: named.
+  const drawings = coerceDrawings(d.drawings, seen, repaired);
   const devicesBoard = typeof d.devicesBoard === 'string' && seen.has(d.devicesBoard) ? d.devicesBoard : undefined;
   if (d.devicesBoard !== undefined && !devicesBoard) repaired.push('devices board');
   return {

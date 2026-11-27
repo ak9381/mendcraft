@@ -56,14 +56,20 @@ export function sanitizePlanDoc(raw: unknown): Record<string, unknown> | null {
 
 /** The `drawings` part of a stored canvas document: only for boards that
  *  exist, every drawing sanitized; anything off is dropped (never the boards). */
-export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>): Drawings {
+export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>, dropped?: string[]): Drawings {
   const out: Drawings = {};
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  if (raw === undefined || raw === null) return out;
+  if (typeof raw !== 'object' || Array.isArray(raw)) { dropped?.push('drawings'); return out; }
+  const short = (s: string): string => s.slice(0, 40);
   for (const [frameId, boards] of Object.entries(raw as Record<string, unknown>)) {
-    if (!frameIds.has(frameId) || !boards || typeof boards !== 'object' || Array.isArray(boards)) continue;
-    for (const [boardId, doc] of Object.entries(boards as Record<string, unknown>).slice(0, 8)) {
+    if (!frameIds.has(frameId)) { dropped?.push(`drawings for missing board ${short(frameId)}`); continue; }
+    if (!boards || typeof boards !== 'object' || Array.isArray(boards)) { dropped?.push(`drawings on ${short(frameId)}`); continue; }
+    const entries = Object.entries(boards as Record<string, unknown>);
+    if (entries.length > 8) dropped?.push(`${entries.length - 8} drawings past 8 on ${short(frameId)}`);
+    for (const [boardId, doc] of entries.slice(0, 8)) {
       const clean = /^[a-z0-9][a-z0-9-]{0,39}$/.test(boardId) ? sanitizePlanDoc(doc) : null;
       if (clean) (out[frameId] ??= {})[boardId] = clean;
+      else dropped?.push(`drawing ${short(boardId)} on ${short(frameId)}`);
     }
   }
   return out;
