@@ -172,6 +172,19 @@ export function bindOperatorHands(paused: boolean, lastBox: unknown): boolean {
   return !paused && lastBox != null;
 }
 
+/** MediaPipe's detectForVideo is synchronous (on the GPU delegate it waits
+ *  for its own readback). When runs stay slow — two in a row over
+ *  SLOW_TRACKING_RUN_MS, e.g. the GPU busy with Nano or a heavy render — each
+ *  is followed by a short pause (half its time, at most TRACKING_BACKOFF_MAX_MS)
+ *  so the page's other work gets the thread. One slow run (a hiccup) and
+ *  normal runs wait for nothing extra. */
+export const SLOW_TRACKING_RUN_MS = 50;
+export const TRACKING_BACKOFF_MAX_MS = 80;
+export function trackingBackoffMs(spentMs: number, previousWasSlow: boolean): number {
+  if (!(spentMs > SLOW_TRACKING_RUN_MS) || !previousWasSlow) return 0;
+  return Math.min(spentMs * 0.5, TRACKING_BACKOFF_MAX_MS);
+}
+
 export function createPresenceTracker(
   onEvent: (e: HandEvent) => void,
   onFrame?: (f: PresenceFrame) => void,
@@ -211,6 +224,9 @@ export function createPresenceTracker(
   let stopped = false;
   let lastFaceAt = -Infinity;
   let lastRunAt = -Infinity;
+  /** No tracking run before this time: a slow run is followed by as much idle time. */
+  let backoffUntil = -Infinity;
+  let lastRunSlow = false;
   let ts = 0;
 
   const processor = createHandsProcessor(onEvent);
@@ -377,7 +393,7 @@ export function createPresenceTracker(
     }
     const at = performance.now();
     const minGap = opts?.frameIntervalMs?.() ?? 0;
-    if (minGap > 0 && at - lastRunAt < minGap) {
+    if ((minGap > 0 && at - lastRunAt < minGap) || at < backoffUntil) {
       rafId = requestAnimationFrame(loop);
       return;
     }
@@ -410,6 +426,10 @@ export function createPresenceTracker(
       // onFrame subscribers would never see the facing signal.
       handleHands({ landmarks: [], worldLandmarks: [], handedness: [], handednesses: [] } as unknown as HandLandmarkerResult);
     }
+    const doneAt = performance.now();
+    const spent = doneAt - at;
+    backoffUntil = doneAt + trackingBackoffMs(spent, lastRunSlow);
+    lastRunSlow = spent > SLOW_TRACKING_RUN_MS;
     rafId = requestAnimationFrame(loop);
   }
 
