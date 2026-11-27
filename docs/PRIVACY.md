@@ -29,11 +29,11 @@ can actually reach another machine.
 | kind | leaves device | what is sent | what is NOT sent |
 | --- | --- | --- | --- |
 | **cloud-ai-model** | yes (cloud modes only) | command text + design ops; for point-and-say, one cropped still | camera/hand/face/voice streams |
-| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan/ui, a11y-explain, escalated intent/deixis; any-language fallbacks: `lang-detect` and non-English translate + intent | raw sensor data, voice audio |
+| **cloud-inference** (`ONLY_IN_CLOUD`) | yes | big jobs: generate plan, a11y-explain, CAD copilot (copilot-answer, guideline-explain, client-email draft, 3D materials, cad-tool on escalation), escalated intent/deixis; any-language fallbacks: `lang-detect` and non-English translate + intent | raw sensor data, voice audio |
 | **prefer-on-device** (`PREFER_ON_DEVICE`) | sometimes | runs on Nano; on fallback sends the same abstract text. Every fallback is a ledger cloud call | sensor streams |
 | **on-device-only** (`ONLY_ON_DEVICE`) | **no** | hand-adaptive profile pick runs with no `inCloudParams` — raw hand numbers can never leave, even if Nano is missing | everything |
 | **lan-bridge** (`fetch`) | **no (LAN only)** | HTTP to `127.0.0.1` local WiZ bridge → UDP to the lamp; add-a-device connector calls to a private LAN IP only | nothing reaches the internet |
-| **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames | frames go to the paired device, never to Gemini |
+| **firestore-relay** | yes (peer) | privacy-safe control snapshots, taught-recipe summaries, commands, and — only when a phone camera is paired — still frames. A phone without Nano may send a prompt to the desktop hub so the hub can redact it (tokens like [Client A]) before Gemini; the raw prompt is not sent to Gemini | frames go to the paired device, never to Gemini |
 | **remote-config** | yes | a one-way config pull (model ids, prompt-template ids, flags) | no user data |
 | **spotify** | yes | playback commands and search text to Spotify's API; optional Web Playback SDK | camera, hand, face, voice audio, access tokens (tokens stay in this browser) |
 | **network-fetch** | sometimes | the declared `fetch()` allowlist (LAN lamp bridge + Spotify + Openverse / Wikimedia) | anything not registered here |
@@ -127,24 +127,35 @@ actions is declared as the `chrome-extension` outbound kind (leaves device: no).
 The reference panel also uses the extension, when it is connected, to open a
 site that refuses to be framed (LinkedIn, Google, Spotify, Instagram, Facebook,
 X, WhatsApp, GitHub login) in a real Chrome tab, instead of sitting on
-"Loading…".
+"Loading…". Hands-free reference search uses that same extension to open a
+real Google Images or Pinterest tab, overlay numbered badges, and bring a
+picked picture back to the canvas. The extension never types into any field,
+including password or payment fields.
 
+### Picture references — the real web, Openverse fallback, and Gemini drawings
 
-### Picture references — Openverse and Wikimedia Commons
+When she says "find me references for drawings" (or "show me pictures of …")
+and picks **Search the web**, Mendcraft asks the Chrome extension to open a
+real Google Images or Pinterest tab. If the extension is not connected, it
+falls back to the Openverse API (`api.openverse.org`) and the Wikimedia
+Commons API (`commons.wikimedia.org`) and says so on the canvas. Only the
+**search text** leaves the device; the camera, hand landmarks, face mesh and
+raw voice audio never do. Results appear as numbered cards, each with its
+source and licence.
 
-When she says "find me references for drawings" (or "show me pictures of …"),
-Mendcraft searches the Openverse API (`api.openverse.org`) and the Wikimedia
-Commons API (`commons.wikimedia.org`). Only the **search text** leaves the
-device; the camera, hand landmarks, face mesh and raw voice audio never do.
-Results appear as numbered cards on the canvas, each with its source and
-licence. A "Search on the web" card can open a full-page search in the Chrome
-extension, or in a new tab if the extension is not connected — she pinches to
-confirm before anything opens.
+When she picks **Generate with Gemini** (or says "draw me a reference of …" /
+asks for landing-page inspirations or mockups), a cloud **text** Gemini model
+returns 3–4 SVG sketches or layout frames, shown as numbered cards labeled
+**Gemini · cloud**. That call is a ledger row with job `ref-generate`. Only
+the request text is sent — never sensors, photos, or an image-generating
+model. Image generation on Firebase AI Logic needs the paid Blaze plan;
+billing is not enabled.
 
-A fuzzy or non-English request may be turned into a short English search query
-by Gemini Nano on the device, or by Gemini in the cloud when Nano cannot run
-that language. That call is a ledger row with job `references`. Only the
-request text is sent, never sensors or the images themselves.
+A fuzzy or non-English web-search request may be turned into a short English
+search query by Gemini Nano on the device, or by Gemini in the cloud when
+Nano cannot run that language. That call is a ledger row with job
+`references`. Only the request text is sent, never sensors or the images
+themselves.
 
 ## Backstops
 
@@ -156,3 +167,11 @@ request text is sent, never sensors or the images themselves.
   reason. A `PREFER_ON_DEVICE` call that fell back to the cloud shows CLOUD.
 - **Confirm before apply/send**: any unsure or destructive change needs an
   explicit pinch/tap; nothing auto-sends.
+
+
+## CAD copilot and site book
+
+- Plan questions (wall thickness, room sizes, door widths) are answered on the device from the drawing data; nothing is sent.
+- Hard questions, guideline explanations, client email drafts and 3D materials go to Gemini via Firebase AI Logic as text (question + abstract plan summary).
+- The site checklist and change-log titles sync to Firestore (`sitebooks/{id}`); full plan snapshots used for revert stay on the device.
+- Client emails are only drafts: Mendcraft opens the user's mail app after a confirm and never sends.

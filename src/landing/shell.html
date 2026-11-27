@@ -88,15 +88,17 @@
 
   <div class="stage night">
     <div class="hero wrap">
-      <h1 id="h-land" tabindex="-1"><span class="d1 rv">Mendcraft.</span><span class="tagline rv d1s">Your hands and voice, in control of everything.</span></h1>
-      <p class="lede rv d2s">Dim the lamp, pause the music, reply on your phone, browse the web and design with real tools, all with small pinches and plain speech. Polished in English. Speak any language. Made for people whose hands are limited by arthritis, tremor or weak grip.</p>
-      <div class="ctas rv d3s"><button class="btn btn-p" data-go="editor">Try Mendcraft</button><button class="btn btn-s" data-scroll="film">Watch the film</button></div>
-      <p class="built rv d3s">Built with Gemini and Firebase</p>
+      <h1 id="h-land" tabindex="-1"><span class="d1 rv">Mendcraft.</span><span class="tagline rv d1s">Draw and check a floor plan with your voice and hands.</span></h1>
+      <p class="lede rv d2s">Made for people whose hands are limited by arthritis, tremor or weak grip. Pinch a target, dwell on it, or say what you want. Polished in English. Speak any language.</p>
+      <div class="ctas rv d3s"><button class="btn btn-p" data-go="editor">Open the editor</button><button class="btn btn-s" data-scroll="modes">See a plan</button></div>
     </div>
-    <div class="cons" id="cons" role="img" aria-label="You at the centre, connected to a desk lamp, a speaker, a phone, an iPad, a web browser and a laptop. Gemini Nano on this device, or Gemini in the cloud when needed, understands each request and picks a command, and a Mendcraft app carries it out on the device.">
+    <figure class="hero-product wrap rv d2s">
+      <img src="/product-studio.png" width="1440" height="900" alt="The Mendcraft editor with a two-bedroom plan. The copilot has answered “what’s the wall thickness?” straight from the drawing.">
+    </figure>
+    <div class="cons" id="cons" hidden role="img" aria-hidden="true" aria-label="You at the centre, connected to a desk lamp, a speaker, a phone, an iPad, a web browser and a laptop. Gemini Nano on this device, or Gemini in the cloud when needed, understands each request and picks a command, and a Mendcraft app carries it out on the device.">
       <svg id="heroSvg" viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true"></svg>
     </div>
-    <div class="hstrip">
+    <div class="hstrip" hidden>
       <div class="capl" aria-hidden="true">
         <p><span class="lg" lang="kn">ಕನ್ನಡ</span><span class="tx" lang="kn" id="hKn">ದೀಪದ ಬೆಳಕು ಕಡಿಮೆ ಮಾಡು</span></p>
         <p><span class="lg">English</span><span class="tx" id="hEn">Dim the lamp</span></p>
@@ -109,7 +111,7 @@
 
   <section class="sec rule" id="control" aria-labelledby="h-ctl">
     <div class="wrap">
-      <div class="sec-h"><h2 class="d2 rv" id="h-ctl">One pinch. Every device.</h2><p class="lede rv d1s">The same gesture and the same voice work everywhere, so you never switch to a mouse or a touchscreen halfway through a task. Pick a device to see a command land.</p></div>
+      <div class="sec-h"><h2 class="d2 rv" id="h-ctl">The same pinch works on every device.</h2><p class="lede rv d1s">Use the same gesture and the same voice on the lamp, the speaker, your phone and the drawing, so you never switch to a mouse halfway through a task. Pick a device to see a command land.</p></div>
       <div class="xp">
         <div class="xlist" id="xlist" role="tablist" aria-label="Devices" aria-orientation="vertical"></div>
         <div class="xview night rv" id="xpanel" role="tabpanel">
@@ -125,7 +127,7 @@
 
   <section class="sec rule" id="film" aria-labelledby="h-film">
     <div class="wrap">
-      <div class="sec-h"><h2 class="d2 rv" id="h-film">How it works.</h2><p class="lede rv d1s">Three moves, always in this order. No grip, no drag and no double-click anywhere.</p></div>
+      <div class="sec-h"><h2 class="d2 rv" id="h-film">Show your hand, then say what you want.</h2><p class="lede rv d1s">Three moves, always in this order. No grip, no drag and no double-click.</p></div>
       <div class="film">
         <div class="frame night rv" role="group" aria-label="Film placeholder showing the Mendcraft editor">
           <div class="fr-top"><svg aria-hidden="true"><use href="#i-mk"/></svg>Ground floor plan<span class="r"><span class="why" id="fWhy">Kannada detected → cloud</span><span class="sig cloud" id="fSig">Gemini · cloud</span></span></div>
@@ -151,11 +153,11 @@
 
   <section class="sec rule" id="gemini" aria-labelledby="h-gem">
     <div class="wrap">
-      <div class="sec-h"><h2 class="d2 rv" id="h-gem">How Gemini powers Mendcraft</h2><p class="lede rv d1s">Two Gemini models do the understanding. Gemini Nano runs inside Chrome on your computer for quick, private work. Gemini in the cloud, reached through Firebase AI Logic, takes the jobs that need more. A router picks one for every request and shows you why. Gemini then picks a command, and a Mendcraft app carries it out.</p></div>
+      <div class="sec-h"><h2 class="d2 rv" id="h-gem">Which model answers, and why</h2><p class="lede rv d1s">Gemini Nano runs in Chrome on your computer for quick, private work. Gemini in the cloud, reached through Firebase AI Logic, takes the jobs that need more. A router picks one for every request and shows you why. Then a Mendcraft app carries out the command.</p></div>
       <div class="gx rv" role="group" aria-label="Try an example request" id="gx"></div>
       <div class="gd night rv" id="gd">
         <svg id="gdLines" aria-hidden="true"></svg>
-        <div class="gbox" id="gb-you"><span class="k">Input</span><h3>You</h3><p class="said" id="gdSaid"></p><p id="gdSaidSub"></p></div>
+        <div class="gbox" id="gb-you"><h3>You</h3><p class="said" id="gdSaid"></p><p id="gdSaidSub"></p></div>
         <div class="gbox on" id="gb-router"><span class="k">Router, on this device</span><h3>Hybrid router</h3><p>Picks the right Gemini for every request, and says why.</p><p class="why" id="gdWhy"></p></div>
         <div class="geng">
           <div class="gbox" id="gb-nano"><span class="k">Understanding</span><h3>Gemini Nano</h3><span class="sub">In Chrome · on device</span><ul>
@@ -198,12 +200,10 @@
 
   <section class="sec rule" id="modes" aria-labelledby="h-modes">
     <div class="wrap">
-      <div class="sec-h"><h2 class="d2 rv" id="h-modes">Three modes. One way of working.</h2><p class="lede rv d1s">Say “Plan mode”, “UI mode” or “Part mode”, or pinch the mode name at the top of the editor.</p></div>
+      <div class="sec-h"><h2 class="d2 rv" id="h-modes">Walls, doors and measurements you can ask about.</h2><p class="lede rv d1s">Draw, check and walk through a plan with your voice and hands. Ask “what’s the wall thickness?” even with no signal.</p></div>
       <div class="modes">
         <div class="mtabs" role="tablist" aria-label="Modes">
           <button role="tab" id="mt-plan" aria-selected="true" aria-controls="mpanel" data-lmode="plan"><b>Plan</b><span>CAD floor plans with real measurements</span></button>
-          <button role="tab" id="mt-ui" aria-selected="false" aria-controls="mpanel" data-lmode="ui" tabindex="-1"><b>UI</b><span>Web and app screens</span></button>
-          <button role="tab" id="mt-part" aria-selected="false" aria-controls="mpanel" data-lmode="part" tabindex="-1"><b>Part</b><span>Small parts for 3D printing</span></button>
         </div>
         <div class="mpanel rv" role="tabpanel" id="mpanel" aria-labelledby="mt-plan">
           <div class="mfig"><svg id="modeFig" role="img" aria-label="Sample floor plan"></svg></div>
@@ -216,7 +216,7 @@
   <section class="sec rule" id="recipes-intro" aria-labelledby="h-rcp">
     <div class="wrap rcp">
       <div>
-        <h2 class="d2 rv" id="h-rcp">Taught once, done forever.</h2>
+        <h2 class="d2 rv" id="h-rcp">Teach a routine once, then say its name.</h2>
         <p class="lede rv d1s" style="margin-top:24px">Show Mendcraft a routine one time. After that, say its name or make its gesture, and the whole thing runs hands-free, across every device it touches.</p>
         <ol class="t3 rv d2s"><li><span>1</span>Say “Watch me”, in any language</li><li><span>2</span>Do the steps once, at your own pace</li><li><span>3</span>Give it a name and, if you like, a gesture</li></ol>
         <button class="btn btn-p" data-go="recipes">Open the recipe book</button>
@@ -229,7 +229,7 @@
     <div class="wrap prom">
       <div class="rv">
         <p class="big44" aria-hidden="true">44<sup>px</sup></p>
-        <h2 class="d3" id="h-prom">The smallest thing you will ever have to hit.</h2>
+        <h2 class="d3" id="h-prom">Buttons stay large enough to pinch.</h2>
         <p class="lede" style="margin-top:20px">Most targets are 56 px, and you can make every one of them 72. That is the first of our accessibility promises. The rest hold on every screen too.</p>
       </div>
       <ul class="plist rv d1s">
@@ -247,17 +247,25 @@
 
   <section class="stage night cta" aria-labelledby="h-cta">
     <div class="wrap" style="position:relative">
-      <h2 class="d2 rv" id="h-cta">Try Mendcraft.</h2>
-      <p class="lede rv d1s">Opens the editor with a sample floor plan. Your mouse stands in for your hand, and sample phrases stand in for your voice.</p>
+      <h2 class="d2 rv" id="h-cta">Open the editor with a sample plan.</h2>
+      <p class="lede rv d1s">Your mouse stands in for your hand, and sample phrases stand in for your voice.</p>
       <div class="ctas rv d2s"><button class="btn btn-p" data-go="editor">Open the editor</button><button class="btn btn-s" data-go="control-room">See the control room</button></div>
+    </div>
+  </section>
+
+  <section class="stage" aria-labelledby="h-backup-video" id="mc-backup-video">
+    <div class="wrap">
+      <h2 class="d2 rv" id="h-backup-video">Backup video</h2>
+      <p class="lede rv d1s">A full run, cued to each demo beat, if the live pass does not land first time.</p>
+      <div id="mc-backup-video-slot" class="rv d2s"></div>
     </div>
   </section>
 
   <footer class="foot">
     <div class="wrap foot-in">
-      <div><button class="mark" data-go="landing" aria-label="Mendcraft, home"><svg aria-hidden="true"><use href="#i-mk"/></svg>Mendcraft</button><p class="muted" style="margin-top:12px;max-width:36ch">Hands and voice, in control of everything around you.</p><p class="built" style="margin-top:16px">Built with Gemini and Firebase</p></div>
+      <div><button class="mark" data-go="landing" aria-label="Mendcraft, home"><svg aria-hidden="true"><use href="#i-mk"/></svg>Mendcraft</button><p class="muted" style="margin-top:12px;max-width:36ch">Draw and check a floor plan with your voice and hands.</p></div>
       <div><h3>Product</h3><ul><li><button class="lk" data-go="editor">Editor</button></li><li><button class="lk" data-go="recipes">Recipe book</button></li><li><button class="lk" data-go="control-room">Control room</button></li></ul></div>
-      <div><h3>Trust</h3><ul><li><button class="lk" data-scroll="gemini">How Gemini powers Mendcraft</button></li><li><button class="lk" data-go="ledger">What left this device</button></li><li><button class="lk" data-scroll="promises">Accessibility promises</button></li><li><button class="lk" data-go="preferences">Privacy settings</button></li></ul></div>
+      <div><h3>Trust</h3><ul><li><button class="lk" data-scroll="gemini">Which model answers, and why</button></li><li><button class="lk" data-go="ledger">What left this device</button></li><li><button class="lk" data-scroll="promises">Accessibility promises</button></li><li><button class="lk" data-go="preferences">Privacy settings</button></li></ul></div>
       <div><h3>Contact</h3><ul><li>hello@mendcraft.app</li><li>Polished in English. Speak any language.</li></ul></div>
       <p class="fine"><span>Mendcraft is a design prototype. Names, plans and figures are sample data.</span><span>On-device AI needs Chrome on desktop.</span></p>
     </div>
@@ -269,7 +277,7 @@
   <div class="ed">
     <div class="ed-top">
       <div class="doc"><h1 id="h-ed" tabindex="-1">Ground floor plan</h1><p id="docSub">Lakshmi’s flat, saved on this device</p></div>
-      <div class="seg" role="group" aria-label="Mode"><button aria-pressed="true" data-emode="plan">Plan</button><button aria-pressed="false" data-emode="ui">UI</button><button aria-pressed="false" data-emode="part">Part</button></div>
+      <div class="seg" role="group" aria-label="Mode"><button aria-pressed="true" data-emode="plan">Plan</button></div>
       <div class="ed-status">
         <button class="route" id="routeBadge" aria-haspopup="dialog"><span class="sig cloud" id="rbSig">Gemini · cloud</span><span class="why" id="rbWhy">Kannada detected → cloud</span></button>
         <button class="net" id="netBtn" aria-pressed="false"><svg class="i" aria-hidden="true"><use id="netIc" href="#i-wifi"/></svg><span id="netTx">Online</span><span class="q" id="netQ" hidden></span></button>
@@ -321,7 +329,7 @@
 <section class="screen tv night" id="s-control-room" data-screen="control-room" aria-labelledby="h-tv" hidden>
   <div class="tv-h">
     <div><h1 id="h-tv" tabindex="-1">Control room</h1><p>Lakshmi’s studio, on the living room TV. Every request shows which Gemini understood it and the command it picked.</p></div>
-    <button class="btn btn-p" id="tvDemo"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg><span>Run a live demo</span></button>
+    <button class="btn btn-p" id="tvDemo"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg><span>Play a sample walk</span></button>
   </div>
   <div class="tv-grid">
     <section class="tile t-dev" aria-labelledby="h-dev">
@@ -336,7 +344,7 @@
       </div>
     </section>
     <section class="tile t-feed" aria-labelledby="h-feed">
-      <h2 id="h-feed"><span>AI feed</span><span>Which Gemini, why, and the command it picked</span></h2>
+      <h2 id="h-feed"><span>What ran, and why</span><span>Which Gemini, why, and the command it picked</span></h2>
       <ol class="feed" id="tvFeed"></ol>
     </section>
     <section class="tile t-lamp" aria-labelledby="h-lamp"><h2 id="h-lamp"><span>Desk lamp</span><span>Warm white</span></h2><div id="lampBox" class="stack"></div></section>

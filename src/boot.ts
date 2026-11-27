@@ -1,13 +1,21 @@
 // Entry fork — runs BEFORE the editor shell mounts. Firebase Hosting rewrites
-// every path to /index.html, so routing is decided here from the URL:
-//   /                          → the marketing landing
-//   /studio (or ?sim / ?play)  → the hands-free editor
-//   /remote (or ?view=remote)  → the phone remote + camera page
-//   /control                   → the iPad control room
-//   /judges                    → the guided-tour page
-//   /spotify                   → Spotify OAuth callback (token exchange, then close the pop-up or bounce back)
+// every path to /index.html, so routing is decided here from the URL. The
+// smart canvas (src/canvas) is the default story; everything below is a
+// legacy page from the old single-page studio and only mounts behind a
+// feature flag (?flags=name, persisted to localStorage so it survives a
+// redirect) — otherwise it bounces to the canvas:
+//   /                          → the old marketing landing     [flag: landing]
+//   /studio (or ?sim / ?play)  → the old hands-free editor      [flag: studio]
+//   /remote (or ?view=remote)  → the phone remote + camera page [flag: remote]
+//   /phone (or ?view=phone)    → the remote's "lamp & music" PWA variant [flag: remote]
+//   /control                   → the iPad control room          [flag: control]
+//   /judges                    → the old guided-tour page       [flag: judgesLegacy]
+//   /spotify                   → Spotify OAuth callback, used only by the old studio's music panel [flag: studio]
 
 import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
+import { loadFlags } from './core/flags';
+
+const flags = loadFlags();
 
 // Inside the thin Android shell (Capacitor) the bundle is served from
 // https://localhost/ with no path — the native app IS the remote, so route
@@ -25,29 +33,55 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
   window.location.replace(canvasUrl(window.location.search));
 } else if (isSpotifyRoute(window.location.pathname, window.location.search)) {
   // OAuth redirect: exchange the auth code, stash tokens, go back to the page
-  // she came from. On the iOS Capacitor shell this route is not used — Connect
-  // opens the web app instead (the hosted /spotify URL cannot return into the app).
-  const { handleSpotifyCallback } = await import('./music/spotifyCallback');
-  await handleSpotifyCallback();
+  // she came from. Only the old studio's music panel sends anyone here, so it
+  // is gated the same as that studio (the 'studio' flag persists across the
+  // OAuth round trip via localStorage, since the provider drops query params).
+  if (flags.has('studio')) {
+    const { handleSpotifyCallback } = await import('./music/spotifyCallback');
+    await handleSpotifyCallback();
+  } else {
+    window.location.replace(canvasUrl(window.location.search));
+  }
 } else if (isPhoneRoute(window.location.pathname, window.location.search)) {
   // /phone is the iPhone PWA install target: the remote page in its compact
   // "lamp & music" variant (large play/pause, volume, lamp on/off/dim).
-  const { mountRemotePage } = await import('./relay/remotePage');
-  await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!, { variant: 'phone' });
+  if (flags.has('remote')) {
+    const { mountRemotePage } = await import('./relay/remotePage');
+    await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!, { variant: 'phone' });
+  } else {
+    window.location.replace(canvasUrl(window.location.search));
+  }
 } else if ((isNativeShell && !isIosShell) || isRemoteRoute(window.location.pathname, window.location.search)) {
-  const { mountRemotePage } = await import('./relay/remotePage');
-  await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!);
+  if (isNativeShell || flags.has('remote')) {
+    const { mountRemotePage } = await import('./relay/remotePage');
+    await mountRemotePage(document.querySelector<HTMLDivElement>('#app')!);
+  } else {
+    window.location.replace(canvasUrl(window.location.search));
+  }
 } else if (isControlRoute(window.location.pathname, window.location.search)) {
-  const { mountControlPage } = await import('./relay/controlPage');
-  await mountControlPage(document.querySelector<HTMLDivElement>('#app')!);
+  if (flags.has('control')) {
+    const { mountControlPage } = await import('./relay/controlPage');
+    await mountControlPage(document.querySelector<HTMLDivElement>('#app')!);
+  } else {
+    window.location.replace(canvasUrl(window.location.search));
+  }
 } else if (isJudgesRoute(window.location.pathname, window.location.search)) {
-  const { mountJudgesPage } = await import('./judges/judgesPage');
-  await mountJudgesPage(document.querySelector<HTMLDivElement>('#app')!);
-} else if (isLandingRoute(window.location.pathname, window.location.search)) {
+  if (flags.has('judgesLegacy')) {
+    const { mountJudgesPage } = await import('./judges/judgesPage');
+    await mountJudgesPage(document.querySelector<HTMLDivElement>('#app')!);
+  } else {
+    // The judges link now opens the seeded canvas tour instead of the old page.
+    window.location.replace('/canvas.html?sim=1');
+  }
+} else if (isLandingRoute(window.location.pathname, window.location.search) && flags.has('landing')) {
+  // The old landing tells the earlier story; the front door is the canvas now.
   const { mountLandingPage } = await import('./landing/landingPage');
   mountLandingPage(document.querySelector<HTMLDivElement>('#app')!);
-} else {
+} else if (flags.has('studio')) {
   await import('./main');
+} else {
+  // Any other unmatched path (old studio fallback) now goes to the canvas by default.
+  window.location.replace(canvasUrl(window.location.search));
 }
 
 // Register the PWA service worker in production builds only (dev keeps HMR

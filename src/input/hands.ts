@@ -79,6 +79,7 @@ export function createHandTracker(
     for (const track of stream?.getTracks() ?? []) track.stop();
     stream = null;
     video.srcObject = null;
+    video.remove(); // idempotent: no-op if already detached
     landmarker?.close();
     landmarker = null;
     onFrame?.([]);

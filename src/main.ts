@@ -1,10 +1,13 @@
 import './style.css';
+import './references/board.css';
 import { getActiveMode, listModes, setActiveMode } from './core/modes';
 import type { ModeController, StepResult, ViewportHandle } from './core/controller';
 import type { HandEvent } from './input/hands';
 import { createPresenceTracker, type PresenceTracker, type PresenceFrame } from './input/presence';
+import { findLiveCameraStream } from './input/cameraShare';
 import { createHandOverlay } from './ui/handOverlay';
 import { createFaceOverlay } from './ui/faceOverlay';
+import { createHandHover, magnetPull } from './ui/handHover';
 import { createVoiceController, type VoiceController } from './input/voice';
 import { createGestureRecognizer } from './input/gestures';
 import type { GestureAction } from './input/gestureMap';
@@ -33,6 +36,8 @@ import {
   resolveDeixis,
   verifyOp,
   prepareHybrid,
+  warmCloud,
+  warmOnDevice,
   getHybridStatus,
   routerEnv,
   adaptHandProfile,
@@ -54,6 +59,11 @@ import {
   type InteractionProfile, type ProfileAdaptation,
 } from './input/handProfile';
 import { createHandProfilePanel } from './ui/handProfilePanel';
+import {
+  clearSavedVoice, loadSavedVoice, parseChangeVoice, pickSpokenVoice, previewPhrase,
+  resolveChangeVoice, saveVoice, toSynthVoice, type ChangeVoiceIntent, type SynthVoice,
+} from './ai/speechVoices';
+import { createVoicePanel } from './ui/voicePanel';
 import { isAccessibilityRequest, recheckFix, type A11yExplanation, type A11yIssue } from './core/a11y';
 import { createA11yPanel } from './ui/a11yPanel';
 import {
@@ -89,8 +99,49 @@ import { checkLanguageAvailability, type FusionOutcome } from './ai/hybrid';
 import { createLedger, type LedgerSource } from './core/ledger';
 import { createLedgerPanel } from './ui/ledgerPanel';
 import { recordInference } from './firebase/telemetry';
+import { createChangeLog, planDigest, ACTOR_LABEL, type Actor, type ChangeEntry } from './cad/changeLog';
+import { createSiteChecklist, fallbackEmail, isHardQuestion, mailtoUrl, type EmailDraft } from './cad/siteChecklist';
+import { createGeminiReview, proposalForReview, unresolvedReview, waitingForGemini, type GeminiReviewItem } from './cad/geminiReview';
+import { withChangeRecording } from './cad/recording';
+import { checkGuidelines, summarizeReport, GUIDELINE_SETS, REGION_IDS, type GuidelineReport, type RegionId } from './cad/guidelines';
+import { proposeStair } from './cad/stairs';
+import { answerPlanQuestion, isPlanQuestion, isPlanJudgementQuestion, isSimplePlanQuestion } from './cad/planQA';
+import { parseCopilot, isInstantCopilot, shouldNanoPickIntent, refineCadPick } from './cad/copilot';
+import { raceHardQuestion, NANO_ROUTE_TIMEOUT_MS } from './cad/hardRace';
+import {
+  formatRouteLine,
+  routeGemini,
+  routeNanoCanvas,
+  routeOffline,
+  routePlanData,
+  routeSpeculative,
+  type RouteInfo,
+} from './cad/routeReason';
+import { createSpeculativeEngine, guessesAgree, type SpeculativeDraft, type SpeculativeStats } from './cad/speculative';
+import { cadTool, describeCall, toolToAction, type ToolCall } from './cad/tools';
+import { LAYER_LABEL, type LayerId } from './cad/layers';
+import { presetFor, PHOTO_RENDER_NOTE, coerceSetMaterialsOp, isSetMaterialsOp, makeSetMaterialsOp, type MaterialPlan } from './cad/materials';
+import { siteBookId, syncSiteBook } from './cad/sync';
+import { createCopilotPanel, createWalkControls } from './ui/copilotPanel';
+import { createDirectoryPanel } from './ui/directoryPanel';
+import { mountStudioChrome, proposalFromChange } from './ux/mountStudio';
+import { catalogRoute } from './ux/routeCatalog';
+import { GETTING_QUICK_READY, LATER_LIST_PROMISE, OFFLINE_QUICK_ONLY, QUICK_READY } from './ux/wording';
+import { deepWorkingLabel, playDeepChime, playDeepTick } from './ux/deepWait';
+import { sharmaHouseOps, WARMUP_PROMPT } from './ux/demoKit';
+import {
+  IDLE_LEAVE, LEAVE_UNDO_MS, PINCH_HOLD_MS as LEAVE_HOLD_MS, armLeave, canUndoLeave,
+  completeHold, leaveCardCopy, releaseHold, startHold, undoLeave, type LeaveState,
+} from './ux/leaveApp';
+import type { Focusable } from './ux/focusModel';
+import { discoveryLevel } from './ux/suggestions';
+import { askCopilot, condenseUtterance, draftClientEmail, pickCadTool, proposeMaterials } from './ai/hybrid';
+import { shouldCondense } from './ai/condense';
+import {
+  bindDirectory, createDirectory, createIndexedDbDirectoryStore, fillVisible, protectText,
+} from './privacy/directory';
+import type { PlanDoc } from './plan/doc';
 import { generatePlan } from './ai/hybrid';
-import { generateUi } from './ai/hybridStudio';
 import { isFirebaseConfigured } from './firebase/app';
 import {
   createJobQueue, createIndexedDbStore, type JobKind, type QueuedJob,
@@ -121,10 +172,15 @@ import { resolveGesture, nextRestState } from './input/gestureDispatch';
 import { matchTemplate } from './input/gestureTemplates';
 import { createFaceCueDetector, faceRatios } from './input/faceCues';
 import { createDwellClicker } from './input/dwell';
+import { createOneEuroFilter } from './input/oneEuro';
+import { createClickCooldown } from './input/clickCooldown';
+import { parseListenPhrase } from './input/listening';
 import { applyGestureHints, createGestureGuide, gestureLabel } from './ui/gestureHints';
 import { createLampPanel } from './ui/lampPanel';
 import { createMusicPanel } from './ui/musicPanel';
 import { parseMusicIntent } from './music/musicIntent';
+import { createReferenceBoard, isReferenceRecipe, recipeSearchQuery, DRAWING_REFERENCES_RECIPE, makeSearch, searchPageUrl, type RefHit, type SearchEngine } from './references';
+import { refineSearchQuery, generateReferenceOptions } from './ai/hybrid';
 import { parseChromeIntent, intentToRequest } from './extension/intents';
 import { createExtensionBridge } from './extension/bridge';
 import { addClip, emptyClips, type ClipsState } from './extension/clips';
@@ -136,7 +192,8 @@ import { getCachedConnector, saveConnector as cacheConnector, saveDevice as cach
 import { builtinWizConnector, connectorKey, isWizIdentity, runAction } from './devices/connector';
 import { identityFromWords, deviceNameIn, isAddDevicePhrase } from './devices/identify';
 import { bridgeHealthy, discoverDevices, makeTransports } from './devices/discovery';
-import { aimGimbalAt, getGimbalPlugin, isIosShell } from './devices/native';
+import { aimGimbalAt, disableSystemTracking, getGimbalPlugin, isIosShell } from './devices/native';
+import { createGimbalFollow } from './devices/gimbalFollow';
 import { createSimWorld } from './devices/simDevice';
 import { identifyDevice, writeDeviceConnector, checkDeviceEffect } from './ai/hybrid';
 import { lampStateLabel, type LampState } from './devices/wiz';
@@ -198,8 +255,8 @@ const hintButtonsHtml = mode.hints
   .map((h) => `<button type="button" data-cmd="${h.command}">${h.label}</button>`)
   .join('');
 
-const MODE_SHORT_LABEL: Record<string, string> = { plan: 'Plan', part: 'Part', ui: 'UI' };
-const modeSwitchHtml = listModes()
+const MODE_SHORT_LABEL: Record<string, string> = { plan: 'Plan' };
+const modeSwitchHtml = listModes().length < 2 ? '' : listModes()
   .map((m) => {
     const active = m.id === mode.id;
     const soon = m.status === 'coming-soon';
@@ -211,78 +268,8 @@ const modeSwitchHtml = listModes()
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <header id="topbar">
-    <a class="brand" href="/">Mendcraft</a>
-    <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
-    <label id="lang-pick" class="lang-pick" title="${LANGUAGE_PROMISE} Auto detects the language of each command and listens in the last one it heard; pick a language if it mishears you.">
-      <span class="sr-only">Speech language</span>
-      <select id="lang-select" aria-label="Speech language. ${LANGUAGE_PROMISE}"><option value="${AUTO_PICK}"${langPick === AUTO_PICK ? ' selected' : ''}>${autoLabel(currentLanguage)}</option>${LANGUAGES
-        .map((l) => `<option value="${l.code}"${l.code === langPick ? ' selected' : ''}>${l.label}</option>`)
-        .join('')}</select>
-      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
-    </label>
-    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help</button>
-    ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
-    <button id="btn-camera" type="button" aria-pressed="false">Camera</button>
-    <button id="btn-register" type="button" hidden>Register me</button>
-    <button id="btn-reregister" type="button" hidden>Re-register</button>
-    <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
-    <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
-    <div class="spacer"></div>
-    <button id="btn-undo" type="button">Undo</button>
-    <button id="btn-redo" type="button">Redo</button>
-    <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
-    <button id="btn-export" type="button">${mode.exportLabel}</button>
-    ${mode.id === 'ui' ? '<button id="btn-copy-html" type="button">Copy HTML</button>' : ''}
-    ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
-    <div id="more-wrap" class="more-wrap">
-      <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
-      <div id="more-menu" class="more-menu" role="menu" hidden>
-        <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
-        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gestures</button>
-        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">My hands</button>
-        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
-        <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
-        <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
-        <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
-        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair a phone as a remote control and camera (scan a QR)">Pair phone</button>
-        <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
-        <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
-        <button id="btn-a11y" type="button" class="ghost" title="Check accessibility (door widths, turning circles, contrast…) — also via the command 'check accessibility'">Access check</button>
-        <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
-        <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
-        <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
-        <div id="progress-wrap" hidden>
-          <div id="progress-bar" role="progressbar" aria-label="On-device AI download" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
-          <span id="progress-label">0%</span>
-        </div>
-      </div>
-    </div>
-  </header>
-  <div id="statusbar" role="group" aria-label="System status">
-    <span class="status-chip">
-      <span class="status-k">AI</span>
-      <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
-      <span id="conf-state" class="conf-state" hidden></span>
-    </span>
-    <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
-    <span class="status-chip"><span class="status-k">On-device model</span><span id="model-state" class="status-v">checking…</span></span>
-    <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
-    <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
-    <span class="status-chip"><span class="status-k">Tracking</span><span id="tracking-state" class="status-v">camera off</span></span>
-    <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard.">
-      <span class="status-k">Pinch</span>
-      <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
-      <span id="pinch-meter-label" class="status-v">—</span>
-    </span>
-    <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
-    <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
-      <span class="status-k">Chrome</span>
-      <span id="chrome-ext-state" class="status-v">not connected</span>
-    </span>
-  </div>
   <div id="layout">
-    <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom.">
+    <div id="viewport" tabindex="0" role="application" aria-label="Design viewport. Click an object to select it; arrow keys pan, +/- zoom. Dwell or speak if a pinch is hard.">
       <div id="resume-hint" class="resume-hint" role="status" hidden>Look at the screen to resume</div>
       <p id="privacy-line" class="privacy-line" hidden>Face and hand data stay on this device. Nothing is uploaded.</p>
       <div id="caption-bar" class="caption-bar" role="status" aria-live="polite" hidden>
@@ -291,15 +278,16 @@ app.innerHTML = `
       </div>
       <div id="choice-bar" class="choice-bar" role="group" aria-label="Did you mean" hidden></div>
       <div id="chrome-confirm" class="recipe-confirm chrome-confirm" hidden></div>
+      <button type="button" id="btn-panel-chip" class="mc-panel-chip" aria-expanded="false" aria-controls="panel" title="Objects and command">Objects</button>
       <div id="empty-hint" class="empty-hint">
         <p>${mode.hint}</p>
         <div class="hint-buttons">${hintButtonsHtml}</div>
       </div>
     </div>
-    <aside id="panel" aria-label="Design details">
+    <aside id="panel" class="is-collapsed" aria-label="Design details" hidden>
       <div id="fail-states" role="alert"></div>
-      <section id="queue-section" aria-label="Offline cloud job queue" hidden>
-        <h2>Cloud queue <span id="queue-count" class="queue-count"></span></h2>
+      <section id="queue-section" aria-label="Later list" hidden>
+        <h2>Later list <span id="queue-count" class="queue-count"></span></h2>
         <p id="queue-note" class="queue-note"></p>
         <ul id="queue-list" class="queue-list"></ul>
       </section>
@@ -332,6 +320,88 @@ app.innerHTML = `
       </section>
     </aside>
   </div>
+  <div id="statusbar" role="group" aria-label="System status">
+    <a class="brand" href="/">Mendcraft</a>
+    ${SIM_ACTIVE ? '<span class="badge badge-sim" title="Judge/simulation mode — no camera or mic needed">SIM</span>' : ''}
+    <div id="mode-switch" role="group" aria-label="Design mode">${modeSwitchHtml}</div>
+    <label id="lang-pick" class="lang-pick" title="${LANGUAGE_PROMISE} Auto detects the language of each command and listens in the last one it heard; pick a language if it mishears you.">
+      <span class="sr-only">Speech language</span>
+      <select id="lang-select" aria-label="Speech language. ${LANGUAGE_PROMISE}"><option value="${AUTO_PICK}"${langPick === AUTO_PICK ? ' selected' : ''}>${autoLabel(currentLanguage)}</option>${LANGUAGES
+        .map((l) => `<option value="${l.code}"${l.code === langPick ? ' selected' : ''}>${l.label}</option>`)
+        .join('')}</select>
+      <button id="btn-mute" type="button" class="ghost" aria-pressed="false" title="Mute or unmute spoken replies">🔊 <span class="btn-label">Voice</span></button>
+    </label>
+    <span id="listen-chip" class="status-chip" data-state="listening" title="Say ‘Mendcraft sleep’ so background speech cannot fire commands. Say ‘Mendcraft wake’ to listen again.">
+      <span class="status-k">Mic</span>
+      <span id="listen-state" class="status-v">Listening</span>
+    </span>
+    <span class="status-chip">
+      <span class="status-k sr-only">Source</span>
+      <span id="source-badge" class="badge badge-rules" tabindex="0" role="img">RULES</span>
+      <span id="conf-state" class="conf-state" hidden></span>
+    </span>
+    <span class="status-chip" title="${LANGUAGE_PROMISE}"><span class="status-k">Language</span><span id="lang-state" class="status-v">${langPick === AUTO_PICK ? 'Auto' : 'Picked'} · ${currentLanguage.englishName}</span></span>
+    <span class="status-chip"><span class="status-k">Quick</span><span id="model-state" class="status-v">checking…</span></span>
+    <span class="status-chip"><span class="status-k">Facing</span><span id="facing-state" class="status-v">—</span></span>
+    <span class="status-chip"><span class="status-k">Operator</span><span id="operator-state" class="status-v">—</span></span>
+    <span class="status-chip"><span class="status-k">Hand</span><span id="tracking-state" class="status-v">Hand not seen</span></span>
+    <span class="status-chip" id="pinch-chip" title="Pinch strength: close thumb and index until the bar fills and turns green. Hover and wait to select if a pinch is hard. You can also speak the command.">
+      <span class="status-k">Pinch</span>
+      <span id="pinch-meter" class="pinch-meter" role="meter" aria-label="Pinch strength" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="pinch-meter-fill"></span></span>
+      <span id="pinch-meter-label" class="status-v">—</span>
+    </span>
+    <span class="status-chip"><span class="status-k">Network</span><span id="net-state" class="status-v net-online" tabindex="0">Online</span></span>
+    <span id="chrome-ext-chip" class="status-chip" title="Load the Mendcraft Chrome extension (chrome://extensions, Developer mode, Load unpacked, pick the extension folder) to copy and paste in any Chrome tab.">
+      <span class="status-k">Chrome</span>
+      <span id="chrome-ext-state" class="status-v">not connected</span>
+    </span>
+  </div>
+  <div id="history-island" class="mc-island mc-island-history" role="group" aria-label="Undo and redo">
+    <button id="btn-undo" type="button">Undo</button>
+    <button id="btn-redo" type="button">Redo</button>
+  </div>
+  <div id="zoom-island" class="mc-island mc-island-zoom" role="group" aria-label="Zoom">
+    <button id="btn-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+    <button id="btn-zoom-fit" type="button" title="Zoom to fit the plan" aria-label="Zoom to fit">Fit</button>
+    <button id="btn-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+  </div>
+  <header id="topbar">
+    <button id="btn-help" type="button" class="ghost" title="Help and guided tour">Help</button>
+    <button id="btn-camera" type="button" aria-pressed="false">Camera</button>
+    <button id="btn-register" type="button" hidden>Register me</button>
+    <button id="btn-reregister" type="button" hidden>Re-register</button>
+    <button id="btn-mic" type="button" aria-pressed="false">Mic</button>
+    <button id="btn-add-device" type="button" aria-haspopup="dialog" aria-label="Add a device" title="Add a device: point a camera at it, or say “add the lamp”">+ <span class="btn-label">Device</span></button>
+    <button id="btn-copilot" type="button" aria-pressed="false" title="Review and History">Review &amp; History</button>
+    <button id="btn-3d" type="button" aria-pressed="false" hidden>3D view</button>
+    <button id="btn-export" type="button">${mode.exportLabel}</button>
+    ${SIM_ACTIVE ? '<button id="btn-demo" type="button">Play demo</button>' : ''}
+    <div id="more-wrap" class="more-wrap">
+      <button id="btn-more" type="button" class="ghost" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" aria-label="More tools" title="More tools">More</button>
+      <div id="more-menu" class="more-menu" role="menu" hidden>
+        <button id="btn-setup" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="First-run setup: reach, pinch, steadiness, your own gestures and voice shortcuts (stays on this device)">Set up hands</button>
+        <button id="btn-gestures" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Gesture guide</button>
+        <button id="btn-hands" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Adapt pointer sensitivity to your hands (on-device)">Pointer comfort</button>
+        <button id="btn-voice" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pick the voice that speaks replies (voices already on this device)">Spoken voice</button>
+        <button id="btn-directory" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="People directory: names stay on this device and are replaced with tokens before anything goes to Gemini">Directory</button>
+        <button id="btn-keyboard" type="button" class="ghost" aria-pressed="false">Keyboard</button>
+        <button id="btn-reference" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog">Reference</button>
+        <button id="btn-routing" type="button" class="ghost" aria-pressed="false" title="Show how each command was routed (rules / on-device / cloud)">Routing</button>
+        <button id="btn-ledger" type="button" class="ghost" aria-pressed="false" title="What left this device: a ledger of every cloud call vs. the private on-device events">What left device</button>
+        <button id="btn-pair" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Pair an iPad or phone as a remote and a second camera (scan a QR)">Pair iPad or phone</button>
+        <button id="btn-lamp" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Control a WiZ lamp over the local bridge (npm run wiz-bridge)">Lamp</button>
+        <button id="btn-music" type="button" class="ghost" aria-pressed="false" aria-haspopup="dialog" title="Play music: Spotify Premium when connected, otherwise the built-in player">Music</button>
+        <button id="btn-a11y" type="button" class="ghost" title="Guideline check: door widths, stairs, room sizes. Never certified code compliance. Also say “check the plan”.">Guideline check</button>
+        <button id="btn-teach" type="button" class="ghost" aria-pressed="false" title="Teach a recipe: turn on, do the task once, then say 'save this as <name>'">Teach</button>
+        <button id="btn-recipes" type="button" class="ghost" aria-pressed="false" title="Recipe book: taught-once tasks you can replay by saying 'do <name>'">Recipes</button>
+        <button id="btn-ai" type="button" disabled>Checking on-device AI…</button>
+        <div id="progress-wrap" hidden>
+          <div id="progress-bar" role="progressbar" aria-label="Getting Quick ready" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+          <span id="progress-label">0%</span>
+        </div>
+      </div>
+    </div>
+  </header>
   <div id="sr-live" class="sr-only" aria-live="polite"></div>
   <div id="status-live" class="sr-only" aria-live="polite"></div>
   <div id="mc-toast" class="mc-toast" role="status" aria-live="polite" hidden></div>
@@ -353,6 +423,50 @@ const modelStateEl = el<HTMLSpanElement>('model-state');
 const facingStateEl = el<HTMLSpanElement>('facing-state');
 const operatorStateEl = el<HTMLSpanElement>('operator-state');
 const trackingStateEl = el<HTMLSpanElement>('tracking-state');
+let lastHandState: 'seen' | 'paused' | 'off' = 'off';
+let quickDownloadPercent: number | undefined;
+let studioChrome: ReturnType<typeof mountStudioChrome> | null = null;
+let leaveState: LeaveState = IDLE_LEAVE;
+let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+let deepAudio: AudioContext | undefined;
+function deepSound(): AudioContext | undefined {
+  try { return deepAudio ??= new AudioContext(); } catch { return undefined; }
+}
+function beginDeepWait(kind: 'copilot' | 'lighting' | 'email' | 'connector' | 'plan' | 'other'): void {
+  playDeepTick(deepSound());
+  copilotPanel.setBusy(deepWorkingLabel(kind));
+}
+function endDeepWait(): void {
+  copilotPanel.setBusy(null);
+  playDeepChime(deepSound());
+}
+function refreshStudioStatus(): void {
+  if (!studioChrome) return;
+  const st = getHybridStatus();
+  const quick = st.deviceModel === 'ready' ? 'ready'
+    : st.deviceModel === 'downloading' ? 'getting-ready'
+    : st.deviceModel === 'idle' ? 'checking'
+    : 'unavailable';
+  studioChrome.setStatus({
+    online: typeof net !== 'undefined' ? net.online() : true,
+    quick,
+    quickPercent: typeof quickDownloadPercent === 'undefined' ? undefined : quickDownloadPercent,
+    mic: voiceListening ? 'listening' : 'sleep',
+    hand: lastHandState,
+  });
+}
+function setTracking(text: string): void {
+  const paused = /paused/i.test(text);
+  const off = text === 'camera off' || /starting camera|camera off/i.test(text);
+  const seen = !off && !paused && /(?:^|[^\d])([1-9]\d*)\s/.test(text);
+  lastHandState = paused ? 'paused' : seen ? 'seen' : 'off';
+  trackingStateEl.textContent = lastHandState === 'seen' ? 'Hand seen' : lastHandState === 'paused' ? 'Hands paused' : 'Hand not seen';
+  trackingStateEl.title = text;
+  trackingStateEl.closest('.status-chip')?.classList.toggle('is-live', lastHandState === 'seen');
+  refreshStudioStatus();
+}
+const listenChip = el<HTMLSpanElement>('listen-chip');
+const listenStateEl = el<HTMLSpanElement>('listen-state');
 const pinchMeterEl = el<HTMLSpanElement>('pinch-meter');
 const pinchMeterFill = el<HTMLSpanElement>('pinch-meter-fill');
 const pinchMeterLabel = el<HTMLSpanElement>('pinch-meter-label');
@@ -375,6 +489,7 @@ const btnAi = el<HTMLButtonElement>('btn-ai');
 const btnUndo = el<HTMLButtonElement>('btn-undo');
 const btnRedo = el<HTMLButtonElement>('btn-redo');
 const btn3d = el<HTMLButtonElement>('btn-3d');
+const btnCopilot = el<HTMLButtonElement>('btn-copilot');
 const btnExport = el<HTMLButtonElement>('btn-export');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
 const progressBar = el<HTMLDivElement>('progress-bar');
@@ -411,12 +526,14 @@ function say(message: string): void {
  *  pickReply already fell back to English otherwise). */
 function speakSynth(message: string, lang: Language = DEFAULT_LANGUAGE): void {
   if (!('speechSynthesis' in window)) return;
-  const voice = pickVoice(window.speechSynthesis.getVoices(), lang);
+  const raw = window.speechSynthesis.getVoices();
+  const picked = pickSpokenVoice(raw.map(toSynthVoice), { lang: lang.speechLang, saved: loadSavedVoice() });
+  const voice = picked ? raw.find((v) => v.voiceURI === picked.voiceURI) ?? null : null;
   if (!voice && !isEnglish(lang)) return;
   const utter = new SpeechSynthesisUtterance(message);
   utter.rate = 1.1;
   utter.lang = lang.speechLang;
-  if (voice) utter.voice = voice as SpeechSynthesisVoice;
+  if (voice) utter.voice = voice;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utter);
 }
@@ -468,7 +585,14 @@ const SOURCE_TOOLTIP: Record<'on-device' | 'cloud' | 'rules', string> = {
   rules: 'Answered by the built-in deterministic parser — fully offline, no AI.',
 };
 
+// Change-log context (who / why for the next recorded edit).
+let applyingReviewed = false;
+let lastUtteranceAt = 0;
+let lastUtteranceText = '';
+let lastUtteranceSource: ChangeEntry['source'] = 'rules';
+
 function setBadge(source: Source, reason?: RouteReason, translated = false, note?: string | null): void {
+  lastUtteranceSource = source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules';
   sourceBadge.className = `badge badge-${source}`;
   const label = reason
     ? languageBadgeLabel(source, reason, currentLanguage, translated)
@@ -478,11 +602,47 @@ function setBadge(source: Source, reason?: RouteReason, translated = false, note
   sourceBadge.title = `${SOURCE_TOOLTIP[source]}${why}`;
   sourceBadge.setAttribute('aria-label', `AI source: ${label}. ${SOURCE_TOOLTIP[source]}${why}`);
 }
+/** Honest badge when the numbers were read from the drawing, not invented by Nano. */
+function setPlanDataBadge(note?: string): void {
+  lastUtteranceSource = 'rules';
+  sourceBadge.className = 'badge badge-rules';
+  sourceBadge.textContent = 'Plan data · on device';
+  const tip = note
+    ? `${note} The numbers come from the drawing; no model guessed them.`
+    : 'Read from the drawing on this device. No model was asked.';
+  sourceBadge.title = tip;
+  sourceBadge.setAttribute('aria-label', `AI source: Plan data · on device. ${tip}`);
+}
 setBadge('rules');
 
 // ---- live caption bar (her words + the English translation) ----------------
 
-/** Show what was heard; the translation line fills in once fusion returns. */
+/** Show what was heard; the translation line fills in once fusion returns.
+ *  The bar is a compact caption (not a full-height column) and fades out. */
+const CAPTION_HOLD_MS = 4000;
+const CAPTION_FADE_MS = 600;
+let captionHideTimer: ReturnType<typeof setTimeout> | undefined;
+let captionFadeTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleCaptionHide(): void {
+  captionBar.classList.remove('is-fading');
+  if (captionHideTimer) clearTimeout(captionHideTimer);
+  if (captionFadeTimer) clearTimeout(captionFadeTimer);
+  const reduce = typeof matchMedia === 'function'
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  captionHideTimer = setTimeout(() => {
+    if (reduce) {
+      captionBar.hidden = true;
+      return;
+    }
+    captionBar.classList.add('is-fading');
+    captionFadeTimer = setTimeout(() => {
+      captionBar.hidden = true;
+      captionBar.classList.remove('is-fading');
+    }, CAPTION_FADE_MS);
+  }, CAPTION_HOLD_MS);
+}
+
 function showCaptionHeard(heard: string): void {
   const text = heard.trim();
   if (!text) return;
@@ -491,6 +651,7 @@ function showCaptionHeard(heard: string): void {
   captionTranslation.hidden = true;
   captionTranslation.textContent = '';
   captionBar.hidden = false;
+  scheduleCaptionHide();
   controlCaption = {
     heard: text, translation: null,
     langCode: currentLanguage.code, langLabel: currentLanguage.englishName,
@@ -504,6 +665,8 @@ function showCaptionTranslation(heard: string, translation?: string): void {
   captionTranslation.textContent = `→ ${cap.translation}`;
   captionTranslation.lang = 'en';
   captionTranslation.hidden = false;
+  captionBar.hidden = false;
+  scheduleCaptionHide();
   controlCaption = {
     heard: cap.heard, translation: cap.translation,
     langCode: currentLanguage.code, langLabel: currentLanguage.englishName,
@@ -569,7 +732,7 @@ async function detectCommandLanguage(text: string): Promise<Detection> {
     recordLedger('cloud', 'lang-detect (simulated)', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, 0);
   } else {
     const t0 = performance.now();
-    const r = await detectLanguageCloud(text);
+    const r = await detectLanguageCloud(text, { planNames: planLabelNames() });
     // The transcript left the device whether or not an answer came back.
     recordLedger('cloud', 'lang-detect', 'no on-device language detector', `detect language: ${JSON.stringify(text)}`, r?.ms ?? performance.now() - t0);
     detection = r?.detection ?? plan.fallback;
@@ -605,13 +768,72 @@ function applyLanguage(pick: string, announce: boolean): void {
 
 // ---- controller + renderer (mode-provided) ----
 
-if (mode.id === 'ui') viewportEl.classList.add('ui-mode');
-const controller: ModeController = await mode.createController();
+// Every drawing change goes through the change log: her own edits are recorded
+// as applied; accepted AI proposals and reverts are recorded by the log itself.
+const changeLog = createChangeLog(typeof localStorage !== 'undefined' ? localStorage : null);
+const siteChecklist = createSiteChecklist(typeof localStorage !== 'undefined' ? localStorage : null);
+const geminiReview = createGeminiReview(typeof localStorage !== 'undefined' ? localStorage : null);
+const peopleDirectory = createDirectory(createIndexedDbDirectoryStore());
+bindDirectory(peopleDirectory);
+window.addEventListener('pagehide', () => changeLog.flush());
+const rawController: ModeController = await mode.createController();
+const controller: ModeController = withChangeRecording(rawController, {
+  log: changeLog,
+  suppressed: () => applyingReviewed,
+  why: () => (Date.now() - lastUtteranceAt < 8000 && lastUtteranceText ? `You said: "${lastUtteranceText}"` : 'Direct edit (pinch / mouse)'),
+  source: () => (Date.now() - lastUtteranceAt < 8000 ? lastUtteranceSource : 'rules'),
+});
 const viewport: ViewportHandle = await mode.createRenderer(viewportEl, controller, (id) => {
   if (!id) return;
   controller.selectId(id);
   renderAll();
 });
+
+const btnPanelChip = el<HTMLButtonElement>('btn-panel-chip');
+const panelEl = el<HTMLElement>('panel');
+function setPanelOpen(on: boolean): void {
+  panelEl.classList.toggle('is-collapsed', !on);
+  panelEl.hidden = !on;
+  btnPanelChip.setAttribute('aria-expanded', String(on));
+  btnPanelChip.classList.toggle('is-open', on);
+}
+btnPanelChip.addEventListener('click', () => setPanelOpen(panelEl.classList.contains('is-collapsed')));
+setPanelOpen(false);
+
+(function dockUndoRedo(): void {
+  const dock = viewportEl.querySelector('.mc-palette');
+  const island = document.getElementById('history-island');
+  if (!dock || !island) return;
+  const group = document.createElement('div');
+  group.className = 'mc-dock-edit';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', 'Undo and redo');
+  group.append(btnUndo, btnRedo);
+  dock.append(group);
+  island.remove();
+})();
+
+(function dockAsk(): void {
+  const form = document.getElementById('command-box');
+  const topbar = document.getElementById('topbar');
+  if (!form || !topbar || !topbar.parentElement) return;
+  form.classList.add('mc-ask');
+  const input = document.getElementById('command-input');
+  if (input instanceof HTMLInputElement) {
+    input.placeholder = 'Say it, or type here';
+    input.setAttribute('aria-label', 'Say or type a command');
+  }
+  const cluster = document.createElement('div');
+  cluster.className = 'mc-session-cluster';
+  cluster.setAttribute('role', 'group');
+  cluster.setAttribute('aria-label', 'Session');
+  topbar.parentElement.insertBefore(cluster, topbar);
+  cluster.append(form, topbar);
+  for (const sel of ['#last-command', '#op-json', '#verifier-result']) {
+    const section = document.querySelector(sel)?.closest('section');
+    if (section instanceof HTMLElement) section.hidden = true;
+  }
+})();
 
 let hadContent = false;
 function renderAll(): void {
@@ -625,6 +847,12 @@ function renderAll(): void {
   if (!hadContent && count > 0) {
     hadContent = true;
     viewport.fit?.();
+    // Wait for the spoken-caption pill to fade so the next-step hint is not covered.
+    window.setTimeout(() => {
+      if (controller.listItems().length > 0) {
+        viewport.showHint?.('You can say: add a door, check the plan, or convert to 3D.');
+      }
+    }, 4500);
   } else if (count === 0) {
     hadContent = false;
   }
@@ -632,6 +860,8 @@ function renderAll(): void {
 
 function renderParts(): void {
   const items = controller.listItems();
+  const n = items.length;
+  btnPanelChip.textContent = n ? `Objects · ${n}` : 'Objects';
   partsList.innerHTML = '';
   for (const item of items) {
     const li = document.createElement('li');
@@ -797,6 +1027,86 @@ function toggleButton(btn: HTMLButtonElement, on: boolean): void {
   btn.classList.toggle('active', on);
 }
 
+// ---- spoken voice picker (ai/speechVoices + ui/voicePanel) ----
+// Free, on-device: replies speak with a voice the browser already has, and the
+// choice stays in this browser's localStorage. No paid TTS, ever.
+const btnVoice = el<HTMLButtonElement>('btn-voice');
+const btnDirectory = el<HTMLButtonElement>('btn-directory');
+
+function listSynthVoices(): SynthVoice[] {
+  if (!('speechSynthesis' in window)) return [];
+  return window.speechSynthesis.getVoices().map(toSynthVoice);
+}
+
+/** Speak with one specific voice, even when mute or a terse profile would
+ *  silence ordinary replies — she asked to hear this voice. */
+function speakWithVoice(text: string, voice: SynthVoice | null): void {
+  if (!('speechSynthesis' in window)) {
+    srLive.textContent = 'This browser cannot speak. Replies stay as text.';
+    return;
+  }
+  srLive.textContent = text;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.1;
+  if (voice) {
+    utter.lang = voice.lang;
+    const raw = window.speechSynthesis.getVoices().find((x) => x.voiceURI === voice.voiceURI);
+    if (raw) utter.voice = raw;
+  }
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utter);
+}
+
+const voicePanel = createVoicePanel({
+  getVoices: listSynthVoices,
+  onChange: (saved) => {
+    const voice = pickSpokenVoice(listSynthVoices(), { lang: currentLanguage.speechLang, saved });
+    const text = saved ? `Voice set to ${saved.name ?? 'your pick'}.` : 'Back to the usual voice.';
+    if (muted) { srLive.textContent = text; return; } // mute still wins for the confirm
+    speakWithVoice(text, voice);
+  },
+  onPreview: (voice) => speakWithVoice(previewPhrase(voice.lang), voice),
+});
+viewportEl.appendChild(voicePanel.element);
+btnVoice.addEventListener('click', () => {
+  overflowMenu.close();
+  voicePanel.toggle();
+  toggleButton(btnVoice, voicePanel.isOpen());
+});
+const directoryPanel = createDirectoryPanel(peopleDirectory);
+viewportEl.appendChild(directoryPanel.element);
+btnDirectory.addEventListener('click', () => {
+  overflowMenu.close();
+  directoryPanel.toggle();
+  toggleButton(btnDirectory, directoryPanel.isOpen());
+});
+peopleDirectory.subscribe(() => {
+  if (directoryPanel.isOpen()) directoryPanel.refresh();
+  toggleButton(btnDirectory, directoryPanel.isOpen());
+});
+if ('speechSynthesis' in window && typeof window.speechSynthesis.addEventListener === 'function') {
+  // Chrome fills getVoices() late; repaint the open panel when the list lands.
+  window.speechSynthesis.addEventListener('voiceschanged', () => voicePanel.refresh());
+}
+
+/** "Change voice" / "use the Soumya voice" / "preview the voice": resolved by
+ *  pure resolveChangeVoice; this applies the storage + panel side effects. */
+function runChangeVoice(intent: ChangeVoiceIntent, utterance: string): boolean {
+  const out = resolveChangeVoice(intent, listSynthVoices(), loadSavedVoice(), currentLanguage.speechLang);
+  if (out.action === 'reset') clearSavedVoice();
+  if (out.action === 'set' && out.voice) saveVoice(out.voice);
+  if (out.action === 'open' || out.action === 'not-found') {
+    voicePanel.open();
+    toggleButton(btnVoice, true);
+  }
+  voicePanel.refresh();
+  speakWithVoice(out.say, out.voice);
+  setBadge('rules', 'exact');
+  recordLedger('rules', 'command', 'voice picker', utterance);
+  verifierEl.textContent = out.say;
+  return true;
+}
+
 
 // ---- first-run setup + a gesture for every button ----
 // Pure logic: setup/calibration, setup/setupState, input/motionGestures,
@@ -805,6 +1115,9 @@ function toggleButton(btn: HTMLButtonElement, on: boolean): void {
 let setupData: SetupData = loadSetup();
 const motion = createMotionRecognizer();
 const dwell = createDwellClicker(900);
+const cursorFilter = createOneEuroFilter();
+const clickCooldown = createClickCooldown();
+let voiceListening = true;
 const faceCues = createFaceCueDetector();
 let resting = false;
 let lastClosedPanel: HTMLElement | null = null;
@@ -895,6 +1208,19 @@ function setResting(on: boolean): void {
   say(on ? 'Resting. Gestures paused. Wave to wake.' : 'Awake. Gestures on.');
 }
 
+function setListening(on: boolean): void {
+  if (voiceListening === on) {
+    say(on ? 'Already listening.' : 'Already sleeping. Say Mendcraft wake to listen.');
+    return;
+  }
+  voiceListening = on;
+  listenChip.dataset.state = on ? 'listening' : 'sleep';
+  listenStateEl.textContent = on ? 'Mic on' : 'Mic sleeping';
+  document.body.classList.toggle('mc-voice-sleep', !on);
+  say(on ? 'Listening. Commands are on.' : 'Sleeping. Say Mendcraft wake when you want me to listen.');
+  refreshStudioStatus();
+}
+
 /** Panels a palm swipe "back" can close, newest first. */
 function topOpenPanel(): HTMLElement | null {
   const open = [...viewportEl.children].filter((c): c is HTMLElement =>
@@ -903,6 +1229,8 @@ function topOpenPanel(): HTMLElement | null {
 }
 
 function closeTopPanel(): boolean {
+  if (refBoard.isGridOpen() || refBoard.isChooserOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+  if (refsTabOpen) { void chromeBridge.request('closeRefs'); refsTabOpen = false; say('References closed.'); return true; }
   if (overflowMenu.isOpen()) { overflowMenu.close(); return true; }
   const panel = topOpenPanel();
   if (!panel) return false;
@@ -947,7 +1275,7 @@ function lampButton(sel: string): void {
 
 /** Something is waiting for a yes (chips, recipe card, a11y preview)? */
 function somethingPending(): boolean {
-  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || !chromeConfirmEl.hidden || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
+  return !choiceBarEl.hidden || !recipeConfirmEl.hidden || !chromeConfirmEl.hidden || refBoard.pendingConfirm() || document.querySelector('.mc-a11y-preview:not([hidden])') !== null;
 }
 
 /** Run a button or command target. Returns false if nothing ran. */
@@ -955,23 +1283,34 @@ function runTarget(target: string, value?: number): boolean {
   switch (target) {
     case 'add-device': void openAddDevice(); return true;
     case 'confirm':
+      if (refBoard.pendingConfirm() && refBoard.confirm()) return true;
       if (!chromeConfirmEl.hidden) { void confirmChromePaste('pinch'); return true; }
       if (addDevicePanel.confirm()) return true;
       viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       return true;
     case 'cancel':
       window.speechSynthesis?.cancel();
+      if (refBoard.isGridOpen() || refBoard.isChooserOpen()) { refBoard.closeGrid(); say('References closed.'); return true; }
+      if (refsTabOpen) { void chromeBridge.request('closeRefs'); refsTabOpen = false; say('References closed.'); return true; }
       if (!chromeConfirmEl.hidden) { clearChromeConfirm(); return true; }
       if (addDevicePanel.cancel()) return true;
       if (handleChoiceReply('cancel') !== null) return true;
-      return closeTopPanel();
+      if (somethingPending()) return closeTopPanel();
+      if (studioChrome?.palmOpen()) { studioChrome.closePalm(); return true; }
+      studioChrome?.openPalm({ x: viewportEl.clientWidth / 2, y: viewportEl.clientHeight / 2 });
+      say('Palm menu. Glide toward a slice and pinch, or say its name.');
+      return true;
     case 'nav-back':
       return closeTopPanel();
     case 'nav-forward':
       if (lastClosedPanel && lastClosedPanel.hidden) { lastClosedPanel.hidden = false; return true; }
       return false;
-    case 'scroll-up': scrollUnderCursor(-1); return true;
-    case 'scroll-down': scrollUnderCursor(1); return true;
+    case 'scroll-up':
+      if (refsTabOpen) { void chromeBridge.request('refsCommand', { cmd: 'scrollUp' }); return true; }
+      scrollUnderCursor(-1); return true;
+    case 'scroll-down':
+      if (refsTabOpen) { void chromeBridge.request('refsCommand', { cmd: 'scrollDown' }); return true; }
+      scrollUnderCursor(1); return true;
     case 'rotate': void runUtterance(`rotate ${value && value < 0 ? 345 : 15}`); return true;
     case 'tap':
       if (!lastHand) return false;
@@ -1038,7 +1377,7 @@ function matchCustom(points: readonly { x: number; y: number }[] | undefined, no
 /** Elements a pinch (or dwell) clicks directly: any button/link/control in the
  *  toolbar, menus, side panel and floating panels (the canvas keeps its own
  *  pick/drag path). */
-const HAND_CLICK_ZONES = '#topbar, #panel, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
+const HAND_CLICK_ZONES = '#topbar, #panel, #btn-panel-chip, #statusbar, .mc-dock-edit, #zoom-island, #choice-bar, #chrome-confirm, .hint-buttons, [role="dialog"], [role="menu"], .mc-setup, .mc-lamp-panel, .mc-music-panel, .mc-add-device, .mc-ref-panel, .mc-ref-layer, .mc-clips, .mc-rest-banner, #onboarding, .mc-tour';
 function handClickable(clientX: number, clientY: number): HTMLElement | null {
   const hit = document.elementFromPoint(clientX, clientY);
   const ctl = hit?.closest<HTMLElement>('button, a[href], select, input, summary, label');
@@ -1086,10 +1425,27 @@ btnLedger.addEventListener('click', () => {
 });
 el<HTMLButtonElement>('btn-a11y').addEventListener('click', () => {
   if (a11yPanel.isOpen()) a11yPanel.toggle();
-  else void runUtterance('check accessibility');
+  else void runUtterance('check the plan');
 });
 
 // ---- phone relay pairing (QR → /remote page → room over an injected transport)
+
+const controlFeed: AiFeedInput[] = [];
+let controlDevice: DeviceId = 'laptop';
+let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
+let controlRev = 0;
+// Appliance state mirrored to the /control dashboard. Lamp comes from the editor
+// lamp panel (laptop ↔ bridge); music comes from Spotify / the built-in player
+// (this laptop) and is also relayed from a paired phone remote.
+// 'unknown' until we actually know — never a fabricated "connected".
+let controlLamp: ApplianceState = 'unknown';
+let controlLampDetail: string | undefined;
+let controlMusic: ApplianceState = 'unknown';
+let controlMusicTitle: string | undefined;
+
+let hostSession: HostSession | null = null;
+let relayTransport: RelayTransport | null = null;
+let pairingInit: Promise<void> | null = null;
 
 const btnPair = el<HTMLButtonElement>('btn-pair');
 const pairPanel = createPairPanel({
@@ -1122,6 +1478,110 @@ btnMusic.addEventListener('click', () => {
   musicPanel.toggle();
   toggleButton(btnMusic, musicPanel.isOpen());
 });
+
+let refsTabOpen = false;
+let lastRefsEngine: SearchEngine = 'google';
+let lastRefsQuery = '';
+let lastRefsCursorAt = 0;
+
+function hitFromExtImage(data: { url?: string; title?: string; text?: string } | undefined, engine: SearchEngine, query: string): RefHit | null {
+  if (!data?.url) return null;
+  const src = engine === 'pinterest' ? 'Pinterest' : 'Google Images';
+  return {
+    id: `web-${Date.now()}`,
+    title: (data.title || data.text || query || 'Reference').slice(0, 80),
+    thumbUrl: data.url,
+    fullUrl: data.url,
+    pageUrl: data.url,
+    creator: '',
+    source: src,
+    license: '',
+    credit: src,
+  };
+}
+
+const refBoard = createReferenceBoard({
+  fixtures: SIM_ACTIVE,
+  refineQuery: refineSearchQuery,
+  speak: (text) => say(text),
+  onStatus: (text) => { verifierEl.textContent = text; },
+  onCall: ({ job, reason, sent, ms, source }) => {
+    recordLedger(source === 'on-device' ? 'on-device' : source === 'rules' ? 'rules' : 'cloud', job, reason, sent, ms);
+  },
+  openWeb: (url) => {
+    if (chromeBridge.isConnected()) {
+      void chromeBridge.request('openTab', { url }).then((res) => {
+        if (!res.ok) window.open(url, '_blank', 'noopener');
+      });
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
+  },
+  extensionConnected: () => chromeBridge.isConnected(),
+  isBrowserOpen: () => refsTabOpen,
+  async openBrowserSearch(query, engine) {
+    lastRefsEngine = engine;
+    lastRefsQuery = query;
+    const url = searchPageUrl(query, engine);
+    const res = await chromeBridge.request('openRefs', { query, engine, url });
+    if (!res.ok) {
+      refsTabOpen = false;
+      const detail = res.error === 'not-connected'
+        ? 'Chrome extension not connected. Load it from chrome://extensions, then Reload, to search in a real tab.'
+        : 'I could not open a Chrome tab for that search.';
+      return { ok: false, detail };
+    }
+    refsTabOpen = true;
+    const where = engine === 'pinterest' ? 'Pinterest' : 'Google Images';
+    const detail = `Opened ${where} for “${query}”. Say number three, next page, or pinch the highlighted picture. Palm or “close” to come back.`;
+    return { ok: true, detail };
+  },
+  async closeBrowser() {
+    if (!refsTabOpen) return;
+    await chromeBridge.request('closeRefs');
+    refsTabOpen = false;
+  },
+  async sendBrowserCommand(cmd) {
+    if (!refsTabOpen) return { ok: false, detail: 'No references tab is open.' };
+    const payload =
+      cmd.type === 'scroll' ? { cmd: cmd.dir === 'up' ? 'scrollUp' as const : 'scrollDown' as const }
+      : cmd.type === 'nextPage' ? { cmd: 'nextPage' as const }
+      : cmd.type === 'highlight' ? { cmd: 'highlight' as const, index: cmd.index }
+      : cmd.type === 'cursor' ? { cmd: 'cursor' as const, cursor: { x: cmd.x ?? 0.5, y: cmd.y ?? 0.5 } }
+      : cmd.type === 'pick' ? { cmd: 'pick' as const, index: cmd.index }
+      : { cmd: 'pick' as const };
+    if (cmd.type === 'close') {
+      await chromeBridge.request('closeRefs');
+      refsTabOpen = false;
+      return { ok: true, detail: 'References tab closed.' };
+    }
+    const res = await chromeBridge.request('refsCommand', payload);
+    if (!res.ok) {
+      if (res.error === 'no-refs-tab') refsTabOpen = false;
+      return { ok: false, detail: res.error || 'The references tab did not respond.' };
+    }
+    const hit = res.data?.kind === 'image' ? hitFromExtImage(res.data, lastRefsEngine, lastRefsQuery) : undefined;
+    if (hit) refsTabOpen = true;
+    return { ok: true, detail: hit ? `Picked “${hit.title}”.` : 'OK', hit: hit ?? undefined };
+  },
+  async generate(query, kind) {
+    if (SIM_ACTIVE) {
+      const { fixtureGenerated, generatedToHits } = await import('./references/mockups');
+      return generatedToHits(fixtureGenerated(query, kind));
+    }
+    const r = await generateReferenceOptions(query, kind);
+    if (!r) return null;
+    recordLedger(
+      'cloud',
+      'ref-generate',
+      kind === 'layout' ? 'Gemini layout frames' : 'Gemini reference drawings',
+      query,
+      r.ms,
+    );
+    return r.hits;
+  },
+});
+viewportEl.appendChild(refBoard.element);
 
 // ---- add a device (camera or voice → Nano names it → cached declarative
 // connector → LAN → pinch to confirm → Nano checks the effect). No gimbal needed.
@@ -1177,12 +1637,31 @@ function addDeviceDeps(mode: AddMode, hint: { pointer?: { x: number; y: number }
     },
     saveConnector: (c) => cacheConnector(c),
     discover: (_id, c) => discoverDevices(c),
-    aim: (box) => aimGimbalAt(box),
+    aim: async (box) => {
+      const ok = await aimGimbalAt(box);
+      gimbalFollow.setMode('hold');
+      return ok;
+    },
     run: (c, a, h) => runAction(c, a, {}, h, transports),
     check: (b, a, cue) => checkDeviceEffect(b, a, cue),
     saveDevice: (d) => { cachePairedDevice(d); },
   };
 }
+
+const gimbalFollow = createGimbalFollow({
+  aim: (box) => aimGimbalAt(box, globalThis, 0.45),
+  nudge: async (yaw, pitch) => {
+    const g = getGimbalPlugin();
+    if (!g) return false;
+    try {
+      const a = await g.isAvailable();
+      if (!a.available) return false;
+      return (await g.aim({ yaw, pitch, seconds: 0.6 })).ok;
+    } catch {
+      return false;
+    }
+  },
+});
 
 const addDevicePanel = createAddDevicePanel({
   sim: SIM_ACTIVE,
@@ -1195,6 +1674,9 @@ const addDevicePanel = createAddDevicePanel({
   deps: addDeviceDeps,
   enableCamera: () => void enableCamera(),
   say: (t) => say(t),
+  onOpen: () => gimbalFollow.setMode('point'),
+  onClose: () => gimbalFollow.setMode('hands'),
+  nudge: (dir) => { void gimbalFollow.nudge(dir); },
   // Honest ledger: each model call that ran, and what it sent if it was cloud.
   onStep: (ev) => {
     if (ev.sim || ev.state === 'active' || (ev.source !== 'cloud' && ev.source !== 'on-device')) return;
@@ -1225,9 +1707,6 @@ el<HTMLButtonElement>('btn-add-device').addEventListener('click', () => {
   if (addDevicePanel.isOpen()) addDevicePanel.close(); else void openAddDevice();
 });
 
-let hostSession: HostSession | null = null;
-let relayTransport: RelayTransport | null = null;
-let pairingInit: Promise<void> | null = null;
 
 /** Incoming phone commands ride the exact paths mouse/pinch already use:
  *  the Undo/Redo/Mic buttons, the shared runUtterance pipeline, and the
@@ -1408,7 +1887,38 @@ function processGestureFrame(f: PresenceFrame): void {
 // ---- command pipeline (shared by voice, text, and sim) ----
 
 async function runUtterance(utterance: string): Promise<void> {
+  const listen = parseListenPhrase(utterance);
+  if (listen === 'wake') {
+    lastCommandEl.textContent = `"${utterance}"`;
+    setListening(true);
+    return;
+  }
+  if (listen === 'sleep') {
+    lastCommandEl.textContent = `"${utterance}"`;
+    setListening(false);
+    return;
+  }
+  if (!voiceListening) {
+    lastCommandEl.textContent = 'Sleeping. Say “Mendcraft wake” to listen.';
+    return;
+  }
   lastCommandEl.textContent = `"${utterance}"`;
+  if (leaveState.phase === 'sent' && /^undo$/i.test(utterance.trim())) {
+    const next = undoLeave(leaveState, Date.now());
+    if (next.phase === 'undone') {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      say('Undone. Nothing was sent from Mendcraft.');
+      return;
+    }
+  }
+  if (studioChrome) {
+    const handled = studioChrome.handleUtterance(utterance);
+    if (handled) {
+      studioChrome.refresh();
+      return;
+    }
+  }
   let ok = false;
   try {
     ok = await runUtteranceInner(utterance);
@@ -1440,8 +1950,6 @@ let lastPointer: {
  */
 async function runPointAndSay(utterance: string, t0: number, decision: RouteDecision): Promise<boolean | null> {
   if (!lastPointer || !controller.deixisInfo) return null;
-  // The canvas port's hybrid resolves pointing on floor plans only.
-  if (mode.id !== 'plan') return null;
   const pointedId = viewport.pick(lastPointer.clientX, lastPointer.clientY);
   const kindOf = (id: string): string => controller.deixisInfo?.(id)?.kind ?? id.replace(/[-_]?\d+$/, '');
   const items = controller.listItems();
@@ -1467,6 +1975,7 @@ async function runPointAndSay(utterance: string, t0: number, decision: RouteDeci
   }
   const outcome = await resolveDeixis(utterance, image, {
     pointer: pointerPx, candidates, space: 'plan',
+    planNames: planLabelNames(),
   });
   if (!outcome) return null;
   const res = outcome.resolution;
@@ -1684,18 +2193,6 @@ const jobQueue = createJobQueue(createIndexedDbStore());
 // + reason for every AI event, cloud utterances only (private text stays here),
 // the ledger, the queue, captions and a compact scene — never camera, landmarks
 // or audio. Built fresh on every change; a no-op until a phone/iPad pairs.
-const controlFeed: AiFeedInput[] = [];
-let controlDevice: DeviceId = 'laptop';
-let controlCaption: { heard: string; translation?: string | null; langCode?: string; langLabel?: string } | null = null;
-let controlRev = 0;
-// Appliance state mirrored to the /control dashboard. Lamp comes from the editor
-// lamp panel (laptop ↔ bridge); music comes from Spotify / the built-in player
-// (this laptop) and is also relayed from a paired phone remote.
-// 'unknown' until we actually know — never a fabricated "connected".
-let controlLamp: ApplianceState = 'unknown';
-let controlLampDetail: string | undefined;
-let controlMusic: ApplianceState = 'unknown';
-let controlMusicTitle: string | undefined;
 
 /** Compact 2D primitives for the dashboard's wireframe preview. Plan walls are
  *  line segments; other modes fall back to summary-only (empty primitives). */
@@ -1728,6 +2225,8 @@ function publishControlSnapshot(): void {
       rev: controlRev,
       primitives: controlScenePrimitives(),
     },
+    changes: controlChanges(),
+    checklist: controlChecklist(),
     recipes: recipeStore.list().map((r) => ({
       id: r.id, name: r.name, device: r.device,
       taughtBy: r.taughtBy, summary: describeRecipe(r), steps: r.steps.length,
@@ -1773,22 +2272,1120 @@ let lastCommand: string | null = null;
 const net = createNetworkMonitor({ navigator, target: window });
 let draining = false;
 
+// ---- CAD copilot + reviewed changes + site checklist (src/cad) -----------
+// Her words → a typed CAD tool. When Nano is ready it picks the intent first
+// (including phrases the rules already know, like "convert 2D to 3D") and
+// hands heavy work (materials, guideline research) to Gemini. The rules
+// parser is the fallback when Nano is unavailable. Every AI canvas change is
+// a PENDING proposal in the change log until she accepts it (pinch / click /
+// "accept"); her own edits are logged as applied. Offline, hard questions
+// become the site checklist.
+
+const REGION_KEY = 'mendcraft.region';
+let guidelineRegion: RegionId = (() => {
+  try {
+    const r = localStorage.getItem(REGION_KEY);
+    return r && (REGION_IDS as readonly string[]).includes(r) ? (r as RegionId) : 'international';
+  } catch { return 'international'; }
+})();
+let lastReport: GuidelineReport | null = null;
+
+function planDoc(): PlanDoc {
+  return rawController.snapshot() as PlanDoc;
+}
+function isOnline(): boolean {
+  return net.online();
+}
+function sourceToActor(source: Source): Actor {
+  return source === 'cloud' ? 'gemini' : source === 'on-device' ? 'nano' : 'rules';
+}
+
+function applyReviewedOp(op: Record<string, unknown>): { ok: boolean; error?: string } {
+  const mat = coerceSetMaterialsOp(op);
+  if (mat) {
+    void viewport.setMaterials?.(mat.plan);
+    btn3d.setAttribute('aria-pressed', 'true');
+    btn3d.classList.toggle('active', true);
+    btn3d.textContent = '2D view';
+    return { ok: true };
+  }
+  const step = rawController.applyOp(op);
+  return { ok: step.ok, error: step.error };
+}
+
+function restoreMaterialsOp(op: Record<string, unknown> | null | undefined): void {
+  const mat = coerceSetMaterialsOp(op);
+  if (!mat) return;
+  if (mat.previous) void viewport.setMaterials?.(mat.previous);
+  if (mat.previous3d === false) {
+    viewport.toggle3D?.(false);
+    btn3d.setAttribute('aria-pressed', 'false');
+    btn3d.classList.toggle('active', false);
+    btn3d.textContent = '3D view';
+  }
+}
+
+let speculative: ReturnType<typeof createSpeculativeEngine>;
+const copilotPanel = createCopilotPanel({
+  onAccept: (id) => acceptChange(id),
+  onReject: (id) => rejectChange(id),
+  onAcceptAll: () => acceptAllChanges(),
+  onRevert: (id) => stageRevert(id),
+  onIssueShow: (issue) => highlightA11yIssue(issue),
+  onIssueFix: (issue) => proposeIssueFix(issue, 'rules'),
+  onRegion: (r) => {
+    guidelineRegion = r;
+    try { localStorage.setItem(REGION_KEY, r); } catch { /* session only */ }
+    void runGuidelineCheck(r, false);
+  },
+  onRecheck: () => void runGuidelineCheck(guidelineRegion, false),
+  onAskGemini: (id) => void askChecklistItem(id),
+  onRemoveItem: (id) => { siteChecklist.remove(id); },
+  onEmailClient: () => void emailClient(),
+  onOpenDraft: (d) => confirmOpenDraft(d),
+  onCancelDraft: () => { copilotPanel.setDraft(null); say('Email draft closed. Nothing was sent.'); },
+  onReviewAccept: (id) => acceptGeminiReview(id),
+  onReviewDrop: (id) => dropGeminiReview(id),
+  onReviewRemove: (id) => { geminiReview.remove(id); },
+});
+viewportEl.appendChild(copilotPanel.element);
+const walkControls = createWalkControls(
+  (step) => { viewport.walkStep?.(step); },
+  () => { void runCadTool({ tool: 'walkthrough', args: { on: false } }, 'her', 'Exit walk', 'rules'); },
+);
+viewportEl.appendChild(walkControls.element);
+
+let cpRenderQueued = false;
+function refreshCopilot(): void {
+  if (cpRenderQueued) return;
+  cpRenderQueued = true;
+  requestAnimationFrame(() => {
+    cpRenderQueued = false;
+    copilotPanel.setChanges(changeLog.entries());
+    copilotPanel.setChecklist(siteChecklist.items(), isOnline());
+    copilotPanel.setGeminiReview(geminiReview.items());
+    const pendN = changeLog.pending().length;
+    const toCheck = unresolvedReview(geminiReview.items()).length;
+    btnCopilot.textContent = toCheck ? `Review · ${toCheck} to check`
+      : pendN ? `Review · ${pendN} waiting`
+      : 'Review & History';
+    btnCopilot.setAttribute('aria-label', btnCopilot.textContent);
+    studioChrome?.refresh();
+    const waiting = changeLog.pending()[0];
+    const reviewWait = geminiReview.items().find((i) => i.awaitingPinch);
+    if (waiting && leaveState.phase === 'idle') {
+      studioChrome?.setProposal(proposalFromChange(waiting), {
+        onKeep: () => acceptChange(waiting.id),
+        onDrop: () => rejectChange(waiting.id),
+      });
+    } else if (reviewWait && leaveState.phase === 'idle') {
+      studioChrome?.setProposal(proposalFromReviewItem(reviewWait), {
+        onKeep: () => acceptGeminiReview(reviewWait.id),
+        onDrop: () => dropGeminiReview(reviewWait.id),
+      });
+    } else if (leaveState.phase === 'idle' && new URLSearchParams(location.search).get('ux') !== 'proposal' && new URLSearchParams(location.search).get('ux') !== 'demo' && new URLSearchParams(location.search).get('ux') !== 'tocheck') {
+      studioChrome?.setProposal(null);
+    }
+    publishControlSnapshot();
+  });
+}
+changeLog.subscribe(refreshCopilot);
+siteChecklist.subscribe(refreshCopilot);
+geminiReview.subscribe(refreshCopilot);
+net.subscribe((online) => {
+  refreshCopilot();
+  if (online) {
+    void warmCloud();
+    void syncSite();
+    const open = siteChecklist.open().length;
+    const reviewN = waitingForGemini(geminiReview.items()).length;
+    if (reviewN) {
+      showToast(`Back online. ${geminiReview.waitingCountLine()}.`);
+      say(`Back online. ${geminiReview.waitingCountLine()}.`);
+    }
+    if (open) {
+      showToast(`Back online. ${open} site question${open === 1 ? '' : 's'} waiting in your checklist.`);
+      say(`Back online. You have ${open} site question${open === 1 ? '' : 's'}. Ask Gemini, or email the client.`);
+    }
+  }
+});
+btnCopilot.addEventListener('click', () => {
+  if (copilotPanel.isOpen()) copilotPanel.close();
+  else copilotPanel.open(changeLog.pending().length ? 'review' : copilotPanel.tab());
+  toggleButton(btnCopilot, copilotPanel.isOpen());
+});
+
+function focusablesFromPlan(): Focusable[] {
+  const items = controller.listItems();
+  return items.map((it, i) => {
+    const label = it.label.toLowerCase();
+    const kind: Focusable['kind'] =
+      /stair/.test(label) ? 'stair'
+      : /door/.test(label) || it.id.startsWith('d') ? 'door'
+      : /window/.test(label) ? 'window'
+      : /room|kitchen|bedroom|bath|living/.test(label) || it.id.startsWith('r') ? 'room'
+      : /wall/.test(label) || it.id.startsWith('w') ? 'wall'
+      : 'plan';
+    return { id: it.id, kind, name: it.label, x: i * 80, y: 0 };
+  });
+}
+function currentFocus(): Focusable | null {
+  const id = controller.selectedId();
+  const all = focusablesFromPlan();
+  return all.find((f) => f.id === id) ?? (all.length ? { id: 'plan', kind: 'plan', name: 'the plan', x: 0, y: 0 } : null);
+}
+function loadSampleHouse(): void {
+  const step = controller.applyGenerated?.({ ops: sharmaHouseOps() });
+  if (step?.ok) {
+    renderAll();
+    say('Sharma House is ready. The site and levels are set. No rooms yet.');
+  } else {
+    say(step?.error ?? 'Could not load the sample house.');
+  }
+}
+async function warmupQuick(): Promise<void> {
+  try {
+    if (getHybridStatus().deviceModel !== 'ready') return;
+    if (sessionStorage.getItem('mendcraft:warmed') === '1') return;
+    sessionStorage.setItem('mendcraft:warmed', '1');
+    const { compileCommand } = await import('./ai/hybrid');
+    await compileCommand(WARMUP_PROMPT, controller.summary(), controller.selectedId());
+  } catch {
+    // Warm-up is best-effort and must never block the studio.
+  }
+}
+
+const layoutEl = document.getElementById('layout') ?? viewportEl;
+studioChrome = mountStudioChrome(layoutEl, {
+  getFocus: currentFocus,
+  getFocusables: focusablesFromPlan,
+  getChanges: () => changeLog.entries(),
+  getSuggestionSituation: () => {
+    const items = controller.listItems();
+    const rooms = items.filter((it) => /room|kitchen|bedroom|bath|living/i.test(it.label)).length;
+    return {
+      level: discoveryLevel({ hasClosedRoom: rooms > 0, roomCount: rooms, offline: !isOnline() }),
+      hasClosedRoom: rooms > 0,
+      emptyCanvas: items.length === 0,
+      keptChanges: changeLog.entries().filter((e) => e.status === 'applied').length,
+      offline: !isOnline(),
+      trigger: items.length === 0 ? 'empty-plan' : 'kept-change',
+    };
+  },
+  onPalmSlice(id) {
+    if (id === 'review') {
+      copilotPanel.open(changeLog.pending().length ? 'review' : 'history');
+      toggleButton(btnCopilot, true);
+    } else if (id === 'view') {
+      void runUtterance('walk in');
+    } else if (id === 'devices') {
+      void openAddDevice();
+    } else if (id === 'site') {
+      copilotPanel.open('checklist');
+      toggleButton(btnCopilot, true);
+    } else if (id === 'settings') {
+      document.getElementById('btn-setup')?.click();
+    } else if (id === 'studio') {
+      studioChrome?.closeHere();
+    }
+  },
+  onHereAction(phrase) { void runUtterance(phrase); },
+  onSuggestionAccept(s) { void runUtterance(s.say); },
+  onFirstRunSpeak(text) { say(text); },
+  onLoadSampleHouse: loadSampleHouse,
+});
+studioChrome.setReviewButton(btnCopilot);
+studioChrome.refresh();
+refreshStudioStatus();
+const uxShot = new URLSearchParams(location.search).get('ux');
+if (uxShot === 'here' || uxShot === 'demo') studioChrome.openHere();
+if (uxShot === 'proposal' || uxShot === 'demo') {
+  studioChrome.setProposal({
+    id: 'demo-proposal',
+    title: 'Door D2: 750 → 900 mm',
+    youAsked: 'make this door wheelchair friendly',
+    why: 'our wheelchair guideline uses 900 mm clear',
+    catalog: catalogRoute({ route: routeGemini({ nano: 'unsure' }), kind: 'escalation', sent: 'make this door wheelchair friendly' }),
+    status: 'waiting',
+  });
+}
+if (uxShot === 'tocheck' || uxShot === 'demo') {
+  if (!geminiReview.items().length) {
+    const seeds = [
+      { question: 'Is the kitchen wide enough for a wheelchair turn?', offlineAnswer: 'Yes — 1600 mm clear.' },
+      { question: 'Door D2 clear width?', offlineAnswer: '750 mm' },
+      { question: 'What is the ramp slope to the porch?', offlineAnswer: '1:12' },
+    ];
+    for (const s of seeds) geminiReview.recordOffline(s);
+    const door = geminiReview.findByQuestion('Door D2 clear width?');
+    if (door) geminiReview.recordGeminiResult(door.id, { geminiAnswer: '800 mm on the plan', agreed: false, because: 'the plan door is 800 mm, not 750 mm' });
+  }
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  const waiting = geminiReview.items().find((i) => i.awaitingPinch);
+  if (waiting) {
+    studioChrome.setProposal(proposalFromReviewItem(waiting), {
+      onKeep: () => acceptGeminiReview(waiting.id),
+      onDrop: () => dropGeminiReview(waiting.id),
+    });
+  }
+}
+if (uxShot === 'directory') {
+  if (!peopleDirectory.people().length) {
+    peopleDirectory.add({ name: 'Priya Sharma', role: 'client', phone: '+91 98765 43210', email: 'priya@example.com', note: 'Wants a wider front door' });
+    peopleDirectory.add({ name: 'Lakshmi', role: 'mother', note: 'Uses a walker' });
+    peopleDirectory.add({ name: 'Ravi', role: 'contractor' });
+  }
+  directoryPanel.open();
+  toggleButton(btnDirectory, true);
+}
+
+const siteBook = (() => {
+  try { return siteBookId(localStorage); } catch { return null; }
+})();
+async function syncSite(): Promise<void> {
+  if (!siteBook || !isOnline()) return;
+  const r = await syncSiteBook(changeLog, siteChecklist, siteBook);
+  if (!r.ok) {
+    console.info('[mendcraft]', r.reason);
+    document.body.dataset.siteSync = 'error';
+    return;
+  }
+  console.info('[mendcraft] site checklist cloud sync ok');
+  document.body.dataset.siteSync = 'ok';
+}
+
+function publishRoute(route?: RouteInfo): void {
+  if (!route) {
+    delete document.body.dataset.routeLine;
+    delete document.body.dataset.routeTier;
+    return;
+  }
+  document.body.dataset.routeLine = formatRouteLine(route);
+  document.body.dataset.routeTier = route.tier;
+}
+
+/** Stage an AI (or rules) drawing change for her review. Nothing applies yet. */
+function proposeChange(p: { actor: Actor; tool: string; title: string; why: string; op: Record<string, unknown>; source: ChangeEntry['source']; tag?: ChangeEntry['tag']; route?: RouteInfo }): ChangeEntry {
+  const e = changeLog.propose({ ...p, before: planDigest(rawController.snapshot()) });
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  const by = p.tag === 'nano-guess' ? "Nano's guess"
+    : p.tag === 'confirmed' ? "Gemini confirmed Nano's guess"
+    : p.tag === 'corrected' ? 'Gemini corrected a guess'
+    : ACTOR_LABEL[p.actor];
+  verifierEl.textContent = `${by} suggests: ${p.title}. Waiting for you. Pinch Accept, or say "accept".`;
+  // The confirm chip doubles as the pinch target for the newest proposal.
+  presentChoices(`${by} suggests: ${p.title}`, [{ label: p.title, result: p.op, source: p.source }], () => acceptChange(e.id), () => rejectChange(e.id));
+  return e;
+}
+
+function acceptChange(id: string): void {
+  const e = changeLog.get(id);
+  if (!e) return;
+  applyingReviewed = true;
+  let res: { ok: boolean; error?: string };
+  try {
+    res = changeLog.accept(id, {
+      snapshot: () => rawController.snapshot(),
+      apply: applyReviewedOp,
+      summary: () => planDigest(rawController.snapshot()),
+    });
+  } finally {
+    applyingReviewed = false;
+  }
+  if (pendingChoices) clearChoices();
+  if (!res.ok) {
+    verifierEl.textContent = `Couldn't apply "${e.title}": ${res.error ?? 'invalid'}`;
+    say(`I couldn't apply that: ${res.error ?? 'invalid change'}.`);
+    return;
+  }
+  renderAll();
+  verifierEl.textContent = `Accepted: ${e.title}. Undo or revert it any time from History.`;
+  say(`Done. ${e.title}.`);
+  if (lastReport) void runGuidelineCheck(guidelineRegion, false, true);
+}
+
+function rejectChange(id: string): void {
+  const e = changeLog.get(id);
+  if (!e || !changeLog.reject(id)) return;
+  restoreMaterialsOp(e.op);
+  verifierEl.textContent = `Rejected: ${e.title}. Nothing changed.`;
+  say('Rejected. Nothing changed.');
+}
+
+function acceptAllChanges(): void {
+  const ids = changeLog.pending().map((e) => e.id);
+  for (const id of ids) acceptChange(id);
+  if (ids.length > 1) say(`Accepted ${ids.length} changes.`);
+}
+
+function stageRevert(id: string): void {
+  const e = changeLog.get(id);
+  if (!e) return;
+  const later = changeLog.revertImpact(id);
+  const label = later.length ? `Revert "${e.title}" and ${later.length} later change${later.length === 1 ? '' : 's'}` : `Revert "${e.title}"`;
+  presentChoices(label, [{ label: 'Revert', result: { revert: id }, source: 'rules' }], () => {
+    applyingReviewed = true;
+    let r: { ok: boolean; error?: string; count?: number };
+    try {
+      r = changeLog.revert(id, {
+        restore: (doc) => {
+          const step = rawController.restoreSnapshot?.(doc) ?? { ok: false, error: 'This view cannot restore.' };
+          return { ok: step.ok, error: step.error };
+        },
+        summary: () => planDigest(rawController.snapshot()),
+      });
+    } finally {
+      applyingReviewed = false;
+    }
+    if (!r.ok) { say(r.error ?? 'Could not revert.'); verifierEl.textContent = r.error ?? 'Could not revert.'; return; }
+    const chain = [e, ...later].sort((a, b) => a.at - b.at);
+    const firstMat = chain.map((x) => x.op).find((op) => isSetMaterialsOp(op));
+    if (firstMat) restoreMaterialsOp(firstMat);
+    renderAll();
+    verifierEl.textContent = `Reverted ${r.count} change${r.count === 1 ? '' : 's'}. You can undo the revert too.`;
+    say(`Reverted ${r.count === 1 ? 'that change' : `${r.count} changes`}.`);
+  }, () => { verifierEl.textContent = 'Revert cancelled.'; });
+  say(`${label}? Say apply or cancel.`);
+}
+
+/** The deterministic guideline check (+ Gemini explanations when online). */
+async function runGuidelineCheck(region: RegionId, speak = true, quiet = false): Promise<boolean> {
+  const report = checkGuidelines(planDoc(), region);
+  lastReport = report;
+  const summary = summarizeReport(report);
+  copilotPanel.setReport(report.issues, region, summary);
+  if (quiet) return true;
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  setBadge('rules', 'exact');
+  recordLedger('rules', 'guideline-check', 'measured on this device', '');
+  verifierEl.textContent = summary;
+  if (speak) say(report.issues.length ? `${summary.replace(/^.*?: /, '')} I've marked them on the plan.` : 'Guideline check: nothing flagged.');
+  const ids = [...new Set(report.issues.flatMap((i) => i.targetIds))];
+  if (ids.length) {
+    const sel = rawController.applyOp({ op: 'select_set', ids });
+    if (!sel.ok && ids[0]) rawController.selectId(ids[0]);
+    renderAll();
+  }
+  if (!report.issues.length) return true;
+  if (!isOnline() || !cloudConfigured) {
+    siteChecklist.add(`Explain the guideline findings (${report.region.label}) and suggest fixes`, controller.summary().slice(0, 300), true);
+    verifierEl.textContent += ' Gemini will explain these when you are back online (saved to your site checklist).';
+    return true;
+  }
+  const sent = report.issues.map(({ id, rule, message, citation }) => ({ id, rule, message, citation }));
+  beginDeepWait('copilot');
+  const res = await explainAccessibility(sent, controller.summary());
+  endDeepWait();
+  recordLedger(res.source, 'guideline-explain', res.source === 'cloud' ? 'explain findings' : REASON_TEXT.private, `issues: ${JSON.stringify(sent)}`);
+  if (res.items.length) {
+    const byId = new Map(res.items.map((x) => [x.id, x]));
+    const merged = report.issues.map((i) => {
+      const x = byId.get(i.id);
+      if (!x) return i;
+      return { ...i, message: `${i.message} ${x.explanation}`, ...(x.fix && !i.fix ? { fix: x.fix as Record<string, unknown>, fixLabel: 'Gemini fix', fixSource: res.source } : {}) };
+    });
+    lastReport = { ...report, issues: merged };
+    const route = res.source === 'cloud'
+      ? routeGemini({ kind: 'guideline', model: res.model })
+      : routeOffline();
+    publishRoute(route);
+    copilotPanel.setReport(merged, region, summary, route);
+  }
+  return true;
+}
+
+function proposeIssueFix(issue: A11yIssue, by: 'rules' | 'cloud' | 'on-device'): void {
+  if (!issue.fix) return;
+  const src = issue.fixSource ?? by;
+  highlightA11yIssue(issue);
+  proposeChange({
+    actor: sourceToActor(src as Source), tool: 'fix_guideline', title: issue.fixLabel ?? 'Guideline fix',
+    why: issue.message.slice(0, 280), op: issue.fix, source: src === 'cloud' ? 'cloud' : src === 'on-device' ? 'on-device' : 'rules',
+  });
+}
+
+/** Answer a hard question: Gemini when online, else the site checklist. */
+function applyPlanAnswer(ans: { text: string; ids: string[] }, question: string, by: string, badgeNote?: string, route?: RouteInfo): true {
+  setPlanDataBadge(badgeNote);
+  const ids = 'ids' in ans && Array.isArray(ans.ids) ? ans.ids : [];
+  if (ids.length) {
+    const sel = rawController.applyOp({ op: 'select_set', ids });
+    if (!sel.ok) rawController.selectId(ids[0]);
+    renderAll();
+  }
+  const info = route ?? routePlanData({ nanoUnderstood: Boolean(badgeNote) });
+  publishRoute(info);
+  copilotPanel.setAnswer({ question, text: ans.text, by, route: info });
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  verifierEl.textContent = ans.text;
+  say(ans.text);
+  return true;
+}
+
+async function handleHardQuestion(
+  question: string,
+  opts?: { condensed?: { from: number; to: number } },
+): Promise<boolean> {
+  if (isSimplePlanQuestion(question)) {
+    const local = answerPlanQuestion(planDoc(), question);
+    if (local) {
+      recordLedger('rules', 'plan-qa', 'read from the drawing', question);
+      const refine = await maybeQueueOfflineCheck(question, local.text);
+      return applyPlanAnswer(local, question, 'Plan data · on device', undefined, refine ?? undefined);
+    }
+  }
+  // Rules-first redaction (ai/redact): only the SENT text swaps her names for
+  // neutral tokens; the question shown on the card keeps her real words.
+  const sent = protectText(question, planLabelNames());
+  const redacted = { names: sent.names, details: sent.details };
+  const judgement = isPlanJudgementQuestion(question);
+  const hard = judgement || isHardQuestion(question);
+  const online = isOnline() && cloudConfigured;
+  if (online && hard) beginDeepWait('copilot');
+  // Apply the early Gemini result (or fire once more if the final transcript
+  // changed). This is what marks Nano's guess confirmed / corrected / withdrawn.
+  if (speculative && (hard || isPlanQuestion(question))) {
+    try {
+      await speculative.onFinal(question);
+    } catch {
+      // Fall through to the parallel race below.
+    }
+  }
+  const existing = speculative?.getDraft();
+  const same = existing && existing.utterance.trim().toLowerCase() === question.trim().toLowerCase();
+  if (same && existing && (existing.state === 'confirmed' || existing.state === 'corrected' || existing.state === 'withdrawn' || existing.geminiAnswer)) {
+    endDeepWait();
+    if (existing.geminiAnswer || existing.state !== 'draft') setBadge('cloud', 'big-job');
+    showSpeculativeDraft(existing, speculative.stats(), { speak: true });
+    return true;
+  }
+  const raced = await raceHardQuestion({
+    judgement,
+    hard,
+    online,
+    deviceReady: routerEnv().deviceReady,
+    nanoTimeoutMs: NANO_ROUTE_TIMEOUT_MS,
+    pickNano: () => pickCadTool(question, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS }),
+    askCloud: () => askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label, (partial) => {
+      const streamRoute = routeGemini({ kind: judgement ? 'judgment' : 'hard', condensed: opts?.condensed, redacted });
+      publishRoute(streamRoute);
+      copilotPanel.setAnswer({ question, text: revealAnswer(partial, streamRoute).text, by: 'Gemini · cloud', route: revealAnswer(partial, streamRoute).route ?? streamRoute });
+    }).then((res) => res ? { answer: res.answer, calls: res.calls, why: res.why, source: res.source, ms: res.ms, model: res.model } : null),
+  });
+  endDeepWait();
+  if (raced.kind === 'nano-tool') {
+    const picked = raced.pick;
+    if (picked.call.tool === 'measure') {
+      const q = String(picked.call.args.question ?? question);
+      const ans = answerPlanQuestion(planDoc(), q);
+      if (ans) {
+        recordLedger('on-device', 'cad-tool', 'private', '', picked.ms);
+        lastUtteranceSource = 'on-device';
+        return applyPlanAnswer(ans, q, 'Plan data · on device', 'Nano understood the question.');
+      }
+    }
+    recordLedger(picked.source, 'cad-tool', picked.source === 'cloud' ? 'pick a CAD tool' : 'private', '', picked.ms);
+    lastUtteranceSource = picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules';
+    setBadge(picked.source === 'cloud' ? 'cloud' : picked.source === 'on-device' ? 'on-device' : 'rules', picked.source === 'on-device' ? 'private' : 'exact');
+    const call = refineCadPick(question, picked.call);
+    const tool = cadTool(call.tool);
+    const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? (picked.source === 'cloud' ? 'gemini' : picked.source === 'on-device' ? 'nano' : 'her') : 'her';
+    return runCadTool(call, actor, question, picked.source, picked.source === 'on-device' ? routeNanoCanvas() : undefined);
+  }
+  if (raced.kind === 'offline') {
+    const route = routeOffline();
+    publishRoute(route);
+    siteChecklist.add(question, controller.summary().slice(0, 300), !isOnline());
+    copilotPanel.setAnswer({
+      question,
+      text: `Saved to your site checklist: "${question}". When the signal is back, ask Gemini or email the client.`,
+      by: 'Offline · on device',
+      route,
+    });
+    copilotPanel.open('review');
+    toggleButton(btnCopilot, true);
+    setBadge('rules', 'offline');
+    recordLedger('rules', 'site-checklist', 'saved on this device (offline)', '');
+    verifierEl.textContent = `Saved to your site checklist: "${question}". When the signal is back, ask Gemini or email the client.`;
+    say('No signal right now. I saved that to your site checklist.');
+    return true;
+  }
+  if (raced.kind === 'cloud') {
+    const res = raced.cloud;
+    const route = routeGemini({
+      kind: judgement ? 'judgment' : 'hard',
+      nano: raced.nano,
+      nanoTimeoutMs: NANO_ROUTE_TIMEOUT_MS,
+      model: res.model,
+      why: res.why,
+      condensed: opts?.condensed,
+      redacted,
+    });
+    const shown = revealAnswer(res.answer, route);
+    const shownRoute = shown.route ?? route;
+    publishRoute(shownRoute);
+    setBadge('cloud', 'big-job');
+    recordLedger('cloud', 'copilot-answer', res.model ? `hard question · ${res.model}` : 'hard question', `question: ${JSON.stringify(sent.text)}\nplan: ${controller.summary().slice(0, 400)}`, res.ms);
+    copilotPanel.setAnswer({ question, text: shown.text, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route: shownRoute });
+    copilotPanel.open('review');
+    toggleButton(btnCopilot, true);
+    verifierEl.textContent = shown.text;
+    say(shown.text);
+    for (const call of res.calls) {
+      const act = toolToAction(call);
+      if (act.kind === 'op') {
+        proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || question, op: act.op, source: 'cloud', route });
+      }
+    }
+    return true;
+  }
+  siteChecklist.add(question, controller.summary().slice(0, 300), false);
+  verifierEl.textContent = `Gemini couldn't answer right now. Saved to your site checklist: "${question}".`;
+  say("Gemini couldn't answer right now, so I saved it to your checklist.");
+  copilotPanel.open('checklist');
+  return true;
+}
+
+async function askChecklistItem(id: string): Promise<void> {
+  const it = siteChecklist.get(id);
+  if (!it) return;
+  if (!isOnline() || !cloudConfigured) { say('Still no signal. I will keep it on the list.'); return; }
+  beginDeepWait('copilot');
+  const sent = protectText(it.question, planLabelNames());
+  const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+  endDeepWait();
+  if (!res) { say("Gemini couldn't answer that right now."); return; }
+  const shown = revealAnswer(res.answer, routeGemini({ kind: 'hard', model: res.model, why: res.why }));
+  const route = shown.route ?? routeGemini({ kind: 'hard', model: res.model, why: res.why });
+  publishRoute(route);
+  recordLedger('cloud', 'copilot-answer', 'site checklist item', `question: ${JSON.stringify(sent.text)}`, res.ms);
+  siteChecklist.answer(id, shown.text, 'gemini');
+  copilotPanel.setAnswer({ question: it.question, text: shown.text, by: res.model ? `Gemini · ${res.model}` : 'Gemini · cloud', route });
+  say(shown.text);
+  for (const call of res.calls) {
+    const act = toolToAction(call);
+    if (act.kind === 'op') proposeChange({ actor: 'gemini', tool: call.tool, title: describeCall(call), why: res.why || it.question, op: act.op, source: 'cloud', route });
+  }
+}
+
+async function emailClient(): Promise<boolean> {
+  const items = siteChecklist.items().filter((i) => i.status === 'open' || i.status === 'answered');
+  if (!items.length) { say('Your site checklist is empty.'); return false; }
+  copilotPanel.open('checklist');
+  toggleButton(btnCopilot, true);
+  let draft = fallbackEmail(items);
+  let by = 'Drafted on this device (no signal). Gemini can polish it when you are online.';
+  let route: RouteInfo = routeOffline();
+  if (isOnline() && cloudConfigured) {
+    beginDeepWait('email');
+    const res = await draftClientEmail(items.map((i) => ({ question: i.question, answer: i.answer })), controller.summary());
+    endDeepWait();
+    if (res) {
+      const subj = fillVisible(res.draft.subject);
+      const body = fillVisible(res.draft.body);
+      const to = fillVisible(res.draft.to);
+      draft = { ...res.draft, subject: subj.text, body: body.text, to: to.text };
+      const filled = subj.filled + body.filled + to.filled;
+      by = 'Drafted by Gemini · cloud. Read it first.';
+      route = routeGemini({ kind: 'email', model: res.model });
+      if (filled) route = { ...route, filledOnDevice: true };
+      recordLedger('cloud', 'client-email', 'draft from site checklist', `questions: ${items.length}`, res.ms);
+    }
+  }
+  publishRoute(route);
+  copilotPanel.setDraft({ draft, by, route });
+  verifierEl.textContent = 'Email draft ready below. Nothing is sent. Pinch "Open in my mail app" to open it there.';
+  say('Here is the draft. Read it, then pinch Open in my mail app. Nothing is sent until you press send there.');
+  return true;
+}
+
+/** Her confirm (pinch) → open her own mail app with the draft. Never sends. */
+function confirmOpenDraft(d: EmailDraft): void {
+  leaveState = armLeave({ kind: 'email', title: d.subject || 'Client email', detail: 'Opens your mail app. You press send there.' });
+  renderLeaveCard(d);
+  say('Pinch and hold to open this email in your mail app. You can undo for 10 seconds. Nothing is sent from Mendcraft.');
+}
+
+function renderLeaveCard(d?: EmailDraft): void {
+  if (!studioChrome) return;
+  const now = Date.now();
+  const copy = leaveCardCopy(leaveState, now);
+  const req = leaveState.request;
+  const catalog = catalogRoute({
+    route: { tier: 'gemini', engine: 'gemini', reason: 'needs writing (client email)' },
+    kind: req?.kind === 'connector' ? 'connector' : 'email',
+    sent: 'the draft and your words',
+  });
+  const sent = leaveState.phase === 'sent' || leaveState.phase === 'undone';
+  studioChrome.setProposal({
+    id: 'leave-app',
+    title: req ? (req.kind === 'connector' ? req.title : `Email: ${req.title}`) : 'Send',
+    why: req?.detail,
+    catalog,
+    status: sent ? 'leave-sent' : 'leave',
+    leaveAction: copy.action,
+    undoLabel: copy.undo,
+  }, {
+    onHoldStart: () => {
+      leaveState = startHold(leaveState, Date.now());
+      renderLeaveCard(d);
+      const started = leaveState.holdStartedAt ?? Date.now();
+      window.setTimeout(() => {
+        if (leaveState.phase !== 'holding') return;
+        finishLeave(d);
+      }, LEAVE_HOLD_MS + 30);
+      void started;
+    },
+    onHoldEnd: () => {
+      if (leaveState.phase === 'holding') {
+        leaveState = releaseHold(leaveState);
+        renderLeaveCard(d);
+      }
+    },
+    onDrop: () => {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      say('Dropped. Nothing left the app.');
+    },
+    onUndo: () => {
+      const next = undoLeave(leaveState, Date.now());
+      if (next.phase !== 'undone') return;
+      leaveState = next;
+      if (leaveTimer) clearTimeout(leaveTimer);
+      studioChrome?.setProposal(null);
+      leaveState = IDLE_LEAVE;
+      say('Undone. If your mail app opened, delete the draft there if you did not mean to send it. Nothing was sent from Mendcraft.');
+    },
+  });
+}
+
+function finishLeave(d?: EmailDraft): void {
+  leaveState = completeHold(leaveState, Date.now());
+  if (leaveState.phase !== 'sent') return;
+  if (leaveState.request?.kind === 'email' && d) {
+    window.open(mailtoUrl(d), '_blank');
+    for (const it of siteChecklist.items()) if (it.status === 'open' || it.status === 'answered') siteChecklist.mark(it.id, 'emailed');
+    copilotPanel.setDraft(null);
+    verifierEl.textContent = 'Opened in your mail app. Nothing was sent from Mendcraft. You have 10 seconds to undo.';
+    say('Opened in your mail app. Brush or say undo within 10 seconds if you did not mean to.');
+  }
+  renderLeaveCard(d);
+  if (leaveTimer) clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    if (leaveState.phase === 'sent' && !canUndoLeave(leaveState, Date.now())) {
+      leaveState = IDLE_LEAVE;
+      studioChrome?.setProposal(null);
+      studioChrome?.refresh();
+    }
+  }, LEAVE_UNDO_MS + 50);
+}
+
+/** Run one typed CAD tool call. `actor` = who asked (her) or proposed (AI). */
+async function runCadTool(call: ToolCall, actor: Actor, why: string, source: Source, route?: RouteInfo): Promise<boolean> {
+  const act = toolToAction(call);
+  if (act.kind === 'error') { verifierEl.textContent = act.error; say(act.error); return false; }
+  opJsonEl.textContent = JSON.stringify({ tool: call.tool, args: call.args, by: actor }, null, 2);
+  if (act.kind === 'op') {
+    if (actor === 'her' || act.op.op === 'select') {
+      const step = controller.applyOp(act.op);
+      if (!step.ok) { say(`I couldn't do that: ${step.error ?? 'invalid'}`); verifierEl.textContent = `Rejected: ${step.error}`; return false; }
+      renderAll();
+      verifierEl.textContent = step.message ?? 'Done.';
+      speakConfirm(String(act.op.op));
+      return true;
+    }
+    const info = route ?? (source === 'on-device' ? routeNanoCanvas() : source === 'cloud' ? routeGemini({ kind: 'hard', why }) : undefined);
+    if (info) publishRoute(info);
+    proposeChange({ actor, tool: call.tool, title: describeCall(call), why, op: act.op, source: source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules', route: info });
+    return true;
+  }
+  const a = call.args;
+  switch (act.action) {
+    case 'add_stair': {
+      const p = proposeStair(planDoc(), {
+        floorHeight: typeof a.floorHeight === 'number' ? a.floorHeight : null,
+        region: guidelineRegion, width: typeof a.width === 'number' ? a.width : undefined,
+        dir: a.dir === 'down' ? 'down' : 'up',
+      });
+      setBadge(source, source === 'rules' ? 'exact' : 'private');
+      recordLedger(source, 'stair-design', 'computed on this device', '');
+      // Staircase math is deterministic code, so the proposer is the rules
+      // (or Nano/Gemini if they picked the tool); it still waits for her OK.
+      proposeChange({
+        actor: actor === 'her' ? 'rules' : actor, tool: 'add_stair',
+        title: `Add a staircase: ${p.plan.risers} steps × ${Math.round(p.plan.rise)} mm, tread ${p.plan.tread} mm`,
+        why: `${p.summary} ${why ? `You said: "${why}".` : ''}`.trim(), op: p.op, source: 'rules',
+      });
+      say(`${p.summary} Pinch Accept to place it.`);
+      return true;
+    }
+    case 'fix_guideline': {
+      const issue = lastReport?.issues.find((i) => i.id === a.issueId);
+      if (!issue?.fix) { say('I could not find that finding. Run the guideline check first.'); return false; }
+      proposeIssueFix(issue, source === 'cloud' ? 'cloud' : source === 'on-device' ? 'on-device' : 'rules');
+      return true;
+    }
+    case 'guideline_check': {
+      const region = typeof a.region === 'string' && (REGION_IDS as readonly string[]).includes(a.region) ? (a.region as RegionId) : guidelineRegion;
+      if (region !== guidelineRegion) { guidelineRegion = region; try { localStorage.setItem(REGION_KEY, region); } catch { /* */ } }
+      return runGuidelineCheck(region);
+    }
+    case 'measure': {
+      const q = String(a.question ?? why);
+      const ans = answerPlanQuestion(planDoc(), q);
+      if (!ans) return handleHardQuestion(q);
+      recordLedger('rules', 'plan-question', 'read from the drawing on this device', '');
+      const info = routePlanData({ nanoUnderstood: source === 'on-device' });
+      publishRoute(info);
+      setPlanDataBadge(source === 'on-device' ? 'Nano understood the question.' : undefined);
+      copilotPanel.setAnswer({ question: q, text: ans.text, by: source === 'on-device' ? 'Plan data · on device (Nano understood the question)' : 'Plan data · on device', route: info });
+      if (ans.ids.length) {
+        const sel = rawController.applyOp({ op: 'select_set', ids: ans.ids });
+        if (!sel.ok) rawController.selectId(ans.ids[0]);
+        renderAll();
+      }
+      verifierEl.textContent = ans.text;
+      say(ans.text);
+      return true;
+    }
+    case 'ask_gemini':
+      return handleHardQuestion(String(a.question ?? why));
+    case 'zoom': {
+      if (a.to === 'fit') viewport.fit?.();
+      else viewport.zoom?.(a.to === 'in' ? 1.4 : 1 / 1.4);
+      say(a.to === 'fit' ? 'Whole plan.' : a.to === 'in' ? 'Zoomed in.' : 'Zoomed out.');
+      return true;
+    }
+    case 'show_layer': {
+      const visible = a.visible !== false;
+      viewport.setLayerHidden?.(String(a.layer), !visible);
+      const label = LAYER_LABEL[a.layer as LayerId] ?? String(a.layer);
+      verifierEl.textContent = `${label} ${visible ? 'shown' : 'hidden'} (view only, the drawing is unchanged).`;
+      say(`${label} ${visible ? 'shown' : 'hidden'}.`);
+      return true;
+    }
+    case 'view_3d': {
+      const on = a.on !== false;
+      if (!on && viewport.walking?.()) { await viewport.walk?.(false); walkControls.show(false); }
+      const now = viewport.toggle3D ? viewport.toggle3D(on) : false;
+      btn3d.setAttribute('aria-pressed', String(now));
+      say(now ? '3D view.' : 'Plan view.');
+      return true;
+    }
+    case 'walkthrough': {
+      if (a.on === false) {
+        await viewport.walk?.(false);
+        walkControls.show(false);
+        verifierEl.textContent = 'Walk ended. Still in 3D; say "back to plan" for the drawing.';
+        say('Walk ended.');
+        return true;
+      }
+      if (!viewport.walk) { say('Walkthrough is not available here.'); return false; }
+      const ok = await viewport.walk(true, typeof a.room === 'string' ? a.room : undefined);
+      btn3d.setAttribute('aria-pressed', 'true');
+      walkControls.show(ok);
+      setBadge('rules', 'private');
+      recordLedger('rules', 'walkthrough', 'runs on this device', '');
+      verifierEl.textContent = 'Walking through your plan, on this device. Say forward, back, turn left, turn right, or stop. Or pinch the big buttons.';
+      say('Walking through your plan. Say forward, turn left, turn right, or stop.');
+      return ok;
+    }
+    case 'walk_step':
+      viewport.walkStep?.(String(a.step));
+      return true;
+    case 'set_materials': {
+      const style = String(a.style ?? why);
+      let plan: MaterialPlan = presetFor(style);
+      let by = 'a preset on this device';
+      let handedOff = false;
+      if (isOnline() && cloudConfigured) {
+        copilotPanel.open('review');
+        toggleButton(btnCopilot, true);
+        beginDeepWait('lighting');
+        verifierEl.textContent = deepWorkingLabel('lighting');
+        const res = await proposeMaterials(style, controller.summary());
+        endDeepWait();
+        if (res) {
+          plan = res.plan;
+          by = 'Gemini · cloud';
+          handedOff = source === 'on-device' || actor === 'nano';
+          recordLedger('cloud', 'materials', handedOff ? 'Nano → Gemini' : '3D materials as data', `request: ${JSON.stringify(style)}\nrooms: ${controller.summary().slice(0, 300)}`, res.ms);
+          setBadge('cloud', handedOff ? 'handed-off' : 'big-job', false, handedOff ? 'Nano picked the tool, Gemini chose materials' : null);
+          if (handedOff) {
+            routerPanel.add({
+              utterance: why || style, planned: 'on-device', source: 'cloud',
+              reason: 'handed-off', escalated: true, ms: res.ms,
+              note: 'Nano picked set_materials; Gemini chose materials and light',
+            });
+          }
+        }
+      } else {
+        setBadge(source === 'on-device' ? 'on-device' : 'rules', source === 'on-device' ? 'private' : (isOnline() ? 'private' : 'offline'));
+      }
+      const names = `walls ${plan.walls.name}, floor ${plan.floor.name}`;
+      // Convert-to-3D always waits for Accept — even a local preset is a look change.
+      {
+        const previous = (viewport.currentMaterials?.() as MaterialPlan | undefined) ?? null;
+        const previous3d = viewport.is3D?.() === true || btn3d.getAttribute('aria-pressed') === 'true';
+        await viewport.setMaterials?.(plan);
+        btn3d.setAttribute('aria-pressed', 'true');
+        btn3d.classList.toggle('active', true);
+        btn3d.textContent = '2D view';
+        const title = `3D look: ${plan.label} (${names})`;
+        const info = handedOff
+          ? routeGemini({ kind: 'hard', why: 'Nano picked the tool; Gemini chose materials and light' })
+          : by === 'Gemini · cloud' ? routeGemini({ kind: 'hard' })
+          : source === 'on-device' ? routeNanoCanvas() : undefined;
+        if (info) publishRoute(info);
+        copilotPanel.setAnswer({ question: 'Convert to 3D', text: `${plan.label}: ${names}. ${plan.notes}`, by: `${handedOff ? 'Nano → Gemini' : by}. ${PHOTO_RENDER_NOTE}`, route: info });
+        proposeChange({
+          actor: actor === 'her' ? 'gemini' : actor,
+          tool: 'set_materials',
+          title,
+          why: `${plan.notes}${why ? ` You said: "${why}".` : ''} ${PHOTO_RENDER_NOTE}`.trim(),
+          op: makeSetMaterialsOp(plan, previous, previous3d),
+          source: handedOff || by === 'Gemini · cloud' ? 'cloud' : (source === 'on-device' ? 'on-device' : 'rules'),
+          route: info,
+        });
+        return true;
+      }
+    }
+    default:
+      return false;
+  }
+}
+
+/** Copilot pass (early in the pipeline). Instant review/walk commands stay on
+ *  rules. When Nano is ready, recognised canvas tools (including
+ *  "convert 2D to 3D") go to Nano first; rules are the fallback. Null = not a
+ *  copilot request. */
+async function handleCopilot(utterance: string): Promise<boolean | null> {
+  if (isSimplePlanQuestion(utterance)) {
+    const t0 = performance.now();
+    const local = answerPlanQuestion(planDoc(), utterance);
+    if (local) {
+      lastUtteranceText = utterance;
+      lastUtteranceAt = Date.now();
+      lastUtteranceSource = 'rules';
+      recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+      document.body.dataset.planQaMs = String(Math.round(performance.now() - t0));
+      return applyPlanAnswer(local, utterance, 'Plan data · on device');
+    }
+  }
+  // Judgement questions ("should we take down this wall?", wheelchair width)
+  // go to the copilot — never become a canvas edit via Nano.
+  if (isPlanJudgementQuestion(utterance)) {
+    lastUtteranceText = utterance;
+    lastUtteranceAt = Date.now();
+    return handleHardQuestion(utterance);
+  }
+  const intent = parseCopilot(utterance, { walking: viewport.walking?.() ?? false });
+  if (intent && isInstantCopilot(intent) && intent.kind !== 'tool') {
+    lastUtteranceText = utterance;
+    lastUtteranceAt = Date.now();
+    lastUtteranceSource = 'rules';
+    if (intent.kind === 'checklist-add') {
+      return handleCopilotRules(intent, utterance);
+    }
+    if (intent.kind === 'meta') {
+      return handleCopilotRules(intent, utterance);
+    }
+  }
+  if (shouldNanoPickIntent(routerEnv().deviceReady, intent)) {
+    const picked = await pickCadTool(utterance, controller.summary(), { allowCloud: false });
+    if (picked && picked.call.tool !== 'ask_gemini' && picked.confidence >= 0.5) {
+      const call = refineCadPick(utterance, picked.call);
+      recordLedger('on-device', 'cad-tool', REASON_TEXT.private, '', picked.ms);
+      lastUtteranceText = utterance;
+      lastUtteranceAt = Date.now();
+      lastUtteranceSource = 'on-device';
+      setBadge('on-device', 'private');
+      routerPanel.add({
+        utterance, planned: 'on-device', source: 'on-device', reason: 'private',
+        confidence: picked.confidence, escalated: false, ms: picked.ms,
+        note: call.tool === picked.call.tool ? `Nano picked ${call.tool}` : `Nano picked ${picked.call.tool}; using ${call.tool}`,
+      });
+      const tool = cadTool(call.tool);
+      const actor: Actor = (tool?.kind === 'edit' || call.tool === 'set_materials') ? 'nano' : 'her';
+      return runCadTool(call, actor, utterance, 'on-device', routeNanoCanvas());
+    }
+    // Nano missed or was unsure — fall through to the rules parse.
+  }
+  if (!intent) return null;
+  lastUtteranceText = utterance;
+  lastUtteranceAt = Date.now();
+  lastUtteranceSource = 'rules';
+  return handleCopilotRules(intent, utterance);
+}
+
+async function handleCopilotRules(intent: NonNullable<ReturnType<typeof parseCopilot>>, utterance: string): Promise<boolean | null> {
+  if (intent.kind === 'checklist-add') {
+    siteChecklist.add(intent.question, controller.summary().slice(0, 300), !isOnline());
+    copilotPanel.open('checklist');
+    say('Added to your site checklist.');
+    return true;
+  }
+  if (intent.kind === 'meta') {
+    switch (intent.meta) {
+      case 'open-checklist': copilotPanel.open('checklist'); toggleButton(btnCopilot, true); say(`${siteChecklist.open().length} open site questions.`); return true;
+      case 'open-changes': copilotPanel.open('history'); toggleButton(btnCopilot, true); say('Here is every change.'); return true;
+      case 'email-client': return emailClient();
+      case 'accept': {
+        const p = changeLog.pending();
+        if (!p.length) return null; // let the chip/other handlers have it
+        acceptChange(p[p.length - 1].id);
+        return true;
+      }
+      case 'accept-all': if (!changeLog.pending().length) { say('Nothing is waiting.'); return true; } acceptAllChanges(); return true;
+      case 'reject': {
+        const p = changeLog.pending();
+        if (!p.length) return null;
+        rejectChange(p[p.length - 1].id);
+        return true;
+      }
+      case 'reject-all': {
+        const pending = changeLog.pending();
+        if (!pending.length) { say('Nothing is waiting.'); return true; }
+        for (const e of pending) rejectChange(e.id);
+        say('Rejected everything waiting.');
+        return true;
+      }
+      case 'revert-last': {
+        const last = [...changeLog.entries()].reverse().find((e) => e.status === 'applied');
+        if (!last) { say('Nothing to revert.'); return true; }
+        stageRevert(last.id);
+        return true;
+      }
+    }
+  }
+  if (intent.kind === 'tool') return runCadTool(intent.call, 'her', utterance, 'rules');
+  return null;
+}
+
+/** Copilot fallback for questions the rules didn't catch: Nano understands
+ *  (on device, works offline), numbers still come from the drawing; hard
+ *  questions go to Gemini, or to the site checklist with no signal. */
+async function handleCopilotQuestion(
+  utterance: string,
+  opts?: { condensed?: { from: number; to: number } },
+): Promise<boolean | null> {
+  if (isSimplePlanQuestion(utterance)) {
+    const local = answerPlanQuestion(planDoc(), utterance);
+    if (local) {
+      recordLedger('rules', 'plan-qa', 'read from the drawing', utterance);
+      lastUtteranceSource = 'rules';
+      const refine = await maybeQueueOfflineCheck(utterance, local.text);
+      return applyPlanAnswer(local, utterance, 'Plan data · on device', undefined, refine ?? undefined);
+    }
+  }
+  if (isPlanJudgementQuestion(utterance) || isHardQuestion(utterance) || isPlanQuestion(utterance)) {
+    return handleHardQuestion(utterance, opts);
+  }
+  return null;
+}
+
+/** Put directory names back into a cloud reply before she sees it. */
+function revealAnswer(text: string, route?: RouteInfo): { text: string; route?: RouteInfo; filled: number } {
+  const { text: filledText, filled } = fillVisible(text);
+  if (!filled) return { text, route, filled: 0 };
+  return { text: filledText, route: route ? { ...route, filledOnDevice: true } : undefined, filled };
+}
+
+function proposalFromReviewItem(item: GeminiReviewItem) {
+  const p = proposalForReview(item);
+  const sent = protectText(item.question, planLabelNames()).text;
+  const filled = item.geminiAnswer ? fillVisible(item.geminiAnswer).filled : 0;
+  return {
+    id: `review-${item.id}`,
+    title: p.title,
+    youAsked: item.question,
+    why: p.why,
+    catalog: catalogRoute({
+      route: {
+        tier: 'gemini' as const,
+        engine: 'gemini' as const,
+        reason: item.because ?? 'checked the offline answer',
+        filledOnDevice: filled > 0,
+      },
+      kind: 'hard' as const,
+      sent,
+      filledOnDevice: filled > 0,
+    }),
+    status: 'waiting' as const,
+  };
+}
+
+function acceptGeminiReview(id: string): void {
+  const kept = geminiReview.accept(id);
+  if (!kept) return;
+  const raw = kept.geminiAnswer ?? kept.offlineAnswer;
+  const shown = revealAnswer(raw, {
+    tier: 'gemini', engine: 'gemini',
+    reason: kept.because ?? 'checked the offline answer',
+    filledOnDevice: fillVisible(raw).filled > 0,
+  });
+  copilotPanel.setAnswer({
+    question: kept.question,
+    text: shown.text,
+    by: kept.status === 'corrected' ? 'Gemini corrected an offline answer' : 'Gemini confirmed the offline answer',
+    route: shown.route,
+  });
+  if (shown.route) publishRoute(shown.route);
+  verifierEl.textContent = shown.text;
+  say(kept.status === 'corrected' ? 'Kept Gemini’s correction.' : 'Kept Gemini’s check.');
+  refreshCopilot();
+}
+
+function dropGeminiReview(id: string): void {
+  const kept = geminiReview.drop(id);
+  if (!kept) return;
+  say('Kept the offline answer.');
+  refreshCopilot();
+}
+
+/** Offline, a plan-data answer still earns Gemini's second opinion: queue a
+ *  'question' job (drained on reconnect) and say so on the route line. Also
+ *  adds a visible item to the Gemini review checklist. */
+async function maybeQueueOfflineCheck(question: string, offlineAnswer: string): Promise<RouteInfo | null> {
+  if (isOnline() || !cloudConfigured) return null;
+  const job = await jobQueue.enqueue({
+    kind: 'question',
+    mode: mode.id,
+    label: question,
+    payload: { prompt: question, offlineAnswer },
+  });
+  geminiReview.recordOffline({ question, offlineAnswer, jobId: job.id });
+  return routeOffline({ refineQueued: true });
+}
+
+function controlChanges() {
+  return changeLog.entries().map((e) => ({ id: e.id, actor: e.actor, title: e.title, why: e.why, status: e.status }));
+}
+function controlChecklist() {
+  return siteChecklist.items().map((i) => ({ id: i.id, question: i.question, status: i.status, askedOffline: i.askedOffline, answer: i.answer }));
+}
+refreshCopilot();
+void syncSite();
+
 /** Cloud results awaiting the user's accept/reject. Kept in memory only (large,
  *  and re-fetchable on the next reconnect), keyed by job id. */
 type StagedResult =
   | { kind: 'plan'; payload: { ops: unknown[] }; source: Source }
-  | { kind: 'ui'; payload: { frame: unknown }; source: Source }
   | { kind: 'a11y'; items: A11yExplanation[]; source: Source };
 const staged = new Map<string, StagedResult>();
 /** Job ids with an accept/reject in flight — guards against a double-click
  *  re-entering acceptJob before the async remove settles (double-apply). */
 const settling = new Set<string>();
 
-const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', ui: 'Screen', a11y: 'A11y audit', question: 'Question' };
+const KIND_LABEL: Record<JobKind, string> = { plan: 'Plan', a11y: 'A11y audit', question: 'Question' };
 
-/** Only plan/ui modes queue generation jobs; part stays fully synchronous. */
+/** Plan generation jobs queue when offline. */
 function bigJobKind(): JobKind | null {
-  return mode.id === 'plan' || mode.id === 'ui' ? (mode.id as JobKind) : null;
+  return mode.id === 'plan' ? 'plan' : null;
 }
 
 function netEnv() {
@@ -1800,12 +3397,11 @@ function renderNetState(): void {
   const n = jobQueue.count();
   netStateEl.classList.toggle('net-online', online);
   netStateEl.classList.toggle('net-offline', !online);
-  netStateEl.textContent = online
-    ? n ? `Online · ${n} in queue` : 'Online'
-    : n ? `Offline · ${n} queued` : 'Offline';
+  netStateEl.textContent = online ? 'Online' : OFFLINE_QUICK_ONLY;
   netStateEl.title = online
-    ? 'Connected. Queued cloud jobs run automatically.'
-    : 'Offline. Edits keep working on-device; big cloud jobs are queued until you reconnect.';
+    ? (n ? `Online. ${n} in the Later list.` : 'Online.')
+    : (n ? `${OFFLINE_QUICK_ONLY}. ${n} in the Later list.` : OFFLINE_QUICK_ONLY);
+  refreshStudioStatus();
 }
 
 function renderQueue(jobs: QueuedJob[] = jobQueue.jobs()): void {
@@ -1813,8 +3409,8 @@ function renderQueue(jobs: QueuedJob[] = jobQueue.jobs()): void {
   queueCountEl.textContent = jobs.length ? String(jobs.length) : '';
   queueNoteEl.textContent = jobs.length
     ? net.online()
-      ? 'Back online — running queued jobs on the cloud…'
-      : 'Queued — these run automatically when you reconnect.'
+      ? 'Back online — running the Later list…'
+      : LATER_LIST_PROMISE
     : '';
   queueListEl.replaceChildren(...jobs.map(renderJobRow));
   renderNetState();
@@ -1931,6 +3527,40 @@ async function enqueueA11yJob(issues: A11yIssue[], summary: string): Promise<voi
 
 /** Run one queued job on the cloud and stage its result (or mark it failed). */
 async function runJobOnCloud(job: QueuedJob): Promise<void> {
+  if (job.kind === 'question') {
+    // Offline she already got an answer from the drawing; on reconnect Gemini
+    // checks it. The agreement compare is the speculative engine's (exported),
+    // so confirmed/corrected is earned, never invented; with nothing to
+    // compare it only claims "checked".
+    const question = job.payload.prompt ?? '';
+    const sent = protectText(question, planLabelNames());
+    const res = await askCopilot(sent.text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    if (!res) {
+      await jobQueue.setStatus(job.id, 'error', 'Gemini could not check this yet');
+      return;
+    }
+    recordLedger('cloud', 'copilot-answer (queued)', 'drained on reconnect', `question: ${JSON.stringify(sent.text)}`, res.ms);
+    const offline = job.payload.offlineAnswer;
+    const agreed = offline ? guessesAgree({ answer: offline }, { answer: res.answer, calls: res.calls }) : null;
+    const why = agreed === null
+      ? 'checked the offline answer after reconnect'
+      : agreed
+        ? 'confirmed the offline answer after reconnect'
+        : 'corrected the offline answer after reconnect';
+    const item = geminiReview.items().find((i) => i.jobId === job.id)
+      ?? geminiReview.findByQuestion(question)
+      ?? (offline ? geminiReview.recordOffline({ question, offlineAnswer: offline, jobId: job.id }) : null);
+    if (item) geminiReview.recordGeminiResult(item.id, { geminiAnswer: res.answer, agreed, because: why });
+    const route = routeGemini({ model: res.model, why, redacted: { names: sent.names, details: sent.details } });
+    publishRoute(route);
+    copilotPanel.open('review');
+    toggleButton(btnCopilot, true);
+    verifierEl.textContent = geminiReview.waitingCountLine();
+    say('Gemini has a review waiting for you.');
+    await jobQueue.remove(job.id);
+    refreshCopilot();
+    return;
+  }
   if (job.kind === 'a11y') {
     const res = await explainAccessibility(job.payload.issues ?? [], job.payload.summary ?? '');
     recordLedger(res.source, 'a11y-explain (queued)',
@@ -1950,16 +3580,6 @@ async function runJobOnCloud(job: QueuedJob): Promise<void> {
       await jobQueue.setStatus(job.id, 'ready');
     } else {
       await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no plan');
-    }
-  } else {
-    const res = await generateUi(prompt);
-    recordLedger(res.source, 'generate (queued)',
-      res.source === 'cloud' ? 'drained on reconnect' : REASON_TEXT.private, commandPayload(prompt));
-    if (res.frame) {
-      staged.set(job.id, { kind: 'ui', payload: { frame: res.frame }, source: res.source });
-      await jobQueue.setStatus(job.id, 'ready');
-    } else {
-      await jobQueue.setStatus(job.id, 'error', res.clarify ?? 'cloud returned no screen');
     }
   }
 }
@@ -1991,6 +3611,7 @@ net.subscribe((online) => {
   renderNetState();
   renderQueue();
   if (online) {
+    void warmCloud();
     const n = jobQueue.count();
     if (n) say(`Back online — running ${n} queued cloud job${n === 1 ? '' : 's'}.`);
     void drainQueue();
@@ -2023,6 +3644,10 @@ renderNetState();
 // always behind an explicit confirm, applied as ONE undoable step.
 
 const recipeStore = createRecipeStore(typeof localStorage !== 'undefined' ? localStorage : null);
+if (!recipeStore.get(DRAWING_REFERENCES_RECIPE.id) && !recipeStore.list().some((r) => r.name === DRAWING_REFERENCES_RECIPE.name)) {
+  recipeStore.upsert({ ...DRAWING_REFERENCES_RECIPE, createdAt: Date.now(), updatedAt: Date.now() });
+}
+
 const recipeRecorder = createRecipeRecorder();
 /** Hard allowlist for browser recipes — the ONLY hosts a browser step may open
  *  (same-origin app pages + the demo mail host). Everything else is refused. */
@@ -2425,6 +4050,11 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
     const recipe = recipeStore.get(ruleHit.id)!;
     recordLedger('rules', 'recipe pick', REASON_TEXT.exact, '');
     routerPanel.add({ utterance, planned: 'rules', source: 'rules', reason: 'exact', escalated: false, ms: performance.now() - t0 });
+    if (isReferenceRecipe(recipe)) {
+      const result = await refBoard.apply(makeSearch(recipeSearchQuery(recipe), utterance, { fuzzy: false, explicit: true, preferred: 'search' }));
+      verifierEl.textContent = result.detail;
+      return result.ok;
+    }
     stageRecipeRun(recipe, 'rules', 'exact');
     return true;
   }
@@ -2435,6 +4065,7 @@ async function handleRecipeMeta(utterance: string): Promise<boolean | null> {
   const pick = await pickRecipeHybrid(utterance, candidates, {
     forceCloud: toCloud,
     lang: translated ? currentLanguage : undefined,
+    planNames: planLabelNames(),
   });
   if (!pick) return null;
   const reason: RouteReason = pick.source === 'on-device' ? 'private' : 'no-device';
@@ -2474,8 +4105,21 @@ renderRecipes();
 renderTeachState();
 void syncRecipes(); // best-effort cloud merge at boot (fails soft offline)
 
+/** The plan's text labels, for the rules-first redactor (person-like filtering
+ *  happens inside protectText; room-like labels pass through untouched). */
+function planLabelNames(): string[] {
+  if (mode.id !== 'plan') return [];
+  try {
+    return planDoc().texts.map((t) => t.text);
+  } catch {
+    return [];
+  }
+}
+
 function commandPayload(utterance: string, ctx?: FusionContext): string {
-  const base = `command: ${JSON.stringify(utterance)}`;
+  // Rules-first redaction (ai/redact): the payload recorded as sent — and
+  // shown in the ledger — carries neutral tokens, never her family's names.
+  const base = `command: ${JSON.stringify(protectText(utterance, planLabelNames()).text)}`;
   if (!ctx) return base;
   return `${base}\ncontext: ${JSON.stringify({ space: ctx.space, unit: ctx.unit, selected: ctx.selectedIds })}`;
 }
@@ -2553,7 +4197,7 @@ let pendingChoices: PendingChoices | null = null;
 
 /** Show the confidence state next to the honest source badge. */
 function setConfidenceState(state: ConfidenceState | null): void {
-  if (!state) {
+  if (!state || state === 'sure') {
     confStateEl.hidden = true;
     confStateEl.textContent = '';
     return;
@@ -2755,7 +4399,8 @@ async function handleChromeIntent(utterance: string): Promise<boolean | null> {
       const res = await chromeBridge.request('getLastCopied');
       clip = res.data ?? null;
     }
-    const added = addClip(clipsState, { kind: clip?.kind, text: clip?.text, url: clip?.url, title: clip?.title });
+    const kind = clip?.kind === 'link' ? 'link' as const : clip?.kind === 'text' ? 'text' as const : undefined;
+    const added = addClip(clipsState, { kind, text: clip?.text, url: clip?.url, title: clip?.title });
     if (!added.clip) {
       const msg = 'Nothing to send. Say copy this or copy the link first.';
       verifierEl.textContent = msg;
@@ -2836,6 +4481,17 @@ async function handleChromeIntent(utterance: string): Promise<boolean | null> {
 }
 
 async function runUtteranceInner(utterance: string): Promise<boolean> {
+  // Reference grid: "the second one" / "next" / "close" must win over choice
+  // chips and music while results are on the canvas.
+  if (refBoard.isGridOpen() || refBoard.hasSelection() || refBoard.isChooserOpen() || refsTabOpen) {
+    const handled = await refBoard.handleUtterance(utterance);
+    if (handled) {
+      setBadge('rules', 'exact');
+      recordLedger('rules', 'command', 'reference intent', utterance);
+      verifierEl.textContent = handled.detail;
+      return handled.ok;
+    }
+  }
   // A reply to open "Did you mean…?" chips (or a confirm preview) is resolved
   // FIRST — before recipes, phrasebook, or routing can eat "first"/"cancel".
   const choiceHandled = handleChoiceReply(utterance);
@@ -2847,11 +4503,22 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   if (isSetupPhrase(utterance)) { setupPanel.open(); toggleButton(btnSetup, true); return true; }
   const rp = restPhrase(utterance);
   if (rp) { setResting(rp === 'rest'); return true; }
+  // SPOKEN VOICE: "change voice" / "use the Soumya voice" / "preview the
+  // voice" run locally — the picker, not the plan parser, owns these.
+  const voiceIntent = parseChangeVoice(utterance);
+  if (voiceIntent) return runChangeVoice(voiceIntent, utterance);
   setConfidenceState(null); // each command earns its own state
 
   // Accessibility requests short-circuit BEFORE routing: "make this house
   // wheelchair friendly" would otherwise hit the plan-generate path on "house".
   if (isAccessibilityRequest(utterance)) return runAccessibilityCheck();
+
+  // CAD COPILOT (src/cad): guideline check, staircase, 2D→3D, walkthrough,
+  // plan questions, layers/zoom, review (accept/reject/revert), site checklist.
+  const copilotHandled = await handleCopilot(utterance);
+  if (copilotHandled !== null) return copilotHandled;
+  lastUtteranceText = utterance;
+  lastUtteranceAt = Date.now();
 
   // ANY LANGUAGE: find out which language this command is in (on-device
   // first; a cloud check only when it must, and the ledger records it).
@@ -2894,6 +4561,41 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   const chromeHandled = await handleChromeIntent(utterance);
   if (chromeHandled !== null) return chromeHandled;
 
+  // REFERENCES: "find me references for drawings" opens a numbered grid on
+  // the canvas (Openverse + Wikimedia). Unrecognised utterances fall through.
+  const refHandled = await refBoard.handleUtterance(utterance);
+  if (refHandled) {
+    setBadge('rules', 'exact');
+    recordLedger('rules', 'command', 'reference intent', utterance);
+    verifierEl.textContent = refHandled.detail;
+    return refHandled.ok;
+  }
+
+  // NANO RAMBLE CONDENSER (ai/condense): a long natural ramble is condensed to
+  // one short command ON DEVICE (ONLY_ON_DEVICE, ~1.5 s cap) before the
+  // copilot and fusion paths — and the cloud payload — see it. The caption and
+  // history keep her real words; a miss keeps them everywhere and the route
+  // line is unchanged.
+  let command = utterance;
+  let condensedWords: { from: number; to: number } | undefined;
+  if (isEnglish(currentLanguage)
+    && shouldCondense(utterance, (u) => !('clarify' in (mode.parse(u) as Record<string, unknown>)))) {
+    const c = await condenseUtterance(utterance);
+    if (c) {
+      command = c.text;
+      condensedWords = { from: c.fromWords, to: c.toWords };
+      recordLedger('on-device', 'condense', REASON_TEXT.private, '', c.ms);
+      showCaptionTranslation(utterance, c.text); // her words + the short command
+    }
+  }
+
+  // Questions the copilot rules missed: Nano understands on the device; hard
+  // ones go to Gemini, or to the site checklist with no signal.
+  if (!decisionIsExactEdit(command)) {
+    const q = await handleCopilotQuestion(command, { condensed: condensedWords });
+    if (q !== null) return q;
+  }
+
   // VISIBLE HYBRID ROUTER (ai/router.ts): exact rules → on-device fusion →
   // cloud escalation. The decision is pure; the badge shows the ACTUAL source
   // plus the reason, and every decision lands in the Routing dev panel.
@@ -2902,8 +4604,8 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // SIM: a fake any-language transcript runs as if Nano + cloud were both here,
   // so the judge sees the router pick on-device (es/ja) vs cloud (kn/hi).
   const env = SIM_ACTIVE && simSpeechFor(utterance) ? { deviceReady: true, cloudReady: true } : routerEnv();
-  const isBig = controller.isDesignRequest(utterance);
-  const decision = planRoute(utterance, (u) => mode.parse(u), isBig, env);
+  const isBig = controller.isDesignRequest(command);
+  const decision = planRoute(command, (u) => mode.parse(u), isBig, env);
 
   // Whole-design requests go to the cloud "generate" path (rules fallback
   // inside the controller), everything else through the single-op fusion path.
@@ -2911,17 +4613,17 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // Offline + a queueable mode → persist a cloud job for reconnect, then still
     // apply the on-device/rules result now so the edit keeps working.
     const route = bigJobKind() ? routeBigJob(netEnv()) : 'run-now';
-    if (route === 'enqueue') await enqueueBigJob(utterance);
-    const { source, step, clarify } = await controller.generate(utterance);
+    if (route === 'enqueue') await enqueueBigJob(command);
+    const { source, step, clarify } = await controller.generate(command);
     const reason = finalReason(decision, source, false);
     // NOT translated: the whole-design generate path has no translate guide and
     // returns no translation, so the badge must stay generic ("Cloud · big job")
     // and never claim "· Kannada" for a call that didn't translate.
     setBadge(source, reason);
     routerPanel.add({ utterance, planned: decision.path, source, reason, escalated: false, ms: performance.now() - t0 });
-    recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(utterance), performance.now() - t0);
+    recordLedger(source, 'generate', REASON_TEXT[reason], commandPayload(command), performance.now() - t0);
     // Keep the op/JSON panel fresh — reflect this command, not the previous op.
-    opJsonEl.textContent = JSON.stringify({ generate: utterance, source }, null, 2);
+    opJsonEl.textContent = JSON.stringify({ generate: command, source }, null, 2);
     if (clarify) {
       opJsonEl.textContent = '';
       verifierEl.textContent = clarify;
@@ -2981,13 +4683,14 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     // Attached to the on-device Nano call only (it stays on the device). It is
     // withheld from a first cloud call (no-device / translate) and only sent to
     // the cloud on the escalation below, where the router already went cloud.
-    const fewShot = phrasebook.fewShotFor(utterance, mode.id);
+    const fewShot = phrasebook.fewShotFor(command, mode.id);
     // SIM: a fake any-language transcript gets a faked model answer (labelled
     // SIM); everything around it — detection, routing, badge, ledger — is real.
     const simOutcome = SIM_ACTIVE ? simFuse(utterance, toCloud) : null;
-    let outcome = simOutcome ?? await fuseIntent(utterance, ctx, {
+    let outcome = simOutcome ?? await fuseIntent(command, ctx, {
       forceCloud: toCloud, lang: langOpt,
       fewShot: toCloud ? undefined : fewShot,
+      planNames: planLabelNames(),
     });
     // Primary inference: a cloud answer stores its payload; on-device/rules are
     // private. The reason follows the planned route (on-device → private).
@@ -2995,7 +4698,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     recordLedger(
       outcome.source, simOutcome ? 'intent (simulated)' : 'intent',
       outcome.source === 'cloud' ? (langNoteNow ?? REASON_TEXT[decision.reason]) : REASON_TEXT.private,
-      commandPayload(utterance, ctx), outcome.ms,
+      commandPayload(command, ctx), outcome.ms,
     );
     if (!simOutcome && shouldEscalate(outcome.source, outcome.confidence, env)) {
       // Unsure on-device answer: re-ask the cloud twin, keep the better one. The
@@ -3003,12 +4706,13 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
       // on-device answer is ultimately kept.
       // Sanctioned escalation: the router already went to the cloud, so the few
       // relevant phrasebook examples may ride along (and only those).
-      const retry = await fuseIntent(utterance, ctx, {
+      const retry = await fuseIntent(command, ctx, {
         forceCloud: true, lang: langOpt, fewShot, examplesCloudOk: true,
+        planNames: planLabelNames(),
       });
       const escalatedPayload = fewShot
-        ? `${commandPayload(utterance, ctx)}\nphrasebook examples: ${phrasebook.select(utterance, mode.id).length}`
-        : commandPayload(utterance, ctx);
+        ? `${commandPayload(command, ctx)}\nphrasebook examples: ${phrasebook.select(command, mode.id).length}`
+        : commandPayload(command, ctx);
       recordLedger(retry.source, 'intent (escalated)', REASON_TEXT['low-confidence'], escalatedPayload, retry.ms);
       ({ outcome, escalated } = pickEscalated(outcome, retry));
     }
@@ -3019,8 +4723,9 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
     if (translated) pendingReply = outcome.reply ?? null;
     simulated = !!simOutcome;
   }
-  // Pair her words with the English translation the model returned.
-  showCaptionTranslation(utterance, translation);
+  // Pair her words with the English translation the model returned (or the
+  // condensed command when the on-device condenser produced one).
+  showCaptionTranslation(utterance, translation ?? (condensedWords ? command : undefined));
   const reason = finalReason(decision, source, escalated);
   const langNote = langRouteNote(currentLanguage, { ...env, deviceLangReady }, source, escalated);
   const note = langNote && simulated ? `SIM · ${langNote}` : langNote;
@@ -3036,7 +4741,7 @@ async function runUtteranceInner(utterance: string): Promise<boolean> {
   // itself and suggests commands. The exact-rule path is deterministic → sure.
   // ruleAgrees = does an independent deterministic parse produce the same op?
   const isClarifyResult = 'clarify' in result;
-  const altRule = decision.ruleResult ? null : exactRuleParse((u) => mode.parse(u), utterance);
+  const altRule = decision.ruleResult ? null : exactRuleParse((u) => mode.parse(u), command);
   const ruleAgrees = altRule ? JSON.stringify(altRule) === JSON.stringify(result) : null;
   const state = classifyConfidence({
     valid: !isClarifyResult, clarify: isClarifyResult, source, confidence, ruleAgrees, deixisAmbiguous,
@@ -3126,6 +4831,17 @@ commandForm.addEventListener('submit', (e) => {
 
 // ---- undo / redo / export / 3D ----
 
+el<HTMLButtonElement>('btn-zoom-in').addEventListener('click', () => {
+  viewportEl.focus();
+  viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true }));
+});
+el<HTMLButtonElement>('btn-zoom-out').addEventListener('click', () => {
+  viewportEl.focus();
+  viewportEl.dispatchEvent(new KeyboardEvent('keydown', { key: '-', bubbles: true }));
+});
+el<HTMLButtonElement>('btn-zoom-fit').addEventListener('click', () => {
+  viewport.fit?.();
+});
 btnUndo.addEventListener('click', () => {
   controller.applyOp({ op: 'undo' });
   renderAll();
@@ -3135,36 +4851,9 @@ btnRedo.addEventListener('click', () => {
   renderAll();
 });
 btnExport.addEventListener('click', async () => {
-  // UI mode opens an accessible export panel (preview + code + download/copy)
-  // instead of silently downloading files; other modes export directly.
-  if (mode.id === 'ui') {
-    const { uiHtmlOf, uiSvgOf, uiFrameSizeOf } = await import('./ui/design/controller');
-    const html = uiHtmlOf(controller);
-    if (!html) { say('Nothing to export yet — create a screen first.'); return; }
-    const size = uiFrameSizeOf(controller);
-    const { openExportPanel } = await import('./ui/design/exportPanel');
-    openExportPanel({ html, svg: uiSvgOf(controller), frameW: size?.w, frameH: size?.h, onStatus: (m) => say(m) });
-    return;
-  }
   controller.export();
   say(`${mode.exportLabel}.`);
 });
-
-// UI mode only: copy the active frame's single-file HTML to the clipboard.
-const btnCopyHtml = document.getElementById('btn-copy-html') as HTMLButtonElement | null;
-if (btnCopyHtml) {
-  btnCopyHtml.addEventListener('click', async () => {
-    const { uiHtmlOf } = await import('./ui/design/controller');
-    const html = uiHtmlOf(controller);
-    if (!html) { say('Nothing to copy yet — create a screen first.'); return; }
-    try {
-      await navigator.clipboard.writeText(html);
-      say('HTML copied to clipboard.');
-    } catch {
-      say('Could not access the clipboard.');
-    }
-  });
-}
 
 if (viewport.toggle3D) {
   btn3d.hidden = false;
@@ -3187,7 +4876,122 @@ overflowMenu.layout();
 
 // ---- voice ----
 
-const voice: VoiceController = createVoiceController((utterance) => void runUtterance(utterance));
+const specChangeByDraft = new Map<string, string>();
+function showSpeculativeDraft(d: SpeculativeDraft, stats: SpeculativeStats, opts?: { speak?: boolean }): void {
+  copilotPanel.open('review');
+  toggleButton(btnCopilot, true);
+  copilotPanel.setSpeculativeStats(stats);
+  document.body.dataset.specState = d.state;
+  document.body.dataset.specVisibleMs = String(d.visibleAt);
+  if (d.answer) {
+    const by = d.state === 'confirmed' ? "Gemini confirmed Nano's guess"
+      : d.state === 'corrected' || d.state === 'withdrawn' ? (d.geminiModel ? `Gemini · ${d.geminiModel}` : 'Gemini · cloud')
+      : "Nano's guess · on device";
+    const route = d.fromNano
+      ? routeSpeculative({
+          state: d.state === 'confirmed' || d.state === 'corrected' || d.state === 'withdrawn' || d.state === 'draft' ? d.state : 'draft',
+          because: d.why,
+        })
+      : routeGemini({ kind: isPlanJudgementQuestion(d.utterance) ? 'judgment' : 'hard', model: d.geminiModel, why: d.why });
+    const shown = revealAnswer(d.answer, route);
+    const shownRoute = shown.route ?? route;
+    publishRoute(shownRoute);
+    copilotPanel.setAnswer({
+      question: d.utterance,
+      text: shown.text,
+      by: d.fromNano ? by : (d.geminiModel ? `Gemini · ${d.geminiModel}` : 'Gemini · cloud'),
+      guess: Boolean(d.fromNano && d.state === 'draft'),
+      confirmed: Boolean(d.fromNano && d.state === 'confirmed'),
+      route: shownRoute,
+    });
+    verifierEl.textContent = d.state === 'draft' ? `Nano's guess: ${shown.text}` : shown.text;
+    if (opts?.speak && d.state !== 'draft') say(shown.text);
+  }
+  if (d.tool && d.state !== 'withdrawn') {
+    const call: ToolCall = { tool: d.tool, args: d.args ?? {} };
+    const act = toolToAction(call);
+    if (act.kind === 'op') {
+      const existingId = specChangeByDraft.get(d.id);
+      const specRoute = d.fromNano
+        ? routeSpeculative({
+            state: d.state === 'confirmed' || d.state === 'corrected' || d.state === 'draft' ? d.state : 'draft',
+            because: d.why,
+          })
+        : routeGemini({ kind: isPlanJudgementQuestion(d.utterance) ? 'judgment' : 'hard', model: d.geminiModel, why: d.why });
+      if (d.state === 'corrected' && existingId) {
+        changeLog.amend(existingId, { tag: 'corrected', why: d.why ?? 'Gemini corrected Nano’s guess.', route: specRoute });
+        changeLog.reject(existingId);
+        specChangeByDraft.delete(d.id);
+        const e = proposeChange({
+          actor: 'gemini', tool: d.tool, title: describeCall(call),
+          why: d.why ?? 'Gemini corrected Nano’s guess.',
+          op: act.op, source: 'cloud', tag: 'corrected', route: specRoute,
+        });
+        specChangeByDraft.set(d.id, e.id);
+      } else if (!existingId) {
+        const e = proposeChange({
+          actor: d.state === 'corrected' ? 'gemini' : 'nano',
+          tool: d.tool, title: describeCall(call),
+          why: d.why ?? "Nano's guess while you were still speaking.",
+          op: act.op,
+          source: d.state === 'corrected' ? 'cloud' : 'on-device',
+          tag: d.state === 'confirmed' ? 'confirmed' : d.state === 'corrected' ? 'corrected' : 'nano-guess',
+          route: specRoute,
+        });
+        specChangeByDraft.set(d.id, e.id);
+      } else if (d.state === 'confirmed') {
+        changeLog.amend(existingId, { tag: 'confirmed', why: d.why ?? "Gemini confirmed Nano's guess.", route: specRoute });
+      }
+    }
+  }
+  if (d.state === 'withdrawn') {
+    const id = specChangeByDraft.get(d.id);
+    if (id) {
+      changeLog.amend(id, { tag: 'withdrawn', why: d.why ?? "Withdrawn: Gemini disagreed with Nano's guess.", route: routeSpeculative({ state: 'withdrawn', because: d.why }) });
+      changeLog.reject(id);
+      specChangeByDraft.delete(d.id);
+    }
+  }
+}
+
+speculative = createSpeculativeEngine({
+  online: () => isOnline() && cloudConfigured,
+  isSimplePlan: isSimplePlanQuestion,
+  isJudgement: isPlanJudgementQuestion,
+  isHard: isHardQuestion,
+  answerPlan: (s) => answerPlanQuestion(planDoc(), s),
+  pickNano: async (s) => {
+    if (!routerEnv().deviceReady) return null;
+    const picked = await pickCadTool(s, controller.summary(), { allowCloud: false, timeoutMs: NANO_ROUTE_TIMEOUT_MS });
+    if (!picked) return null;
+    const plan = picked.call.tool === 'measure' ? answerPlanQuestion(planDoc(), String(picked.call.args.question ?? s)) : null;
+    return { call: picked.call, confidence: picked.confidence, answer: plan?.text };
+  },
+  askCloud: async (s) => {
+    // Same rules-first redaction as the hard-question race: the SENT text
+    // swaps her names for neutral tokens; the draft card keeps her words.
+    const res = await askCopilot(protectText(s, planLabelNames()).text, controller.summary(), GUIDELINE_SETS[guidelineRegion].label);
+    return res ? { answer: res.answer, calls: res.calls, why: res.why, model: res.model } : null;
+  },
+  onUpdate: (d, stats) => {
+    copilotPanel.setSpeculativeStats(stats);
+    if (d) showSpeculativeDraft(d, stats);
+  },
+});
+
+const voice: VoiceController = createVoiceController(
+  (utterance) => void runUtterance(utterance),
+  (interim) => speculative.onInterim(interim),
+);
+
+const onSpeculativeEvent = (ev: Event): void => {
+  const d = (ev as CustomEvent<{ kind?: string; text?: string }>).detail;
+  if (!d || typeof d.text !== 'string') return;
+  if (d.kind === 'interim') speculative.onInterim(d.text);
+  if (d.kind === 'final') void speculative.onFinal(d.text);
+};
+window.addEventListener('mc-speculative', onSpeculativeEvent);
+document.addEventListener('mc-speculative', onSpeculativeEvent);
 
 if (!voice.supported) {
   btnMic.disabled = true;
@@ -3243,6 +5047,11 @@ const handCursor = document.createElement('div');
 handCursor.className = 'hand-cursor';
 handCursor.hidden = true;
 viewportEl.appendChild(handCursor);
+const handHover = createHandHover();
+/** How strongly the visual cursor eases toward a hovered control's centre
+ *  (0 = none, 1 = snaps straight there); the real aim point used for hit
+ *  testing is never touched, only where the cursor is drawn. */
+const MAGNET_PULL = 0.35;
 
 function placeCursor(x: number, y: number): void {
   const rect = viewportEl.getBoundingClientRect();
@@ -3278,17 +5087,13 @@ function aimPointer(clientX: number, clientY: number): { clientX: number; client
   return { clientX, clientY, id };
 }
 
-// Pointer smoothing for the AIMING phase only: the active profile's `smoothing`
-// EMA steadies a shaky hover/cursor, while commit actions (tap, drag) stay on raw
-// coordinates for accuracy. Reset whenever the pinch state changes.
-let smX: number | null = null;
-let smY: number | null = null;
-function smoothAim(x: number, y: number): { x: number; y: number } {
+// Pointer smoothing for the AIMING phase only: a One-Euro filter steadies a
+// shaky hover/cursor (cutoff rises with speed so a reach is not laggy), while
+// commit actions (tap, drag) stay on raw coordinates. Reset on pinch or lost.
+function smoothAim(x: number, y: number, now = performance.now()): { x: number; y: number } {
   const keep = setupData.calibration?.smoothing ?? activeProfile.smoothing;
-  if (keep <= 0 || smX === null || smY === null) { smX = x; smY = y; return { x, y }; }
-  smX += (x - smX) * (1 - keep);
-  smY += (y - smY) * (1 - keep);
-  return { x: smX, y: smY };
+  cursorFilter.setSmoothing(keep);
+  return cursorFilter.filter(x, y, now);
 }
 
 // Mouse/touch pointers feed point-and-say too (same pointer layer as pinch);
@@ -3296,6 +5101,30 @@ function smoothAim(x: number, y: number): { x: number; y: number } {
 viewportEl.addEventListener('pointermove', (e: PointerEvent) => {
   lastPointer = { clientX: e.clientX, clientY: e.clientY, cameraNorm: null };
 }, { passive: true });
+
+function driveRefsHand(e: HandEvent): boolean {
+  if (!refsTabOpen) return false;
+  if (e.type === 'tracking') {
+    const now = performance.now();
+    if (now - lastRefsCursorAt > 120) {
+      lastRefsCursorAt = now;
+      void chromeBridge.request('refsCommand', { cmd: 'cursor', cursor: { x: e.x, y: e.y } });
+    }
+    return false;
+  }
+  if (e.type === 'pinch-tap' || e.type === 'pinch-start') {
+    void (async () => {
+      const res = await chromeBridge.request('refsCommand', { cmd: 'pick' });
+      const hit = res.data?.kind === 'image' ? hitFromExtImage(res.data, lastRefsEngine, lastRefsQuery) : null;
+      if (hit) {
+        refBoard.placeExternal(hit);
+        say(`Placed “${hit.title}” on the canvas.`);
+      }
+    })();
+    return true;
+  }
+  return false;
+}
 
 function handleHandEvent(raw: HandEvent): void {
   // Calibrated reach: her comfortable box covers the whole screen.
@@ -3308,30 +5137,48 @@ function handleHandEvent(raw: HandEvent): void {
   if (resting && e.type !== 'tracking' && e.type !== 'lost') return;
   switch (e.type) {
     case 'tracking': {
-      const s = smoothAim(e.x, e.y);
+      const s = smoothAim(e.x, e.y, performance.now());
       const raw = toClient(s.x, s.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
-      placeCursorClient(aimed.clientX, aimed.clientY);
-      handCursor.classList.toggle('snapped', !!aimed.id);
+      // The real DOM control under the aim point (if any) gets its own
+      // outline+scale highlight instead of a ring on the cursor — no second,
+      // redundant dot sitting on top of the thing it's pointing at.
+      const ctl = !resting ? handClickable(aimed.clientX, aimed.clientY) : null;
+      handHover.setTarget(ctl);
+      const snapped = !!ctl || !!aimed.id;
+      // Visual-only magnetic pull toward the hovered control's centre; the
+      // aim point used for hit-testing below stays exact.
+      const drawAt = ctl
+        ? magnetPull({ x: aimed.clientX, y: aimed.clientY }, ctl.getBoundingClientRect(), MAGNET_PULL)
+        : { x: aimed.clientX, y: aimed.clientY };
+      placeCursorClient(drawAt.x, drawAt.y);
+      handCursor.classList.toggle('snapped', snapped);
       // Hand coords are mirrored to screen space (x = 1 - camera x); store the
       // camera-frame position so point-and-say can crop the frame there.
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - s.x, y: s.y } };
+      driveRefsHand(e);
+      refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY });
       // When the on-screen keyboard is up, an open hand over it dwells on keys.
       if (keyboard.isOpen() && keyboard.hoverAt(aimed.clientX, aimed.clientY)) break;
-      // Dwell-to-select is always available as a fallback for people who can't
-      // pinch: hover a button or a canvas object and wait.
+      // Dwell is a first-class click, equal to pinch and voice (a pinch can
+      // hurt). Hover a button or a canvas object and wait for the ring to fill.
       if (!resting) {
-        const ctl = handClickable(aimed.clientX, aimed.clientY);
+        const now = performance.now();
         const target: unknown = ctl ?? aimed.id ?? null;
-        const d = dwell.update(target, performance.now());
+        const d = dwell.update(target, now);
         handCursor.style.setProperty('--dwell', String(d.progress));
         handCursor.classList.toggle('dwelling', d.progress > 0);
         if (d.fire) {
           handCursor.classList.remove('dwelling');
-          if (ctl) activateControl(ctl);
-          else if (aimed.id) {
-            if (!viewport.tap?.(aimed.clientX, aimed.clientY)) controller.selectId(aimed.id);
-            renderAll();
+          if (!clickCooldown.ready(now)) {
+            dwell.reset();
+          } else {
+            clickCooldown.arm(now);
+            if (ctl) activateControl(ctl);
+            else if (aimed.id) {
+              if (!viewport.tap?.(aimed.clientX, aimed.clientY)) controller.selectId(aimed.id);
+              renderAll();
+            }
           }
         }
       }
@@ -3339,35 +5186,42 @@ function handleHandEvent(raw: HandEvent): void {
       break;
     }
     case 'pinch-start': {
-      smX = null; smY = null; // commit on raw coordinates
+      cursorFilter.reset(); // commit on raw coordinates
       const raw = toClient(e.x, e.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
       handCursor.classList.add('pinching');
       handCursor.classList.toggle('snapped', !!aimed.id);
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) break;
       viewport.beginDrag?.(aimed.clientX, aimed.clientY);
       break;
     }
     case 'pinch-tap': {
+      const now = performance.now();
       const raw = toClient(e.x, e.y);
       const aimed = aimPointer(raw.clientX, raw.clientY);
       placeCursorClient(aimed.clientX, aimed.clientY);
       onboarding.notifyPinch();
       lastPointer = { clientX: aimed.clientX, clientY: aimed.clientY, cameraNorm: { x: 1 - e.x, y: e.y } };
+      if (!clickCooldown.ready(now)) break;
+      const consumed = (): void => { clickCooldown.arm(now); };
+      if (driveRefsHand(e) || refBoard.handleHand(e, { x: aimed.clientX, y: aimed.clientY })) { consumed(); break; }
       // A pinch over the on-screen keyboard presses the key under the cursor.
-      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) break;
+      if (keyboard.isOpen() && keyboard.pressAt(aimed.clientX, aimed.clientY)) { consumed(); break; }
       // Every button is pinchable: toolbar, More menu, panels, setup, chips.
       const ctl = handClickable(aimed.clientX, aimed.clientY);
-      if (ctl) { activateControl(ctl); break; }
+      if (ctl) { activateControl(ctl); consumed(); break; }
       if (viewport.tap?.(aimed.clientX, aimed.clientY)) {
         renderAll(); // a palette/tool consumed the tap
+        consumed();
         break;
       }
       const id = aimed.id ?? viewport.pick(aimed.clientX, aimed.clientY);
       if (id) {
         controller.selectId(id);
         renderAll();
+        consumed();
       }
       break;
     }
@@ -3375,6 +5229,7 @@ function handleHandEvent(raw: HandEvent): void {
       // Follow the hand during a drag — don't remagnet mid-gesture.
       placeCursor(e.x, e.y);
       const { clientX, clientY } = toClient(e.x, e.y);
+      if (refBoard.handleHand(e, { x: clientX, y: clientY })) break;
       if (viewport.drag?.(clientX, clientY)) break; // world-space drag with snap (plan)
       if (controller.selectedId()) {
         const step = controller.dragSelectedMm(e.dx * controller.dragRangeMm, -e.dy * controller.dragRangeMm);
@@ -3384,11 +5239,13 @@ function handleHandEvent(raw: HandEvent): void {
     }
     case 'pinch-end':
       handCursor.classList.remove('pinching');
+      if (lastPointer && refBoard.handleHand(e, { x: lastPointer.clientX, y: lastPointer.clientY })) break;
       viewport.endDrag?.();
       break;
     case 'lost':
-      smX = null; smY = null;
+      cursorFilter.reset();
       handCursor.hidden = true;
+      handHover.setTarget(null);
       viewport.endDrag?.();
       break;
   }
@@ -3421,11 +5278,11 @@ function onPresenceFrame(f: PresenceFrame): void {
   const fps = noteFps(performance.now());
   const handCount = f.hands.length;
   if (f.paused) {
-    trackingStateEl.textContent = 'paused · look at screen';
+    setTracking('paused · look at screen');
   } else {
     const quality = handCount > 0 && fps >= 12 ? 'good' : handCount > 0 ? 'poor' : 'searching';
     const plural = handCount === 1 ? 'hand' : 'hands';
-    trackingStateEl.textContent = `${handCount} ${plural} · ${fps} fps · ${quality}`;
+    setTracking(`${handCount} ${plural} · ${fps} fps · ${quality}`);
   }
   const primary = f.hands[0];
   updatePinchMeter(primary ? primary.pinchStrength : 0, primary?.pinching ?? false, !f.paused && !!primary);
@@ -3444,6 +5301,7 @@ function onPresenceFrame(f: PresenceFrame): void {
   }
 
   processGestureFrame(f);
+  gimbalFollow.onFrame(f.hands, performance.now());
 }
 
 function updatePinchMeter(strength: number, pinching: boolean, visible: boolean): void {
@@ -3459,7 +5317,7 @@ function resetPresenceStatus(): void {
   fpsStamps = [];
   facingStateEl.textContent = '—';
   operatorStateEl.textContent = '—';
-  trackingStateEl.textContent = 'camera off';
+  setTracking('camera off');
   updatePinchMeter(0, false, false);
 }
 
@@ -3468,7 +5326,7 @@ function setCameraBusy(busy: boolean): void {
   if (busy) {
     btnCamera.textContent = 'Starting camera…';
     btnCamera.disabled = true;
-    trackingStateEl.textContent = 'starting camera…';
+    setTracking('starting camera…');
   } else {
     btnCamera.disabled = false;
   }
@@ -3476,13 +5334,15 @@ function setCameraBusy(busy: boolean): void {
 
 async function enableCamera(): Promise<boolean> {
   if (tracker) return true;
-  if (!navigator.mediaDevices?.getUserMedia) {
+  const live = findLiveCameraStream();
+  if (!live && !navigator.mediaDevices?.getUserMedia) {
     fail('fail-camera-unsupported', 'This browser cannot access a camera — pinch gestures are unavailable. Voice and text still work.');
     return false;
   }
   setCameraBusy(true);
+  let t: PresenceTracker | null = null;
   try {
-    const t = createPresenceTracker(handleHandEvent, onPresenceFrame);
+    t = createPresenceTracker(handleHandEvent, onPresenceFrame);
     t.onPauseChange((paused) => {
       resumeHint.hidden = !paused;
       if (paused) {
@@ -3492,7 +5352,7 @@ async function enableCamera(): Promise<boolean> {
         say('Resumed.');
       }
     });
-    await t.start();
+    await t.start(live ?? undefined);
     tracker = t;
     setCameraBusy(false);
     btnCamera.setAttribute('aria-pressed', 'true');
@@ -3512,6 +5372,7 @@ async function enableCamera(): Promise<boolean> {
     say('Camera on. Pinch to select or drag. Press "Register me" to lock onto your face.');
     return true;
   } catch {
+    t?.stop();
     tracker = null;
     setCameraBusy(false);
     btnCamera.setAttribute('aria-pressed', 'false');
@@ -3559,6 +5420,12 @@ btnCamera.addEventListener('click', () => {
     void enableCamera();
   }
 });
+
+void disableSystemTracking();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void disableSystemTracking();
+});
+window.addEventListener('focus', () => { void disableSystemTracking(); });
 
 btnRegister.addEventListener('click', () => {
   registerOperator();
@@ -3608,14 +5475,20 @@ const DEVICE_STATE_TEXT: Record<DeviceModelStatus, string> = {
 
 function renderAiStatus(): void {
   const st = getHybridStatus();
-  const cloud = st.appCheck === 'ready' ? 'Cloud AI on' : st.appCheck === 'failed' ? 'Cloud AI off' : 'Rules only';
-  modelStateEl.textContent = `${DEVICE_STATE_TEXT[st.deviceModel]} · ${cloud}`;
-  modelStateEl.title = st.lastError ?? '';
+  const cloud = st.appCheck === 'ready' ? 'Deep available' : st.appCheck === 'failed' ? 'Deep off' : 'Quick only';
+  const nanoOn = st.deviceModel === 'ready';
+  modelStateEl.textContent = nanoOn
+    ? QUICK_READY
+    : st.deviceModel === 'downloading'
+      ? (quickDownloadPercent != null ? `${GETTING_QUICK_READY} ${quickDownloadPercent}%` : GETTING_QUICK_READY)
+      : `${DEVICE_STATE_TEXT[st.deviceModel]}${cloud === 'Deep available' ? '' : ` · ${cloud}`}`;
+  modelStateEl.title = st.lastError || `${DEVICE_STATE_TEXT[st.deviceModel]}. ${cloud}.`;
+  refreshStudioStatus();
 }
 
 btnAi.addEventListener('click', async () => {
   btnAi.disabled = true;
-  btnAi.textContent = 'Downloading on-device AI…';
+  btnAi.textContent = GETTING_QUICK_READY + '…';
   progressWrap.hidden = false;
   progressFill.style.width = '0%';
   progressBar.setAttribute('aria-valuenow', '0');
@@ -3625,17 +5498,20 @@ btnAi.addEventListener('click', async () => {
   const ok = await initDeviceModel((p) => {
     sawProgress = true;
     const pct = Math.round(p * 100);
+    quickDownloadPercent = pct;
     progressFill.style.width = `${pct}%`;
     progressBar.setAttribute('aria-valuenow', String(pct));
     progressLabel.textContent = `${pct}%`;
+    renderAiStatus();
   });
   progressWrap.hidden = true;
   const status = getHybridStatus();
   renderDeviceButton(status.deviceModel);
   renderAiStatus();
   if (ok) {
-    announceStatus('On-device AI ready.');
-    say(sawProgress ? 'On-device AI downloaded and ready.' : 'On-device AI is ready.');
+    announceStatus(QUICK_READY + '.');
+    say(sawProgress ? 'Quick is ready on this device.' : 'Quick is ready.');
+    void warmupQuick();
   } else {
     const why =
       status.deviceModel === 'unavailable' || status.deviceModel === 'unsupported'
@@ -3675,6 +5551,7 @@ void prepareHybrid().then(async (status) => {
   }
   renderDeviceButton(await checkDeviceAvailability());
   renderAiStatus();
+  if (getHybridStatus().deviceModel === 'ready') void warmOnDevice();
 });
 
 // ---- sim mode ----
@@ -4122,14 +5999,14 @@ function createTour() {
     card.className = 'tour-card tour-centered';
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-modal', 'true');
-    card.setAttribute('aria-label', 'Judges welcome');
+    card.setAttribute('aria-label', 'Welcome to Mendcraft');
     const h = document.createElement('h2');
     h.tabIndex = -1;
-    h.textContent = 'Judges: take the 2-minute tour 👋';
+    h.textContent = 'Welcome to Mendcraft';
     const p = document.createElement('p');
     p.textContent =
-      'It spotlights the real controls in the running app — no camera or mic needed. ' +
-      'You can set up the camera instead, or open the judges’ page for the 30-second path.';
+      'This is your floor-plan studio. Take a short tour of the controls, set up the camera for pinch and voice, or start drawing. ' +
+      'Judges can also open the 30-second path.';
     const actions = document.createElement('div');
     actions.className = 'tour-actions';
     actions.append(
@@ -4239,8 +6116,6 @@ function createTour() {
     walks.className = 'tour-actions tour-walks';
     walks.append(
       button('Plan · 2D floor plan', () => { window.location.href = '/?sim=1&play=1'; }, 'primary'),
-      button('Part · 3D cup grip', () => { window.location.href = '/?sim=1&mode=part&play=1'; }, 'primary'),
-      button('UI · login screen', () => { window.location.href = '/?sim=1&mode=ui&play=1'; }, 'primary'),
     );
     const foot = document.createElement('div');
     foot.className = 'tour-actions';
@@ -4292,11 +6167,13 @@ try {
 } catch {
   onboardedAlready = false;
 }
-// First load no longer forces the camera onboarding on a judge. Instead it
-// offers the 2-minute guided tour (camera setup stays one click away inside it).
-// A judge who has dismissed it before is left alone.
-if (!SIM_ACTIVE && !tourDismissed(localStorage) && !onboardedAlready) {
-  tour.openWelcome();
+// First run v1 (7 minutes, skippable, resumable) is the default welcome.
+// The older tour stays one click away from Help. Simulation / judges walks
+// are left alone so they can start on the canvas.
+if (!SIM_ACTIVE) {
+  studioChrome?.openFirstRun();
+} else if (!tourDismissed(localStorage) && !onboardedAlready) {
+  // sim: do not auto-block the canvas
 }
 
 if (!navigator.mediaDevices?.getUserMedia) {
@@ -4308,3 +6185,10 @@ renderAll();
 
 // Apply saved setup (calibration, hints) once everything above exists.
 applySetup();
+
+/** Does the plan rule parser read this as a concrete edit? (then it is not a
+ *  question for the copilot, even if it ends with "?"). */
+function decisionIsExactEdit(utterance: string): boolean {
+  const r = mode.parse(utterance) as Record<string, unknown>;
+  return !!r && typeof r === 'object' && !('clarify' in r);
+}

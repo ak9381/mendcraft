@@ -105,6 +105,21 @@ describe('extension bridge: replies are data only', () => {
     expect(parseExtResult(good)).toEqual(good);
   });
 
+  it('accepts an image pick from a references tab and allows openRefs / refsCommand / closeRefs', () => {
+    const image = {
+      type: 'mendcraft-ext-result',
+      v: 1,
+      requestId: 'mcx-2',
+      ok: true,
+      action: 'refsCommand',
+      data: { kind: 'image', url: 'https://cdn.example/cup.jpg', title: 'A cup', text: '' },
+    };
+    expect(parseExtResult(image)).toEqual(image);
+    expect(parseExtResult({ ...good, action: 'openRefs' })?.action).toBe('openRefs');
+    expect(parseExtResult({ ...good, action: 'closeRefs' })?.action).toBe('closeRefs');
+    expect(parseExtResult({ ...image, data: { kind: 'image', url: () => 'nope' } })).toBeNull();
+  });
+
   it('rejects functions, scripts, arrays, and missing fields — never evaluates the payload', () => {
     expect(parseExtResult('copyThis()')).toBeNull();
     expect(parseExtResult(null)).toBeNull();

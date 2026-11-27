@@ -58,7 +58,6 @@ describe('toolbar id lists', () => {
       'btn-register',
       'btn-reregister',
       'topbar-spacer',
-      'btn-export',
       'more-wrap',
     ]);
   });

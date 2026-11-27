@@ -11,6 +11,7 @@
     "gen-icons": "node scripts/gen-icons.mjs",
     "eval:commands": "vitest run --config vitest.eval.config.ts",
     "a11y:axe": "node scripts/a11y-axe.mjs",
+    "hands:reach": "node scripts/hand-reach.mjs",
     "test": "vitest run",
     "e2e": "node scripts/e2e-actual.mjs",
     "record": "node scripts/record-fixtures.mjs"

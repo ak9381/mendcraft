@@ -101,10 +101,10 @@ export const KNOWN_OUTBOUND: readonly OutboundSurface[] = [
     kind: 'firestore-relay',
     label: 'Firestore pairing room',
     primitive: '\\b(addDoc|setDoc|updateDoc|writeBatch)\\(',
-    files: ['src/relay/firestoreTransport.ts', 'src/recipes/sync.ts'],
+    files: ['src/relay/firestoreTransport.ts', 'src/recipes/sync.ts', 'src/cad/sync.ts'],
     leavesDevice: true,
     note:
-      'Phone<->laptop pairing and taught-recipe sync write to a Firestore room doc. ' +
+      'Phone<->laptop pairing, taught-recipe sync and the site book (site checklist questions + change-log titles, no plan snapshots) write to Firestore. ' +
       'The room carries privacy-safe control snapshots, taught recipe summaries, commands, and — ' +
       'ONLY when the user pairs a phone camera — still frames. Frames go to the paired device, never to Gemini.',
   },
@@ -163,6 +163,12 @@ export const CLOUD_LEDGER_JOBS: readonly string[] = [
   'lang-detect',
   'spotify',
   'references',
+  'ref-generate',
+  'copilot-answer',
+  'client-email',
+  'materials',
+  'guideline-explain',
+  'cad-tool',
 ];
 
 /** Strip the parenthetical state suffix a ledger job can carry, e.g.

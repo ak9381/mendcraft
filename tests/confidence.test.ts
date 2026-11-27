@@ -134,8 +134,8 @@ describe('choicePrompt / suggestCommands', () => {
     expect(choicePrompt('en', 1)).toMatch(/apply/);
   });
   it('suggests three runnable commands per mode', () => {
-    for (const m of ['plan', 'ui', 'part']) expect(suggestCommands(m)).toHaveLength(3);
-    expect(suggestCommands('ui')[0]).toMatch(/button/);
+    expect(suggestCommands('plan')).toHaveLength(3);
+    expect(suggestCommands('plan')[0]).toMatch(/door/);
   });
 });
 

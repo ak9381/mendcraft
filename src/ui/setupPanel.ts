@@ -3,16 +3,18 @@
 // file owns the dialog, the step screens and feeding camera frames into them.
 // Every number it computes stays in this browser (localStorage).
 
-import type { Pt } from '../input/handLogic';
+import { INDEX_TIP, type Pt } from '../input/handLogic';
 import type { Pt3 } from '../input/faceLogic';
 import { pinchRatio } from '../input/handMetrics';
 import { computeCalibration, type Calibration } from '../setup/calibration';
+import { CALIBRATION_TARGETS, TARGET_HOLD_MS, targetHit } from '../setup/targets';
 import {
   SETUP_STEPS, CAMERA_STEPS, STEP_TITLES, nextStep, prevStep, stepProgress, loadSetup, saveSetup,
   setBinding, addTemplate, removeTemplate, type SetupData, type SetupStep,
 } from '../setup/setupState';
 import { createTemplateRecorder, steadiestFrame } from '../input/gestureTemplates';
 import { faceRatios, type FaceRatios } from '../input/faceCues';
+import { ensureCameraReady } from '../input/cameraShare';
 
 export interface SetupTarget { id: string; label: string }
 export interface SetupGesture { id: string; label: string }
@@ -42,7 +44,6 @@ export interface SetupPanel {
   feedFace(landmarks: readonly Pt3[] | null): void;
 }
 
-const REACH_MS = 6000;
 const STILL_MS = 2500;
 const PINCHES_NEEDED = 5;
 const TRY_MS = 1200;
@@ -98,7 +99,9 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
 
   // ---- per-step capture state ----
   let reachFrames: Pt[][] = [];
-  let reachStart = 0;
+  let targetIndex = 0;
+  let targetHoldStart = 0;
+  let targetHits: Pt[] = [];
   let pinchFrames: Pt[][] = [];
   let pinchCount = 0;
   let wasPinched = false;
@@ -143,9 +146,9 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
   function resetCapture(): void {
     // Sample arrays survive step changes (calibration needs all three); each is
     // cleared only when its own step starts again.
-    reachStart = 0; pinchCount = 0; wasPinched = false;
+    pinchCount = 0; wasPinched = false;
     stillStart = 0; faceSamples = []; capturingFace = false;
-    if (step === 'reach') reachFrames = [];
+    if (step === 'reach') { reachFrames = []; targetIndex = 0; targetHoldStart = 0; targetHits = []; }
     if (step === 'pinch') pinchFrames = [];
     if (step === 'still') stillFrames = [];
     recorder = null; tryFrames = []; tryUntil = 0; progressEl = null;
@@ -181,7 +184,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
   // ---- step renderers ----
   function renderWelcome(): void {
     body.append(
-      h('p', 'mc-setup-lead', 'Two minutes, once. Mendcraft learns how far your hand reaches, how firmly you can pinch, and how steady it is. Then you can give any button your own gesture or spoken phrase.'),
+      h('p', 'mc-setup-lead', 'Two minutes, once. Mendcraft learns how far your hand reaches from five spots, how firmly you can pinch, and how steady it is. Then you can give any button your own gesture or spoken phrase. Dwell, voice and pinch all click — a pinch is optional if it hurts.'),
       h('p', 'mc-setup-note', 'Everything stays on this device. No video or hand data is uploaded.'),
     );
     const list = h('ul', 'mc-setup-list');
@@ -197,6 +200,32 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     const cam = cameraNote();
     if (cam) body.append(cam);
     else body.append(progressBar());
+  }
+
+  function renderReach(): void {
+    body.append(h('p', 'mc-setup-lead', 'Hold your pointing finger on each of the five spots, one at a time. This steadies the cursor and cuts false clicks.'));
+    const k = h('p', 'mc-setup-kn-line', 'ಪ್ರತಿ ಚುಕ್ಕೆಯ ಮೇಲೆ ಬೆರಳು ಹಿಡಿದು ನಿಲ್ಲಿಸಿ.');
+    k.lang = 'kn';
+    body.append(k);
+    const cam = cameraNote();
+    if (cam) {
+      body.append(cam);
+      return;
+    }
+    const board = h('div', 'mc-setup-board');
+    board.setAttribute('aria-label', 'Five calibration spots');
+    for (let i = 0; i < CALIBRATION_TARGETS.length; i++) {
+      const t = CALIBRATION_TARGETS[i];
+      const spot = h('div', 'mc-setup-spot', t.label);
+      spot.style.left = `${t.nx * 100}%`;
+      spot.style.top = `${t.ny * 100}%`;
+      if (i < targetIndex) spot.classList.add('is-done');
+      if (i === targetIndex) spot.classList.add('is-current');
+      board.append(spot);
+    }
+    body.append(board);
+    body.append(progressBar());
+    live.textContent = `${targetIndex} of ${CALIBRATION_TARGETS.length}`;
   }
 
   function renderGestures(): void {
@@ -234,8 +263,11 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     }
   }
 
-  function startTry(): void {
-    if (!opts.cameraOn()) { live.textContent = 'Turn on the camera first.'; return; }
+  async function startTry(): Promise<void> {
+    const wasOn = opts.cameraOn();
+    const ready = await ensureCameraReady(opts);
+    if (!ready.ok) { live.textContent = ready.message; return; }
+    if (!wasOn) render();
     if (!recorder) {
       const label = opts.targets().find((t) => t.id === recordTarget)?.label ?? recordTarget;
       const id = `${recordTarget}`.replace(/^btn-/, '').replace(/[^a-z0-9-]/g, '').slice(0, 30) || 'gesture';
@@ -374,7 +406,7 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     nextBtn.textContent = step === 'welcome' ? 'Start' : step === 'done' ? 'Finish' : 'Next';
     switch (step) {
       case 'welcome': renderWelcome(); break;
-      case 'reach': renderCapture('Move your pointing finger slowly to the corners you can reach comfortably. Small is fine.', 'ಆರಾಮವಾಗಿ ತಲುಪುವಷ್ಟು ಮಾತ್ರ ಬೆರಳು ಆಡಿಸಿ.'); break;
+      case 'reach': renderReach(); break;
       case 'pinch': renderCapture(`Pinch ${PINCHES_NEEDED} times, only as firmly as is comfortable today.`, 'ಇಂದು ಆರಾಮವಿರುವಷ್ಟು ಮಾತ್ರ ಚಿವುಟಿ.'); break;
       case 'still': renderCapture('Point at the screen and hold still for a moment.', 'ಪರದೆಯ ಕಡೆ ಬೆರಳು ತೋರಿಸಿ, ಸ್ವಲ್ಪ ಹೊತ್ತು ಹಾಗೇ ಇಡಿ.'); break;
       case 'gestures': renderGestures(); break;
@@ -389,11 +421,31 @@ export function createSetupPanel(opts: SetupPanelOptions): SetupPanel {
     if (root.hidden || !points || points.length < 21) return;
     const p = points as Pt[];
     if (step === 'reach' && progressEl) {
-      if (!reachStart) reachStart = now;
-      reachFrames.push(p);
-      const f = (now - reachStart) / REACH_MS;
-      setProgress(f);
-      if (f >= 1 && reachFrames.length >= 30) { live.textContent = 'Reach saved.'; reachStart = Infinity; go('pinch'); }
+      const tip = p[INDEX_TIP];
+      const current = CALIBRATION_TARGETS[targetIndex];
+      if (current && tip && targetHit(tip, current)) {
+        if (!targetHoldStart) targetHoldStart = now;
+        const f = (now - targetHoldStart) / TARGET_HOLD_MS;
+        setProgress(f);
+        live.textContent = `${current.label} · ${targetIndex + 1} of ${CALIBRATION_TARGETS.length}`;
+        if (f >= 1) {
+          targetHits.push({ x: tip.x, y: tip.y });
+          reachFrames.push(p);
+          targetIndex++;
+          targetHoldStart = 0;
+          setProgress(0);
+          if (targetIndex >= CALIBRATION_TARGETS.length) {
+            live.textContent = 'Reach saved.';
+            go('pinch');
+          } else {
+            render();
+          }
+        }
+      } else {
+        targetHoldStart = 0;
+        setProgress(0);
+        if (current) live.textContent = `Point at ${current.label} · ${targetIndex + 1} of ${CALIBRATION_TARGETS.length}`;
+      }
     } else if (step === 'pinch' && progressEl) {
       pinchFrames.push(p);
       const r = pinchRatio(p);

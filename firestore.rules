@@ -16,6 +16,45 @@ rules_version = '2';
 // abandoned rooms and alias docs expire on their own.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Message envelope shape mirrors src/relay/protocol.ts's RelayMessage
+    // union — keep the two in sync. `at` is the server timestamp sentinel
+    // firestoreTransport.ts adds on every publish(), so it must resolve to
+    // request.time on create. The only field with attacker-controlled size
+    // (a phone-camera still) is capped well under Firestore's 1MiB document
+    // ceiling so a single room can't be used to pile up unbounded storage.
+    function isSizedString(data, key, maxSize) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxSize);
+    }
+    function isMapField(data, key) {
+      return !(key in data) || data[key] is map;
+    }
+    function isValidMessage(data) {
+      return data.keys().hasOnly([
+          'v', 'from', 'type', 'at',
+          'cmd', 'run', 'runStatus', 'runControl',
+          'mimeType', 'dataBase64', 'music', 'snapshot', 'ask', 'reply',
+        ])
+        && data.v == 1
+        && data.from in ['host', 'phone', 'control']
+        && data.type in [
+          'hello', 'bye', 'cmd', 'run', 'runStatus', 'runControl',
+          'frame', 'music', 'state', 'privacyAsk', 'privacyReply',
+        ]
+        && data.at == request.time
+        && isSizedString(data, 'mimeType', 40)
+        // ~150KB of raw JPEG once decoded — well above the 320px-wide,
+        // quality-0.5 stills remotePage.ts actually sends.
+        && isSizedString(data, 'dataBase64', 200000)
+        && isMapField(data, 'cmd')
+        && isMapField(data, 'run')
+        && isMapField(data, 'runStatus')
+        && isMapField(data, 'runControl')
+        && isMapField(data, 'music')
+        && isMapField(data, 'snapshot')
+        && isMapField(data, 'ask')
+        && isMapField(data, 'reply');
+    }
+
     match /rooms/{roomId} {
       allow get: if true;
       allow list: if false;
@@ -28,7 +67,8 @@ service cloud.firestore {
       match /messages/{messageId} {
         // list is required for onSnapshot over the subcollection, but the path
         // already requires the unguessable roomId, so it leaks nothing.
-        allow get, list, create: if true;
+        allow get, list: if true;
+        allow create: if isValidMessage(request.resource.data);
         allow update, delete: if false; // append-only channel
       }
     }
@@ -38,6 +78,19 @@ service cloud.firestore {
     // knowing it IS the capability. One doc per book holding only the merged
     // {recipes, deleted} maps (validated client-side on every load; recipes are
     // declarative JSON steps, never code). No list → ids can't be enumerated.
+    // Site checklist + reviewed change log (cad/sync.ts). Capability id like
+    // the recipe book; metadata only, bounded lists.
+    match /sitebooks/{bookId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if bookId.size() == 24
+        && request.resource.data.keys().hasOnly(['changes', 'checklist', 'updatedAt'])
+        && request.resource.data.changes is list
+        && request.resource.data.changes.size() <= 80
+        && request.resource.data.checklist is list
+        && request.resource.data.checklist.size() <= 60;
+      allow delete: if false;
+    }
     match /recipebooks/{bookId} {
       allow get: if true;
       allow list: if false;

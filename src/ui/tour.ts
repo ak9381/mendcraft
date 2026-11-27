@@ -21,8 +21,8 @@ export const TOUR_STEPS: TourStepDef[] = [
   {
     id: 'mode',
     selector: '#mode-switch',
-    title: 'Pick a design mode',
-    body: 'Plan is a 2D floor plan, Part is a 3D printable part, UI is a screen design. Everything in the tour works the same in all three.',
+    title: 'Your floor plan',
+    body: 'Mendcraft draws CAD floor plans. Say or pinch what you want, and see it in 3D any time.',
   },
   {
     id: 'palette',

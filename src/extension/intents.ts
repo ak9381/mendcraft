@@ -10,13 +10,17 @@ export type ChromeIntent =
   | { type: 'paste-here' }
   | { type: 'switch-tab'; query: string };
 
-export type ExtAction = 'copyThis' | 'copyLink' | 'pasteHere' | 'switchTab' | 'openTab' | 'getStatus' | 'getLastCopied';
+export type ExtAction = 'copyThis' | 'copyLink' | 'pasteHere' | 'switchTab' | 'openTab' | 'getStatus' | 'getLastCopied' | 'openRefs' | 'refsCommand' | 'closeRefs';
 
 export interface ExtRequestPayload {
   query?: string;
   url?: string;
   text?: string;
   confirmed?: boolean;
+  engine?: 'google' | 'pinterest';
+  cmd?: 'scrollUp' | 'scrollDown' | 'nextPage' | 'highlight' | 'cursor' | 'pick' | 'start';
+  index?: number;
+  cursor?: { x: number; y: number };
 }
 
 function norm(utterance: string): string {

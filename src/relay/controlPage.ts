@@ -10,6 +10,7 @@
 // (sim.playControlDemo) and says so honestly — it never fakes a live connection.
 
 import '../style.css';
+import { esc } from '../core/esc';
 import { groupCode, parseJoinInput } from './protocol';
 import { createFakeTransport, type RelayTransport } from './transport';
 import { probeFirestore } from './firestoreTransport';
@@ -43,6 +44,7 @@ const DEVICE_RUN_LABEL: Record<string, string> = {
 
 export async function mountControlPage(root: HTMLElement): Promise<void> {
   document.title = 'Mendcraft control room';
+  document.body.classList.add('control-room');
   root.innerHTML = `
     <div class="control-page">
       <header class="control-head">
@@ -61,34 +63,53 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
 
       <div class="control-grid">
         <section class="card card-device" aria-label="Active device">
-          <h2>Working on</h2>
+          <h2>This device</h2>
           <p id="c-device" class="c-device">—</p>
-          <p class="card-note">From the devices in this room.</p>
+          <p class="card-note">The machine she is working on in this room.</p>
+        </section>
+
+        <section class="card card-lamp card-appliances" aria-label="Lamp">
+          <h2>Lamp</h2>
+          <p class="c-appliance-line"><span id="c-lamp" class="c-tag">unknown</span></p>
+          <p id="c-lamp-detail" class="c-appliance-detail"></p>
+          <p class="card-note">Read-only. Change it from the editor or /remote.</p>
+        </section>
+
+        <section class="card card-music card-appliances" aria-label="Music">
+          <h2>Music</h2>
+          <p class="c-appliance-line"><span id="c-music" class="c-tag">unknown</span></p>
+          <p id="c-music-detail" class="c-appliance-detail"></p>
+          <p class="card-note">Spotify when connected, otherwise the built-in player.</p>
         </section>
 
         <section class="card card-scene" aria-label="3D review">
           <div class="card-head">
             <h2>3D review</h2>
-            <button id="c-scene-full" type="button" class="c-scene-full" hidden>⛶ Fullscreen</button>
+            <button id="c-scene-full" type="button" class="c-scene-full" hidden>Fullscreen</button>
           </div>
           <div id="c-scene" class="c-scene"><p class="card-empty">No scene published yet.</p></div>
           <p id="c-scene-sum" class="card-note"></p>
         </section>
 
+        <section class="card card-ledger" aria-label="What left this device">
+          <h2>On-device vs cloud</h2>
+          <div class="c-ledger-stats">
+            <div class="c-stat c-stat-device">
+              <span class="c-stat-value" id="c-ledger-private">—</span>
+              <span class="c-stat-label">Stayed on device</span>
+            </div>
+            <div class="c-stat c-stat-cloud">
+              <span class="c-stat-value" id="c-ledger-cloud">—</span>
+              <span class="c-stat-label">Went to the cloud</span>
+            </div>
+          </div>
+          <p id="c-ledger-counts" class="c-counts"></p>
+          <ul id="c-ledger" class="c-feed" tabindex="0" aria-label="What left this device"><li class="card-empty">Nothing has left this device.</li></ul>
+        </section>
+
         <section class="card card-ai" aria-label="AI request feed">
           <h2>AI requests</h2>
-          <ul id="c-ai" class="c-feed"><li class="card-empty">No requests yet.</li></ul>
-        </section>
-
-        <section class="card card-ledger" aria-label="What left this device">
-          <h2>What left this device</h2>
-          <p id="c-ledger-counts" class="c-counts"></p>
-          <ul id="c-ledger" class="c-feed"><li class="card-empty">Nothing has left this device.</li></ul>
-        </section>
-
-        <section class="card card-queue" aria-label="Offline job queue">
-          <h2>Cloud queue</h2>
-          <ul id="c-queue" class="c-feed"><li class="card-empty">Queue empty.</li></ul>
+          <ul id="c-ai" class="c-feed" tabindex="0" aria-label="AI requests"><li class="card-empty">No requests yet.</li></ul>
         </section>
 
         <section class="card card-recipes" aria-label="Shared recipes">
@@ -97,11 +118,19 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           <p id="c-run-status" class="card-note" role="status" aria-live="polite"></p>
         </section>
 
-        <section class="card card-appliances" aria-label="Lamp and music">
-          <h2>Room</h2>
-          <p class="c-appliance">Lamp: <span id="c-lamp" class="c-tag">unknown</span> <span id="c-lamp-detail" class="c-appliance-detail"></span></p>
-          <p class="c-appliance">Music: <span id="c-music" class="c-tag">unknown</span> <span id="c-music-detail" class="c-appliance-detail"></span></p>
-          <p class="card-note">Read-only mirror. Control the lamp from the editor or /remote. Music is Spotify when connected, otherwise the built-in player (studio or /remote).</p>
+        <section class="card card-changes" aria-label="Change review">
+          <h2>Changes to review</h2>
+          <ul id="c-changes" class="c-feed" tabindex="0" aria-label="Plan changes"><li class="card-empty">No changes yet.</li></ul>
+        </section>
+
+        <section class="card card-checklist" aria-label="Site checklist">
+          <h2>Site checklist</h2>
+          <ul id="c-checklist" class="c-feed" tabindex="0" aria-label="Site checklist"><li class="card-empty">No site questions yet.</li></ul>
+        </section>
+
+        <section class="card card-queue" aria-label="Offline job queue">
+          <h2>Cloud queue</h2>
+          <ul id="c-queue" class="c-feed" tabindex="0" aria-label="Offline queue"><li class="card-empty">Queue empty.</li></ul>
         </section>
 
         <section class="card card-caption" aria-label="Live captions">
@@ -220,6 +249,10 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     const c = snap.ledger.counts;
     $<HTMLParagraphElement>('c-ledger-counts').textContent =
       `${c.cloud} cloud · ${c.private} private (on-device ${c.onDevice} + rules ${c.rules}) · ${formatBytes(c.bytesSent)} sent`;
+    const priv = root.querySelector<HTMLElement>('#c-ledger-private');
+    const cloud = root.querySelector<HTMLElement>('#c-ledger-cloud');
+    if (priv) priv.textContent = String(c.private);
+    if (cloud) cloud.textContent = String(c.cloud);
     const ledgerEl = $<HTMLUListElement>('c-ledger');
     ledgerEl.innerHTML = '';
     if (!snap.ledger.calls.length) {
@@ -302,8 +335,10 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
           return;
         }
         const runId = `run-${++runSeq}-${r.id.slice(0, 8)}`;
-        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => undefined);
         setRunStatus(`Asked the laptop to run “${r.name}”…`);
+        void session.sendRun({ runId, recipeId: r.id, device: r.device, by: 'iPad' }).catch(() => {
+          setRunStatus(`Couldn't reach the laptop to run “${r.name}” — check the connection.`);
+        });
       });
       li.append(info, runBtn);
       recipesEl.appendChild(li);
@@ -313,6 +348,32 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
       li.className = 'card-note';
       li.textContent = `+${snap.omitted.recipes} more recipes hidden`;
       recipesEl.appendChild(li);
+    }
+
+    // Reviewed change log: who changed what and why; pending ones are marked.
+    const WHO_LABEL: Record<string, string> = { her: 'You', nano: 'Nano · on device', gemini: 'Gemini · cloud', rules: 'Rules · on device' };
+    const changesEl = $<HTMLUListElement>('c-changes');
+    changesEl.innerHTML = '';
+    const changes = snap.changes ?? [];
+    if (!changes.length) changesEl.innerHTML = '<li class="card-empty">No changes yet.</li>';
+    for (const c of [...changes].reverse()) {
+      const li = document.createElement('li');
+      li.className = `c-row c-change c-change-${c.status}`;
+      li.innerHTML = `<span class="c-tag tag-${esc(c.status)}">${esc(c.status === 'pending' ? 'waiting' : c.status)}</span>`
+        + `<span class="c-row-text"><b>${esc(c.title)}</b> · ${esc(WHO_LABEL[c.who] ?? c.who)}${c.why ? `<br><small>${esc(c.why)}</small>` : ''}</span>`;
+      changesEl.appendChild(li);
+    }
+    // Site checklist questions (asked offline at the site).
+    const checklistEl = $<HTMLUListElement>('c-checklist');
+    checklistEl.innerHTML = '';
+    const items = snap.checklist ?? [];
+    if (!items.length) checklistEl.innerHTML = '<li class="card-empty">No site questions yet.</li>';
+    for (const it of items) {
+      const li = document.createElement('li');
+      li.className = `c-row c-check c-check-${it.status}`;
+      li.innerHTML = `<span class="c-tag tag-${esc(it.status)}">${esc(it.status)}</span>`
+        + `<span class="c-row-text">${esc(it.question)}${it.offline ? ' <small>(asked offline)</small>' : ''}${it.answer ? `<br><small>${esc(it.answer)}</small>` : ''}</span>`;
+      checklistEl.appendChild(li);
     }
 
     // 3D review (compact wireframe preview; ⛶ opens the fullscreen orbit view).
@@ -340,6 +401,7 @@ export async function mountControlPage(root: HTMLElement): Promise<void> {
     session.onState((s) => {
       if (s === 'paired') setConn('live', 'cloud');
       else if (s === 'gone') setConn('laptop left', 'rules');
+      else if (s === 'disconnected') setConn('connection lost — check your network', 'rules');
       else setConn('waiting for laptop…', 'rules');
     });
     session.onSnapshot(render);
@@ -448,6 +510,3 @@ function renderScene(snap: ControlSnapshot): string {
   return `<svg class="c-wire" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Scene preview">${body}</svg>`;
 }
 
-function esc(s: string): string {
-  return s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]!));
-}
