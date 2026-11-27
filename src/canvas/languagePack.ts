@@ -354,22 +354,32 @@ export function statusText(k: StatusKey, pack: LanguagePack | null): string {
   return pack?.status?.[k] ?? EN_STATUS[k];
 }
 
-/** Script-aware normalize: keep letters/digits of any script, drop punctuation. */
+/** Script-aware normalize: keep letters, marks (Kannada vowel signs) and
+ *  digits of any script, drop punctuation. */
 function normMulti(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return text.toLowerCase().normalize('NFC').replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** A spoken phrase → the intent it routes to, or null. Longest phrases win so a
- *  specific sentence beats a word it contains. */
+/** Polite words that may stand around a phrase ("please", "ದಯವಿಟ್ಟು"). */
+const POLITE_WORDS = new Set(['please', 'pls', 'now', 'ok', 'okay', 'ದಯವಿಟ್ಟು', 'ದಯಮಾಡಿ', 'ಈಗ', 'ಸರಿ', 'कृपया', 'अभी', 'porfa', 'ahora', 'stp', 'bitte', 'jetzt']);
+const POLITE_MULTI = /(?:^|\s)(?:por favor|s il vous plaît|s il vous plait|sil vous plait)(?=\s|$)/gu;
+
+/** A spoken phrase → the intent it routes to, or null. The same command
+ *  shape rule as the English device parser (N1): the whole line must BE the
+ *  phrase (a polite word around it is fine) — a phrase inside a longer
+ *  sentence ("ದೀಪ ಆನ್ ಮಾಡಿದ್ದೀಯಾ", "ಲೈಟ್ ಆಫ್ ಮಾಡಬೇಡ", "por qué no enciende la
+ *  luz") never fires — and a question never acts. */
 export function routePackPhrase(text: string, pack: LanguagePack): IntentKey | null {
-  const t = normMulti(text);
+  if (/[?？¿;]/u.test(text)) return null;
+  const words = normMulti(text).replace(POLITE_MULTI, ' ').split(' ').filter(Boolean);
+  while (words.length && POLITE_WORDS.has(words[0])) words.shift();
+  while (words.length && POLITE_WORDS.has(words[words.length - 1])) words.pop();
+  const t = words.join(' ');
   if (!t) return null;
-  let best: { intent: IntentKey; len: number } | null = null;
   for (const intent of INTENT_KEYS) {
     for (const phrase of pack.phrases[intent] ?? []) {
-      const p = normMulti(phrase);
-      if (p && t.includes(p) && (!best || p.length > best.len)) best = { intent, len: p.length };
+      if (normMulti(phrase) === t) return intent;
     }
   }
-  return best?.intent ?? null;
+  return null;
 }
