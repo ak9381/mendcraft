@@ -2249,16 +2249,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function showAi(on = true, pin = false): void {
     clearTimeout(aiHideTimer);
     if (AI_PANEL_ALWAYS_OPEN) { on = true; pin = true; }
-    const insetBefore = !aiPanel.hidden && !aiAuto;
+    const shownBefore = !aiPanel.hidden;
     aiAuto = on && !pin && (!!aiPanel.hidden || aiAuto);
     aiPanel.hidden = !on;
-    // Only a user-pinned panel shifts the cluster/swarm; an auto-open is a pure overlay.
+    // Only a user-pinned panel shifts the swarm; an auto-open overlays the boards.
     root.classList.toggle('is-ai-pinned', on && !aiAuto);
     if (aiScrim) aiScrim.hidden = true;
     root.querySelector('[data-cmd=ai]')?.setAttribute('aria-expanded', String(on));
-    // Only a layout-changing (user-pinned) toggle re-flies; an overlay never moves the camera.
-    const insetAfter = on && !aiAuto;
-    if (insetBefore !== insetAfter && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
+    // The hand cluster moves left of the drawer whenever it shows (canvas.css),
+    // pinned or not, so the focused board is re-fitted on every open/close:
+    // the cluster never covers a board's buttons (final review L1).
+    if (shownBefore !== on && focusId) { const f = reg.get(focusId); if (f) void flyTo(focusCam(fitBoardWidth(f))); }
   }
   aiPanel.querySelector('.mc-ai-close')?.addEventListener('click', closeAi);
   // Scrim stays inert (never used as a dismiss target).
@@ -5941,6 +5942,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   return {
     /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
     loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),
+    /** e2e: the AI drawer opening by itself (as on a failure) / folding away. */
+    aiOverlay: (on: boolean) => showAi(on),
     /** Status lines said since `mark` (0: all kept), for e2e. */
     statusSince: (mark: number) => statusLog.slice(Math.max(0, mark - statusBase)),    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
