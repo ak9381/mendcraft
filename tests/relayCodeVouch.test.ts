@@ -99,6 +99,28 @@ describe('C2: a code left behind by a reload never comes back in the resumed roo
     await s3.close();
   });
 
+  it('review sim-4 §5: a failed delete then admitMore keeps the old code on the delete list; the next session online deletes it', async () => {
+    const base = createFakeTransport();
+    const token = generateRoomToken();
+    const storage = memStorage();
+    let deletesFail = false;
+    const flaky: RelayTransport = { ...base, async clearAlias(code) { if (deletesFail) throw new Error('offline'); return base.clearAlias(code); } };
+    const s1 = await createHostSession(flaky, undefined, { token, openCode: openCodeStore(storage) });
+    const c1 = s1.code;
+    deletesFail = true;
+    await s1.endAdmission(); // the delete fails (a network blip)
+    deletesFail = false;
+    await s1.admitMore(); // a new code is opened and saved over the old one
+    expect(s1.code).not.toBe(c1);
+    expect(loadOpenCode(storage)).toBe(s1.code);
+    expect(loadStaleCodes(storage)).toContain(c1);
+    // The page goes away; the next session deletes C1 before its room opens.
+    const s2 = await createHostSession(flaky, undefined, { token, openCode: openCodeStore(storage) });
+    expect(await base.resolveAlias(c1)).toBeNull();
+    expect(loadStaleCodes(storage)).not.toContain(c1);
+    await s2.close();
+  });
+
   it('the open code is remembered beside the token and forgotten when cleared', async () => {
     const t = createFakeTransport();
     const storage = memStorage();

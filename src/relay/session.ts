@@ -359,7 +359,13 @@ export async function createHostSession(
     const was = code;
     await transport.clearAlias(was).then(() => {
       if (openStore?.load() === was) openStore.save(null);
-    }, () => undefined);
+      openStore?.stale?.remove(was);
+    }, () => {
+      // Review sim-4 §5: admitMore() may save a new code over this one before
+      // the next session runs, so a code whose delete failed goes on the
+      // delete list now — never forgotten while it may point at the room.
+      openStore?.stale?.add(was);
+    });
   }
   /** Open the alias for the current code: remembered first (a crash right
    *  after still leaves a trace to clear), then vouched for by a 'codeOpen'
