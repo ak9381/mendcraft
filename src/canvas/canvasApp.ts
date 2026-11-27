@@ -1694,7 +1694,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const changed = applyRealLamps(lampSwap, lamps);
       syncConnectorLabels();
       for (const fid of changed) renderSurface(fid);
-      if (changed.length) { sync(); updateDock(); persist(); }
+      // Re-rendered only: discovery never changes or saves a board.
+      if (changed.length) { sync(); updateDock(); }
       if (devicesWired) refreshLiveTables();
       // A quiet re-check that changed nothing says nothing.
       if (!again || !wasUp) say(lamps.length ? `${again ? 'The lamp bridge is back — found' : 'Found'} ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
@@ -1829,9 +1830,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function renderSurface(id: string): boolean {
     if (!surfaces[id]) return false;
-    // Backstop: whatever reached this board (a saved board from another
-    // session, a script, a shared board) shows only lamps that exist.
-    const plan = surfaces[id] = fitPlan(surfaces[id], id);
+    // The stored board is shown as approved (spec §9): a lamp tile whose
+    // bulb is not found shows "Not connected"; nothing here rewrites it.
+    const plan = roomWithoutPlanTiles(surfaces[id]);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.

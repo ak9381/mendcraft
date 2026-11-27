@@ -5,12 +5,12 @@
 // One bulb in the room means one lamp on the canvas — and one lamp id in the
 // list the models are given.
 //
-// Lamp ids are managed here: 'wiz-lamp-N'. A board may
-// only show a managed lamp id that is in the device list right now; any
-// other (a bulb that has gone, a plan written
-// from a prompt built before discovery, a saved board from another session)
-// is given the first current lamp that board does not already show, or
-// removed — never left as a dead "unknown device" tile.
+// Lamp ids are managed here: 'wiz-lamp-N'. A NEW plan (a model's reply,
+// before she reviews it) naming a managed lamp id that is not in the device
+// list (a plan written from a prompt built before discovery) is given the
+// first current lamp that plan does not already show, or loses that tile
+// (fitLampTiles). A STORED board is never changed by discovery: a tile whose
+// bulb is not found shows "Not connected" (spec §9).
 import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
 import type { WizClient } from '../devices/wizClient';
 
@@ -169,7 +169,7 @@ export interface LampSlot { id: string; label: string }
 
 const isDeviceTile = (t: TileSpec): t is Extract<TileSpec, { deviceId: string }> => t.type === 'lamp' || t.type === 'switch' || t.type === 'music';
 
-/** Make a board show only lamps that exist. A managed lamp id that is not in
+/** Fit a NEW plan (before review) to lamps that exist. A managed lamp id that is not in
  *  `lamps` (a vanished bulb, a remembered lamp
  *  on a machine that never saw it) becomes the first current lamp THIS board
  *  does not already show — so a board with one lamp tile keeps a lamp
@@ -227,10 +227,27 @@ export interface LampSwapTarget {
   ips: Map<string, string>;
 }
 
+/** Every managed lamp id a board shows. */
+function managedLampIdsOn(plan: SurfacePlan): Set<string> {
+  const ids = new Set<string>();
+  const scan = (tiles: TileSpec[]): void => {
+    for (const t of tiles) {
+      if (isDeviceTile(t)) { if (isManagedLampId(t.deviceId)) ids.add(t.deviceId); }
+      else if (t.type === 'row' || t.type === 'grid' || t.type === 'card') scan(t.children);
+      else if (t.type === 'tabs') t.tabs.forEach((tab) => scan(tab.children));
+      else if (t.type === 'split') { scan(t.first); scan(t.second); }
+    }
+  };
+  scan(plan.tiles);
+  return ids;
+}
+
 /** Set the canvas's lamps to exactly `lamps`: every other managed lamp id
- *  leaves the device list (a bulb that has gone), each
- *  given lamp joins it, and every board is fitted to the new list. Returns
- *  the ids of the boards that changed (to re-render). The speaker and every
+ *  leaves the device list (a bulb that has gone, or one that missed this
+ *  broadcast), and each given lamp joins it. Boards are NEVER rewritten
+ *  (spec §9): a tile whose bulb is not found stays as approved and shows
+ *  "Not connected"; it is live again when its bulb answers. Returns the ids
+ *  of the boards that show a lamp (to re-render). The speaker and every
  *  other device stay. */
 export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[]): string[] {
   const now = new Set(lamps.map((l) => l.id));
@@ -242,12 +259,7 @@ export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[
     target.labels[lamp.id] = lamp.label;
     target.ips.set(lamp.id, lamp.ip);
   }
-  const changed: string[] = [];
-  for (const [frameId, plan] of Object.entries(target.surfaces)) {
-    const next = fitLampTiles(plan, lamps);
-    if (next !== plan) { target.surfaces[frameId] = next; changed.push(frameId); }
-  }
-  return changed;
+  return Object.entries(target.surfaces).filter(([, plan]) => managedLampIdsOn(plan).size > 0).map(([frameId]) => frameId);
 }
 
 /** The lamps to start with when the bridge has not answered (yet, or at all):
