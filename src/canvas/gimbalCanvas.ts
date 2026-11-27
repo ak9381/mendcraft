@@ -72,6 +72,9 @@ export interface GimbalCanvasOptions {
 export interface GimbalCanvasController {
   mode(): GimbalCanvasMode;
   setMode(mode: GimbalCanvasMode, o?: { explicit?: boolean }): Promise<GimbalResult>;
+  /** Counts her explicit mode choices (voice, the tile): a build that set the
+   *  mode for itself checks it before putting the old mode back. */
+  choiceSeq?(): number;
   /** A pointing fingertip (point mode only). Holds the stand; never aims. */
   onPoint(pt: { x: number; y: number }, now?: number): Promise<GimbalResult>;
   /** Hand frames in CAMERA space (un-mirrored). Only used in hands mode. */
@@ -160,16 +163,19 @@ export const CUE_RATE_WHY = 'Gimbal cue skipped (one every 2 s)';
  * Soft-fails to a no-op on the web, where `setMode` resolves `{ ok: false }`.
  */
 export async function followWhileBuilding<T>(
-  controller: Pick<GimbalCanvasController, 'mode' | 'setMode'>,
+  controller: Pick<GimbalCanvasController, 'mode' | 'setMode' | 'choiceSeq'>,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevMode = controller.mode();
   if (prevMode === 'face' || prevMode === 'hands') return run();
+  const choices = controller.choiceSeq?.();
   void controller.setMode('face').catch(() => {});
   try {
     return await run();
   } finally {
-    void controller.setMode(prevMode).catch(() => {});
+    // She chose a mode while it built ("follow my hands"): her choice wins,
+    // the build never puts the old mode back over it (D3).
+    if (controller.choiceSeq?.() === choices) void controller.setMode(prevMode).catch(() => {});
   }
 }
 
@@ -221,6 +227,8 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
   let lastReason = '';
   /** She explicitly chose this mode by voice (hold / hands are respected on redock). */
   let explicit: GimbalCanvasMode | null = null;
+  /** How many explicit choices she made (choiceSeq). */
+  let choiceCount = 0;
   let lastDocked: boolean | null = null;
   /** Inside the native app the plugin's reason; on the web the generic line. */
   const why = (): string => (plugin ? lastReason || NO_STAND_WHY : NO_GIMBAL_WHY);
@@ -480,8 +488,9 @@ export function createGimbalCanvasController(opts: GimbalCanvasOptions = {}): Gi
 
   return {
     mode: () => currentMode,
+    choiceSeq: () => choiceCount,
     async setMode(mode: GimbalCanvasMode, o?: { explicit?: boolean }): Promise<GimbalResult> {
-      if (o?.explicit) explicit = mode;
+      if (o?.explicit) { explicit = mode; choiceCount++; }
       const gen = ++modeGen;
       requestedMode = mode;
       if (!(await checkPlugin())) {
