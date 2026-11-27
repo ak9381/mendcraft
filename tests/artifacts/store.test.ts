@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import {
-  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore, STORE_OPEN_TIMEOUT_MS,
+  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore, STORE_OPEN_TIMEOUT_MS, withinRunningTime,
 } from '../../src/artifacts/store';
 import { ARTIFACT_MAX_COUNT } from '../../src/artifacts/artifact';
 import { board } from './sample';
@@ -83,6 +83,24 @@ describe('ArtifactStore', () => {
       await r.store.put(board('f1'));
       expect(await r.store.list()).toHaveLength(1);
       expect(STORE_OPEN_TIMEOUT_MS).toBe(3000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a frozen host (one late tick) does not use up the wait: the open still lands on IndexedDB', async () => {
+    vi.useFakeTimers();
+    try {
+      let answer: (v: string) => void = () => {};
+      const p = withinRunningTime(new Promise<string>((r) => { answer = r; }), STORE_OPEN_TIMEOUT_MS);
+      // Freeze: the clock jumps 10 s with no tick in between, then one late tick.
+      vi.setSystemTime(Date.now() + 10_000);
+      await vi.advanceTimersByTimeAsync(250);
+      answer('opened');
+      expect(await p).toBe('opened');
+      // Running time still runs out.
+      const q = withinRunningTime(new Promise<never>(() => {}), STORE_OPEN_TIMEOUT_MS);
+      const settled = q.catch((e: Error) => e.message);
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
+      expect(await settled).toBe('IndexedDB did not answer');
     } finally { vi.useRealTimers(); }
   });
 

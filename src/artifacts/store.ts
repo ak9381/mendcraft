@@ -71,15 +71,26 @@ export function createIdbArtifactStore(
   };
 }
 
-/** How long boot waits for IndexedDB to open or answer a read. Some iOS
- *  webviews never answer `indexedDB.open`: the canvas then opens on the
+/** How long boot waits for IndexedDB to open and answer its first read. Some
+ *  iOS webviews never answer `indexedDB.open`: the canvas then opens on the
  *  memory store and says so, instead of never mounting (final review I13). */
 export const STORE_OPEN_TIMEOUT_MS = 3000;
-/** `p`, or a rejection once `ms` has passed with no answer. */
-function withinTime<T>(p: Promise<T>, ms: number): Promise<T> {
+const TICK_MS = 250;
+/** `p`, or a rejection once `ms` of running time has passed with no answer.
+ *  Time the page was frozen (a busy or suspended host: a tick that comes far
+ *  too late) is not counted — IndexedDB could not answer then either, and a
+ *  slow open must not cost her stored boards. */
+export function withinRunningTime<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('IndexedDB did not answer')), ms);
-    p.then((v) => { clearTimeout(timer); resolve(v); }, (e: unknown) => { clearTimeout(timer); reject(e); });
+    let waited = 0;
+    let last = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      waited += Math.min(now - last, TICK_MS);
+      last = now;
+      if (waited >= ms) { clearInterval(timer); reject(new Error('IndexedDB did not answer')); }
+    }, TICK_MS);
+    p.then((v) => { clearInterval(timer); resolve(v); }, (e: unknown) => { clearInterval(timer); reject(e); });
   });
 }
 
@@ -89,7 +100,7 @@ export async function openArtifactStore(): Promise<{ store: ArtifactStore; persi
     const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
     if (!idb) throw new Error('no IndexedDB');
     const store = createIdbArtifactStore(idb);
-    await withinTime(store.list(), STORE_OPEN_TIMEOUT_MS);
+    await withinRunningTime(store.list(), STORE_OPEN_TIMEOUT_MS);
     return { store, persistent: true };
   } catch {
     return { store: createMemoryArtifactStore(), persistent: false };
