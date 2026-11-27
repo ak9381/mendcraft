@@ -30,6 +30,10 @@ export interface ItemDragEvent {
 export interface EdgeGlow {
   side: Side | null;
   glow: number;
+  /** Whole-board path only, while near a paired edge: the dragged board and
+   *  the phone it would go to (the board itself lights up — boardGlow.ts). */
+  frameId?: string;
+  target?: PhonePlatform;
 }
 
 export interface EdgeTransferDeps {
@@ -199,7 +203,9 @@ export function createBoardEdgeTransferController(deps: BoardEdgeDeps): BoardEdg
     if (d.committed || !Number.isFinite(d.lastX)) return false;
     const intent = edgeIntent(d.lastX, deps.getViewportWidth(), deps.getLayout(), deps.tuning);
     d.inZone = intent.inZone && !!intent.side;
-    deps.onGlow({ side: intent.side, glow: intent.glow });
+    deps.onGlow(intent.side && intent.target
+      ? { side: intent.side, glow: intent.glow, frameId: d.frameId, target: intent.target }
+      : { side: intent.side, glow: intent.glow });
     const res = evaluateDwell(dwell, intent, deps.now(), deps.dwellMs);
     dwell = res.state;
     if (!res.commit || !intent.side || !intent.target) return false;
@@ -305,11 +311,11 @@ export function createSentBoardMemo(): SentBoardMemo {
   };
 }
 
-const PHONE_NAME: Record<PhonePlatform, string> = { ios: 'iPhone', android: 'Nothing phone' };
+export const PHONE_NAME: Record<PhonePlatform, string> = { ios: 'iPhone', android: 'Nothing phone' };
 
 /** Status line for a board send (not an AI action: never goes to the AI feed). */
 export function boardSendLine(target: PhonePlatform, title: string, live: boolean): string {
-  return live ? `Sent ${title || 'the board'} to the ${PHONE_NAME[target]}.` : `Sent to ${PHONE_NAME[target]} (SIM).`;
+  return live ? `Sent ${title || 'the board'} to the ${PHONE_NAME[target]}.` : `Sent to the ${PHONE_NAME[target]} (SIM).`;
 }
 
 // ---- phone side -------------------------------------------------------------

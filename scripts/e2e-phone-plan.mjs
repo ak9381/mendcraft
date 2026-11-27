@@ -105,6 +105,17 @@ async function main() {
       page.on('pageerror', (e) => errors.push(`${vp.name}: ${String(e?.message || e)}`));
       await page.setViewport({ width: vp.width, height: vp.height, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
       if (vp.ios) await page.evaluateOnNewDocument(() => { window.webkit = { messageHandlers: { bridge: { postMessage() {} } } }; });
+      // Count each time a board starts its "Moved from laptop" glow.
+      await page.evaluateOnNewDocument(() => {
+        window.__mcArrivals = 0;
+        const lit = new Set();
+        new MutationObserver((ms) => {
+          for (const m of ms) {
+            const on = m.target.classList?.contains('mc-frame-arrived');
+            if (on && !lit.has(m.target)) { lit.add(m.target); window.__mcArrivals++; } else if (!on) lit.delete(m.target);
+          }
+        }).observe(document, { subtree: true, attributes: true, attributeFilter: ['class'] });
+      });
       await page.goto(`${BASE}/canvas.html?sim=1&fresh=1`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await page.waitForFunction(() => !!window.__mcGuestSnapshot, { timeout: 20_000 });
       return page;
@@ -118,6 +129,18 @@ async function main() {
     const p1 = await iphone.evaluate(phonePlan);
     check(p1.rooms.includes('Studio') && p1.rooms.includes('Bedroom'), `the iPhone shows Studio + Bedroom (${p1.rooms.join(', ')})`);
     check(p1.labels.includes('Bedroom'), 'the iPhone draws the Bedroom label');
+    const arrivedPill = () => {
+      const p = document.querySelector('.mc-frame.mc-frame-arrived .mc-frame-pill[data-pill="arrived"]:not([hidden])');
+      const r = p?.getBoundingClientRect();
+      const hit = r ? document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2) : [];
+      // Never over a control: nothing interactive sits under the pill's centre.
+      const covers = hit.some((e) => e !== p && e.matches?.('button, [role=button], a, input') && !e.closest('.mc-frame-head'));
+      const onScreen = !!r && r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+      return { text: p?.textContent ?? '', onScreen, covers, count: window.__mcArrivals };
+    };
+    const a1 = await iphone.evaluate(arrivedPill);
+    check(a1.text === 'Moved from laptop' && a1.count === 1, `the iPhone board lights up: “${a1.text}” (${a1.count})`);
+    check(a1.onScreen && !a1.covers, `the “Moved from laptop” pill is on screen and covers no control (${JSON.stringify(a1)})`);
     if (SHOTS) await iphone.screenshot({ path: join(SHOTS, 'iphone-plan-sent.png') });
 
     // ---- a later laptop edit updates the phone that holds the board ----
@@ -128,6 +151,7 @@ async function main() {
     check(snap2?.boardFor === 'ios', `the republish still targets the iPhone (${snap2?.boardFor})`);
     check(await iphone.evaluate((s) => window.__mcGuestSnapshot(s), snap2), 'the iPhone takes the update');
     await waitFor(iphone, () => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Kitchen'), 10_000, 'Kitchen on the iPhone');
+    check(await iphone.evaluate(() => window.__mcArrivals) === 1, 'a republish after a laptop edit does not light the board again');
     const p2 = await iphone.evaluate(phonePlan);
     check(['Bedroom', 'Kitchen', 'Studio'].every((n) => p2.rooms.includes(n)), `the iPhone shows the later edit (${p2.rooms.join(', ')})`);
     if (SHOTS) await iphone.screenshot({ path: join(SHOTS, 'iphone-plan-updated.png') });
@@ -156,6 +180,8 @@ async function main() {
     check(sentA && snap3?.boardFor === 'android', 'the board goes to the Nothing phone edge');
     check(await android.evaluate((s) => window.__mcGuestSnapshot(s), snap3), 'the Nothing phone takes it');
     await waitFor(android, () => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Kitchen'), 10_000, 'Kitchen on the Nothing phone');
+    const aA = await android.evaluate(arrivedPill);
+    check(aA.text === 'Moved from laptop' && aA.count === 1 && aA.onScreen && !aA.covers, `the Nothing phone board lights up (${JSON.stringify(aA)})`);
     if (SHOTS) await android.screenshot({ path: join(SHOTS, 'android-plan.png') });
 
     // ---- re-pairing: the same board arrives again (replay on hello), and
@@ -178,6 +204,7 @@ async function main() {
     const once1 = await android.evaluate(shownOnce);
     console.log('     android after replay', JSON.stringify(once1));
     check(once1.frames === 1 && once1.plans === 1, `a replayed board shows once on the Nothing phone (${JSON.stringify(once1)})`);
+    check(await android.evaluate(() => window.__mcArrivals) === 1, 'a replayed send does not light the board again');
     await android.reload({ waitUntil: 'domcontentloaded' });
     await android.waitForFunction(() => !!window.__mcGuestSnapshot, { timeout: 20_000 });
     await sleep(1200);
@@ -187,6 +214,7 @@ async function main() {
     const once2 = await android.evaluate(shownOnce);
     console.log('     android after reload + replay', JSON.stringify(once2));
     check(once2.frames === 1 && once2.plans === 1 && once2.titles <= once0.titles, `after re-pairing the board still shows once (${JSON.stringify(once2)})`);
+    check(await android.evaluate(() => window.__mcArrivals) === 0, 'after a reload the replayed send does not light the board');
     // A phone that saved a board from an older build (a dashboard that still
     // held the plan tile): on reload that tile is lifted to its own "Floor
     // plan" board — and the laptop's Floor plan must land THERE, not on a
