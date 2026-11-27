@@ -26,6 +26,8 @@ export interface DeviceRef {
   unknown?: boolean;
   /** The first look for real lamps has not finished yet. */
   looking?: boolean;
+  /** Asked for its state just now and it did not answer in time: its state is the last one heard. */
+  stale?: boolean;
 }
 export interface DeviceCommandResult { intents: DeviceIntent[]; say: string; statusKey?: StatusKey }
 

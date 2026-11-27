@@ -32,7 +32,10 @@ function stateOf(d: DeviceRef): string {
     case 'looking': return `I'm still looking for ${name}`;
     case 'unreachable': return `${name} isn't answering`;
     case 'unknown': return d.kind === 'music' ? `I don't know whether ${name} is playing` : `I don't know whether ${name} is on`;
-    default: return d.kind === 'music' ? `${name} is ${d.playing ? 'playing' : 'not playing'}` : `${name} is ${d.on ? 'on' : 'off'}`;
+    default:
+      if (d.kind === 'music') return `${name} is ${d.playing ? 'playing' : 'not playing'}`;
+      // Final review 5: not answering the read just now — say it is the last state heard.
+      return d.stale ? `last I heard, ${name} was ${d.on ? 'on' : 'off'}` : `${name} is ${d.on ? 'on' : 'off'}`;
   }
 }
 
@@ -59,7 +62,7 @@ export function deviceStateAnswer(text: string, devices: readonly DeviceRef[]): 
   }
   if (!hits.length) return null;
   const all = hits.map(stateOf);
-  const line = all.length === 1 ? all[0] : `${all.slice(0, -1).join(', ')} and ${all[all.length - 1]}`;
+  const line = all.length === 1 ? all[0] : `${all.slice(0, -1).join(', ')}${all.some((x) => x.includes(',')) ? ',' : ''} and ${all[all.length - 1]}`;
   const out = line[0].toUpperCase() + line.slice(1) + '.';
   return hits.every((d) => kindOfAnswer(d) === 'unreachable') ? `I don't know — ${out[0].toLowerCase()}${out.slice(1)}` : out;
 }

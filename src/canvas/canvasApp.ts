@@ -63,6 +63,7 @@ import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type Ar
 import { createMemoryArtifactStore, type ArtifactStore } from '../artifacts/store';
 import { approvalDate, makerLabel, mountArtifactsSheet } from './artifactsSheet';
 import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
+import { rereadLamps } from './lampReread';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
@@ -2588,6 +2589,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         for (const id of speakers) { store.patch(id, { playing: !!pb?.playing }); playingRead.add(id); }
       } catch { /* not read: stays "I don't know" */ }
       line = deviceStateAnswer(text, deviceRefs()) ?? line;
+    }
+    // Final review 5: a reachable real lamp is read first too (bounded at 1.5 s);
+    // one that does not answer in time is answered from its last state, said so.
+    const lampIds = wizClient && liveLamps && lampsLookedFor && bridgeStatus.up && !/\b(music|song|speakers?|player|playing|paused)\b/i.test(text)
+      ? Object.entries(store.all()).filter(([id, s]) => isManagedLampId(id) && !s.sim && !s.unreachable && !!lampIps.get(id)).map(([id]) => id)
+      : [];
+    if (lampIds.length) {
+      const stale = await rereadLamps(lampIds, (id) => wizClient!.getPilot(lampIps.get(id)!),
+        (id, s) => store.patch(id, { on: s.on, ...(typeof s.dimming === 'number' ? { brightness: s.dimming } : {}) }));
+      line = deviceStateAnswer(text, deviceRefs().map((d) => (stale.has(d.id) ? { ...d, stale: true } : d))) ?? line;
     }
     say(line, { speak: true });
   }
