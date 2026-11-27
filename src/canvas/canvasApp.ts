@@ -5922,7 +5922,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   if (openLine) setTimeout(() => say(openLine, { speak: true }), 0);
   return {
     /** How the saved doc loaded (e2e / support): unreadable → kept aside. */
-    loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
+    loadState: () => ({ unreadable: loaded.unreadable, safe: loaded.safe }),
+    /** Status lines said since `mark` (0: all kept), for e2e. */
+    statusSince: (mark: number) => statusLog.slice(Math.max(0, mark - statusBase)),    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, sharedBoards: () => boardEdge.sharedBoards(), replay, destroy,
     /** iPhone: the laptop asked for the point photo (relay 'sensePoint'). */
     pointForLaptop: () => { if (phoneSensor) void phoneSensorPoint('', true); else opts.sendPointResult?.(encodePointResult({ ok: false, reason: 'no-camera', message: POINT_NEEDS_LAPTOP })); },
     phoneSenseStatus,
