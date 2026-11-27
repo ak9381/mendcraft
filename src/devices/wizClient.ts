@@ -16,6 +16,8 @@ import {
 /** Default bridge URL: localhost, so it only works on the same laptop unless
  *  the user runs the bridge with --host 0.0.0.0 and points here at its LAN IP. */
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:38888';
+/** The longest a bridge call may take (a discovery window is ~1 s). */
+export const WIZ_CALL_TIMEOUT_MS = 8000;
 
 /** A bulb the bridge discovered on the LAN. */
 export interface DiscoveredBulb {
@@ -121,20 +123,32 @@ export function createWizClient(
   baseUrl: string = resolveBridgeUrl(),
   fetchImpl: FetchLike = (input, init) => fetch(input, init) as unknown as ReturnType<FetchLike>,
   token: string = resolveWizToken(),
+  timeoutMs: number = WIZ_CALL_TIMEOUT_MS,
 ): WizClient {
   const base = baseUrl.replace(/\/$/, '');
 
   async function call(path: string, body?: unknown): Promise<unknown> {
     let res;
+    // A bridge that never answers (a hung process, a sleeping laptop) is
+    // offline after timeoutMs, and the request is cancelled: a hung /health
+    // must never leave discovery waiting forever (final review M7).
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      res = await fetchImpl(`${base}${path}`, {
-        method: body ? 'POST' : 'GET',
-        headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-wiz-token': token },
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      res = await Promise.race([
+        fetchImpl(`${base}${path}`, {
+          method: body ? 'POST' : 'GET',
+          headers: { ...(body ? { 'content-type': 'application/json' } : {}), 'x-wiz-token': token },
+          body: body ? JSON.stringify(body) : undefined,
+          ...(ctl ? { signal: ctl.signal } : {}),
+        }),
+        new Promise<never>((_r, reject) => { timer = setTimeout(() => { ctl?.abort(); reject(new BridgeOfflineError('bridge did not answer in time')); }, timeoutMs); }),
+      ]);
     } catch {
-      // Connection refused / DNS / CORS network error — the bridge is down.
+      // Connection refused / DNS / CORS network error / no answer — the bridge is down.
       throw new BridgeOfflineError();
+    } finally {
+      clearTimeout(timer);
     }
     if (res.status === 400) {
       // The bridge is up and said no (its own range check): not "offline".

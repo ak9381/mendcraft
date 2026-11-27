@@ -63,3 +63,23 @@ describe('createWizClient token header', () => {
     }
   });
 });
+
+describe('final review M7: a bridge that never answers is offline after a time limit', () => {
+  it('health() says false and discover() throws BridgeOfflineError instead of hanging (re-discovery keeps going)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { BridgeOfflineError } = await import('../src/devices/wizClient');
+      const aborted: boolean[] = [];
+      const hang = (_i: string, init?: RequestInit) => new Promise<never>((_r, rej) => {
+        init?.signal?.addEventListener('abort', () => { aborted.push(true); rej(new Error('aborted')); });
+      });
+      const c = createWizClient('http://127.0.0.1:38888', hang as never, 't', 5000);
+      const h = c.health();
+      const d = c.discover().then(() => 'answered', (e) => e);
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(await h).toBe(false);
+      expect(await d).toBeInstanceOf(BridgeOfflineError);
+      expect(aborted.length).toBe(2); // the hung requests are cancelled, not left open
+    } finally { vi.useRealTimers(); }
+  });
+});
