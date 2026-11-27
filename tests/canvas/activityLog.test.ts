@@ -48,10 +48,10 @@ describe('AI activity opens only while a model works', () => {
     expect(src).toMatch(/if \(reviewBusy\(\) \|\| aiHold\.size > 0 \|\| !aiAuto\) return;/);
   });
 
-  it('an auto-opened panel overlays: vp() ignores it and only a user-pinned open re-flies', () => {
+  it('an auto-opened panel overlays: vp() ignores it; it re-flies on a pinned toggle, or when the moved dock would cover the board (L1)', () => {
     const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/aiPanel\.hidden \|\| aiAuto \? 0 :/);
-    expect(src).toContain('if (insetBefore !== insetAfter && focusId)');
+    expect(src).toContain('if ((insetBefore !== insetAfter || (on && clusterCoversFocus())) && focusId)');
   });
 });
 
