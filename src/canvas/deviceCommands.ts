@@ -104,6 +104,8 @@ const ORDER_WORDS = new Set<string>([
   ...Object.values(WIZ_SCENES).flatMap((l) => norm(l).split(' ')), 'cosy', 'cozy', 'reading', 'study',
 ]);
 
+const PLAY_NOT_MUSIC = /\b(?:game|games|chess|cards?|catch|ball|tag|football|cricket|tennis|with me|with us|a part|role|along|dead|fair|safe|pretend|hide|seek|video|movie|film|demo|tour)\b/;
+
 function strayWords(t: string, devices: readonly DeviceRef[]): string[] {
   const label = new Set(devices.flatMap((d) => norm(d.label).split(' ')));
   return t.split(' ').filter((w) => w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w));
@@ -126,7 +128,11 @@ export function looksLikeDeviceCommand(text: string, devices: readonly DeviceRef
   if (REFUSE.test(t)) return false;
   if (/\bright$/.test(t)) return false; // "…, right"
   if (/\bstop \w+ing\b/.test(t)) return false; // "stop turning the lamp off"
-  if (strayWords(t, devices).length) return false;
+  // "play some jazz", "play something relaxing": a play order for the speaker
+  // (its words are the music she wants) — never a game ("play a game").
+  const playAsk = devices.some((d) => d.kind === 'music') && /^(?:(?:please|hey|ok|okay|now|just|can you|could you)\s+)*play\b/.test(t)
+    && t.split(' ').length <= 7 && !PLAY_NOT_MUSIC.test(t);
+  if (!playAsk && strayWords(t, devices).length) return false;
   // "turn on the lamp at 9": a time, not a level.
   if (/\bat \d+\b/.test(t) && !/\d\s*(?:percent|per cent|%)/.test(raw)) return false;
   const words = t.replace(POLITE, '').replace(/(?:\s+(?:please|pls|now|thanks|thank you))+$/, '').split(' ').filter(Boolean);

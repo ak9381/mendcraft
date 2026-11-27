@@ -187,6 +187,12 @@ function normMulti(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** The polite and the plain imperative are the same order: "ದೀಪ ಆನ್ ಮಾಡಿ"
+ *  and "ದೀಪ ಆನ್ ಮಾಡು" (the last word's -ಇ ending read as -ಉ). */
+function plainImperative(t: string): string {
+  return t.replace(/ಿ$/u, 'ು');
+}
+
 /** Polite words that may stand around a phrase ("please", "ದಯವಿಟ್ಟು"). */
 const POLITE_WORDS = new Set(['please', 'ದಯವಿಟ್ಟು', 'ದಯಮಾಡಿ', 'ಈಗ', 'now', 'ok', 'okay', 'ಸರಿ']);
 
@@ -201,9 +207,10 @@ export function routePackPhrase(text: string, pack: LanguagePack): IntentKey | n
   while (words.length && POLITE_WORDS.has(words[words.length - 1])) words.pop();
   const t = words.join(' ');
   if (!t) return null;
+  const said = plainImperative(t);
   for (const intent of INTENT_KEYS) {
     for (const phrase of pack.phrases[intent] ?? []) {
-      if (normMulti(phrase) === t) return intent;
+      if (plainImperative(normMulti(phrase)) === said) return intent;
     }
   }
   return null;
