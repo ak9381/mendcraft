@@ -22,7 +22,7 @@ import {
   type RelayMessage,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { ALIAS_TTL_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
+import { ALIAS_TTL_MS, PRIVACY_ASK_MAX, PRIVACY_ASK_WINDOW_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
 
 const seqRandom =
   (start = 0): RandomBytes =>
@@ -471,6 +471,72 @@ describe('privacyAsk / privacyReply on the wire', () => {
     await flush();
     await guest.close();
     await expect(pending).rejects.toThrow(/closed/);
+    await host.close();
+  });
+});
+
+describe('I5: privacyAsk needs a paired phone, once per job, rate-limited, never from history', () => {
+  it('an ask with no phone in the room (no hello) never reaches the hub', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    await flush();
+    await t.publish(host.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'x1', text: 'spend quota' } });
+    await flush();
+    expect(asks).toEqual([]);
+    await host.close();
+  });
+
+  it('a paired phone is heard once per jobId, and at most PRIVACY_ASK_MAX per window', async () => {
+    let clock = 1_000_000;
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom(), { now: () => clock });
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    const send = (jobId: string) => t.publish(host.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId, text: 'email Priya' } });
+    await send('j1'); await send('j1'); await flush();
+    expect(asks).toEqual(['j1']);
+    for (let i = 2; i <= PRIVACY_ASK_MAX + 3; i++) await send(`j${i}`);
+    await flush();
+    expect(asks).toHaveLength(PRIVACY_ASK_MAX);
+    clock += PRIVACY_ASK_WINDOW_MS + 1;
+    await send('later'); await flush();
+    expect(asks.at(-1)).toBe('later');
+    await guest.close();
+    await host.close();
+  });
+
+  it("an ask older than the laptop's session (the room's history) never acts", async () => {
+    // A room that keeps its history and replays it to every new listener (as Firestore does).
+    const base = createFakeTransport();
+    const log: Array<{ room: string; msg: RelayMessage; at: number }> = [];
+    let clock = 0;
+    const t: typeof base = {
+      ...base,
+      async publish(room, msg) { await this.publishStamped!(room, msg); },
+      async publishStamped(room, msg) { const at = ++clock; log.push({ room, msg, at }); await base.publish(room, msg); return { at }; },
+      subscribe(room, onMsg, onError, since) {
+        const off = base.subscribe(room, (m) => onMsg(m, { at: clock }), onError, since);
+        for (const h of log.filter((e) => e.room === room)) onMsg(h.msg, { at: h.at });
+        return off;
+      },
+    };
+    const old = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, old.token);
+    await flush();
+    await t.publish(old.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'old-1', text: 'email Priya' } });
+    await flush();
+    await old.close({ silent: true } as never);
+    // A laptop reload: a new session on the same room. The old ask is history.
+    const host = await createHostSession(t, seqRandom(), { token: old.token });
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    await flush();
+    expect(asks).toEqual([]);
+    await guest.close();
     await host.close();
   });
 });

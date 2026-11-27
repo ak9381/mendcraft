@@ -265,6 +265,12 @@ export const UNSIGNED_PING_BURST = 3;
  *  full 24-char token, never the short code, once a session is established. */
 export const ALIAS_TTL_MS = 5 * 60 * 1000;
 
+/** Phone asks the laptop runs through Gemini (each costs quota): at most this
+ *  many per PRIVACY_ASK_WINDOW_MS per host session, each jobId once. */
+export const PRIVACY_ASK_MAX = 6;
+export const PRIVACY_ASK_WINDOW_MS = 60_000;
+const PRIVACY_JOBS_KEPT = 64;
+
 export interface CreateHostOptions {
   /** Resume an EXISTING room token (e.g. one a remembered phone is still pointed
    *  at) instead of minting a fresh one. Must be a 24-char token; ignored
@@ -331,6 +337,8 @@ export async function createHostSession(
   let runCb: ((run: RelayRunRequest) => void) | null = null;
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
+  let privacyAskAt: number[] = [];
+  const privacyJobs = new Set<string>();
   const cueLimiter = createCueLimiter(undefined, opts.now);
   let cueInflight = false;
   const modeLimiter = createModeLimiter(undefined, undefined, opts.now);
@@ -364,7 +372,19 @@ export async function createHostSession(
       return;
     }
     if (msg.type === 'privacyAsk') {
-      privacyAskCb?.(msg.ask);
+      // Each ask spends Gemini quota on this laptop: only a phone paired in
+      // this session (history never gets here — see makeCore), each job
+      // once, and at most PRIVACY_ASK_MAX a minute. A dropped ask is not
+      // answered (the phone times out and says so).
+      if (core.state !== 'paired' || !privacyAskCb) return;
+      if (privacyJobs.has(msg.ask.jobId)) return;
+      const t = now();
+      privacyAskAt = privacyAskAt.filter((at) => t - at < PRIVACY_ASK_WINDOW_MS);
+      if (privacyAskAt.length >= PRIVACY_ASK_MAX) return;
+      privacyAskAt.push(t);
+      privacyJobs.add(msg.ask.jobId);
+      if (privacyJobs.size > PRIVACY_JOBS_KEPT) privacyJobs.delete(privacyJobs.values().next().value as string);
+      privacyAskCb(msg.ask);
       return;
     }
     if (msg.from === 'control') {
