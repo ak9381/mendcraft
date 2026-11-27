@@ -284,3 +284,15 @@ describe('the devices-board marker belongs to its doc', () => {
     expect(r.repaired).toContain('devices board');
   });
 });
+
+describe('final review D1: the last edit survives closing the tab', () => {
+  const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+  it('pagehide and a hidden visibilitychange flush a pending (debounced) save, the wheel camera save too', () => {
+    expect(app).toMatch(/const onPageHide = \(\): void => \{\s*flushSave\(\);/);
+    expect(app).toContain("const onVisibility = (): void => { if (document.visibilityState === 'hidden') flushSave(); };");
+    expect(app).toContain("document.addEventListener('visibilitychange', onVisibility);");
+    expect(app).toMatch(/const flushSave = \(\): void => \{\s*if \(wheelPersistTimer\) \{ clearTimeout\(wheelPersistTimer\); wheelPersistTimer = 0; persist\(true\); \}\s*else if \(persistTimer\) persist\(true\);/);
+    // a write clears the pending mark, so a flush after it writes nothing again
+    expect(app).toMatch(/const write = \(\): boolean => \{\s*persistTimer = 0;/);
+  });
+});

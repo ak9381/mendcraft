@@ -1951,6 +1951,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
+      persistTimer = 0;
       // Saved boards this build couldn't read AND couldn't copy aside: never
       // write over them (this session's changes just aren't saved).
       const ok = !saveBlocked && tryWriteStorage(storage, STORAGE_KEY, JSON.stringify(snapshot()));
@@ -5167,14 +5168,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   addEventListener('online', onWindowOnline);
   addEventListener('offline', onWindowOffline);
   // Leaving the page: the short code must not outlive the pairing (best effort).
-  const onPageHide = (): void => { if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); } };
+  // Leaving or hiding the page flushes a pending save (debounced 250 ms, a
+  // wheel's camera 200 ms more): the last edit survives closing the tab.
+  const flushSave = (): void => {
+    if (wheelPersistTimer) { clearTimeout(wheelPersistTimer); wheelPersistTimer = 0; persist(true); }
+    else if (persistTimer) persist(true);
+  };
+  const onPageHide = (): void => {
+    flushSave();
+    if (admissionOpen) { admissionOpen = false; void hostSession?.endAdmission().catch(() => undefined); }
+  };
+  const onVisibility = (): void => { if (document.visibilityState === 'hidden') flushSave(); };
   addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onVisibility);
   function destroy(): void {
     // Pending writes and timers go first, so nothing fires into a torn-down
     // canvas — but a pending board write is flushed, not dropped (the last
     // edit must survive).
-    if (persistTimer) persist(true);
-    clearTimeout(wheelPersistTimer);
+    flushSave();
     if (statusTimer) clearTimeout(statusTimer);
     boardEdge.reset();
     if (pairingStop) { void pairingStop(); pairingStop = null; }
@@ -5214,6 +5225,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     removeEventListener('online', onWindowOnline);
     removeEventListener('offline', onWindowOffline);
     removeEventListener('pagehide', onPageHide);
+    document.removeEventListener('visibilitychange', onVisibility);
     barRo?.disconnect();
     engineRo?.disconnect();
     chipRowRo?.disconnect();
@@ -5259,7 +5271,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       cancelAnimationFrame(flight); zoomGoal = null;
       camera = clampRoomPan(panBy(camera, -intent.dx, -intent.dy));
       applyCamera();
-      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
+      clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(() => { wheelPersistTimer = 0; persist(); }, 200);
       return;
     }
     e.preventDefault();
