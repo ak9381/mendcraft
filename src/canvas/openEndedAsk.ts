@@ -15,7 +15,7 @@ export function buildOpenEndedPrompt(text: string): string {
 }
 /** Chat can't act: it never touches a board, a device or the plan, so the
  *  model is told so — and promiseGuard() below catches it when it forgets. */
-export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. Reply in English: one or two short, friendly sentences, no emoji.';
+export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. You cannot see whether a device is on. Reply in English: one or two short, friendly sentences, no emoji.';
 
 /** What replaces a reply that promised an action chat cannot do — a plan
  *  ask gets the plan's own way in; anything else, the board's buttons. */
@@ -198,7 +198,7 @@ const COLOUR = 'red|orange|yellow|green|blue|purple|violet|pink|white|warm\\s+wh
 const SCENE = 'sunset|party|relax|focus|cozy|cosy|night\\s+light|reading|ocean|romance|fireplace|forest|candlelight|movie|bedtime';
 const PRED_DEV = String.raw`on|off|out|up|down|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|softer|warmer|cooler|bigger|smaller|wider|ready|updated|saved|added|created|set|connected|done|at\s+(?:full|max(?:imum)?|half|\d+)\S*(?:\s+(?:brightness|volume|percent|%))?|\d+\s*%|\d+|${COLOUR}|in\s+(?:[\w-]+\s+){1,2}mode|(?:${SCENE})(?:\s+(?:scene|mode))?|on\s+(?:the|your)\s+(?:board|dashboard|plan|canvas)`;
 const PRED_PRON = 'on|off|out|brighter|dimmer|louder|quieter|softer|warmer|cooler|playing|paused|muted|done|set|ready|both\\s+on|both\\s+off|all\\s+(?:on|off)';
-const BE = String.raw`(?:is|are|'s|'re|was|were)(?:\s+(?:now|already|both|all|still|just))*`;
+const BE = String.raw`(?:is|are|'s|'re|was|were)(?:\s+(?:now|already|both|all|still|just|currently))*`;
 const CHANGE = String.raw`(?:now\s+|just\s+)?(?:came|went|switched|turned|glows|is\s+glowing|looks|got|has\s+gone|has\s+come)`;
 const END = String.raw`(?:\s+(?:now|already|again|for\s+you|both|too|successfully|here|right\s+now))*\s*(?:[.!,;—–]|$)`;
 const PAST1 = `${APP_PAST}|made|changed|dimmed|started|sent|saved|updated|added|created|set`;
