@@ -526,6 +526,69 @@ async function gimbal(page) {
 }
 SECTIONS.gimbal = gimbal;
 
+// ---- connector: "connect the lamp" writes a connector as data; approved, the lamp runs on it ----
+const CONNECTOR_ID = 'connector-wiz-smart-bulb';
+const lampTile = () => {
+  const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=lamp]'))?.shadowRoot;
+  return r ? { footnote: r.querySelector('[data-connector]')?.textContent.trim() ?? '', state: r.querySelector('[data-device-state]')?.textContent.trim() ?? '', sim: !!r.querySelector('.sim-badge'), error: r.querySelector('.note.error')?.textContent.trim() ?? '' } : null;
+};
+const LAMP_BOARD = {
+  id: 'board-f1', kind: 'board', v: 1, title: 'Desk', by: 'replay', at: Date.now(), status: 'approved',
+  data: {
+    frame: { kind: 'room', title: 'Desk', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false },
+    plan: { kind: 'room', title: 'Desk', tiles: [{ type: 'lamp', deviceId: LAMP_ID, label: 'Lamp' }] },
+  },
+};
+const connectorArtifacts = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'connector')));
+
+async function connector(page) {
+  await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate((a) => window.__mcArtifacts.put(a), LAMP_BOARD);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is on the canvas'))) return;
+  const before = await page.evaluate(lampTile);
+  check(before?.footnote === 'Built-in WiZ connector' && before.sim, `before: the SIM lamp tile says "Built-in WiZ connector" (got ${JSON.stringify(before)})`);
+
+  await page.evaluate(() => { window.__mcCanvas.run('connect the lamp'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the connector review opens'))) return;
+  const text = await page.evaluate(reviewText);
+  check(/UDP port 38899/.test(text), `the review shows port 38899 (got ${JSON.stringify(text.slice(0, 600))})`);
+  check(text.includes('Replay · written example'), 'the review names the engine: "Replay · written example"');
+  check(/When you ask: Brightness/.test(text) && /Set brightness/.test(text), 'the review lists the actions and the intent map rows');
+  check(!/192\.168\.|127\.0\.0\.1|38888|wizToken|x-wiz-token/i.test(text), 'the review shows no address and no bridge token');
+  check((await connectorArtifacts(page)).length === 0, '0 connector artifacts until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, () => window.__mcArtifacts.list().then((l) => l.some((a) => a.id === 'connector-wiz-smart-bulb')), 5_000, `artifact ${CONNECTOR_ID} exists`)
+    .then((ok) => ok && check(true, `artifact ${CONNECTOR_ID} exists`));
+  const stored = await connectorArtifacts(page);
+  check(stored.length === 1 && stored[0].by === 'replay' && stored[0].data.connector.source === 'cloud', `stored once, made by replay, source cloud (got ${JSON.stringify(stored.map((a) => [a.id, a.by]))})`);
+  check(!JSON.stringify(stored).match(/192\.168\.|127\.0\.0\.1|38888|token/i), 'the stored connector holds no address and no token');
+  await waitFor(page, () => { const r = [...document.querySelectorAll('mc-device-tile')][0]?.shadowRoot; return !!r && !r.querySelector('[data-connector]'); }, 5_000, 'the tile footnote is gone')
+    .then((ok) => ok && check(true, 'after Approve the tile footnote is gone'));
+
+  // A press runs through the approved connector's checks (a SIM lamp: then the simulated answer).
+  await page.evaluate(() => document.querySelector('mc-device-tile').shadowRoot.querySelector('[data-act=toggle]').click());
+  await waitFor(page, (id) => window.__mcCanvas.store.get(id)?.on === true && !window.__mcCanvas.store.get(id)?.pending, 5_000, 'the toggle turns the lamp on', LAMP_ID)
+    .then((ok) => ok && check(true, 'a press works on the generated connector'));
+
+  // Back after a reload: the connector is checked again and the footnote stays gone.
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is back'))) return;
+  check((await page.evaluate(lampTile))?.footnote === '', 'after a reload the lamp still runs on the generated connector');
+
+  // A tampered connector (a port outside the allow-list) is dropped at load: the lamp is back on the built-in one.
+  const bad = JSON.parse(JSON.stringify(stored[0]));
+  bad.data.connector.actions.push({ id: 'shell', label: 'Shell', params: [], request: { transport: 'udp', port: 22, payload: { x: 1 } }, successCue: 'x' });
+  await page.evaluate((a) => window.__mcArtifacts.put(a), bad);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is back again'))) return;
+  await waitFor(page, (line) => document.body.innerText.includes(line), 5_000, 'the dropped line is visible', DROPPED_LINE)
+    .then((ok) => ok && check(true, 'a tampered connector is dropped and said'));
+  check((await page.evaluate(lampTile))?.footnote === 'Built-in WiZ connector', 'with the tampered connector dropped, the tile says "Built-in WiZ connector" again');
+}
+SECTIONS.connector = connector;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

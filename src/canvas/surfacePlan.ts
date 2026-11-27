@@ -89,6 +89,9 @@ export interface DeviceState {
   source?: MusicSource;
   /** Speaker: where Spotify is playing ("iPhone", "this browser"). */
   playingOn?: string;
+  /** Lamp: what it runs on — a generated connector she approved, the
+   *  labelled built-in WiZ mapping, or none yet (display text only). */
+  connector?: 'generated' | 'built-in' | 'none';
 }
 
 /** '' = nothing has said yet (a SIM speaker, or before the first answer). */
@@ -442,12 +445,13 @@ export function expandPlan(
         controls: t.controls ?? standardControls('lamp'),
         standard: !t.controls,
         on: p('on'), brightness: p('brightness'), temp: p('temp'), color: p('color'), sceneId: p('sceneId'),
-        pending: p('pending'), error: p('error'), sim: p('sim'), unreachable: p('unreachable'),
+        pending: p('pending'), error: p('error'), sim: p('sim'), unreachable: p('unreachable'), connector: p('connector'),
         onAct: { event: { name: 'device.act', context: { deviceId: t.deviceId, tile: id } } },
       });
       const s = devices[t.deviceId];
       deviceData[t.deviceId] = {
         on: s?.on ?? false, brightness: s?.brightness ?? 50, pending: false, error: s?.error ?? '', sim: s?.sim ?? false,
+        ...(s?.connector ? { connector: s.connector } : {}),
         // A lamp this canvas does not have (unplugged, another laptop) shows "Not connected".
         unreachable: !s || !!s.unreachable,
         temp: s?.temp ?? 0, color: s?.color ?? '', sceneId: s?.sceneId ?? 0,
@@ -637,6 +641,7 @@ export function deviceUpdate(surfaceId: string, deviceId: string, s: DeviceState
   if (s.sceneId !== undefined) value.sceneId = s.sceneId;
   if (s.source !== undefined) value.source = s.source;
   if (s.playingOn !== undefined) value.playingOn = s.playingOn;
+  if (s.connector !== undefined) value.connector = s.connector;
 
   return {
     version: PROTOCOL,

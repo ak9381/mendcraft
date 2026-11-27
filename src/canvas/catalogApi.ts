@@ -57,6 +57,8 @@ export const DeviceTileApi = {
       error: CommonSchemas.DynamicString.optional(),
       sim: CommonSchemas.DynamicBoolean.optional(),
       unreachable: CommonSchemas.DynamicBoolean.optional(),
+      /** Lamp: 'generated' | 'built-in' | 'none' — what it runs on (footnoted unless generated). */
+      connector: CommonSchemas.DynamicString.optional(),
       /** The model wrote no controls: these were derived (footnoted "Standard controls"). */
       standard: z.boolean(),
       /** One event; a press adds only its control (and option) index. */

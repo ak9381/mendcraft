@@ -17,6 +17,10 @@ import type { ControlSpec, IntentSpec, SliderKey, StateKey } from './controlSpec
 export const DEVICE_TILE_TAG = 'mc-device-tile';
 export const NOT_CONNECTED_BADGE = 'Not connected';
 export const STANDARD_CONTROLS_NOTE = 'Standard controls';
+/** The lamp runs on the fixed WiZ mapping in the code, not a generated connector. */
+export const BUILTIN_CONNECTOR_NOTE = 'Built-in WiZ connector';
+/** The lamp has no connector at all yet. */
+export const NO_CONNECTOR_NOTE = 'No connector yet · say “connect the lamp”';
 
 /** The tile's live state, as the data model hands it over. */
 export interface TileState {
@@ -126,6 +130,8 @@ export class DeviceTileElement extends A2uiLitElement<typeof DeviceTileApi> {
       ${p.error ? html`<p class="note error" role="status">${p.error}</p>` : nothing}
       ${controls.map((c, i) => this.control(c, i, s, p.onAct))}
       ${p.standard ? html`<p class="note" data-standard>${STANDARD_CONTROLS_NOTE}</p>` : nothing}
+      ${p.connector === 'built-in' ? html`<p class="note" data-connector="built-in">${BUILTIN_CONNECTOR_NOTE}</p>`
+        : p.connector === 'none' ? html`<p class="note" data-connector="none">${NO_CONNECTOR_NOTE}</p>` : nothing}
     </div>`;
   }
   private control(c: ControlSpec, i: number, s: TileState, act: unknown) {

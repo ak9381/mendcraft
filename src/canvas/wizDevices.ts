@@ -7,6 +7,10 @@ import { DeviceError, lampLook, type DeviceConnector, type DeviceIntent } from '
 import type { DeviceState } from './surfacePlan';
 import { BridgeRefusedError, type WizClient } from '../devices/wizClient';
 import type { LampIntent, LampState } from '../devices/wiz';
+import { planRequest, type Connector } from '../devices/connector';
+import { actionsForIntent, argsRefusal, type ActionCall, type IntentMap } from '../devices/intentMap';
+import { runPlanned } from '../devices/connectorTransport';
+import type { LanPlugin } from '../devices/native';
 
 export function isWizDevice(deviceId: string): boolean {
   return deviceId.startsWith('wiz-');
@@ -31,6 +35,59 @@ export interface WizConnectorDeps {
   onDown?: () => void;
   /** Live mode: a lamp press was refused because the bridge isn't answering. */
   onRefusedUnreachable?: () => void;
+  /** Which connector a lamp runs on: an approved generated one (its data and
+   *  intent map), the labelled built-in WiZ mapping, or none (a press is
+   *  refused with how to connect it). Not given: the built-in mapping. */
+  connectorFor?: (deviceId: string) => LampConnector;
+  /** The phone app's LAN plugin, when there is one (it sends what the browser can't). */
+  native?: LanPlugin;
+}
+
+/** An approved generated connector, as the canvas holds it after its check. */
+export interface ApprovedConnector { connector: Connector; intents: IntentMap }
+/** What a lamp runs on right now. */
+export type LampConnector = ApprovedConnector | 'built-in' | null;
+/** The tile's footnote words for it. */
+export type ConnectorState = 'generated' | 'built-in' | 'none';
+export const connectorState = (c: LampConnector): ConnectorState => (c === null ? 'none' : c === 'built-in' ? 'built-in' : 'generated');
+
+/** A lamp with no connector yet: a press says how to get one. */
+export const NO_CONNECTOR_LINE = 'This lamp has no connector yet. Say “connect the lamp” to make one. Nothing changed.';
+/** The lamp's generated connector has no action for what was asked. */
+export const CONNECTOR_CANT_DO_THAT = "The lamp's connector has no action for that. Nothing changed.";
+
+/** What an intent becomes on a lamp, checked before anything is sent: the
+ *  built-in WiZ command, or the generated connector's action calls. Throws
+ *  the refusal (never a clamp, never a default). */
+export function checkLampIntent(intent: DeviceIntent, c: LampConnector): { builtin: LampIntent } | { calls: ActionCall[]; approved: ApprovedConnector } {
+  if (c === null) throw new DeviceError(NO_CONNECTOR_LINE);
+  if (c === 'built-in') {
+    const lamp = wizIntentFor(intent);
+    if (!lamp) throw new DeviceError(LAMP_CANT_DO_THAT);
+    return { builtin: lamp };
+  }
+  if (intent.playing !== undefined || intent.volume !== undefined || intent.next !== undefined || intent.previous !== undefined || intent.query !== undefined) throw new DeviceError(LAMP_CANT_DO_THAT);
+  const calls = actionsForIntent(intent, c.intents);
+  if (!calls) throw new DeviceError(CONNECTOR_CANT_DO_THAT);
+  for (const call of calls) {
+    const action = c.connector.actions.find((a) => a.id === call.action);
+    if (!action) throw new DeviceError(CONNECTOR_CANT_DO_THAT);
+    const why = argsRefusal(action, call.args);
+    if (why) throw new DeviceError(`${why} Nothing changed.`);
+  }
+  return { calls, approved: c };
+}
+
+/** A test build's simulated lamps follow the same connector rules as real
+ *  ones: the same refusals, then the simulated answer. */
+export function createConnectorGate(inner: DeviceConnector, connectorFor: (deviceId: string) => LampConnector): DeviceConnector {
+  return {
+    async run(intent) {
+      if (!isWizDevice(intent.deviceId)) return inner.run(intent);
+      checkLampIntent(intent, connectorFor(intent.deviceId));
+      return inner.run(intent);
+    },
+  };
 }
 
 /** A real lamp the bridge can't reach right now (live mode only). */
@@ -82,26 +139,44 @@ function lookFrom(state: LampState | null, intent: DeviceIntent): Partial<Device
 
 export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector {
   const bulbIp = deps.bulbIp ?? (() => '');
+  const ack = (state: LampState | null, intent: DeviceIntent): Partial<DeviceState> =>
+    ({ on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false, unreachable: false });
+  /** The generated connector's calls, each planned (allow-list, private
+   *  address) before the first is sent, then sent through the fixed transport. */
+  async function runGenerated(calls: ActionCall[], c: ApprovedConnector, intent: DeviceIntent): Promise<Partial<DeviceState>> {
+    const ip = bulbIp(intent.deviceId);
+    const plans = calls.map((call) => planRequest(c.connector, call.action, call.args, ip));
+    for (const p of plans) if (!p.ok) throw new DeviceError(`${p.error} Nothing changed.`);
+    let state: LampState | null = null;
+    for (const p of plans) {
+      if (!p.ok) continue;
+      const r = await runPlanned(p.request, { wiz: deps.client, native: deps.native });
+      if (!r.ok) throw new DeviceError(r.why);
+      if (r.state !== undefined) state = r.state;
+    }
+    return ack(state, intent);
+  }
   return {
     async run(intent: DeviceIntent): Promise<Partial<DeviceState>> {
       // Checked before the bridge or the fallback: nothing reaches a bulb, real or simulated.
-      const lamp = isWizDevice(intent.deviceId) ? wizIntentFor(intent) : null;
-      if (isWizDevice(intent.deviceId) && !lamp) throw new DeviceError(LAMP_CANT_DO_THAT);
-      if (lamp && deps.status.up) {
+      const plan = isWizDevice(intent.deviceId) ? checkLampIntent(intent, deps.connectorFor ? deps.connectorFor(intent.deviceId) : 'built-in') : null;
+      if (plan && deps.status.up) {
         try {
-          const state = await deps.client.setPilot(bulbIp(intent.deviceId), lamp);
-          return { on: state?.on ?? intent.on ?? true, brightness: state?.dimming ?? intent.brightness, ...lookFrom(state, intent), sim: false, unreachable: false };
+          if ('calls' in plan) return await runGenerated(plan.calls, plan.approved, intent);
+          const state = await deps.client.setPilot(bulbIp(intent.deviceId), plan.builtin);
+          return ack(state, intent);
         } catch (err) {
-          // The bridge is up and refused the value: the lamp did not change and
-          // nothing is simulated in its place — the store shows the refusal.
-          if (err instanceof BridgeRefusedError) throw err;
+          // The bridge is up and refused the value (or the connector's request
+          // was refused here): the lamp did not change and nothing is
+          // simulated in its place — the store shows the refusal.
+          if (err instanceof BridgeRefusedError || err instanceof DeviceError) throw err;
           deps.status.up = false; // bridge dropped mid-session — fall through below.
           deps.onDown?.();
         }
       }
       if (deps.honest && isWizDevice(intent.deviceId)) { deps.onRefusedUnreachable?.(); throw new DeviceError(LAMP_NOT_REACHABLE); }
-      const ack = await deps.fallback.run(intent);
-      return isWizDevice(intent.deviceId) ? { ...ack, sim: true } : ack;
+      const res = await deps.fallback.run(intent);
+      return isWizDevice(intent.deviceId) ? { ...res, sim: true } : res;
     },
   };
 }

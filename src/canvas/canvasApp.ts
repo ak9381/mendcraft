@@ -50,7 +50,11 @@ import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, type Dev
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
 import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
-import { createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type BridgeStatus } from './wizDevices';
+import { connectorState, createConnectorGate, createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type ApprovedConnector, type BridgeStatus, type LampConnector } from './wizDevices';
+import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR_SENT_WORDS, connectorArtifactId, lampConnectorKey, parseConnectorReply, WIZ_LAMP_IDENTITY } from './connectorTurn';
+import { isPrivateIPv4 } from '../devices/connector';
+import { getLanPlugin } from '../devices/native';
+import { coerceArtifact, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
@@ -112,7 +116,7 @@ import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { combineFacts, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, connectorChanges, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlanDocs, diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
@@ -130,7 +134,6 @@ import { nanoQueue } from '../ai/nanoQueue';
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
-import type { ArtifactBy } from '../artifacts/artifact';
 import { identifyDevice, onNanoBusyHandoff, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
@@ -170,6 +173,11 @@ export interface CanvasOptions {
   /** Who made the board on a frame (what its stored artifact says, or would
    *  say on the next save), if known. Sent with a board to a phone. */
   artifactBy?: (frameId: string) => ArtifactBy | undefined;
+  /** Approved connector artifacts (checked at load): a lamp whose connector
+   *  is here runs on it, through the fixed bridge client only. */
+  connectors?: readonly Artifact[];
+  /** A connector she just approved, to be stored by the caller. */
+  onConnector?: (a: Artifact) => void;
   /** Frame ids of stored boards not on the canvas (kept as they are): new
    *  boards never reuse them, so their saves can't collide. */
   reservedFrameIds?: readonly string[];
@@ -1306,15 +1314,32 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // and a real lamp the bridge can't reach is shown "Not reachable" and
   // refused — never simulated.
   const liveLamps = !opts.sim && !opts.devices && !opts.connector;
+  // Approved generated connectors, by device key ("wiz|smart-bulb"). They are
+  // data: only connector.ts planRequest and connectorTransport.ts act on them.
+  const connectorArtifacts = new Map<string, Artifact>();
+  for (const a of opts.connectors ?? []) {
+    const c = (a.data as { connector?: { key?: unknown } }).connector;
+    if (a.kind === 'connector' && typeof c?.key === 'string') connectorArtifacts.set(c.key, a);
+  }
+  /** What a WiZ lamp runs on: the approved connector for its key, else the
+   *  labelled built-in mapping. A real bulb whose address discovery has not
+   *  given yet stays on the built-in one (a connector's host is never guessed). */
+  function lampConnectorFor(deviceId: string): LampConnector {
+    const a = connectorArtifacts.get(lampConnectorKey());
+    if (!a) return 'built-in';
+    if (wizClient && !isPrivateIPv4(lampIps.get(deviceId) ?? '')) return 'built-in';
+    return a.data as unknown as ApprovedConnector;
+  }
   const lampConnector = wizClient
     ? createWizAwareConnector({
       client: wizClient, fallback: simulatedConnector, status: bridgeStatus, bulbIp: (id) => lampIps.get(id) ?? '', honest: liveLamps,
+      connectorFor: lampConnectorFor, native: getLanPlugin() ?? undefined,
       // Bridge dropped mid-session: every WiZ lamp shows "Not reachable" now (not a working tile).
       onDown: () => { bridgeWentDown(); },
       // A refused press is a good moment to look again (throttled).
       onRefusedUnreachable: () => { void rediscoverLamps(); },
     })
-    : liveLamps ? createUnreachableLampConnector(simulatedConnector) : simulatedConnector;
+    : liveLamps ? createUnreachableLampConnector(simulatedConnector) : createConnectorGate(simulatedConnector, lampConnectorFor);
   // Speaker tiles play through Spotify when she is connected; ?sim=1 stays fully simulated.
   const spOpts = (): spotifyApi.SpotifyApiOptions => ({
     // Path + short query only (redacted in the api layer); never a token.
@@ -1424,6 +1449,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // or none at all: the boards then offer "Connect a device" instead.
     applyRealLamps(lampSwap, rememberedLamps(storage) ?? []);
   }
+  /** Each WiZ lamp's tile says what it runs on ("Built-in WiZ connector"
+   *  until a generated one is approved). Display text only. */
+  function syncConnectorLabels(): void {
+    for (const [id, d] of Object.entries(store.all())) {
+      if (!isWizDevice(id) || (d.cls && d.cls !== 'lamp')) continue;
+      const want = connectorState(lampConnectorFor(id));
+      if (d.connector !== want) store.patch(id, { connector: want });
+    }
+  }
+  syncConnectorLabels();
   /** The bridge stopped answering: mark every WiZ lamp so (live: "Not
    *  reachable"; otherwise SIM, as at boot), and start looking for it again. */
   function bridgeWentDown(): void {
@@ -1472,6 +1507,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       const changed = applyRealLamps(lampSwap, lamps);
+      syncConnectorLabels();
       for (const fid of changed) renderSurface(fid);
       if (changed.length) { sync(); updateDock(); persist(); }
       if (devicesWired) refreshDevicesBoard();
@@ -3750,6 +3786,79 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       facts: reviewFacts(knSent, utterance),
     }, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });
   }
+  // ---- the lamp connector turn: Gemini writes how to talk to the lamp, as data ----
+  /** "connect the lamp" with a WiZ lamp here: a connector turn (else null). */
+  const LAMP_WORD_RE = /\b(lamps?|bulbs?|lights?)\b/i;
+  function wizLampHere(): string | null {
+    return Object.entries(store.all()).find(([id, d]) => isWizDevice(id) && (!d.cls || d.cls === 'lamp'))?.[0] ?? null;
+  }
+  async function connectorTurn(utterance: string): Promise<void> {
+    try { await connectorTurnRun(utterance); } finally { settleEngines(); }
+  }
+  async function connectorTurnRun(utterance: string): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (!net.isOnline()) { say('Writing a connector needs Gemini, and you are offline. Nothing was generated.', { speak: true }); return; }
+    const engine = engineFor('gemini', 'connector');
+    if (!engine) { noModel('gemini'); return; }
+    const key = lampConnectorKey();
+    const routeOf = (): string => {
+      const rl = engine.routeLine ?? CONNECTOR_ROUTE_LINE;
+      return engine.sim && !rl.startsWith('SIM') ? `SIM · ${rl}` : rl;
+    };
+    // The brand and kind only: no address, no token, no board data.
+    const sent: SentInfo = { ...buildConnectorPrompt(WIZ_LAMP_IDENTITY), sim: engine.sim, routeLine: routeOf() };
+    aiSent(utterance, sent, { task: 'generic', defer: true, swarm: false });
+    let full = '';
+    try { full = await engine.stream(sent.prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(sent), onCloudRetract: () => cloudRetract(sent) }); }
+    catch (e) {
+      settleSwarm();
+      const why = `The connector didn’t arrive. ${geminiFailLine(e)}`;
+      panels.forEngine('gemini').fail(why);
+      say(why, { speak: true }); return;
+    }
+    // A replay's label follows the reply it really took.
+    sent.routeLine = routeOf();
+    const r = parseConnectorReply(full, key);
+    if (!r.ok) {
+      settleSwarm();
+      const why = `Refused the connector: ${r.error}. Nothing was generated.`;
+      panels.forEngine('gemini').fail(why);
+      say(why, { speak: true }); return;
+    }
+    await finishSwarm();
+    const { connector, intents } = r.value;
+    panels.forEngine('gemini').log('replied', `Lamp connector ready · ${connector.actions.length} actions`);
+    const id = connectorArtifactId(connector.key);
+    const prev = connectorArtifacts.get(connector.key);
+    const title = 'Connect the lamp';
+    const card = renderProposalCard(document, {
+      id: 'p-connector', title, youAsked: utterance, status: 'changed',
+      catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: sent.routeLine, lineId: 'custom', whyLabel: 'Why online', whatWasSent: CONNECTOR_SENT_WORDS, technicalLine: sent.routeLine },
+    }, {
+      onKeep: () => {
+        reviewDialog.close();
+        const by: ArtifactBy = replayRouteIn(sent.routeLine) ? 'replay' : 'gemini';
+        // Checked again as the artifact it becomes, exactly as a reload will check it.
+        const art = coerceArtifact({ id, kind: 'connector', v: (prev?.v ?? 0) + 1, title: `${connector.brand} ${connector.deviceKind}`.replace(/[<>]/g, '').slice(0, 80), data: { connector, intents }, by, at: Date.now(), status: 'approved' });
+        if (!art.ok) { say(`Couldn’t keep the connector: ${art.error}. Nothing changed.`, { speak: true }); return; }
+        connectorArtifacts.set(connector.key, art.value);
+        opts.onConnector?.(art.value);
+        syncConnectorLabels();
+        say('The lamp now runs on the connector you approved.', { speak: true });
+        bodyLanguage('yes');
+      },
+      onDrop: () => { reviewDialog.close(); say('Dropped. The lamp stays as it was.'); },
+    });
+    showReview({
+      title, card, extra: buildReviewExtra(),
+      changes: connectorChanges(connector, intents),
+      notes: [
+        ...(r.notes ?? []),
+        'This is data, not code. It runs only through the fixed lamp bridge, which checks every value again.',
+      ],
+      facts: reviewFacts(sent, utterance),
+    }, { tokens: [sent], facts: () => reviewFacts(sent, utterance) });
+  }
   /** A pack phrase (Kannada) routes to the same intents as the English parsers. */
   function runIntent(intent: IntentKey): boolean {
     switch (intent) {
@@ -4996,6 +5105,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // ("connect the speaker") becomes a Nano-only by-name turn.
       case 'connectSheet': openConnectSheet(); return true;
       case 'connectByName': {
+        // "connect the lamp" with a WiZ lamp here: write its connector (a reviewed turn).
+        if (LAMP_WORD_RE.test(text) && wizLampHere()) { void connectorTurn(text); return true; }
         const id = focusId ?? lastFocus;
         if (!id) { say('Open a board first, then connect a device.'); return true; }
         void nameTurn(id, text);

@@ -1,6 +1,8 @@
 import { SCREEN_MARGIN_PX } from './handEdge';
 import { mountDraggablePanel } from './dragPanel';
 import { NO_VISIBLE_CHANGE, type PlanChange } from './planDiff';
+import type { Connector } from '../devices/connector';
+import type { IntentKey, IntentMap } from '../devices/intentMap';
 
 // Floating review window: whenever a Proposal needs a human decision it opens
 // here (~560px, top-right inside the 24px safe zone, left of the hand
@@ -133,6 +135,29 @@ export function combineFacts(main: ReviewFacts, other: ReviewFacts, kind: 'impro
  *  model: Gemini drafts, and nothing improves its own draft): "Made by Gemini · 2.1 KB". */
 export function madeByFacts(facts: ReviewFacts): ReviewFacts {
   return { ...facts, chain: `Made by ${engineName(facts.engine)} · ${stepBytes(facts)}` };
+}
+
+/** What each canvas request is called in the connector review. */
+const INTENT_WORDS: Record<IntentKey, string> = {
+  on: 'Turn on', off: 'Turn off', brightness: 'Brightness', temp: 'Warm or cool white', rgb: 'Colour', sceneId: 'Scene',
+};
+/** A connector review's plan: each action with its transport and port (and
+ *  what it sends), then one row per intent-map entry. All of it is data. */
+export function connectorChanges(c: Connector, intents: IntentMap): PlanChange[] {
+  const out: PlanChange[] = c.actions.map((a) => {
+    const r = a.request;
+    const what = r.transport === 'udp'
+      ? `UDP port ${r.port}${typeof (r.payload as { method?: unknown })?.method === 'string' ? ` · ${String((r.payload as { method: string }).method).slice(0, 24)}` : ''}`
+      : `HTTP ${r.method} port ${r.port} · ${r.path.slice(0, 60)}`;
+    const params = a.params.length ? ` · ${a.params.map((p) => (p.type === 'number' ? `${p.name} ${p.min}–${p.max}` : p.name)).join(', ')}` : '';
+    return { op: 'add' as const, label: `Action: ${a.label}`, detail: `${what}${params}` };
+  });
+  for (const [k, e] of Object.entries(intents) as [IntentKey, NonNullable<IntentMap[IntentKey]>][]) {
+    const label = c.actions.find((a) => a.id === e.action)?.label ?? e.action;
+    const fills = Object.entries(e.params ?? {}).map(([name, field]) => `${name} ← ${field}`).join(', ');
+    out.push({ op: 'add', label: `When you ask: ${INTENT_WORDS[k]}`, detail: `runs “${label}”${fills ? ` (${fills})` : ''}` });
+  }
+  return out;
 }
 
 /** What a turn told the ledger (aiTurn's SentInfo shape, kept structural). */

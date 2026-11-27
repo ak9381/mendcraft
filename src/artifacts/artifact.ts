@@ -7,7 +7,8 @@ import { coerceSurfacePlan, type Coerced, type SurfacePlan } from '../canvas/sur
 import { cleanTitle, type FrameKind } from '../canvas/frames';
 import { sanitizePlanDoc } from '../canvas/planDocs';
 import { coerceLanguagePack } from '../canvas/languagePack';
-import { coerceConnector, type ConnectorSource } from '../devices/connector';
+import { coerceConnector, slug, type ConnectorSource } from '../devices/connector';
+import { coerceIntentMapNotes } from '../devices/intentMap';
 
 export const ARTIFACT_KINDS = ['board', 'plan', 'connector', 'pack', 'steps'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
@@ -122,9 +123,13 @@ function coerceConnectorData(data: Record<string, unknown>): Coerced<Record<stri
   if (!STORED_CONNECTOR_SOURCES.includes(source)) return bad('a stored connector must be generated (cloud or on-device)');
   const c = coerceConnector(raw, source);
   if (!c) return bad('the connector failed its check');
-  // The intent map gets its own check with the connector it names (intentMap.ts).
-  if (data.intents !== undefined && !isObj(data.intents)) return bad('the intent map is not an object');
-  return { ok: true, value: { connector: c, ...(isObj(data.intents) ? { intents: data.intents } : {}) } };
+  // A stored action that no longer passes (an old port, a changed rule) is
+  // not quietly dropped: the connector she approved is not the one left.
+  if (Array.isArray(raw.actions) && raw.actions.length !== c.actions.length) return bad('an action of the connector failed its check');
+  // The intent map is checked against the connector it names.
+  const { map, dropped } = coerceIntentMapNotes(data.intents, c);
+  if (!Object.keys(map).length) return bad('the intent map names no action the connector has');
+  return { ok: true, value: { connector: c, intents: map }, ...(dropped.length ? { notes: dropped.map((d) => `Left out of a connector's intent map: ${d}.`) } : {}) };
 }
 
 function coerceSteps(data: Record<string, unknown>): Coerced<Record<string, unknown>> {
@@ -167,5 +172,6 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   const d = coerceData(k, data);
   if (!d.ok) return d;
   if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
+  if (k === 'connector' && id !== `connector-${slug((d.value.connector as { key: string }).key)}`) return bad('the connector id does not match its device');
   return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }

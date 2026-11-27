@@ -11,6 +11,7 @@ const connector = (source: string) => ({
       discovery: { method: 'wiz-udp-broadcast', port: 38899 },
       actions: [{ id: 'on', label: 'On', request: { transport: 'udp', port: 38899, payload: { method: 'setPilot', params: { state: true } } } }],
     },
+    intents: { on: { action: 'on' } },
   },
 });
 
@@ -52,6 +53,19 @@ describe('coerceArtifact', () => {
     expect(coerceArtifact(connector('builtin')).ok).toBe(false);
     expect(coerceArtifact(connector('sim')).ok).toBe(false);
     expect(coerceArtifact(connector('cloud')).ok).toBe(true);
+  });
+
+  it('refuses a connector with no usable intent map, or stored under another device', () => {
+    const c = connector('cloud');
+    expect(coerceArtifact({ ...c, data: { connector: c.data.connector } }).ok).toBe(false);
+    expect(coerceArtifact({ ...c, data: { ...c.data, intents: { on: { action: 'reboot' } } } }).ok).toBe(false);
+    expect(coerceArtifact({ ...c, id: 'connector-govee-strip' }).ok).toBe(false);
+  });
+
+  it('refuses a stored connector with a port outside the allow-list, not just that action', () => {
+    const c = connector('cloud');
+    const extra = { id: 'ssh', label: 'Shell', request: { transport: 'udp', port: 22, payload: { x: 1 } } };
+    expect(coerceArtifact({ ...c, data: { ...c.data, connector: { ...c.data.connector, actions: [...c.data.connector.actions, extra] } } }).ok).toBe(false);
   });
 
   it('refuses a bad envelope: version, maker, status, title with markup', () => {
