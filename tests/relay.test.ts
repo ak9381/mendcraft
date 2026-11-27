@@ -22,7 +22,7 @@ import {
   type RelayMessage,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { ALIAS_TTL_MS, PRIVACY_ASK_MAX, PRIVACY_ASK_WINDOW_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
+import { ALIAS_TTL_MS, RELAY_STEP_TIMEOUT_MS, PRIVACY_ASK_MAX, PRIVACY_ASK_WINDOW_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
 
 const seqRandom =
   (start = 0): RandomBytes =>
@@ -540,3 +540,29 @@ describe('I5: privacyAsk needs a paired phone, once per job, rate-limited, never
     await host.close();
   });
 });
+
+describe('M5: opening or joining a room never hangs', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const never = () => new Promise<never>(() => undefined);
+
+  it('a host whose code never gets written gives up (the canvas says it needs network)', async () => {
+    const base = createFakeTransport();
+    const t = { ...base, setAlias: never };
+    const p = createHostSession(t, seqRandom());
+    const caught = p.then(() => 'opened', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(RELAY_STEP_TIMEOUT_MS + 10);
+    expect(await caught).toMatch(/no answer/);
+  });
+
+  it("a phone whose hello is never stored gives up; a code that never resolves too", async () => {
+    const base = createFakeTransport();
+    const t = { ...base, publish: never, publishStamped: never, resolveAlias: never };
+    const joined = createGuestSession(t, 'ABCDEFGHJKMNPQRSTVWXYZ01').then(() => 'joined', (e: Error) => e.message);
+    const resolved = resolveRoomId(t, { kind: 'code', code: 'ABCDEFGH' }).then((r) => r, (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(RELAY_STEP_TIMEOUT_MS + 10);
+    expect(await joined).toMatch(/no answer/);
+    expect(await resolved).toMatch(/no answer/);
+  });
+});
+

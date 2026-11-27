@@ -253,6 +253,16 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   };
 }
 
+/** One network step of opening or joining a room (writing the code, the
+ *  first hello, resolving a code) that takes longer than this is given up:
+ *  the caller says it needs the network instead of "Joining…" for ever. */
+export const RELAY_STEP_TIMEOUT_MS = 15_000;
+function inTime<T>(p: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('relay: no answer from the room')), RELAY_STEP_TIMEOUT_MS); });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
 /** Pings that do not name this session: at most this many answers per gap
  *  (a phone rejoining right away is answered; a replayed history is not). */
 export const UNSIGNED_PING_GAP_MS = 1500;
@@ -445,7 +455,11 @@ export async function createHostSession(
   // history and never acts.
   const whoMsg: RelayMessage = { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } };
   void core.markStart(() => (transport.publishStamped ? transport.publishStamped(token, whoMsg) : transport.publish(token, whoMsg)));
-  await transport.setAlias(code, token);
+  try { await inTime(transport.setAlias(code, token)); } catch (e) {
+    clearTimeout(aliasTimer);
+    await core.close({ silent: true });
+    throw e;
+  }
 
   return {
     token,
@@ -630,7 +644,11 @@ export async function createGuestSession(
   // board, an old gimbal cue or an old point request in the room never acts.
   const helloMsg: RelayMessage = { v: 1, from: 'phone', type: 'hello' };
   const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
-  const first = await hello();
+  let first: void | RelayMeta;
+  try { first = await inTime(hello()); } catch (e) {
+    await core.close({ silent: true });
+    throw e;
+  }
   if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
@@ -765,7 +783,7 @@ export async function resolveRoomId(
   opts: { now?: () => number } = {},
 ): Promise<string | null> {
   if (input.kind === 'token') return input.token;
-  const room = await transport.resolveAlias(input.code);
+  const room = await inTime(transport.resolveAlias(input.code));
   if (!room || !transport.aliasFreshAt) return room;
   const at = await transport.aliasFreshAt(input.code, room).catch(() => null);
   const now = (opts.now ?? Date.now)();
