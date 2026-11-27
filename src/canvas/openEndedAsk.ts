@@ -258,11 +258,11 @@ const EXEMPT_CLAUSE = new RegExp([
   // "I wouldn't know whether…", "I couldn't say".
   String.raw`^i\s+(?:wouldn'?t|couldn'?t|would\s+not|could\s+not)\s+(?:know|tell|say)\b`,
   // Her instruction: "Remember to turn the lamp off", "Don't forget…", "Make sure…", "For a new board, say …".
-  String.raw`^(?:remember|don'?t\s+forget|do\s+not\s+forget|make\s+sure|be\s+sure|never)\b|^for\s+(?:a|an)\s`,
+  String.raw`^(?:remember|don'?t\s+forget|do\s+not\s+forget)\s+to\b|^(?:make|be)\s+sure\s+(?:to\b|(?:that\s+)?(?:the|your)\s+[^,;]*\b(?:plugged|charged|connected|close|near|within|switched\s+on\s+at\s+the\s+wall)\b)|^never\b|^for\s+(?:a|an)\s+[\w'-]+(?:\s+[\w'-]+)?$`,
   // A definition: "Brightness is how much light…", "\"Paused\" means…", "Standby is when…".
   String.raw`^(?:"…"|[\w'-]+)\s+(?:means|refers\s+to|is\s+(?:when|how|what|where|the\s+(?:amount|measure|level|word|name)))\b`,
   // Lamps in general, not hers: "Most smart lamps can be dimmed", "Stage lights are dimmed before a play starts".
-  String.raw`^(?:(?:most|many|some|all|old|smart|stage|street|traffic|fairy|festival|led|christmas|oil)\s+)*(?:lamps|lights|bulbs|speakers|candles)\b(?=[^]*\b(?:during|all\s+over|before|after|at\s+(?:night|dusk|dawn|bedtime)|every|usually|often|always|sometimes|can|could|may|might|waste|use|save|cost)\b)|^(?:most|many)\s`,
+  String.raw`^(?:(?:most|many|some|all|old|smart|stage|street|traffic|fairy|festival|led|christmas|oil)\s+)*(?:lamps|lights|bulbs|speakers|candles)\b(?=[^]*\b(?:during|all\s+over|before|after|at\s+(?:night|dusk|dawn|bedtime)|every|usually|often|always|sometimes|can|could|may|might|waste|use|save|cost)\b)|^(?:most|many)\s+(?:[\w-]+\s+)?(?:lamps|lights|bulbs|speakers|people|homes)\b`,
   // A generic statement ("A lamp that is on all day uses more power") — not
   // one that says something changed ("A new tile is on…", "A room was added").
   String.raw`^(?:a|an)\s+(?![^,;]*\b(?:new|now|was|were|has\s+been|have\s+been|added|created|moved|removed|turned|switched)\b)`,
@@ -280,7 +280,9 @@ function assertedText(t: string): string {
   const out: string[] = [];
   for (const sen of sentencesOf(t)) {
     if (/\?\s*["”')]*\s*$/.test(sen)) continue;
-    const parts = sen.split(/(\s*[,;:—–]\s*|\s+-\s+)/);
+    // "… and I switched it off": a first-person or state clause after and / but / so is its own clause,
+    // so an exemption for the first ("I'm Gemini Nano") never shields it.
+    const parts = sen.split(/(\s*[,;:—–]\s*|\s+-\s+|\s+(?:and|but|so)\s+(?=(?:i|i'?ve|i'?m|we|it|they|everything|the|your|my|now)\b))/i);
     let kept = '';
     for (let i = 0; i < parts.length; i += 2) {
       const clause = parts[i].trim();

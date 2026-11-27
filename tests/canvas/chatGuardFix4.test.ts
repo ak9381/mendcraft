@@ -14,6 +14,9 @@ describe('chat guard (final review 5)', () => {
     'Finished! The lamp is on.', 'Success!', 'It worked!', 'Mission accomplished!', 'Sorted — the lamp is off.',
     "You're all set, the lamp is on.", 'As requested, the lamp is off.',
     "I'm Gemini Nano, and I've turned the lamp on.", 'I run on your device, and the lamp is now off.', "I've turned the lamp on, on your device.",
+    // An exemption never shields a following claim (fix-4 review).
+    "I'm Gemini Nano and I switched your lights off.", "I'm an AI assistant and I dimmed the lamp for you.", 'I can help with that and I turned the lamp off.',
+    'For a moment I turned the lamp on.', 'Make sure you know the lamp is on now.', 'Most nights I turn the lamp off for you.',
   ])('replaces %j', (r) => expect(replaced(r)).toBe(true));
 
   it.each([
@@ -25,7 +28,7 @@ describe('chat guard (final review 5)', () => {
     "I wouldn't know whether the lamp is on.", 'Lamps are lit all over India during Deepavali.', 'Lights left on all night waste electricity.',
     'Most smart lamps can be dimmed.', 'Stage lights are dimmed before a play starts.', 'Remember to turn the lamp off before you leave.',
     "Don't forget to switch the lights off.", 'Make sure the lamp is plugged in.', 'Many lamps can change colour.',
-    'Oota aaytha?', 'Chennagide!',
+    'Oota aaytha?', 'Chennagide!', "I'm Gemini Nano and I run on your device.", 'I can help with that and anything else.',
   ])('passes %j', (r) => expect(replaced(r)).toBe(false));
 
   it.each([
