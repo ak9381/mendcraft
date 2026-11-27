@@ -217,6 +217,19 @@ describe('send-glow painter (caches the dragged frame; rewrites only on change)'
     expect(a.classes.has('mc-frame-sending')).toBe(false);
     expect(b.classes.has('mc-frame-sending')).toBe(true);
   });
+  it('a frame rebuilt mid-drag is found again and lit', () => {
+    const old = Object.assign(fakeFrame(), { isConnected: true });
+    const rebuilt = fakeFrame();
+    let current: typeof old | typeof rebuilt = old;
+    const p = createSendGlowPainter(() => current);
+    p.paint('f1', sendGlowView(0.4, 'ios'));
+    old.isConnected = false;
+    current = rebuilt;
+    p.paint('f1', sendGlowView(0.6, 'ios'));
+    expect(rebuilt.classes.has('mc-frame-sending')).toBe(true);
+    expect(rebuilt.vars.get('--mc-send-glow')).toBe('0.600');
+    expect(rebuilt.pills[0].textContent).toBe('Hold to send to iPhone');
+  });
 });
 
 describe('frameSelector escapes the id', () => {

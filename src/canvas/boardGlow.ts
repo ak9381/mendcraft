@@ -30,6 +30,8 @@ export interface GlowFrame {
   querySelector(sel: string): (GlowPill & { appendChild?(n: unknown): unknown }) | null;
   appendChild(n: unknown): unknown;
   ownerDocument: { createElement(tag: string): GlowPill } | null;
+  /** False once the element left the DOM (absent on test fakes). */
+  isConnected?: boolean;
 }
 export interface GlowPill {
   className: string;
@@ -90,6 +92,8 @@ export function createSendGlowPainter(find: (frameId: string) => GlowFrame | nul
       if (!next) return;
       cur ??= { id: next, el: null, pill: null, on: false, label: '' };
       const c = cur;
+      // The frame element was rebuilt mid-drag (a re-render): find the new one.
+      if (c.el && c.el.isConnected === false) { c.el = null; c.pill = null; c.on = false; }
       c.el ??= find(next);
       if (!c.el) return;
       if (!c.on || c.label !== view.label) {
