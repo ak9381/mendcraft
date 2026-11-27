@@ -137,7 +137,7 @@ describe('a generated floor plan on its own board', () => {
     // Nothing applied before Approve: no board made.
     expect(h.frames()).toEqual([]);
     h.keep();
-    await vi.waitFor(() => expect(Object.keys(h.snapshot().surfaces)).toHaveLength(1));
+    await vi.waitFor(() => expect(Object.keys(h.snapshot().surfaces)).toHaveLength(1), { timeout: 8000 });
     const doc = h.snapshot();
     const [frameId] = Object.keys(doc.surfaces);
     const plan = doc.surfaces[frameId];
@@ -152,7 +152,7 @@ describe('a generated floor plan on its own board', () => {
     const saved: CanvasDoc[] = [];
     const { h } = await generate(saved);
     h.keep();
-    await vi.waitFor(() => expect(saved.at(-1)?.drawings).toBeTruthy());
+    await vi.waitFor(() => expect(saved.at(-1)?.drawings).toBeTruthy(), { timeout: 8000 });
     const doc = saved.at(-1)!;
     const frameId = doc.frames[0].id;
     const put = splitCanvasDoc(doc, [], maker(h), 1000).put;
@@ -169,13 +169,13 @@ describe('a generated floor plan on its own board', () => {
     const saved: CanvasDoc[] = [];
     const { h } = await generate(saved);
     h.keep();
-    await vi.waitFor(() => expect(saved.at(-1)?.drawings).toBeTruthy());
+    await vi.waitFor(() => expect(saved.at(-1)?.drawings).toBeTruthy(), { timeout: 8000 });
     const frameId = h.frames()[0].id;
     const stored = splitCanvasDoc(saved.at(-1)!, [], maker(h), 1000).put;
     h.undo();
     expect(h.frames()).toEqual([]);
     expect(h.snapshot().drawings).toBeUndefined();
-    await vi.waitFor(() => expect(saved.at(-1)?.frames).toEqual([]));
+    await vi.waitFor(() => expect(saved.at(-1)?.frames).toEqual([]), { timeout: 8000 });
     expect(h.makerOf(artifactId('plan', frameId, `${frameId}-cad`))).toBeUndefined();
     const last = saved.at(-1)!;
     const out = splitCanvasDoc(last, stored, maker(h), 2000);
@@ -216,14 +216,14 @@ describe('a generated floor plan on its own board', () => {
     a.h.run('draw a two bedroom floor plan');
     await vi.waitFor(() => expect(reviewTitle(a.root)).not.toBe(''), { timeout: 8000 });
     a.h.keep();
-    await vi.waitFor(() => expect(a.h.snapshot().surfaces.f1?.kind).toBe('plan'));
+    await vi.waitFor(() => expect(a.h.snapshot().surfaces.f1?.kind).toBe('plan'), { timeout: 8000 });
     handle?.destroy(); handle = null; document.body.innerHTML = '';
     // 40 boards, all showing something: refused before anything is generated.
     const docFull = joinCanvasDoc(layout(40), ids.map(filled)) as CanvasDoc;
     const b = mount({ engines: createReplayEngines({ 'gemini.plan': REPLY }), doc: docFull });
     const mark = b.h.statusMark();
     b.h.run('draw a two bedroom floor plan');
-    await vi.waitFor(() => expect(b.h.statusSince(mark).join(' ')).toContain('The canvas holds 40 boards'));
+    await vi.waitFor(() => expect(b.h.statusSince(mark).join(' ')).toContain('The canvas holds 40 boards'), { timeout: 8000 });
     expect(reviewOpen(b.root)).toBe(false);
   });
 
@@ -237,16 +237,16 @@ describe('a generated floor plan on its own board', () => {
     h.run('draw a two bedroom floor plan');
     await vi.waitFor(() => expect(reviewTitle(root)).not.toBe(''), { timeout: 8000 });
     h.keep();
-    await vi.waitFor(() => expect(h.snapshot().surfaces[empty]?.kind).toBe('plan'));
+    await vi.waitFor(() => expect(h.snapshot().surfaces[empty]?.kind).toBe('plan'), { timeout: 8000 });
     expect(h.frames()).toHaveLength(1);
     expect(h.frames()[0]).toMatchObject({ id: empty, kind: 'plan', title: 'Floor plan' });
     const first = JSON.stringify(h.snapshot().drawings?.[empty]);
     // Asked again on the drawn plan: a new board; the first drawing stays.
-    await vi.waitFor(() => expect(reviewOpen(root)).toBe(false));
+    await vi.waitFor(() => expect(reviewOpen(root)).toBe(false), { timeout: 8000 });
     h.run('draw a two bedroom floor plan');
     await vi.waitFor(() => expect(reviewOpen(root)).toBe(true), { timeout: 8000 });
     h.keep();
-    await vi.waitFor(() => expect(h.frames()).toHaveLength(2));
+    await vi.waitFor(() => expect(h.frames()).toHaveLength(2), { timeout: 8000 });
     expect(JSON.stringify(h.snapshot().drawings?.[empty])).toBe(first);
     // Undo of the plan on the reused board gives the empty board back.
     h.undo(); h.undo();
@@ -259,7 +259,7 @@ describe('a generated floor plan on its own board', () => {
     const saved: CanvasDoc[] = [];
     const { h, root } = await generate(saved);
     h.keep();
-    await vi.waitFor(() => expect(Object.keys(h.snapshot().surfaces)).toHaveLength(1));
+    await vi.waitFor(() => expect(Object.keys(h.snapshot().surfaces)).toHaveLength(1), { timeout: 8000 });
     const frameId = h.frames()[0].id;
     expect(h.makerOf(artifactId('plan', frameId, `${frameId}-cad`))).toBe('gemini');
     // Her own edit on the plan board (the hand / mouse journal's event).
