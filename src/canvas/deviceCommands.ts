@@ -38,7 +38,8 @@ function matchDevices(t: string, devices: readonly DeviceRef[]): DeviceRef[] {
   const scored = devices
     .map((d) => {
       const label = norm(d.label);
-      if (label && t.includes(label)) return { d, score: 2 };
+      // A whole label wins, the longest first ("lamp 2" over "lamp").
+      if (label && new RegExp(`\\b${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(t)) return { d, score: 2 + label.length / 100 };
       const distinctive = label.split(' ').filter((w) => !COMMON.has(w));
       return { d, score: distinctive.some((w) => toks.has(w)) ? 1 : 0 };
     })
@@ -111,6 +112,23 @@ function strayWords(t: string, devices: readonly DeviceRef[]): string[] {
   return t.split(' ').filter((w) => w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w));
 }
 
+const LAMP_NOUN = /^(?:lamps?|lights?|bulbs?)$/;
+/** The words she names a lamp by that are on no tile: up to two words just
+ *  before lamp / light ("the DESK lamp", "the LIVING room lamp", "the
+ *  CEILING light"). A real bulb's tile says "Lamp" (review sim-3 §3). */
+function lampNames(t: string, devices: readonly DeviceRef[]): string[] {
+  const words = t.split(' ');
+  const stray = new Set(strayWords(t, devices));
+  const out: string[] = [];
+  words.forEach((w, i) => {
+    if (!LAMP_NOUN.test(w)) return;
+    let j = i - 1;
+    if (words[j] === 'room') j -= 1; // "living room lamp"
+    for (let k = 0; k < 2 && j >= 0 && stray.has(words[j]); k++, j--) out.unshift(words[j]);
+  });
+  return out;
+}
+
 /** A short phrase ends at its state: "lamp on", "desk lamp 40 percent",
  *  "volume up" — never "lamp on my desk", "room on the left". */
 const STATE_END = /(?:\b(?:on|off|out|up|down|brighter|dimmer|darker|lighter|warmer|cooler|louder|softer|quieter|percent|cent|quiet|medium|loud|full|max|half)|\d)$/;
@@ -132,7 +150,8 @@ export function looksLikeDeviceCommand(text: string, devices: readonly DeviceRef
   // (its words are the music she wants) — never a game ("play a game").
   const playAsk = devices.some((d) => d.kind === 'music') && /^(?:(?:please|hey|ok|okay|now|just|can you|could you)\s+)*play\b/.test(t)
     && t.split(' ').length <= 7 && !PLAY_NOT_MUSIC.test(t);
-  if (!playAsk && strayWords(t, devices).length) return false;
+  const named = new Set(lampNames(t, devices));
+  if (!playAsk && strayWords(t, devices).some((w) => !named.has(w))) return false;
   // "turn on the lamp at 9": a time, not a level.
   if (/\bat \d+\b/.test(t) && !/\d\s*(?:percent|per cent|%)/.test(raw)) return false;
   const words = t.replace(POLITE, '').replace(/(?:\s+(?:please|pls|now|thanks|thank you))+$/, '').split(' ').filter(Boolean);
@@ -147,7 +166,7 @@ export function looksLikeDeviceCommand(text: string, devices: readonly DeviceRef
   // "party scene", "sunset mode": a scene by name, still about the lights.
   if (words.length <= 3 && /\b(?:scene|mode)$/.test(phrase) && !!sceneFromSpeech(phrase)) return true;
   const head = words.find((w) => !DETERMINERS.has(w));
-  if (!head || !(SHORT_HEADS.has(head) || labelWords.has(head))) return false;
+  if (!head || !(SHORT_HEADS.has(head) || labelWords.has(head) || named.has(head))) return false;
   // "the lamps on" is "the lamp's on" heard without its apostrophe: a report.
   if (/^(?:the|my|our) \w+s (?:on|off|out)$/.test(phrase)) return false;
   return STATE_END.test(phrase) || (words.length <= 4 && !!(colourFromSpeech(phrase) || sceneFromSpeech(phrase)));
@@ -235,7 +254,16 @@ function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?:
     }
   }
 
-  const matched = matchDevices(t, lamps);
+  let matched = matchDevices(t, lamps);
+  // "the desk lamp" when no tile says desk: with one lamp it is that lamp;
+  // with several it is refused aloud, naming them — never guessed, never chat.
+  const names = lampNames(t, devices);
+  // "the desk lamp" is not the tile called just "Lamp" when there are several.
+  if (names.length) matched = matched.filter((d) => norm(d.label).split(' ').some((w) => !COMMON.has(w) && !/^\d+$/.test(w)));
+  if (names.length && !matched.length && lamps.length === 1) matched = lamps.slice();
+  else if (names.length && !matched.length && lamps.length > 1) {
+    return { intents: [], say: `There’s no ${names.join(' ')} ${/light/.test(t) ? 'light' : 'lamp'} here — your lamps are ${labelList(lamps, false)}.` };
+  }
   // A music word with no lamp named is about the speaker, never the lamps
   // (with no speaker connected, "volume 40 percent" does nothing here).
   if (!matched.length && MUSIC_WORD.test(t)) return null;
