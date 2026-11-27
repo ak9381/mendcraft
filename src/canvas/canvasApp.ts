@@ -57,7 +57,7 @@ import { isPrivateIPv4 } from '../devices/connector';
 import { getLanPlugin } from '../devices/native';
 import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import { createMemoryArtifactStore, type ArtifactStore } from '../artifacts/store';
-import { ENGINE_LABEL, approvalDate, mountArtifactsSheet } from './artifactsSheet';
+import { approvalDate, makerLabel, mountArtifactsSheet } from './artifactsSheet';
 import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
@@ -206,11 +206,12 @@ export interface CanvasOptions {
    *  took what they showed off the screen). */
   onArtifactsRemoved?: (ids: string[]) => void;
   /** The sheet imported artifacts into the store: they open as a load opens
-   *  them (canvasMain reloads). Missing: they open on the next load. */
-  onArtifactsImported?: () => void;
+   *  them (canvasMain reloads, then says `line` again). Missing: they open on
+   *  the next load. */
+  onArtifactsImported?: (line: string) => void;
   /** The stored board artifact on a frame (who made it, when it was
-   *  approved), shown on the board's head. */
-  artifactInfo?: (frameId: string) => { by: ArtifactBy; at: number } | undefined;
+   *  approved, whether it was imported), shown on the board's head. */
+  artifactInfo?: (frameId: string) => { by: ArtifactBy; at: number; imported?: boolean } | undefined;
   /** One line to say once at boot about storage (e.g. the memory fallback). */
   storeNote?: string;
   voice?: { supported: boolean; pushToTalkStart(): void; pushToTalkStop(): void; setLang?(lang: string): void } | null;
@@ -1247,6 +1248,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       say('What would you like instead?');
     },
   });
+  // A review decided (every keep / drop closes it): saved requests waiting
+  // for it go next (kickLater runs after the decision's own clean-up).
+  { const closeReview = reviewDialog.close.bind(reviewDialog); reviewDialog.close = () => { closeReview(); kickLater(); }; }
   // Every review opens through here so the phone menu sheet (z-index 61, above
   // the review's 50) can never cover Approve/Reject/Ask-else. No-op on desktop
   // (phoneMenu is null there). Keeps the human-in-the-loop gate reachable.
@@ -1937,7 +1941,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const byEl = el.querySelector<HTMLElement>('.mc-frame-by');
     if (!byEl) return;
     const info = surfaces[frameId] ? opts.artifactInfo?.(frameId) : undefined;
-    const text = info ? `${ENGINE_LABEL[info.by]} · ${approvalDate(info.at)}` : '';
+    const text = info ? `${makerLabel(info)} · ${approvalDate(info.at)}` : '';
     if (byEl.textContent !== text) byEl.textContent = text;
     byEl.hidden = !text;
     if (info) byEl.dataset.by = info.by; else delete byEl.dataset.by;
@@ -2169,6 +2173,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   // ---- persistence ----
   let persistTimer = 0;
+  /** Saves held while the Artifacts sheet writes an import (see persist). */
+  let importHold = false;
   function snapshot(): CanvasDoc {
     // Stored: only drawings whose plan tile is on a board now.
     const livePlans: Record<string, string[]> = {};
@@ -2178,6 +2184,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
+    // An import is being written (or is about to reload): no save may write
+    // the board it replaces back over it. What she had was saved first.
+    if (importHold) return false;
     const write = (): boolean => {
       // The caller keeps the document (layout + artifacts); without one it
       // lives in memory for this page only.
@@ -2869,7 +2878,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       const kept = roomPlan(frameId, out.plan, out.si, utterance);
       return await proposePlan(frameId, utterance, kept, out.si, summaryOf(summary, kept), status, improve ? { si: improve.si, kind: 'improved' } : undefined);
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** A quick on-device draft that is NOT reviewed on its own: the next
@@ -2894,14 +2903,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const handedOff = lastTurnHandedOff;
       if (!handedOff && out.si.engine !== 'gemini') panels.forEngine(out.si.engine).log('done', `draft: ${tilesFilledLine(plan)}, for Gemini to improve`);
       return { plan, si: out.si, summary: summaryOf(summary, plan), status, handedOff };
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); }
   }
   /** Review a draft as it is (Gemini already made it after a Nano handoff). */
   async function proposeDraft(frameId: string, utterance: string, d: TurnDraft, madeBy = false): Promise<boolean> {
     if (turnBusy) return false;
     turnBusy = true;
     try { return await proposePlan(frameId, utterance, d.plan, d.si, d.summary, d.status, undefined, madeBy); }
-    finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
+    finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** The class each bound device really is (null: not here). */
@@ -3012,16 +3021,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** Boards whose Deep (Gemini) pass was skipped offline; run on reconnect. */
   const deepLater: Array<{ frameId: string; utterance: string }> = [];
-  /** Saved requests waiting on a review (or a running turn): look again shortly. */
+  /** Saved requests wait while a turn runs or a review is open; whatever ends
+   *  that (a turn's end, a review decided) kicks the next one. No polling. */
   let laterTimer: ReturnType<typeof setTimeout> | undefined;
-  function laterRetry(): void {
+  function kickLater(): void {
+    if (!langLater.length && !deepLater.length) return;
     clearTimeout(laterTimer);
-    laterTimer = setTimeout(() => { laterTimer = undefined; if (langLater.length) runLangLater(); else void runDeepLater(); }, 500);
+    laterTimer = setTimeout(() => { laterTimer = undefined; if (langLater.length) runLangLater(); else void runDeepLater(); }, 0);
   }
+  let deepRunning = false;
   async function runDeepLater(): Promise<void> {
+    if (deepRunning) return; // one loop at a time (a kick may land mid-turn)
+    deepRunning = true;
+    try { await runDeepLaterLoop(); } finally { deepRunning = false; }
+  }
+  async function runDeepLaterLoop(): Promise<void> {
     while (deepLater.length && net.isOnline()) {
       // Saved language asks go first; then each board waits for the review before it.
-      if (langRunning || langLater.length || reviewBusy()) { laterRetry(); return; } // retried after the waiting proposal is decided
+      if (langRunning || langLater.length || reviewBusy()) return; // kicked again when the turn ends or the review is decided
       const next = deepLater.shift()!;
       if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue; // board deleted meanwhile
       panels.forEngine('nano').setQueued(net.laterCount() + deepLater.length);
@@ -3056,7 +3073,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return;
       }
       await proposePlan(frameId, utterance, out.plan, out.si, `Show your devices: ${out.plan.title}`, 'guess');
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   /** The Nano devices draft: title and columns only; the board is built in code. */
@@ -3188,7 +3205,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         panels.forEngine('gemini').fail(why);
         say(why, { speak: true }); return;
       }
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); }
     sent.routeLine = routeOf();
     // A reply's redaction tokens become the real names again on this device.
     const r = planFromReply(fillVisible(full).text);
@@ -3323,7 +3340,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // on this device before the edit is read.
         restoreReply: (r) => fillVisible(r).text,
       });
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); }
     if (!out.ok) {
       if (out.si) panels.forEngine(out.si.engine).fail(out.offline ? `couldn’t make the edit (${out.why}); offline, so Gemini can’t take over` : `couldn’t make the edit: ${out.why}`);
       const line = out.ask ?? PLAN_EDIT_FAIL;
@@ -3470,7 +3487,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         return false;
       }
       return await proposePlan(frameId, utterance, merged, reviewSent, summary, status, undefined, false, false);
-    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); }
+    } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); }
   }
 
   // ---- point-to-connect: hold a point (or click, hands off) → one frame →
@@ -4140,7 +4157,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // (the Nano card was left on Working after the language handoff).
   async function languageTurn(code: string, utterance: string): Promise<void> {
     langRunning = true;
-    try { await languageTurnRun(code, utterance); } finally { langRunning = false; settleEngines(); }
+    try { await languageTurnRun(code, utterance); } finally { langRunning = false; settleEngines(); kickLater(); }
   }
   /** Language asks saved offline, asked of Gemini one at a time once back
    *  online: each waits until the review before it is decided. */
@@ -4149,11 +4166,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let langRunning = false;
   function runLangLater(): void {
     if (!langLater.length || !net.isOnline()) return;
-    if (langRunning || reviewBusy()) { laterRetry(); return; }
+    if (langRunning || reviewBusy()) return; // kicked again when it ends
     const next = langLater.shift()!;
     panels.forEngine('nano').setQueued(net.laterCount() + langLater.length + deepLater.length);
+    // A turn sets langRunning before languageAskTurn returns; an ask that
+    // needed no turn (refused, already on) lets the next one go now.
     languageAskTurn(next.code, next.utterance, next.fresh);
-    laterRetry();
+    kickLater();
   }
   async function languageTurnRun(code: string, utterance: string): Promise<void> {
     const engine = engineFor('gemini', 'pack', code);
@@ -4768,6 +4787,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** What the sheet changed since the canvas last caught up. */
   const sheetRemoved: string[] = [];
   let sheetImported = false;
+  /** The sheet's last line (said again after an import reloads the page). */
+  let lastSheetLine = '';
   const writeRefusal = (): string | null => {
     if (opts.artifactsReadOnly) return 'Stored boards couldn’t be read this session, so the store is left as it is. Nothing changed.';
     if (reviewBusy()) return 'Finish the review first: keep or drop. Nothing changed.';
@@ -4781,7 +4802,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     async remove(id) { const no = writeRefusal(); if (no) throw new Error(no); await artifactBase.remove(id); sheetRemoved.push(id); },
     async clear() { throw new Error('The sheet removes one artifact at a time. Nothing changed.'); },
   };
-  const artifactsSheet = mountArtifactsSheet(root, { store: sheetStore, say, onChange: () => artifactsChanged() });
+  const artifactsSheet = mountArtifactsSheet(root, {
+    store: sheetStore,
+    say: (line) => { lastSheetLine = line; say(line); },
+    onChange: () => artifactsChanged(),
+    // Before an import is written: save what she has now (an edit still in
+    // its debounce), then hold every save until the page reloads.
+    importing: (on) => {
+      if (on) { if (!importHold) persist(true); importHold = true; }
+      else importHold = false;
+    },
+  });
   function openArtifacts(): void {
     if (phoneShell) { say('Artifacts open on the laptop.'); return; }
     voiceSheet.close();
@@ -4836,8 +4867,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     if (sheetImported) {
       sheetImported = false;
-      if (opts.onArtifactsImported) { clearTimeout(persistTimer); opts.onArtifactsImported(); }
-      else say('They open the next time the canvas opens.');
+      if (opts.onArtifactsImported) { clearTimeout(persistTimer); opts.onArtifactsImported(lastSheetLine); }
+      else { importHold = false; say('They open the next time the canvas opens.'); }
     }
   }
   /** "change voice" / "use the Ava voice" / "preview voice" / "default voice". */

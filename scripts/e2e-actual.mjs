@@ -547,7 +547,7 @@ async function gimbal(page) {
 
   // "add gimbal controls" is an ordinary generation turn with a review.
   await page.evaluate(() => window.__mcCanvas.run('add gimbal controls'));
-  if (!(await waitFor(page, reviewOpen, 15_000, 'the gimbal review opens'))) return;
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the gimbal review opens'))) { console.log('  said:', JSON.stringify(await page.evaluate(() => window.__mcCanvas.statusSince(0).slice(-6)))); return; }
   check((await page.evaluate(reviewText)).includes('Replay · written example'), 'the gimbal review says its reply is a hand-written example: "Replay · written example"');
   const said = await page.evaluate(reviewNotes);
   check(said.includes(STAND_NOTE), `the review says the "spin" cue was dropped (got ${JSON.stringify(said)})`);
@@ -1090,7 +1090,7 @@ async function breakIt(page) {
   check(listed.map((r) => r.id).sort().join(',') === 'board-f1,board-f2', `the sheet lists what remains, not the dropped connector (got ${JSON.stringify(listed.map((r) => r.id))})`);
   check(listed.every((r) => /^(Board) /.test(`${r.kind} `) && / · approved \d{1,2} [A-Z][a-z]{2} \d{4}$/.test(r.made)), `each row has kind, maker and date (got ${JSON.stringify(listed)})`);
   check(await page.evaluate(() => document.querySelector('.mc-artifacts-sheet').innerText.includes('1 stored item failed its check')), 'the sheet says one stored item failed its check');
-  const small = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-sheet button')].filter((b) => b.getBoundingClientRect().height < 56).map((b) => b.textContent.trim()));
+  const small = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-sheet button')].filter((b) => b.getClientRects().length && b.getBoundingClientRect().height < 56).map((b) => b.textContent.trim()));
   check(small.length === 0, `every sheet button is at least 56 px tall (smaller: ${JSON.stringify(small)})`);
   await page.evaluate(() => document.querySelector('[data-artifact="board-f2"] .mc-artifacts-remove').click());
   await page.evaluate(() => document.querySelector('[data-artifact="board-f2"] .mc-artifacts-remove').click());
@@ -1111,11 +1111,24 @@ async function breakIt(page) {
   await waitFor(page, () => !document.querySelector('.mc-artifacts-sheet')?.hidden, 3_000, 'the sheet opens again');
   const input = await page.$('.mc-artifacts-file');
   await input.uploadFile(tmp);
-  await waitFor(page, () => document.body.innerText.includes('Imported 1 artifact. 3 entries failed their check and were left out.'), 3_000, 'the import line counts what was left out')
+  if (!(await waitFor(page, () => !document.querySelector('.mc-artifacts-confirm')?.hidden, 10_000, 'the import confirm shows'))) return;
+  const confirmText = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-confirm-line')].map((p) => p.textContent));
+  check(confirmText[0] === 'Adds 1, replaces 0.' && confirmText.includes('3 entries failed their check and were left out.'), `the confirm says what it adds and what was left out (got ${JSON.stringify(confirmText)})`);
+  const confirmBtns = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-confirm button')].map((b) => ({ t: b.textContent.trim(), h: b.getBoundingClientRect().height })));
+  check(confirmBtns.map((b) => b.t).join() === 'Import,Cancel' && confirmBtns.every((b) => b.h >= 56), `Import / Cancel, each at least 56 px (got ${JSON.stringify(confirmBtns)})`);
+  check(!(await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.some((a) => a.id === 'board-f2')))), 'nothing is written before Import');
+  await page.evaluate(() => document.querySelector('.mc-artifacts-do-import').click());
+  await waitFor(page, () => document.body.innerText.includes('Imported 1 artifact. 3 entries failed their check and were left out.'), 8_000, 'the import line counts what was left out')
     .then((ok) => ok && check(true, 'import: 1 kept, 3 left out, said'));
   await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10_000 }).catch(() => undefined);
   await waitFor(page, () => !!window.__mcCanvas && window.__mcCanvas.frames().length === 2, 10_000, 'after the import the Notes board opens');
   check((await frames(page)).some((f) => f.title === 'Notes'), 'the imported board is on the canvas');
+  await waitFor(page, () => document.body.innerText.includes('Imported 1 artifact.'), 5_000, 'the import line is said again after the reload')
+    .then((ok) => ok && check(true, 'the import line is said again after the reload'));
+  const importedHead = await page.evaluate(() => document.querySelector('[data-frame=f2] .mc-frame-by')?.textContent.trim() ?? '');
+  check(/^Imported · Replay · recorded reply · \d{1,2} [A-Z][a-z]{2} \d{4}$/.test(importedHead), `the imported board's head says Imported (got ${JSON.stringify(importedHead)})`);
+  const importedRow = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.find((a) => a.id === 'board-f2')));
+  check(importedRow?.imported === true && importedRow.by === 'replay', 'the stored row is marked imported and keeps its maker');
   require('node:fs').rmSync(tmp, { force: true });
   check(outside.length === 0, `offline: no request left this server (got ${JSON.stringify(outside.slice(0, 3))})`);
   page.off('request', onRequest);

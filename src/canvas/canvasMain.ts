@@ -65,7 +65,13 @@ const startDoc = joinCanvasDoc(layout, artifacts, (d) => joinDropped.push(d));
 const keepIds = new Set([...unjoinedIds(startDoc, artifacts), ...loaded.overCap]);
 artifacts = artifacts.filter((a) => !keepIds.has(a.id));
 if (keepIds.size) console.warn(`[mendcraft] ${keepIds.size} stored item(s) not on the canvas are kept as they are.`);
+/** The Artifacts sheet's import line, kept across the reload that opens what it imported. */
+const IMPORT_NOTE_KEY = 'mc.artifacts.importNote';
+const importNote = (() => {
+  try { const v = sessionStorage.getItem(IMPORT_NOTE_KEY); sessionStorage.removeItem(IMPORT_NOTE_KEY); return (v ?? '').slice(0, 300); } catch { return ''; }
+})();
 const storeNotes = [
+  importNote,
   loadLine(layoutLoad) ?? '',
   persistent ? '' : STORE_FALLBACK_LINE,
   loaded.readFailed ? `${STORE_READ_FAILED_LINE} ${STORE_SAVE_OFF_LINE}` : '',
@@ -302,8 +308,13 @@ handle = mountCanvas(root, {
   artifactStore,
   artifactsReadOnly: !!loaded.readFailed,
   onArtifactsRemoved: (ids) => { const gone = new Set(ids); artifacts = artifacts.filter((a) => !gone.has(a.id)); },
-  onArtifactsImported: () => { reloading = true; setTimeout(() => location.reload(), 1200); },
-  artifactInfo: (frameId) => { const a = artifacts.find((x) => x.id === `board-${frameId}`); return a ? { by: a.by, at: a.at } : undefined; },
+  onArtifactsImported: (line) => {
+    reloading = true;
+    // Said again once the page is back (a partial failure too).
+    try { if (line) sessionStorage.setItem(IMPORT_NOTE_KEY, line); } catch { /* the line was said once already */ }
+    setTimeout(() => location.reload(), 1200);
+  },
+  artifactInfo: (frameId) => { const a = artifacts.find((x) => x.id === `board-${frameId}`); return a ? { by: a.by, at: a.at, ...(a.imported ? { imported: true } : {}) } : undefined; },
   reservedFrameIds: reservedFrameIds(),
   storeNote: storeNotes.length ? storeNotes.join(' ') : undefined,
   phoneCamera,

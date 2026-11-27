@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ARTIFACT_MAX_CHARS, artifactId, coerceArtifact, frameIdOfArtifactId } from '../../src/artifacts/artifact';
 import { coerceSurfacePlan } from '../../src/canvas/surfacePlan';
+import { coerceConnector } from '../../src/devices/connector';
 import { board, PLAN } from './sample';
 
 const connector = (source: string) => ({
@@ -60,6 +61,17 @@ describe('coerceArtifact', () => {
     expect(coerceArtifact({ ...c, data: { connector: c.data.connector } }).ok).toBe(false);
     expect(coerceArtifact({ ...c, data: { ...c.data, intents: { on: { action: 'reboot' } } } }).ok).toBe(false);
     expect(coerceArtifact({ ...c, id: 'connector-govee-strip' }).ok).toBe(false);
+  });
+
+  it('a connector action on a port outside the allow-list (21, 22, 443, 65535) is dropped, and such a stored connector is refused', () => {
+    const c = connector('cloud');
+    for (const port of [21, 22, 443, 65535]) {
+      const raw = { ...c.data.connector, actions: [{ id: 'on', label: 'On', request: { transport: 'udp', port, payload: { method: 'setPilot', params: { state: true } } } }] };
+      const got = coerceConnector(raw, 'cloud');
+      expect(got === null || got.actions.length === 0, `port ${port}`).toBe(true);
+      expect(coerceArtifact({ ...c, data: { ...c.data, connector: raw } }).ok, `port ${port}`).toBe(false);
+    }
+    expect(coerceConnector(c.data.connector, 'cloud')?.actions).toHaveLength(1); // 38899 passes
   });
 
   it('refuses a stored connector with a port outside the allow-list, not just that action', () => {

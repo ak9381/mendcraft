@@ -17,9 +17,9 @@ describe('offline Deep pass is queued and run on reconnect (A7-026)', () => {
     expect(body).toContain('void runDeepLater()');
   });
   it('runDeepLater skips deleted boards and waits while a proposal is open', () => {
-    const body = src.slice(src.indexOf('async function runDeepLater('), src.indexOf('async function connectRoom('));
+    const body = src.slice(src.indexOf('async function runDeepLaterLoop('), src.indexOf('async function connectRoom('));
     // Busy (a review open, a saved language ask first): looked at again shortly, never dropped.
-    expect(body).toContain('if (langRunning || langLater.length || reviewBusy()) { laterRetry(); return; }');
+    expect(body).toContain('if (langRunning || langLater.length || reviewBusy()) return;');
     expect(body).toContain('if (!reg.get(next.frameId) || !surfaces[next.frameId]) continue;');
   });
 });

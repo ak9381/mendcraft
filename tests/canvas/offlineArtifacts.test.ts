@@ -115,4 +115,31 @@ describe('offline artifacts', () => {
     await vi.waitFor(() => expect(said(h, 'Kept Hindi. Nothing changed.')).toBe(true));
     expect(h.statusSince(0).some((t) => t.startsWith('Finish the review first'))).toBe(false);
   });
+
+  it('a slow pack holds the next saved language until its review is decided (no polling, no overlap)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const packs: Record<string, LanguagePack> = { hi: packOf('hi', 'सब दिखाओ'), ta: packOf('ta', 'எல்லாம் காட்டு'), te: packOf('te', 'అన్నీ చూపించు') };
+      const asked: string[] = [];
+      const gemini = (_kind: string, sub?: string) => ({
+        id: 'gemini' as const, sim: false,
+        stream: async () => { asked.push(sub ?? ''); await new Promise((r) => setTimeout(r, 300)); return JSON.stringify(packs[sub ?? ''] ?? {}); },
+      });
+      const { h, root } = mount({ online: false, engines: { gemini } });
+      h.run('add Hindi'); h.run('add Tamil'); h.run('add Telugu');
+      root.querySelector<HTMLElement>('[data-cmd=offline]')!.click();
+      // The first turn is running before setOnline returns: the others wait.
+      expect(asked).toEqual(['hi']);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(asked).toEqual(['hi']); // still streaming: nothing else started
+      await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Hindi'), { timeout: 8000 });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(asked).toEqual(['hi']); // waits on the review, however long
+      h.drop();
+      await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Tamil'), { timeout: 8000 });
+      h.keep();
+      await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Telugu'), { timeout: 8000 });
+      expect(asked).toEqual(['hi', 'ta', 'te']);
+    } finally { vi.useRealTimers(); }
+  });
 });

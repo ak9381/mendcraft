@@ -36,6 +36,9 @@ export interface Artifact {
    *  'suggested' is the next-step chips' own status (and theirs only): they
    *  are never approved, because a chip only says her words to run(). */
   status: ArtifactStatus;
+  /** Came in through Import (the Artifacts sheet): `by` is still the
+   *  original maker, `at` is when it was imported. Only `true` or absent. */
+  imported?: true;
 }
 
 /** Same cap as PLAN_DOC_MAX_CHARS. */
@@ -174,7 +177,7 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   let size: number;
   try { size = JSON.stringify(raw).length; } catch { return bad('not plain data'); }
   if (size > ARTIFACT_MAX_CHARS) return bad(`over ${ARTIFACT_MAX_CHARS} characters`);
-  const { id, kind, v, title, data, by, at, status } = raw;
+  const { id, kind, v, title, data, by, at, status, imported } = raw;
   if (!ARTIFACT_KINDS.includes(kind as ArtifactKind)) return bad('unknown kind');
   const k = kind as ArtifactKind;
   if (typeof id !== 'string' || !ID_RE.test(id) || !id.startsWith(`${k}-`)) return bad('bad id');
@@ -183,6 +186,7 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (!ARTIFACT_BY.includes(by as ArtifactBy)) return bad('unknown maker');
   if (!fin(at) || at < 0) return bad('bad time');
   if (status !== statusOf(kind as ArtifactKind)) return bad(kind === 'steps' ? 'suggestions are stored as suggested' : 'not approved');
+  if (imported !== undefined && imported !== true) return bad('imported is not true');
   if (!isObj(data)) return bad('no data');
   if (k === 'board' && !FRAME_ID_RE.test(id.slice('board-'.length))) return bad('bad board id');
   const d = coerceData(k, data);
@@ -191,5 +195,5 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (k === 'connector' && id !== `connector-${slug((d.value.connector as { key: string }).key)}`) return bad('the connector id does not match its device');
   if (k === 'steps' && id !== `steps-${String(d.value.at)}`) return bad('the suggestions id does not match their step');
   if (k === 'pack' && id !== artifactId('pack', String(d.value.lang))) return bad('the pack id does not match its language');
-  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: statusOf(k) }, ...(d.notes?.length ? { notes: d.notes } : {}) };
+  return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: statusOf(k), ...(imported === true ? { imported: true as const } : {}) }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }

@@ -154,7 +154,8 @@ export function splitCanvasDoc(doc: CanvasDoc, prev: Artifact[], by: (id: string
     // Moving, renaming or pinning a board changes no content: it keeps its
     // maker. Only a change to what it shows is credited to whoever made it.
     const contentSame = old && same(contentOf(old.kind, old.data), contentOf(n.kind, n.data));
-    put.push({ ...n, v: old ? old.v + 1 : 1, by: contentSame ? old.by : by(n.id), at: now, status: 'approved' });
+    // An imported board stays labelled imported until its content changes.
+    put.push({ ...n, v: old ? old.v + 1 : 1, by: contentSame ? old.by : by(n.id), at: now, status: 'approved', ...(contentSame && old.imported ? { imported: true as const } : {}) });
   }
   const live = new Set(next.map((n) => n.id));
   const remove = prev.filter((a) => (a.kind === 'board' || a.kind === 'plan') && !live.has(a.id) && !keep.has(a.id)).map((a) => a.id);
