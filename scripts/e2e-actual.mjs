@@ -1506,8 +1506,10 @@ async function recordmode(page) {
   await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'record mode: two SIM phones join');
   const chips = await page.evaluate(() => [...document.querySelectorAll('.mc-paired-chip')].map((c) => !!c.querySelector('.mc-chip')));
   check(chips.length === 2 && chips.every(Boolean), `record mode: the phones are SIM, no relay room is opened (got ${JSON.stringify(chips)})`);
-  await sleep(3_000); // a bridge probe or rediscovery would have gone out by now
-  check(seen.length === 0, `record mode: nothing went to the WiZ bridge, Spotify or the relay (got ${JSON.stringify(seen.slice(0, 3))})`);
+  // A bridge probe, a Spotify read or a relay room would have gone out by now
+  // (the live control below sees each within this time). Pause-safe wait.
+  const leaked = await pollUntil(() => seen.length > 0, 4_000);
+  check(!leaked.ok && seen.length === 0, `record mode: nothing went to the WiZ bridge, Spotify or the relay (got ${JSON.stringify(seen.slice(0, 3))})`);
 
   // ?record=1 without ?sim=1 does not record (and is an ordinary live page).
   seen.length = 0;
@@ -1515,6 +1517,13 @@ async function recordmode(page) {
   check(!(await page.evaluate(() => !!window.__mcRecording)), 'record mode: ?record=1 without ?sim=1 does not record');
   await pollUntil(() => seen.some((u) => /38888/.test(u)), 8_000);
   check(seen.some((u) => /38888/.test(u)), `control: a live page with the same storage does reach for the bridge, so the check above can fail (got ${JSON.stringify(seen.slice(0, 3))})`);
+  // The same steps as the record run, live: Spotify and the relay (Firestore) are reached too (and aborted here).
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  const short = () => JSON.stringify(seen.map((u) => u.slice(0, 60)).slice(0, 4));
+  await pollUntil(() => seen.some((u) => /spotify\.com/.test(u)), 10_000);
+  check(seen.some((u) => /spotify\.com/.test(u)), `control: a live page with the same Spotify tokens does reach Spotify, so the check above can fail (got ${short()})`);
+  await pollUntil(() => seen.some((u) => /firestore\.googleapis\.com/.test(u)), 10_000);
+  check(seen.some((u) => /firestore\.googleapis\.com/.test(u)), `control: "connect devices" on a live page does open a relay room (Firestore), so the check above can fail (got ${short()})`);
   page.off('request', onRequest);
   await page.setRequestInterception(false);
 }
