@@ -12,6 +12,7 @@ Before you start:
 - WiZ bridge running (`npm run wiz-bridge` in mendcraft-sim), bulb powered.
 - Both phones unlocked, Mendcraft open. **The phones hold one build at a time** — tell me which app you're testing and I'll install the right build (≈5 min).
 - iPhone docked on the charged gimbal. Marshall paired to the iPhone over Bluetooth.
+- **Before pairing after a deploy: reload the laptop page first.** Phones paired before this build need one re-pair by chime.
 
 Write the number of anything that looks wrong.
 
