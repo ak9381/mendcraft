@@ -611,7 +611,8 @@ async function floorplan(page) {
   const text = await page.evaluate(reviewText);
   check(/Bedroom 1/.test(text) && /Bedroom 2/.test(text) && /Living room/.test(text), `the review lists the rooms (got ${JSON.stringify(text.slice(0, 400))})`);
   check(/4 × 3 m/.test(text), 'the review gives room sizes in metres');
-  check(/walls, 5 rooms/.test(text), 'the review shows the plan check');
+  check(/The door (into|between) /.test(text), 'the review shows the plan checks in plain words');
+  check(!/\b(Door|Window) [ow]\d+\b/.test(text), 'the review shows no internal ids');
   check(text.includes('Replay · written example'), 'the review names the engine: "Replay · written example"');
   check((await frames(page)).length === 1, 'no board is made before Approve');
   check((await planArtifacts(page)).filter((a) => a.kind === 'plan').length === 0, '0 plan artifacts before Approve');
@@ -649,6 +650,27 @@ async function floorplan(page) {
   await sleep(1200); // past the save debounce: loading rewrites nothing
   const after = (await planArtifacts(page)).find((a) => a.kind === 'plan');
   check(after?.v === 2 && after.by === 'replay', `loading keeps the drawing's version and maker (got ${JSON.stringify(after && [after.v, after.by])})`);
+
+  // Asked again from an empty board she is on: that board takes the plan; the drawn plan is never overwritten.
+  const firstPlan = back.frame;
+  const emptyId = await page.evaluate(async () => { window.__mcCanvas.run('new board'); const f = window.__mcCanvas.frames().at(-1); await window.__mcCanvas.focus(f.id); return f.id; });
+  await page.evaluate(() => { window.__mcCanvas.run('draw a two bedroom floor plan'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the second floor-plan review opens'))) return;
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, (id) => window.__mcCanvas.snapshot().surfaces[id]?.kind === 'plan', 5_000, 'the empty board she was on took the plan', emptyId)
+    .then((ok) => ok && check(true, 'the empty board she was on took the plan (no extra board)'));
+  check((await frames(page)).length === 3, 'three boards: the dashboard and two floor plans');
+  const kept = await page.evaluate((id) => Object.values(window.__mcCanvas.snapshot().drawings?.[id] ?? {})[0]?.rooms.map((r) => r.name), firstPlan);
+  check(kept?.includes('Study'), 'the first floor plan, with its study, is untouched');
+  // Undo takes the generated plan back: the board is empty again and its stored plan goes.
+  await page.evaluate(() => window.__mcCanvas.undo());
+  await waitFor(page, (id) => window.__mcArtifacts.list().then((l) => !l.some((a) => a.kind === 'plan' && a.data.frameId === id) && !l.some((a) => a.id === `board-${id}`)), 5_000, 'undo removes the stored board and plan', emptyId)
+    .then((ok) => ok && check(true, 'undo removes the generated plan and its stored artifacts'));
+  const gone = await page.evaluate((id) => window.__mcCanvas.frames().find((f) => f.id === id), emptyId);
+  check(!!gone && gone.title !== 'Floor plan' && gone.kind !== 'plan', `the reused board is back as it was (got ${JSON.stringify(gone)})`);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  const reloaded = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'plan').length));
+  check(reloaded === 1, `after a reload only the first floor plan's drawing is stored (got ${reloaded})`);
 }
 SECTIONS.floorplan = floorplan;
 

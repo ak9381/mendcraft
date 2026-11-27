@@ -76,7 +76,7 @@ import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
+import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -2993,19 +2993,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         prop.accept();
         // Applied only now: a new board of kind plan, its plan tile blank,
         // the drawing beside it (re-checked as the artifact it becomes).
+        // Where: the empty board she is on, else an empty floor-plan
+        // board, else a new one — never a board that already shows something.
+        const target = floorPlanTarget({ frames: reg.list(), surfaces, from: focusId });
+        const reused = target.reuseEmpty && target.id ? reg.get(target.id) : undefined;
         let id: string;
-        try { id = reg.add('plan', FLOOR_PLAN_TITLE).id; } catch (e) { finish(e instanceof Error ? `${e.message} Nothing changed.` : 'Couldn’t open a new board. Nothing changed.'); return; }
+        if (reused) id = reused.id;
+        else try { id = reg.add('plan', FLOOR_PLAN_TITLE).id; } catch (e) { finish(e instanceof Error ? `${e.message} Nothing changed.` : 'Couldn’t open a new board. Nothing changed.'); return; }
+        const undoMade = (): void => { if (reused) { reg.rename(id, reused.title); reg.setKind(id, reused.kind); } else reg.remove(id); sync(); };
         const boardId = `${id}-cad`;
         const doc = sanitizePlanDoc(r.doc);
         const plan = coerceSurfacePlan({ kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [{ type: 'plan', boardId, template: 'blank' }] });
-        if (!doc || !plan.ok) { reg.remove(id); sync(); finish(PLAN_GENERATE_FAIL); return; }
+        if (!doc || !plan.ok) { undoMade(); finish(PLAN_GENERATE_FAIL); return; }
+        if (reused) { reg.rename(id, FLOOR_PLAN_TITLE); reg.setKind(id, 'plan'); }
         drawings[id] = { [boardId]: doc };
         setSavedPlanDoc(id, boardId, doc);
         planMakers.set(planKey(id, boardId), ranId);
         planGeneratedBy.set(planKey(id, boardId), ranId);
         surfaces[id] = plan.value;
-        if (!renderSurface(id)) { delete surfaces[id]; delete drawings[id]; setSavedPlanDoc(id, boardId, null); reg.remove(id); sync(); finish(PLAN_GENERATE_FAIL); return; }
-        history.push({ frameId: id, before: null, after: plan.value, by: ranId, summary });
+        if (!renderSurface(id)) { delete surfaces[id]; delete drawings[id]; setSavedPlanDoc(id, boardId, null); planMakers.delete(planKey(id, boardId)); planGeneratedBy.delete(planKey(id, boardId)); undoMade(); finish(PLAN_GENERATE_FAIL); return; }
+        history.push({ frameId: id, before: null, after: plan.value, by: ranId, summary, planFrame: { made: !reused, title: reused?.title ?? FLOOR_PLAN_TITLE, kind: reused?.kind ?? 'plan', boardId } });
         sync(); updateDock(); persist(); historyRender();
         void focus(id);
         finish(`Kept: ${summary}. Say “undo” to put it back.`);
@@ -3021,7 +3028,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       showReview({
         title: summary, card, extra: buildReviewExtra(),
         changes: planGenerateChanges(r.rooms),
-        notes: [...r.findings.map((f) => `Check: ${f}`), 'Code drew every wall from the rooms Gemini placed, and checked them. It opens on a new board.'],
+        notes: [...r.findings, 'Code drew every wall from the rooms Gemini placed, and checked them. It opens on a new board.'],
         facts: reviewFacts(sent, utterance),
       }, { tokens: [sent], facts: () => reviewFacts(sent, utterance) });
       say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
@@ -3789,6 +3796,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       historyRender();
       say(n ? `Undid: ${h.summary}.` : `Could not undo “${h.summary}” — that plan was redrawn since.`);
+      return;
+    }
+    if (h.planFrame) {
+      // A generated floor plan: the board it opened, its drawing and who
+      // made it all go (a reused empty board goes back to what it was); the
+      // next save drops the stored board and drawing.
+      const id = h.frameId, pf = h.planFrame;
+      if (live.has(id)) { try { processor.processMessages([{ version: 'v0.9', deleteSurface: { surfaceId: id } }] as never); } catch { /* already gone */ } }
+      live.delete(id); deviceSurfaces.untrack(id);
+      delete surfaces[id];
+      delete drawings[id];
+      setSavedPlanDoc(id, pf.boardId, null);
+      for (const k of [...planMakers.keys()]) if (k.startsWith(`${id}\n`)) { planMakers.delete(k); planGeneratedBy.delete(k); }
+      if (pf.made) { reg.remove(id); if (focusId === id) { focusId = null; void overview(); } }
+      else { reg.rename(id, pf.title); reg.setKind(id, pf.kind); const el = world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-surface`); if (el) el.innerHTML = ''; }
+      sync(); updateDock(); persist(); historyRender();
+      say(`Undid: ${h.summary}.`, { speak: true });
       return;
     }
     if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); deviceSurfaces.untrack(h.frameId); }

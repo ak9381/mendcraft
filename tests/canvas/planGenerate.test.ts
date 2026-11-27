@@ -32,7 +32,10 @@ describe('planFromReply', () => {
     for (const rm of doc.rooms) for (const w of rm.wallIds) uses.set(w, (uses.get(w) ?? 0) + 1);
     expect([...uses.values()].some((n) => n >= 2)).toBe(true);
     expect(r.rooms.find((x) => x.name === 'Bedroom 1')).toEqual({ name: 'Bedroom 1', w: 4, h: 3 });
-    expect(r.findings.some((f) => /walls, 5 rooms/.test(f))).toBe(true);
+    // The checks speak in rooms, never internal ids.
+    expect(r.findings.length).toBeGreaterThan(0);
+    expect(r.findings.some((f) => /^The door (into|between) /.test(f))).toBe(true);
+    expect(r.findings.join(' ')).not.toMatch(/\b[owr]\d+\b/);
     // Sanitized: nothing selected, every wall finite.
     expect((r.doc as { selectedId: unknown }).selectedId).toBeNull();
   });
@@ -52,6 +55,21 @@ describe('planFromReply', () => {
     expect(nan).toMatchObject({ ok: false });
     expect(planFromReply('{"rooms":[{"name":"A","x":0,"y":0,"w":NaN,"h":3}]}').ok).toBe(false);
     expect(PLAN_GENERATE_FAIL).toBe("I couldn't draw that plan. Nothing was generated.");
+  });
+
+  it('a room out of the drawing limits is refused, never clamped', () => {
+    expect(planFromReply(JSON.stringify({ rooms: [room('Huge', 0, 0, 1e9, 3000)] }))).toEqual({ ok: false, error: 'room 1 is too big' });
+    expect(planFromReply(JSON.stringify({ unit: 'm', rooms: [room('Huge', 0, 0, 60, 3)] }))).toMatchObject({ ok: false });
+    expect(planFromReply(JSON.stringify({ rooms: [room('Tiny', 0, 0, 50, 3000)] }))).toEqual({ ok: false, error: 'room 1 is too small' });
+    expect(planFromReply(JSON.stringify({ rooms: [room('Far', 1e7, 0)] }))).toEqual({ ok: false, error: 'room 1 is placed outside the drawing' });
+    // In metres, a normal room is fine.
+    expect(planFromReply(JSON.stringify({ unit: 'm', rooms: [room('Room', 0, 0, 4, 3)] })).ok).toBe(true);
+  });
+
+  it('a door or window naming a room or side not in the plan is left out, and the review says so', () => {
+    const r = planFromReply(JSON.stringify({ rooms: [room('Studio', 0, 0, 6000, 4000), room('Bath', 6000, 0, 2000, 4000)], doors: [{ room: 'Studio', side: 's', width: 900 }, { room: 'Garage', side: 's' }], windows: [{ room: 'Studio', side: 'up-ish' }] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.findings).toContain('Left out 2 doors or windows that named a room or side not in the plan.');
   });
 
   it('prose around the JSON is tolerated', () => {
@@ -83,6 +101,7 @@ function mount(opts: Parameters<typeof mountCanvas>[1] = {}): { h: CanvasHandle;
 }
 afterEach(() => { handle?.destroy(); handle = null; document.body.innerHTML = ''; });
 
+const reviewOpen = (root: HTMLElement): boolean => { const d = root.querySelector<HTMLElement>('.mc-review-dialog') ?? document.querySelector<HTMLElement>('.mc-review-dialog'); return !!d && !d.hidden; };
 const reviewTitle = (root: HTMLElement): string => root.querySelector('.mc-review-title')?.textContent ?? '';
 /** canvasMain's maker rule, minus the stored artifacts: what the handle says. */
 const maker = (h: CanvasHandle) => (id: string): ArtifactBy => h.makerOf(id) ?? 'person';
@@ -131,6 +150,56 @@ describe('a generated floor plan on its own board', () => {
     const back = joinCanvasDoc({ version: doc.version, camera: doc.camera, focusId: doc.focusId, frames: doc.frames }, put) as CanvasDoc;
     const again = mount({ doc: back });
     expect(again.h.snapshot().drawings?.[frameId]?.[`${frameId}-cad`]).toEqual(doc.drawings?.[frameId]?.[`${frameId}-cad`]);
+  });
+
+  it('undo of a generated plan removes its board, drawing and maker; after a reload nothing comes back', async () => {
+    const saved: CanvasDoc[] = [];
+    const { h } = await generate(saved);
+    h.keep();
+    await vi.waitFor(() => expect(saved.at(-1)?.drawings).toBeTruthy());
+    const frameId = h.frames()[0].id;
+    const stored = splitCanvasDoc(saved.at(-1)!, [], maker(h), 1000).put;
+    h.undo();
+    expect(h.frames()).toEqual([]);
+    expect(h.snapshot().drawings).toBeUndefined();
+    await vi.waitFor(() => expect(saved.at(-1)?.frames).toEqual([]));
+    expect(h.makerOf(artifactId('plan', frameId, `${frameId}-cad`))).toBeUndefined();
+    const last = saved.at(-1)!;
+    const out = splitCanvasDoc(last, stored, maker(h), 2000);
+    expect(out.remove.sort()).toEqual([artifactId('board', frameId), artifactId('plan', frameId, `${frameId}-cad`)].sort());
+    const left = stored.filter((a) => !out.remove.includes(a.id));
+    handle?.destroy(); handle = null;
+    const again = mount({ doc: joinCanvasDoc(out.layout, left) });
+    expect(again.h.frames()).toEqual([]);
+    expect(again.h.snapshot().drawings).toBeUndefined();
+  });
+
+  it('an empty board she is on is reused; a drawn floor plan is never overwritten', async () => {
+    const saved: CanvasDoc[] = [];
+    const engines = createReplayEngines({ 'gemini.plan': REPLY });
+    const { h, root } = mount({ engines, onPersist: (d) => saved.push(d) });
+    h.run('new board');
+    const empty = h.frames()[0].id;
+    await h.focus(empty);
+    h.run('draw a two bedroom floor plan');
+    await vi.waitFor(() => expect(reviewTitle(root)).not.toBe(''), { timeout: 8000 });
+    h.keep();
+    await vi.waitFor(() => expect(h.snapshot().surfaces[empty]?.kind).toBe('plan'));
+    expect(h.frames()).toHaveLength(1);
+    expect(h.frames()[0]).toMatchObject({ id: empty, kind: 'plan', title: 'Floor plan' });
+    const first = JSON.stringify(h.snapshot().drawings?.[empty]);
+    // Asked again on the drawn plan: a new board; the first drawing stays.
+    await vi.waitFor(() => expect(reviewOpen(root)).toBe(false));
+    h.run('draw a two bedroom floor plan');
+    await vi.waitFor(() => expect(reviewOpen(root)).toBe(true), { timeout: 8000 });
+    h.keep();
+    await vi.waitFor(() => expect(h.frames()).toHaveLength(2));
+    expect(JSON.stringify(h.snapshot().drawings?.[empty])).toBe(first);
+    // Undo of the plan on the reused board gives the empty board back.
+    h.undo(); h.undo();
+    expect(h.frames().map((f) => [f.id, f.title, f.kind])).toEqual([[empty, h.frames()[0].title, h.frames()[0].kind]]);
+    expect(h.frames()[0].title).not.toBe('Floor plan');
+    expect(h.snapshot().surfaces[empty]).toBeUndefined();
   });
 
   it('a hand edit to the drawing is hers; the board stays the engine\'s', async () => {

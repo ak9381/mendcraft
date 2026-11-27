@@ -217,18 +217,19 @@ export function roomWithoutPlanTiles(plan: SurfacePlan): SurfacePlan {
   return { ...plan, tiles: tiles.length ? tiles : [{ type: 'connect', label: CONNECT_LABEL }] };
 }
 
-/** Where "draw the floor plan" goes: the existing floor-plan board (kind
- *  'plan'); else the board she is on when it is empty (it becomes "Floor
- *  plan"); else a new board. Never a board with tiles on it. */
+/** Where an approved floor plan goes: the board she is on when it is empty;
+ *  else an existing EMPTY floor-plan board (kind 'plan' or titled "Floor
+ *  plan"); else a new board. Never a board with tiles on it, so a plan that
+ *  is already drawn is never overwritten. */
 export function floorPlanTarget(o: {
-  frames: readonly { id: string; title: string }[];
+  frames: readonly { id: string; title: string; kind?: string }[];
   surfaces: Record<string, SurfacePlan | undefined>;
   from: string | null;
-}): { id: string | null; existing?: boolean; reuseEmpty?: boolean; make?: boolean } {
-  const plan = o.frames.find((f) => o.surfaces[f.id]?.kind === 'plan')
-    ?? o.frames.find((f) => f.title === FLOOR_PLAN_TITLE && !o.surfaces[f.id]?.tiles.length);
-  if (plan) return { id: plan.id, existing: true };
-  if (o.from && o.frames.some((f) => f.id === o.from) && !o.surfaces[o.from]?.tiles.length) return { id: o.from, reuseEmpty: true };
+}): { id: string | null; reuseEmpty?: boolean; make?: boolean } {
+  const empty = (id: string): boolean => !o.surfaces[id]?.tiles.length;
+  if (o.from && o.frames.some((f) => f.id === o.from) && empty(o.from)) return { id: o.from, reuseEmpty: true };
+  const plan = o.frames.find((f) => (f.kind === 'plan' || o.surfaces[f.id]?.kind === 'plan' || f.title === FLOOR_PLAN_TITLE) && empty(f.id));
+  if (plan) return { id: plan.id, reuseEmpty: true };
   return { id: null, make: true };
 }
 

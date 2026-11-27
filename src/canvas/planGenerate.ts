@@ -11,13 +11,13 @@
 // from the canvas, no device, no drawing.
 import type { SentInfo } from './aiTurn';
 import { extractJson, hasCompleteJson } from '../ai/cloudJson';
-import { coercePlanGenerate, MAX_GENERATE_ROOMS, PLAN_GENERATE_CONSTRAINT, PLAN_GENERATE_PROMPT } from '../plan/ai';
+import { coercePlanGenerate, MAX_GENERATE_OPENINGS, MAX_GENERATE_ROOMS, PLAN_GENERATE_CONSTRAINT, PLAN_GENERATE_PROMPT } from '../plan/ai';
+import { PLAN_LIMITS } from '../plan/ops';
 import { PlanEngine } from '../plan/engine';
 import type { PlanDoc } from '../plan/doc';
 import { sanitizePlanDoc } from './planDocs';
 import { planRooms } from './planEdit';
 import { checkPlanAccessibility } from '../plan/accessibility';
-import { answerPlanQuestion } from '../cad/planQA';
 
 export const PLAN_GENERATE_FAIL = "I couldn't draw that plan. Nothing was generated.";
 export const PLAN_GENERATE_ROUTE_LINE = 'Gemini · cloud — drawing the floor plan as checked geometry';
@@ -61,6 +61,10 @@ export function planFromReply(text: string): PlanFromReply {
   for (const [i, r] of kept.entries()) {
     if (!isObj(r) || !fin(r.x) || !fin(r.y) || !fin(r.w) || !fin(r.h) || r.w <= 0 || r.h <= 0) return bad(`room ${i + 1} has no real size`);
     const rect = { x: r.x * toMm, y: r.y * toMm, w: r.w * toMm, h: r.h * toMm };
+    // Refused, never clamped: a 1e9 mm room is not made into a 50 m one.
+    const { coord, size } = PLAN_LIMITS;
+    if (rect.x < coord.min || rect.x > coord.max || rect.y < coord.min || rect.y > coord.max) return bad(`room ${i + 1} is placed outside the drawing`);
+    if (rect.w < size.min || rect.w > size.max || rect.h < size.min || rect.h > size.max) return bad(`room ${i + 1} is ${rect.w < size.min || rect.h < size.min ? 'too small' : 'too big'}`);
     if (rects.some((o) => overlaps(o, rect))) return bad(`room ${i + 1} overlaps another room`);
     rects.push(rect);
   }
@@ -75,9 +79,32 @@ export function planFromReply(text: string): PlanFromReply {
   const boxes = planRooms(pd);
   if (boxes.length !== kept.length) return bad('a room could not be drawn');
   const rooms = boxes.map((b) => ({ name: b.name, w: Math.round(b.w / 100) / 10, h: Math.round(b.h / 100) / 10 }));
-  const findings = [
-    ...checkPlanAccessibility(pd).map((i) => i.message),
-    ...[answerPlanQuestion(pd, 'how many walls?')?.text].filter((t): t is string => !!t),
-  ];
+  const asked = (Array.isArray(raw.doors) ? raw.doors.length : 0) + (Array.isArray(raw.windows) ? raw.windows.length : 0);
+  const drawn = pd.openings.length;
+  const findings = checkPlanAccessibility(pd).map((i) => plainFinding(i.message, pd));
+  if (drawn < asked) {
+    const n = asked - drawn;
+    findings.push(`Left out ${n} door${n === 1 ? '' : 's'} or window${n === 1 ? '' : 's'} that named a room or side not in the plan${asked > MAX_GENERATE_OPENINGS ? `, or came after the first ${MAX_GENERATE_OPENINGS}` : ''}.`);
+  }
   return { ok: true, doc, rooms, findings };
+}
+
+/** A check line in plain words: an opening's id ("Door o23") becomes the
+ *  room it leads into ("The door into Bedroom 2", "The door between the
+ *  Kitchen and Hall"), else its place in the list ("Door 3"). */
+function plainFinding(message: string, doc: PlanDoc): string {
+  let out = message;
+  for (const kind of ['door', 'window', 'opening'] as const) {
+    const list = doc.openings.filter((o) => o.kind === kind);
+    list.forEach((o, i) => {
+      const re = new RegExp(`\\b${kind[0].toUpperCase()}${kind.slice(1)} ${o.id}\\b|\\b${o.id}\\b`, 'g');
+      if (!re.test(out)) return;
+      const rooms = doc.rooms.filter((r) => r.wallIds.includes(o.wallId)).map((r) => r.name);
+      const word = rooms.length === 1 ? `The ${kind} into ${rooms[0]}`
+        : rooms.length === 2 ? `The ${kind} between ${rooms[0]} and ${rooms[1]}`
+        : `${kind[0].toUpperCase()}${kind.slice(1)} ${i + 1}`;
+      out = out.replace(re, (_m: string, off: number) => (off === 0 ? word : word.charAt(0).toLowerCase() + word.slice(1)));
+    });
+  }
+  return out;
 }

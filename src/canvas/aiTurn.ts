@@ -540,6 +540,10 @@ export interface HistoryEntry {
   layoutBefore?: Record<string, { left: number; top: number; width: number; height: number }>;
   layoutAfter?: Record<string, { left: number; top: number; width: number; height: number }>;
   packAfter?: LanguagePack | null;
+  /** A generated floor plan opened on a board (`made`: a new one; else an
+   *  empty board she had, with its title and kind before). Undo takes it all
+   *  back: the board, its drawing, and who made it. */
+  planFrame?: { made: boolean; title: string; kind: import('./frames').FrameKind; boardId: string };
 }
 
 /** Cap on retained history entries — a long session keeps growing entries

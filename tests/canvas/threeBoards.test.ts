@@ -44,9 +44,14 @@ describe('(b) "draw the floor plan" goes to its own board', () => {
     expect(floorPlanTarget({ frames, surfaces, from: 'b2' })).toEqual({ id: 'b2', reuseEmpty: true });
     expect(floorPlanTarget({ frames, surfaces, from: null })).toEqual({ id: null, make: true });
   });
-  it('focuses the existing floor-plan board', () => {
+  it('reuses an empty floor-plan board, and never overwrites a drawn one', () => {
+    const fp = { id: 'fp', title: FLOOR_PLAN_TITLE, kind: 'plan' };
+    expect(floorPlanTarget({ frames: [frames[0], fp], surfaces, from: 'dash' })).toEqual({ id: 'fp', reuseEmpty: true });
     const s2 = { ...surfaces, fp: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'fp-cad', template: 'blank' }] } as SurfacePlan };
-    expect(floorPlanTarget({ frames: [...frames, { id: 'fp', title: FLOOR_PLAN_TITLE }], surfaces: s2, from: 'dash' })).toEqual({ id: 'fp', existing: true });
+    expect(floorPlanTarget({ frames: [frames[0], fp], surfaces: s2, from: 'dash' })).toEqual({ id: null, make: true });
+    expect(floorPlanTarget({ frames: [frames[0], fp], surfaces: s2, from: 'fp' })).toEqual({ id: null, make: true });
+    // The empty board she is on comes first.
+    expect(floorPlanTarget({ frames: [...frames, fp], surfaces, from: 'b2' })).toEqual({ id: 'b2', reuseEmpty: true });
   });
   it('voice, chip and the empty-board button all use it', () => {
     expect(app).toMatch(/case 'floorPlan': openFloorPlan\(focusId, text\); return true;/);
